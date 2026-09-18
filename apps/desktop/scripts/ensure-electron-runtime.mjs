@@ -130,7 +130,9 @@ function installElectronRuntime(electronDir, version) {
     if (hostPlatform === "darwin") {
       runChecked("ditto", ["-x", "-k", zipPath, NodePath.join(electronDir, "dist")]);
     } else {
-      runChecked("python3", [
+      // Windows ships a `python3` shim that opens the Microsoft Store; use `python`.
+      const python = process.platform === "win32" ? "python" : "python3";
+      runChecked(python, [
         "-c",
         "import os, sys, zipfile; os.makedirs(sys.argv[2], exist_ok=True); zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])",
         zipPath,
