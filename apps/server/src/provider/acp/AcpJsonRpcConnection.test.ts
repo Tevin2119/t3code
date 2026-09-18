@@ -136,6 +136,26 @@ describe("AcpSessionRuntime", () => {
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 
+  it.effect("fails start when session/new never answers", () =>
+    Effect.gen(function* () {
+      const runtime = yield* AcpSessionRuntime.make({
+        ...mockRuntimeOptions,
+        spawn: {
+          ...mockRuntimeOptions.spawn,
+          env: { T3_ACP_HANG_NEW_SESSION_FOREVER: "1" },
+        },
+        sessionLoadTimeout: "50 millis",
+      });
+      const error = yield* runtime.start().pipe(Effect.flip);
+
+      expect(error).toMatchObject({
+        _tag: "AcpTransportError",
+        method: "session/new",
+        detail: "session/new timed out waiting for the agent response.",
+      });
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer), TestClock.withLive),
+  );
+
   it.effect("waits for native cancellation and drains final updates before another prompt", () =>
     Effect.gen(function* () {
       const toolStarted = yield* Deferred.make<void>();

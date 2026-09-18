@@ -25,4 +25,21 @@ describe("AcpAdapterSupport", () => {
     expect(error._tag).toBe("ProviderAdapterRequestError");
     expect(error.message).toContain("Invalid params");
   });
+
+  it("surfaces the transport error detail so a setup timeout is readable", () => {
+    const error = mapAcpToAdapterError(
+      ProviderDriverKind.make("hermes"),
+      "thread-1" as never,
+      "session/start",
+      new EffectAcpErrors.AcpTransportError({
+        operation: "call-rpc",
+        method: "session/new",
+        detail: "session/new timed out waiting for the agent response.",
+        cause: undefined,
+      }),
+    );
+
+    expect(error._tag).toBe("ProviderAdapterRequestError");
+    expect(error.message).toContain("session/new timed out waiting for the agent response.");
+  });
 });

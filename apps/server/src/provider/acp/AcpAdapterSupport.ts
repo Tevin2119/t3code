@@ -13,6 +13,7 @@ import {
 } from "../Errors.ts";
 const isAcpProcessExitedError = Schema.is(EffectAcpErrors.AcpProcessExitedError);
 const isAcpRequestError = Schema.is(EffectAcpErrors.AcpRequestError);
+const isAcpTransportError = Schema.is(EffectAcpErrors.AcpTransportError);
 
 export function mapAcpToAdapterError(
   provider: ProviderDriverKind,
@@ -38,7 +39,8 @@ export function mapAcpToAdapterError(
   return new ProviderAdapterRequestError({
     provider,
     method,
-    detail: error.message,
+    // Transport errors keep the actionable reason (such as a setup timeout) in `detail`.
+    detail: isAcpTransportError(error) && error.detail ? error.detail : error.message,
     cause: error,
   });
 }

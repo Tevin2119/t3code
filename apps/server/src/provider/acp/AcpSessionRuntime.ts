@@ -82,6 +82,7 @@ export interface AcpSessionRuntimeOptions {
   readonly cwd: string;
   readonly resumeSessionId?: string;
   readonly resumeMethod?: "load" | "resume";
+  /** Bounds the session setup request: session/new, session/load, or session/resume. */
   readonly sessionLoadTimeout?: Duration.Input;
   readonly sessionLoadReplayIdleGap?: Duration.Input;
   /** Native cancellation waits for the prompt response and the getEvents consumer to drain. */
@@ -843,7 +844,21 @@ export const make = (
         const created = yield* runLoggedRequest(
           "session/new",
           createPayload,
-          acp.agent.createSession(createPayload),
+          acp.agent.createSession(createPayload).pipe(
+            Effect.timeoutOption(options.sessionLoadTimeout ?? defaultSessionLoadTimeout),
+            Effect.flatMap((result) =>
+              Option.isSome(result)
+                ? Effect.succeed(result.value)
+                : Effect.fail(
+                    new EffectAcpErrors.AcpTransportError({
+                      operation: "call-rpc",
+                      method: "session/new",
+                      detail: "session/new timed out waiting for the agent response.",
+                      cause: undefined,
+                    }),
+                  ),
+            ),
+          ),
         );
         sessionId = created.sessionId;
         sessionSetupResult = created;
