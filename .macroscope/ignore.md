@@ -1,17 +1,13 @@
 # Files Macroscope skips during code review and in Check Run Agents.
-
 # This file REPLACES Macroscope's built-in defaults rather than extending them,
-
 # so the defaults are reproduced below (from docs.macroscope.com, Code Review),
-
 # followed by this repository's own entries at the end.
+# One glob per line; not Markdown, and excluded from vp fmt for that reason.
 
 # ---- Macroscope defaults ----
-
 # === Vendored / dependency directories ===
-
 **/.git/**
-**/**pycache**/**
+**/__pycache__/**
 **/.pytest_cache/**
 **/.mypy_cache/**
 **/.ruff_cache/**
@@ -20,8 +16,8 @@
 **/node_modules/**
 **/site-packages/**
 **/.pnpm-store/**
-**/**Snapshots**/**
-**/**snapshots**/**
+**/__Snapshots__/**
+**/__snapshots__/**
 **/.agents/skills/**
 **/.claude/skills/**
 **/.github/skills/**
@@ -34,20 +30,16 @@
 **/.vercel/**
 **/.angular/**
 **/vendor/**
-**/\_vendor/**
+**/_vendor/**
 **/third_party/**
 **/Pods/**
 **/.bundle/**
-
 # === Root-anchored ambiguous directories ===
-
 build/**
 out/**
 env/**
 ENV/**
-
 # === Generated / build-output directories (match anywhere) ===
-
 **/target/**
 **/dist/**
 **/generated/**
@@ -56,212 +48,174 @@ ENV/**
 **/generated-sources/**
 **/generated-src/**
 **/src/main/generated/**
-
 # === Minified build output ===
-
-**/_.min.js
-\**/_.min.css
+**/*.min.js
+**/*.min.css
 **/*.bundle.js
-
 # === Yarn PnP loader files ===
-
 **/.pnp.cjs
 **/.pnp.loader.mjs
-
 # === Generated protobuf / codegen files ===
-
-**/_\_pb.d.ts
-\**/__pb.js
-**/_.pb.go
-\**/__pb2.py
-**/_\_pb2_grpc.py
-\**/__pb2.pyi
-**/_.grpc.swift
-\**/_.pb.swift
-**/_.sql.go
-\**/_.designer.cs
-**/_.g.dart
-\**/_.pb.dart
-**/_\_pb.rb
-\**/_.d.ts
-**/_.gen.ts
-\**/_.gen.tsx
-**/_.gen.js
-\**/_.gen.jsx
-
+**/*_pb.d.ts
+**/*_pb.js
+**/*.pb.go
+**/*_pb2.py
+**/*_pb2_grpc.py
+**/*_pb2.pyi
+**/*.grpc.swift
+**/*.pb.swift
+**/*.sql.go
+**/*.designer.cs
+**/*.g.dart
+**/*.pb.dart
+**/*_pb.rb
+**/*.d.ts
+**/*.gen.ts
+**/*.gen.tsx
+**/*.gen.js
+**/*.gen.jsx
 # === Package manager files ===
-
 **/go.mod
 **/package.json
-**/_.pbxproj
-\**/_.xcstrings
-**/_.strings
-\**/_.properties
+**/*.pbxproj
+**/*.xcstrings
+**/*.strings
+**/*.properties
 **/pom.xml
 **/Package.swift
 **/bun.lock
 **/.eslintrc
 **/.eslintignore
-
 # === Lock / sum files ===
-
 **/go.sum
 **/package-lock.json
 **/pnpm-lock.yaml
 **/yarn.lock
 **/Package.resolved
-
 # === Images ===
-
-**/_.jpg
-\**/_.jpeg
-**/_.png
-\**/_.gif
-**/_.svg
-\**/_.ico
-**/_.webp
-\**/_.bmp
+**/*.jpg
+**/*.jpeg
+**/*.png
+**/*.gif
+**/*.svg
+**/*.ico
+**/*.webp
+**/*.bmp
 **/*.tiff
-
 # === Fonts ===
-
-**/_.woff
-\**/_.woff2
-**/_.ttf
-\**/_.eot
+**/*.woff
+**/*.woff2
+**/*.ttf
+**/*.eot
 **/*.otf
-
 # === Media ===
-
-**/_.mp3
-\**/_.mp4
-**/_.wav
-\**/_.avi
-**/_.mov
-\**/_.mkv
-**/_.flac
-\**/_.ogg
+**/*.mp3
+**/*.mp4
+**/*.wav
+**/*.avi
+**/*.mov
+**/*.mkv
+**/*.flac
+**/*.ogg
 **/*.srt
-
 # === Archives ===
-
-**/_.zip
-\**/_.tar
-**/_.gz
-\**/_.rar
-**/_.7z
-\**/_.bz2
-
+**/*.zip
+**/*.tar
+**/*.gz
+**/*.rar
+**/*.7z
+**/*.bz2
 # === Documents ===
-
-**/_.pdf
-\**/_.doc
-**/_.docx
-\**/_.xls
-**/_.xlsx
-\**/_.ppt
+**/*.pdf
+**/*.doc
+**/*.docx
+**/*.xls
+**/*.xlsx
+**/*.ppt
 **/*.pptx
-
 # === Data / serialized ===
-
-**/_.db
-\**/_.sqlite
-**/_.sqlite3
-\**/_.parquet
-**/_.avro
-\**/_.arrow
-**/_.npy
-\**/_.pkl
+**/*.db
+**/*.sqlite
+**/*.sqlite3
+**/*.parquet
+**/*.avro
+**/*.arrow
+**/*.npy
+**/*.pkl
 **/*.jsonl
-
 # === ML models ===
-
-**/_.onnx
-\**/_.tflite
-**/_.h5
-\**/_.safetensors
-
+**/*.onnx
+**/*.tflite
+**/*.h5
+**/*.safetensors
 # === Compiled / binary ===
-
-**/_.exe
-\**/_.dll
-**/_.so
-\**/_.dylib
-**/_.bin
-\**/_.pyc
-**/_.class
-\**/_.o
-**/_.a
-\**/_.wasm
-
+**/*.exe
+**/*.dll
+**/*.so
+**/*.dylib
+**/*.bin
+**/*.pyc
+**/*.class
+**/*.o
+**/*.a
+**/*.wasm
 # === Certificates / keys ===
-
-**/_.cer
-\**/_.pem
+**/*.cer
+**/*.pem
 **/*.p12
-
 # === Platform-specific / non-reviewable ===
-
-**/_.stringsdict
-\**/_.snap
-**/_.adoc
-\**/_.arb
-**/_.lock
-\**/_.po
-**/_.fbx
-\**/_.log
-**/_.xib
-\**/_.meta
-**/_.kml
-\**/_.prefab
-**/_.eml
-\**/_.csv
-**/_.grpc.reflection
-\**/_.js.map
-
+**/*.stringsdict
+**/*.snap
+**/*.adoc
+**/*.arb
+**/*.lock
+**/*.po
+**/*.fbx
+**/*.log
+**/*.xib
+**/*.meta
+**/*.kml
+**/*.prefab
+**/*.eml
+**/*.csv
+**/*.grpc.reflection
+**/*.js.map
 # === Go ===
-
 **/*_test.go
-
 # === TypeScript / JavaScript ===
-
-**/_.test.ts
-\**/_.test.tsx
-**/_.test.js
-\**/_.test.jsx
-**/_.test.mjs
-\**/_.test.cjs
-**/_.test.mts
-\**/_.test.cts
-**/_.spec.ts
-\**/_.spec.tsx
-**/_.spec.js
-\**/_.spec.jsx
-**/_.spec.mjs
-\**/_.spec.cjs
-**/_.spec.mts
-\**/_.spec.cts
-**/_.e2e.ts
-\**/_.e2e.tsx
-**/_.e2e.js
-\**/_.e2e.jsx
-**/_.e2e.mjs
-\**/_.e2e.cjs
-**/_.integration.ts
-\**/_.integration.tsx
-**/_.integration.js
-\**/_.integration.jsx
-**/_.integration.mjs
-\**/_.integration.cjs
-**/**tests**/**
-
+**/*.test.ts
+**/*.test.tsx
+**/*.test.js
+**/*.test.jsx
+**/*.test.mjs
+**/*.test.cjs
+**/*.test.mts
+**/*.test.cts
+**/*.spec.ts
+**/*.spec.tsx
+**/*.spec.js
+**/*.spec.jsx
+**/*.spec.mjs
+**/*.spec.cjs
+**/*.spec.mts
+**/*.spec.cts
+**/*.e2e.ts
+**/*.e2e.tsx
+**/*.e2e.js
+**/*.e2e.jsx
+**/*.e2e.mjs
+**/*.e2e.cjs
+**/*.integration.ts
+**/*.integration.tsx
+**/*.integration.js
+**/*.integration.jsx
+**/*.integration.mjs
+**/*.integration.cjs
+**/__tests__/**
 # === Python ===
-
-**/test__.py
-\**/__test.py
-
+**/test_*.py
+**/*_test.py
 # === Java / Kotlin ===
-
 **/*Test.java
 **/*Tests.java
 **/*Spec.java
@@ -276,26 +230,20 @@ ENV/**
 **/src/test/kotlin/**
 **/src/androidTest/**
 **/src/integrationTest/**
-
 # === Swift ===
-
 **/*Tests.swift
-**/*UITests.swift *_/*Tests/*_ *_/*UITests/*_
-
+**/*UITests.swift
+**/*Tests/**
+**/*UITests/**
 # === Rust ===
-
-**/tests/_.rs
-\**/__test.rs
-\**/test_*.rs
-
+**/tests/*.rs
+**/*_test.rs
+**/test_*.rs
 # === Ruby ===
-
-**/_\_test.rb
-\**/__spec.rb
-\**/test_*.rb
-
+**/*_test.rb
+**/*_spec.rb
+**/test_*.rb
 # === Generic test directories ===
-
 **/test/**
 **/tests/**
 **/spec/**
@@ -303,11 +251,7 @@ ENV/**
 **/e2e/**
 
 # ---- t3code ----
-
 # Vendored read-only reference checkouts of upstream Effect and Alchemy
-
 # (see scripts/lib/reference-repos.ts). Nothing imports from them; findings
-
 # there belong upstream.
-
 .repos/**
