@@ -739,6 +739,92 @@ export const GrokSettings = makeProviderSettingsSchema(
 export type GrokSettings = typeof GrokSettings.Type;
 
 /**
+ * Kimi Code sign-in regions. The CLI keeps one credential per region and the
+ * device-code flow targets a different host for each (`kimi.ai` vs `kimi.com`),
+ * so the region has to be chosen before login rather than discovered after it.
+ */
+export const KIMI_REGIONS = [
+  { value: "global", label: "Global (kimi.ai)" },
+  { value: "mainland-cn", label: "Mainland China (kimi.com)" },
+] as const satisfies ReadonlyArray<ProviderSettingsFormOption>;
+export const KimiRegion = Schema.Literals(KIMI_REGIONS.map((region) => region.value));
+export type KimiRegion = typeof KimiRegion.Type;
+
+export const KimiSettings = makeProviderSettingsSchema(
+  {
+    // Off by default, as Cursor, Grok and OpenCode are: a newly added binding
+    // should not probe on every install until it has soaked.
+    enabled: Schema.Boolean.pipe(
+      Schema.withDecodingDefault(Effect.succeed(false)),
+      Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
+    ),
+    binaryPath: makeBinaryPathSetting("kimi").pipe(
+      Schema.annotateKey({
+        title: "Binary path",
+        description: "Path to the Kimi Code CLI binary.",
+        providerSettingsForm: { placeholder: "kimi", clearWhenEmpty: "omit" },
+      }),
+    ),
+    region: KimiRegion.pipe(
+      Schema.withDecodingDefault(Effect.succeed("global" as const)),
+      Schema.annotateKey({
+        title: "Sign-in region",
+        description: "Kimi keeps separate credentials per region.",
+        providerSettingsForm: {
+          control: "select",
+          options: KIMI_REGIONS,
+          clearWhenEmpty: "omit",
+        },
+      }),
+    ),
+    customModels: Schema.Array(CustomModelSetting).pipe(
+      Schema.withDecodingDefault(Effect.succeed([])),
+      Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
+    ),
+  },
+  {
+    order: ["binaryPath", "region"],
+  },
+);
+export type KimiSettings = typeof KimiSettings.Type;
+
+export const PiSettings = makeProviderSettingsSchema(
+  {
+    // Off by default, for the same reason as Kimi above.
+    enabled: Schema.Boolean.pipe(
+      Schema.withDecodingDefault(Effect.succeed(false)),
+      Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
+    ),
+    binaryPath: makeBinaryPathSetting("pi").pipe(
+      Schema.annotateKey({
+        title: "Binary path",
+        description: "Path to the pi CLI binary.",
+        providerSettingsForm: { placeholder: "pi", clearWhenEmpty: "omit" },
+      }),
+    ),
+    // pi fronts several model backends and defaults to `google`. T3 Code drives
+    // it against the Moonshot models, so the default here is `kimi-coding` —
+    // the provider id `pi auth check` and `pi --list-models` report.
+    provider: TrimmedString.pipe(
+      Schema.withDecodingDefault(Effect.succeed("kimi-coding")),
+      Schema.annotateKey({
+        title: "Provider",
+        description: "pi provider id used for sessions and auth checks.",
+        providerSettingsForm: { placeholder: "kimi-coding", clearWhenEmpty: "omit" },
+      }),
+    ),
+    customModels: Schema.Array(CustomModelSetting).pipe(
+      Schema.withDecodingDefault(Effect.succeed([])),
+      Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
+    ),
+  },
+  {
+    order: ["binaryPath", "provider"],
+  },
+);
+export type PiSettings = typeof PiSettings.Type;
+
+/**
  * Antigravity ACP auth methods. Personal and Enterprise open a Google sign-in
  * in the browser. The API key and Agent Platform methods take credentials from
  * the instance config and never open a browser.
@@ -1218,6 +1304,8 @@ export const ServerSettings = Schema.Struct({
     grok: GrokSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
     opencode: OpenCodeSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
     antigravity: AntigravitySettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
+    kimi: KimiSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
+    pi: PiSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
   }).pipe(Schema.withDecodingDefault(Effect.succeed({}))),
   // New driver-agnostic instance map. Keyed by `ProviderInstanceId`; values
   // are `ProviderInstanceConfig` envelopes. The driver-specific config blob
@@ -1373,6 +1461,20 @@ const GrokSettingsPatch = Schema.Struct({
   customModels: Schema.optionalKey(Schema.Array(CustomModelSetting)),
 });
 
+const KimiSettingsPatch = Schema.Struct({
+  enabled: Schema.optionalKey(Schema.Boolean),
+  binaryPath: Schema.optionalKey(TrimmedString),
+  region: Schema.optionalKey(KimiRegion),
+  customModels: Schema.optionalKey(Schema.Array(CustomModelSetting)),
+});
+
+const PiSettingsPatch = Schema.Struct({
+  enabled: Schema.optionalKey(Schema.Boolean),
+  binaryPath: Schema.optionalKey(TrimmedString),
+  provider: Schema.optionalKey(TrimmedString),
+  customModels: Schema.optionalKey(Schema.Array(CustomModelSetting)),
+});
+
 const AntigravitySettingsPatch = Schema.Struct({
   enabled: Schema.optionalKey(Schema.Boolean),
   authMethod: Schema.optionalKey(AntigravityAuthMethod),
@@ -1491,6 +1593,8 @@ export const ServerSettingsPatch = Schema.Struct({
       grok: Schema.optionalKey(GrokSettingsPatch),
       opencode: Schema.optionalKey(OpenCodeSettingsPatch),
       antigravity: Schema.optionalKey(AntigravitySettingsPatch),
+      kimi: Schema.optionalKey(KimiSettingsPatch),
+      pi: Schema.optionalKey(PiSettingsPatch),
     }),
   ),
   // Whole-map replacement for the new instance config. Patching individual

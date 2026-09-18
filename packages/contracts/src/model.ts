@@ -148,6 +148,8 @@ const CLAUDE_DRIVER_KIND = ProviderDriverKind.make("claudeAgent");
 const CURSOR_DRIVER_KIND = ProviderDriverKind.make("cursor");
 const GROK_DRIVER_KIND = ProviderDriverKind.make("grok");
 const OPENCODE_DRIVER_KIND = ProviderDriverKind.make("opencode");
+const KIMI_DRIVER_KIND = ProviderDriverKind.make("kimi");
+const PI_DRIVER_KIND = ProviderDriverKind.make("pi");
 
 export const DEFAULT_MODEL = "gpt-6-astra";
 
@@ -174,6 +176,10 @@ export const DEFAULT_MODEL_BY_PROVIDER: Partial<Record<ProviderDriverKind, strin
   [GROK_DRIVER_KIND]: "grok-build",
   [OPENCODE_DRIVER_KIND]: "openai/gpt-5",
   [ProviderDriverKind.make("antigravity")]: ANTIGRAVITY_DEFAULT_MODEL,
+  // `kimi provider list` reports this as the account default model alias.
+  [KIMI_DRIVER_KIND]: "kimi-code/kimi-for-coding",
+  // pi takes `provider/id` model patterns; `kimi-coding` is the Moonshot backend.
+  [PI_DRIVER_KIND]: "kimi-coding/kimi-for-coding",
 };
 
 /** Per-provider text generation model defaults. */
@@ -222,4 +228,6 @@ export const PROVIDER_DISPLAY_NAMES: Partial<Record<ProviderDriverKind, string>>
   [CURSOR_DRIVER_KIND]: "Cursor",
   [GROK_DRIVER_KIND]: "Grok",
   [OPENCODE_DRIVER_KIND]: "OpenCode",
+  [KIMI_DRIVER_KIND]: "Kimi",
+  [PI_DRIVER_KIND]: "pi",
 };
