@@ -828,7 +828,8 @@ export type PiSettings = typeof PiSettings.Type;
  * Hermes fronts whichever inference provider `hermes model` selected on the
  * host — DeepSeek on a default install — so T3 Code carries no key or endpoint
  * of its own. The only credential lives in Hermes' own config, which is why
- * this schema is a binary path and a hook policy and nothing else.
+ * this schema is a binary path, the home that config is read from, and a hook
+ * policy and nothing else.
  */
 export const HermesSettings = makeProviderSettingsSchema(
   {
@@ -842,6 +843,14 @@ export const HermesSettings = makeProviderSettingsSchema(
         title: "Binary path",
         description: "Path to the Hermes Agent CLI binary.",
         providerSettingsForm: { placeholder: "hermes", clearWhenEmpty: "omit" },
+      }),
+    ),
+    homePath: TrimmedString.pipe(
+      Schema.withDecodingDefault(Effect.succeed("")),
+      Schema.annotateKey({
+        title: "HERMES_HOME path",
+        description: "Custom Hermes home and config directory.",
+        providerSettingsForm: { placeholder: "~/.hermes", clearWhenEmpty: "omit" },
       }),
     ),
     // `hermes acp` prompts on a TTY the first time it sees a project's shell
@@ -860,7 +869,7 @@ export const HermesSettings = makeProviderSettingsSchema(
       Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
     ),
   },
-  { order: ["binaryPath", "acceptHooks"] },
+  { order: ["binaryPath", "homePath", "acceptHooks"] },
 );
 export type HermesSettings = typeof HermesSettings.Type;
 
@@ -1519,6 +1528,7 @@ const PiSettingsPatch = Schema.Struct({
 const HermesSettingsPatch = Schema.Struct({
   enabled: Schema.optionalKey(Schema.Boolean),
   binaryPath: Schema.optionalKey(TrimmedString),
+  homePath: Schema.optionalKey(TrimmedString),
   acceptHooks: Schema.optionalKey(Schema.Boolean),
   customModels: Schema.optionalKey(Schema.Array(CustomModelSetting)),
 });

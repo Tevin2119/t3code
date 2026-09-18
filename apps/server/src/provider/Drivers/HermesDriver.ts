@@ -24,7 +24,7 @@ import { ChildProcessSpawner } from "effect/unstable/process";
 import * as BackgroundPolicy from "../../background/BackgroundPolicy.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { makeHermesTextGeneration } from "../../textGeneration/HermesTextGeneration.ts";
-import { makeHermesAcpRuntime } from "../acp/HermesAcpSupport.ts";
+import { makeHermesAcpRuntime, makeHermesEnvironment } from "../acp/HermesAcpSupport.ts";
 import { makeCliAuth } from "../CliAuth.ts";
 import { ProviderDriverError } from "../Errors.ts";
 import { makeHermesAdapter, type HermesAdapterOptions } from "../Layers/HermesAdapter.ts";
@@ -78,7 +78,12 @@ export const HermesDriver: ProviderDriver<HermesSettings, HermesDriverEnv> = {
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
       const serverSettings = yield* ServerSettingsService;
       const eventLoggers = yield* ProviderEventLoggers;
-      const processEnv = mergeProviderInstanceEnvironment(environment);
+      // One environment for the ACP agent, the status probes and the credential
+      // check, so a scoped `homePath` governs everything the card reports.
+      const processEnv = makeHermesEnvironment(
+        config,
+        mergeProviderInstanceEnvironment(environment),
+      );
       const continuationIdentity = defaultProviderContinuationIdentity({
         driverKind: DRIVER_KIND,
         instanceId,

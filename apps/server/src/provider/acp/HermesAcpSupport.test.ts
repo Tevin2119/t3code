@@ -5,15 +5,13 @@ import {
   buildHermesAcpSpawnInput,
   hermesAcpSpawnArgs,
   hermesModelSlug,
+  makeHermesEnvironment,
   resolveHermesAcpModelId,
 } from "./HermesAcpSupport.ts";
 
 it("only passes --accept-hooks when the instance opted into unattended hooks", () => {
-  expect(hermesAcpSpawnArgs({ binaryPath: "hermes", acceptHooks: false })).toEqual(["acp"]);
-  expect(hermesAcpSpawnArgs({ binaryPath: "hermes", acceptHooks: true })).toEqual([
-    "acp",
-    "--accept-hooks",
-  ]);
+  expect(hermesAcpSpawnArgs({ acceptHooks: false })).toEqual(["acp"]);
+  expect(hermesAcpSpawnArgs({ acceptHooks: true })).toEqual(["acp", "--accept-hooks"]);
 });
 
 it("falls back to the CLI on PATH when no binary path is configured", () => {
@@ -22,6 +20,28 @@ it("falls back to the CLI on PATH when no binary path is configured", () => {
     args: ["acp"],
     cwd: "/repo",
   });
+});
+
+it("runs hermes acp against the instance's scoped HERMES_HOME", () => {
+  const scopedHome = "/scoped/hermes";
+  const spawn = buildHermesAcpSpawnInput(
+    { binaryPath: "hermes", homePath: scopedHome, acceptHooks: false },
+    "/repo",
+    { PATH: "/bin", HERMES_HOME: "/ambient" },
+  );
+  expect(spawn.env).toEqual({ PATH: "/bin", HERMES_HOME: scopedHome });
+});
+
+it("leaves an inherited HERMES_HOME alone when no home path is configured", () => {
+  const environment = { PATH: "/bin", HERMES_HOME: "/ambient" };
+  expect(makeHermesEnvironment({ homePath: "" }, environment)).toBe(environment);
+  expect(
+    buildHermesAcpSpawnInput(
+      { binaryPath: "hermes", homePath: "", acceptHooks: false },
+      "/repo",
+      environment,
+    ).env,
+  ).toBe(environment);
 });
 
 it("writes model ids the way Hermes reports them", () => {

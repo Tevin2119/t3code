@@ -51,6 +51,18 @@ this takes a long time, and T3 Code shows the thread as starting throughout. If 
 thread never finishes starting, trim that configuration — `hermes config show`
 lists what it loads — or start Hermes' MCP servers on demand rather than at boot.
 
+### A separate Hermes config for T3 Code
+
+**HERMES_HOME path** in provider settings points the instance at a different
+Hermes home, so T3 Code can run Hermes with its own `config.yaml` while the one
+you use in a terminal stays as it is. Leave it empty to use Hermes' default home.
+
+This is the fix when threads hang at starting because Hermes' memory provider
+is enabled: copy your Hermes home to a new directory, set `memory.provider: ''`
+in that copy's `config.yaml`, and enter the directory here. The credential check
+and model list read from the same home, so run `hermes acp --setup` with
+`HERMES_HOME` set to that directory if the copy has no credential yet.
+
 ## Accounts and removal
 
 | Action  | Effect                                                          |

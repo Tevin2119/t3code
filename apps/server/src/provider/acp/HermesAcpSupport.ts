@@ -29,6 +29,7 @@ import * as ChildProcessSpawner from "effect/unstable/process/ChildProcessSpawne
 import type * as EffectAcpErrors from "effect-acp/errors";
 import type * as EffectAcpSchema from "effect-acp/schema";
 
+import { expandHomePath } from "../../pathExpansion.ts";
 import * as AcpSessionRuntime from "./AcpSessionRuntime.ts";
 
 const HERMES_DRIVER_KIND = ProviderDriverKind.make("hermes");
@@ -42,7 +43,10 @@ const HERMES_DRIVER_KIND = ProviderDriverKind.make("hermes");
  */
 export const HERMES_AUTH_METHOD_ID = "hermes-setup";
 
-export type HermesAcpRuntimeSettings = Pick<HermesSettings, "binaryPath" | "acceptHooks">;
+export type HermesAcpRuntimeSettings = Pick<
+  HermesSettings,
+  "binaryPath" | "homePath" | "acceptHooks"
+>;
 
 export interface HermesAcpRuntimeInput extends Omit<
   AcpSessionRuntime.AcpSessionRuntimeOptions,
@@ -54,7 +58,7 @@ export interface HermesAcpRuntimeInput extends Omit<
 }
 
 export function hermesAcpSpawnArgs(
-  hermesSettings: HermesAcpRuntimeSettings | null | undefined,
+  hermesSettings: Pick<HermesSettings, "acceptHooks"> | null | undefined,
 ): ReadonlyArray<string> {
   // `hermes acp` takes no permission-mode flags: approval policy is negotiated
   // per tool call over ACP `session/request_permission`. `--accept-hooks` is
@@ -63,16 +67,35 @@ export function hermesAcpSpawnArgs(
   return hermesSettings?.acceptHooks ? ["acp", "--accept-hooks"] : ["acp"];
 }
 
+/**
+ * The environment every Hermes subprocess of an instance runs with. A configured
+ * `homePath` is exported as `HERMES_HOME`, which is where Hermes reads its
+ * config, credentials and sessions from, so the ACP agent and the CLI probes
+ * all see the same scoped config. With no `homePath` the base environment
+ * passes through untouched, including any `HERMES_HOME` it already carries.
+ */
+export function makeHermesEnvironment(
+  hermesSettings: Pick<HermesSettings, "homePath"> | null | undefined,
+  baseEnv: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv {
+  const homePath = hermesSettings?.homePath.trim() ?? "";
+  if (homePath.length === 0) return baseEnv;
+  return { ...baseEnv, HERMES_HOME: expandHomePath(homePath) };
+}
+
 export function buildHermesAcpSpawnInput(
   hermesSettings: HermesAcpRuntimeSettings | null | undefined,
   cwd: string,
   environment?: NodeJS.ProcessEnv,
 ): AcpSessionRuntime.AcpSpawnInput {
+  const env = hermesSettings?.homePath.trim()
+    ? makeHermesEnvironment(hermesSettings, environment)
+    : environment;
   return {
     command: hermesSettings?.binaryPath || "hermes",
     args: [...hermesAcpSpawnArgs(hermesSettings)],
     cwd,
-    ...(environment ? { env: environment } : {}),
+    ...(env ? { env } : {}),
   };
 }
 
