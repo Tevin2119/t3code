@@ -14,7 +14,6 @@ import { EnvironmentMachineKind, ThreadEnvMode } from "./environment.ts";
 import { KeybindingShortcut } from "./keybindings.ts";
 import {
   CustomModelSetting,
-  DEEPSEEK_DEFAULT_BASE_URL,
   DEFAULT_TEXT_GENERATION_MODEL,
   DEFAULT_TEXT_GENERATION_REASONING_EFFORT,
   ProviderOptionSelections,
@@ -826,40 +825,34 @@ export const PiSettings = makeProviderSettingsSchema(
 export type PiSettings = typeof PiSettings.Type;
 
 /**
- * DeepSeek is an API, not a CLI harness: there is no process to spawn, no
- * sandbox and no editing tools, so this driver only backs text generation.
- * The key is read from settings first and `DEEPSEEK_API_KEY` second, which
- * keeps a shared machine working without writing the key into settings.json.
+ * Hermes fronts whichever inference provider `hermes model` selected on the
+ * host — DeepSeek on a default install — so T3 Code carries no key or endpoint
+ * of its own. The only credential lives in Hermes' own config, which is why
+ * this schema is a binary path and a hook policy and nothing else.
  */
-export const DeepSeekSettings = makeProviderSettingsSchema(
+export const HermesSettings = makeProviderSettingsSchema(
   {
-    // Off by default, as every provider added after Codex and Claude is.
+    // Off by default, for the same reason as Kimi above.
     enabled: Schema.Boolean.pipe(
       Schema.withDecodingDefault(Effect.succeed(false)),
       Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
     ),
-    apiKey: TrimmedString.pipe(
-      Schema.withDecodingDefault(Effect.succeed("")),
+    binaryPath: makeBinaryPathSetting("hermes").pipe(
       Schema.annotateKey({
-        title: "API key",
-        description:
-          "DeepSeek platform key. Stored in plain text. Leave empty to use DEEPSEEK_API_KEY.",
-        providerSettingsForm: {
-          control: "password",
-          placeholder: "DEEPSEEK_API_KEY",
-          clearWhenEmpty: "omit",
-        },
+        title: "Binary path",
+        description: "Path to the Hermes Agent CLI binary.",
+        providerSettingsForm: { placeholder: "hermes", clearWhenEmpty: "omit" },
       }),
     ),
-    baseUrl: TrimmedString.pipe(
-      Schema.withDecodingDefault(Effect.succeed("")),
+    // `hermes acp` prompts on a TTY the first time it sees a project's shell
+    // hooks. T3 Code gives it no TTY, so the prompt would hang the session;
+    // this opts into running them unattended instead.
+    acceptHooks: Schema.Boolean.pipe(
+      Schema.withDecodingDefault(Effect.succeed(false)),
       Schema.annotateKey({
-        title: "Base URL",
-        description: "OpenAI-compatible endpoint. Leave empty for https://api.deepseek.com.",
-        providerSettingsForm: {
-          placeholder: DEEPSEEK_DEFAULT_BASE_URL,
-          clearWhenEmpty: "omit",
-        },
+        title: "Auto-approve shell hooks",
+        description: "Run a project's unseen Hermes hooks without asking.",
+        providerSettingsForm: { control: "switch" },
       }),
     ),
     customModels: Schema.Array(CustomModelSetting).pipe(
@@ -867,9 +860,9 @@ export const DeepSeekSettings = makeProviderSettingsSchema(
       Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
     ),
   },
-  { order: ["apiKey", "baseUrl"] },
+  { order: ["binaryPath", "acceptHooks"] },
 );
-export type DeepSeekSettings = typeof DeepSeekSettings.Type;
+export type HermesSettings = typeof HermesSettings.Type;
 
 /**
  * Antigravity ACP auth methods. Personal and Enterprise open a Google sign-in
@@ -1353,7 +1346,7 @@ export const ServerSettings = Schema.Struct({
     antigravity: AntigravitySettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
     kimi: KimiSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
     pi: PiSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
-    deepseek: DeepSeekSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
+    hermes: HermesSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
   }).pipe(Schema.withDecodingDefault(Effect.succeed({}))),
   // New driver-agnostic instance map. Keyed by `ProviderInstanceId`; values
   // are `ProviderInstanceConfig` envelopes. The driver-specific config blob
@@ -1523,10 +1516,10 @@ const PiSettingsPatch = Schema.Struct({
   customModels: Schema.optionalKey(Schema.Array(CustomModelSetting)),
 });
 
-const DeepSeekSettingsPatch = Schema.Struct({
+const HermesSettingsPatch = Schema.Struct({
   enabled: Schema.optionalKey(Schema.Boolean),
-  apiKey: Schema.optionalKey(TrimmedString),
-  baseUrl: Schema.optionalKey(TrimmedString),
+  binaryPath: Schema.optionalKey(TrimmedString),
+  acceptHooks: Schema.optionalKey(Schema.Boolean),
   customModels: Schema.optionalKey(Schema.Array(CustomModelSetting)),
 });
 
@@ -1650,7 +1643,7 @@ export const ServerSettingsPatch = Schema.Struct({
       antigravity: Schema.optionalKey(AntigravitySettingsPatch),
       kimi: Schema.optionalKey(KimiSettingsPatch),
       pi: Schema.optionalKey(PiSettingsPatch),
-      deepseek: Schema.optionalKey(DeepSeekSettingsPatch),
+      hermes: Schema.optionalKey(HermesSettingsPatch),
     }),
   ),
   // Whole-map replacement for the new instance config. Patching individual

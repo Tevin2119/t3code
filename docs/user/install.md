@@ -122,7 +122,7 @@ broken.
 | Antigravity | Install and sign in with Google from T3 Code's provider settings.                                                          |
 | Kimi        | Install [Kimi Code CLI](https://moonshotai.github.io/kimi-code/), then sign in from provider settings or run `kimi login`. |
 | pi          | Install [pi](https://www.npmjs.com/package/@earendil-works/pi-coding-agent), then run `pi` and sign in with `/login`.      |
-| DeepSeek    | Chat only. Add a [DeepSeek API key](https://platform.deepseek.com) in provider settings, or export `DEEPSEEK_API_KEY`.     |
+| Hermes      | Install [Hermes Agent](https://github.com/NousResearch/hermes-agent), then run `hermes acp --setup` to pick a provider.    |
 
 Provider CLIs must be on the server's `PATH`. If T3 Code cannot find one, set its
 **Binary path** in provider settings, especially when using a version manager.
@@ -144,7 +144,7 @@ their original values.
 For provider-specific setup and accounts, see [Codex](./providers-codex.md),
 [Claude](./providers-claude.md), [OpenCode](./providers-opencode.md),
 [Antigravity](./providers-antigravity.md), [Kimi](./providers-kimi.md),
-[pi](./providers-pi.md), and [DeepSeek](./providers-deepseek.md).
+[pi](./providers-pi.md), and [Hermes](./providers-hermes.md).
 
 ## Next steps
 

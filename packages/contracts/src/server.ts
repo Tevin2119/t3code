@@ -204,10 +204,9 @@ export const ServerProvider = Schema.Struct({
   supportsConversationRollback: Schema.optional(Schema.Boolean),
   supportsTextGeneration: Schema.optional(Schema.Boolean),
   /**
-   * False for providers that cannot run a thread — an API-only driver such as
-   * DeepSeek backs text generation but has no session protocol, sandbox or
-   * editing tools. Absent means the provider runs threads, which is every
-   * CLI-backed driver.
+   * False for providers that cannot run a thread — an API-only driver backs
+   * text generation but has no session protocol, sandbox or editing tools.
+   * Absent means the provider runs threads, which is every CLI-backed driver.
    */
   supportsSessions: Schema.optional(Schema.Boolean),
   setup: Schema.optional(

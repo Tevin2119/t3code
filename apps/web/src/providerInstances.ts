@@ -81,8 +81,8 @@ export function isProviderInstancePickerReady(entry: ProviderInstanceEntry): boo
 
 /**
  * Picker rails contain configured, enabled instances that can actually run a
- * thread. An API-only provider (DeepSeek) reports `supportsSessions: false` and
- * stays out of the chat picker while remaining selectable for text generation.
+ * thread. An API-only provider reports `supportsSessions: false` and stays out
+ * of the chat picker while remaining selectable for text generation.
  */
 export function isProviderInstancePickerVisible(entry: ProviderInstanceEntry): boolean {
   return entry.enabled && entry.snapshot.supportsSessions !== false;
