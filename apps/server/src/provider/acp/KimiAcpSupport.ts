@@ -70,6 +70,33 @@ export function kimiLoginArgs(region: KimiSettings["region"]): ReadonlyArray<str
   return ["login", "--region", region];
 }
 
+/**
+ * Pull the device-code challenge out of `kimi login` output. Verified against
+ * CLI 0.42.0, which prints to stderr:
+ *
+ *   Opening browser for Kimi device login: https://…/authorize_device?user_code=AB1C-DEFG
+ *   If the browser did not open, paste the URL above and enter code: AB1C-DEFG
+ *
+ * The code is read from the URL's own `user_code` parameter when present, so a
+ * reworded prompt line does not cost us the code.
+ */
+export function parseKimiLoginChallenge(
+  output: string,
+): { readonly verificationUrl: string; readonly verificationCode: string | undefined } | undefined {
+  const urls = output.match(/https?:\/\/[^\s'"]+/g) ?? [];
+  // The region decides the host (kimi.ai vs kimi.com), so the path is what
+  // identifies the sign-in link among any other URL the CLI may print.
+  const url = urls.find((candidate) => /authorize|device|login/i.test(candidate)) ?? urls[0];
+  if (!url) return undefined;
+  const verificationUrl = url.replace(/[).,;]+$/, "");
+  const fromUrl = verificationUrl.match(/[?&]user_code=([^&\s]+)/i)?.[1];
+  const fromPrompt = output.match(/enter code:\s*([A-Za-z0-9-]{4,})/i)?.[1];
+  return {
+    verificationUrl,
+    verificationCode: fromUrl ? decodeURIComponent(fromUrl) : fromPrompt,
+  };
+}
+
 export const makeKimiAcpRuntime = (
   input: KimiAcpRuntimeInput,
 ): Effect.Effect<

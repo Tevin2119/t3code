@@ -157,6 +157,8 @@ export function buildModelOptions(
     if (
       !provider.enabled ||
       !provider.installed ||
+      // API-only providers back text generation but cannot run a thread.
+      provider.supportsSessions === false ||
       provider.auth.status === "unauthenticated" ||
       (provider.driver === "antigravity" && provider.availability === "unavailable")
     ) {

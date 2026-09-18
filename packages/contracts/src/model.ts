@@ -150,6 +150,7 @@ const GROK_DRIVER_KIND = ProviderDriverKind.make("grok");
 const OPENCODE_DRIVER_KIND = ProviderDriverKind.make("opencode");
 const KIMI_DRIVER_KIND = ProviderDriverKind.make("kimi");
 const PI_DRIVER_KIND = ProviderDriverKind.make("pi");
+const DEEPSEEK_DRIVER_KIND = ProviderDriverKind.make("deepseek");
 
 export const DEFAULT_MODEL = "gpt-6-astra";
 
@@ -168,6 +169,16 @@ export const DEFAULT_TEXT_GENERATION_MODEL = "gpt-5.6-luna";
 export const ANTIGRAVITY_DEFAULT_MODEL = "antigravity-default";
 export const DEFAULT_TEXT_GENERATION_REASONING_EFFORT = "low";
 
+/** DeepSeek's OpenAI-compatible endpoint. */
+export const DEEPSEEK_DEFAULT_BASE_URL = "https://api.deepseek.com";
+/**
+ * The two models the DeepSeek platform serves. Aliases layered on top by other
+ * harnesses (Hermes' "deepseek-v4-pro", for instance) are not DeepSeek model
+ * ids and must be mapped onto one of these before a request goes out.
+ */
+export const DEEPSEEK_CHAT_MODEL = "deepseek-chat";
+export const DEEPSEEK_REASONER_MODEL = "deepseek-reasoner";
+
 export const DEFAULT_MODEL_BY_PROVIDER: Partial<Record<ProviderDriverKind, string>> = {
   [CODEX_DRIVER_KIND]: DEFAULT_MODEL,
   [CLAUDE_DRIVER_KIND]: "claude-fable-5-1",
@@ -180,6 +191,7 @@ export const DEFAULT_MODEL_BY_PROVIDER: Partial<Record<ProviderDriverKind, strin
   [KIMI_DRIVER_KIND]: "kimi-code/kimi-for-coding",
   // pi takes `provider/id` model patterns; `kimi-coding` is the Moonshot backend.
   [PI_DRIVER_KIND]: "kimi-coding/kimi-for-coding",
+  [DEEPSEEK_DRIVER_KIND]: DEEPSEEK_CHAT_MODEL,
 };
 
 /** Per-provider text generation model defaults. */
@@ -191,6 +203,7 @@ export const DEFAULT_TEXT_GENERATION_MODEL_BY_PROVIDER: Partial<
   [CLAUDE_DRIVER_KIND]: "claude-haiku-4-5",
   [CURSOR_DRIVER_KIND]: "composer-2",
   [OPENCODE_DRIVER_KIND]: "openai/gpt-5",
+  [DEEPSEEK_DRIVER_KIND]: DEEPSEEK_CHAT_MODEL,
 };
 
 export const MODEL_SLUG_ALIASES_BY_PROVIDER: Partial<
@@ -230,4 +243,5 @@ export const PROVIDER_DISPLAY_NAMES: Partial<Record<ProviderDriverKind, string>>
   [OPENCODE_DRIVER_KIND]: "OpenCode",
   [KIMI_DRIVER_KIND]: "Kimi",
   [PI_DRIVER_KIND]: "pi",
+  [DEEPSEEK_DRIVER_KIND]: "DeepSeek",
 };

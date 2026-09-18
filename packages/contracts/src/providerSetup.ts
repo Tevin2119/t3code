@@ -23,6 +23,13 @@ export const ProviderAuthState = Schema.Struct({
   ]),
   flowId: Schema.NullOr(SetupOperationId),
   authorizationUrl: Schema.NullOr(Schema.String),
+  /**
+   * Device code the user types at `authorizationUrl`. Present only for
+   * device-code flows, which finish inside the provider CLI and never redirect
+   * back — clients read it as "show the code, hide the callback field".
+   * Absent for browser-callback flows, which is every pre-existing producer.
+   */
+  verificationCode: Schema.optional(Schema.NullOr(Schema.String)),
   expiresAt: Schema.NullOr(IsoDateTime),
   message: Schema.NullOr(Schema.String),
 });

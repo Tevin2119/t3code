@@ -3,28 +3,37 @@
  *
  * `kimi acp` is a first-class ACP agent, so this driver composes the shared ACP
  * runtime the same way the Grok driver does rather than owning a transport.
- * Sign-in is a device-code flow run in a terminal (`kimi login`), which the CLI
- * performs and persists itself — there is no browser callback for the server to
- * host, so the driver exposes no `auth` controller and reports login state from
- * the snapshot probe instead.
+ *
+ * Sign-in is a device-code flow: `kimi login` prints a verification URL plus a
+ * short code and polls until the user approves, so `CliAuth` runs it as a child
+ * process and republishes the code instead of hosting a browser callback.
+ * Sign-out goes the other way — the ACP agent advertises `auth.logout`, so it
+ * is an ACP request, the same shape `AntigravityAuth` uses.
  *
  * @module provider/Drivers/KimiDriver
  */
-import { KimiSettings, ProviderDriverKind } from "@t3tools/contracts";
+import { KimiSettings, ProviderDriverKind, ProviderSetupError } from "@t3tools/contracts";
+import { resolveSpawnCommand } from "@t3tools/shared/shell";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
-import { ChildProcessSpawner } from "effect/unstable/process";
+import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 import * as BackgroundPolicy from "../../background/BackgroundPolicy.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { makeKimiTextGeneration } from "../../textGeneration/KimiTextGeneration.ts";
-import { makeKimiAcpRuntime } from "../acp/KimiAcpSupport.ts";
+import {
+  kimiLoginArgs,
+  makeKimiAcpRuntime,
+  parseKimiLoginChallenge,
+} from "../acp/KimiAcpSupport.ts";
+import { makeCliAuth } from "../CliAuth.ts";
 import { ProviderDriverError } from "../Errors.ts";
 import { makeKimiAdapter, type KimiAdapterOptions } from "../Layers/KimiAdapter.ts";
 import {
   buildInitialKimiProviderSnapshot,
   checkKimiProviderStatus,
+  probeKimiAuthenticated,
 } from "../Layers/KimiProvider.ts";
 import { ProviderEventLoggers } from "../Layers/ProviderEventLoggers.ts";
 import { makeManagedServerProvider } from "../makeManagedServerProvider.ts";
@@ -43,6 +52,7 @@ import {
 import { withInstanceIdentity } from "./instanceIdentity.ts";
 
 const decodeKimiSettings = Schema.decodeSync(KimiSettings);
+const isSetupError = Schema.is(ProviderSetupError);
 
 const DRIVER_KIND = ProviderDriverKind.make("kimi");
 const MAINTENANCE_CAPABILITIES = makeManualOnlyProviderMaintenanceCapabilities({
@@ -126,6 +136,71 @@ export const KimiDriver: ProviderDriver<KimiSettings, KimiDriverEnv> = {
         ),
       );
 
+      const setupError = (operation: string, detail: string) =>
+        new ProviderSetupError({ instanceId, operation, detail });
+
+      const auth = yield* makeCliAuth({
+        instanceId,
+        providerName: "Kimi",
+        login: {
+          command: Effect.gen(function* () {
+            const binary = effectiveConfig.binaryPath || "kimi";
+            const resolved = yield* resolveSpawnCommand(
+              binary,
+              kimiLoginArgs(effectiveConfig.region),
+              { env: processEnv },
+            );
+            return ChildProcess.make(resolved.command, resolved.args, {
+              env: processEnv,
+              shell: resolved.shell,
+            });
+          }).pipe(
+            Effect.mapError(() =>
+              setupError("start", "Kimi Code CLI (`kimi`) is not installed or not on PATH."),
+            ),
+          ),
+          parseChallenge: parseKimiLoginChallenge,
+          // The CLI prints "Code expires in 1800s"; expire the flow with it
+          // rather than earlier, or the UI cancels a code that still works.
+          timeoutMs: 1_800_000,
+        },
+        verify: probeKimiAuthenticated(effectiveConfig, processEnv).pipe(
+          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+        ),
+        signInHint: "Kimi sign-in did not complete. Start sign-in again.",
+        // `kimi acp` advertises `auth.logout`, so sign-out is an ACP request
+        // against a throwaway runtime rather than another CLI invocation.
+        logout: (stopSessions) =>
+          Effect.gen(function* () {
+            yield* stopSessions;
+            // Built here rather than through the adapter's `makeRuntime`, whose
+            // return type is narrowed to the session surface the adapter uses.
+            const runtime = yield* makeKimiAcpRuntime({
+              cwd: process.cwd(),
+              clientInfo: { name: "t3-code-auth", version: "0.0.0" },
+              kimiSettings: effectiveConfig,
+              environment: processEnv,
+              childProcessSpawner: spawner,
+            }).pipe(Effect.provideService(Crypto.Crypto, crypto));
+            const initialized = yield* runtime.initialize();
+            if (!initialized.agentCapabilities?.auth?.logout) {
+              return yield* setupError(
+                "logout",
+                "This Kimi Code CLI version does not support sign-out. Update the CLI.",
+              );
+            }
+            yield* runtime.request("logout", {});
+          }).pipe(
+            Effect.scoped,
+            Effect.mapError((cause) =>
+              isSetupError(cause)
+                ? cause
+                : setupError("logout", "Kimi sign-out failed. Try again."),
+            ),
+          ),
+        onSettled: snapshot.refresh.pipe(Effect.asVoid),
+      });
+
       return {
         instanceId,
         driverKind: DRIVER_KIND,
@@ -136,6 +211,7 @@ export const KimiDriver: ProviderDriver<KimiSettings, KimiDriverEnv> = {
         snapshot,
         adapter,
         textGeneration,
+        auth,
       } satisfies ProviderInstance;
     }),
 };

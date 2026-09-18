@@ -3,12 +3,17 @@ import {
   ClaudeSettings,
   CodexSettings,
   CursorSettings,
+  DeepSeekSettings,
   GrokSettings,
+  KimiSettings,
   OpenCodeSettings,
+  PiSettings,
   ProviderDriverKind,
 } from "@t3tools/contracts";
 import type * as Schema from "effect/Schema";
+import { BotIcon } from "lucide-react";
 import {
+  ACPRegistryIcon,
   AntigravityIcon,
   ClaudeAI,
   CursorIcon,
@@ -16,6 +21,7 @@ import {
   type Icon,
   OpenAI,
   OpenCodeIcon,
+  PiAgentIcon,
 } from "../Icons";
 
 type ProviderSettingsSchema = {
@@ -81,6 +87,27 @@ const PROVIDER_CLIENT_DEFINITIONS: readonly ProviderClientDefinition[] = [
     label: "Antigravity",
     icon: AntigravityIcon,
     settingsSchema: AntigravitySettings,
+  },
+  {
+    value: ProviderDriverKind.make("kimi"),
+    label: "Kimi",
+    icon: ACPRegistryIcon,
+    badgeLabel: "Early Access",
+    settingsSchema: KimiSettings,
+  },
+  {
+    value: ProviderDriverKind.make("pi"),
+    label: "pi",
+    icon: PiAgentIcon,
+    badgeLabel: "Early Access",
+    settingsSchema: PiSettings,
+  },
+  {
+    value: ProviderDriverKind.make("deepseek"),
+    label: "DeepSeek",
+    icon: BotIcon,
+    badgeLabel: "Chat only",
+    settingsSchema: DeepSeekSettings,
   },
 ];
 

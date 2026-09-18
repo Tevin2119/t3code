@@ -203,10 +203,23 @@ export const ServerProvider = Schema.Struct({
   requiresNewThreadForModelChange: Schema.optional(Schema.Boolean),
   supportsConversationRollback: Schema.optional(Schema.Boolean),
   supportsTextGeneration: Schema.optional(Schema.Boolean),
+  /**
+   * False for providers that cannot run a thread — an API-only driver such as
+   * DeepSeek backs text generation but has no session protocol, sandbox or
+   * editing tools. Absent means the provider runs threads, which is every
+   * CLI-backed driver.
+   */
+  supportsSessions: Schema.optional(Schema.Boolean),
   setup: Schema.optional(
     Schema.Struct({
       canAuthenticate: Schema.Boolean,
       canInstall: Schema.Boolean,
+      /**
+       * False when the provider's sign-out only exists outside T3 Code — pi
+       * clears credentials from its own TUI and exposes no headless command.
+       * Absent means sign-out works, which is every pre-existing producer.
+       */
+      canSignOut: Schema.optional(Schema.Boolean),
     }),
   ),
   enabled: Schema.Boolean,

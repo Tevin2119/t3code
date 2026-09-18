@@ -129,6 +129,21 @@ export function parsePiModelsOutput(output: string): ReadonlyArray<ServerProvide
   return models;
 }
 
+/**
+ * pi snapshots advertise `canAuthenticate` so clients can re-check credentials
+ * from settings. pi's own sign-in only exists inside its TUI (`/login`), so the
+ * driver's controller verifies rather than signs in, and there is no managed
+ * runtime to install.
+ */
+function buildPiProvider(input: Parameters<typeof buildServerProvider>[0]): ServerProviderDraft {
+  return {
+    ...buildServerProvider(input),
+    // pi's `/logout` is a TUI command with no headless equivalent, so clients
+    // must not offer a sign-out button that can only fail.
+    setup: { canAuthenticate: true, canInstall: false, canSignOut: false },
+  };
+}
+
 const runPiCliCommand = (
   piSettings: PiSettings,
   args: ReadonlyArray<string>,
@@ -153,12 +168,33 @@ function piModelsFromSettings(
   return providerModelsFromSettings(builtIn, customModels, EMPTY_CAPABILITIES);
 }
 
+/**
+ * Read whether the configured pi provider currently has usable credentials.
+ * `pi auth check` refreshes an expired OAuth token as a side effect, which is
+ * exactly what the auth controller wants before it reports a verdict.
+ */
+export const probePiAuthenticated = Effect.fn("probePiAuthenticated")(function* (
+  piSettings: PiSettings,
+  environment: NodeJS.ProcessEnv = process.env,
+): Effect.fn.Return<boolean, never, ChildProcessSpawner.ChildProcessSpawner> {
+  const provider = piSettings.provider.trim() || "kimi-coding";
+  const result = yield* runPiCliCommand(
+    piSettings,
+    ["auth", "check", "--provider", provider, "--json"],
+    environment,
+  ).pipe(Effect.timeoutOption(AUTH_PROBE_TIMEOUT_MS), Effect.result);
+  if (Result.isFailure(result) || Option.isNone(result.success)) return false;
+  // `pi auth check` exits non-zero when the provider is not ready and still
+  // prints the verdict, so the payload decides rather than the exit code.
+  return parsePiAuthCheck(result.success.value.stdout)?.status === "authenticated";
+});
+
 export function buildInitialPiProviderSnapshot(
   piSettings: PiSettings,
 ): Effect.Effect<ServerProviderDraft> {
   return Effect.gen(function* () {
     const checkedAt = DateTime.formatIso(yield* DateTime.now);
-    return buildServerProvider({
+    return buildPiProvider({
       presentation: PI_PRESENTATION,
       enabled: piSettings.enabled,
       checkedAt,
@@ -183,7 +219,7 @@ export const checkPiProviderStatus = Effect.fn("checkPiProviderStatus")(function
   const provider = piSettings.provider.trim() || "kimi-coding";
 
   if (!piSettings.enabled) {
-    return buildServerProvider({
+    return buildPiProvider({
       presentation: PI_PRESENTATION,
       enabled: false,
       checkedAt,
@@ -206,7 +242,7 @@ export const checkPiProviderStatus = Effect.fn("checkPiProviderStatus")(function
   if (Result.isFailure(versionResult)) {
     const error = versionResult.failure;
     yield* Effect.logWarning("pi CLI health check failed.", { errorTag: error._tag });
-    return buildServerProvider({
+    return buildPiProvider({
       presentation: PI_PRESENTATION,
       enabled: piSettings.enabled,
       checkedAt,
@@ -224,7 +260,7 @@ export const checkPiProviderStatus = Effect.fn("checkPiProviderStatus")(function
   }
 
   if (Option.isNone(versionResult.success)) {
-    return buildServerProvider({
+    return buildPiProvider({
       presentation: PI_PRESENTATION,
       enabled: piSettings.enabled,
       checkedAt,
@@ -245,7 +281,7 @@ export const checkPiProviderStatus = Effect.fn("checkPiProviderStatus")(function
     yield* Effect.logWarning("pi CLI version probe exited with a non-zero status.", {
       exitCode: versionOutput.code,
     });
-    return buildServerProvider({
+    return buildPiProvider({
       presentation: PI_PRESENTATION,
       enabled: piSettings.enabled,
       checkedAt,
@@ -292,7 +328,7 @@ export const checkPiProviderStatus = Effect.fn("checkPiProviderStatus")(function
   );
 
   if (auth === undefined) {
-    return buildServerProvider({
+    return buildPiProvider({
       presentation: PI_PRESENTATION,
       enabled: piSettings.enabled,
       checkedAt,

@@ -141,6 +141,19 @@ function parseJson(output: string): Option.Option<unknown> {
   }
 }
 
+/**
+ * Every Kimi snapshot advertises `canAuthenticate` so clients render the
+ * sign-in affordance: the driver owns a device-code controller that runs
+ * `kimi login`. There is no managed runtime to download, so `canInstall`
+ * stays false and the CLI has to be installed by the user.
+ */
+function buildKimiProvider(input: Parameters<typeof buildServerProvider>[0]): ServerProviderDraft {
+  return {
+    ...buildServerProvider(input),
+    setup: { canAuthenticate: true, canInstall: false },
+  };
+}
+
 const runKimiCliCommand = (
   kimiSettings: KimiSettings,
   args: ReadonlyArray<string>,
@@ -165,12 +178,31 @@ function kimiModelsFromSettings(
   return providerModelsFromSettings(builtIn, customModels, EMPTY_CAPABILITIES);
 }
 
+/**
+ * Read whether the CLI currently holds usable credentials. Used by the auth
+ * controller after a sign-in or sign-out, where the full status probe would
+ * re-run the version check for nothing.
+ */
+export const probeKimiAuthenticated = Effect.fn("probeKimiAuthenticated")(function* (
+  kimiSettings: KimiSettings,
+  environment: NodeJS.ProcessEnv = process.env,
+): Effect.fn.Return<boolean, never, ChildProcessSpawner.ChildProcessSpawner> {
+  const result = yield* runKimiCliCommand(
+    kimiSettings,
+    ["provider", "list", "--json"],
+    environment,
+  ).pipe(Effect.timeoutOption(AUTH_PROBE_TIMEOUT_MS), Effect.result);
+  if (Result.isFailure(result) || Option.isNone(result.success)) return false;
+  if (result.success.value.code !== 0) return false;
+  return parseKimiProviderCatalog(result.success.value.stdout)?.auth.status === "authenticated";
+});
+
 export function buildInitialKimiProviderSnapshot(
   kimiSettings: KimiSettings,
 ): Effect.Effect<ServerProviderDraft> {
   return Effect.gen(function* () {
     const checkedAt = DateTime.formatIso(yield* DateTime.now);
-    return buildServerProvider({
+    return buildKimiProvider({
       presentation: KIMI_PRESENTATION,
       enabled: kimiSettings.enabled,
       checkedAt,
@@ -195,7 +227,7 @@ export const checkKimiProviderStatus = Effect.fn("checkKimiProviderStatus")(func
   const fallbackModels = kimiModelsFromSettings(kimiSettings.customModels);
 
   if (!kimiSettings.enabled) {
-    return buildServerProvider({
+    return buildKimiProvider({
       presentation: KIMI_PRESENTATION,
       enabled: false,
       checkedAt,
@@ -218,7 +250,7 @@ export const checkKimiProviderStatus = Effect.fn("checkKimiProviderStatus")(func
   if (Result.isFailure(versionResult)) {
     const error = versionResult.failure;
     yield* Effect.logWarning("Kimi CLI health check failed.", { errorTag: error._tag });
-    return buildServerProvider({
+    return buildKimiProvider({
       presentation: KIMI_PRESENTATION,
       enabled: kimiSettings.enabled,
       checkedAt,
@@ -236,7 +268,7 @@ export const checkKimiProviderStatus = Effect.fn("checkKimiProviderStatus")(func
   }
 
   if (Option.isNone(versionResult.success)) {
-    return buildServerProvider({
+    return buildKimiProvider({
       presentation: KIMI_PRESENTATION,
       enabled: kimiSettings.enabled,
       checkedAt,
@@ -257,7 +289,7 @@ export const checkKimiProviderStatus = Effect.fn("checkKimiProviderStatus")(func
     yield* Effect.logWarning("Kimi CLI version probe exited with a non-zero status.", {
       exitCode: versionOutput.code,
     });
-    return buildServerProvider({
+    return buildKimiProvider({
       presentation: KIMI_PRESENTATION,
       enabled: kimiSettings.enabled,
       checkedAt,
@@ -290,7 +322,7 @@ export const checkKimiProviderStatus = Effect.fn("checkKimiProviderStatus")(func
       : undefined;
 
   if (catalog === undefined) {
-    return buildServerProvider({
+    return buildKimiProvider({
       presentation: KIMI_PRESENTATION,
       enabled: kimiSettings.enabled,
       checkedAt,

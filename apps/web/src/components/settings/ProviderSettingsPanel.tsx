@@ -916,14 +916,22 @@ export function EnvironmentProviderSettings({
         onSelect={mode === "list" ? () => setSelectedInstanceId(row.instanceId) : undefined}
         readOnly={readOnly}
         setup={
-          mode === "editor" && row.driver === "antigravity" ? (
+          // Antigravity always renders setup (it may need installing before it
+          // can report anything); every other driver opts in by advertising a
+          // sign-in affordance on its snapshot.
+          mode === "editor" &&
+          (row.driver === "antigravity" || liveProvider?.setup?.canAuthenticate === true) ? (
             <ProviderSetupSection
               environmentId={environmentId}
               environmentLabel={environmentLabel}
               instanceId={row.instanceId}
               provider={liveProvider}
               binaryPath={configuredBinaryPath(row.instance.config)}
-              authMethod={readAntigravityAuthMethod(row.instance.config)}
+              authMethod={
+                row.driver === "antigravity"
+                  ? readAntigravityAuthMethod(row.instance.config)
+                  : undefined
+              }
               enabled={resolveProviderInstanceEnabled(row.instance)}
               readOnly={readOnly}
               onEnable={() => updateProviderInstance(row, { ...row.instance, enabled: true })}

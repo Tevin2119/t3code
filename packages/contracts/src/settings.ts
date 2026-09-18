@@ -14,6 +14,7 @@ import { EnvironmentMachineKind, ThreadEnvMode } from "./environment.ts";
 import { KeybindingShortcut } from "./keybindings.ts";
 import {
   CustomModelSetting,
+  DEEPSEEK_DEFAULT_BASE_URL,
   DEFAULT_TEXT_GENERATION_MODEL,
   DEFAULT_TEXT_GENERATION_REASONING_EFFORT,
   ProviderOptionSelections,
@@ -825,6 +826,52 @@ export const PiSettings = makeProviderSettingsSchema(
 export type PiSettings = typeof PiSettings.Type;
 
 /**
+ * DeepSeek is an API, not a CLI harness: there is no process to spawn, no
+ * sandbox and no editing tools, so this driver only backs text generation.
+ * The key is read from settings first and `DEEPSEEK_API_KEY` second, which
+ * keeps a shared machine working without writing the key into settings.json.
+ */
+export const DeepSeekSettings = makeProviderSettingsSchema(
+  {
+    // Off by default, as every provider added after Codex and Claude is.
+    enabled: Schema.Boolean.pipe(
+      Schema.withDecodingDefault(Effect.succeed(false)),
+      Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
+    ),
+    apiKey: TrimmedString.pipe(
+      Schema.withDecodingDefault(Effect.succeed("")),
+      Schema.annotateKey({
+        title: "API key",
+        description:
+          "DeepSeek platform key. Stored in plain text. Leave empty to use DEEPSEEK_API_KEY.",
+        providerSettingsForm: {
+          control: "password",
+          placeholder: "DEEPSEEK_API_KEY",
+          clearWhenEmpty: "omit",
+        },
+      }),
+    ),
+    baseUrl: TrimmedString.pipe(
+      Schema.withDecodingDefault(Effect.succeed("")),
+      Schema.annotateKey({
+        title: "Base URL",
+        description: "OpenAI-compatible endpoint. Leave empty for https://api.deepseek.com.",
+        providerSettingsForm: {
+          placeholder: DEEPSEEK_DEFAULT_BASE_URL,
+          clearWhenEmpty: "omit",
+        },
+      }),
+    ),
+    customModels: Schema.Array(CustomModelSetting).pipe(
+      Schema.withDecodingDefault(Effect.succeed([])),
+      Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
+    ),
+  },
+  { order: ["apiKey", "baseUrl"] },
+);
+export type DeepSeekSettings = typeof DeepSeekSettings.Type;
+
+/**
  * Antigravity ACP auth methods. Personal and Enterprise open a Google sign-in
  * in the browser. The API key and Agent Platform methods take credentials from
  * the instance config and never open a browser.
@@ -1306,6 +1353,7 @@ export const ServerSettings = Schema.Struct({
     antigravity: AntigravitySettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
     kimi: KimiSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
     pi: PiSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
+    deepseek: DeepSeekSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
   }).pipe(Schema.withDecodingDefault(Effect.succeed({}))),
   // New driver-agnostic instance map. Keyed by `ProviderInstanceId`; values
   // are `ProviderInstanceConfig` envelopes. The driver-specific config blob
@@ -1475,6 +1523,13 @@ const PiSettingsPatch = Schema.Struct({
   customModels: Schema.optionalKey(Schema.Array(CustomModelSetting)),
 });
 
+const DeepSeekSettingsPatch = Schema.Struct({
+  enabled: Schema.optionalKey(Schema.Boolean),
+  apiKey: Schema.optionalKey(TrimmedString),
+  baseUrl: Schema.optionalKey(TrimmedString),
+  customModels: Schema.optionalKey(Schema.Array(CustomModelSetting)),
+});
+
 const AntigravitySettingsPatch = Schema.Struct({
   enabled: Schema.optionalKey(Schema.Boolean),
   authMethod: Schema.optionalKey(AntigravityAuthMethod),
@@ -1595,6 +1650,7 @@ export const ServerSettingsPatch = Schema.Struct({
       antigravity: Schema.optionalKey(AntigravitySettingsPatch),
       kimi: Schema.optionalKey(KimiSettingsPatch),
       pi: Schema.optionalKey(PiSettingsPatch),
+      deepseek: Schema.optionalKey(DeepSeekSettingsPatch),
     }),
   ),
   // Whole-map replacement for the new instance config. Patching individual
