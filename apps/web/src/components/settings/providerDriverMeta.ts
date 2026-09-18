@@ -16,8 +16,10 @@ import {
   AntigravityIcon,
   ClaudeAI,
   CursorIcon,
+  DeepSeekIcon,
   GrokIcon,
   type Icon,
+  KimiIcon,
   OpenAI,
   OpenCodeIcon,
   PiAgentIcon,
@@ -90,7 +92,7 @@ const PROVIDER_CLIENT_DEFINITIONS: readonly ProviderClientDefinition[] = [
   {
     value: ProviderDriverKind.make("kimi"),
     label: "Kimi",
-    icon: ACPRegistryIcon,
+    icon: KimiIcon,
     badgeLabel: "Early Access",
     settingsSchema: KimiSettings,
   },
@@ -104,7 +106,7 @@ const PROVIDER_CLIENT_DEFINITIONS: readonly ProviderClientDefinition[] = [
   {
     value: ProviderDriverKind.make("hermes"),
     label: "Hermes",
-    icon: ACPRegistryIcon,
+    icon: DeepSeekIcon,
     badgeLabel: "Early Access",
     settingsSchema: HermesSettings,
   },
