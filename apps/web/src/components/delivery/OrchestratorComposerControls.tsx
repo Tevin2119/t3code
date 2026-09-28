@@ -242,10 +242,10 @@ export function OrchestratorComposerControls(props: {
         <span
           className={
             problem
-              ? "max-w-72 truncate text-xs text-warning"
+              ? "max-w-[28rem] text-xs text-warning"
               : "max-w-72 truncate text-xs text-muted-foreground"
           }
-          title={problem ?? note ?? ""}
+
           data-delivery-orchestrator-status
         >
           {problem ??

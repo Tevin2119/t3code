@@ -2,8 +2,21 @@ import type { SeatSettings } from "../../lib/delivery";
 import type { SeatChoice } from "../../state/delivery";
 import { Input } from "../ui/input";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 
 const TEAM_DEFAULT = "__team__";
+
+/** A setting that cannot be changed for this seat, with the reason on hover. */
+function Fixed(props: { readonly value: string; readonly why: string }) {
+  return (
+    <Tooltip>
+      <TooltipTrigger render={<span className="text-[10px] text-muted-foreground" tabIndex={0} />}>
+        {props.value}
+      </TooltipTrigger>
+      <TooltipPopup side="top">{props.why}</TooltipPopup>
+    </Tooltip>
+  );
+}
 
 function Choice(props: {
   readonly label: string;
@@ -15,11 +28,7 @@ function Choice(props: {
   readonly onChange: (value: string) => void;
 }) {
   if (props.options.length <= 1 && props.why) {
-    return (
-      <span className="text-[10px] text-muted-foreground" title={props.why}>
-        {props.teamValue ?? "its own"}
-      </span>
-    );
+    return <Fixed value={props.teamValue ?? "its own"} why={props.why} />;
   }
   return (
     <Select
@@ -104,9 +113,10 @@ export function SeatSettingsPanel(props: {
                     }
                   />
                 ) : (
-                  <span className="text-[10px] text-muted-foreground" title={item.why.model ?? ""}>
-                    {item.now.model ?? "its own"}
-                  </span>
+                  <Fixed
+                    value={item.now.model ?? "its own"}
+                    why={item.why.model ?? "cannot be set"}
+                  />
                 )}
               </td>
               <td className="py-1 pr-2">

@@ -1,7 +1,7 @@
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import { DELIVERY_DEFAULT_TEAM } from "@t3tools/contracts";
 import { Link, useNavigate, useSearch } from "@tanstack/react-router";
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 
 import { isElectron } from "../../env";
 import {
@@ -144,13 +144,12 @@ export function OrchestratorPage() {
 
   // A saved draft is loaded into the form once, when it is opened.
   const [loaded, setLoaded] = useState<string | null>(null);
-  useEffect(() => {
-    if (!thread || thread.state !== "draft" || loaded === thread.thread) return;
+  if (thread && thread.state === "draft" && loaded !== thread.thread) {
     setLoaded(thread.thread);
     setTeam(thread.team);
     setText(thread.draft?.text ?? "");
     setSeats(Object.fromEntries(thread.settings.map((item) => [item.seat, { ...item.set }])));
-  }, [loaded, thread]);
+  }
 
   const chosenTeam = teams.find((item) => item.team === (editing ? team : thread?.team));
   const seatsToSend = chosenTeam ? seatSettingsToSend(chosenTeam.settings, seats) : {};
