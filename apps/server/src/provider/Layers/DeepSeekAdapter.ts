@@ -481,7 +481,10 @@ export const makeDeepSeekAdapter = Effect.fn("makeDeepSeekAdapter")(function* (
           const runtime = yield* options.makeRuntime({
             cwd,
             clientInfo: { name: "t3-code", version: "0.0.0" },
-            ...(Option.isSome(cursor) ? { resumeSessionId: cursor.value.sessionId } : {}),
+            // dsh offers session/resume and has no session/load.
+            ...(Option.isSome(cursor)
+              ? { resumeSessionId: cursor.value.sessionId, resumeMethod: "resume" as const }
+              : {}),
             mcpServers: [
               ...(mcp
                 ? [
