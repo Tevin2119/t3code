@@ -10334,6 +10334,11 @@ export default function ChatView(props: ChatViewProps) {
                               pending: isServerThread ? null : (draftTeamChoice.team ?? "none"),
                               onRelease: activeThread
                                 ? () => {
+                                    // The way out is "No team" for this thread, or the next
+                                    // send would ask for the same team again.
+                                    useDeliveryDraftStore
+                                      .getState()
+                                      .setChoice(activeThread.id, { team: null, role: null });
                                     void releaseDeliveryThread({
                                       environmentId,
                                       input: { threadId: activeThread.id },
