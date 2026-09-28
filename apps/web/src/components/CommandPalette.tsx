@@ -47,6 +47,7 @@ import {
   FileSearchIcon,
   FolderIcon,
   FolderPlusIcon,
+  KanbanIcon,
   LinkIcon,
   MessageSquareIcon,
   MonitorIcon,
@@ -56,6 +57,7 @@ import {
   SquarePenIcon,
   SunIcon,
   TextSearchIcon,
+  UsersIcon,
 } from "lucide-react";
 import {
   useCallback,
@@ -95,6 +97,7 @@ import { useEnvironmentQuery } from "../state/query";
 import { sourceControlEnvironment } from "../state/sourceControl";
 import { useAtomCommand } from "../state/use-atom-command";
 import { useAtomQueryRunner } from "../state/use-atom-query-runner";
+import { useDeliveryEnabled } from "../state/delivery";
 import { useEnvironments, usePrimaryEnvironmentId } from "../state/environments";
 import { useProjects, useServerConfigs, useThreadShells, waitForProject } from "../state/entities";
 import { useThreadSearch } from "../state/queries";
@@ -714,6 +717,7 @@ function OpenCommandPaletteDialog(props: {
   const { environments } = useEnvironments();
   const desktopLocalBootstraps = useDesktopLocalBootstraps();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
+  const deliveryEnabled = useDeliveryEnabled(primaryEnvironmentId);
   const availableSettingsSearchItems = useAvailableSettingsSearchItems();
   const { activeDraftThread, activeThread, defaultProjectRef, handleNewThread } =
     useHandleNewThread();
@@ -2028,6 +2032,29 @@ function OpenCommandPaletteDialog(props: {
       await navigate({ to: "/usage" });
     },
   });
+
+  if (deliveryEnabled) {
+    actionItems.push({
+      kind: "action",
+      value: "action:board",
+      searchTerms: ["board", "kanban", "tasks", "lanes", "delivery", "approve", "review"],
+      title: "Open board",
+      icon: <KanbanIcon className={ITEM_ICON_CLASS} />,
+      run: async () => {
+        await navigate({ to: "/board" });
+      },
+    });
+    actionItems.push({
+      kind: "action",
+      value: "action:orchestrator",
+      searchTerms: ["orchestrator", "team", "council", "delivery", "roster"],
+      title: "Open orchestrator",
+      icon: <UsersIcon className={ITEM_ICON_CLASS} />,
+      run: async () => {
+        await navigate({ to: "/orchestrator" });
+      },
+    });
+  }
 
   actionItems.push({
     kind: "action",

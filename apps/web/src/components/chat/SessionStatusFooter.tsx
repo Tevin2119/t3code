@@ -1,6 +1,11 @@
-import type { ServerProviderUsageLimits } from "@t3tools/contracts";
+import type {
+  DeliveryThreadBinding,
+  EnvironmentId,
+  ServerProviderUsageLimits,
+} from "@t3tools/contracts";
 import type { ReactNode } from "react";
 import { formatContextWindowTokens, type ContextWindowSnapshot } from "../../lib/contextWindow";
+import { SessionDetails } from "../delivery/SessionDetails";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 
 function StatusField(props: { detail: string; children: ReactNode }) {
@@ -23,6 +28,17 @@ export function SessionStatusFooter(props: {
   phase: string;
   context: ContextWindowSnapshot | null;
   limits: ServerProviderUsageLimits | undefined;
+  /** Present when this environment has a delivery engine turned on. */
+  delivery?:
+    | {
+        readonly environmentId: EnvironmentId | null;
+        /** Null for a thread that was never bound to a team. */
+        readonly binding: DeliveryThreadBinding | null;
+        /** For a draft: the team it will be bound to when sent. */
+        readonly pending: string | null;
+        readonly harness: string | null;
+      }
+    | undefined;
 }) {
   const context = props.context;
   const percentage = context?.usedPercentage;
@@ -32,6 +48,24 @@ export function SessionStatusFooter(props: {
       aria-label="Session status"
       className="pointer-events-auto flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 px-3 pt-1 font-mono text-[10px] text-muted-foreground sm:px-4"
     >
+      {props.delivery ? (
+        props.delivery.pending !== null && !props.delivery.binding ? (
+          <StatusField detail="The team this thread is bound to when it is sent">
+            team:{props.delivery.pending}
+          </StatusField>
+        ) : (
+          <SessionDetails
+            environmentId={props.delivery.environmentId}
+            binding={props.delivery.binding}
+            harness={props.delivery.harness}
+            model={props.model}
+            cwd={props.cwd}
+            branch={props.branch}
+            dirty={props.dirty}
+            phase={props.phase}
+          />
+        )
+      ) : null}
       <StatusField detail={props.cwd ?? "No working directory"}>
         {props.cwd?.split(/[\\/]/).findLast(Boolean) ?? props.project}
       </StatusField>

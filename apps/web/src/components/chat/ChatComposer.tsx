@@ -244,6 +244,7 @@ import {
 } from "~/state/pullRequests";
 import { useEnvironmentQuery } from "~/state/query";
 import { useDebouncedValue } from "~/state/queries";
+import { TeamPicker } from "../delivery/TeamPicker";
 import { ProviderModelPicker } from "./ProviderModelPicker";
 import { resolveModelPickerSelectedModel } from "./ModelPickerContent";
 import { type ComposerCommandItem, ComposerCommandMenu } from "./ComposerCommandMenu";
@@ -4902,6 +4903,24 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     hidden: composerControlsHidden || restingHiddenBlockCount > 1,
   });
   const restingBlockDefs = [
+    // A team is chosen before the thread is sent and is fixed after that.
+    ...(routeKind === "draft" && activeThreadId
+      ? [
+          {
+            id: "team",
+            content: (
+              <>
+                <ComposerControlSeparator size={composerControlsInStrip ? "xs" : "sm"} />
+                <TeamPicker
+                  environmentId={environmentId}
+                  threadId={activeThreadId}
+                  driver={selectedProvider}
+                />
+              </>
+            ),
+          },
+        ]
+      : []),
     ...(providerTraitsPicker
       ? [
           {

@@ -1,11 +1,18 @@
-import { ArrowLeftIcon, ChartNoAxesColumnIcon, SettingsIcon } from "lucide-react";
+import {
+  ArrowLeftIcon,
+  ChartNoAxesColumnIcon,
+  KanbanIcon,
+  SettingsIcon,
+  UsersIcon,
+} from "lucide-react";
 import type { ReactNode } from "react";
 import { memo, useCallback } from "react";
 import { Link, useCanGoBack, useLocation, useNavigate } from "@tanstack/react-router";
 
 import { useEnvironmentIdentificationMode } from "../../hooks/useSettings";
 import { cn } from "../../lib/utils";
-import { useEnvironments } from "../../state/environments";
+import { useDeliveryEnabled } from "../../state/delivery";
+import { useEnvironments, usePrimaryEnvironmentId } from "../../state/environments";
 import { T3Wordmark } from "../T3Wordmark";
 import {
   resolveEnvironmentIdentificationPillLabel,
@@ -142,8 +149,14 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
             ? "usage"
             : location.pathname === "/pull-requests"
               ? "pull-requests"
-              : null,
+              : location.pathname === "/board"
+                ? "board"
+                : location.pathname === "/orchestrator"
+                  ? "orchestrator"
+                  : null,
   });
+  const primaryEnvironmentId = usePrimaryEnvironmentId();
+  const deliveryEnabled = useDeliveryEnabled(primaryEnvironmentId);
   const { environments } = useEnvironments();
   // The page reads every connected server, so one of them offering pull requests is enough for
   // the link to lead somewhere.
@@ -173,6 +186,15 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
     }
     void navigate({ to: "/usage" });
   }, [isMobile, navigate, setOpenMobile]);
+
+  const handleBoardClick = useCallback(() => {
+    closeMobileSidebar();
+    void navigate({ to: "/board" });
+  }, [closeMobileSidebar, navigate]);
+  const handleOrchestratorClick = useCallback(() => {
+    closeMobileSidebar();
+    void navigate({ to: "/orchestrator" });
+  }, [closeMobileSidebar, navigate]);
 
   const handleBackClick = useCallback(() => {
     closeMobileSidebar();
@@ -211,6 +233,16 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
             label="Usage"
             onClick={handleUsageClick}
           />
+          {deliveryEnabled ? (
+            <>
+              <SidebarUtilityItem icon={<KanbanIcon />} label="Board" onClick={handleBoardClick} />
+              <SidebarUtilityItem
+                icon={<UsersIcon />}
+                label="Orchestrator"
+                onClick={handleOrchestratorClick}
+              />
+            </>
+          ) : null}
         </>
       )}
       <SidebarUpdatePill />

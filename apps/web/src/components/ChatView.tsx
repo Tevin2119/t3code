@@ -363,6 +363,15 @@ import {
 import { environmentShell } from "../state/shell";
 import { ChatComposer, type ChatComposerHandle } from "./chat/ChatComposer";
 import { SessionStatusFooter } from "./chat/SessionStatusFooter";
+import { parseTeams, resolveTeamChoice, type TeamChoice } from "../lib/delivery";
+import {
+  deliveryEnvironment,
+  readDraftTeamChoice,
+  useDeliveryDraftStore,
+  useDeliveryEnabled,
+  useDeliveryRead,
+  useDraftTeamChoice,
+} from "../state/delivery";
 import { createPageScrollController, type PageScrollKey } from "./chat/pageScrollController";
 import { DraftHeroHeadline } from "./chat/DraftHeroHeadline";
 import { ExpandedImageDialog } from "./chat/ExpandedImageDialog";
@@ -1510,6 +1519,10 @@ export default function ChatView(props: ChatViewProps) {
     reportFailure: false,
   });
   const startThreadTurn = useAtomCommand(threadEnvironment.startTurn, { reportFailure: false });
+  const bindDeliveryThread = useAtomCommand(deliveryEnvironment.bindThread, {
+    label: "bind thread to team",
+    reportFailure: false,
+  });
   const createAttachmentAssetUrl = useAtomQueryRunner(assetEnvironment.createUrl, {
     reportFailure: false,
     refresh: true,
@@ -2902,6 +2915,28 @@ export default function ChatView(props: ChatViewProps) {
     conversationProviderStatus !== null &&
     conversationProviderStatus.supportsConversationRollback !== false;
   const phase = derivePhase(activeThread?.session ?? null);
+  const deliveryEnabled = useDeliveryEnabled(environmentId);
+  const deliveryTeams = useDeliveryRead(deliveryEnabled ? environmentId : null, "/api/teams");
+  // Read through a ref at send time, so the send path needs no new dependencies.
+  const deliverySendRef = useRef({
+    enabled: deliveryEnabled,
+    teams: parseTeams(deliveryTeams.body),
+    error: deliveryTeams.error,
+  });
+  deliverySendRef.current = {
+    enabled: deliveryEnabled,
+    teams: parseTeams(deliveryTeams.body),
+    error: deliveryTeams.error,
+  };
+  const deliveryBinding = useEnvironmentQuery(
+    deliveryEnabled && isServerThread && activeThread
+      ? deliveryEnvironment.threadBinding({
+          environmentId,
+          input: { threadId: activeThread.id },
+        })
+      : null,
+  );
+  const draftTeamChoice = useDraftTeamChoice(activeThread?.id ?? null);
   const threadActivities = activeThread?.activities ?? EMPTY_ACTIVITIES;
   const latestCheckpointCompletedAt = activeThread?.checkpoints.at(-1)?.completedAt ?? null;
   const workspaceMutationId = useMemo(() => {
@@ -7659,6 +7694,37 @@ export default function ChatView(props: ChatViewProps) {
     }
     const threadIdForSend = activeThread.id;
     const isFirstMessage = !isServerThread || activeThread.messages.length === 0;
+    // A thread is bound to its team before its first turn. A choice that
+    // cannot be honoured stops the send: sending anyway would start an
+    // ordinary thread under a team's name.
+    const deliveryForSend = deliverySendRef.current;
+    const draftTeamForSend = readDraftTeamChoice(threadIdForSend);
+    const teamChoiceForSend: TeamChoice =
+      isServerThread || !deliveryForSend.enabled
+        ? { state: "manual" }
+        : draftTeamForSend.team !== null && deliveryForSend.error
+          ? {
+              state: "blocked",
+              team: draftTeamForSend.team,
+              why: `Delivery engine not reachable, so team ${draftTeamForSend.team} cannot be loaded. Choose "No team" to start an ordinary thread.`,
+            }
+          : resolveTeamChoice({
+              teams: deliveryForSend.teams,
+              team: draftTeamForSend.team,
+              role: draftTeamForSend.role,
+              driver: ctxSelectedProvider,
+            });
+    if (teamChoiceForSend.state === "blocked") {
+      setThreadError(threadIdForSend, teamChoiceForSend.why);
+      return;
+    }
+    if (teamChoiceForSend.state === "choose-role") {
+      setThreadError(
+        threadIdForSend,
+        `Choose a role in team ${teamChoiceForSend.team}: ${teamChoiceForSend.roles.join(", ")}.`,
+      );
+      return;
+    }
     const baseBranchForWorktree =
       isFirstMessage && sendEnvMode === "worktree" && !activeThread.worktreePath
         ? activeThreadBranch
@@ -8317,6 +8383,24 @@ export default function ChatView(props: ChatViewProps) {
       });
       if (settingsResult._tag === "Failure") {
         failure = settingsResult;
+      }
+    }
+
+    if (failure === null && teamChoiceForSend.state === "ready") {
+      const bindResult = await bindDeliveryThread({
+        environmentId,
+        input: {
+          threadId: threadIdForSend,
+          team: teamChoiceForSend.team as never,
+          role: teamChoiceForSend.role as never,
+          driver: ctxSelectedProvider as never,
+          cwd: (activeThread.worktreePath ?? activeProject.workspaceRoot) as never,
+        },
+      });
+      if (bindResult._tag === "Failure") {
+        failure = bindResult;
+      } else {
+        useDeliveryDraftStore.getState().clearChoice(threadIdForSend);
       }
     }
 
@@ -10215,6 +10299,17 @@ export default function ChatView(props: ChatViewProps) {
                       phase={phase}
                       context={activeContextWindow}
                       limits={conversationProviderStatus?.usageLimits}
+                      delivery={
+                        deliveryEnabled
+                          ? {
+                              environmentId,
+                              binding: isServerThread ? deliveryBinding.data : null,
+                              pending: isServerThread ? null : (draftTeamChoice.team ?? "none"),
+                              harness:
+                                conversationProviderStatus?.driver ?? selectedProvider ?? null,
+                            }
+                          : undefined
+                      }
                     />
                     <div
                       aria-hidden
