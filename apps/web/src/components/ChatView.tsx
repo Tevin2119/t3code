@@ -7702,10 +7702,10 @@ export default function ChatView(props: ChatViewProps) {
       composerRef.current?.resetCursorState();
       return;
     }
-    // In Orchestrator mode what is typed is a draft of a workflow. The send key
-    // saves it. It never starts a turn, and it never starts the team.
+    // In Orchestrator mode the send button starts the workflow, and the send key
+    // does what the button does. It never starts a turn of a single harness.
     if (!isServerThread && isOrchestratorDraft(activeThread.id)) {
-      useOrchestratorDraftStore.getState().requestSave(activeThread.id);
+      useOrchestratorDraftStore.getState().requestStart(activeThread.id);
       return;
     }
     const threadIdForSend = activeThread.id;

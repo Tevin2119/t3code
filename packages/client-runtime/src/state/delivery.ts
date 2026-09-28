@@ -20,6 +20,11 @@ export function createDeliveryEnvironmentAtoms<R, E>(
       tag: WS_METHODS.deliveryThreadBinding,
       staleTimeMs: 1_000,
     }),
+    /** One reading asked for by hand, such as a piece of a file. Not kept and not refreshed. */
+    fetch: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:delivery:fetch",
+      tag: WS_METHODS.deliveryRead,
+    }),
     act: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:delivery:act",
       tag: WS_METHODS.deliveryAct,

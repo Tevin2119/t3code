@@ -5,12 +5,18 @@ import {
   deliveryFailureText,
   describeBinding,
   isStaleReading,
+  deliveryFailureProblems,
+  moveSeat,
   parseBoard,
-  parseOrchestratorThread,
+  parseCards,
+  parseSeatSettings,
+  parseTask,
+  parseTeamDefaults,
   parseTeamProfile,
   parseTeams,
   resolveTeamChoice,
   rolesForHarness,
+  seatOfferFor,
   seatSettingsToSend,
 } from "./delivery";
 
@@ -201,51 +207,98 @@ describe("describeBinding", () => {
   });
 });
 
+const card = (overrides: Record<string, unknown> = {}) => ({
+  id: "task-1",
+  number: 1001,
+  title: "Add a file",
+  team: "development",
+  lane: "validation",
+  state: "doing",
+  revision: 2,
+  origin: "person",
+  owner: "Sam",
+  priority: "high",
+  priorityBy: "triage",
+  tags: ["engine", 7],
+  created: "2026-09-28T09:00:00Z",
+  updated: "2026-09-28T10:00:00Z",
+  submitted: "2026-09-28T09:01:00Z",
+  held: false,
+  parts: [{ id: "task-2", number: 1002, title: "Part", lane: "human-review", state: "doing" }],
+  partsDelivered: 1,
+  run: { id: "run-1", state: "running", stage: "qa", candidate: "abc", configuration: "c" },
+  stage: "qa",
+  workers: [{ seat: "qa-attack", harness: "opencode", role: "qa-attack", stage: "qa" }],
+  paused: null,
+  qa: { votes: [{ seat: "qa-third", provider: "deepseek", verdict: "pass" }], needed: 2 },
+  findings: { open: 1, all: 3 },
+  approvals: [{ actor: "Sam", decision: "approve", stands: false }],
+  questions: 1,
+  unread: 2,
+  unanswered: 1,
+  files: 3,
+  last: { at: "2026-09-28T10:00:00Z", by: "lead", from: "team", kind: "question", text: "Which?" },
+  blocker: "Which folder?",
+  waitingOn: "person",
+  actions: ["stop", 7],
+  ...overrides,
+});
+
 describe("parseBoard", () => {
   it("reads lanes and cards and drops what it cannot read", () => {
     const board = parseBoard({
       view: "development",
       views: [{ id: "development", title: "Development" }],
-      lanes: [
-        {
-          lane: "validation",
-          title: "Validation",
-          cards: [
-            {
-              id: "task-1",
-              title: "Add a file",
-              team: "development",
-              lane: "validation",
-              state: "doing",
-              revision: 2,
-              origin: "person",
-              parts: [{ id: "task-2", title: "Part", lane: "human-review" }],
-              run: {
-                id: "run-1",
-                state: "running",
-                stage: "qa",
-                candidate: "abc",
-                configuration: "c",
-              },
-              paused: null,
-              findings: { open: 1, all: 3 },
-              approvals: [{ actor: "Sam", decision: "approve", stands: false }],
-              actions: ["stop", 7],
-            },
-            "not a card",
-          ],
-        },
-      ],
+      teams: ["development", "rnd"],
+      waiting: 1,
+      lanes: [{ lane: "validation", title: "Testing", cards: [card(), "not a card"] }],
       notices: [{ key: "seat:x", kind: "credit", text: "Out of credit.", count: 2 }],
       note: null,
     });
     expect(board?.lanes[0]?.cards).toHaveLength(1);
-    const card = board?.lanes[0]?.cards[0];
-    expect(card?.findings).toEqual({ open: 1, all: 3 });
-    expect(card?.actions).toEqual(["stop"]);
-    expect(card?.approvals[0]?.stands).toBe(false);
-    expect(card?.run?.stage).toBe("qa");
+    const read = board?.lanes[0]?.cards[0];
+    expect(read?.findings).toEqual({ open: 1, all: 3 });
+    expect(read?.actions).toEqual(["stop"]);
+    expect(read?.approvals[0]?.stands).toBe(false);
+    expect(read?.run?.stage).toBe("qa");
     expect(board?.notices[0]?.count).toBe(2);
+    expect([board?.waiting, board?.teams]).toEqual([1, ["development", "rnd"]]);
+  });
+
+  it("reads what a card shows: its number, who holds it, and what waits", () => {
+    const read = parseBoard({ lanes: [{ lane: "validation", title: "Testing", cards: [card()] }] })
+      ?.lanes[0]?.cards[0];
+    expect([read?.number, read?.priority, read?.priorityBy, read?.owner]).toEqual([
+      1001,
+      "high",
+      "triage",
+      "Sam",
+    ]);
+    expect(read?.tags).toEqual(["engine"]);
+    expect(read?.workers).toEqual([
+      {
+        seat: "qa-attack",
+        harness: "opencode",
+        role: "qa-attack",
+        stage: "qa",
+        specialist: null,
+        since: null,
+      },
+    ]);
+    expect([read?.questions, read?.unread, read?.unanswered, read?.files]).toEqual([1, 2, 1, 3]);
+    expect([read?.waitingOn, read?.blocker]).toEqual(["person", "Which folder?"]);
+    expect(read?.qa).toEqual({
+      votes: [{ seat: "qa-third", provider: "deepseek", verdict: "pass" }],
+      needed: 2,
+    });
+    expect([read?.parts[0]?.number, read?.partsDelivered]).toEqual([1002, 1]);
+  });
+
+  it("takes a priority it does not know for the usual one", () => {
+    const read = parseBoard({
+      lanes: [{ lane: "ready", title: "Ready", cards: [card({ priority: "whenever" })] }],
+    })?.lanes[0]?.cards[0];
+    expect(read?.priority).toBe("medium");
   });
 
   it("is null for an answer that is not a board", () => {
@@ -254,108 +307,387 @@ describe("parseBoard", () => {
   });
 });
 
-describe("parseOrchestratorThread", () => {
-  it("keeps a model for each seat and never invents the one a harness used", () => {
-    const thread = parseOrchestratorThread({
-      kind: "orchestrator",
-      thread: "thread-1",
-      team: "development",
-      title: "Add a file",
-      working: true,
-      task: { id: "task-1", state: "doing", revision: 1 },
-      state: "started",
-      workflow: "standard",
-      settings: [
-        {
-          seat: "lead",
-          harness: "codex",
-          now: { model: "gpt-6-astra", reasoning: null, access: "full" },
-          may: { model: true, reasoning: ["low", "high"], access: ["full"] },
-          why: {},
-          set: { reasoning: "high", model: "" },
-          effective: { model: "gpt-6-astra", reasoning: "high", access: "full" },
-        },
-      ],
-      roster: [seat({})],
-      children: [{ run: "run-1", state: "running", stage: "qa", whole: false }],
-      council: {
-        run: "run-1",
-        state: "running",
-        stage: "qa",
-        configuration: "development@2#abc",
-        seats: [
+describe("parseCards", () => {
+  it("reads what a search answers with", () => {
+    expect(parseCards([card(), { title: "no id" }, null]).map((item) => item.number)).toEqual([
+      1001,
+    ]);
+    expect(parseCards({ error: "no" })).toEqual([]);
+  });
+});
+
+const seatSetting = (overrides: Record<string, unknown> = {}) => ({
+  seat: "lead",
+  title: "Lead developer",
+  role: "team-lead",
+  harness: "codex",
+  provider: "openai",
+  defined: { harness: "codex", model: "gpt-6-astra", reasoning: null, access: "full" },
+  now: { harness: "codex", model: "gpt-6-astra", reasoning: null, access: "full" },
+  saved: {},
+  models: ["gpt-6-astra", "gpt-6-sol"],
+  may: {
+    harness: ["claude", "codex", "kimi"],
+    model: true,
+    reasoning: ["low", "high"],
+    access: ["full", "read-only"],
+  },
+  byHarness: {
+    claude: { model: true, reasoning: ["low", "high", "max"], access: ["full", "workspace"] },
+    codex: { model: true, reasoning: ["low", "high"], access: ["full", "read-only"] },
+    kimi: { model: false, reasoning: [], access: ["full"] },
+  },
+  why: {},
+  ...overrides,
+});
+
+describe("parseTask", () => {
+  const task = parseTask({
+    id: "task-1",
+    number: 1001,
+    title: "Add a file",
+    body: "Add one file.",
+    requirements: ["No new dependency"],
+    acceptance: ["The file is there"],
+    revision: 2,
+    state: "needs-decision",
+    lane: "needs-decision",
+    team: "development",
+    priority: "urgent",
+    priorityBy: "person",
+    tags: ["engine"],
+    owner: "Sam",
+    origin: "person",
+    created: "2026-09-28T09:00:00Z",
+    updated: "2026-09-28T10:00:00Z",
+    submitted: "2026-09-28T09:01:00Z",
+    card: card({ lane: "needs-decision" }),
+    actions: ["retry", "retriage"],
+    timeline: [
+      {
+        id: "e4",
+        at: "2026-09-28T09:01:00Z",
+        source: "event",
+        kind: "task.submitted",
+        by: "Sam",
+        text: "Submitted to team development.",
+        icon: "submitted",
+        detail: false,
+      },
+      {
+        id: "e9",
+        at: "2026-09-28T09:02:00Z",
+        source: "event",
+        kind: "attempt.started",
+        by: "classifier on claude",
+        text: "Started triage.",
+        icon: "work",
+        detail: true,
+      },
+      {
+        id: "m3",
+        seq: 3,
+        at: "2026-09-28T09:30:00Z",
+        source: "message",
+        kind: "question",
+        by: "lead",
+        sender: "team",
+        text: "Which folder?",
+        state: "open",
+        replyTo: null,
+        files: [],
+      },
+      {
+        id: "m4",
+        seq: 4,
+        at: "2026-09-28T09:40:00Z",
+        source: "message",
+        kind: "answer",
+        by: "Sam",
+        sender: "person",
+        text: "The docs folder.",
+        state: "applied",
+        replyTo: 3,
+        revision: 2,
+        files: [
           {
-            seat: "lead",
-            role: "team-lead",
-            harness: "codex",
-            provider: "openai",
-            required: true,
-            requestedModel: "gpt-6-astra",
-            actualModel: null,
-            activity: "queued",
-            blockedBy: "global limit",
-            attempts: [{}, {}],
+            id: "file-1",
+            name: "screenshot.png",
+            type: "image/png",
+            size: 2048,
+            by: "Sam",
+            at: "2026-09-28T09:39:00Z",
+            message: 4,
+            path: "C:/engine/files/task-1/file-1-screenshot.png",
           },
         ],
-        votes: [{ seat: "qa-third", provider: "deepseek", verdict: "fail", reason: "wrong" }],
-        findings: [],
-        concurrency: { active: 4, waiting: 1, global: 4 },
       },
-      messages: [{ seq: 1, at: "2026-09-28T10:00:00Z", from: "person", text: "Add a file." }],
-      pendingFromPerson: 0,
-    });
-    const lead = thread?.council?.seats[0];
+      {
+        id: "m5",
+        seq: 5,
+        at: "2026-09-28T09:45:00Z",
+        source: "message",
+        kind: "proposal",
+        by: "coordinator",
+        sender: "coordinator",
+        text: "I read this as a change.",
+        state: "open",
+        change: { text: "Also add a test." },
+      },
+    ],
+    questions: [{ seq: 3, at: "2026-09-28T09:30:00Z", by: "lead", text: "Which folder?" }],
+    proposals: [
+      {
+        seq: 5,
+        at: "2026-09-28T09:45:00Z",
+        by: "coordinator",
+        text: "I read this as a change.",
+        change: { text: "Also add a test." },
+      },
+    ],
+    files: [],
+    links: [
+      {
+        id: "task-9",
+        number: 1009,
+        title: "Other",
+        state: "ready",
+        lane: "ready",
+        kind: "depends-on",
+        direction: "out",
+      },
+      { kind: "related" },
+    ],
+    revisions: [{ revision: 1, notes: null, created: "2026-09-28T09:00:00Z", body: "Add." }],
+    settings: [
+      {
+        ...seatSetting(),
+        set: { harness: "claude", model: "claude-opus-5-5", reasoning: "" },
+        effective: {
+          harness: "claude",
+          model: "claude-opus-5-5",
+          reasoning: null,
+          access: "full",
+          provider: "anthropic",
+        },
+      },
+    ],
+    defaults: 3,
+    working: true,
+    council: {
+      run: "run-1",
+      state: "running",
+      stage: "qa",
+      configuration: "development@4#abc",
+      seats: [
+        {
+          seat: "lead",
+          role: "team-lead",
+          harness: "claude",
+          provider: "anthropic",
+          required: true,
+          requestedModel: "claude-opus-5-5",
+          actualModel: null,
+          activity: "queued",
+          blockedBy: "global limit",
+          attempts: [{}, {}],
+        },
+      ],
+      votes: [{ seat: "qa-third", provider: "deepseek", verdict: "fail", reason: "wrong" }],
+      findings: [],
+      concurrency: { active: 4, waiting: 1, global: 4 },
+    },
+    pendingFromPerson: 0,
+    kind: "orchestrator",
+  });
+
+  it("reads one history of what was said and what happened, in the order given", () => {
+    expect(task?.timeline.map((entry) => [entry.id, entry.source, entry.detail])).toEqual([
+      ["e4", "event", false],
+      ["e9", "event", true],
+      ["m3", "message", false],
+      ["m4", "message", false],
+      ["m5", "message", false],
+    ]);
+    const answer = task?.timeline[3];
+    expect([answer?.sender, answer?.state, answer?.replyTo, answer?.revision]).toEqual([
+      "person",
+      "applied",
+      3,
+      2,
+    ]);
+    expect(answer?.files.map((file) => [file.name, file.size, file.message])).toEqual([
+      ["screenshot.png", 2048, 4],
+    ]);
+    expect(task?.timeline[4]?.change).toBe("Also add a test.");
+  });
+
+  it("reads what waits for a person", () => {
+    expect(task?.questions.map((question) => question.seq)).toEqual([3]);
+    expect(task?.proposals[0]?.change).toBe("Also add a test.");
+    expect([task?.number, task?.isDraft, task?.priority, task?.working]).toEqual([
+      1001,
+      false,
+      "urgent",
+      true,
+    ]);
+    expect(task?.links).toHaveLength(2);
+    expect([task?.links[0]?.kind, task?.links[0]?.direction]).toEqual(["depends-on", "out"]);
+  });
+
+  it("keeps a model for each seat and never invents the one a harness used", () => {
+    const lead = task?.council?.seats[0];
     expect([lead?.requestedModel, lead?.actualModel, lead?.activity, lead?.blockedBy]).toEqual([
-      "gpt-6-astra",
+      "claude-opus-5-5",
       null,
       "queued",
       "global limit",
     ]);
     expect(lead?.attempts).toBe(2);
-    expect(thread?.council?.concurrency).toEqual({ active: 4, waiting: 1, global: 4 });
-    expect(thread?.state).toBe("started");
-    expect(thread?.settings[0]?.set).toEqual({ reasoning: "high" });
-    expect(thread?.settings[0]?.effective.reasoning).toBe("high");
+    expect(task?.council?.concurrency).toEqual({ active: 4, waiting: 1, global: 4 });
+    expect(task?.settings[0]?.set).toEqual({ harness: "claude", model: "claude-opus-5-5" });
+    expect(task?.settings[0]?.effective.harness).toBe("claude");
+    expect(task?.defaults).toBe(3);
   });
 
-  it("reads a draft, which has no task and no run", () => {
-    const draft = parseOrchestratorThread({
-      kind: "orchestrator",
-      thread: "thread-2",
-      team: "development",
-      title: "Add a file",
-      state: "draft",
-      draft: { text: "Add a file." },
-      task: null,
-      workflows: [{ id: "standard", title: "Standard flow", stages: ["triage"], stop: "x" }],
-      roster: [],
-      messages: [],
-    });
-    expect([draft?.state, draft?.task, draft?.draft?.text, draft?.council]).toEqual([
-      "draft",
-      null,
-      "Add a file.",
-      null,
-    ]);
-    expect(draft?.workflows[0]?.id).toBe("standard");
-  });
-
-  it("is null for a thread of another kind", () => {
-    expect(parseOrchestratorThread({ kind: "chat", task: {} })).toBeNull();
+  it("knows a draft, and is null for what is not a task", () => {
+    expect(
+      parseTask({ id: "task-2", state: "draft", card: card({ lane: "draft" }) })?.isDraft,
+    ).toBe(true);
+    expect(parseTask({ id: "task-2" })).toBeNull();
+    expect(parseTask({ error: "no task" })).toBeNull();
   });
 });
 
-describe("seatSettingsToSend", () => {
-  it("sends only what differs from what the team defines", () => {
-    const development = teams.find((team) => team.team === "development")!;
+describe("seat settings", () => {
+  const lead = parseSeatSettings(seatSetting());
+  const support = parseSeatSettings(
+    seatSetting({
+      seat: "support",
+      title: "Maintainer",
+      harness: "kimi",
+      defined: { harness: "kimi", model: null, reasoning: null, access: "full" },
+      now: { harness: "kimi", model: null, reasoning: null, access: "full" },
+      may: { harness: ["claude", "codex", "kimi"], model: false, reasoning: [], access: ["full"] },
+    }),
+  );
+
+  it("sends only what differs from the team default", () => {
     expect(
-      seatSettingsToSend(development.settings, {
-        developer: { model: "claude-fable-5-1", reasoning: "high", access: " full " },
+      seatSettingsToSend([lead, support], {
+        lead: { model: "gpt-6-astra", reasoning: "high", access: " full " },
         support: { model: "" },
         nobody: { reasoning: "high" },
       }),
-    ).toEqual({ developer: { reasoning: "high" } });
-    expect(seatSettingsToSend(development.settings, {})).toEqual({});
+    ).toEqual({ lead: { reasoning: "high" } });
+    expect(seatSettingsToSend([lead, support], {})).toEqual({});
+    // The harness a seat already runs on is no change.
+    expect(seatSettingsToSend([lead], { lead: { harness: "codex", model: "gpt-6-sol" } })).toEqual({
+      lead: { model: "gpt-6-sol" },
+    });
+  });
+
+  it("sends a seat that was moved with its model, even one named like the default", () => {
+    expect(
+      seatSettingsToSend([lead], { lead: { harness: "claude", model: "gpt-6-astra" } }),
+    ).toEqual({ lead: { harness: "claude", model: "gpt-6-astra" } });
+  });
+
+  it("lays defaults over the definition and a task over the defaults", () => {
+    const saved = parseSeatSettings(
+      seatSetting({
+        now: { harness: "codex", model: "gpt-6-sol", reasoning: "high", access: "full" },
+        saved: { model: "gpt-6-sol", reasoning: "high" },
+      }),
+    );
+    expect(saved.saved).toEqual({ model: "gpt-6-sol", reasoning: "high" });
+    // For a task, what is already the team default is not sent again.
+    expect(seatSettingsToSend([saved], { lead: { model: "gpt-6-sol" } })).toEqual({});
+    // For the defaults themselves, it is what differs from the definition that is saved.
+    expect(seatSettingsToSend([saved], { lead: { model: "gpt-6-sol" } }, "defined")).toEqual({
+      lead: { model: "gpt-6-sol" },
+    });
+    expect(seatSettingsToSend([saved], { lead: { model: "gpt-6-astra" } }, "defined")).toEqual({});
+  });
+
+  it("offers what the harness a seat is moved to takes", () => {
+    expect(seatOfferFor(lead, {}).reasoning).toEqual(["low", "high"]);
+    expect(seatOfferFor(lead, { harness: "claude" })).toEqual({
+      model: true,
+      reasoning: ["low", "high", "max"],
+      access: ["full", "workspace"],
+    });
+    expect(seatOfferFor(lead, { harness: "kimi" }).model).toBe(false);
+    expect(seatOfferFor(lead, { harness: "abacus" })).toEqual({
+      model: false,
+      reasoning: [],
+      access: [],
+    });
+  });
+
+  it("keeps of a seat's choices only what the harness it moves to takes too", () => {
+    const chosen = { reasoning: "high", access: "read-only" };
+    expect(moveSeat(lead, chosen, { harness: "claude", model: "claude-opus-5-5" })).toEqual({
+      harness: "claude",
+      model: "claude-opus-5-5",
+      reasoning: "high",
+    });
+    // A harness that keeps its own model is not given one.
+    expect(moveSeat(lead, chosen, { harness: "kimi", model: "k3" })).toEqual({ harness: "kimi" });
+  });
+});
+
+describe("parseTeamDefaults", () => {
+  it("reads the defaults, the shares of the builds, and every saving", () => {
+    const read = parseTeamDefaults({
+      team: "development",
+      purpose: "Build.",
+      configuration: "development@4#abc",
+      available: true,
+      seats: [seat({ title: "Senior developer 1", stages: ["plan", "build"], inGate: false })],
+      settings: [seatSetting()],
+      gates: { qa: { seats: ["qa-attack", "qa-third"], minimumPassingProviders: 2 } },
+      defaults: { revision: 2, by: "Sam", at: "2026-09-28T10:00:00Z", problems: [] },
+      workload: {
+        build: { developer: 1, "developer-2": 1 },
+        defined: { developer: 3, "developer-2": 1 },
+      },
+      history: [
+        {
+          revision: 2,
+          by: "Sam",
+          at: "2026-09-28T10:00:00Z",
+          note: "Opus this week",
+          seats: { developer: { model: "claude-opus-5-5", reasoning: "" } },
+          workload: { build: { developer: 1, "developer-2": 1 } },
+        },
+      ],
+      note: "The defaults apply to runs admitted from now on.",
+    });
+    expect(read?.team.defaults.revision).toBe(2);
+    expect(read?.team.workload).toEqual({
+      build: { developer: 1, "developer-2": 1 },
+      defined: { developer: 3, "developer-2": 1 },
+    });
+    expect(read?.team.qaGate).toEqual({ seats: ["qa-attack", "qa-third"], minimum: 2 });
+    expect(read?.team.seats[0]?.stages).toEqual(["plan", "build"]);
+    expect(read?.history[0]?.seats).toEqual({ developer: { model: "claude-opus-5-5" } });
+    expect(read?.history[0]?.workload).toEqual({ developer: 1, "developer-2": 1 });
+    expect(parseTeamDefaults({ error: "no team" })).toBeNull();
+  });
+});
+
+describe("deliveryFailureProblems", () => {
+  it("lists what the engine said is wrong, one entry for each", () => {
+    expect(
+      deliveryFailureProblems({
+        _tag: "DeliveryError",
+        reason: "refused",
+        detail: "the seat settings cannot be used",
+        body: { error: "x", problems: ["lead: needs a model", 4] },
+      }),
+    ).toEqual(["lead: needs a model"]);
+    expect(deliveryFailureProblems(new Error("down"))).toEqual([]);
   });
 });
 

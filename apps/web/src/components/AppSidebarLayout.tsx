@@ -27,7 +27,8 @@ import {
 import LegacyThreadSidebar from "./LegacySidebar";
 import ThreadSidebar from "./Sidebar";
 import { SettingsSidebarNav } from "./settings/SettingsSidebarNav";
-import { SidebarChromeHeader } from "./sidebar/SidebarChrome";
+import { BoardSidebarPanel } from "./delivery/BoardSidebarPanel";
+import { SidebarChromeFooter, SidebarChromeHeader } from "./sidebar/SidebarChrome";
 import {
   resolveSidebarStageFocusRingOffsetClass,
   useSidebarStageBackdropVariant,
@@ -165,6 +166,8 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
   const panelAnimationsSuppressed = usePanelNavigationSuppression(pathname);
   const routePanelAnimationsActive = panelAnimationsActive && !panelAnimationsSuppressed;
   const isOnSettings = pathname === "/settings" || pathname.startsWith("/settings/");
+  // The Board and the Orchestrator show tasks in the sidebar, in place of threads.
+  const isOnBoard = pathname === "/board" || pathname === "/orchestrator";
   const isMacosDesktop = isElectron && isMacPlatform(navigator.platform);
   const [sidebarWidth, setSidebarWidth] = useState(readInitialThreadSidebarWidth);
   // Subscribed rather than read once: the clamp must track live window size,
@@ -259,6 +262,12 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
             <>
               <SidebarChromeHeader isElectron={isElectron} />
               <SettingsSidebarNav pathname={pathname} />
+            </>
+          ) : isOnBoard ? (
+            <>
+              <SidebarChromeHeader isElectron={isElectron} />
+              <BoardSidebarPanel />
+              <SidebarChromeFooter />
             </>
           ) : legacySidebarEnabled ? (
             <LegacyThreadSidebar />

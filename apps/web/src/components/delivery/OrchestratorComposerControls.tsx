@@ -1,36 +1,35 @@
-import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import type { EnvironmentId } from "@t3tools/contracts";
 import { useNavigate } from "@tanstack/react-router";
 import { PlayIcon, SaveIcon, SlidersHorizontalIcon, UsersIcon, WorkflowIcon } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type PointerEventHandler } from "react";
 
+import { parseTask, parseTeams, seatSettingsToSend } from "../../lib/delivery";
+import { cn } from "../../lib/utils";
 import {
-  deliveryFailureText,
-  parseOrchestratorThread,
-  parseTeams,
-  seatSettingsToSend,
-} from "../../lib/delivery";
-import {
-  deliveryEnvironment,
+  useDeliveryAct,
   useDeliveryRead,
+  useOrchestratorActivity,
   useOrchestratorDraft,
   useOrchestratorDraftStore,
+  usePersonName,
 } from "../../state/delivery";
-import { useAtomCommand } from "../../state/use-atom-command";
 import { Button } from "../ui/button";
 import { Popover, PopoverPopup, PopoverTitle, PopoverTrigger } from "../ui/popover";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
+import { Spinner } from "../ui/spinner";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { SeatSettingsPanel } from "./SeatSettingsPanel";
+import { TeamDefaultsDialog } from "./TeamDefaultsDialog";
 import { TeamProfilePanel } from "./TeamProfilePanel";
 
 /**
  * The composer's controls while it prepares a workflow for a team. They take
  * the place of the model, reasoning and access controls of a single harness:
- * a team has a model for each seat, set in the seats panel.
+ * a team has a harness and a model for each seat, set in the seats panel.
  *
  * What is typed is a draft. Saving keeps it on the engine, where nothing
- * runs. Only "Start workflow" starts the team.
+ * runs. Starting saves it and gives it to the team in one step; the buttons
+ * for both stand where Send stands, in `OrchestratorPrimaryActions`.
  */
 export function OrchestratorComposerControls(props: {
   readonly environmentId: EnvironmentId | null;
@@ -39,23 +38,27 @@ export function OrchestratorComposerControls(props: {
   readonly onPromptCleared: () => void;
 }) {
   const navigate = useNavigate();
+  const person = usePersonName();
   const draft = useOrchestratorDraft(props.threadId);
   const update = useOrchestratorDraftStore((state) => state.update);
   const setSeat = useOrchestratorDraftStore((state) => state.setSeat);
   const leave = useOrchestratorDraftStore((state) => state.leave);
+  const setActivity = useOrchestratorDraftStore((state) => state.setActivity);
   const saveRequest = useOrchestratorDraftStore((state) => state.saveRequests[props.threadId] ?? 0);
+  const startRequest = useOrchestratorDraftStore(
+    (state) => state.startRequests[props.threadId] ?? 0,
+  );
   const teamsRead = useDeliveryRead(props.environmentId, "/api/teams");
   const teams = useMemo(
     () => parseTeams(teamsRead.body).filter((team) => team.team !== "triage"),
     [teamsRead.body],
   );
-  const act = useAtomCommand(deliveryEnvironment.act, {
-    label: "orchestrator draft",
-    reportFailure: false,
-  });
+  const act = useDeliveryAct(props.environmentId, "orchestrator draft");
   const [busy, setBusy] = useState<"save" | "start" | null>(null);
-  const [problem, setProblem] = useState<string | null>(null);
-  const [note, setNote] = useState<string | null>(null);
+  // Held from the press to the answer, so a second press cannot start a second workflow.
+  const working = useRef(false);
+  const [problems, setProblems] = useState<ReadonlyArray<string>>([]);
+  const [editingDefaults, setEditingDefaults] = useState(false);
 
   const team = teams.find((candidate) => candidate.team === draft?.team) ?? null;
   const workflow =
@@ -66,68 +69,100 @@ export function OrchestratorComposerControls(props: {
     [draft, team],
   );
   const changedSeats = Object.keys(seatsToSend).length;
-  const unsaved = draft !== null && text.length > 0 && text !== (draft.savedText ?? "");
+  const saved =
+    draft?.engineThread == null ? "new" : text !== (draft.savedText ?? "") ? "changed" : "saved";
+  const blocked = !props.environmentId
+    ? "No environment is connected."
+    : teamsRead.error
+      ? `Delivery engine not reachable. ${teamsRead.error}`
+      : team && !team.available
+        ? (team.why ?? "This team cannot work now.")
+        : text.length === 0
+          ? "Write what the team is asked to do."
+          : null;
+
+  useEffect(() => {
+    setActivity(props.threadId, { busy, blocked, team: draft?.team ?? null, saved });
+  }, [blocked, busy, draft?.team, props.threadId, saved, setActivity]);
 
   const save = useCallback(async (): Promise<string | null> => {
-    if (!props.environmentId || !draft) return null;
-    setProblem(null);
-    setNote(null);
-    const body = { team: draft.team, workflow: draft.workflow, text, seats: seatsToSend };
-    const result = await act({
-      environmentId: props.environmentId,
-      input: draft.engineThread
-        ? { path: `/api/threads/${draft.engineThread}/draft` as never, body }
-        : { path: "/api/threads" as never, body: { ...body, start: false } },
-    });
-    if (result._tag === "Failure") {
-      setProblem(deliveryFailureText(squashAtomCommandFailure(result)));
+    if (!draft) return null;
+    setProblems([]);
+    const body = {
+      team: draft.team,
+      workflow: draft.workflow,
+      text,
+      seats: seatsToSend,
+      by: person,
+    };
+    const result = draft.engineThread
+      ? await act(`/api/tasks/${draft.engineThread}/edit`, body)
+      : await act("/api/tasks", { ...body, draft: true });
+    if (!result.ok) {
+      setProblems(result.problems.length > 0 ? result.problems : [result.why]);
       return null;
     }
-    const saved = parseOrchestratorThread(result.value.body);
-    if (!saved) {
-      setProblem("The delivery engine answered with something that is not a workflow.");
+    const task = parseTask(result.body);
+    if (!task) {
+      setProblems(["The delivery engine answered with something that is not a task."]);
       return null;
     }
-    update(props.threadId, { engineThread: saved.thread, savedText: text });
-    return saved.thread;
-  }, [act, draft, props.environmentId, props.threadId, seatsToSend, text, update]);
+    update(props.threadId, { engineThread: task.id, savedText: text });
+    return task.id;
+  }, [act, draft, person, props.threadId, seatsToSend, text, update]);
 
-  const onSave = useCallback(async () => {
-    setBusy("save");
-    const saved = await save();
-    setBusy(null);
-    if (saved) setNote("Draft saved. Nothing has started.");
-  }, [save]);
-
-  // The send key saves the draft. It never starts the team.
-  const handled = useRef(saveRequest);
-  useEffect(() => {
-    if (saveRequest === handled.current) return;
-    handled.current = saveRequest;
-    void onSave();
-  }, [onSave, saveRequest]);
-
-  const onStart = async () => {
-    if (!props.environmentId) return;
-    setBusy("start");
-    const saved = await save();
-    if (!saved) {
+  const once = useCallback(async (kind: "save" | "start", work: () => Promise<void>) => {
+    if (working.current) return;
+    working.current = true;
+    setBusy(kind);
+    try {
+      await work();
+    } finally {
+      working.current = false;
       setBusy(null);
-      return;
     }
-    const result = await act({
-      environmentId: props.environmentId,
-      input: { path: `/api/threads/${saved}/start` as never, body: {} },
+  }, []);
+
+  const onSave = useCallback(() => {
+    if (text.length === 0) return;
+    void once("save", async () => {
+      await save();
     });
-    setBusy(null);
-    if (result._tag === "Failure") {
-      setProblem(deliveryFailureText(squashAtomCommandFailure(result)));
+  }, [once, save, text.length]);
+
+  const onStart = useCallback(() => {
+    if (blocked) {
+      setProblems([blocked]);
       return;
     }
-    props.onPromptCleared();
-    leave(props.threadId);
-    void navigate({ to: "/orchestrator", search: { thread: saved } });
-  };
+    void once("start", async () => {
+      const id = await save();
+      if (!id) return;
+      const result = await act(`/api/tasks/${id}/submit`, { by: person });
+      if (!result.ok) {
+        setProblems(result.problems.length > 0 ? result.problems : [result.why]);
+        return;
+      }
+      props.onPromptCleared();
+      leave(props.threadId);
+      // What is written next is written on the task, in its own composer.
+      void navigate({ to: "/orchestrator", search: { thread: id } });
+    });
+  }, [act, blocked, leave, navigate, once, person, props, save]);
+
+  // The buttons stand in the composer's own place for Send, and ask from there.
+  const handledSave = useRef(saveRequest);
+  useEffect(() => {
+    if (saveRequest === handledSave.current) return;
+    handledSave.current = saveRequest;
+    onSave();
+  }, [onSave, saveRequest]);
+  const handledStart = useRef(startRequest);
+  useEffect(() => {
+    if (startRequest === handledStart.current) return;
+    handledStart.current = startRequest;
+    onStart();
+  }, [onStart, startRequest]);
 
   if (!draft) return null;
 
@@ -194,17 +229,22 @@ export function OrchestratorComposerControls(props: {
           <SlidersHorizontalIcon />
           Seats{changedSeats > 0 ? ` (${changedSeats} set)` : ""}
         </PopoverTrigger>
-        <PopoverPopup side="top" align="start" className="w-[44rem] max-w-[calc(100vw-2rem)]">
-          <PopoverTitle className="pb-1 text-sm">Seats of team {draft.team}</PopoverTitle>
+        <PopoverPopup side="top" align="start" className="w-[34rem] max-w-[calc(100vw-2rem)]">
+          <div className="flex items-center justify-between gap-2 pb-1">
+            <PopoverTitle className="text-sm">Seats of team {draft.team}</PopoverTitle>
+            <Button size="xs" variant="ghost" onClick={() => setEditingDefaults(true)}>
+              Team defaults
+            </Button>
+          </div>
           <p className="pb-2 text-xs text-muted-foreground">
-            A team has a model for each seat. What you leave alone runs as the team defines it. What
-            you set is recorded with the run.
+            Each seat keeps its role. Choose the harness and the model it runs on for this workflow,
+            or leave it on the team default. What you set is recorded with the run.
           </p>
           {team ? (
             <div className="max-h-[50vh] overflow-y-auto">
               <SeatSettingsPanel
+                environmentId={props.environmentId}
                 settings={team.settings}
-                roster={team.seats}
                 chosen={draft.seats}
                 onChange={(seat, choice) => setSeat(props.threadId, seat, choice)}
               />
@@ -238,55 +278,134 @@ export function OrchestratorComposerControls(props: {
         </Popover>
       ) : null}
 
-      <span className="ml-auto flex items-center gap-1">
+      {problems.length > 0 ? (
         <span
-          className={
-            problem
-              ? "max-w-[28rem] text-xs text-warning"
-              : "max-w-72 truncate text-xs text-muted-foreground"
-          }
+          className="ml-auto max-w-[32rem] text-xs text-warning"
           data-delivery-orchestrator-status
+          role="alert"
         >
-          {problem ??
-            note ??
-            (draft.engineThread
-              ? unsaved
-                ? "Draft changed since it was saved"
-                : "Draft saved"
-              : "Not saved yet")}
+          {problems.join(" ")}
         </span>
-        <Button
-          size="xs"
-          variant="outline"
-          disabled={busy !== null || text.length === 0 || !props.environmentId}
-          onClick={() => void onSave()}
+      ) : null}
+
+      {editingDefaults ? (
+        <TeamDefaultsDialog
+          environmentId={props.environmentId}
+          team={draft.team}
+          onClose={() => setEditingDefaults(false)}
+          onSaved={teamsRead.refresh}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+const SAVED_LABEL = {
+  new: "Not saved yet",
+  saved: "Draft saved",
+  changed: "Changed since it was saved",
+} as const;
+
+const preventPointerFocus: PointerEventHandler<HTMLElement> = (event) => {
+  event.preventDefault();
+};
+
+/**
+ * What stands in the place of Send while the composer prepares a workflow:
+ * Start workflow where Send is, and Save draft beside it. The start button
+ * submits the composer's form, so the send key does what the button does.
+ */
+export function OrchestratorPrimaryActions(props: {
+  readonly threadId: string;
+  readonly promptHasText: boolean;
+  readonly preserveComposerFocusOnPointerDown?: boolean;
+}) {
+  const activity = useOrchestratorActivity(props.threadId);
+  const requestSave = useOrchestratorDraftStore((state) => state.requestSave);
+  const pointerFocusProps = props.preserveComposerFocusOnPointerDown
+    ? { onPointerDown: preventPointerFocus }
+    : undefined;
+  const busy = activity.busy !== null;
+  const startLabel =
+    activity.busy === "start"
+      ? "Starting the workflow"
+      : (activity.blocked ?? `Start workflow for team ${activity.team ?? ""}`.trim());
+
+  return (
+    <div className="flex items-center gap-1.5" data-delivery-primary-actions>
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <span
+              tabIndex={0}
+              role="status"
+              aria-label={SAVED_LABEL[activity.saved]}
+              data-delivery-draft-state={activity.saved}
+              className="flex size-4 items-center justify-center"
+            />
+          }
         >
-          <SaveIcon />
-          {busy === "save" ? "Saving" : "Save draft"}
-        </Button>
-        <Tooltip>
-          <TooltipTrigger
-            render={
-              <Button
-                size="xs"
-                disabled={
-                  busy !== null || text.length === 0 || !props.environmentId || !team?.available
-                }
-                onClick={() => void onStart()}
-                data-delivery-start-workflow
-              />
-            }
-          >
-            <PlayIcon />
-            {busy === "start" ? "Starting" : "Start workflow"}
-          </TooltipTrigger>
-          <TooltipPopup side="top">
-            {team && !team.available
-              ? (team.why ?? "This team cannot work now.")
-              : `Files this as a task for team ${draft.team} and starts the team. It stops for your decision before anything is merged.`}
-          </TooltipPopup>
-        </Tooltip>
-      </span>
+          <span
+            className={cn(
+              "size-1.5 rounded-full",
+              activity.saved === "saved"
+                ? "bg-emerald-500"
+                : activity.saved === "changed"
+                  ? "bg-amber-500"
+                  : "bg-muted-foreground/40",
+            )}
+          />
+        </TooltipTrigger>
+        <TooltipPopup side="top">
+          {SAVED_LABEL[activity.saved]}. Nothing runs for a draft.
+        </TooltipPopup>
+      </Tooltip>
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <Button
+              type="button"
+              size="icon-sm"
+              variant="ghost"
+              className="rounded-full"
+              aria-label="Save draft"
+              disabled={busy || !props.promptHasText}
+              {...pointerFocusProps}
+              onClick={() => requestSave(props.threadId)}
+              data-delivery-save-draft
+            />
+          }
+        >
+          {activity.busy === "save" ? <Spinner className="size-3.5" /> : <SaveIcon />}
+        </TooltipTrigger>
+        <TooltipPopup side="top">
+          Save draft. It is kept on the engine and nothing is started.
+        </TooltipPopup>
+      </Tooltip>
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <button
+              type="submit"
+              className="relative flex h-9 w-9 items-center justify-center rounded-full bg-message-action text-message-action-foreground shadow-xs transition-all duration-150 enabled:cursor-pointer enabled:shadow-message-action/24 enabled:inset-shadow-[0_1px_--theme(--color-white/16%)] hover:scale-105 hover:bg-message-action-hover disabled:pointer-events-none disabled:opacity-30 disabled:shadow-none sm:h-8 sm:w-8"
+              aria-label={startLabel}
+              disabled={busy || activity.blocked !== null || !props.promptHasText}
+              {...pointerFocusProps}
+              data-delivery-start-workflow
+            />
+          }
+        >
+          {activity.busy === "start" ? (
+            <Spinner className="size-3.5" aria-hidden="true" />
+          ) : (
+            <PlayIcon className="size-3.5 fill-current" aria-hidden="true" />
+          )}
+        </TooltipTrigger>
+        <TooltipPopup side="top">
+          {activity.blocked ??
+            `Start workflow. Saves this and gives it to team ${activity.team ?? ""}, which triages, plans, builds, reviews and tests it without being asked again. It stops for your decision before anything is merged.`}
+        </TooltipPopup>
+      </Tooltip>
     </div>
   );
 }

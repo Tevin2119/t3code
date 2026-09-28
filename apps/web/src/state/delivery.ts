@@ -1,13 +1,23 @@
 import { createDeliveryEnvironmentAtoms } from "@t3tools/client-runtime/state/delivery";
+import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import { DELIVERY_DEFAULT_TEAM, type EnvironmentId } from "@t3tools/contracts";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 
 import { connectionAtomRuntime } from "../connection/runtime";
 import { useEnvironmentSettings } from "../hooks/useSettings";
-import { isStaleReading } from "../lib/delivery";
+import {
+  deliveryFailureProblems,
+  deliveryFailureText,
+  isStaleReading,
+  type SeatChoice,
+} from "../lib/delivery";
+import { NO_FILTERS, type BoardFilters, type BoardGrouping } from "../lib/deliveryBoard";
 import { useEnvironmentQuery } from "./query";
+import { useAtomCommand } from "./use-atom-command";
+
+export type { SeatChoice };
 
 export const deliveryEnvironment = createDeliveryEnvironmentAtoms(connectionAtomRuntime);
 
@@ -68,6 +78,73 @@ export function useStaleReading(readAt: string | null): boolean {
   return isStaleReading(readAt, now);
 }
 
+/** The time, for ages shown on cards. Moves once a minute, which is as fine as an age is shown. */
+export function useMinuteClock(): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 60_000);
+    return () => window.clearInterval(timer);
+  }, []);
+  return now;
+}
+
+export type DeliveryActResult =
+  | { readonly ok: true; readonly body: unknown }
+  | {
+      readonly ok: false;
+      readonly why: string;
+      /** What the engine listed when it refused, one entry for each thing that is wrong. */
+      readonly problems: ReadonlyArray<string>;
+    };
+
+/** Asks the engine to do something, and answers with what it said or why it refused. */
+export function useDeliveryAct(environmentId: EnvironmentId | null, label: string) {
+  const act = useAtomCommand(deliveryEnvironment.act, { label, reportFailure: false });
+  return useCallback(
+    async (path: string, body: unknown = {}): Promise<DeliveryActResult> => {
+      if (!environmentId) {
+        return { ok: false, why: "No environment is connected.", problems: [] };
+      }
+      const result = await act({ environmentId, input: { path: path as never, body } });
+      if (result._tag === "Failure") {
+        const failure = squashAtomCommandFailure(result);
+        return {
+          ok: false,
+          why: deliveryFailureText(failure),
+          problems: deliveryFailureProblems(failure),
+        };
+      }
+      return { ok: true, body: result.value.body };
+    },
+    [act, environmentId],
+  );
+}
+
+/** Reads the engine once, outside of rendering: a piece of a file, for one. */
+export function useDeliveryFetch(environmentId: EnvironmentId | null) {
+  const read = useAtomCommand(deliveryEnvironment.fetch, {
+    label: "delivery read",
+    reportFailure: false,
+  });
+  return useCallback(
+    async (path: string): Promise<DeliveryActResult> => {
+      if (!environmentId) {
+        return { ok: false, why: "No environment is connected.", problems: [] };
+      }
+      const result = await read({ environmentId, input: { path: path as never } });
+      if (result._tag === "Failure") {
+        return {
+          ok: false,
+          why: deliveryFailureText(squashAtomCommandFailure(result)),
+          problems: [],
+        };
+      }
+      return { ok: true, body: result.value.body };
+    },
+    [environmentId, read],
+  );
+}
+
 export interface DraftTeamChoice {
   /** Null is "No team": the thread starts as an ordinary one. */
   readonly team: string | null;
@@ -119,7 +196,18 @@ export function useDraftTeamChoice(threadId: string | null): DraftTeamChoice {
   );
 }
 
-export type SeatChoice = Partial<Record<"model" | "reasoning" | "access", string>>;
+/** Replaces what is chosen for a seat, dropping what was set back to the team default. */
+export function withSeatChoice(
+  seats: Readonly<Record<string, SeatChoice>>,
+  seat: string,
+  choice: SeatChoice,
+): Record<string, SeatChoice> {
+  const kept = Object.fromEntries(
+    Object.entries(choice).filter(([, value]) => typeof value === "string" && value !== ""),
+  );
+  const { [seat]: _previous, ...others } = seats;
+  return Object.keys(kept).length > 0 ? { ...others, [seat]: kept } : others;
+}
 
 /** A workflow being prepared in the composer. It is saved to the engine as a draft. */
 export interface OrchestratorDraft {
@@ -132,16 +220,38 @@ export interface OrchestratorDraft {
   readonly savedText: string | null;
 }
 
+/** What the composer's controls are doing, for the buttons that stand in the place of Send. */
+export interface OrchestratorActivity {
+  readonly busy: "save" | "start" | null;
+  /** Why the workflow cannot be started now, or null when it can. */
+  readonly blocked: string | null;
+  readonly team: string | null;
+  /** `new` before the first save, then `saved` or `changed`. */
+  readonly saved: "new" | "saved" | "changed";
+}
+
+export const IDLE_ORCHESTRATOR_ACTIVITY: OrchestratorActivity = {
+  busy: null,
+  blocked: null,
+  team: null,
+  saved: "new",
+};
+
 interface OrchestratorDraftState {
   /** Threads whose composer is in Orchestrator mode, with what was chosen there. */
   readonly drafts: Record<string, OrchestratorDraft>;
-  /** Counts requests to save, so the composer's controls can act on the send key. */
+  /** Counts what was asked of the composer's controls, so they can act on it. */
   readonly saveRequests: Record<string, number>;
+  readonly startRequests: Record<string, number>;
+  readonly activity: Record<string, OrchestratorActivity>;
   readonly enter: (threadId: string) => void;
   readonly leave: (threadId: string) => void;
   readonly update: (threadId: string, patch: Partial<OrchestratorDraft>) => void;
+  /** Replaces what is chosen for one seat. */
   readonly setSeat: (threadId: string, seat: string, choice: SeatChoice) => void;
   readonly requestSave: (threadId: string) => void;
+  readonly requestStart: (threadId: string) => void;
+  readonly setActivity: (threadId: string, activity: OrchestratorActivity) => void;
 }
 
 const NEW_ORCHESTRATOR_DRAFT: OrchestratorDraft = {
@@ -157,6 +267,8 @@ export const useOrchestratorDraftStore = create<OrchestratorDraftState>()(
     (set) => ({
       drafts: {},
       saveRequests: {},
+      startRequests: {},
+      activity: {},
       enter: (threadId) =>
         set((state) =>
           threadId in state.drafts
@@ -167,7 +279,8 @@ export const useOrchestratorDraftStore = create<OrchestratorDraftState>()(
         set((state) => {
           if (!(threadId in state.drafts)) return state;
           const { [threadId]: _removed, ...rest } = state.drafts;
-          return { drafts: rest };
+          const { [threadId]: _activity, ...activity } = state.activity;
+          return { drafts: rest, activity };
         }),
       update: (threadId, patch) =>
         set((state) => {
@@ -184,13 +297,7 @@ export const useOrchestratorDraftStore = create<OrchestratorDraftState>()(
         set((state) => {
           const current = state.drafts[threadId];
           if (!current) return state;
-          const merged = Object.fromEntries(
-            Object.entries({ ...current.seats[seat], ...choice }).filter(
-              ([, value]) => typeof value === "string" && value !== "",
-            ),
-          );
-          const { [seat]: _previous, ...others } = current.seats;
-          const seats = Object.keys(merged).length > 0 ? { ...others, [seat]: merged } : others;
+          const seats = withSeatChoice(current.seats, seat, choice);
           return { drafts: { ...state.drafts, [threadId]: { ...current, seats } } };
         }),
       requestSave: (threadId) =>
@@ -200,6 +307,27 @@ export const useOrchestratorDraftStore = create<OrchestratorDraftState>()(
             [threadId]: (state.saveRequests[threadId] ?? 0) + 1,
           },
         })),
+      requestStart: (threadId) =>
+        set((state) => ({
+          startRequests: {
+            ...state.startRequests,
+            [threadId]: (state.startRequests[threadId] ?? 0) + 1,
+          },
+        })),
+      setActivity: (threadId, activity) =>
+        set((state) => {
+          const current = state.activity[threadId];
+          if (
+            current &&
+            current.busy === activity.busy &&
+            current.blocked === activity.blocked &&
+            current.team === activity.team &&
+            current.saved === activity.saved
+          ) {
+            return state;
+          }
+          return { activity: { ...state.activity, [threadId]: activity } };
+        }),
     }),
     {
       name: "t3code:delivery-orchestrator-drafts:v1",
@@ -214,4 +342,72 @@ export function isOrchestratorDraft(threadId: string): boolean {
 
 export function useOrchestratorDraft(threadId: string | null): OrchestratorDraft | null {
   return useOrchestratorDraftStore((state) => (threadId ? (state.drafts[threadId] ?? null) : null));
+}
+
+export function useOrchestratorActivity(threadId: string | null): OrchestratorActivity {
+  return useOrchestratorDraftStore((state) =>
+    threadId
+      ? (state.activity[threadId] ?? IDLE_ORCHESTRATOR_ACTIVITY)
+      : IDLE_ORCHESTRATOR_ACTIVITY,
+  );
+}
+
+interface BoardState {
+  /** The name written on what this person does: a message, a move, a decision. */
+  readonly person: string;
+  readonly view: string;
+  readonly filters: BoardFilters;
+  readonly grouping: BoardGrouping;
+  /** Whether the history shows how the engine got somewhere, beside where it got. */
+  readonly showDetail: boolean;
+  readonly collapsedLanes: ReadonlyArray<string>;
+  readonly setPerson: (person: string) => void;
+  readonly setView: (view: string) => void;
+  readonly setFilters: (patch: Partial<BoardFilters>) => void;
+  readonly clearFilters: () => void;
+  readonly setGrouping: (grouping: BoardGrouping) => void;
+  readonly setShowDetail: (showDetail: boolean) => void;
+  readonly toggleLane: (lane: string) => void;
+}
+
+/** How this person looks at the board. Kept across reloads, on this device. */
+export const useBoardStore = create<BoardState>()(
+  persist(
+    (set) => ({
+      person: "",
+      view: "development",
+      filters: NO_FILTERS,
+      grouping: "none",
+      showDetail: false,
+      collapsedLanes: [],
+      setPerson: (person) => set({ person: person.slice(0, 60) }),
+      setView: (view) => set({ view }),
+      setFilters: (patch) => set((state) => ({ filters: { ...state.filters, ...patch } })),
+      clearFilters: () => set({ filters: NO_FILTERS }),
+      setGrouping: (grouping) => set({ grouping }),
+      setShowDetail: (showDetail) => set({ showDetail }),
+      toggleLane: (lane) =>
+        set((state) => ({
+          collapsedLanes: state.collapsedLanes.includes(lane)
+            ? state.collapsedLanes.filter((item) => item !== lane)
+            : [...state.collapsedLanes, lane],
+        })),
+    }),
+    {
+      name: "t3code:delivery-board:v1",
+      // A search is for now. How the board is laid out is kept.
+      partialize: (state) => ({
+        person: state.person,
+        view: state.view,
+        grouping: state.grouping,
+        showDetail: state.showDetail,
+        collapsedLanes: state.collapsedLanes,
+      }),
+    },
+  ),
+);
+
+/** The name to write on what is done. Empty, the engine writes "person". */
+export function usePersonName(): string {
+  return useBoardStore((state) => state.person.trim());
 }

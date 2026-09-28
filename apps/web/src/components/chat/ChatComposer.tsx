@@ -244,7 +244,10 @@ import {
 } from "~/state/pullRequests";
 import { useEnvironmentQuery } from "~/state/query";
 import { useDebouncedValue } from "~/state/queries";
-import { OrchestratorComposerControls } from "../delivery/OrchestratorComposerControls";
+import {
+  OrchestratorComposerControls,
+  OrchestratorPrimaryActions,
+} from "../delivery/OrchestratorComposerControls";
 import { TeamPicker } from "../delivery/TeamPicker";
 import {
   useDeliveryEnabled,
@@ -3752,8 +3755,23 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     showPlanFollowUpPrompt,
   ]);
 
+  const deliveryEnabledForComposer = useDeliveryEnabled(environmentId);
+  const orchestratorOffered = deliveryEnabledForComposer && routeKind === "draft";
+  const orchestratorDraft = useOrchestratorDraft(orchestratorOffered ? activeThreadId : null);
+  const orchestratorMode = orchestratorOffered && orchestratorDraft !== null;
+  const enterOrchestrator = useOrchestratorDraftStore((store) => store.enter);
+  const leaveOrchestrator = useOrchestratorDraftStore((store) => store.leave);
+  const requestWorkflowStart = useOrchestratorDraftStore((store) => store.requestStart);
+
   const submitComposer = useCallback(
     (event?: { preventDefault: () => void }, intent: ComposerSubmissionIntent = "foreground") => {
+      // A workflow is started by the team's own controls, which save what is written and
+      // give it to the team. No harness of this thread is involved, so none can block it.
+      if (orchestratorMode && activeThreadId) {
+        event?.preventDefault();
+        if (promptRef.current.trim().length > 0) requestWorkflowStart(activeThreadId);
+        return;
+      }
       if (noProviderAvailable || isSendDisabled) {
         event?.preventDefault();
         return;
@@ -3811,7 +3829,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       isSendDisabled,
       noProviderAvailable,
       onSend,
+      orchestratorMode,
       promptRef,
+      requestWorkflowStart,
       shouldBlurMobileComposerOnSubmit,
     ],
   );
@@ -4908,12 +4928,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     size: "xs",
     hidden: composerControlsHidden || restingHiddenBlockCount > 1,
   });
-  const deliveryEnabledForComposer = useDeliveryEnabled(environmentId);
-  const orchestratorOffered = deliveryEnabledForComposer && routeKind === "draft";
-  const orchestratorDraft = useOrchestratorDraft(orchestratorOffered ? activeThreadId : null);
-  const orchestratorMode = orchestratorOffered && orchestratorDraft !== null;
-  const enterOrchestrator = useOrchestratorDraftStore((store) => store.enter);
-  const leaveOrchestrator = useOrchestratorDraftStore((store) => store.leave);
   const restingBlockDefs = [
     // A team is chosen before the thread is sent and is fixed after that.
     ...(routeKind === "draft" && activeThreadId
@@ -7012,43 +7026,49 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                       </Tooltip>
                     </>
                   ) : null}
-                  <ComposerFooterPrimaryActions
-                    compact={isComposerResting || isComposerPrimaryActionsCompact}
-                    activeContextWindow={
-                      settings.contextWindowMeterEnabled ? activeContextWindow : null
-                    }
-                    reserveContextWindowMeter={reserveContextWindowMeter}
-                    activeThreadModelDisplayName={activeThreadModelDisplayName}
-                    pendingAction={pendingPrimaryAction}
-                    isRunning={phase === "running"}
-                    showPlanFollowUpPrompt={
-                      pendingUserInputs.length === 0 && showPlanFollowUpPrompt
-                    }
-                    promptHasText={prompt.trim().length > 0}
-                    isSendBusy={isSendBusy}
-                    sendDisabledReason={
-                      orchestratorMode
-                        ? "This is a draft of a workflow. Use Save draft or Start workflow."
-                        : sendDisabledReason
-                    }
-                    isConnecting={isConnecting}
-                    isEnvironmentUnavailable={
-                      environmentUnavailable !== null ||
-                      noProviderAvailable ||
-                      projectSelectionRequired
-                    }
-                    isPreparingWorktree={isPreparingWorktree}
-                    hasSendableContent={composerSendState.hasSendableContent}
-                    preserveComposerFocusOnPointerDown={isMobileViewport || isComposerResting}
-                    onPreviousPendingQuestion={onPreviousActivePendingUserInputQuestion}
-                    onInterrupt={handleInterruptPrimaryAction}
-                    onImplementPlanInNewThread={handleImplementPlanInNewThreadPrimaryAction}
-                    compactDisabled={
-                      compactDisabled || noProviderAvailable || isSendBusy || isConnecting
-                    }
-                    compactDisabledReason={resolvedCompactDisabledReason}
-                    {...(compactCommandAvailable ? { onCompactContext: compactThreadContext } : {})}
-                  />
+                  {orchestratorMode && activeThreadId ? (
+                    <OrchestratorPrimaryActions
+                      threadId={activeThreadId}
+                      promptHasText={prompt.trim().length > 0}
+                      preserveComposerFocusOnPointerDown={isMobileViewport || isComposerResting}
+                    />
+                  ) : (
+                    <ComposerFooterPrimaryActions
+                      compact={isComposerResting || isComposerPrimaryActionsCompact}
+                      activeContextWindow={
+                        settings.contextWindowMeterEnabled ? activeContextWindow : null
+                      }
+                      reserveContextWindowMeter={reserveContextWindowMeter}
+                      activeThreadModelDisplayName={activeThreadModelDisplayName}
+                      pendingAction={pendingPrimaryAction}
+                      isRunning={phase === "running"}
+                      showPlanFollowUpPrompt={
+                        pendingUserInputs.length === 0 && showPlanFollowUpPrompt
+                      }
+                      promptHasText={prompt.trim().length > 0}
+                      isSendBusy={isSendBusy}
+                      sendDisabledReason={sendDisabledReason}
+                      isConnecting={isConnecting}
+                      isEnvironmentUnavailable={
+                        environmentUnavailable !== null ||
+                        noProviderAvailable ||
+                        projectSelectionRequired
+                      }
+                      isPreparingWorktree={isPreparingWorktree}
+                      hasSendableContent={composerSendState.hasSendableContent}
+                      preserveComposerFocusOnPointerDown={isMobileViewport || isComposerResting}
+                      onPreviousPendingQuestion={onPreviousActivePendingUserInputQuestion}
+                      onInterrupt={handleInterruptPrimaryAction}
+                      onImplementPlanInNewThread={handleImplementPlanInNewThreadPrimaryAction}
+                      compactDisabled={
+                        compactDisabled || noProviderAvailable || isSendBusy || isConnecting
+                      }
+                      compactDisabledReason={resolvedCompactDisabledReason}
+                      {...(compactCommandAvailable
+                        ? { onCompactContext: compactThreadContext }
+                        : {})}
+                    />
+                  )}
                 </div>
               </div>
             )}
