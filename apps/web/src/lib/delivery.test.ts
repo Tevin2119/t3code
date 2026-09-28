@@ -7,8 +7,11 @@ import {
   isStaleReading,
   parseBoard,
   parseOrchestratorThread,
+  parseTeamProfile,
   parseTeams,
   resolveTeamChoice,
+  rolesForHarness,
+  seatSettingsToSend,
 } from "./delivery";
 
 const seat = (overrides: Record<string, unknown>) => ({
@@ -42,6 +45,41 @@ const teams = parseTeams([
       }),
     ],
     specialists: ["backend"],
+    roles: [
+      {
+        role: "lead-developer",
+        title: "Lead developer",
+        summary: "Builds.",
+        harnesses: ["claude"],
+      },
+      { role: "maintainer", title: "Maintainer", summary: "Keeps.", harnesses: ["hermes"] },
+      { role: "qa-attack", title: "QA, attacking", summary: "Breaks.", harnesses: ["opencode"] },
+      { role: "team-lead", title: "Team lead", summary: "Leads.", harnesses: ["codex"] },
+    ],
+    settings: [
+      {
+        seat: "developer",
+        harness: "claude",
+        now: { model: "claude-fable-5-1", reasoning: null, access: "full" },
+        may: { model: true, reasoning: ["low", "high"], access: ["full", "read-only"] },
+        why: { model: null, reasoning: null, access: null },
+      },
+      {
+        seat: "support",
+        harness: "hermes",
+        now: { model: null, reasoning: null, access: "full" },
+        may: { model: false, reasoning: [], access: ["full"] },
+        why: { model: "set in hermes itself", reasoning: "none", access: "full only" },
+      },
+    ],
+    workflows: [
+      {
+        id: "standard",
+        title: "Standard flow",
+        stages: ["triage", "plan"],
+        stop: "a person decides",
+      },
+    ],
   },
   {
     team: "rnd",
@@ -92,10 +130,32 @@ describe("resolveTeamChoice", () => {
     ).toBe("choose-role");
   });
 
-  it("blocks the send when the team cannot serve this harness", () => {
+  it("lets any role of the team be chosen, with the harness's own role first", () => {
+    const development = teams.find((team) => team.team === "development")!;
+    expect(rolesForHarness(development, "claude")).toMatchObject({
+      held: "lead-developer",
+      roles: [
+        { role: "lead-developer" },
+        { role: "maintainer" },
+        { role: "qa-attack" },
+        { role: "team-lead" },
+      ],
+    });
     expect(
-      resolveTeamChoice({ teams, team: "rnd", role: null, driver: "claudeAgent" }),
-    ).toMatchObject({ state: "blocked", why: "Team rnd has no seat on this harness." });
+      resolveTeamChoice({ teams, team: "development", role: "qa-attack", driver: "claudeAgent" }),
+    ).toEqual({ state: "ready", team: "development", role: "qa-attack" });
+    // A harness with no seat in the team can still take a role, once one is chosen.
+    expect(resolveTeamChoice({ teams, team: "rnd", role: null, driver: "claudeAgent" })).toEqual({
+      state: "choose-role",
+      team: "rnd",
+      roles: ["challenger", "scout"],
+    });
+    expect(resolveTeamChoice({ teams, team: "rnd", role: "scout", driver: "claudeAgent" })).toEqual(
+      { state: "ready", team: "rnd", role: "scout" },
+    );
+  });
+
+  it("blocks the send when the team cannot serve this harness", () => {
     expect(
       resolveTeamChoice({ teams, team: "development", role: null, driver: "cursor" }),
     ).toMatchObject({ state: "blocked" });
@@ -203,6 +263,19 @@ describe("parseOrchestratorThread", () => {
       title: "Add a file",
       working: true,
       task: { id: "task-1", state: "doing", revision: 1 },
+      state: "started",
+      workflow: "standard",
+      settings: [
+        {
+          seat: "lead",
+          harness: "codex",
+          now: { model: "gpt-6-astra", reasoning: null, access: "full" },
+          may: { model: true, reasoning: ["low", "high"], access: ["full"] },
+          why: {},
+          set: { reasoning: "high", model: "" },
+          effective: { model: "gpt-6-astra", reasoning: "high", access: "full" },
+        },
+      ],
       roster: [seat({})],
       children: [{ run: "run-1", state: "running", stage: "qa", whole: false }],
       council: {
@@ -240,10 +313,74 @@ describe("parseOrchestratorThread", () => {
     ]);
     expect(lead?.attempts).toBe(2);
     expect(thread?.council?.concurrency).toEqual({ active: 4, waiting: 1, global: 4 });
+    expect(thread?.state).toBe("started");
+    expect(thread?.settings[0]?.set).toEqual({ reasoning: "high" });
+    expect(thread?.settings[0]?.effective.reasoning).toBe("high");
+  });
+
+  it("reads a draft, which has no task and no run", () => {
+    const draft = parseOrchestratorThread({
+      kind: "orchestrator",
+      thread: "thread-2",
+      team: "development",
+      title: "Add a file",
+      state: "draft",
+      draft: { text: "Add a file." },
+      task: null,
+      workflows: [{ id: "standard", title: "Standard flow", stages: ["triage"], stop: "x" }],
+      roster: [],
+      messages: [],
+    });
+    expect([draft?.state, draft?.task, draft?.draft?.text, draft?.council]).toEqual([
+      "draft",
+      null,
+      "Add a file.",
+      null,
+    ]);
+    expect(draft?.workflows[0]?.id).toBe("standard");
   });
 
   it("is null for a thread of another kind", () => {
     expect(parseOrchestratorThread({ kind: "chat", task: {} })).toBeNull();
+  });
+});
+
+describe("seatSettingsToSend", () => {
+  it("sends only what differs from what the team defines", () => {
+    const development = teams.find((team) => team.team === "development")!;
+    expect(
+      seatSettingsToSend(development.settings, {
+        developer: { model: "claude-fable-5-1", reasoning: "high", access: " full " },
+        support: { model: "" },
+        nobody: { reasoning: "high" },
+      }),
+    ).toEqual({ developer: { reasoning: "high" } });
+    expect(seatSettingsToSend(development.settings, {})).toEqual({});
+  });
+});
+
+describe("parseTeamProfile", () => {
+  it("reads the layers in order, and keeps a layer that has no text", () => {
+    const profile = parseTeamProfile({
+      team: "development",
+      configuration: "development@3#abc",
+      role: "qa-attack",
+      harness: "claude",
+      heldByASeat: false,
+      layers: [
+        { name: "company", source: "AGENTS.md", text: null },
+        { name: "team", source: "teams/development/TEAM.md", text: "Team rules." },
+      ],
+      tools: [{ server: "delivery", offers: ["task_get"], runsAs: "a program", route: "MCP" }],
+      specialists: [{ name: "backend", text: "You know the backend." }],
+      gates: { qa: { seats: ["a", "b", "c"], minimumPassingProviders: 2 } },
+    });
+    expect(profile?.layers.map((layer) => [layer.name, layer.text])).toEqual([
+      ["company", null],
+      ["team", "Team rules."],
+    ]);
+    expect(profile?.qaGate).toEqual({ seats: ["a", "b", "c"], minimum: 2 });
+    expect(parseTeamProfile({ error: "no team" })).toBeNull();
   });
 });
 
@@ -344,6 +481,14 @@ describe("decideTeamForSend", () => {
       decideTeamForSend({ ...base, held, draft: { team: null, role: null }, driver: "kimi" })
         .action,
     ).toBe("blocked");
+    expect(
+      decideTeamForSend({
+        ...base,
+        held: { team: "rnd", role: "scout" },
+        draft: { team: null, role: null },
+        driver: "kimi",
+      }),
+    ).toEqual({ action: "bind", team: "rnd", role: "scout" });
   });
 
   it("stops the send when the team cannot be set up, and never falls back to no team", () => {

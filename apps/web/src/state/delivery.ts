@@ -118,3 +118,100 @@ export function useDraftTeamChoice(threadId: string | null): DraftTeamChoice {
     threadId ? (state.choices[threadId] ?? DEFAULT_DRAFT_TEAM_CHOICE) : DEFAULT_DRAFT_TEAM_CHOICE,
   );
 }
+
+export type SeatChoice = Partial<Record<"model" | "reasoning" | "access", string>>;
+
+/** A workflow being prepared in the composer. It is saved to the engine as a draft. */
+export interface OrchestratorDraft {
+  readonly team: string;
+  readonly workflow: string;
+  readonly seats: Readonly<Record<string, SeatChoice>>;
+  /** The engine's id for the draft, once it has been saved there. */
+  readonly engineThread: string | null;
+  /** The text as it was when last saved, to tell a saved draft from a changed one. */
+  readonly savedText: string | null;
+}
+
+interface OrchestratorDraftState {
+  /** Threads whose composer is in Orchestrator mode, with what was chosen there. */
+  readonly drafts: Record<string, OrchestratorDraft>;
+  /** Counts requests to save, so the composer's controls can act on the send key. */
+  readonly saveRequests: Record<string, number>;
+  readonly enter: (threadId: string) => void;
+  readonly leave: (threadId: string) => void;
+  readonly update: (threadId: string, patch: Partial<OrchestratorDraft>) => void;
+  readonly setSeat: (threadId: string, seat: string, choice: SeatChoice) => void;
+  readonly requestSave: (threadId: string) => void;
+}
+
+const NEW_ORCHESTRATOR_DRAFT: OrchestratorDraft = {
+  team: DELIVERY_DEFAULT_TEAM,
+  workflow: "standard",
+  seats: {},
+  engineThread: null,
+  savedText: null,
+};
+
+export const useOrchestratorDraftStore = create<OrchestratorDraftState>()(
+  persist(
+    (set) => ({
+      drafts: {},
+      saveRequests: {},
+      enter: (threadId) =>
+        set((state) =>
+          threadId in state.drafts
+            ? state
+            : { drafts: { ...state.drafts, [threadId]: NEW_ORCHESTRATOR_DRAFT } },
+        ),
+      leave: (threadId) =>
+        set((state) => {
+          if (!(threadId in state.drafts)) return state;
+          const { [threadId]: _removed, ...rest } = state.drafts;
+          return { drafts: rest };
+        }),
+      update: (threadId, patch) =>
+        set((state) => {
+          const current = state.drafts[threadId];
+          if (!current) return state;
+          // Settings made for one team's seats mean nothing for another's.
+          const seats =
+            patch.team !== undefined && patch.team !== current.team && patch.seats === undefined
+              ? {}
+              : (patch.seats ?? current.seats);
+          return { drafts: { ...state.drafts, [threadId]: { ...current, ...patch, seats } } };
+        }),
+      setSeat: (threadId, seat, choice) =>
+        set((state) => {
+          const current = state.drafts[threadId];
+          if (!current) return state;
+          const merged = Object.fromEntries(
+            Object.entries({ ...current.seats[seat], ...choice }).filter(
+              ([, value]) => typeof value === "string" && value !== "",
+            ),
+          );
+          const { [seat]: _previous, ...others } = current.seats;
+          const seats = Object.keys(merged).length > 0 ? { ...others, [seat]: merged } : others;
+          return { drafts: { ...state.drafts, [threadId]: { ...current, seats } } };
+        }),
+      requestSave: (threadId) =>
+        set((state) => ({
+          saveRequests: {
+            ...state.saveRequests,
+            [threadId]: (state.saveRequests[threadId] ?? 0) + 1,
+          },
+        })),
+    }),
+    {
+      name: "t3code:delivery-orchestrator-drafts:v1",
+      partialize: (state) => ({ drafts: state.drafts }),
+    },
+  ),
+);
+
+export function isOrchestratorDraft(threadId: string): boolean {
+  return threadId in useOrchestratorDraftStore.getState().drafts;
+}
+
+export function useOrchestratorDraft(threadId: string | null): OrchestratorDraft | null {
+  return useOrchestratorDraftStore((state) => (threadId ? (state.drafts[threadId] ?? null) : null));
+}

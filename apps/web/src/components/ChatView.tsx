@@ -367,7 +367,9 @@ import { decideTeamForSend, parseTeams } from "../lib/delivery";
 import {
   deliveryEnvironment,
   hasDraftTeamChoice,
+  isOrchestratorDraft,
   readDraftTeamChoice,
+  useOrchestratorDraftStore,
   useDeliveryDraftStore,
   useDeliveryEnabled,
   useDeliveryRead,
@@ -7698,6 +7700,12 @@ export default function ChatView(props: ChatViewProps) {
       composerTerminalContextsRef.current = [];
       clearComposerDraftContent(composerDraftTarget);
       composerRef.current?.resetCursorState();
+      return;
+    }
+    // In Orchestrator mode what is typed is a draft of a workflow. The send key
+    // saves it. It never starts a turn, and it never starts the team.
+    if (!isServerThread && isOrchestratorDraft(activeThread.id)) {
+      useOrchestratorDraftStore.getState().requestSave(activeThread.id);
       return;
     }
     const threadIdForSend = activeThread.id;

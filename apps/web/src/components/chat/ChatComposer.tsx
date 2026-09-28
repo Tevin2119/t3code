@@ -244,7 +244,13 @@ import {
 } from "~/state/pullRequests";
 import { useEnvironmentQuery } from "~/state/query";
 import { useDebouncedValue } from "~/state/queries";
+import { OrchestratorComposerControls } from "../delivery/OrchestratorComposerControls";
 import { TeamPicker } from "../delivery/TeamPicker";
+import {
+  useDeliveryEnabled,
+  useOrchestratorDraft,
+  useOrchestratorDraftStore,
+} from "../../state/delivery";
 import { ProviderModelPicker } from "./ProviderModelPicker";
 import { resolveModelPickerSelectedModel } from "./ModelPickerContent";
 import { type ComposerCommandItem, ComposerCommandMenu } from "./ComposerCommandMenu";
@@ -4902,6 +4908,12 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     size: "xs",
     hidden: composerControlsHidden || restingHiddenBlockCount > 1,
   });
+  const deliveryEnabledForComposer = useDeliveryEnabled(environmentId);
+  const orchestratorOffered = deliveryEnabledForComposer && routeKind === "draft";
+  const orchestratorDraft = useOrchestratorDraft(orchestratorOffered ? activeThreadId : null);
+  const orchestratorMode = orchestratorOffered && orchestratorDraft !== null;
+  const enterOrchestrator = useOrchestratorDraftStore((store) => store.enter);
+  const leaveOrchestrator = useOrchestratorDraftStore((store) => store.leave);
   const restingBlockDefs = [
     // A team is chosen before the thread is sent and is fixed after that.
     ...(routeKind === "draft" && activeThreadId
@@ -5057,12 +5069,26 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         getModelDisabledReason={getModelDisabledReason}
         onInstanceModelChange={(instanceId, model) => {
           setMultipleModelSelections(null);
+          // A model is a single harness: the composer leaves Orchestrator mode.
+          if (activeThreadId) leaveOrchestrator(activeThreadId);
           onProviderModelSelect(instanceId, model);
         }}
         onOpenProviderSetup={onOpenProviderSetup}
+        orchestrator={
+          orchestratorOffered && activeThreadId
+            ? { active: orchestratorMode, onSelect: () => enterOrchestrator(activeThreadId) }
+            : undefined
+        }
       />
 
-      {composerControlsCompact ? (
+      {orchestratorMode && activeThreadId ? (
+        <OrchestratorComposerControls
+          environmentId={environmentId}
+          threadId={activeThreadId}
+          prompt={prompt}
+          onPromptCleared={() => setComposerDraftPrompt(composerDraftTarget, "")}
+        />
+      ) : composerControlsCompact ? (
         <CompactComposerControlsMenu
           interactionMode={interactionMode}
           runtimeMode={runtimeMode}
@@ -7000,7 +7026,11 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     }
                     promptHasText={prompt.trim().length > 0}
                     isSendBusy={isSendBusy}
-                    sendDisabledReason={sendDisabledReason}
+                    sendDisabledReason={
+                      orchestratorMode
+                        ? "This is a draft of a workflow. Use Save draft or Start workflow."
+                        : sendDisabledReason
+                    }
                     isConnecting={isConnecting}
                     isEnvironmentUnavailable={
                       environmentUnavailable !== null ||

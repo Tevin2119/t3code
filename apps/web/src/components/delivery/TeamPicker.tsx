@@ -1,22 +1,26 @@
-import type { EnvironmentId } from "@t3tools/contracts";
-import { UsersIcon } from "lucide-react";
+import { DELIVERY_HARNESS_BY_DRIVER, type EnvironmentId } from "@t3tools/contracts";
+import { InfoIcon, UsersIcon } from "lucide-react";
 import { useMemo } from "react";
 
-import { parseTeams, resolveTeamChoice } from "../../lib/delivery";
+import { parseTeams, resolveTeamChoice, rolesForHarness } from "../../lib/delivery";
 import {
   useDeliveryDraftStore,
   useDeliveryEnabled,
   useDeliveryRead,
   useDraftTeamChoice,
 } from "../../state/delivery";
+import { Button } from "../ui/button";
+import { Popover, PopoverPopup, PopoverTitle, PopoverTrigger } from "../ui/popover";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { TeamProfilePanel } from "./TeamProfilePanel";
 
 const NO_TEAM = "__none__";
 
 /**
- * Team and role for a thread that has not been sent yet. Once the thread is
- * sent its team is fixed, so this is only shown for drafts.
+ * Team profile and role for a thread that has not been sent yet, between the
+ * model and the reasoning controls. Once the thread is sent its team and role
+ * are fixed, so this is only shown for drafts.
  */
 export function TeamPicker(props: {
   readonly environmentId: EnvironmentId | null;
@@ -32,6 +36,9 @@ export function TeamPicker(props: {
     () => parseTeams(teamsRead.body).filter((team) => team.team !== "triage"),
     [teamsRead.body],
   );
+  const harness = props.driver ? (DELIVERY_HARNESS_BY_DRIVER[props.driver] ?? null) : null;
+  const team = teams.find((candidate) => candidate.team === choice.team) ?? null;
+  const offered = team && harness ? rolesForHarness(team, harness) : null;
   const resolved = resolveTeamChoice({
     teams,
     team: choice.team,
@@ -41,19 +48,20 @@ export function TeamPicker(props: {
 
   if (!enabled) return null;
 
+  const role = resolved.state === "ready" ? resolved.role : null;
   const detail = teamsRead.error
     ? `Delivery engine not reachable. ${teamsRead.error}`
     : resolved.state === "blocked"
       ? resolved.why
       : resolved.state === "choose-role"
-        ? "This harness can take more than one role in this team. Choose one."
+        ? "Choose the role this harness is to take in the team."
         : resolved.state === "ready"
           ? `Team ${resolved.team}, role ${resolved.role}. Fixed once the thread is sent.`
           : "No team: an ordinary thread, with no team instructions or tools.";
   const attention = Boolean(teamsRead.error) || resolved.state === "blocked";
 
   return (
-    <div className="flex min-w-0 items-center gap-1" data-delivery-team-picker>
+    <div className="flex min-w-0 items-center gap-0.5" data-delivery-team-picker>
       <Tooltip>
         <Select
           value={choice.team ?? NO_TEAM}
@@ -67,7 +75,7 @@ export function TeamPicker(props: {
           <TooltipTrigger
             render={
               <SelectTrigger
-                aria-label="Team"
+                aria-label="Team profile"
                 size="compact"
                 variant="ghost"
                 className={attention ? "w-auto min-w-0 text-warning" : "w-auto min-w-0"}
@@ -78,13 +86,11 @@ export function TeamPicker(props: {
             <SelectValue>{choice.team ?? "No team"}</SelectValue>
           </TooltipTrigger>
           <SelectPopup alignItemWithTrigger={false}>
-            {teams.map((team) => (
-              <SelectItem key={team.team} value={team.team} disabled={!team.available}>
+            {teams.map((item) => (
+              <SelectItem key={item.team} value={item.team}>
                 <span className="flex flex-col">
-                  <span>{team.team}</span>
-                  <span className="text-xs text-muted-foreground">
-                    {team.available ? team.purpose : (team.why ?? "Not available")}
-                  </span>
+                  <span>{item.team}</span>
+                  <span className="text-xs text-muted-foreground">{item.purpose}</span>
                 </span>
               </SelectItem>
             ))}
@@ -98,9 +104,10 @@ export function TeamPicker(props: {
         </Select>
         <TooltipPopup side="top">{detail}</TooltipPopup>
       </Tooltip>
-      {resolved.state === "choose-role" || (resolved.state === "ready" && choice.role) ? (
+
+      {team && offered ? (
         <Select
-          value={choice.role ?? ""}
+          value={role ?? ""}
           onValueChange={(value) =>
             setChoice(props.threadId, { team: choice.team, role: String(value) })
           }
@@ -109,29 +116,52 @@ export function TeamPicker(props: {
             aria-label="Role"
             size="compact"
             variant="ghost"
-            className="w-auto min-w-0"
+            className={
+              resolved.state === "choose-role" ? "w-auto min-w-0 text-warning" : "w-auto min-w-0"
+            }
           >
-            <SelectValue>{choice.role ?? "Choose a role"}</SelectValue>
+            <SelectValue>{role ?? "Choose a role"}</SelectValue>
           </SelectTrigger>
           <SelectPopup alignItemWithTrigger={false}>
-            {(resolved.state === "choose-role"
-              ? resolved.roles
-              : [
-                  ...new Set(
-                    teams
-                      .find((team) => team.team === choice.team)
-                      ?.seats.map((seat) => seat.role) ?? [],
-                  ),
-                ]
-            ).map((role) => (
-              <SelectItem key={role} value={role}>
-                {role}
+            {offered.roles.map((item) => (
+              <SelectItem key={item.role} value={item.role}>
+                <span className="flex max-w-80 flex-col">
+                  <span>
+                    {item.title}
+                    {item.role === offered.held ? " (this harness's own)" : ""}
+                  </span>
+                  <span className="text-xs text-muted-foreground">{item.summary}</span>
+                </span>
               </SelectItem>
             ))}
           </SelectPopup>
         </Select>
-      ) : resolved.state === "ready" ? (
-        <span className="truncate text-xs text-muted-foreground">{resolved.role}</span>
+      ) : null}
+
+      {team ? (
+        <Popover>
+          <PopoverTrigger
+            render={
+              <Button
+                size="icon-xs"
+                variant="ghost"
+                aria-label="Inspect team setup"
+                data-delivery-inspect
+              />
+            }
+          >
+            <InfoIcon />
+          </PopoverTrigger>
+          <PopoverPopup side="top" align="start" className="w-[34rem] max-w-[calc(100vw-2rem)]">
+            <PopoverTitle className="pb-2 text-sm">What this session is given</PopoverTitle>
+            <TeamProfilePanel
+              environmentId={props.environmentId}
+              team={team.team}
+              harness={harness}
+              role={role}
+            />
+          </PopoverPopup>
+        </Popover>
       ) : null}
     </div>
   );

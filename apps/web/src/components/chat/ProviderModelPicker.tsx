@@ -1,3 +1,4 @@
+import { UsersIcon } from "lucide-react";
 import {
   ANTIGRAVITY_DEFAULT_MODEL,
   type ProviderInstanceId,
@@ -58,7 +59,13 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
   onOpenProviderSetup?: (instanceId: ProviderInstanceId) => void;
   getModelDisabledReason?: (instanceId: ProviderInstanceId, model: string) => string | null;
   onInstanceModelChange: (instanceId: ProviderInstanceId, model: string) => void;
+  /**
+   * Offers "Orchestrator" beside the harnesses: a whole team in place of one
+   * model. Choosing a model again goes back to a single harness.
+   */
+  orchestrator?: { readonly active: boolean; readonly onSelect: () => void } | undefined;
 }) {
+  const triggerLabelOverride = props.orchestrator?.active ? "Orchestrator" : props.triggerLabel;
   const composerFloatingLayerProps = useComposerMenuProps();
   const [uncontrolledIsMenuOpen, setUncontrolledIsMenuOpen] = useState(false);
   const isMenuOpen = props.open ?? uncontrolledIsMenuOpen;
@@ -189,8 +196,8 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
     ? selectedEntries.map((selection) => selection.label).join(", ") || "Choose models"
     : undefined;
   const triggerTooltipContent = shortcutLabel
-    ? `${props.triggerLabel ?? allModelNames ?? triggerLabel} · ${shortcutLabel}`
-    : (props.triggerLabel ?? allModelNames ?? triggerLabel);
+    ? `${triggerLabelOverride ?? allModelNames ?? triggerLabel} · ${shortcutLabel}`
+    : (triggerLabelOverride ?? allModelNames ?? triggerLabel);
 
   return (
     <Popover
@@ -222,7 +229,7 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
         <span
           className={cn("flex min-w-0 flex-1 items-center", size === "xs" ? "gap-1" : "gap-1.5")}
         >
-          {selectedEntries && props.triggerLabel === undefined ? (
+          {selectedEntries && triggerLabelOverride === undefined ? (
             <span className="flex shrink-0 items-center -space-x-1" aria-hidden="true">
               {selectedEntries
                 .slice(0, 3)
@@ -244,7 +251,9 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
                 </span>
               ) : null}
             </span>
-          ) : activeEntry && props.triggerLabel === undefined ? (
+          ) : props.orchestrator?.active ? (
+            <UsersIcon className="size-4 shrink-0" />
+          ) : activeEntry && triggerLabelOverride === undefined ? (
             <ProviderInstanceIcon
               driverKind={activeEntry.driverKind}
               displayName={activeEntry.displayName}
@@ -268,11 +277,13 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
                 />
               }
             >
-              {props.triggerLabel ?? multipleLabel ?? triggerTitle}
+              {triggerLabelOverride ?? multipleLabel ?? triggerTitle}
             </TooltipTrigger>
             <TooltipPopup side="top">{triggerTooltipContent}</TooltipPopup>
           </Tooltip>
-          {selectedModel?.isUnavailable && !selectedEntries && props.triggerLabel === undefined ? (
+          {selectedModel?.isUnavailable &&
+          !selectedEntries &&
+          triggerLabelOverride === undefined ? (
             <Badge variant="outline" size="sm">
               Unavailable
             </Badge>
@@ -288,6 +299,30 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
         className="before:hidden [--viewport-inline-padding:0]"
         viewportClassName="overflow-hidden! rounded-[calc(var(--radius-lg)-1px)] p-0 [clip-path:inset(0_round_calc(var(--radius-lg)-1px))]"
       >
+        {props.orchestrator ? (
+          <button
+            type="button"
+            data-model-picker-orchestrator
+            aria-pressed={props.orchestrator.active}
+            className={cn(
+              "flex w-full cursor-pointer items-center gap-2 border-b border-border px-3 py-2 text-left text-sm hover:bg-accent",
+              props.orchestrator.active && "bg-accent",
+            )}
+            onClick={() => {
+              props.orchestrator?.onSelect();
+              setIsMenuOpen(false);
+            }}
+          >
+            <UsersIcon className="size-4 shrink-0" />
+            <span className="flex min-w-0 flex-col">
+              <span className="font-medium">Orchestrator</span>
+              <span className="truncate text-xs text-muted-foreground">
+                A whole team works on it, with a model for each seat. Choose a model below for a
+                single harness.
+              </span>
+            </span>
+          </button>
+        ) : null}
         <ModelPickerContent
           activeInstanceId={activeInstanceId}
           model={props.model}

@@ -44,7 +44,83 @@ export interface DeliveryTeam {
   readonly why: string | null;
   readonly seats: ReadonlyArray<DeliverySeat>;
   readonly specialists: ReadonlyArray<string>;
+  /** Every role the team has written down. Any of them can be chosen for a harness. */
+  readonly roles: ReadonlyArray<DeliveryRole>;
+  readonly settings: ReadonlyArray<SeatSettings>;
+  readonly workflows: ReadonlyArray<DeliveryWorkflow>;
 }
+
+export interface DeliveryRole {
+  readonly role: string;
+  readonly title: string;
+  readonly summary: string;
+  /** Harnesses whose own seat holds this role. */
+  readonly harnesses: ReadonlyArray<string>;
+}
+
+export interface DeliveryWorkflow {
+  readonly id: string;
+  readonly title: string;
+  readonly stages: ReadonlyArray<string>;
+  readonly stop: string;
+}
+
+export interface SeatSettingValues {
+  readonly model: string | null;
+  readonly reasoning: string | null;
+  readonly access: string | null;
+}
+
+/** What may be set for one seat, what the team defines, and what is set for a thread. */
+export interface SeatSettings {
+  readonly seat: string;
+  readonly harness: string;
+  readonly now: SeatSettingValues;
+  readonly may: {
+    readonly model: boolean;
+    readonly reasoning: ReadonlyArray<string>;
+    readonly access: ReadonlyArray<string>;
+  };
+  readonly why: SeatSettingValues;
+  readonly set: Partial<Record<"model" | "reasoning" | "access", string>>;
+  readonly effective: SeatSettingValues;
+}
+
+const parseValues = (value: unknown): SeatSettingValues => {
+  const from = isRecord(value) ? value : {};
+  return {
+    model: textOrNull(from.model),
+    reasoning: textOrNull(from.reasoning),
+    access: textOrNull(from.access),
+  };
+};
+
+export const parseSeatSettings = (value: Json): SeatSettings => {
+  const may = isRecord(value.may) ? value.may : {};
+  const set = isRecord(value.set) ? value.set : {};
+  const now = parseValues(value.now);
+  return {
+    seat: text(value.seat),
+    harness: text(value.harness),
+    now,
+    may: { model: flag(may.model), reasoning: strings(may.reasoning), access: strings(may.access) },
+    why: parseValues(value.why),
+    set: Object.fromEntries(
+      (["model", "reasoning", "access"] as const)
+        .filter((key) => typeof set[key] === "string" && set[key] !== "")
+        .map((key) => [key, String(set[key])]),
+    ),
+    effective: value.effective === undefined ? now : parseValues(value.effective),
+  };
+};
+
+const parseWorkflows = (value: unknown): ReadonlyArray<DeliveryWorkflow> =>
+  records(value).map((item) => ({
+    id: text(item.id),
+    title: text(item.title, text(item.id)),
+    stages: strings(item.stages),
+    stop: text(item.stop),
+  }));
 
 const parseSeat = (value: Json): DeliverySeat => ({
   seat: text(value.seat),
@@ -69,7 +145,43 @@ export function parseTeams(body: unknown): ReadonlyArray<DeliveryTeam> {
       why: textOrNull(team.why),
       seats: records(team.seats).map(parseSeat),
       specialists: strings(team.specialists),
+      roles: records(team.roles).map((role) => ({
+        role: text(role.role),
+        title: text(role.title, text(role.role)),
+        summary: text(role.summary),
+        harnesses: strings(role.harnesses),
+      })),
+      settings: records(team.settings).map(parseSeatSettings),
+      workflows: parseWorkflows(team.workflows),
     }));
+}
+
+/**
+ * The roles a harness can be given in a team: every role of the team, with
+ * the ones the harness's own seats hold first. `held` is what is taken when
+ * the person chooses nothing, and is null when that is not one clear role.
+ */
+export function rolesForHarness(
+  team: DeliveryTeam,
+  harness: string,
+): { readonly roles: ReadonlyArray<DeliveryRole>; readonly held: string | null } {
+  const own = [
+    ...new Set(team.seats.filter((seat) => seat.harness === harness).map((seat) => seat.role)),
+  ];
+  const known = team.roles.length
+    ? team.roles
+    : // An engine that does not list roles: the ones the seats hold are all that is known.
+      [...new Set(team.seats.map((seat) => seat.role))].map((role) => ({
+        role,
+        title: role,
+        summary: "",
+        harnesses: [],
+      }));
+  const roles = [
+    ...known.filter((role) => own.includes(role.role)),
+    ...known.filter((role) => !own.includes(role.role)),
+  ];
+  return { roles, held: own.length === 1 ? own[0]! : null };
 }
 
 export type TeamChoice =
@@ -100,23 +212,102 @@ export function resolveTeamChoice(input: {
       why: "Teams are not set up for this harness. Choose another harness, or No team.",
     };
   }
-  const seats = team.seats.filter((seat) => seat.harness === harness);
-  if (seats.length === 0) {
+  const { roles, held } = rolesForHarness(team, harness);
+  const names = roles.map((role) => role.role);
+  // A role left over from another team is not taken for a choice.
+  const wanted = input.role && names.includes(input.role) ? input.role : null;
+  const role = wanted ?? held;
+  if (!role) return { state: "choose-role", team: team.team, roles: names };
+  // Whether the harness is installed is known from any seat that runs on it.
+  const onHarness = team.seats.find((seat) => seat.harness === harness);
+  if (onHarness && !onHarness.available) {
     return {
       state: "blocked",
       team: team.team,
-      why: `Team ${team.team} has no seat on this harness.`,
+      why: onHarness.why ?? "This harness cannot be started.",
     };
   }
-  const roles = [...new Set(seats.map((seat) => seat.role))];
-  const wanted = input.role && roles.includes(input.role) ? input.role : null;
-  if (!wanted && roles.length > 1) return { state: "choose-role", team: team.team, roles };
-  const role = wanted ?? roles[0]!;
-  const seat = seats.find((candidate) => candidate.role === role)!;
-  if (!seat.available) {
-    return { state: "blocked", team: team.team, why: seat.why ?? "This seat cannot be started." };
-  }
   return { state: "ready", team: team.team, role };
+}
+
+export interface TeamProfile {
+  readonly team: string;
+  readonly purpose: string;
+  readonly configuration: string;
+  readonly role: string;
+  readonly harness: string | null;
+  readonly heldByASeat: boolean;
+  readonly layers: ReadonlyArray<{
+    readonly name: string;
+    readonly source: string;
+    /** Null for the repository's own rules, which the harness reads by itself. */
+    readonly text: string | null;
+  }>;
+  readonly tools: ReadonlyArray<{
+    readonly server: string;
+    readonly offers: ReadonlyArray<string>;
+    readonly runsAs: string;
+    readonly onlyWith: string | null;
+    readonly route: string;
+  }>;
+  readonly specialists: ReadonlyArray<{ readonly name: string; readonly text: string }>;
+  readonly specialistsStartedBy: string | null;
+  readonly stages: ReadonlyArray<string>;
+  readonly memoryScope: string;
+  readonly qaGate: { readonly seats: ReadonlyArray<string>; readonly minimum: number } | null;
+}
+
+export function parseTeamProfile(body: unknown): TeamProfile | null {
+  if (!isRecord(body) || !Array.isArray(body.layers)) return null;
+  const gates = isRecord(body.gates) ? body.gates : {};
+  const qa = isRecord(gates.qa) ? gates.qa : null;
+  return {
+    team: text(body.team),
+    purpose: text(body.purpose),
+    configuration: text(body.configuration),
+    role: text(body.role),
+    harness: textOrNull(body.harness),
+    heldByASeat: flag(body.heldByASeat),
+    layers: records(body.layers).map((layer) => ({
+      name: text(layer.name),
+      source: text(layer.source),
+      text: textOrNull(layer.text),
+    })),
+    tools: records(body.tools).map((tool) => ({
+      server: text(tool.server),
+      offers: strings(tool.offers),
+      runsAs: text(tool.runsAs),
+      onlyWith: textOrNull(tool.onlyWith),
+      route: text(tool.route),
+    })),
+    specialists: records(body.specialists).map((item) => ({
+      name: text(item.name),
+      text: text(item.text),
+    })),
+    specialistsStartedBy: textOrNull(body.specialistsStartedBy),
+    stages: strings(body.stages),
+    memoryScope: text(body.memoryScope),
+    qaGate: qa ? { seats: strings(qa.seats), minimum: count(qa.minimumPassingProviders) } : null,
+  };
+}
+
+/** Only what differs from what the team defines is sent as a setting for a run. */
+export function seatSettingsToSend(
+  settings: ReadonlyArray<SeatSettings>,
+  chosen: Readonly<Record<string, Partial<Record<"model" | "reasoning" | "access", string>>>>,
+): Record<string, Record<string, string>> {
+  const out: Record<string, Record<string, string>> = {};
+  for (const item of settings) {
+    const asked = chosen[item.seat] ?? {};
+    const kept = Object.entries(asked).filter(([key, value]) => {
+      if (typeof value !== "string" || value.trim() === "") return false;
+      return value.trim() !== (item.now[key as keyof SeatSettingValues] ?? "");
+    });
+    if (kept.length > 0) {
+      out[item.seat] = Object.fromEntries(kept.map(([key, value]) => [key, String(value).trim()]));
+    }
+  }
+  return out;
 }
 
 /** The label of a thread's team. A thread that was never bound says so. */
@@ -284,8 +475,16 @@ export interface OrchestratorThread {
   readonly thread: string;
   readonly team: string;
   readonly title: string;
+  /** `draft` until a person starts it. Nothing runs for a draft. */
+  readonly state: "draft" | "started";
+  readonly draft: { readonly text: string } | null;
+  readonly workflow: string;
+  readonly workflows: ReadonlyArray<DeliveryWorkflow>;
+  readonly configuration: string;
+  readonly settings: ReadonlyArray<SeatSettings>;
   readonly working: boolean;
-  readonly task: { readonly id: string; readonly state: string; readonly revision: number };
+  /** Null while the thread is a draft. */
+  readonly task: { readonly id: string; readonly state: string; readonly revision: number } | null;
   readonly parts: ReadonlyArray<{
     readonly id: string;
     readonly title: string;
@@ -330,25 +529,34 @@ export interface OrchestratorThread {
     readonly seq: number;
     readonly at: string;
     readonly from: string;
+    /** `question`, `change`, `answer`, `start`, or null for the coordinator's own notes. */
+    readonly kind: string | null;
     readonly text: string;
   }>;
   readonly pendingFromPerson: number;
 }
 
 export function parseOrchestratorThread(body: unknown): OrchestratorThread | null {
-  if (!isRecord(body) || text(body.kind) !== "orchestrator" || !isRecord(body.task)) return null;
+  if (!isRecord(body) || text(body.kind) !== "orchestrator") return null;
+  const task = isRecord(body.task) ? body.task : null;
+  const draft = isRecord(body.draft) ? body.draft : null;
   const council = isRecord(body.council) ? body.council : null;
   const concurrency = council && isRecord(council.concurrency) ? council.concurrency : {};
   return {
     thread: text(body.thread),
     team: text(body.team),
     title: text(body.title),
+    // A thread from an engine that knows no drafts has started.
+    state: text(body.state) === "draft" ? "draft" : "started",
+    draft: draft ? { text: text(draft.text) } : null,
+    workflow: text(body.workflow, "standard"),
+    workflows: parseWorkflows(body.workflows),
+    configuration: text(body.configuration),
+    settings: records(body.settings).map(parseSeatSettings),
     working: flag(body.working),
-    task: {
-      id: text(body.task.id),
-      state: text(body.task.state),
-      revision: count(body.task.revision),
-    },
+    task: task
+      ? { id: text(task.id), state: text(task.state), revision: count(task.revision) }
+      : null,
     parts: records(body.parts).map((part) => ({
       id: text(part.id),
       title: text(part.title),
@@ -408,6 +616,7 @@ export function parseOrchestratorThread(body: unknown): OrchestratorThread | nul
       seq: count(message.seq),
       at: text(message.at),
       from: text(message.from),
+      kind: textOrNull(message.kind),
       text: text(message.text),
     })),
     pendingFromPerson: count(body.pendingFromPerson),
@@ -419,6 +628,7 @@ export function parseThreadList(body: unknown): ReadonlyArray<{
   readonly team: string;
   readonly title: string;
   readonly state: string | null;
+  readonly taskState: string | null;
   readonly updated: string;
 }> {
   return records(body).map((item) => ({
@@ -426,6 +636,7 @@ export function parseThreadList(body: unknown): ReadonlyArray<{
     team: text(item.team),
     title: text(item.title),
     state: textOrNull(item.state),
+    taskState: textOrNull(item.taskState),
     updated: text(item.updated),
   }));
 }
