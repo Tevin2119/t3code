@@ -20,6 +20,7 @@ import {
   DeliveryResponse,
   DeliveryThreadBinding,
   DeliveryThreadBindingInput,
+  DeliveryThreadState,
 } from "./delivery.ts";
 import { ExternalLauncherError, LaunchEditorInput } from "./editor.ts";
 import {
@@ -396,6 +397,7 @@ export const WS_METHODS = {
   deliveryAct: "delivery.act",
   deliveryBindThread: "delivery.bindThread",
   deliveryThreadBinding: "delivery.threadBinding",
+  deliveryReleaseThread: "delivery.releaseThread",
 
   // Cloud environment methods
   cloudGetRelayClientStatus: "cloud.getRelayClientStatus",
@@ -663,11 +665,18 @@ const WsDeliveryBindThreadRpc = Rpc.make(WS_METHODS.deliveryBindThread, {
   error: Schema.Union([EnvironmentAuthorizationError, DeliveryError]),
 });
 
-/** Null for a thread that was never bound: a manual or legacy thread. */
+/** Both null for a thread that was never bound: a manual or legacy thread. */
 const WsDeliveryThreadBindingRpc = Rpc.make(WS_METHODS.deliveryThreadBinding, {
   payload: DeliveryThreadBindingInput,
-  success: Schema.NullOr(DeliveryThreadBinding),
-  error: EnvironmentAuthorizationError,
+  success: DeliveryThreadState,
+  error: Schema.Union([EnvironmentAuthorizationError, DeliveryError]),
+});
+
+/** Gives up a team choice whose setup never completed, so the thread can start without a team. */
+const WsDeliveryReleaseThreadRpc = Rpc.make(WS_METHODS.deliveryReleaseThread, {
+  payload: DeliveryThreadBindingInput,
+  success: DeliveryThreadState,
+  error: Schema.Union([EnvironmentAuthorizationError, DeliveryError]),
 });
 
 const WsServerGetUsageSummaryRpc = Rpc.make(WS_METHODS.serverGetUsageSummary, {
@@ -1421,6 +1430,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsDeliveryActRpc,
   WsDeliveryBindThreadRpc,
   WsDeliveryThreadBindingRpc,
+  WsDeliveryReleaseThreadRpc,
   WsServerProbeRpc,
   WsServerGetConfigRpc,
   WsServerRefreshProvidersRpc,

@@ -453,3 +453,70 @@ export function isStaleReading(readAt: string | null, nowMs: number): boolean {
 }
 
 export const draftTeamKey = (threadId: ThreadId | string) => String(threadId);
+
+export type TeamSendDecision =
+  /** Nothing to set up: delivery is off, the thread is bound, or it never had a team. */
+  | { readonly action: "none" }
+  | { readonly action: "bind"; readonly team: string; readonly role: string }
+  /** The person chose "No team" for a thread whose team setup had failed. */
+  | { readonly action: "release" }
+  | { readonly action: "blocked"; readonly why: string };
+
+/**
+ * What has to happen to a thread's team before a turn may start. A team
+ * choice stays in force until a turn has really started with it, so a send
+ * that failed half way is followed by the same setup and never by an
+ * ordinary thread.
+ */
+export function decideTeamForSend(input: {
+  readonly enabled: boolean;
+  readonly isServerThread: boolean;
+  readonly bound: boolean;
+  readonly held: { readonly team: string; readonly role: string | null } | null;
+  /** Set when the server could not say whether the thread belongs to a team. */
+  readonly stateError: string | null;
+  readonly draft: { readonly team: string | null; readonly role: string | null };
+  /** Whether the person has made a choice for this thread since it was held. */
+  readonly draftIsExplicit: boolean;
+  readonly teams: ReadonlyArray<DeliveryTeam>;
+  readonly teamsError: string | null;
+  readonly driver: string | null;
+}): TeamSendDecision {
+  if (!input.enabled) return { action: "none" };
+  if (input.stateError) {
+    return {
+      action: "blocked",
+      why: `Whether this thread belongs to a team could not be read, so it is not started. ${input.stateError}`,
+    };
+  }
+  if (input.bound) return { action: "none" };
+  if (input.isServerThread && !input.held) return { action: "none" };
+
+  // A held thread is retried with the team it was held for, unless the person chose again.
+  const choice =
+    input.held && !input.draftIsExplicit
+      ? { team: input.held.team, role: input.held.role }
+      : input.draft;
+  if (choice.team === null) return input.held ? { action: "release" } : { action: "none" };
+  if (input.teamsError) {
+    return {
+      action: "blocked",
+      why: `Delivery engine not reachable, so team ${choice.team} cannot be loaded. Choose "No team" to start an ordinary thread.`,
+    };
+  }
+  const resolved = resolveTeamChoice({
+    teams: input.teams,
+    team: choice.team,
+    role: choice.role,
+    driver: input.driver,
+  });
+  if (resolved.state === "blocked") return { action: "blocked", why: resolved.why };
+  if (resolved.state === "choose-role") {
+    return {
+      action: "blocked",
+      why: `Choose a role in team ${resolved.team}: ${resolved.roles.join(", ")}.`,
+    };
+  }
+  if (resolved.state === "manual") return { action: "none" };
+  return { action: "bind", team: resolved.team, role: resolved.role };
+}

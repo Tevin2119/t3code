@@ -14,15 +14,20 @@ export function createDeliveryEnvironmentAtoms<R, E>(
       tag: WS_METHODS.deliveryRead,
       staleTimeMs: 2_000,
     }),
-    /** A binding never changes once made, so it is only refetched after a bind. */
+    /** A thread's team, or the team choice that is still held. Cheap, and read often. */
     threadBinding: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:delivery:thread-binding",
       tag: WS_METHODS.deliveryThreadBinding,
-      staleTimeMs: 60_000,
+      staleTimeMs: 1_000,
     }),
     act: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:delivery:act",
       tag: WS_METHODS.deliveryAct,
+    }),
+    /** Gives up a team choice whose setup never completed. */
+    releaseThread: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:delivery:release-thread",
+      tag: WS_METHODS.deliveryReleaseThread,
     }),
     bindThread: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:delivery:bind-thread",

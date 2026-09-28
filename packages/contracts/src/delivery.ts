@@ -53,6 +53,10 @@ export const DeliveryThreadBinding = Schema.Struct({
   seat: TrimmedNonEmptyString,
   /** The engine's name for the harness, e.g. `claude` or `dsh`. */
   harness: TrimmedNonEmptyString,
+  /** T3 Code's driver kind the thread was bound with. A session on another driver is refused. */
+  driver: TrimmedNonEmptyString,
+  /** Root of the repository the thread was bound in. A session elsewhere is refused. */
+  workspace: TrimmedNonEmptyString,
   /** `team@revision#digest`, as written on the engine's receipt. */
   configuration: TrimmedNonEmptyString,
   requestedModel: Schema.NullOr(Schema.String),
@@ -74,11 +78,46 @@ export const DeliveryBindThreadInput = Schema.Struct({
 });
 export type DeliveryBindThreadInput = typeof DeliveryBindThreadInput.Type;
 
+/**
+ * A team was chosen for the thread and its setup did not complete. Until it
+ * does, or a person releases it, the thread cannot start a session: a failed
+ * setup must never leave behind an ordinary thread that looks like a retry.
+ */
+export const DeliveryThreadPending = Schema.Struct({
+  threadId: ThreadId,
+  team: TrimmedNonEmptyString,
+  role: Schema.NullOr(Schema.String),
+  driver: TrimmedNonEmptyString,
+  cwd: TrimmedNonEmptyString,
+  since: Schema.String,
+  /** Why the last attempt failed, or null while the first attempt is under way. */
+  why: Schema.NullOr(Schema.String),
+});
+export type DeliveryThreadPending = typeof DeliveryThreadPending.Type;
+
+export const DeliveryThreadState = Schema.Struct({
+  binding: Schema.NullOr(DeliveryThreadBinding),
+  pending: Schema.NullOr(DeliveryThreadPending),
+});
+export type DeliveryThreadState = typeof DeliveryThreadState.Type;
+
 export const DeliveryThreadBindingInput = Schema.Struct({ threadId: ThreadId });
 export type DeliveryThreadBindingInput = typeof DeliveryThreadBindingInput.Type;
 
 export class DeliveryError extends Schema.TaggedError<DeliveryError>()("DeliveryError", {
-  reason: Schema.Literals(["disabled", "unreachable", "refused", "invalid", "unsupportedHarness"]),
+  reason: Schema.Literals([
+    "disabled",
+    "unreachable",
+    "refused",
+    "invalid",
+    "unsupportedHarness",
+    /** The record of bound threads could not be read or written. */
+    "storage",
+    /** The session does not match what the thread was bound with. */
+    "mismatch",
+    /** A team was chosen and its setup has not completed. */
+    "pending",
+  ]),
   /** Stable, bounded description. For `refused` this is the engine's own reason. */
   detail: TrimmedNonEmptyString,
   /** The engine's HTTP status, when it answered. */

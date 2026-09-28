@@ -1,5 +1,6 @@
 import type {
   DeliveryThreadBinding,
+  DeliveryThreadPending,
   EnvironmentId,
   ServerProviderUsageLimits,
 } from "@t3tools/contracts";
@@ -34,8 +35,13 @@ export function SessionStatusFooter(props: {
         readonly environmentId: EnvironmentId | null;
         /** Null for a thread that was never bound to a team. */
         readonly binding: DeliveryThreadBinding | null;
+        /** A team choice whose setup did not complete. The thread cannot start until it does. */
+        readonly held: DeliveryThreadPending | null;
+        /** Set when the server could not say whether this thread belongs to a team. */
+        readonly unreadable: string | null;
         /** For a draft: the team it will be bound to when sent. */
         readonly pending: string | null;
+        readonly onRelease: (() => void) | undefined;
         readonly harness: string | null;
       }
     | undefined;
@@ -48,7 +54,28 @@ export function SessionStatusFooter(props: {
       aria-label="Session status"
       className="pointer-events-auto flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 px-3 pt-1 font-mono text-[10px] text-muted-foreground sm:px-4"
     >
-      {props.delivery ? (
+      {props.delivery?.unreadable ? (
+        <StatusField detail={props.delivery.unreadable}>
+          <span className="text-warning">team: could not be read, thread held</span>
+        </StatusField>
+      ) : props.delivery?.held && !props.delivery.binding ? (
+        <>
+          <StatusField
+            detail={`Team ${props.delivery.held.team} was chosen and its setup did not complete${props.delivery.held.why ? `: ${props.delivery.held.why}` : "."} Send again to retry.`}
+          >
+            <span className="text-warning">team:{props.delivery.held.team} not set up</span>
+          </StatusField>
+          {props.delivery.onRelease ? (
+            <button
+              type="button"
+              className="cursor-pointer underline decoration-dotted underline-offset-2"
+              onClick={props.delivery.onRelease}
+            >
+              start without a team
+            </button>
+          ) : null}
+        </>
+      ) : props.delivery ? (
         props.delivery.pending !== null && !props.delivery.binding ? (
           <StatusField detail="The team this thread is bound to when it is sent">
             team:{props.delivery.pending}

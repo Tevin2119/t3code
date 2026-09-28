@@ -42,7 +42,10 @@ export function clearAllDeliveryThreadSessions(): void {
   sessionsByThread.clear();
 }
 
-type Preparer = (threadId: ThreadId) => Effect.Effect<boolean, DeliveryError>;
+type Preparer = (
+  threadId: ThreadId,
+  actual: { readonly driver: string; readonly cwd: string | undefined },
+) => Effect.Effect<boolean, DeliveryError>;
 let preparer: Preparer | undefined;
 
 /** Set by DeliveryService when it starts, so ProviderService needs no layer dependency on it. */
@@ -56,8 +59,11 @@ export function registerDeliveryPreparer(next: Preparer | undefined): void {
  * thread is bound and its setup cannot be fetched: a bound thread must not
  * start as an ordinary one.
  */
-export function prepareDeliveryThread(threadId: ThreadId): Effect.Effect<boolean, DeliveryError> {
-  return preparer ? preparer(threadId) : Effect.succeed(false);
+export function prepareDeliveryThread(
+  threadId: ThreadId,
+  actual: { readonly driver: string; readonly cwd: string | undefined },
+): Effect.Effect<boolean, DeliveryError> {
+  return preparer ? preparer(threadId, actual) : Effect.succeed(false);
 }
 
 type TeamLookup = (threadId: string) => string | undefined;

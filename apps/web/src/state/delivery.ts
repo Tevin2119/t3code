@@ -108,6 +108,11 @@ export function readDraftTeamChoice(threadId: string): DraftTeamChoice {
   return useDeliveryDraftStore.getState().choices[threadId] ?? DEFAULT_DRAFT_TEAM_CHOICE;
 }
 
+/** Whether the person chose for this thread, as opposed to the default standing in. */
+export function hasDraftTeamChoice(threadId: string): boolean {
+  return threadId in useDeliveryDraftStore.getState().choices;
+}
+
 export function useDraftTeamChoice(threadId: string | null): DraftTeamChoice {
   return useDeliveryDraftStore((state) =>
     threadId ? (state.choices[threadId] ?? DEFAULT_DRAFT_TEAM_CHOICE) : DEFAULT_DRAFT_TEAM_CHOICE,

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  decideTeamForSend,
   deliveryFailureText,
   describeBinding,
   isStaleReading,
@@ -125,6 +126,8 @@ describe("describeBinding", () => {
       role: "researcher" as never,
       seat: "researcher" as never,
       harness: "claude" as never,
+      driver: "claudeAgent" as never,
+      workspace: "C:/work" as never,
       configuration: "rnd@2#def" as never,
       requestedModel: null,
       memoryScope: "team:rnd" as never,
@@ -269,5 +272,94 @@ describe("isStaleReading", () => {
     expect(isStaleReading("2026-09-28T10:00:00.000Z", at + 21_000)).toBe(true);
     expect(isStaleReading(null, at)).toBe(true);
     expect(isStaleReading("soon", at)).toBe(true);
+  });
+});
+
+describe("decideTeamForSend", () => {
+  const base = {
+    enabled: true,
+    isServerThread: false,
+    bound: false,
+    held: null,
+    stateError: null,
+    draft: { team: "development", role: null },
+    draftIsExplicit: false,
+    teams,
+    teamsError: null,
+    driver: "claudeAgent",
+  };
+
+  it("binds a new thread to its team before the first turn", () => {
+    expect(decideTeamForSend(base)).toEqual({
+      action: "bind",
+      team: "development",
+      role: "lead-developer",
+    });
+    expect(decideTeamForSend({ ...base, draft: { team: null, role: null } })).toEqual({
+      action: "none",
+    });
+    expect(decideTeamForSend({ ...base, enabled: false })).toEqual({ action: "none" });
+  });
+
+  it("leaves a bound thread and an old thread without a team alone", () => {
+    expect(decideTeamForSend({ ...base, isServerThread: true, bound: true })).toEqual({
+      action: "none",
+    });
+    expect(decideTeamForSend({ ...base, isServerThread: true })).toEqual({ action: "none" });
+  });
+
+  it("sets the team up again when the first send failed, draft or not", () => {
+    const held = { team: "rnd", role: "scout" };
+    // The thread was never created: still a draft, and the choice is still there.
+    expect(decideTeamForSend({ ...base, held, driver: "kimi" })).toEqual({
+      action: "bind",
+      team: "rnd",
+      role: "scout",
+    });
+    // The thread was created and its turn failed: a server thread, held on the server.
+    // The draft's choice is gone by then, and the held one is used.
+    expect(
+      decideTeamForSend({
+        ...base,
+        isServerThread: true,
+        held,
+        draft: { team: "development", role: null },
+        driver: "kimi",
+      }),
+    ).toEqual({ action: "bind", team: "rnd", role: "scout" });
+  });
+
+  it("starts a held thread without a team only when the person chose that", () => {
+    const held = { team: "rnd", role: null };
+    expect(
+      decideTeamForSend({
+        ...base,
+        held,
+        draft: { team: null, role: null },
+        draftIsExplicit: true,
+      }),
+    ).toEqual({ action: "release" });
+    // A draft store that merely has no entry is not a choice of "No team".
+    expect(
+      decideTeamForSend({ ...base, held, draft: { team: null, role: null }, driver: "kimi" })
+        .action,
+    ).toBe("blocked");
+  });
+
+  it("stops the send when the team cannot be set up, and never falls back to no team", () => {
+    expect(decideTeamForSend({ ...base, teamsError: "No answer." })).toMatchObject({
+      action: "blocked",
+    });
+    expect(decideTeamForSend({ ...base, stateError: "The record is damaged." })).toMatchObject({
+      action: "blocked",
+    });
+    expect(
+      decideTeamForSend({ ...base, isServerThread: true, stateError: "The record is damaged." })
+        .action,
+    ).toBe("blocked");
+    expect(decideTeamForSend({ ...base, driver: "cursor" }).action).toBe("blocked");
+    expect(
+      decideTeamForSend({ ...base, draft: { team: "rnd", role: null }, driver: "kimi" }),
+    ).toEqual({ action: "blocked", why: "Choose a role in team rnd: challenger, scout." });
   });
 });

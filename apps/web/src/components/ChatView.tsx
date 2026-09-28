@@ -363,9 +363,10 @@ import {
 import { environmentShell } from "../state/shell";
 import { ChatComposer, type ChatComposerHandle } from "./chat/ChatComposer";
 import { SessionStatusFooter } from "./chat/SessionStatusFooter";
-import { parseTeams, resolveTeamChoice, type TeamChoice } from "../lib/delivery";
+import { decideTeamForSend, parseTeams } from "../lib/delivery";
 import {
   deliveryEnvironment,
+  hasDraftTeamChoice,
   readDraftTeamChoice,
   useDeliveryDraftStore,
   useDeliveryEnabled,
@@ -2928,14 +2929,21 @@ export default function ChatView(props: ChatViewProps) {
     teams: parseTeams(deliveryTeams.body),
     error: deliveryTeams.error,
   };
-  const deliveryBinding = useEnvironmentQuery(
-    deliveryEnabled && isServerThread && activeThread
+  // Asked for drafts too: a draft whose first send failed is held on the server.
+  const deliveryThreadState = useEnvironmentQuery(
+    deliveryEnabled && activeThread
       ? deliveryEnvironment.threadBinding({
           environmentId,
           input: { threadId: activeThread.id },
         })
       : null,
   );
+  const deliveryStateRef = useRef(deliveryThreadState);
+  deliveryStateRef.current = deliveryThreadState;
+  const releaseDeliveryThread = useAtomCommand(deliveryEnvironment.releaseThread, {
+    label: "start without a team",
+    reportFailure: false,
+  });
   const draftTeamChoice = useDraftTeamChoice(activeThread?.id ?? null);
   const threadActivities = activeThread?.activities ?? EMPTY_ACTIVITIES;
   const latestCheckpointCompletedAt = activeThread?.checkpoints.at(-1)?.completedAt ?? null;
@@ -7698,31 +7706,26 @@ export default function ChatView(props: ChatViewProps) {
     // cannot be honoured stops the send: sending anyway would start an
     // ordinary thread under a team's name.
     const deliveryForSend = deliverySendRef.current;
-    const draftTeamForSend = readDraftTeamChoice(threadIdForSend);
-    const teamChoiceForSend: TeamChoice =
-      isServerThread || !deliveryForSend.enabled
-        ? { state: "manual" }
-        : draftTeamForSend.team !== null && deliveryForSend.error
-          ? {
-              state: "blocked",
-              team: draftTeamForSend.team,
-              why: `Delivery engine not reachable, so team ${draftTeamForSend.team} cannot be loaded. Choose "No team" to start an ordinary thread.`,
-            }
-          : resolveTeamChoice({
-              teams: deliveryForSend.teams,
-              team: draftTeamForSend.team,
-              role: draftTeamForSend.role,
-              driver: ctxSelectedProvider,
-            });
-    if (teamChoiceForSend.state === "blocked") {
-      setThreadError(threadIdForSend, teamChoiceForSend.why);
-      return;
-    }
-    if (teamChoiceForSend.state === "choose-role") {
-      setThreadError(
-        threadIdForSend,
-        `Choose a role in team ${teamChoiceForSend.team}: ${teamChoiceForSend.roles.join(", ")}.`,
-      );
+    const deliveryStateForSend = deliveryStateRef.current;
+    const heldTeamForSend = deliveryStateForSend.data?.pending ?? null;
+    const boundForSend = deliveryStateForSend.data?.binding ?? null;
+    // A team choice stays in force until a turn has really started with it.
+    // A thread that was created by a send that then failed is a server
+    // thread with a held choice, and goes through the same setup again.
+    const teamForSend = decideTeamForSend({
+      enabled: deliveryForSend.enabled,
+      isServerThread,
+      bound: boundForSend !== null,
+      held: heldTeamForSend,
+      stateError: deliveryStateForSend.error,
+      draft: readDraftTeamChoice(threadIdForSend),
+      draftIsExplicit: hasDraftTeamChoice(threadIdForSend),
+      teams: deliveryForSend.teams,
+      teamsError: deliveryForSend.error,
+      driver: ctxSelectedProvider,
+    });
+    if (teamForSend.action === "blocked") {
+      setThreadError(threadIdForSend, teamForSend.why);
       return;
     }
     const baseBranchForWorktree =
@@ -8386,22 +8389,32 @@ export default function ChatView(props: ChatViewProps) {
       }
     }
 
-    if (failure === null && teamChoiceForSend.state === "ready") {
+    if (failure === null && teamForSend.action === "bind") {
       const bindResult = await bindDeliveryThread({
         environmentId,
         input: {
           threadId: threadIdForSend,
-          team: teamChoiceForSend.team as never,
-          role: teamChoiceForSend.role as never,
+          team: teamForSend.team as never,
+          role: teamForSend.role as never,
           driver: ctxSelectedProvider as never,
           cwd: (activeThread.worktreePath ?? activeProject.workspaceRoot) as never,
         },
       });
       if (bindResult._tag === "Failure") {
         failure = bindResult;
-      } else {
-        useDeliveryDraftStore.getState().clearChoice(threadIdForSend);
       }
+      deliveryStateRef.current.refresh();
+    } else if (failure === null && teamForSend.action === "release") {
+      // "No team" chosen for a thread whose team setup had failed: the held
+      // choice is given up by the person, on the record, before anything starts.
+      const released = await releaseDeliveryThread({
+        environmentId,
+        input: { threadId: threadIdForSend },
+      });
+      if (released._tag === "Failure") {
+        failure = released;
+      }
+      deliveryStateRef.current.refresh();
     }
 
     const turnAttachmentsResult = await settlePromise(async () => {
@@ -8529,6 +8542,10 @@ export default function ChatView(props: ChatViewProps) {
         failure = startResult;
       } else {
         turnStartSucceeded = true;
+        // Only now is the team choice spent. Until a turn has started, a retry
+        // goes through the team's setup again.
+        useDeliveryDraftStore.getState().clearChoice(threadIdForSend);
+        deliveryStateRef.current.refresh();
         // The turn is under way and will spend quota, so that thread's limits
         // snapshot is stale. Uploads may have outlasted a navigation, so only
         // the sending thread's panel clears.
@@ -10303,8 +10320,18 @@ export default function ChatView(props: ChatViewProps) {
                         deliveryEnabled
                           ? {
                               environmentId,
-                              binding: isServerThread ? deliveryBinding.data : null,
+                              binding: deliveryThreadState.data?.binding ?? null,
+                              held: deliveryThreadState.data?.pending ?? null,
+                              unreadable: deliveryThreadState.error,
                               pending: isServerThread ? null : (draftTeamChoice.team ?? "none"),
+                              onRelease: activeThread
+                                ? () => {
+                                    void releaseDeliveryThread({
+                                      environmentId,
+                                      input: { threadId: activeThread.id },
+                                    }).then(() => deliveryThreadState.refresh());
+                                  }
+                                : undefined,
                               harness:
                                 conversationProviderStatus?.driver ?? selectedProvider ?? null,
                             }

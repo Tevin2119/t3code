@@ -2609,9 +2609,13 @@ const makeWsRpcLayer = (
             "rpc.aggregate": "delivery",
           }),
         [WS_METHODS.deliveryThreadBinding]: (input) =>
+          observeRpcEffect(WS_METHODS.deliveryThreadBinding, delivery.threadState(input.threadId), {
+            "rpc.aggregate": "delivery",
+          }),
+        [WS_METHODS.deliveryReleaseThread]: (input) =>
           observeRpcEffect(
-            WS_METHODS.deliveryThreadBinding,
-            delivery.threadBinding(input.threadId),
+            WS_METHODS.deliveryReleaseThread,
+            delivery.releaseThread(input.threadId),
             { "rpc.aggregate": "delivery" },
           ),
         [WS_METHODS.serverGetUsageSummary]: (input) =>

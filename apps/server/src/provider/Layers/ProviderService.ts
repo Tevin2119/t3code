@@ -941,11 +941,16 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     } satisfies Record<string, string>;
   });
 
-  const prepareMcpSession = (threadId: ThreadId, providerInstanceId: ProviderInstanceId) =>
+  const prepareMcpSession = (
+    threadId: ThreadId,
+    providerInstanceId: ProviderInstanceId,
+    /** What the session is really started with, held against the thread's team binding. */
+    actual: { readonly driver: string; readonly cwd: string | undefined },
+  ) =>
     Effect.gen(function* () {
       // A thread bound to a team gets that team's instructions and tools. If
       // they cannot be fetched the session does not start.
-      yield* DeliveryThreadSession.prepareDeliveryThread(threadId).pipe(
+      yield* DeliveryThreadSession.prepareDeliveryThread(threadId, actual).pipe(
         Effect.mapError((error) =>
           toValidationError("ProviderService.startSession", error.message, error),
         ),
@@ -1277,7 +1282,10 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       const persistedCwd = readPersistedCwd(input.binding.runtimePayload);
       const persistedModelSelection = readPersistedModelSelection(input.binding.runtimePayload);
 
-      yield* prepareMcpSession(input.binding.threadId, bindingInstanceId);
+      yield* prepareMcpSession(input.binding.threadId, bindingInstanceId, {
+        driver: input.binding.provider,
+        cwd: persistedCwd,
+      });
       const resumed = yield* adapter
         .startSession({
           threadId: input.binding.threadId,
@@ -1508,7 +1516,10 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         }
         const adapter = yield* registry.getByInstance(resolvedInstanceId);
         yield* clearTurnAnalyticsSession(resolvedInstanceId, threadId);
-        yield* prepareMcpSession(threadId, resolvedInstanceId);
+        yield* prepareMcpSession(threadId, resolvedInstanceId, {
+          driver: resolvedProvider,
+          cwd: effectiveCwd,
+        });
         const session = yield* adapter
           .startSession({
             ...input,
