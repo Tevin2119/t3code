@@ -34,6 +34,7 @@ import { getModelSelectionStringOptionValue } from "@t3tools/shared/model";
 
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
+import * as DeliveryThreadSession from "../../delivery/DeliveryThreadSession.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
 import {
@@ -2881,6 +2882,24 @@ export function makeOpenCodeAdapter(
                   }),
                 );
               }
+              // A thread bound to a team also gets that team's tools.
+              if (!server.external) {
+                for (const [name, tool] of Object.entries(
+                  DeliveryThreadSession.deliveryStdioServers(input.threadId),
+                )) {
+                  yield* runOpenCodeSdk("mcp.add", () =>
+                    client.mcp.add({
+                      name,
+                      config: {
+                        type: "local",
+                        command: [tool.command, ...tool.args],
+                        environment: tool.env,
+                        enabled: true,
+                      },
+                    }),
+                  );
+                }
+              }
               // Resume: re-adopt the session named by the durable cursor —
               // OpenCode scopes history by session id. The probe recovers only
               // a confirmed not-found (start fresh); transport/auth/server
@@ -3283,6 +3302,7 @@ export function makeOpenCodeAdapter(
                     system: buildRuntimeInstructions({
                       harness: "OpenCode",
                       model: `${parsedModel.providerID}/${parsedModel.modelID}`,
+                      threadId: input.threadId,
                     }),
                     parts: [...(text ? [{ type: "text" as const, text }] : []), ...fileParts],
                   },

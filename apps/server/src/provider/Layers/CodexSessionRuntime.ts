@@ -66,7 +66,9 @@ const RECOVERABLE_THREAD_RESUME_ERROR_SNIPPETS = [
 ];
 
 export function hasConfiguredMcpServer(appServerArgs: ReadonlyArray<string> | undefined): boolean {
-  return appServerArgs?.some((argument) => argument.includes("mcp_servers.")) === true;
+  // Only T3 Code's own server carries the browser and device tools. A team's
+  // tool servers are other entries and say nothing about those.
+  return appServerArgs?.some((argument) => argument.includes("mcp_servers.t3-code.")) === true;
 }
 
 function configuredMcpToolAvailability(
@@ -585,6 +587,7 @@ function buildCodexCollaborationMode(input: {
   readonly model?: string;
   readonly effort?: EffectCodexSchema.V2TurnStartParams__ReasoningEffort;
   readonly browserToolsAvailable?: boolean | T3CodeToolAvailability;
+  readonly t3ThreadId?: ThreadId;
 }): EffectCodexSchema.V2TurnStartParams__CollaborationMode | undefined {
   if (input.interactionMode === undefined) {
     return undefined;
@@ -598,7 +601,7 @@ function buildCodexCollaborationMode(input: {
       reasoning_effort: reasoningEffort,
       developer_instructions: buildCodexDeveloperInstructions(
         input.interactionMode,
-        { model, reasoningEffort },
+        { model, reasoningEffort, threadId: input.t3ThreadId },
         input.browserToolsAvailable ?? true,
       ),
     },
@@ -623,6 +626,8 @@ export function buildTurnStartParams(input: {
   readonly interactionMode?: ProviderInteractionMode;
   /** Defaults to true so callers that predate the agent-access gate are unchanged. */
   readonly browserToolsAvailable?: boolean | T3CodeToolAvailability;
+  /** T3 Code's own thread id, which is not Codex's. Used to find the thread's team. */
+  readonly t3ThreadId?: ThreadId;
 }): Effect.Effect<
   CodexTurnStartParamsWithCollaborationMode,
   CodexErrors.CodexAppServerProtocolParseError
@@ -644,6 +649,7 @@ export function buildTurnStartParams(input: {
     ...(input.model ? { model: input.model } : {}),
     ...(input.effort ? { effort: input.effort } : {}),
     browserToolsAvailable: input.browserToolsAvailable ?? true,
+    ...(input.t3ThreadId ? { t3ThreadId: input.t3ThreadId } : {}),
   });
 
   return decodeCodexTurnStartParamsWithCollaborationMode({
@@ -2452,6 +2458,7 @@ export const makeCodexSessionRuntime = (
           );
           const params = yield* buildTurnStartParams({
             threadId: providerThreadId,
+            t3ThreadId: options.threadId,
             runtimeMode: options.runtimeMode,
             ...(input.input ? { prompt: input.input } : {}),
             ...(input.attachments ? { attachments: input.attachments } : {}),

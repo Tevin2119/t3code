@@ -154,6 +154,7 @@ import * as HostResources from "./resourceTelemetry/HostResources.ts";
 import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
 import * as UsageLimitSources from "./usage/UsageLimitSources.ts";
 import * as UsageService from "./usage/UsageService.ts";
+import * as DeliveryService from "./delivery/DeliveryService.ts";
 import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
 import * as PullRequestService from "./pullRequest/PullRequestService.ts";
 import { listLinkedPullRequestThreads } from "./pullRequest/linkedThreads.ts";
@@ -664,6 +665,7 @@ const makeWsRpcLayer = (
       const processResourceMonitor = yield* ProcessResourceMonitor.ProcessResourceMonitor;
       const resourceTelemetry = yield* ResourceTelemetry.ResourceTelemetry;
       const usage = yield* UsageService.UsageService;
+      const delivery = yield* DeliveryService.DeliveryService;
       const relayClient = yield* RelayClient.RelayClient;
       const authorizationError = (requiredScope: AuthEnvironmentScope) =>
         new EnvironmentAuthorizationError({
@@ -2593,6 +2595,24 @@ const makeWsRpcLayer = (
             {
               "rpc.aggregate": "server",
             },
+          ),
+        [WS_METHODS.deliveryRead]: (input) =>
+          observeRpcEffect(WS_METHODS.deliveryRead, delivery.read(input), {
+            "rpc.aggregate": "delivery",
+          }),
+        [WS_METHODS.deliveryAct]: (input) =>
+          observeRpcEffect(WS_METHODS.deliveryAct, delivery.act(input), {
+            "rpc.aggregate": "delivery",
+          }),
+        [WS_METHODS.deliveryBindThread]: (input) =>
+          observeRpcEffect(WS_METHODS.deliveryBindThread, delivery.bindThread(input), {
+            "rpc.aggregate": "delivery",
+          }),
+        [WS_METHODS.deliveryThreadBinding]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.deliveryThreadBinding,
+            delivery.threadBinding(input.threadId),
+            { "rpc.aggregate": "delivery" },
           ),
         [WS_METHODS.serverGetUsageSummary]: (input) =>
           observeRpcEffect(WS_METHODS.serverGetUsageSummary, usage.readSummary(input), {

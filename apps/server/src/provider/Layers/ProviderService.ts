@@ -82,6 +82,7 @@ import * as ProviderSessionDirectory from "../Services/ProviderSessionDirectory.
 import { type EventNdjsonLogger } from "./EventNdjsonLogger.ts";
 import * as ProviderEventLoggers from "./ProviderEventLoggers.ts";
 import * as AnalyticsService from "../../telemetry/AnalyticsService.ts";
+import * as DeliveryThreadSession from "../../delivery/DeliveryThreadSession.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import * as McpSessionRegistry from "../../mcp/McpSessionRegistry.ts";
 import * as ServerSettings from "../../serverSettings.ts";
@@ -942,6 +943,13 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
 
   const prepareMcpSession = (threadId: ThreadId, providerInstanceId: ProviderInstanceId) =>
     Effect.gen(function* () {
+      // A thread bound to a team gets that team's instructions and tools. If
+      // they cannot be fetched the session does not start.
+      yield* DeliveryThreadSession.prepareDeliveryThread(threadId).pipe(
+        Effect.mapError((error) =>
+          toValidationError("ProviderService.startSession", error.message, error),
+        ),
+      );
       const capabilities = yield* agentAccessCapabilities(threadId);
       const credential = yield* issueMcpCredential({ threadId, providerInstanceId, capabilities });
       if (credential) {

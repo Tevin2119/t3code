@@ -47,6 +47,7 @@ import * as EffectAcpErrors from "effect-acp/errors";
 import type * as EffectAcpSchema from "effect-acp/schema";
 
 import { buildRuntimeInstructions } from "../RuntimeInstructions.ts";
+import * as DeliveryThreadSession from "../../delivery/DeliveryThreadSession.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import {
   ProviderAdapterRequestError,
@@ -471,16 +472,20 @@ export const makeKimiAdapter = Effect.fn("makeKimiAdapter")(function* (
             cwd,
             clientInfo: { name: "t3-code", version: "0.0.0" },
             ...(Option.isSome(cursor) ? { resumeSessionId: cursor.value.sessionId } : {}),
-            mcpServers: mcp
-              ? [
-                  {
-                    type: "http",
-                    name: "t3-code",
-                    url: mcp.endpoint,
-                    headers: [{ name: "Authorization", value: mcp.authorizationHeader }],
-                  },
-                ]
-              : [],
+            mcpServers: [
+              ...(mcp
+                ? [
+                    {
+                      type: "http" as const,
+                      name: "t3-code",
+                      url: mcp.endpoint,
+                      headers: [{ name: "Authorization", value: mcp.authorizationHeader }],
+                    },
+                  ]
+                : []),
+              // A thread bound to a team also gets that team's tools.
+              ...DeliveryThreadSession.deliveryAcpServers(input.threadId),
+            ],
             ...makeNativeLoggers({
               nativeEventLogger: options.nativeEventLogger,
               provider: PROVIDER,
@@ -678,7 +683,11 @@ export const makeKimiAdapter = Effect.fn("makeKimiAdapter")(function* (
                   { type: "text", text },
                   {
                     type: "text",
-                    text: buildRuntimeInstructions({ harness: "Kimi", model }),
+                    text: buildRuntimeInstructions({
+                      harness: "Kimi",
+                      model,
+                      threadId: input.threadId,
+                    }),
                   },
                 ],
               },

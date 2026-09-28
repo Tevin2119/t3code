@@ -12,6 +12,15 @@ import {
   ProviderSetupInput,
 } from "./providerSetup.ts";
 
+import {
+  DeliveryActInput,
+  DeliveryBindThreadInput,
+  DeliveryError,
+  DeliveryReadInput,
+  DeliveryResponse,
+  DeliveryThreadBinding,
+  DeliveryThreadBindingInput,
+} from "./delivery.ts";
 import { ExternalLauncherError, LaunchEditorInput } from "./editor.ts";
 import {
   AuthAccessStreamError,
@@ -382,6 +391,12 @@ export const WS_METHODS = {
   serverGetUsageSummary: "server.getUsageSummary",
   serverRefreshUsageRates: "server.refreshUsageRates",
 
+  // Team delivery engine methods
+  deliveryRead: "delivery.read",
+  deliveryAct: "delivery.act",
+  deliveryBindThread: "delivery.bindThread",
+  deliveryThreadBinding: "delivery.threadBinding",
+
   // Cloud environment methods
   cloudGetRelayClientStatus: "cloud.getRelayClientStatus",
   cloudInstallRelayClient: "cloud.installRelayClient",
@@ -624,6 +639,34 @@ const WsServerGetResourceTelemetryHistoryRpc = Rpc.make(
 const WsServerRetryResourceTelemetryRpc = Rpc.make(WS_METHODS.serverRetryResourceTelemetry, {
   payload: Schema.Struct({}),
   success: ResourceTelemetryRetryResult,
+  error: EnvironmentAuthorizationError,
+});
+
+/** Relays a read to the delivery engine. The engine's answer is passed on as it came. */
+const WsDeliveryReadRpc = Rpc.make(WS_METHODS.deliveryRead, {
+  payload: DeliveryReadInput,
+  success: DeliveryResponse,
+  error: Schema.Union([EnvironmentAuthorizationError, DeliveryError]),
+});
+
+/** Relays a request that changes engine state. The engine validates every transition. */
+const WsDeliveryActRpc = Rpc.make(WS_METHODS.deliveryAct, {
+  payload: DeliveryActInput,
+  success: DeliveryResponse,
+  error: Schema.Union([EnvironmentAuthorizationError, DeliveryError]),
+});
+
+/** Binds a thread to a team before its first turn. A bound thread cannot be rebound. */
+const WsDeliveryBindThreadRpc = Rpc.make(WS_METHODS.deliveryBindThread, {
+  payload: DeliveryBindThreadInput,
+  success: DeliveryThreadBinding,
+  error: Schema.Union([EnvironmentAuthorizationError, DeliveryError]),
+});
+
+/** Null for a thread that was never bound: a manual or legacy thread. */
+const WsDeliveryThreadBindingRpc = Rpc.make(WS_METHODS.deliveryThreadBinding, {
+  payload: DeliveryThreadBindingInput,
+  success: Schema.NullOr(DeliveryThreadBinding),
   error: EnvironmentAuthorizationError,
 });
 
@@ -1374,6 +1417,10 @@ const WsSubscribeResourceTelemetryRpc = Rpc.make(WS_METHODS.subscribeResourceTel
 });
 
 export const WsRpcGroup = RpcGroup.make(
+  WsDeliveryReadRpc,
+  WsDeliveryActRpc,
+  WsDeliveryBindThreadRpc,
+  WsDeliveryThreadBindingRpc,
   WsServerProbeRpc,
   WsServerGetConfigRpc,
   WsServerRefreshProvidersRpc,

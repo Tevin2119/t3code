@@ -47,6 +47,7 @@ import * as EffectCodexSchema from "effect-codex-app-server/schema";
 
 import { getModelSelectionStringOptionValue } from "@t3tools/shared/model";
 import { getCodexServiceTierOptionValue } from "../../codexModelOptions.ts";
+import * as DeliveryThreadSession from "../../delivery/DeliveryThreadSession.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 
 import {
@@ -2255,6 +2256,8 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
             ? getCodexServiceTierOptionValue(input.modelSelection)
             : undefined;
         const mcpSession = McpProviderSession.readMcpProviderSession(input.threadId);
+        // A thread bound to a team also gets that team's instructions and tools.
+        const deliveryArgs = DeliveryThreadSession.deliveryCodexArgs(input.threadId);
         const runtimeInput: CodexSessionRuntimeOptions = {
           threadId: input.threadId,
           providerInstanceId: boundInstanceId,
@@ -2285,10 +2288,13 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
                   `mcp_servers.t3-code.url=${mcpSession.endpoint}`,
                   "-c",
                   'mcp_servers.t3-code.bearer_token_env_var="T3_MCP_BEARER_TOKEN"',
+                  ...deliveryArgs,
                 ],
                 mcpCapabilities: mcpSession.capabilities,
               }
-            : {}),
+            : deliveryArgs.length > 0
+              ? { appServerArgs: deliveryArgs }
+              : {}),
         };
         const turnTokenUsage = makeCodexTurnTokenUsageState();
         // Codex reports a usage-limit stop as OpenAI's own sentence, which on a

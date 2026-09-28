@@ -49,6 +49,7 @@ import {
   ProviderAdapterValidationError,
   type ProviderAdapterError,
 } from "../Errors.ts";
+import * as DeliveryThreadSession from "../../delivery/DeliveryThreadSession.ts";
 import { makePiRpcSession, type PiRpcRecord, type PiRpcSession } from "../pi/PiRpcSession.ts";
 import type { ProviderAdapterShape } from "../Services/ProviderAdapter.ts";
 
@@ -64,6 +65,8 @@ type Adapter = ProviderAdapterShape<ProviderAdapterError>;
 export function buildPiRpcArgs(input: {
   readonly provider: string;
   readonly model: string | undefined;
+  /** For a thread bound to a team: `--append-system-prompt` and `--skill` with their paths. */
+  readonly teamArgs?: ReadonlyArray<string>;
 }): ReadonlyArray<string> {
   return [
     "--mode",
@@ -71,6 +74,7 @@ export function buildPiRpcArgs(input: {
     "--provider",
     input.provider,
     ...(input.model ? ["--model", input.model] : []),
+    ...(input.teamArgs ?? []),
   ];
 }
 
@@ -326,12 +330,14 @@ export const makePiAdapter = Effect.fn("makePiAdapter")(function* (
         return yield* Effect.gen(function* () {
           const command = settings.binaryPath || "pi";
           const model = input.modelSelection?.model?.trim() || undefined;
+          const team = DeliveryThreadSession.deliveryPiLaunch(input.threadId);
           const args = buildPiRpcArgs({
             provider: settings.provider.trim() || "kimi-coding",
             model,
+            teamArgs: team.args,
           });
           const spawnCommand = yield* resolveSpawnCommand(command, args, {
-            env: environment,
+            env: { ...environment, ...team.env },
           }).pipe(
             Effect.mapError(
               (cause) =>

@@ -64,6 +64,7 @@ import { resolveCodexHomeLayout } from "../provider/Drivers/CodexHomeLayout.ts";
 import { makeClaudeEnvironment } from "../provider/Drivers/ClaudeHome.ts";
 import { deriveProviderInstanceConfigMap } from "../provider/Layers/ProviderInstanceRegistryHydration.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import * as DeliveryThreadSession from "../delivery/DeliveryThreadSession.ts";
 import {
   increment,
   terminalRestartsTotal,
@@ -522,6 +523,50 @@ function shellCandidateFromCommand(
     return { shell: command, args: ["-o", "nopromptsp"] };
   }
   return { shell: command };
+}
+
+const powerShellLiteral = (value: string) => `'${value.replaceAll("'", "''")}'`;
+
+/**
+ * Makes terminals team-aware when a delivery entry script is configured.
+ * PowerShell dot-sources the script, because a function defined by a profile
+ * is found before anything on the path. Every other shell gets the script's
+ * folder first on its path, where the launchers of the same names live.
+ * Nothing outside this one terminal is changed.
+ */
+export function withDeliveryTerminalEntry(input: {
+  readonly candidates: ReadonlyArray<ShellCandidate>;
+  readonly env: NodeJS.ProcessEnv;
+  readonly platform: NodeJS.Platform;
+  readonly entryScript: string | null;
+  readonly team: string | undefined;
+}): { readonly candidates: ReadonlyArray<ShellCandidate>; readonly env: NodeJS.ProcessEnv } {
+  const script = input.entryScript?.trim();
+  if (!script) return { candidates: input.candidates, env: input.env };
+  const separator = input.platform === "win32" ? ";" : ":";
+  const folder = script.replace(/[\\/][^\\/]*$/, "");
+  const pathKey = Object.keys(input.env).find((key) => key.toLowerCase() === "path") ?? "PATH";
+  const current = input.env[pathKey] ?? "";
+  const env: NodeJS.ProcessEnv = {
+    ...input.env,
+    [pathKey]: current.split(separator).includes(folder)
+      ? current
+      : [folder, current].filter((part) => part.length > 0).join(separator),
+    POLYMANIA_T3_TERMINAL: "1",
+    ...(input.team ? { POLYMANIA_DEFAULT_TEAM: input.team } : {}),
+  };
+  const candidates = input.candidates.map((candidate) => {
+    const shellName = basenameForPlatform(candidate.shell, input.platform).toLowerCase();
+    if (shellName !== "pwsh.exe" && shellName !== "powershell.exe" && shellName !== "pwsh") {
+      return candidate;
+    }
+    const team = input.team ? ` -Team ${powerShellLiteral(input.team)}` : "";
+    return {
+      ...candidate,
+      args: ["-NoLogo", "-NoExit", "-Command", `. ${powerShellLiteral(script)}${team}`],
+    };
+  });
+  return { candidates, env };
 }
 
 function windowsSystemRoot(env: NodeJS.ProcessEnv): string {
@@ -2222,9 +2267,14 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       increment(terminalSessionsTotal, { lifecycle: eventType }).pipe(
         Effect.andThen(
           Effect.gen(function* () {
-            const shellCandidates = resolveShellCandidates(shellResolver, platform, baseEnv);
-            const terminalEnv = createTerminalSpawnEnv(baseEnv, session.runtimeEnv);
-            const spawnResult = yield* trySpawn(shellCandidates, terminalEnv, session);
+            const entry = withDeliveryTerminalEntry({
+              candidates: resolveShellCandidates(shellResolver, platform, baseEnv),
+              env: createTerminalSpawnEnv(baseEnv, session.runtimeEnv),
+              platform,
+              entryScript: DeliveryThreadSession.deliveryTerminalEntryScript(),
+              team: DeliveryThreadSession.deliveryTeamOf(session.threadId),
+            });
+            const spawnResult = yield* trySpawn(entry.candidates, entry.env, session);
             ptyProcess = spawnResult.process;
             startedShell = spawnResult.shellLabel;
 

@@ -145,6 +145,7 @@ import * as ResourceMonitorBinary from "./resourceTelemetry/ResourceMonitorBinar
 import * as ResourceTelemetry from "./resourceTelemetry/ResourceTelemetry.ts";
 import * as UsageLimitSources from "./usage/UsageLimitSources.ts";
 import * as UsageService from "./usage/UsageService.ts";
+import * as DeliveryService from "./delivery/DeliveryService.ts";
 import { OrchestrationLayerLive } from "./orchestration/runtimeLayer.ts";
 import {
   clearPersistedServerRuntimeState,
@@ -208,6 +209,8 @@ const BackgroundLayerLive = BackgroundPolicy.layer.pipe(
 );
 
 const UsageLayerLive = UsageService.layer.pipe(Layer.provide(ServerSettingsLayerLive));
+
+const DeliveryLayerLive = DeliveryService.layer.pipe(Layer.provide(ServerSettingsLayerLive));
 
 const ResourceDiagnosticsLayerLive = Layer.mergeAll(
   HostResources.layer,
@@ -553,6 +556,7 @@ const RuntimeDependenciesLive = RuntimeCoreDependenciesLive.pipe(
   Layer.provideMerge(BackgroundLayerLive),
   Layer.provideMerge(ResourceDiagnosticsLayerLive),
   Layer.provideMerge(UsageLayerLive),
+  Layer.provideMerge(DeliveryLayerLive),
   Layer.provideMerge(TraceDiagnostics.layer),
   Layer.provideMerge(AnalyticsService.layer),
   Layer.provideMerge(ExternalLauncher.layer),

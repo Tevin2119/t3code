@@ -1064,6 +1064,20 @@ export const ObservabilitySettings = Schema.Struct({
 });
 export type ObservabilitySettings = typeof ObservabilitySettings.Type;
 
+/**
+ * A team delivery engine on this host. Off unless turned on: with it off,
+ * every thread is an ordinary single-harness thread and nothing is relayed.
+ */
+export const DeliverySettings = Schema.Struct({
+  enabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  engineUrl: TrimmedString.pipe(
+    Schema.withDecodingDefault(Effect.succeed("http://127.0.0.1:4320")),
+  ),
+  /** Dot-sourced by PowerShell terminals T3 Code opens, so harnesses start with a team loaded. */
+  terminalEntryScript: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
+});
+export type DeliverySettings = typeof DeliverySettings.Type;
+
 export const SourceControlWritingStyleMode = Schema.Literals([
   "repo_conventions",
   "conventional_commits",
@@ -1404,6 +1418,7 @@ export const ServerSettings = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed({})),
   ),
   observability: ObservabilitySettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
+  delivery: DeliverySettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
   // Keyed by a user-chosen id so a source keeps its rows across edits. Entries
   // this build cannot decode round-trip untouched, as provider instances do.
   usageLimitSources: Schema.Record(UsageLimitSourceId, UsageLimitSourceConfig).pipe(
@@ -1686,6 +1701,13 @@ export const ServerSettingsPatch = Schema.Struct({
     Schema.Struct({
       otlpTracesUrl: Schema.optionalKey(TrimmedString),
       otlpMetricsUrl: Schema.optionalKey(TrimmedString),
+    }),
+  ),
+  delivery: Schema.optionalKey(
+    Schema.Struct({
+      enabled: Schema.optionalKey(Schema.Boolean),
+      engineUrl: Schema.optionalKey(TrimmedString),
+      terminalEntryScript: Schema.optionalKey(TrimmedString),
     }),
   ),
   providers: Schema.optionalKey(

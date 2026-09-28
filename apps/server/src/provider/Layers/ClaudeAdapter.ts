@@ -88,6 +88,7 @@ import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
+import * as DeliveryThreadSession from "../../delivery/DeliveryThreadSession.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import { resolveClaudeSdkExecutablePath } from "../Drivers/ClaudeExecutable.ts";
 import { claudeSignedOutMessage, makeClaudeEnvironment } from "../Drivers/ClaudeHome.ts";
@@ -4902,6 +4903,8 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         extraArgs["thinking-display"] = "summarized";
       }
       const mcpSession = McpProviderSession.readMcpProviderSession(input.threadId);
+      // A thread bound to a team also gets that team's tools.
+      const deliveryServers = DeliveryThreadSession.deliveryStdioServers(input.threadId);
       // The attachments dir grant lets the agent Read/copy pasted images at
       // the paths ProviderService injects into the turn text, without an
       // approval prompt. It is a leaf directory holding only attachment
@@ -4918,7 +4921,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
           type: "preset",
           preset: "claude_code",
           // Model and effort can change after this session-level prompt is set.
-          append: buildRuntimeInstructions({ harness: "Claude Code" }),
+          append: buildRuntimeInstructions({ harness: "Claude Code", threadId: input.threadId }),
         },
         settingSources: [...CLAUDE_SETTING_SOURCES],
         // `ultracode` is a Claude Code setting, not an API effort level. It is
@@ -4950,16 +4953,21 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         env: McpProviderSession.withAgentDeviceEnvironment(claudeEnvironment, mcpSession),
         additionalDirectories,
         ...(Object.keys(extraArgs).length > 0 ? { extraArgs } : {}),
-        ...(mcpSession
+        ...(mcpSession || Object.keys(deliveryServers).length > 0
           ? {
               mcpServers: {
-                "t3-code": {
-                  type: "http",
-                  url: mcpSession.endpoint,
-                  headers: {
-                    Authorization: mcpSession.authorizationHeader,
-                  },
-                },
+                ...(mcpSession
+                  ? {
+                      "t3-code": {
+                        type: "http" as const,
+                        url: mcpSession.endpoint,
+                        headers: {
+                          Authorization: mcpSession.authorizationHeader,
+                        },
+                      },
+                    }
+                  : {}),
+                ...deliveryServers,
               },
             }
           : {}),
