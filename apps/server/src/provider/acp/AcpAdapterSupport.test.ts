@@ -2,7 +2,45 @@ import { describe, expect, it } from "vite-plus/test";
 import * as EffectAcpErrors from "effect-acp/errors";
 import { ProviderDriverKind } from "@t3tools/contracts";
 
-import { acpPermissionOutcome, mapAcpToAdapterError } from "./AcpAdapterSupport.ts";
+import {
+  acpPermissionOutcome,
+  autoApprovedAcpPermissionOptionId,
+  mapAcpToAdapterError,
+} from "./AcpAdapterSupport.ts";
+
+describe("autoApprovedAcpPermissionOptionId", () => {
+  const toolCall = { toolCallId: "t1" };
+  it("prefers the standing allowance, then a single one, and never a rejection", () => {
+    expect(
+      autoApprovedAcpPermissionOptionId({
+        sessionId: "s",
+        toolCall,
+        options: [
+          { optionId: "no", name: "Deny", kind: "reject_once" },
+          { optionId: "once", name: "Allow", kind: "allow_once" },
+          { optionId: "always", name: "Always", kind: "allow_always" },
+        ],
+      }),
+    ).toBe("always");
+    expect(
+      autoApprovedAcpPermissionOptionId({
+        sessionId: "s",
+        toolCall,
+        options: [
+          { optionId: "no", name: "Deny", kind: "reject_once" },
+          { optionId: "once", name: "Allow", kind: "allow_once" },
+        ],
+      }),
+    ).toBe("once");
+    expect(
+      autoApprovedAcpPermissionOptionId({
+        sessionId: "s",
+        toolCall,
+        options: [{ optionId: "no", name: "Deny", kind: "reject_once" }],
+      }),
+    ).toBeUndefined();
+  });
+});
 
 describe("AcpAdapterSupport", () => {
   it("maps ACP approval decisions to permission outcomes", () => {

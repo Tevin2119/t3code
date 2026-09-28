@@ -63,7 +63,10 @@ import {
   ProviderAdapterValidationError,
   type ProviderAdapterError,
 } from "../Errors.ts";
-import { mapAcpToAdapterError } from "../acp/AcpAdapterSupport.ts";
+import {
+  autoApprovedAcpPermissionOptionId,
+  mapAcpToAdapterError,
+} from "../acp/AcpAdapterSupport.ts";
 import {
   makeAcpAssistantItemEvent,
   makeAcpContentDeltaEvent,
@@ -289,6 +292,11 @@ export const makeHermesAdapter = Effect.fn("makeHermesAdapter")(function* (
   ): Effect.fn.Return<NativePermissionResponse, ProviderAdapterError> {
     if (context.stopped || request.sessionId !== context.nativeSessionId) {
       return { outcome: { outcome: "cancelled" } };
+    }
+    // A full-access thread answers for the user, the way the other ACP drivers do.
+    if (context.session.runtimeMode === "full-access") {
+      const optionId = autoApprovedAcpPermissionOptionId(request);
+      if (optionId !== undefined) return { outcome: { outcome: "selected", optionId } };
     }
     const requestId = ApprovalRequestId.make(yield* randomId);
     const runtimeRequestId = RuntimeRequestId.make(requestId);
