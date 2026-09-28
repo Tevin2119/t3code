@@ -347,9 +347,18 @@ describe("DeliveryService", () => {
         expect(codex).toContain(
           'mcp_servers.delivery.env={DELIVERY_TEAM="development",DELIVERY_SEAT="developer"}',
         );
-        expect(codex.find((value) => value.startsWith("developer_instructions="))).toContain(
-          "You are on team development as lead-developer.\\n",
+        const codexInstructions =
+          codex
+            .find((value) => value.startsWith("developer_instructions="))
+            ?.slice("developer_instructions=".length) ?? "";
+        expect(readTomlString(codexInstructions)).toBe(
+          DeliveryThreadSession.deliveryInstructions(id),
         );
+        expect(readTomlString(codexInstructions)).toContain(
+          "You are on team development as lead-developer.\n",
+        );
+        // Nothing in it that the Windows shell would take as its own.
+        expect(codexInstructions.slice(1, -1)).toMatch(/^[A-Za-z0-9 _./:\\-]*$/);
         expect(DeliveryThreadSession.deliveryPiLaunch(id)).toEqual({
           args: [
             "--append-system-prompt",
@@ -535,6 +544,23 @@ describe("DeliveryService", () => {
         expect((yield* delivery.threadState(threadId("thread-saved"))).binding).toEqual(first);
       }).pipe(Effect.provide(layer(fake, { prefix: "unused-", config })));
     }).pipe(Effect.provide(shared("t3-delivery-unsaved-")));
+  });
+});
+
+/** Reads a TOML basic string back, the way Codex does. */
+const readTomlString = (value: string) =>
+  value
+    .slice(1, -1)
+    .replace(/\\U([0-9a-f]{8})|\\u([0-9a-f]{4})/g, (_match, long: string, short: string) =>
+      String.fromCodePoint(Number.parseInt(long ?? short, 16)),
+    );
+
+describe("tomlString", () => {
+  it("writes what a shell would misread as escapes, and loses nothing", () => {
+    const text = 'Say "no" to <this> & that | 100% of the time ^ \\ path\nnext line é 🙂';
+    const written = DeliveryThreadSession.tomlString(text);
+    expect(written.slice(1, -1)).toMatch(/^[A-Za-z0-9 _./:\\-]*$/);
+    expect(readTomlString(written)).toBe(text);
   });
 });
 

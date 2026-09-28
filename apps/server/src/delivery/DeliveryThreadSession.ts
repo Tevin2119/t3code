@@ -114,7 +114,21 @@ export function deliveryStdioServers(
   );
 }
 
-const tomlString = (value: string) => JSON.stringify(value);
+/**
+ * A TOML string holding only letters, digits and a few marks: every other
+ * character is written as a TOML escape. On Windows Codex is started through
+ * `cmd.exe` and its own `.cmd` file, which read the command line twice. A
+ * quote, `<`, `>`, `&` or `%` in a team's instructions would be taken there
+ * as the shell's own, and Codex would not start.
+ */
+export const tomlString = (value: string) =>
+  `"${Array.from(value, (char) => {
+    if (/[A-Za-z0-9 _./:-]/.test(char)) return char;
+    const code = char.codePointAt(0) ?? 0;
+    return code > 0xffff
+      ? `\\U${code.toString(16).padStart(8, "0")}`
+      : `\\u${code.toString(16).padStart(4, "0")}`;
+  }).join("")}"`;
 
 /**
  * Codex takes configuration as `-c key=value` with TOML values. The team's

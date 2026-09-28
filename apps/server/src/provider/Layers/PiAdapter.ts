@@ -336,8 +336,10 @@ export const makePiAdapter = Effect.fn("makePiAdapter")(function* (
             model,
             teamArgs: team.args,
           });
+          // The team's tools read who they serve from the environment pi runs in.
+          const spawnEnvironment = { ...environment, ...team.env };
           const spawnCommand = yield* resolveSpawnCommand(command, args, {
-            env: { ...environment, ...team.env },
+            env: spawnEnvironment,
           }).pipe(
             Effect.mapError(
               (cause) =>
@@ -355,7 +357,7 @@ export const makePiAdapter = Effect.fn("makePiAdapter")(function* (
               command: spawnCommand.command,
               args: spawnCommand.args,
               cwd,
-              env: environment,
+              env: spawnEnvironment,
               ...(spawnCommand.shell === undefined ? {} : { shell: spawnCommand.shell }),
             },
           }).pipe(

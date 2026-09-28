@@ -245,7 +245,6 @@ export function OrchestratorComposerControls(props: {
               ? "max-w-[28rem] text-xs text-warning"
               : "max-w-72 truncate text-xs text-muted-foreground"
           }
-
           data-delivery-orchestrator-status
         >
           {problem ??
