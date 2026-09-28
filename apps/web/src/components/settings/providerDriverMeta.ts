@@ -3,6 +3,7 @@ import {
   ClaudeSettings,
   CodexSettings,
   CursorSettings,
+  DeepSeekSettings,
   GrokSettings,
   HermesSettings,
   KimiSettings,
@@ -18,6 +19,7 @@ import {
   CursorIcon,
   DeepSeekIcon,
   GrokIcon,
+  HermesIcon,
   type Icon,
   KimiIcon,
   OpenAI,
@@ -106,9 +108,16 @@ const PROVIDER_CLIENT_DEFINITIONS: readonly ProviderClientDefinition[] = [
   {
     value: ProviderDriverKind.make("hermes"),
     label: "Hermes",
-    icon: DeepSeekIcon,
+    icon: HermesIcon,
     badgeLabel: "Early Access",
     settingsSchema: HermesSettings,
+  },
+  {
+    value: ProviderDriverKind.make("deepseek"),
+    label: "DeepSeek",
+    icon: DeepSeekIcon,
+    badgeLabel: "Early Access",
+    settingsSchema: DeepSeekSettings,
   },
 ];
 

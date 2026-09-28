@@ -151,6 +151,7 @@ const OPENCODE_DRIVER_KIND = ProviderDriverKind.make("opencode");
 const KIMI_DRIVER_KIND = ProviderDriverKind.make("kimi");
 const PI_DRIVER_KIND = ProviderDriverKind.make("pi");
 const HERMES_DRIVER_KIND = ProviderDriverKind.make("hermes");
+const DEEPSEEK_DRIVER_KIND = ProviderDriverKind.make("deepseek");
 
 export const DEFAULT_MODEL = "gpt-6-astra";
 
@@ -177,6 +178,9 @@ export const DEFAULT_TEXT_GENERATION_REASONING_EFFORT = "low";
  */
 export const HERMES_DEFAULT_MODEL = "hermes-default";
 
+/** A model of the DeepSeek Harness official backend; other backends are `backend/model`. */
+export const DEEPSEEK_DEFAULT_MODEL = "deepseek-v4-pro";
+
 export const DEFAULT_MODEL_BY_PROVIDER: Partial<Record<ProviderDriverKind, string>> = {
   [CODEX_DRIVER_KIND]: DEFAULT_MODEL,
   [CLAUDE_DRIVER_KIND]: "claude-fable-5-1",
@@ -190,6 +194,7 @@ export const DEFAULT_MODEL_BY_PROVIDER: Partial<Record<ProviderDriverKind, strin
   // pi takes `provider/id` model patterns; `kimi-coding` is the Moonshot backend.
   [PI_DRIVER_KIND]: "kimi-coding/kimi-for-coding",
   [HERMES_DRIVER_KIND]: HERMES_DEFAULT_MODEL,
+  [DEEPSEEK_DRIVER_KIND]: DEEPSEEK_DEFAULT_MODEL,
 };
 
 /** Per-provider text generation model defaults. */
@@ -202,6 +207,7 @@ export const DEFAULT_TEXT_GENERATION_MODEL_BY_PROVIDER: Partial<
   [CURSOR_DRIVER_KIND]: "composer-2",
   [OPENCODE_DRIVER_KIND]: "openai/gpt-5",
   [HERMES_DRIVER_KIND]: HERMES_DEFAULT_MODEL,
+  [DEEPSEEK_DRIVER_KIND]: "deepseek-v4-flash",
 };
 
 export const MODEL_SLUG_ALIASES_BY_PROVIDER: Partial<
@@ -242,4 +248,5 @@ export const PROVIDER_DISPLAY_NAMES: Partial<Record<ProviderDriverKind, string>>
   [KIMI_DRIVER_KIND]: "Kimi",
   [PI_DRIVER_KIND]: "pi",
   [HERMES_DRIVER_KIND]: "Hermes",
+  [DEEPSEEK_DRIVER_KIND]: "DeepSeek",
 };
