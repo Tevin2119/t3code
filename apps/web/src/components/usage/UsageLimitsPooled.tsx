@@ -13,6 +13,7 @@ import {
 import { AlertTriangleIcon, TicketIcon } from "lucide-react";
 import { type ReactNode, useState } from "react";
 
+import zaiLogo from "../../assets/zai-logo.svg";
 import { usePrimarySettings } from "../../hooks/useSettings";
 import { cn } from "../../lib/utils";
 import { formatUpcomingTimestamp } from "../../timestampFormat";
@@ -71,6 +72,11 @@ function AccountAvatar({
   readonly account: LimitAccount;
   readonly className?: string;
 }) {
+  if (account.limits.quotaGroup?.label === "GLM Coding Plan") {
+    return (
+      <img src={zaiLogo} alt="Z.AI" className={cn("size-5 shrink-0 object-contain", className)} />
+    );
+  }
   if (account.redeem) {
     return (
       <ProviderInstanceIcon
@@ -176,6 +182,13 @@ function SegmentPopover({
       </div>
       <div className="flex flex-col gap-1 border-t border-border/60 pt-2.5">
         {account.plan ? <Row label="Plan">{account.plan}</Row> : null}
+        {account.harnesses && account.harnesses.length > 1 ? (
+          <Row label="Shared by">
+            {account.harnesses
+              .map((driver) => getDriverOption(driver)?.label ?? String(driver))
+              .join(", ")}
+          </Row>
+        ) : null}
         {where ? (
           <Row label={account.environments.length > 0 ? "Signed in" : "Via"}>{where}</Row>
         ) : null}
@@ -510,19 +523,36 @@ function PoolWindowCard({
 
 function PoolSection({ pool, now }: { readonly pool: LimitPool; readonly now: number }) {
   const color = barColor(pool.driver);
-  const label = getDriverOption(pool.driver)?.label ?? String(pool.driver);
+  const label =
+    pool.accounts.find((account) => account.limits.quotaGroup)?.limits.quotaGroup?.label ??
+    getDriverOption(pool.driver)?.label ??
+    String(pool.driver);
+  const harnesses = [
+    ...new Set(pool.accounts.flatMap((account) => account.harnesses ?? [account.driver])),
+  ];
   return (
     <section className="flex flex-col gap-3">
       <h2 className="flex items-center gap-2 text-sm font-medium text-foreground">
-        <ProviderInstanceIcon
-          driverKind={pool.driver}
-          displayName={label}
-          indicatorBackground="var(--background)"
-          className="size-5"
-          iconClassName="size-4 text-foreground/80"
-        />
+        {label === "GLM Coding Plan" ? (
+          <img src={zaiLogo} alt="Z.AI" className="size-5 shrink-0 object-contain" />
+        ) : (
+          <ProviderInstanceIcon
+            driverKind={pool.driver}
+            displayName={label}
+            indicatorBackground="var(--background)"
+            className="size-5"
+            iconClassName="size-4 text-foreground/80"
+          />
+        )}
         {label}
       </h2>
+      {pool.accounts.some((account) => (account.harnesses?.length ?? 0) > 1) ? (
+        <p className="text-xs text-muted-foreground">
+          Shared allowance:{" "}
+          {harnesses.map((driver) => getDriverOption(driver)?.label ?? String(driver)).join(" + ")}.
+          Counted once per account.
+        </p>
+      ) : null}
       {pool.windows.map((window) => (
         <PoolWindowCard key={`${window.kind}:${window.id}`} pool={window} color={color} now={now} />
       ))}

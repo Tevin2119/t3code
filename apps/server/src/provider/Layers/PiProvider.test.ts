@@ -1,6 +1,6 @@
 import { expect, it } from "@effect/vitest";
 
-import { parsePiAuthCheck, parsePiModelsOutput } from "./PiProvider.ts";
+import { parsePiAuthCheck, parsePiModelsOutput, withPiDefaultModel } from "./PiProvider.ts";
 
 // Captured verbatim from `pi --list-models kimi` on pi 0.85.1. Columns are
 // aligned with runs of spaces and the rows carry trailing padding.
@@ -39,6 +39,39 @@ it("reads a ready provider as authenticated with its auth type", () => {
   expect(
     parsePiAuthCheck('{"status":"ready","provider":"kimi-coding","authType":"oauth"}'),
   ).toEqual({ status: "authenticated", type: "oauth", label: "Moonshot account" });
+});
+
+it("names the account after the backend pi is signed in to", () => {
+  expect(
+    parsePiAuthCheck('{"status":"ready","provider":"openai-codex","authType":"oauth"}')?.label,
+  ).toBe("ChatGPT account");
+  expect(parsePiAuthCheck('{"status":"ready","authType":"oauth"}', "openai-codex")?.label).toBe(
+    "ChatGPT account",
+  );
+  expect(
+    parsePiAuthCheck('{"status":"ready","provider":"anthropic","authType":"oauth"}')?.label,
+  ).toBe("anthropic account");
+  expect(
+    parsePiAuthCheck('{"status":"ready","provider":"openai-codex","authType":"api_key"}')?.label,
+  ).toBeUndefined();
+});
+
+it("opens the picker on a preferred model when the catalog marks none", () => {
+  const catalog = parsePiModelsOutput(
+    [
+      "provider      model                context",
+      "openai-codex  gpt-5.3-codex-spark  128K",
+      "openai-codex  gpt-5.6-sol          272K",
+      "openai-codex  gpt-6-astra          272K",
+    ].join("\n"),
+  );
+  expect(
+    withPiDefaultModel(catalog)
+      .filter((model) => model.isDefault)
+      .map((model) => model.slug),
+  ).toEqual(["openai-codex/gpt-6-astra"]);
+  expect(withPiDefaultModel(catalog.slice(0, 1))[0]?.isDefault).toBe(true);
+  expect(withPiDefaultModel([])).toEqual([]);
 });
 
 it("reads every non-ready verdict as signed out", () => {

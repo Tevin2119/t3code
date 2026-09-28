@@ -93,6 +93,7 @@ export function applyUsageLimitsUpdate(input: {
   }
   return {
     ...makeUsageLimits({ checkedAt: input.checkedAt, windows: merged.values() }),
+    ...(previous?.quotaGroup ? { quotaGroup: previous.quotaGroup } : {}),
     ...(previous?.resetCredits !== undefined ? { resetCredits: previous.resetCredits } : {}),
   };
 }

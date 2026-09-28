@@ -52,7 +52,8 @@ const HERMES_PRESENTATION = {
 
 const EMPTY_CAPABILITIES: ModelCapabilities = createModelCapabilities({ optionDescriptors: [] });
 
-const VERSION_PROBE_TIMEOUT_MS = 4_000;
+// Cold Python startup competes with the other harness probes on Windows.
+const VERSION_PROBE_TIMEOUT_MS = 20_000;
 
 /**
  * Stand-in used before the CLI answers, or when its config cannot be read. The

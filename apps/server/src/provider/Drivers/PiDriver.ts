@@ -19,6 +19,7 @@ import { PiSettings, ProviderDriverKind } from "@t3tools/contracts";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
+import { HttpClient } from "effect/unstable/http";
 import { ChildProcessSpawner } from "effect/unstable/process";
 
 import * as BackgroundPolicy from "../../background/BackgroundPolicy.ts";
@@ -32,6 +33,7 @@ import {
   checkPiProviderStatus,
   probePiAuthenticated,
 } from "../Layers/PiProvider.ts";
+import { readPiUsageLimits } from "../Layers/piUsageLimits.ts";
 import { makeManagedServerProvider } from "../makeManagedServerProvider.ts";
 import {
   defaultProviderContinuationIdentity,
@@ -59,6 +61,7 @@ export type PiDriverEnv =
   | BackgroundPolicy.BackgroundPolicy
   | ChildProcessSpawner.ChildProcessSpawner
   | Crypto.Crypto
+  | HttpClient.HttpClient
   | ServerSettingsService;
 
 export const PiDriver: ProviderDriver<PiSettings, PiDriverEnv> = {
@@ -72,6 +75,7 @@ export const PiDriver: ProviderDriver<PiSettings, PiDriverEnv> = {
   create: ({ instanceId, displayName, accentColor, environment, enabled, config }) =>
     Effect.gen(function* () {
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const httpClient = yield* HttpClient.HttpClient;
       const serverSettings = yield* ServerSettingsService;
       const processEnv = mergeProviderInstanceEnvironment(environment);
       const continuationIdentity = defaultProviderContinuationIdentity({
@@ -94,7 +98,15 @@ export const PiDriver: ProviderDriver<PiSettings, PiDriverEnv> = {
       const textGeneration = yield* makePiTextGeneration(effectiveConfig, processEnv);
 
       const checkProvider = checkPiProviderStatus(effectiveConfig, processEnv).pipe(
+        Effect.flatMap((snapshot) =>
+          effectiveConfig.enabled && snapshot.installed && snapshot.auth.status === "authenticated"
+            ? readPiUsageLimits(effectiveConfig, processEnv).pipe(
+                Effect.map((usageLimits) => ({ ...snapshot, usageLimits })),
+              )
+            : Effect.succeed(snapshot),
+        ),
         Effect.map(stampIdentity),
+        Effect.provideService(HttpClient.HttpClient, httpClient),
         Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
       );
 

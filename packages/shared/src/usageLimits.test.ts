@@ -52,6 +52,94 @@ function provider(overrides: Partial<ServerProvider>): ServerProvider {
   };
 }
 
+describe("shared harness quotas", () => {
+  const checkedAt = "2026-09-03T11:00:00.000Z";
+  const limits = { checkedAt, windows: [window] };
+  const presentation = (providers: ServerProvider[]) =>
+    new Map([
+      [
+        EnvironmentId.make("local"),
+        { entry: { target: { label: "Local" } }, serverConfig: { providers } },
+      ],
+    ]);
+  it("counts Codex and pi once, takes fresh limits, and preserves Codex reset credits", () => {
+    const codex = provider({
+      auth: { status: "authenticated", email: "Same@example.com" },
+      usageLimits: { ...limits, resetCredits: { availableCount: 2 } },
+    });
+    const pi = provider({
+      instanceId: ProviderInstanceId.make("pi"),
+      driver: ProviderDriverKind.make("pi"),
+      usageLimits: {
+        checkedAt: "2026-09-03T11:30:00.000Z",
+        windows: [{ ...window, usedPercent: 60 }],
+        quotaGroup: {
+          driver: ProviderDriverKind.make("codex"),
+          accountKey: "codex:same@example.com",
+          label: "ChatGPT",
+        },
+      },
+    });
+    for (const ordered of [
+      [codex, pi],
+      [pi, codex],
+    ]) {
+      const accounts = collectLimitAccounts(presentation(ordered));
+      expect(accounts).toHaveLength(1);
+      expect(accounts[0]?.harnesses).toEqual(expect.arrayContaining(["codex", "pi"]));
+      expect(accounts[0]?.limits.windows[0]?.usedPercent).toBe(60);
+      expect(accounts[0]?.limits.resetCredits?.availableCount).toBe(2);
+      expect(accounts[0]?.redeem?.input).toEqual({ instanceId: "codex" });
+      expect(collectLimitPools(accounts, now)[0]?.windows[0]?.members).toHaveLength(1);
+    }
+  });
+  it("merges Hermes and OpenCode only with a matching GLM account key", () => {
+    const hermes = provider({
+      instanceId: ProviderInstanceId.make("hermes"),
+      driver: ProviderDriverKind.make("hermes"),
+      usageLimits: {
+        ...limits,
+        quotaGroup: {
+          driver: ProviderDriverKind.make("hermes"),
+          accountKey: "zai:account-one",
+          label: "GLM Coding Plan",
+        },
+      },
+    });
+    const opencode = provider({
+      instanceId: ProviderInstanceId.make("opencode"),
+      driver: ProviderDriverKind.make("opencode"),
+      usageLimits: hermes.usageLimits,
+    });
+    expect(collectLimitAccounts(presentation([hermes, opencode]))).toHaveLength(1);
+    const other = {
+      ...opencode,
+      usageLimits: {
+        ...limits,
+        quotaGroup: {
+          driver: ProviderDriverKind.make("hermes"),
+          accountKey: "zai:account-two",
+          label: "GLM Coding Plan",
+        },
+      },
+    };
+    expect(collectLimitAccounts(presentation([hermes, other]))).toHaveLength(2);
+  });
+  it("does not infer shared quotas from matching windows alone", () => {
+    const accounts = collectLimitAccounts(
+      presentation([
+        provider({ usageLimits: limits }),
+        provider({
+          instanceId: ProviderInstanceId.make("pi"),
+          driver: ProviderDriverKind.make("pi"),
+          usageLimits: limits,
+        }),
+      ]),
+    );
+    expect(accounts).toHaveLength(2);
+  });
+});
+
 describe("pace", () => {
   it("places the clock three fifths through a five-hour window with two hours left", () => {
     expect(elapsedShare(window, now)).toBeCloseTo(0.6);

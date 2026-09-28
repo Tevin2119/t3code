@@ -18,7 +18,10 @@
 import { HermesSettings, ProviderDriverKind } from "@t3tools/contracts";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
+import { HttpClient } from "effect/unstable/http";
 import { ChildProcessSpawner } from "effect/unstable/process";
 
 import * as BackgroundPolicy from "../../background/BackgroundPolicy.ts";
@@ -32,7 +35,9 @@ import {
   buildInitialHermesProviderSnapshot,
   checkHermesProviderStatus,
   probeHermesAuthenticated,
+  readHermesRuntimeConfig,
 } from "../Layers/HermesProvider.ts";
+import { readHermesUsageLimits } from "../Layers/hermesUsageLimits.ts";
 import { ProviderEventLoggers } from "../Layers/ProviderEventLoggers.ts";
 import { makeManagedServerProvider } from "../makeManagedServerProvider.ts";
 import {
@@ -61,6 +66,9 @@ export type HermesDriverEnv =
   | BackgroundPolicy.BackgroundPolicy
   | ChildProcessSpawner.ChildProcessSpawner
   | Crypto.Crypto
+  | FileSystem.FileSystem
+  | HttpClient.HttpClient
+  | Path.Path
   | ProviderEventLoggers
   | ServerSettingsService;
 
@@ -76,6 +84,9 @@ export const HermesDriver: ProviderDriver<HermesSettings, HermesDriverEnv> = {
     Effect.gen(function* () {
       const crypto = yield* Crypto.Crypto;
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const httpClient = yield* HttpClient.HttpClient;
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
       const serverSettings = yield* ServerSettingsService;
       const eventLoggers = yield* ProviderEventLoggers;
       // One environment for the ACP agent, the status probes and the credential
@@ -113,7 +124,23 @@ export const HermesDriver: ProviderDriver<HermesSettings, HermesDriverEnv> = {
       const textGeneration = yield* makeHermesTextGeneration(effectiveConfig, processEnv);
 
       const checkProvider = checkHermesProviderStatus(effectiveConfig, processEnv).pipe(
+        Effect.flatMap((snapshot) =>
+          effectiveConfig.enabled && snapshot.installed && snapshot.auth.status === "authenticated"
+            ? readHermesRuntimeConfig(effectiveConfig, processEnv).pipe(
+                Effect.flatMap((runtime) =>
+                  readHermesUsageLimits({
+                    provider: runtime?.provider ?? "",
+                    environment: processEnv,
+                  }),
+                ),
+                Effect.map((usageLimits) => ({ ...snapshot, usageLimits })),
+              )
+            : Effect.succeed(snapshot),
+        ),
         Effect.map(stampIdentity),
+        Effect.provideService(HttpClient.HttpClient, httpClient),
+        Effect.provideService(FileSystem.FileSystem, fileSystem),
+        Effect.provideService(Path.Path, path),
         Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
       );
 

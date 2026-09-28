@@ -18,6 +18,7 @@ import type {
   ServerProviderAuth,
   ServerProviderModel,
 } from "@t3tools/contracts";
+import { PREFERRED_DEFAULT_CODEX_MODELS } from "@t3tools/contracts";
 import { createModelCapabilities } from "@t3tools/shared/model";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
 import * as DateTime from "effect/DateTime";
@@ -49,8 +50,11 @@ const EMPTY_CAPABILITIES: ModelCapabilities = createModelCapabilities({ optionDe
 const VERSION_PROBE_TIMEOUT_MS = 4_000;
 const MODEL_PROBE_TIMEOUT_MS = 15_000;
 
+const KIMI_PROVIDER = "kimi-coding";
+const CHATGPT_PROVIDER = "openai-codex";
+
 /** Fallback shown before the CLI answers, or when the catalog probe fails. */
-const PI_BUILT_IN_MODELS: ReadonlyArray<ServerProviderModel> = [
+const PI_KIMI_BUILT_IN_MODELS: ReadonlyArray<ServerProviderModel> = [
   {
     slug: "kimi-coding/kimi-for-coding",
     name: "kimi-for-coding",
@@ -59,6 +63,33 @@ const PI_BUILT_IN_MODELS: ReadonlyArray<ServerProviderModel> = [
     capabilities: EMPTY_CAPABILITIES,
   },
 ];
+
+/** Only the Moonshot backend has a model known ahead of the catalog probe. */
+function piBuiltInModels(provider: string): ReadonlyArray<ServerProviderModel> {
+  return provider === KIMI_PROVIDER ? PI_KIMI_BUILT_IN_MODELS : [];
+}
+
+/** Who holds the account behind a pi backend's OAuth sign-in. */
+function piAccountLabel(provider: string): string {
+  if (provider === KIMI_PROVIDER) return "Moonshot account";
+  if (provider === CHATGPT_PROVIDER) return "ChatGPT account";
+  return `${provider} account`;
+}
+
+/**
+ * `pi --list-models` marks no default, so the picker would open on whichever
+ * model sorts first. Prefer the models the Codex driver prefers, then the first.
+ */
+export function withPiDefaultModel(
+  models: ReadonlyArray<ServerProviderModel>,
+): ReadonlyArray<ServerProviderModel> {
+  if (models.length === 0 || models.some((model) => model.isDefault)) return models;
+  const preferred = PREFERRED_DEFAULT_CODEX_MODELS.map((id) =>
+    models.find((model) => model.slug === `${CHATGPT_PROVIDER}/${id}`),
+  ).find((model) => model !== undefined);
+  const chosen = preferred ?? models[0];
+  return models.map((model) => (model === chosen ? { ...model, isDefault: true } : model));
+}
 
 /**
  * Shape of `pi auth check --provider <id> --json`. `status` is `ready` once the
@@ -74,7 +105,10 @@ const PiAuthCheck = Schema.Struct({
 
 const decodePiAuthCheck = Schema.decodeUnknownOption(PiAuthCheck);
 
-export function parsePiAuthCheck(output: string): ServerProviderAuth | undefined {
+export function parsePiAuthCheck(
+  output: string,
+  configuredProvider: string = KIMI_PROVIDER,
+): ServerProviderAuth | undefined {
   const start = output.indexOf("{");
   if (start < 0) return undefined;
   let parsed: unknown;
@@ -92,7 +126,9 @@ export function parsePiAuthCheck(output: string): ServerProviderAuth | undefined
   return {
     status: "authenticated",
     ...(authType ? { type: authType } : {}),
-    ...(authType === "oauth" ? { label: "Moonshot account" } : {}),
+    ...(authType === "oauth"
+      ? { label: piAccountLabel(decoded.provider?.trim() || configuredProvider) }
+      : {}),
   };
 }
 
@@ -144,7 +180,7 @@ function buildPiProvider(input: Parameters<typeof buildServerProvider>[0]): Serv
   };
 }
 
-const runPiCliCommand = (
+export const runPiCliCommand = (
   piSettings: PiSettings,
   args: ReadonlyArray<string>,
   environment: NodeJS.ProcessEnv,
@@ -163,7 +199,7 @@ const runPiCliCommand = (
 
 function piModelsFromSettings(
   customModels: ReadonlyArray<CustomModelSetting>,
-  builtIn: ReadonlyArray<ServerProviderModel> = PI_BUILT_IN_MODELS,
+  builtIn: ReadonlyArray<ServerProviderModel>,
 ): ReadonlyArray<ServerProviderModel> {
   return providerModelsFromSettings(builtIn, customModels, EMPTY_CAPABILITIES);
 }
@@ -177,7 +213,7 @@ export const probePiAuthenticated = Effect.fn("probePiAuthenticated")(function* 
   piSettings: PiSettings,
   environment: NodeJS.ProcessEnv = process.env,
 ): Effect.fn.Return<boolean, never, ChildProcessSpawner.ChildProcessSpawner> {
-  const provider = piSettings.provider.trim() || "kimi-coding";
+  const provider = piSettings.provider.trim() || KIMI_PROVIDER;
   const result = yield* runPiCliCommand(
     piSettings,
     ["auth", "check", "--provider", provider, "--json"],
@@ -198,7 +234,10 @@ export function buildInitialPiProviderSnapshot(
       presentation: PI_PRESENTATION,
       enabled: piSettings.enabled,
       checkedAt,
-      models: piModelsFromSettings(piSettings.customModels),
+      models: piModelsFromSettings(
+        piSettings.customModels,
+        piBuiltInModels(piSettings.provider.trim() || KIMI_PROVIDER),
+      ),
       probe: {
         installed: false,
         version: null,
@@ -215,8 +254,8 @@ export const checkPiProviderStatus = Effect.fn("checkPiProviderStatus")(function
   environment: NodeJS.ProcessEnv = process.env,
 ): Effect.fn.Return<ServerProviderDraft, never, ChildProcessSpawner.ChildProcessSpawner> {
   const checkedAt = DateTime.formatIso(yield* DateTime.now);
-  const fallbackModels = piModelsFromSettings(piSettings.customModels);
-  const provider = piSettings.provider.trim() || "kimi-coding";
+  const provider = piSettings.provider.trim() || KIMI_PROVIDER;
+  const fallbackModels = piModelsFromSettings(piSettings.customModels, piBuiltInModels(provider));
 
   if (!piSettings.enabled) {
     return buildPiProvider({
@@ -306,7 +345,7 @@ export const checkPiProviderStatus = Effect.fn("checkPiProviderStatus")(function
   // prints the JSON verdict, so the payload is parsed regardless of exit code.
   const auth =
     Result.isSuccess(authResult) && Option.isSome(authResult.success)
-      ? parsePiAuthCheck(authResult.success.value.stdout)
+      ? parsePiAuthCheck(authResult.success.value.stdout, provider)
       : undefined;
 
   const modelsResult = yield* runPiCliCommand(
@@ -324,7 +363,7 @@ export const checkPiProviderStatus = Effect.fn("checkPiProviderStatus")(function
 
   const models = piModelsFromSettings(
     piSettings.customModels,
-    discoveredModels.length > 0 ? discoveredModels : PI_BUILT_IN_MODELS,
+    discoveredModels.length > 0 ? withPiDefaultModel(discoveredModels) : piBuiltInModels(provider),
   );
 
   if (auth === undefined) {

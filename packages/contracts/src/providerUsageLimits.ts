@@ -50,6 +50,13 @@ export type ServerProviderResetCredits = typeof ServerProviderResetCredits.Type;
 export const ServerProviderUsageLimits = Schema.Struct({
   checkedAt: IsoDateTime,
   windows: ForwardCompatibleArray(ServerProviderUsageWindow),
+  quotaGroup: Schema.optional(
+    Schema.Struct({
+      driver: ProviderDriverKind,
+      accountKey: TrimmedNonEmptyString,
+      label: TrimmedNonEmptyString,
+    }),
+  ),
   resetCredits: Schema.optional(ServerProviderResetCredits),
   unavailable: Schema.optional(
     Schema.Struct({

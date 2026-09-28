@@ -27,7 +27,11 @@ import { ServerConfig } from "../../config.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { ProviderDriverError } from "../Errors.ts";
 import { makeOpenCodeAdapter } from "../Layers/OpenCodeAdapter.ts";
-import { readOpenCodeGoUsageLimits } from "../Layers/openCodeUsageLimits.ts";
+import {
+  mergeOpenCodeUsageLimits,
+  readOpenCodeGoUsageLimits,
+  readOpenCodeZaiUsageLimits,
+} from "../Layers/openCodeUsageLimits.ts";
 import {
   checkOpenCodeProviderStatus,
   makePendingOpenCodeProvider,
@@ -152,7 +156,12 @@ export const OpenCodeDriver: ProviderDriver<OpenCodeSettings, OpenCodeDriverEnv>
       const checkProvider = Effect.all(
         {
           provider: checkOpenCodeProviderStatus(effectiveConfig, serverConfig.cwd, processEnv),
-          usageLimits: readOpenCodeGoUsageLimits({
+          goLimits: readOpenCodeGoUsageLimits({
+            enabled: effectiveConfig.enabled,
+            serverUrl: effectiveConfig.serverUrl,
+            environment: processEnv,
+          }),
+          zaiLimits: readOpenCodeZaiUsageLimits({
             enabled: effectiveConfig.enabled,
             serverUrl: effectiveConfig.serverUrl,
             environment: processEnv,
@@ -160,7 +169,10 @@ export const OpenCodeDriver: ProviderDriver<OpenCodeSettings, OpenCodeDriverEnv>
         },
         { concurrency: "unbounded" },
       ).pipe(
-        Effect.map(({ provider, usageLimits }) => ({ ...provider, usageLimits })),
+        Effect.map(({ provider, goLimits, zaiLimits }) => ({
+          ...provider,
+          usageLimits: mergeOpenCodeUsageLimits(goLimits.checkedAt, [goLimits, zaiLimits]),
+        })),
         Effect.map(stampIdentity),
         Effect.provideService(FileSystem.FileSystem, fileSystem),
         Effect.provideService(Path.Path, pathService),

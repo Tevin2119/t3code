@@ -16,7 +16,10 @@ import { KimiSettings, ProviderDriverKind, ProviderSetupError } from "@t3tools/c
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
+import { HttpClient } from "effect/unstable/http";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 import * as BackgroundPolicy from "../../background/BackgroundPolicy.ts";
@@ -35,6 +38,7 @@ import {
   checkKimiProviderStatus,
   probeKimiAuthenticated,
 } from "../Layers/KimiProvider.ts";
+import { readKimiUsageLimits } from "../Layers/kimiUsageLimits.ts";
 import { ProviderEventLoggers } from "../Layers/ProviderEventLoggers.ts";
 import { makeManagedServerProvider } from "../makeManagedServerProvider.ts";
 import {
@@ -64,6 +68,9 @@ export type KimiDriverEnv =
   | BackgroundPolicy.BackgroundPolicy
   | ChildProcessSpawner.ChildProcessSpawner
   | Crypto.Crypto
+  | FileSystem.FileSystem
+  | HttpClient.HttpClient
+  | Path.Path
   | ProviderEventLoggers
   | ServerSettingsService;
 
@@ -79,6 +86,9 @@ export const KimiDriver: ProviderDriver<KimiSettings, KimiDriverEnv> = {
     Effect.gen(function* () {
       const crypto = yield* Crypto.Crypto;
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const httpClient = yield* HttpClient.HttpClient;
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
       const serverSettings = yield* ServerSettingsService;
       const eventLoggers = yield* ProviderEventLoggers;
       const processEnv = mergeProviderInstanceEnvironment(environment);
@@ -111,7 +121,17 @@ export const KimiDriver: ProviderDriver<KimiSettings, KimiDriverEnv> = {
       const textGeneration = yield* makeKimiTextGeneration(effectiveConfig, processEnv);
 
       const checkProvider = checkKimiProviderStatus(effectiveConfig, processEnv).pipe(
+        Effect.flatMap((snapshot) =>
+          effectiveConfig.enabled && snapshot.installed && snapshot.auth.status === "authenticated"
+            ? readKimiUsageLimits(processEnv).pipe(
+                Effect.map((usageLimits) => ({ ...snapshot, usageLimits })),
+              )
+            : Effect.succeed(snapshot),
+        ),
         Effect.map(stampIdentity),
+        Effect.provideService(HttpClient.HttpClient, httpClient),
+        Effect.provideService(FileSystem.FileSystem, fileSystem),
+        Effect.provideService(Path.Path, path),
         Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
       );
 

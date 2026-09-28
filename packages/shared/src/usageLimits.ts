@@ -66,6 +66,7 @@ function accountKey(driver: ServerProvider["driver"], email: string | undefined)
 export interface LimitAccount {
   readonly key: string;
   readonly driver: ServerProvider["driver"];
+  readonly harnesses?: ReadonlyArray<ServerProvider["driver"]>;
   /** The instance's configured name, which is not sensitive; null for hub accounts. */
   readonly displayName: string | null;
   readonly email: string | undefined;
@@ -137,6 +138,12 @@ export function collectLimitAccounts(presentations: LimitPresentations): readonl
     const creditSource = creditSources.get(key);
     accounts.set(key, {
       ...previous,
+      harnesses: [
+        ...new Set([
+          ...(previous.harnesses ?? [previous.driver]),
+          ...(next.harnesses ?? [next.driver]),
+        ]),
+      ],
       displayName: previous.displayName ?? next.displayName,
       plan: previous.plan ?? next.plan,
       accentColor: previous.accentColor ?? next.accentColor,
@@ -148,6 +155,9 @@ export function collectLimitAccounts(presentations: LimitPresentations): readonl
         (creditSource ? creditSource.redeem : (winner.redeem ?? previous.redeem ?? next.redeem)),
       limits: {
         ...winner.limits,
+        ...((previous.limits.quotaGroup ?? next.limits.quotaGroup)
+          ? { quotaGroup: previous.limits.quotaGroup ?? next.limits.quotaGroup }
+          : {}),
         ...(creditSource?.limits.resetCredits
           ? { resetCredits: creditSource.limits.resetCredits }
           : { resetCredits: undefined }),
@@ -158,15 +168,18 @@ export function collectLimitAccounts(presentations: LimitPresentations): readonl
     const label = presentation.entry.target.label;
     for (const provider of providersWithLimits(presentation.serverConfig?.providers ?? [])) {
       if (!provider.usageLimits || limitsNotice(provider.usageLimits) !== null) continue;
+      const group = provider.usageLimits.quotaGroup;
       merge(
-        accountKey(provider.driver, provider.auth.email) ??
+        group?.accountKey ??
+          accountKey(provider.driver, provider.auth.email) ??
           `${environmentId}:${provider.instanceId}`,
         {
           key: `${environmentId}:${provider.instanceId}`,
-          driver: provider.driver,
+          driver: group?.driver ?? provider.driver,
+          harnesses: [provider.driver],
           displayName: provider.displayName?.trim() || null,
           email: provider.auth.email,
-          plan: provider.auth.label,
+          plan: group?.label ?? provider.auth.label,
           accentColor: provider.accentColor,
           environments: [{ environmentId, label }],
           sourceLabel: null,
