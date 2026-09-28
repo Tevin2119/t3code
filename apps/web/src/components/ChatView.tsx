@@ -362,6 +362,7 @@ import {
 } from "../state/entities";
 import { environmentShell } from "../state/shell";
 import { ChatComposer, type ChatComposerHandle } from "./chat/ChatComposer";
+import { SessionStatusFooter } from "./chat/SessionStatusFooter";
 import { createPageScrollController, type PageScrollKey } from "./chat/pageScrollController";
 import { DraftHeroHeadline } from "./chat/DraftHeroHeadline";
 import { ExpandedImageDialog } from "./chat/ExpandedImageDialog";
@@ -10205,6 +10206,16 @@ export default function ChatView(props: ChatViewProps) {
                         </div>
                       </div>
                     </ComposerSurface.Shell>
+                    <SessionStatusFooter
+                      project={activeProject?.title ?? "No project"}
+                      cwd={gitCwd}
+                      branch={gitStatusQuery.data?.refName ?? null}
+                      dirty={gitStatusQuery.data?.hasWorkingTreeChanges ?? false}
+                      model={activeThread?.modelSelection.model ?? null}
+                      phase={phase}
+                      context={activeContextWindow}
+                      limits={conversationProviderStatus?.usageLimits}
+                    />
                     <div
                       aria-hidden
                       className="h-[calc(env(safe-area-inset-bottom)+1rem)] sm:h-[calc(env(safe-area-inset-bottom)+1.25rem)]"
