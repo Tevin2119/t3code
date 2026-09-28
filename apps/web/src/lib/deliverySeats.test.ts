@@ -74,8 +74,10 @@ describe("harnesses and the catalog", () => {
 
 describe("what a seat runs on", () => {
   it("lays a choice over the team default", () => {
-    expect(seatValues(lead.now, {})).toEqual(lead.now);
-    expect(seatValues(lead.now, { model: "gpt-6-sol" })).toEqual({
+    expect(seatValues(lead.now, {})).toEqual({ ...lead.now, active: "on" });
+    // A seat that is switched off keeps what is set for it.
+    expect(seatValues(lead.now, { active: "off", model: "gpt-6-sol" })).toEqual({
+      active: "off",
       harness: "codex",
       model: "gpt-6-sol",
       reasoning: "high",
@@ -85,6 +87,7 @@ describe("what a seat runs on", () => {
 
   it("drops what was set for the harness a seat left", () => {
     expect(seatValues(lead.now, { harness: "claude", model: "claude-opus-5-5" })).toEqual({
+      active: "on",
       harness: "claude",
       model: "claude-opus-5-5",
       reasoning: null,
@@ -96,7 +99,13 @@ describe("what a seat runs on", () => {
   it("says it in one line", () => {
     expect(describeSeatValues(lead.now)).toBe("Codex, gpt-6-astra, high reasoning");
     expect(
-      describeSeatValues({ harness: "dsh", model: null, reasoning: null, access: "read-only" }),
+      describeSeatValues({
+        active: "on",
+        harness: "dsh",
+        model: null,
+        reasoning: null,
+        access: "read-only",
+      }),
     ).toBe("DeepSeek, its own model, read-only access");
   });
 

@@ -3,7 +3,15 @@ import { useNavigate } from "@tanstack/react-router";
 import { PlayIcon, SaveIcon, SlidersHorizontalIcon, UsersIcon, WorkflowIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type PointerEventHandler } from "react";
 
-import { parseTask, parseTeams, seatSettingsToSend } from "../../lib/delivery";
+import {
+  flowFor,
+  flowStartLabel,
+  parseTask,
+  parseTeams,
+  seatIsOn,
+  seatSettingsToSend,
+  teamTaskBlock,
+} from "../../lib/delivery";
 import { cn } from "../../lib/utils";
 import {
   useDeliveryAct,
@@ -18,14 +26,15 @@ import { Popover, PopoverPopup, PopoverTitle, PopoverTrigger } from "../ui/popov
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Spinner } from "../ui/spinner";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { useFlowPreview } from "./OrchestratorPanel";
 import { SeatSettingsPanel } from "./SeatSettingsPanel";
+import { SetupPanel } from "./SetupPanel";
 import { TeamDefaultsDialog } from "./TeamDefaultsDialog";
-import { TeamProfilePanel } from "./TeamProfilePanel";
 
 /**
- * The composer's controls while it prepares a workflow for a team. They take
- * the place of the model, reasoning and access controls of a single harness:
- * a team has a harness and a model for each seat, set in the seats panel.
+ * The composer's controls while it prepares work for a team. They take the
+ * place of the model, reasoning and access controls of a single harness: a
+ * team has a flow, and a harness and a model for each seat that takes part.
  *
  * What is typed is a draft. Saving keeps it on the engine, where nothing
  * runs. Starting saves it and gives it to the team in one step; the buttons
@@ -61,40 +70,43 @@ export function OrchestratorComposerControls(props: {
   const [editingDefaults, setEditingDefaults] = useState(false);
 
   const team = teams.find((candidate) => candidate.team === draft?.team) ?? null;
-  const workflow =
-    team?.workflows.find((item) => item.id === draft?.workflow) ?? team?.workflows[0];
+  const flow = flowFor(team, draft?.workflow ?? null);
   const text = props.prompt.trim();
   const seatsToSend = useMemo(
     () => (team && draft ? seatSettingsToSend(team.settings, draft.seats) : {}),
     [draft, team],
   );
-  const changedSeats = Object.keys(seatsToSend).length;
+  const preview = useFlowPreview(props.environmentId, team?.team ?? null, flow, seatsToSend);
+  const flows = preview?.flows ?? team?.flows ?? [];
+  const chosen = flows.find((item) => item.id === flow) ?? null;
+  const seatsOn = team
+    ? team.settings.filter((item) => seatIsOn(item, draft?.seats[item.seat] ?? {})).length
+    : 0;
+  const seatsSet = Object.values(seatsToSend).filter((choice) =>
+    Object.keys(choice).some((key) => key !== "active"),
+  ).length;
   const saved =
     draft?.engineThread == null ? "new" : text !== (draft.savedText ?? "") ? "changed" : "saved";
   const blocked = !props.environmentId
     ? "No environment is connected."
     : teamsRead.error
       ? `Delivery engine not reachable. ${teamsRead.error}`
-      : team && !team.available
-        ? (team.why ?? "This team cannot work now.")
-        : text.length === 0
-          ? "Write what the team is asked to do."
-          : null;
+      : team && teamTaskBlock(team, flow)
+        ? teamTaskBlock(team, flow)
+        : chosen && chosen.problems.length > 0
+          ? chosen.problems.join(" ")
+          : text.length === 0
+            ? "Write what the team is asked to do."
+            : null;
 
   useEffect(() => {
-    setActivity(props.threadId, { busy, blocked, team: draft?.team ?? null, saved });
-  }, [blocked, busy, draft?.team, props.threadId, saved, setActivity]);
+    setActivity(props.threadId, { busy, blocked, team: draft?.team ?? null, saved, flow });
+  }, [blocked, busy, draft?.team, flow, props.threadId, saved, setActivity]);
 
   const save = useCallback(async (): Promise<string | null> => {
     if (!draft) return null;
     setProblems([]);
-    const body = {
-      team: draft.team,
-      workflow: draft.workflow,
-      text,
-      seats: seatsToSend,
-      by: person,
-    };
+    const body = { team: draft.team, workflow: flow, text, seats: seatsToSend, by: person };
     const result = draft.engineThread
       ? await act(`/api/tasks/${draft.engineThread}/edit`, body)
       : await act("/api/tasks", { ...body, draft: true });
@@ -109,7 +121,7 @@ export function OrchestratorComposerControls(props: {
     }
     update(props.threadId, { engineThread: task.id, savedText: text });
     return task.id;
-  }, [act, draft, person, props.threadId, seatsToSend, text, update]);
+  }, [act, draft, flow, person, props.threadId, seatsToSend, text, update]);
 
   const once = useCallback(async (kind: "save" | "start", work: () => Promise<void>) => {
     if (working.current) return;
@@ -130,6 +142,7 @@ export function OrchestratorComposerControls(props: {
     });
   }, [once, save, text.length]);
 
+  const { onPromptCleared, threadId } = props;
   const onStart = useCallback(() => {
     if (blocked) {
       setProblems([blocked]);
@@ -143,12 +156,12 @@ export function OrchestratorComposerControls(props: {
         setProblems(result.problems.length > 0 ? result.problems : [result.why]);
         return;
       }
-      props.onPromptCleared();
-      leave(props.threadId);
+      onPromptCleared();
+      leave(threadId);
       // What is written next is written on the task, in its own composer.
       void navigate({ to: "/orchestrator", search: { thread: id } });
     });
-  }, [act, blocked, leave, navigate, once, person, props, save]);
+  }, [act, blocked, leave, navigate, once, onPromptCleared, person, save, threadId]);
 
   // The buttons stand in the composer's own place for Send, and ask from there.
   const handledSave = useRef(saveRequest);
@@ -181,11 +194,14 @@ export function OrchestratorComposerControls(props: {
         </SelectTrigger>
         <SelectPopup alignItemWithTrigger={false}>
           {teams.map((item) => (
-            <SelectItem key={item.team} value={item.team} disabled={!item.available}>
-              <span className="flex flex-col">
-                <span>{item.team}</span>
+            <SelectItem key={item.team} value={item.team} disabled={teamTaskBlock(item) !== null}>
+              <span className="flex max-w-96 flex-col">
+                <span>
+                  {item.team}
+                  {item.source === "custom" ? " (your profile)" : ""}
+                </span>
                 <span className="text-xs text-muted-foreground">
-                  {item.available ? item.purpose : (item.why ?? "Not available")}
+                  {teamTaskBlock(item) ?? item.purpose}
                 </span>
               </span>
             </SelectItem>
@@ -194,25 +210,25 @@ export function OrchestratorComposerControls(props: {
       </Select>
 
       <Select
-        value={workflow?.id ?? "standard"}
+        value={flow}
         onValueChange={(value) => update(props.threadId, { workflow: String(value) })}
       >
         <SelectTrigger
-          aria-label="Workflow"
+          aria-label="Flow"
           size="compact"
           variant="ghost"
-          className="w-auto min-w-0"
+          className={cn("w-auto min-w-0", chosen && !chosen.ready && "text-warning")}
         >
           <WorkflowIcon className="size-3.5" />
-          <SelectValue>{workflow?.title ?? "Standard flow"}</SelectValue>
+          <SelectValue>{chosen?.title ?? flow}</SelectValue>
         </SelectTrigger>
         <SelectPopup alignItemWithTrigger={false}>
-          {(team?.workflows ?? []).map((item) => (
-            <SelectItem key={item.id} value={item.id}>
-              <span className="flex max-w-80 flex-col">
+          {flows.map((item) => (
+            <SelectItem key={item.id} value={item.id} disabled={!item.offered}>
+              <span className="flex max-w-96 flex-col">
                 <span>{item.title}</span>
                 <span className="text-xs text-muted-foreground">
-                  {item.stages.join(", ")}, then {item.stop}
+                  {item.offered ? item.summary : `${item.why}.`}
                 </span>
               </span>
             </SelectItem>
@@ -227,7 +243,8 @@ export function OrchestratorComposerControls(props: {
           }
         >
           <SlidersHorizontalIcon />
-          Seats{changedSeats > 0 ? ` (${changedSeats} set)` : ""}
+          Seats ({seatsOn} of {team?.settings.length ?? 0} on
+          {seatsSet > 0 ? `, ${seatsSet} set` : ""})
         </PopoverTrigger>
         <PopoverPopup side="top" align="start" className="w-[34rem] max-w-[calc(100vw-2rem)]">
           <div className="flex items-center justify-between gap-2 pb-1">
@@ -237,15 +254,24 @@ export function OrchestratorComposerControls(props: {
             </Button>
           </div>
           <p className="pb-2 text-xs text-muted-foreground">
-            Each seat keeps its role. Choose the harness and the model it runs on for this workflow,
-            or leave it on the team default. What you set is recorded with the run.
+            Switch a seat off to leave it out. Each seat keeps its role. Choose the harness and the
+            model it runs on for this work, or leave it on the team default. What you set is
+            recorded with the run.
           </p>
+          {chosen && chosen.problems.length > 0 ? (
+            <ul className="list-disc pb-2 pl-5 text-[11px] text-warning" data-flow-problems>
+              {chosen.problems.map((item) => (
+                <li key={item}>{item}</li>
+              ))}
+            </ul>
+          ) : null}
           {team ? (
             <div className="max-h-[50vh] overflow-y-auto">
               <SeatSettingsPanel
                 environmentId={props.environmentId}
                 settings={team.settings}
                 chosen={draft.seats}
+                taking={chosen?.seats}
                 onChange={(seat, choice) => setSeat(props.threadId, seat, choice)}
               />
             </div>
@@ -262,17 +288,24 @@ export function OrchestratorComposerControls(props: {
       {team ? (
         <Popover>
           <PopoverTrigger
-            render={<Button size="xs" variant="ghost" aria-label="Inspect team setup" />}
+            render={
+              <Button
+                size="xs"
+                variant="ghost"
+                aria-label="Inspect team setup"
+                data-delivery-setup-button
+              />
+            }
           >
             Setup
           </PopoverTrigger>
-          <PopoverPopup side="top" align="start" className="w-[34rem] max-w-[calc(100vw-2rem)]">
-            <PopoverTitle className="pb-2 text-sm">Team setup</PopoverTitle>
-            <TeamProfilePanel
+          <PopoverPopup side="top" align="start" className="w-[38rem] max-w-[calc(100vw-2rem)]">
+            <PopoverTitle className="pb-2 text-sm">What each seat is given</PopoverTitle>
+            <SetupPanel
               environmentId={props.environmentId}
               team={team.team}
-              harness={null}
-              role={null}
+              flow={flow}
+              seats={seatsToSend}
             />
           </PopoverPopup>
         </Popover>
@@ -306,13 +339,21 @@ const SAVED_LABEL = {
   changed: "Changed since it was saved",
 } as const;
 
+const START_HELP: Readonly<Record<string, string>> = {
+  chat: "which talks it over with you. The lead brings in the seats a message concerns. Nothing is built.",
+  plan: "which triages it and plans it. It stops at the plan, and nothing is built until you start the delivery.",
+  review: "which examines what is there and writes down what it finds. Nothing is changed.",
+  standard:
+    "which triages, plans, builds, reviews and tests it without being asked again. It stops for your decision before anything is merged.",
+};
+
 const preventPointerFocus: PointerEventHandler<HTMLElement> = (event) => {
   event.preventDefault();
 };
 
 /**
- * What stands in the place of Send while the composer prepares a workflow:
- * Start workflow where Send is, and Save draft beside it. The start button
+ * What stands in the place of Send while the composer prepares work for a
+ * team: the start where Send is, and Save draft beside it. The start button
  * submits the composer's form, so the send key does what the button does.
  */
 export function OrchestratorPrimaryActions(props: {
@@ -326,10 +367,11 @@ export function OrchestratorPrimaryActions(props: {
     ? { onPointerDown: preventPointerFocus }
     : undefined;
   const busy = activity.busy !== null;
+  const start = flowStartLabel(activity.flow);
   const startLabel =
     activity.busy === "start"
-      ? "Starting the workflow"
-      : (activity.blocked ?? `Start workflow for team ${activity.team ?? ""}`.trim());
+      ? "Starting"
+      : (activity.blocked ?? `${start} for team ${activity.team ?? ""}`.trim());
 
   return (
     <div className="flex items-center gap-1.5" data-delivery-primary-actions>
@@ -392,6 +434,7 @@ export function OrchestratorPrimaryActions(props: {
               disabled={busy || activity.blocked !== null || !props.promptHasText}
               {...pointerFocusProps}
               data-delivery-start-workflow
+              data-delivery-start-flow={activity.flow ?? ""}
             />
           }
         >
@@ -401,9 +444,9 @@ export function OrchestratorPrimaryActions(props: {
             <PlayIcon className="size-3.5 fill-current" aria-hidden="true" />
           )}
         </TooltipTrigger>
-        <TooltipPopup side="top">
+        <TooltipPopup side="top" className="max-w-96">
           {activity.blocked ??
-            `Start workflow. Saves this and gives it to team ${activity.team ?? ""}, which triages, plans, builds, reviews and tests it without being asked again. It stops for your decision before anything is merged.`}
+            `${start}. Saves this and gives it to team ${activity.team ?? ""}, ${START_HELP[activity.flow ?? "standard"] ?? START_HELP.standard}`}
         </TooltipPopup>
       </Tooltip>
     </div>

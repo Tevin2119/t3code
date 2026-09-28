@@ -52,6 +52,7 @@ export function PriorityPill(props: { readonly priority: TaskPriority; readonly 
 /** Lanes are told apart by colour, as the columns of a board are. */
 export const LANE_TONE: Record<string, { readonly bar: string; readonly tint: string }> = {
   draft: { bar: "bg-zinc-400", tint: "bg-zinc-500/5" },
+  chat: { bar: "bg-lime-500", tint: "bg-lime-500/5" },
   intake: { bar: "bg-sky-500", tint: "bg-sky-500/5" },
   triage: { bar: "bg-violet-500", tint: "bg-violet-500/5" },
   "needs-decision": { bar: "bg-amber-500", tint: "bg-amber-500/8" },

@@ -1,7 +1,7 @@
 import { Toolbar } from "@base-ui/react/toolbar";
 import { type ProviderInstanceId } from "@t3tools/contracts";
 import { memo, useLayoutEffect, useRef, useState } from "react";
-import { SparklesIcon, StarIcon } from "lucide-react";
+import { SparklesIcon, StarIcon, UsersIcon } from "lucide-react";
 import { ProviderInstanceIcon } from "./ProviderInstanceIcon";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { cn } from "~/lib/utils";
@@ -42,7 +42,12 @@ const PICKER_TOOLTIP_SIDE_OFFSET = 8;
 const PICKER_TOOLTIP_CLASS = "max-w-64 text-balance font-normal leading-snug";
 
 export const ModelPickerSidebar = memo(function ModelPickerSidebar(props: {
-  selectedInstanceId: ProviderInstanceId | "favorites";
+  selectedInstanceId: ProviderInstanceId | "favorites" | "orchestrator";
+  /**
+   * Offers a whole team as the first entry of the rail, before any single
+   * harness. Chosen, the area beside the rail shows the team's setup.
+   */
+  orchestrator?: { readonly onSelect: () => void } | undefined;
   onSelectInstance: (instanceId: ProviderInstanceId | "favorites") => void;
   onFocusSearch: () => void;
   /**
@@ -114,6 +119,37 @@ export const ModelPickerSidebar = memo(function ModelPickerSidebar(props: {
               )}
               style={{ top: selectedIndicatorTop }}
             />
+          ) : null}
+          {props.orchestrator ? (
+            <>
+              <div className="relative w-full" data-model-picker-provider="orchestrator">
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <Toolbar.Button
+                        className="relative isolate flex aspect-square w-full cursor-pointer items-center justify-center rounded-md transition-colors hover:bg-[color-mix(in_srgb,var(--popover)_90%,var(--contrast-foreground))] focus-visible:bg-[color-mix(in_srgb,var(--popover)_90%,var(--contrast-foreground))] focus-visible:outline-none"
+                        onClick={() => props.orchestrator?.onSelect()}
+                        type="button"
+                        aria-label="Orchestrator"
+                        aria-pressed={props.selectedInstanceId === "orchestrator"}
+                        data-model-picker-orchestrator
+                      >
+                        <UsersIcon className="size-5 shrink-0" aria-hidden />
+                      </Toolbar.Button>
+                    }
+                  />
+                  <TooltipPopup
+                    side={PICKER_TOOLTIP_SIDE}
+                    sideOffset={PICKER_TOOLTIP_SIDE_OFFSET}
+                    align="center"
+                    className={PICKER_TOOLTIP_CLASS}
+                  >
+                    Orchestrator: a team, with a harness and a model for each seat
+                  </TooltipPopup>
+                </Tooltip>
+              </div>
+              <div className="border-b border-border/70" aria-hidden="true" />
+            </>
           ) : null}
           {/* Favorites section */}
           {showFavorites ? (

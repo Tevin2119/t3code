@@ -228,6 +228,8 @@ export interface OrchestratorActivity {
   readonly team: string | null;
   /** `new` before the first save, then `saved` or `changed`. */
   readonly saved: "new" | "saved" | "changed";
+  /** The flow that would be started: a chat, a plan, a review or a delivery. */
+  readonly flow: string | null;
 }
 
 export const IDLE_ORCHESTRATOR_ACTIVITY: OrchestratorActivity = {
@@ -235,6 +237,7 @@ export const IDLE_ORCHESTRATOR_ACTIVITY: OrchestratorActivity = {
   blocked: null,
   team: null,
   saved: "new",
+  flow: null,
 };
 
 interface OrchestratorDraftState {
@@ -256,7 +259,8 @@ interface OrchestratorDraftState {
 
 const NEW_ORCHESTRATOR_DRAFT: OrchestratorDraft = {
   team: DELIVERY_DEFAULT_TEAM,
-  workflow: "standard",
+  // Empty until the team is read: the flow is then the one the team runs by default.
+  workflow: "",
   seats: {},
   engineThread: null,
   savedText: null,
@@ -322,6 +326,7 @@ export const useOrchestratorDraftStore = create<OrchestratorDraftState>()(
             current.busy === activity.busy &&
             current.blocked === activity.blocked &&
             current.team === activity.team &&
+            current.flow === activity.flow &&
             current.saved === activity.saved
           ) {
             return state;
@@ -360,14 +365,15 @@ interface BoardState {
   readonly grouping: BoardGrouping;
   /** Whether the history shows how the engine got somewhere, beside where it got. */
   readonly showDetail: boolean;
-  readonly collapsedLanes: ReadonlyArray<string>;
+  /** Lanes a person folded or opened by hand. A lane not named here is folded while it is empty. */
+  readonly laneFolds: Readonly<Record<string, boolean>>;
   readonly setPerson: (person: string) => void;
   readonly setView: (view: string) => void;
   readonly setFilters: (patch: Partial<BoardFilters>) => void;
   readonly clearFilters: () => void;
   readonly setGrouping: (grouping: BoardGrouping) => void;
   readonly setShowDetail: (showDetail: boolean) => void;
-  readonly toggleLane: (lane: string) => void;
+  readonly foldLane: (lane: string, folded: boolean) => void;
 }
 
 /** How this person looks at the board. Kept across reloads, on this device. */
@@ -379,29 +385,31 @@ export const useBoardStore = create<BoardState>()(
       filters: NO_FILTERS,
       grouping: "none",
       showDetail: false,
-      collapsedLanes: [],
+      laneFolds: {},
       setPerson: (person) => set({ person: person.slice(0, 60) }),
       setView: (view) => set({ view }),
       setFilters: (patch) => set((state) => ({ filters: { ...state.filters, ...patch } })),
       clearFilters: () => set({ filters: NO_FILTERS }),
       setGrouping: (grouping) => set({ grouping }),
       setShowDetail: (showDetail) => set({ showDetail }),
-      toggleLane: (lane) =>
-        set((state) => ({
-          collapsedLanes: state.collapsedLanes.includes(lane)
-            ? state.collapsedLanes.filter((item) => item !== lane)
-            : [...state.collapsedLanes, lane],
-        })),
+      foldLane: (lane, folded) =>
+        set((state) => ({ laneFolds: { ...state.laneFolds, [lane]: folded } })),
     }),
     {
       name: "t3code:delivery-board:v1",
+      version: 1,
+      // Before lanes folded by themselves, the folded ones were kept as a list.
+      migrate: (kept) => {
+        const { collapsedLanes: _collapsed, ...rest } = (kept ?? {}) as Record<string, unknown>;
+        return { ...rest, laneFolds: {} };
+      },
       // A search is for now. How the board is laid out is kept.
       partialize: (state) => ({
         person: state.person,
         view: state.view,
         grouping: state.grouping,
         showDetail: state.showDetail,
-        collapsedLanes: state.collapsedLanes,
+        laneFolds: state.laneFolds,
       }),
     },
   ),

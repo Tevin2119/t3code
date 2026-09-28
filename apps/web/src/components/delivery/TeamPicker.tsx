@@ -13,6 +13,7 @@ import { Button } from "../ui/button";
 import { Popover, PopoverPopup, PopoverTitle, PopoverTrigger } from "../ui/popover";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { SetupPanel } from "./SetupPanel";
 import { TeamProfilePanel } from "./TeamProfilePanel";
 
 const NO_TEAM = "__none__";
@@ -49,6 +50,10 @@ export function TeamPicker(props: {
   if (!enabled) return null;
 
   const role = resolved.state === "ready" ? resolved.role : null;
+  const seat =
+    team && harness && role
+      ? (team.seats.find((item) => item.harness === harness && item.role === role) ?? null)
+      : null;
   const detail = teamsRead.error
     ? `Delivery engine not reachable. ${teamsRead.error}`
     : resolved.state === "blocked"
@@ -152,14 +157,19 @@ export function TeamPicker(props: {
           >
             <InfoIcon />
           </PopoverTrigger>
-          <PopoverPopup side="top" align="start" className="w-[34rem] max-w-[calc(100vw-2rem)]">
+          <PopoverPopup side="top" align="start" className="w-[38rem] max-w-[calc(100vw-2rem)]">
             <PopoverTitle className="pb-2 text-sm">What this session is given</PopoverTitle>
-            <TeamProfilePanel
-              environmentId={props.environmentId}
-              team={team.team}
-              harness={harness}
-              role={role}
-            />
+            {seat ? (
+              <SetupPanel environmentId={props.environmentId} team={team.team} seat={seat.seat} />
+            ) : (
+              // A role no seat holds on this harness: the session is a seat of its own.
+              <TeamProfilePanel
+                environmentId={props.environmentId}
+                team={team.team}
+                harness={harness}
+                role={role}
+              />
+            )}
           </PopoverPopup>
         </Popover>
       ) : null}

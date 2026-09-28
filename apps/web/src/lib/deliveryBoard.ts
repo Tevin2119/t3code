@@ -179,6 +179,9 @@ export function laneAccepts(
   if (card.lane === "draft") return lane === "intake" || lane === "triage" ? "Submit" : null;
   if (lane === "draft") return null;
   if (card.lane === "completed") return null;
+  // A chat, a plan that is ready and a review that is ready are not moved by hand.
+  if (card.lane === "chat" || lane === "chat") return null;
+  if (["planned", "reviewed"].includes(card.state)) return null;
   if (lane === "paused") return "Pause";
   if (card.lane === "paused" && card.held) return "Resume";
   if (lane === "intake" || lane === "triage") {
@@ -294,6 +297,13 @@ export function linesFromText(value: string): ReadonlyArray<string> {
     .filter(Boolean);
 }
 
+export const FLOW_LABEL: Readonly<Record<string, string>> = {
+  chat: "Chat",
+  plan: "Plan",
+  review: "Review",
+  standard: "Delivery",
+};
+
 export type ComposerKind = "message" | "status" | "change" | "note" | "answer";
 
 export const COMPOSER_KIND_LABEL: Record<ComposerKind, string> = {
@@ -344,6 +354,7 @@ export function queryValue(value: string): string {
 
 export const LANE_TITLE: Readonly<Record<string, string>> = {
   draft: "Draft",
+  chat: "Team chat",
   intake: "Intake",
   triage: "Triage",
   "needs-decision": "Waiting on you",

@@ -13,9 +13,13 @@ import { isElectron } from "../../env";
 import {
   parseCards,
   parseTask,
+  flowFor,
+  flowStartLabel,
   parseTeams,
+  seatIsOn,
   seatSettingsToSend,
   TASK_PRIORITIES,
+  teamTaskBlock,
   type SeatChoice,
   type TaskFile,
   type TaskPriority,
@@ -37,6 +41,7 @@ import { SidebarInset } from "../ui/sidebar";
 import { Textarea } from "../ui/textarea";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { WorkspacePageHeader } from "../WorkspacePageHeader";
+import { FlowChoice, useFlowPreview } from "./OrchestratorPanel";
 import { SeatSettingsPanel } from "./SeatSettingsPanel";
 import {
   AttachButton,
@@ -55,6 +60,8 @@ interface Form {
   readonly acceptance: string;
   readonly tags: string;
   readonly team: string;
+  /** Empty until the team is read: the flow is then the one the team runs by default. */
+  readonly flow: string;
   /** Null until a person chooses: triage sets it then. */
   readonly priority: TaskPriority | null;
   readonly deadline: string;
@@ -68,6 +75,7 @@ const EMPTY: Form = {
   acceptance: "",
   tags: "",
   team: "development",
+  flow: "",
   priority: null,
   deadline: "",
   seats: {},
@@ -80,6 +88,7 @@ const formOf = (task: TaskView): Form => ({
   acceptance: task.acceptance.join("\n"),
   tags: task.tags.join(", "),
   team: task.team,
+  flow: task.workflow,
   priority: task.priorityBy === "person" ? task.priority : null,
   deadline: task.deadline ? task.deadline.slice(0, 10) : "",
   seats: Object.fromEntries(task.settings.map((item) => [item.seat, item.set])),
@@ -147,8 +156,13 @@ export function TaskEditor(props: {
   const uploads = useTaskUploads(props.environmentId, person);
 
   const team = teams.find((candidate) => candidate.team === form.team) ?? null;
+  const flow = flowFor(team, form.flow || null);
   const settings = saved?.team === form.team ? saved.settings : (team?.settings ?? []);
   const seatsToSend = seatSettingsToSend(settings, form.seats);
+  const preview = useFlowPreview(props.environmentId, team?.team ?? null, flow, seatsToSend);
+  const flows = preview?.flows ?? team?.flows ?? [];
+  const chosenFlow = flows.find((item) => item.id === flow) ?? null;
+  const seatsOn = settings.filter((item) => seatIsOn(item, form.seats[item.seat] ?? {})).length;
   const changed = JSON.stringify(form) !== JSON.stringify(clean);
   const set = (patch: Partial<Form>) => setForm((current) => ({ ...current, ...patch }));
 
@@ -171,7 +185,7 @@ export function TaskEditor(props: {
     ...(form.priority ? { priority: form.priority } : {}),
     deadline: form.deadline ? new Date(`${form.deadline}T12:00:00`).toISOString() : null,
     seats: seatsToSend,
-    workflow: "standard",
+    workflow: flow,
     by: person,
   });
 
@@ -278,7 +292,11 @@ export function TaskEditor(props: {
     ? (saved?.links ?? []).filter((item) => item.direction === "out")
     : pendingLinks;
 
-  const canSubmit = form.text.trim().length > 0 && team?.available !== false && busy === null;
+  const teamBlock = team
+    ? (teamTaskBlock(team, flow) ??
+      (chosenFlow && chosenFlow.problems.length > 0 ? chosenFlow.problems.join(" ") : null))
+    : null;
+  const canSubmit = form.text.trim().length > 0 && teamBlock === null && busy === null;
   const engineDown = teamsRead.error ?? taskRead.error;
   const state = !props.taskId ? "Not saved yet" : changed ? "Changed since it was saved" : "Saved";
 
@@ -341,14 +359,18 @@ export function TaskEditor(props: {
                   }
                 >
                   <PlayIcon />
-                  {busy === "submit" ? "Submitting" : "Submit"}
+                  {busy === "submit"
+                    ? "Starting"
+                    : flow === "standard"
+                      ? "Submit"
+                      : flowStartLabel(flow)}
                 </TooltipTrigger>
                 <TooltipPopup side="bottom">
-                  {team && !team.available
-                    ? (team.why ?? "This team cannot work now.")
+                  {teamBlock
+                    ? teamBlock
                     : form.text.trim().length === 0
                       ? "Write what is asked first."
-                      : `Saves it and gives it to team ${form.team}. It is triaged, planned, built, reviewed and tested without being asked again, and then waits for your decision. Nothing is merged.`}
+                      : `Saves it and gives it to team ${form.team}. ${chosenFlow?.summary ?? ""}`}
                 </TooltipPopup>
               </Tooltip>
             </div>
@@ -446,18 +468,25 @@ export function TaskEditor(props: {
               <Field label="Team">
                 <Select
                   value={form.team}
-                  onValueChange={(value) => set({ team: String(value), seats: {} })}
+                  onValueChange={(value) => set({ team: String(value), seats: {}, flow: "" })}
                 >
                   <SelectTrigger aria-label="Team" size="compact">
                     <SelectValue>{form.team}</SelectValue>
                   </SelectTrigger>
                   <SelectPopup alignItemWithTrigger={false}>
                     {teams.map((item) => (
-                      <SelectItem key={item.team} value={item.team} disabled={!item.available}>
+                      <SelectItem
+                        key={item.team}
+                        value={item.team}
+                        disabled={teamTaskBlock(item) !== null}
+                      >
                         <span className="flex max-w-80 flex-col">
-                          <span>{item.team}</span>
+                          <span>
+                            {item.team}
+                            {item.source === "custom" ? " (your profile)" : ""}
+                          </span>
                           <span className="text-xs text-muted-foreground">
-                            {item.available ? item.purpose : (item.why ?? "Not available")}
+                            {teamTaskBlock(item) ?? item.purpose}
                           </span>
                         </span>
                       </SelectItem>
@@ -465,6 +494,17 @@ export function TaskEditor(props: {
                   </SelectPopup>
                 </Select>
               </Field>
+              <section className="flex flex-col gap-1">
+                <h2 className="text-xs font-medium">Flow</h2>
+                <FlowChoice flows={flows} value={flow} onChange={(next) => set({ flow: next })} />
+                {chosenFlow && chosenFlow.problems.length > 0 ? (
+                  <ul className="list-disc pl-5 text-[11px] text-warning" data-flow-problems>
+                    {chosenFlow.problems.map((item) => (
+                      <li key={item}>{item}</li>
+                    ))}
+                  </ul>
+                ) : null}
+              </section>
               <Field
                 label="Priority"
                 hint={
@@ -571,9 +611,10 @@ export function TaskEditor(props: {
                     <Settings2Icon className="size-3.5" />
                     Seats
                     <span className="font-normal text-muted-foreground">
+                      {seatsOn} of {settings.length} on
                       {Object.keys(seatsToSend).length > 0
-                        ? `${Object.keys(seatsToSend).length} set for this task`
-                        : "all on the team default"}
+                        ? `, ${Object.keys(seatsToSend).length} set for this task`
+                        : ", all on the team default"}
                     </span>
                   </button>
                   <Button size="xs" variant="ghost" onClick={() => setEditingDefaults(true)}>
@@ -585,6 +626,7 @@ export function TaskEditor(props: {
                     environmentId={props.environmentId}
                     settings={settings}
                     chosen={form.seats}
+                    taking={chosenFlow?.seats}
                     onChange={(seat, choice) =>
                       set({ seats: withSeatChoice(form.seats, seat, choice) })
                     }

@@ -3,7 +3,13 @@ import { RotateCcwIcon } from "lucide-react";
 import { useMemo } from "react";
 
 import { useEnvironmentSettings } from "../../hooks/useSettings";
-import { moveSeat, seatOfferFor, type SeatChoice, type SeatSettings } from "../../lib/delivery";
+import {
+  moveSeat,
+  seatIsOn,
+  seatOfferFor,
+  type SeatChoice,
+  type SeatSettings,
+} from "../../lib/delivery";
 import {
   entriesForSeat,
   entryForHarness,
@@ -12,6 +18,7 @@ import {
   seatValues,
   withTeamModels,
 } from "../../lib/deliverySeats";
+import { cn } from "../../lib/utils";
 import { getCustomModelOptionsByInstance } from "../../modelSelection";
 import {
   applyProviderInstanceSettings,
@@ -25,6 +32,7 @@ import type { ModelEsque } from "../chat/providerIconUtils";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
+import { Switch } from "../ui/switch";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 
 const TEAM_DEFAULT = "__team__";
@@ -89,7 +97,7 @@ function Choice(props: {
 }
 
 /** The harnesses and models of this environment, as the composer's own picker has them. */
-function useSeatCatalog(environmentId: EnvironmentId | null) {
+export function useSeatCatalog(environmentId: EnvironmentId | null) {
   const environment = useEnvironment(environmentId);
   const settings = useEnvironmentSettings((environmentId ?? "") as EnvironmentId);
   const providers = environment?.serverConfig?.providers ?? EMPTY_SERVER_PROVIDERS;
@@ -102,10 +110,10 @@ function useSeatCatalog(environmentId: EnvironmentId | null) {
 }
 
 /**
- * What each seat of a team runs on. A seat keeps its role; the harness, the
- * model, the reasoning and the access are chosen. What is left alone runs as
- * the team default, and what a harness cannot be told is shown with the
- * reason and cannot be set.
+ * The seats of a team: which take part, and what each runs on. A seat keeps
+ * its role. It is switched on or off, and the harness, the model, the
+ * reasoning and the access it runs with are chosen. What is left alone runs
+ * as the team default. A seat that is off keeps what is set for it.
  */
 export function SeatSettingsPanel(props: {
   readonly environmentId: EnvironmentId | null;
@@ -120,147 +128,219 @@ export function SeatSettingsPanel(props: {
   readonly onChange?: ((seat: string, choice: SeatChoice) => void) | undefined;
   /** Shares of the builds, shown beside the seats that build. */
   readonly shares?: Readonly<Record<string, number>> | undefined;
+  /** Seats the chosen flow would use. The others are on, and the flow has no part for them. */
+  readonly taking?: ReadonlyArray<string> | undefined;
+  /** Only the switches: what each seat runs on is set somewhere else. */
+  readonly switchesOnly?: boolean;
 }) {
   const catalog = useSeatCatalog(props.environmentId);
   const locked = props.onChange === undefined;
   const over = props.over ?? "task";
+  const base = over === "task" ? "now" : "defined";
   const baseLabel = over === "task" ? "Team default" : "As defined";
+  const on = props.settings.filter((item) =>
+    locked ? item.effective.active !== "off" : seatIsOn(item, props.chosen[item.seat] ?? {}, base),
+  ).length;
 
   return (
-    <div className="flex flex-col divide-y divide-border" data-delivery-seat-settings>
-      {props.settings.map((item) => {
-        const base = over === "task" ? item.now : item.defined;
-        const chosen = locked ? {} : (props.chosen[item.seat] ?? {});
-        const values = locked ? item.effective : seatValues(base, chosen);
-        const offer = locked ? item.may : seatOfferFor({ ...item, now: base }, chosen);
-        const entries = entriesForSeat(catalog.entries, item);
-        const entry = entryForHarness(catalog.entries, values.harness);
-        const changed = Object.keys(chosen).length > 0;
-        const share = props.shares?.[item.seat];
-        const options = new Map<ProviderInstanceId, ReadonlyArray<ModelEsque>>(
-          entries.map((candidate) => {
-            const listed = catalog.options.get(candidate.instanceId) ?? [];
-            // The models the team names for the seat belong to the harness it is defined on.
-            return [
-              candidate.instanceId,
-              harnessOfDriver(candidate.driverKind) === item.defined.harness
-                ? withTeamModels(listed, item.models, (slug) => ({ slug, name: slug }))
-                : listed,
-            ];
-          }),
-        );
-        const set = (choice: SeatChoice) => props.onChange?.(item.seat, choice);
+    <div className="flex flex-col gap-1" data-delivery-seat-settings>
+      <p className="text-[11px] text-muted-foreground" data-delivery-seats-on>
+        {on} of {props.settings.length} seats switched on
+      </p>
+      <div className="flex flex-col divide-y divide-border">
+        {props.settings.map((item) => {
+          const from = item[base];
+          const chosen = locked ? {} : (props.chosen[item.seat] ?? {});
+          const values = locked ? item.effective : seatValues(from, chosen);
+          const isOn = values.active !== "off";
+          const offer = locked ? item.may : seatOfferFor({ ...item, now: from }, chosen);
+          const entries = entriesForSeat(catalog.entries, item);
+          const entry = entryForHarness(catalog.entries, values.harness);
+          // Whether the seat is on is not a setting of what it runs on.
+          const { active: _active, ...runsOn } = chosen;
+          const changed = Object.keys(runsOn).length > 0;
+          const share = props.shares?.[item.seat];
+          const idle = isOn && props.taking !== undefined && !props.taking.includes(item.seat);
+          const options = new Map<ProviderInstanceId, ReadonlyArray<ModelEsque>>(
+            entries.map((candidate) => {
+              const listed = catalog.options.get(candidate.instanceId) ?? [];
+              // The models the team names for the seat belong to the harness it is defined on.
+              return [
+                candidate.instanceId,
+                harnessOfDriver(candidate.driverKind) === item.defined.harness
+                  ? withTeamModels(listed, item.models, (slug) => ({ slug, name: slug }))
+                  : listed,
+              ];
+            }),
+          );
+          const set = (choice: SeatChoice) => props.onChange?.(item.seat, choice);
 
-        return (
-          <div
-            key={item.seat}
-            className="flex flex-col gap-1 py-2 first:pt-0 last:pb-0"
-            data-seat={item.seat}
-          >
-            <div className="flex items-center justify-between gap-2">
-              <span className="min-w-0 text-xs">
-                <span className="font-medium">{item.title}</span>
-                <span className="text-muted-foreground">
-                  {" "}
-                  · {item.role}
-                  {share !== undefined ? ` · ${share}% of the builds` : ""}
-                </span>
-              </span>
-              {locked ? null : changed ? (
+          return (
+            <div
+              key={item.seat}
+              className={cn("flex flex-col gap-1 py-2 first:pt-0 last:pb-0", !isOn && "opacity-60")}
+              data-seat={item.seat}
+              data-seat-on={isOn ? "true" : "false"}
+            >
+              <div className="flex items-center gap-2">
                 <Tooltip>
                   <TooltipTrigger
                     render={
-                      <Button
-                        size="icon-xs"
-                        variant="ghost"
-                        aria-label={`Put ${item.title} back to ${baseLabel.toLowerCase()}`}
-                        onClick={() => set({})}
+                      <Switch
+                        aria-label={`${item.title} takes part`}
+                        checked={isOn}
+                        disabled={locked}
+                        onCheckedChange={(next) => {
+                          const wanted = next ? "on" : "off";
+                          // Back to what it is set to is no choice at all.
+                          set({
+                            ...chosen,
+                            active: wanted === (from.active ?? "on") ? "" : wanted,
+                          });
+                        }}
+                        data-seat-switch
                       />
                     }
-                  >
-                    <RotateCcwIcon />
-                  </TooltipTrigger>
-                  <TooltipPopup side="top">Back to {baseLabel.toLowerCase()}</TooltipPopup>
+                  />
+                  <TooltipPopup side="top">
+                    {isOn
+                      ? `${item.title} takes part. Switched off, it keeps what is set for it and is asked nothing.`
+                      : `${item.title} is switched off. It keeps what is set for it and is asked nothing.`}
+                  </TooltipPopup>
                 </Tooltip>
-              ) : (
-                <Badge size="sm" variant="outline" className="shrink-0 text-muted-foreground">
-                  {baseLabel}
-                </Badge>
-              )}
-            </div>
-
-            <div className="flex flex-wrap items-center gap-x-1 gap-y-0.5">
-              {locked ? (
-                <span className="text-xs" data-seat-runs-on>
-                  {harnessLabel(values.harness)}, {values.model ?? "its own model"}
+                <span className="min-w-0 flex-1 text-xs">
+                  <span className="font-medium">{item.title}</span>
+                  <span className="text-muted-foreground">
+                    {" "}
+                    · {item.duties.length > 0 ? item.duties.join(", ") : item.role}
+                    {share !== undefined ? ` · ${share}% of the builds` : ""}
+                  </span>
                 </span>
-              ) : entry ? (
-                <ProviderModelPicker
-                  activeInstanceId={entry.instanceId}
-                  model={values.model ?? ""}
-                  lockedProvider={null}
-                  instanceEntries={entries}
-                  modelOptionsByInstance={options}
-                  size="xs"
-                  triggerVariant="outline"
-                  triggerAriaLabel={`Harness and model for ${item.title}`}
-                  {...(offer.model
-                    ? {}
-                    : { triggerLabel: `${harnessLabel(values.harness)}, its own model` })}
-                  onInstanceModelChange={(instanceId, model) => {
-                    const picked = entries.find((candidate) => candidate.instanceId === instanceId);
-                    const harness = picked ? harnessOfDriver(picked.driverKind) : null;
-                    if (!harness) return;
-                    // Picking what the seat already runs on by default is no choice at all.
-                    if (harness === base.harness && model === base.model) {
-                      const { harness: _harness, model: _model, ...rest } = chosen;
-                      set(rest);
-                      return;
-                    }
-                    set(moveSeat({ ...item, now: base }, chosen, { harness, model }));
-                  }}
-                />
-              ) : (
-                <Fixed
-                  value={`${harnessLabel(values.harness)}, ${values.model ?? "its own model"}`}
-                  why="This harness is not set up in T3 Code on this environment, so it cannot be chosen from here. The engine still runs the seat on it."
-                />
-              )}
+                {idle ? (
+                  <Tooltip>
+                    <TooltipTrigger
+                      render={
+                        <Badge size="sm" variant="outline" className="shrink-0" tabIndex={0} />
+                      }
+                    >
+                      no part in this flow
+                    </TooltipTrigger>
+                    <TooltipPopup side="top">
+                      The flow that is chosen has no part for what this seat does. It is asked
+                      nothing in it, on or off.
+                    </TooltipPopup>
+                  </Tooltip>
+                ) : null}
+                {props.switchesOnly ? null : locked ? null : changed ? (
+                  <Tooltip>
+                    <TooltipTrigger
+                      render={
+                        <Button
+                          size="icon-xs"
+                          variant="ghost"
+                          aria-label={`Put ${item.title} back to ${baseLabel.toLowerCase()}`}
+                          onClick={() => set(chosen.active ? { active: chosen.active } : {})}
+                        />
+                      }
+                    >
+                      <RotateCcwIcon />
+                    </TooltipTrigger>
+                    <TooltipPopup side="top">Back to {baseLabel.toLowerCase()}</TooltipPopup>
+                  </Tooltip>
+                ) : (
+                  <Badge size="sm" variant="outline" className="shrink-0 text-muted-foreground">
+                    {baseLabel}
+                  </Badge>
+                )}
+              </div>
 
-              <Choice
-                label={`Reasoning for ${item.title}`}
-                value={locked ? values.reasoning : (chosen.reasoning ?? null)}
-                baseValue={locked ? values.reasoning : chosen.harness ? null : base.reasoning}
-                baseLabel={locked ? "Reasoning" : baseLabel}
-                options={locked ? [] : offer.reasoning}
-                why={
-                  locked
-                    ? "Set when the workflow started."
-                    : (item.why.reasoning ??
-                      `${harnessLabel(values.harness)} takes no reasoning setting from outside.`)
-                }
-                onChange={(value) => set({ ...chosen, reasoning: value })}
-              />
-              <Choice
-                label={`Access for ${item.title}`}
-                value={locked ? values.access : (chosen.access ?? null)}
-                baseValue={
-                  locked ? values.access : chosen.harness ? (offer.access[0] ?? null) : base.access
-                }
-                baseLabel={locked ? "Access" : baseLabel}
-                options={locked ? [] : offer.access}
-                why={
-                  locked
-                    ? "Set when the workflow started."
-                    : (item.why.access ??
-                      `${harnessLabel(values.harness)} runs with full access only.`)
-                }
-                onChange={(value) => set({ ...chosen, access: value })}
-              />
+              {props.switchesOnly ? (
+                <p className="pl-10 text-[11px] text-muted-foreground" data-seat-runs-on>
+                  {harnessLabel(values.harness)}, {values.model ?? "its own model"}
+                  {values.reasoning ? `, ${values.reasoning}` : ""}
+                  {values.access && values.access !== "full" ? `, ${values.access}` : ""}
+                </p>
+              ) : (
+                <div className="flex flex-wrap items-center gap-x-1 gap-y-0.5 pl-10">
+                  {locked ? (
+                    <span className="text-xs" data-seat-runs-on>
+                      {harnessLabel(values.harness)}, {values.model ?? "its own model"}
+                    </span>
+                  ) : entry ? (
+                    <ProviderModelPicker
+                      activeInstanceId={entry.instanceId}
+                      model={values.model ?? ""}
+                      lockedProvider={null}
+                      instanceEntries={entries}
+                      modelOptionsByInstance={options}
+                      size="xs"
+                      triggerVariant="outline"
+                      triggerAriaLabel={`Harness and model for ${item.title}`}
+                      {...(offer.model
+                        ? {}
+                        : { triggerLabel: `${harnessLabel(values.harness)}, its own model` })}
+                      onInstanceModelChange={(instanceId, model) => {
+                        const picked = entries.find(
+                          (candidate) => candidate.instanceId === instanceId,
+                        );
+                        const harness = picked ? harnessOfDriver(picked.driverKind) : null;
+                        if (!harness) return;
+                        // Picking what the seat already runs on by default is no choice at all.
+                        if (harness === from.harness && model === from.model) {
+                          const { harness: _harness, model: _model, ...rest } = chosen;
+                          set(rest);
+                          return;
+                        }
+                        set(moveSeat({ ...item, now: from }, chosen, { harness, model }));
+                      }}
+                    />
+                  ) : (
+                    <Fixed
+                      value={`${harnessLabel(values.harness)}, ${values.model ?? "its own model"}`}
+                      why="This harness is not set up in T3 Code on this environment, so it cannot be chosen from here. The engine still runs the seat on it."
+                    />
+                  )}
+
+                  <Choice
+                    label={`Reasoning for ${item.title}`}
+                    value={locked ? values.reasoning : (chosen.reasoning ?? null)}
+                    baseValue={locked ? values.reasoning : chosen.harness ? null : from.reasoning}
+                    baseLabel={locked ? "Reasoning" : baseLabel}
+                    options={locked ? [] : offer.reasoning}
+                    why={
+                      locked
+                        ? "Set when the workflow started."
+                        : (item.why.reasoning ??
+                          `${harnessLabel(values.harness)} takes no reasoning setting from outside.`)
+                    }
+                    onChange={(value) => set({ ...chosen, reasoning: value })}
+                  />
+                  <Choice
+                    label={`Access for ${item.title}`}
+                    value={locked ? values.access : (chosen.access ?? null)}
+                    baseValue={
+                      locked
+                        ? values.access
+                        : chosen.harness
+                          ? (offer.access[0] ?? null)
+                          : from.access
+                    }
+                    baseLabel={locked ? "Access" : baseLabel}
+                    options={locked ? [] : offer.access}
+                    why={
+                      locked
+                        ? "Set when the workflow started."
+                        : (item.why.access ??
+                          `${harnessLabel(values.harness)} runs with full access only.`)
+                    }
+                    onChange={(value) => set({ ...chosen, access: value })}
+                  />
+                </div>
+              )}
             </div>
-          </div>
-        );
-      })}
+          );
+        })}
+      </div>
     </div>
   );
 }

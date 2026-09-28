@@ -43,10 +43,20 @@ export interface DeliverySeat {
 
 export interface DeliveryTeam {
   readonly team: string;
+  /** `built-in` for a team that comes with the engine, `custom` for a profile a person made. */
+  readonly source: string;
   readonly purpose: string;
   readonly configuration: string;
   readonly available: boolean;
   readonly why: string | null;
+  readonly flows: ReadonlyArray<DeliveryFlow>;
+  readonly defaultFlow: string;
+  /**
+   * Whether a task can be given to the team. A team without a flow of stages
+   * works in sessions a person opens, and takes no task.
+   */
+  readonly takesTasks: boolean;
+  readonly whyNoTasks: string | null;
   readonly seats: ReadonlyArray<DeliverySeat>;
   readonly specialists: ReadonlyArray<string>;
   /** Every role the team has written down. Any of them can be chosen for a harness. */
@@ -79,16 +89,62 @@ export interface DeliveryRole {
 export interface DeliveryWorkflow {
   readonly id: string;
   readonly title: string;
+  readonly summary: string;
   readonly stages: ReadonlyArray<string>;
   readonly stop: string;
+  /** Whether the flow changes files. A chat, a plan and a review do not. */
+  readonly builds: boolean;
 }
 
-export const SEAT_SETTING_KEYS = ["harness", "model", "reasoning", "access"] as const;
+/** A flow of a team, with whether it can run with the seats as they are set. */
+export interface DeliveryFlow extends DeliveryWorkflow {
+  /** Whether the team has the seats for it at all. */
+  readonly offered: boolean;
+  readonly why: string | null;
+  readonly ready: boolean;
+  /** What the flow lacks, in the engine's words: which seat to switch on, and why. */
+  readonly problems: ReadonlyArray<string>;
+  /** The seats that would take part. */
+  readonly seats: ReadonlyArray<string>;
+  readonly isDefault: boolean;
+}
+
+export const FLOW_START_LABEL: Readonly<Record<string, string>> = {
+  chat: "Start team chat",
+  plan: "Start plan",
+  review: "Start review",
+  standard: "Start delivery",
+};
+
+export const flowStartLabel = (flow: string | null | undefined) =>
+  FLOW_START_LABEL[flow ?? ""] ?? "Start workflow";
+
+export const parseFlows = (value: unknown): ReadonlyArray<DeliveryFlow> =>
+  records(value)
+    .filter((item) => text(item.id).length > 0)
+    .map((item) => ({
+      id: text(item.id),
+      title: text(item.title, text(item.id)),
+      summary: text(item.summary),
+      stages: strings(item.stages),
+      stop: text(item.stop),
+      builds: flag(item.builds),
+      offered: item.offered !== false,
+      why: textOrNull(item.why),
+      ready: item.ready !== false,
+      problems: strings(item.problems),
+      seats: strings(item.seats),
+      isDefault: flag(item.isDefault),
+    }));
+
+export const SEAT_SETTING_KEYS = ["active", "harness", "model", "reasoning", "access"] as const;
 export type SeatSettingKey = (typeof SEAT_SETTING_KEYS)[number];
 /** What a person chose for a seat. A key left out runs as the team has it. */
 export type SeatChoice = Partial<Record<SeatSettingKey, string>>;
 
 export interface SeatSettingValues {
+  /** `on` or `off`. A seat that is off keeps what is set for it and takes no new work. */
+  readonly active: string | null;
   readonly harness: string | null;
   readonly model: string | null;
   readonly reasoning: string | null;
@@ -107,6 +163,8 @@ export interface SeatSettings {
   readonly seat: string;
   readonly title: string;
   readonly role: string;
+  /** What the seat does in its team: leads, plans, builds, reviews, tests. */
+  readonly duties: ReadonlyArray<string>;
   readonly harness: string;
   readonly provider: string;
   /** What the team's definition says, before anybody saved defaults. */
@@ -127,6 +185,7 @@ export interface SeatSettings {
 const parseValues = (value: unknown, harness: string | null = null): SeatSettingValues => {
   const from = isRecord(value) ? value : {};
   return {
+    active: textOrNull(from.active),
     harness: textOrNull(from.harness) ?? harness,
     model: textOrNull(from.model),
     reasoning: textOrNull(from.reasoning),
@@ -161,6 +220,7 @@ export const parseSeatSettings = (value: Json): SeatSettings => {
     seat: text(value.seat),
     title: text(value.title, text(value.seat)),
     role: text(value.role),
+    duties: strings(value.duties),
     harness,
     provider: text(value.provider),
     defined: value.defined === undefined ? now : parseValues(value.defined, harness),
@@ -176,6 +236,10 @@ export const parseSeatSettings = (value: Json): SeatSettings => {
     effective: value.effective === undefined ? now : parseValues(value.effective, harness),
   };
 };
+
+/** Whether a seat is on, with what is chosen for it laid over what it is set to. */
+export const seatIsOn = (item: SeatSettings, choice: SeatChoice, over: "now" | "defined" = "now") =>
+  (choice.active ?? item[over].active ?? "on") !== "off";
 
 /** What can be chosen for a seat once it runs on the harness chosen for it. */
 export function seatOfferFor(item: SeatSettings, choice: SeatChoice): SeatOffer {
@@ -195,6 +259,7 @@ export function moveSeat(
 ): SeatChoice {
   const offer = seatOfferFor(item, { harness: to.harness });
   const next: SeatChoice = { harness: to.harness };
+  if (choice.active) next.active = choice.active;
   if (to.model && offer.model) next.model = to.model;
   if (choice.reasoning && offer.reasoning.includes(choice.reasoning)) {
     next.reasoning = choice.reasoning;
@@ -207,8 +272,10 @@ const parseWorkflows = (value: unknown): ReadonlyArray<DeliveryWorkflow> =>
   records(value).map((item) => ({
     id: text(item.id),
     title: text(item.title, text(item.id)),
+    summary: text(item.summary),
     stages: strings(item.stages),
     stop: text(item.stop),
+    builds: item.builds !== false,
   }));
 
 const shares = (value: unknown): Record<string, number> =>
@@ -238,12 +305,19 @@ const parseTeam = (team: Json): DeliveryTeam => {
   const workload = isRecord(team.workload) ? team.workload : {};
   const gates = isRecord(team.gates) ? team.gates : {};
   const qa = isRecord(gates.qa) ? gates.qa : null;
+  const flows = parseFlows(team.flows);
   return {
     team: text(team.team),
+    source: text(team.source, "built-in"),
     purpose: text(team.purpose),
     configuration: text(team.configuration),
+    flows,
+    defaultFlow: text(team.defaultFlow, flows.find((flow) => flow.isDefault)?.id ?? "standard"),
     available: flag(team.available),
     why: textOrNull(team.why),
+    // An engine that does not say is one from before teams were told apart this way.
+    takesTasks: team.takesTasks !== false,
+    whyNoTasks: textOrNull(team.whyNoTasks),
     seats: records(team.seats).map(parseSeat),
     specialists: strings(team.specialists),
     roles: records(team.roles).map((role) => ({
@@ -463,11 +537,44 @@ export function seatSettingsToSend(
       const value = asked[key]?.trim();
       if (!value) return [];
       if (key === "harness") return moved ? [[key, value]] : [];
+      // Whether a seat is on has nothing to do with what it runs on.
+      if (key === "active") return value !== (base.active ?? "on") ? [[key, value]] : [];
       return moved || value !== (base[key] ?? "") ? [[key, value]] : [];
     });
     if (kept.length > 0) out[item.seat] = Object.fromEntries(kept);
   }
   return out;
+}
+
+/**
+ * Why work cannot be given to a team now, or null when it can. With a flow
+ * named, it is that flow that is asked about. Without one, a team that has
+ * any flow can be given work.
+ */
+export function teamTaskBlock(team: DeliveryTeam, flow: string | null = null): string | null {
+  if (team.flows.length === 0) {
+    // An engine from before flows: a team delivers, or it takes no task.
+    if (!team.takesTasks) {
+      return team.whyNoTasks ?? "This team works in sessions and takes no task.";
+    }
+  } else if (flow) {
+    const wanted = team.flows.find((item) => item.id === flow);
+    if (!wanted || !wanted.offered) {
+      const has = team.flows.filter((item) => item.offered).map((item) => item.title);
+      return `Team ${team.team} has no ${wanted?.title.toLowerCase() ?? flow}. It has: ${has.join(", ") || "no flow"}.`;
+    }
+  } else if (!team.flows.some((item) => item.offered)) {
+    return `Team ${team.team} has no flow it could run.`;
+  }
+  return team.available ? null : (team.why ?? "This team cannot work now.");
+}
+
+/** The flow a team runs when none is chosen, or the first it has. */
+export function flowFor(team: DeliveryTeam | null, wanted: string | null): string {
+  if (!team) return wanted ?? "standard";
+  const offered = team.flows.filter((flow) => flow.offered);
+  if (wanted && offered.some((flow) => flow.id === wanted)) return wanted;
+  return offered.find((flow) => flow.id === team.defaultFlow)?.id ?? offered[0]?.id ?? "standard";
 }
 
 /** The label of a thread's team. A thread that was never bound says so. */
@@ -528,6 +635,8 @@ export interface DeliveryCard {
   readonly number: number;
   readonly title: string;
   readonly team: string;
+  /** The flow it was given in: a chat, a plan, a review or a delivery. */
+  readonly flow: string;
   readonly lane: string;
   readonly state: string;
   readonly revision: number;
@@ -632,6 +741,7 @@ export const parseCard = (value: Json): DeliveryCard => {
     number: count(value.number),
     title: text(value.title),
     team: text(value.team),
+    flow: text(value.flow, "standard"),
     lane: text(value.lane),
     state: text(value.state),
     revision: count(value.revision),
@@ -923,6 +1033,43 @@ export interface TaskView {
   }>;
   readonly workflow: string;
   readonly workflows: ReadonlyArray<DeliveryWorkflow>;
+  readonly flows: ReadonlyArray<DeliveryFlow>;
+  /** The seats that are switched on for this work. */
+  readonly seatsOn: ReadonlyArray<string>;
+  /** The plan, once a plan was settled. It is agreed when the delivery was started from it. */
+  readonly plan: {
+    readonly run: string;
+    readonly agreed: boolean;
+    readonly approach: string;
+    readonly steps: ReadonlyArray<string>;
+    readonly checks: ReadonlyArray<string>;
+    readonly limits: ReadonlyArray<string>;
+    readonly comments: ReadonlyArray<{
+      readonly seat: string;
+      readonly stance: string;
+      readonly points: ReadonlyArray<string>;
+    }>;
+    readonly file: string;
+  } | null;
+  /** What a review found, seat by seat. */
+  readonly review: {
+    readonly run: string;
+    readonly examined: string;
+    readonly missing: ReadonlyArray<string>;
+    readonly file: string;
+    readonly seats: ReadonlyArray<{
+      readonly seat: string;
+      readonly harness: string;
+      readonly summary: string;
+      readonly checked: ReadonlyArray<string>;
+      readonly findings: ReadonlyArray<{
+        readonly title: string;
+        readonly where: string;
+        readonly detail: string;
+        readonly blocking: boolean;
+      }>;
+    }>;
+  } | null;
   readonly configuration: string;
   /** The revision of the team's defaults the settings are laid over. */
   readonly defaults: number;
@@ -1058,6 +1205,44 @@ export function parseTask(body: unknown): TaskView | null {
     })),
     workflow: text(body.workflow, "standard"),
     workflows: parseWorkflows(body.workflows),
+    flows: parseFlows(body.flows),
+    seatsOn: strings(body.seatsOn),
+    plan: isRecord(body.plan)
+      ? {
+          run: text(body.plan.run),
+          agreed: flag(body.plan.agreed),
+          approach: text(body.plan.approach),
+          steps: strings(body.plan.steps),
+          checks: strings(body.plan.checks),
+          limits: strings(body.plan.limits),
+          comments: records(body.plan.comments).map((comment) => ({
+            seat: text(comment.seat),
+            stance: text(comment.stance),
+            points: strings(comment.points),
+          })),
+          file: text(body.plan.file),
+        }
+      : null,
+    review: isRecord(body.review)
+      ? {
+          run: text(body.review.run),
+          examined: text(body.review.examined),
+          missing: strings(body.review.missing),
+          file: text(body.review.file),
+          seats: records(body.review.seats).map((seat) => ({
+            seat: text(seat.seat),
+            harness: text(seat.harness),
+            summary: text(seat.summary),
+            checked: strings(seat.checked),
+            findings: records(seat.findings).map((finding) => ({
+              title: text(finding.title),
+              where: text(finding.where),
+              detail: text(finding.detail),
+              blocking: flag(finding.blocking),
+            })),
+          })),
+        }
+      : null,
     configuration: text(body.configuration),
     defaults: count(body.defaults),
     roster: records(body.roster).map(parseSeat),
@@ -1176,4 +1361,355 @@ export function decideTeamForSend(input: {
   }
   if (resolved.state === "manual") return { action: "none" };
   return { action: "bind", team: resolved.team, role: resolved.role };
+}
+
+export interface ProfileSummary {
+  readonly profile: string;
+  readonly source: string;
+  readonly editable: boolean;
+  readonly purpose: string;
+  readonly revision: number;
+  readonly configuration: string | null;
+  readonly seats: number;
+  readonly seatsOn: number;
+  readonly flows: ReadonlyArray<string>;
+  readonly defaultFlow: string | null;
+  /** Where its files are on the engine's host. */
+  readonly folder: string;
+  /** Why the files could not be read, when they could not. */
+  readonly problem: string | null;
+}
+
+const parseProfileSummary = (item: Json): ProfileSummary => ({
+  profile: text(item.profile),
+  source: text(item.source, "built-in"),
+  editable: flag(item.editable),
+  purpose: text(item.purpose),
+  revision: count(item.revision),
+  configuration: textOrNull(item.configuration),
+  seats: count(item.seats),
+  seatsOn: count(item.seatsOn),
+  flows: strings(item.flows),
+  defaultFlow: textOrNull(item.defaultFlow),
+  folder: text(item.folder),
+  problem: textOrNull(item.problem),
+});
+
+export function parseProfiles(body: unknown): ReadonlyArray<ProfileSummary> {
+  return records(body)
+    .map(parseProfileSummary)
+    .filter((item) => item.profile.length > 0);
+}
+
+export const SEAT_DUTIES = ["plan", "build", "review", "qa"] as const;
+export const SEAT_DUTY_LABEL: Readonly<Record<string, string>> = {
+  plan: "Plans",
+  build: "Builds",
+  review: "Reviews",
+  qa: "Tests",
+};
+
+export interface ProfileSeat {
+  readonly id: string;
+  readonly title: string;
+  readonly role: string;
+  readonly instructions: string;
+  readonly active: boolean;
+  readonly harness: string;
+  readonly model: string | null;
+  readonly reasoning: string | null;
+  readonly access: string | null;
+  readonly required: boolean;
+  readonly focus: string;
+  readonly duties: ReadonlyArray<string>;
+}
+
+/** A profile as it is edited: everything that can be set, in the words it was written in. */
+export interface ProfileForm {
+  readonly name: string;
+  readonly purpose: string;
+  readonly corePrompt: string;
+  readonly defaultFlow: string;
+  readonly memory: { readonly scope: string; readonly notes: string };
+  readonly references: ReadonlyArray<string>;
+  readonly lead: string;
+  readonly seats: ReadonlyArray<ProfileSeat>;
+  readonly tools: ReadonlyArray<string>;
+  readonly specialists: ReadonlyArray<{ readonly name: string; readonly text: string }>;
+  readonly qaMinimum: number;
+  readonly workload: Readonly<Record<string, number>>;
+}
+
+export interface ProfileView extends ProfileSummary {
+  readonly form: ProfileForm;
+  readonly memoryScopes: Readonly<Record<string, string>>;
+  readonly toolsOffered: ReadonlyArray<{
+    readonly server: string;
+    readonly offers: ReadonlyArray<string>;
+    readonly onlyFor: string | null;
+  }>;
+  readonly harnesses: Readonly<Record<string, SeatOffer>>;
+  readonly history: ReadonlyArray<{
+    readonly revision: number;
+    readonly by: string;
+    readonly at: string;
+    readonly note: string | null;
+  }>;
+  readonly note: string | null;
+}
+
+export function parseProfile(body: unknown): ProfileView | null {
+  if (!isRecord(body) || text(body.name).length === 0 || !Array.isArray(body.seats)) return null;
+  const memory = isRecord(body.memory) ? body.memory : {};
+  const scopes = isRecord(memory.scopes) ? memory.scopes : {};
+  const harnesses = isRecord(body.harnesses) ? body.harnesses : {};
+  return {
+    ...parseProfileSummary({ ...body, seats: body.seats.length }),
+    form: {
+      name: text(body.name),
+      purpose: text(body.purpose),
+      corePrompt: text(body.corePrompt),
+      defaultFlow: text(body.defaultFlow, "chat"),
+      memory: { scope: text(memory.scope, "conversation"), notes: text(memory.notes) },
+      references: strings(body.references),
+      lead: text(body.lead),
+      seats: records(body.seats).map((seat) => ({
+        id: text(seat.id),
+        title: text(seat.title, text(seat.id)),
+        role: text(seat.role),
+        instructions: text(seat.instructions),
+        active: seat.active !== false,
+        harness: text(seat.harness),
+        model: textOrNull(seat.model),
+        reasoning: textOrNull(seat.reasoning),
+        access: textOrNull(seat.access),
+        required: flag(seat.required),
+        focus: text(seat.focus),
+        duties: strings(seat.duties),
+      })),
+      tools: strings(body.tools),
+      specialists: records(body.specialists).map((item) => ({
+        name: text(item.name),
+        text: text(item.text),
+      })),
+      qaMinimum: count(body.qaMinimum) || 2,
+      workload: shares(body.workload),
+    },
+    memoryScopes: Object.fromEntries(
+      Object.entries(scopes).map(([scope, what]) => [scope, text(what)]),
+    ),
+    toolsOffered: records(body.toolsOffered).map((tool) => ({
+      server: text(tool.server),
+      offers: strings(tool.offers),
+      onlyFor: textOrNull(tool.onlyFor),
+    })),
+    harnesses: Object.fromEntries(
+      Object.entries(harnesses).map(([harness, takes]) => [harness, parseOffer(takes)]),
+    ),
+    history: records(body.history).map((entry) => ({
+      revision: count(entry.revision),
+      by: text(entry.by),
+      at: text(entry.at),
+      note: textOrNull(entry.note),
+    })),
+    note: textOrNull(body.note),
+  };
+}
+
+/**
+ * Where a tool of a seat stands. Configured is not working: a tool is shown
+ * as working only after its server was started and answered.
+ */
+export type ToolState =
+  | "working"
+  | "incomplete"
+  | "failed"
+  | "not-checked"
+  | "not-reachable"
+  | "not-for-this-seat";
+
+export const TOOL_STATE_LABEL: Readonly<Record<ToolState, string>> = {
+  working: "Working",
+  incomplete: "Answers, with tools missing",
+  failed: "Failed",
+  "not-checked": "Configured, not checked",
+  "not-reachable": "Not reachable from this harness",
+  "not-for-this-seat": "Not given to this seat",
+};
+
+const TOOL_STATES = Object.keys(TOOL_STATE_LABEL) as ReadonlyArray<ToolState>;
+
+export interface SetupSeat {
+  readonly seat: string;
+  readonly title: string;
+  readonly role: string;
+  readonly on: boolean;
+  readonly harness: string;
+  readonly model: string | null;
+  readonly reasoning: string | null;
+  readonly access: string | null;
+  readonly provider: string;
+  readonly installed: boolean;
+}
+
+/** What a seat is really given, and what of it really works. */
+export interface SeatSetup {
+  readonly team: string;
+  readonly source: string;
+  readonly purpose: string;
+  readonly configuration: string;
+  readonly folder: string;
+  readonly flow: string;
+  readonly flows: ReadonlyArray<DeliveryFlow>;
+  readonly problems: ReadonlyArray<string>;
+  readonly seats: ReadonlyArray<SetupSeat>;
+  readonly seat: SetupSeat;
+  readonly memoryScope: string;
+  readonly instructions: ReadonlyArray<{
+    readonly name: string;
+    readonly source: string;
+    readonly file: string | null;
+    /** Null for what the harness reads by itself. */
+    readonly text: string | null;
+    readonly note: string | null;
+  }>;
+  readonly tools: ReadonlyArray<{
+    readonly server: string;
+    readonly state: ToolState;
+    readonly forThisSeat: boolean;
+    readonly whyNotForThisSeat: string | null;
+    readonly reachable: boolean;
+    readonly route: string;
+    readonly whyNotReachable: string | null;
+    readonly runsAs: string;
+    /** What the team's definition says the server offers. Not what it was seen to offer. */
+    readonly declared: ReadonlyArray<string>;
+    /** A check that was made for another setup, and so does not count for this one. */
+    readonly checkedBefore: { readonly at: string; readonly why: string } | null;
+    readonly checked: {
+      readonly at: string;
+      readonly connected: boolean;
+      readonly exercised: boolean;
+      readonly tools: ReadonlyArray<{ readonly name: string; readonly description: string }>;
+      readonly missing: ReadonlyArray<string>;
+      readonly problem: string | null;
+    } | null;
+  }>;
+  readonly specialists: ReadonlyArray<{
+    readonly name: string;
+    readonly purpose: string;
+    readonly text: string;
+    readonly file: string;
+    /** `agent`: started by the engine. `subagent`: the harness's own. `prompt`: words only. */
+    readonly kind: string;
+    readonly how: string;
+    readonly alsoInSessions: string | null;
+    readonly host: {
+      readonly seat: string;
+      readonly harness: string;
+      readonly model: string | null;
+    } | null;
+    readonly tools: ReadonlyArray<string>;
+    readonly history: {
+      readonly started: number;
+      readonly done: number;
+      readonly last: { readonly run: string; readonly at: string; readonly state: string } | null;
+    };
+  }>;
+}
+
+const parseSetupSeat = (value: unknown): SetupSeat => {
+  const seat = isRecord(value) ? value : {};
+  return {
+    seat: text(seat.seat),
+    title: text(seat.title, text(seat.seat)),
+    role: text(seat.role),
+    on: seat.on !== false,
+    harness: text(seat.harness),
+    model: textOrNull(seat.model),
+    reasoning: textOrNull(seat.reasoning),
+    access: textOrNull(seat.access),
+    provider: text(seat.provider),
+    installed: seat.installed !== false,
+  };
+};
+
+export function parseSeatSetup(body: unknown): SeatSetup | null {
+  if (!isRecord(body) || !isRecord(body.seat) || !Array.isArray(body.instructions)) return null;
+  const memory = isRecord(body.memory) ? body.memory : {};
+  return {
+    team: text(body.team),
+    source: text(body.source, "built-in"),
+    purpose: text(body.purpose),
+    configuration: text(body.configuration),
+    folder: text(body.folder),
+    flow: text(body.flow, "standard"),
+    flows: parseFlows(body.flows),
+    problems: strings(body.problems),
+    seats: records(body.seats).map(parseSetupSeat),
+    seat: parseSetupSeat(body.seat),
+    memoryScope: text(memory.scope, "conversation"),
+    instructions: records(body.instructions).map((layer) => ({
+      name: text(layer.name),
+      source: text(layer.source),
+      file: textOrNull(layer.file),
+      text: textOrNull(layer.text),
+      note: textOrNull(layer.note),
+    })),
+    tools: records(body.tools).map((tool) => {
+      const checked = isRecord(tool.checked) ? tool.checked : null;
+      const state = TOOL_STATES.find((item) => item === tool.state) ?? "not-checked";
+      return {
+        server: text(tool.server),
+        // A tool is never taken for working on the word of an answer that does not say so.
+        state: state === "working" && !checked ? "not-checked" : state,
+        forThisSeat: flag(tool.forThisSeat),
+        whyNotForThisSeat: textOrNull(tool.whyNotForThisSeat),
+        reachable: flag(tool.reachable),
+        route: text(tool.route),
+        whyNotReachable: textOrNull(tool.whyNotReachable),
+        runsAs: text(tool.runsAs),
+        declared: strings(tool.declared),
+        checkedBefore: isRecord(tool.checkedBefore)
+          ? { at: text(tool.checkedBefore.at), why: text(tool.checkedBefore.why) }
+          : null,
+        checked: checked
+          ? {
+              at: text(checked.at),
+              connected: flag(checked.connected),
+              exercised: flag(checked.exercised),
+              tools: records(checked.tools).map((item) => ({
+                name: text(item.name),
+                description: text(item.description),
+              })),
+              missing: strings(checked.missing),
+              problem: textOrNull(checked.problem),
+            }
+          : null,
+      };
+    }),
+    specialists: records(body.specialists).map((item) => {
+      const host = isRecord(item.host) ? item.host : null;
+      const history = isRecord(item.history) ? item.history : {};
+      const last = isRecord(history.last) ? history.last : null;
+      return {
+        name: text(item.name),
+        purpose: text(item.purpose),
+        text: text(item.text),
+        file: text(item.file),
+        kind: text(item.kind, "prompt"),
+        how: text(item.how),
+        alsoInSessions: textOrNull(item.alsoInSessions),
+        host: host
+          ? { seat: text(host.seat), harness: text(host.harness), model: textOrNull(host.model) }
+          : null,
+        tools: strings(item.tools),
+        history: {
+          started: count(history.started),
+          done: count(history.done),
+          last: last ? { run: text(last.run), at: text(last.at), state: text(last.state) } : null,
+        },
+      };
+    }),
+  };
 }

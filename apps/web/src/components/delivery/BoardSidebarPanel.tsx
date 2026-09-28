@@ -1,5 +1,5 @@
 import { useLocation, useNavigate } from "@tanstack/react-router";
-import { KanbanIcon, PlusIcon, SearchIcon, XIcon } from "lucide-react";
+import { KanbanIcon, PlusIcon, SearchIcon, UsersIcon, XIcon } from "lucide-react";
 import { useMemo } from "react";
 
 import {
@@ -154,7 +154,8 @@ export function BoardSidebarPanel() {
     );
   };
   const searching = hasFilters(filters);
-  const live = kept.filter((card) => !["completed"].includes(card.lane) && card.lane !== "draft");
+  const live = kept.filter((card) => !["completed", "draft", "chat"].includes(card.lane));
+  const chats = kept.filter((card) => card.lane === "chat");
   const waiting = live.filter((card) => card.waitingOn === "person");
   const working = live.filter((card) => card.waitingOn !== "person" && card.workers.length > 0);
   const rest = live.filter((card) => card.waitingOn !== "person" && card.workers.length === 0);
@@ -175,6 +176,18 @@ export function BoardSidebarPanel() {
           >
             <PlusIcon />
             New task
+          </Button>
+          <Button
+            size="icon-sm"
+            variant="ghost"
+            aria-label="Profiles"
+            onClick={() => {
+              close();
+              void navigate({ to: "/profiles" });
+            }}
+            data-board-panel-profiles
+          >
+            <UsersIcon />
           </Button>
           <Button
             size="icon-sm"
@@ -323,6 +336,14 @@ export function BoardSidebarPanel() {
               name="working"
               title="Being worked on"
               cards={working}
+              now={now}
+              selected={selected}
+              onOpen={open}
+            />
+            <Section
+              name="chats"
+              title="Team chats"
+              cards={chats}
               now={now}
               selected={selected}
               onOpen={open}

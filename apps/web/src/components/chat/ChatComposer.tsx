@@ -248,6 +248,7 @@ import {
   OrchestratorComposerControls,
   OrchestratorPrimaryActions,
 } from "../delivery/OrchestratorComposerControls";
+import { OrchestratorPanel } from "../delivery/OrchestratorPanel";
 import { TeamPicker } from "../delivery/TeamPicker";
 import {
   useDeliveryEnabled,
@@ -5090,7 +5091,17 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         onOpenProviderSetup={onOpenProviderSetup}
         orchestrator={
           orchestratorOffered && activeThreadId
-            ? { active: orchestratorMode, onSelect: () => enterOrchestrator(activeThreadId) }
+            ? {
+                active: orchestratorMode,
+                onSelect: () => enterOrchestrator(activeThreadId),
+                panel: (
+                  <OrchestratorPanel
+                    environmentId={environmentId}
+                    threadId={activeThreadId}
+                    onRequestClose={() => setIsComposerModelPickerOpen(false)}
+                  />
+                ),
+              }
             : undefined
         }
       />

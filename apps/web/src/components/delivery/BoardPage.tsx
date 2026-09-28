@@ -19,6 +19,7 @@ import { parseBoard, type DeliveryCard, type DeliveryLane } from "../../lib/deli
 import {
   BOARD_GROUPINGS,
   filterLanes,
+  FLOW_LABEL,
   GROUPING_LABEL,
   groupCards,
   hasFilters,
@@ -75,6 +76,14 @@ const CardFace = memo(function CardFace(props: {
         <span className="font-mono text-[10px] text-muted-foreground" data-card-number>
           #{card.number}
         </span>
+        {card.flow !== "standard" ? (
+          <span
+            className="rounded bg-muted px-1 text-[10px] text-muted-foreground"
+            data-card-flow={card.flow}
+          >
+            {FLOW_LABEL[card.flow] ?? card.flow}
+          </span>
+        ) : null}
         <span className="ml-auto flex items-center gap-1.5">
           <Age at={card.updated} now={props.now} label="Last changed" />
           {props.menu}
@@ -210,6 +219,7 @@ function Lane(props: {
         className={cn(
           "flex w-9 shrink-0 flex-col items-center overflow-hidden rounded-lg border border-border",
           tone.tint,
+          refused && "opacity-40",
           drop.isOver && offer && "ring-2 ring-ring",
         )}
       >
@@ -220,8 +230,13 @@ function Lane(props: {
           aria-label={`Open ${lane.title}`}
           className="flex flex-1 cursor-pointer flex-col items-center gap-2 py-2 text-xs text-muted-foreground"
         >
-          <span className="font-mono">{lane.cards.length}</span>
+          <span className="font-mono" data-lane-count>
+            {lane.cards.length}
+          </span>
           <span className="[writing-mode:vertical-rl]">{lane.title}</span>
+          {props.dragged && offer ? (
+            <span className="text-[10px] [writing-mode:vertical-rl]">{offer}</span>
+          ) : null}
         </button>
       </section>
     );
@@ -232,7 +247,7 @@ function Lane(props: {
       ref={drop.setNodeRef}
       data-lane={lane.lane}
       className={cn(
-        "flex w-72 shrink-0 flex-col overflow-hidden rounded-lg border border-border",
+        "flex w-68 shrink-0 flex-col overflow-hidden rounded-lg border border-border",
         tone.tint,
         refused && "opacity-40",
         drop.isOver && offer && "ring-2 ring-ring",
@@ -296,12 +311,16 @@ function BoardColumns(props: {
 }) {
   const now = useMinuteClock();
   const grouping = useBoardStore((state) => state.grouping);
-  const collapsed = useBoardStore((state) => state.collapsedLanes);
-  const toggleLane = useBoardStore((state) => state.toggleLane);
+  const folds = useBoardStore((state) => state.laneFolds);
+  const foldLane = useBoardStore((state) => state.foldLane);
   const setFilters = useBoardStore((state) => state.setFilters);
   const [dragged, setDragged] = useState<DeliveryCard | null>(null);
   // A press that does not move is a click, which opens the card.
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
+
+  // An empty lane stands folded, so that the lanes with cards fit on the screen. It still
+  // takes a card that is dropped on it, and a person may open it or fold any other.
+  const isFolded = (lane: DeliveryLane) => folds[lane.lane] ?? lane.cards.length === 0;
 
   const onDragStart = (event: DragStartEvent) =>
     setDragged((event.active.data.current?.card as DeliveryCard | undefined) ?? null);
@@ -333,11 +352,11 @@ function BoardColumns(props: {
             lane={lane}
             total={props.all.find((item) => item.lane === lane.lane)?.cards.length ?? 0}
             grouping={grouping}
-            collapsed={collapsed.includes(lane.lane)}
+            collapsed={isFolded(lane)}
             dragged={dragged}
             now={now}
             busy={props.busy}
-            onToggle={() => toggleLane(lane.lane)}
+            onToggle={() => foldLane(lane.lane, !isFolded(lane))}
             onOpen={props.onOpen}
             onAction={props.onAction}
             onPickTag={(tag) => setFilters({ tag })}
@@ -346,7 +365,7 @@ function BoardColumns(props: {
       </div>
       <DragOverlay dropAnimation={null}>
         {dragged ? (
-          <div className="w-68 rotate-1 cursor-grabbing">
+          <div className="w-64 rotate-1 cursor-grabbing">
             <CardFace card={dragged} now={now} />
           </div>
         ) : null}

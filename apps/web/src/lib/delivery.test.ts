@@ -18,6 +18,7 @@ import {
   rolesForHarness,
   seatOfferFor,
   seatSettingsToSend,
+  teamTaskBlock,
 } from "./delivery";
 
 const seat = (overrides: Record<string, unknown>) => ({
@@ -634,6 +635,27 @@ describe("seat settings", () => {
     });
     // A harness that keeps its own model is not given one.
     expect(moveSeat(lead, chosen, { harness: "kimi", model: "k3" })).toEqual({ harness: "kimi" });
+  });
+});
+
+describe("teamTaskBlock", () => {
+  it("lets a task be given only to a team that has a flow and can work", () => {
+    const [development, rnd] = parseTeams([
+      { team: "development", available: true, takesTasks: true },
+      {
+        team: "rnd",
+        available: true,
+        takesTasks: false,
+        whyNoTasks: "team rnd works in sessions a person opens.",
+      },
+    ]);
+    expect(teamTaskBlock(development!)).toBeNull();
+    expect(teamTaskBlock(rnd!)).toBe("team rnd works in sessions a person opens.");
+    expect(
+      teamTaskBlock({ ...development!, available: false, why: "codex is not installed" }),
+    ).toBe("codex is not installed");
+    // An engine from before teams were told apart says nothing, and is taken at its word.
+    expect(parseTeams([{ team: "development", available: true }])[0]?.takesTasks).toBe(true);
   });
 });
 

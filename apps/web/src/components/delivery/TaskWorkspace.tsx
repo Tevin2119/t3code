@@ -25,6 +25,7 @@ import { isElectron } from "../../env";
 import { usePrimarySettings } from "../../hooks/useSettings";
 import {
   parseTask,
+  seatSettingsToSend,
   TASK_PRIORITIES,
   type TaskBrief,
   type TaskFile,
@@ -51,6 +52,7 @@ import {
   useMinuteClock,
   usePersonName,
   useStaleReading,
+  withSeatChoice,
 } from "../../state/delivery";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
@@ -111,6 +113,7 @@ const MESSAGE_KIND_LABEL: Record<string, string> = {
   question: "question",
   proposal: "proposed change",
   reply: "reply",
+  said: "its part",
   started: "submitted",
   control: "control",
   "decision-needed": "needs your decision",
@@ -272,8 +275,16 @@ function Composer(props: {
   // While a question waits, what is written is the answer to it unless the person says otherwise.
   const replying = props.replyTo ?? null;
   const kind: ComposerKind = replying ? "answer" : chosen;
-  const kinds: ReadonlyArray<ComposerKind> = ["message", "status", "change", "note"];
-  const closed = task.state === "rejected";
+  // A chat has nothing that is asked of the team to change: what is written is the conversation.
+  const chat = task.workflow === "chat";
+  const kinds: ReadonlyArray<ComposerKind> = chat
+    ? ["message", "status", "note"]
+    : ["message", "status", "change", "note"];
+  const help = (item: ComposerKind) =>
+    chat && item === "message"
+      ? "Read by the seat that leads the chat, which answers, or brings in the seats it concerns. Each answers under its own name."
+      : COMPOSER_KIND_HELP[item];
+  const closed = task.state === "rejected" || task.state === "closed";
 
   const attach = async (picked: File[]) => {
     const sent = await Promise.all(picked.map((file) => uploads.send(task.id, file)));
@@ -349,7 +360,7 @@ function Composer(props: {
         aria-label="Message on the task"
         placeholder={
           closed
-            ? "This task is closed."
+            ? "This is closed. What was said is kept."
             : kind === "answer"
               ? "Your answer"
               : kind === "status"
@@ -404,9 +415,7 @@ function Composer(props: {
                 <SelectItem key={item} value={item}>
                   <span className="flex max-w-96 flex-col">
                     <span>{COMPOSER_KIND_LABEL[item]}</span>
-                    <span className="text-xs text-muted-foreground">
-                      {COMPOSER_KIND_HELP[item]}
-                    </span>
+                    <span className="text-xs text-muted-foreground">{help(item)}</span>
                   </span>
                 </SelectItem>
               ))}
@@ -414,7 +423,7 @@ function Composer(props: {
           </Select>
         )}
         <span className="hidden min-w-0 flex-1 truncate text-[11px] text-muted-foreground md:block">
-          {COMPOSER_KIND_HELP[kind]}
+          {help(kind)}
         </span>
         <Tooltip>
           <TooltipTrigger
@@ -621,6 +630,66 @@ function Details(props: {
         </h3>
         <p className="text-sm break-words whitespace-pre-wrap">{task.body}</p>
       </section>
+      {task.plan ? (
+        <section className="flex flex-col gap-2 rounded-md border border-border p-2" data-task-plan>
+          <h3 className="text-xs font-medium">
+            The plan{task.plan.agreed ? ", agreed and being delivered" : ", for you to read"}
+          </h3>
+          <p className="text-sm break-words whitespace-pre-wrap">{task.plan.approach}</p>
+          <Listed title="Steps" items={task.plan.steps} />
+          <Listed title="Checks" items={task.plan.checks} />
+          <Listed title="What it does not cover" items={task.plan.limits} />
+          {task.plan.comments.map((comment) => (
+            <p key={comment.seat} className="text-xs text-muted-foreground">
+              {comment.seat}: {comment.stance}
+              {comment.points.length > 0 ? `. ${comment.points.join(" ")}` : ""}
+            </p>
+          ))}
+          <p className="font-mono text-[10px] break-all text-muted-foreground">{task.plan.file}</p>
+        </section>
+      ) : null}
+      {task.review ? (
+        <section
+          className="flex flex-col gap-2 rounded-md border border-border p-2"
+          data-task-review
+        >
+          <h3 className="text-xs font-medium">What the review found</h3>
+          {task.review.seats.map((seat) => (
+            <div
+              key={seat.seat}
+              className="flex flex-col gap-1 text-sm"
+              data-review-seat={seat.seat}
+            >
+              <p className="text-xs font-medium">
+                {seat.seat} on {harnessLabel(seat.harness)}
+              </p>
+              <p className="break-words whitespace-pre-wrap">{seat.summary}</p>
+              {seat.findings.length === 0 ? (
+                <p className="text-xs text-muted-foreground">No findings.</p>
+              ) : (
+                <ul className="flex list-disc flex-col gap-0.5 pl-5 text-xs">
+                  {seat.findings.map((finding) => (
+                    <li key={`${finding.title}:${finding.where}`}>
+                      {finding.blocking ? <span className="text-warning">Blocking. </span> : null}
+                      {finding.title}{" "}
+                      <span className="font-mono text-[10px] text-muted-foreground">
+                        {finding.where}
+                      </span>
+                      <span className="block text-muted-foreground">{finding.detail}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          ))}
+          {task.review.missing.length > 0 ? (
+            <p className="text-xs text-warning">No answer from {task.review.missing.join(", ")}.</p>
+          ) : null}
+          <p className="font-mono text-[10px] break-all text-muted-foreground">
+            {task.review.file}
+          </p>
+        </section>
+      ) : null}
       <Listed title="Requirements" items={task.requirements} />
       <Listed title="Acceptance criteria" items={task.acceptance} />
       {task.files.length > 0 ? (
@@ -701,7 +770,20 @@ function Info(props: {
   const act = useDeliveryAct(props.environmentId, "task edit");
   const [tags, setTags] = useState<string | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
-  const closed = ["approved", "rejected"].includes(task.state);
+  const [problems, setProblems] = useState<ReadonlyArray<string>>([]);
+  const closed = ["approved", "rejected", "closed"].includes(task.state);
+  const flow = task.flows.find((item) => item.id === task.workflow) ?? null;
+  // What is set for the task, which the switches change.
+  const set = Object.fromEntries(task.settings.map((item) => [item.seat, item.set]));
+  const switchSeat = async (seat: string, choice: Record<string, string>) => {
+    setProblems([]);
+    const result = await act(`/api/tasks/${task.id}/edit`, {
+      seats: seatSettingsToSend(task.settings, withSeatChoice(set, seat, choice)),
+      by: person,
+    });
+    if (!result.ok) setProblems(result.problems.length > 0 ? result.problems : [result.why]);
+    props.onChanged();
+  };
 
   const edit = async (patch: Record<string, unknown>) => {
     setProblem(null);
@@ -794,6 +876,9 @@ function Info(props: {
           )}
         </Row>
         <Row label="Team">{task.team}</Row>
+        <Row label="Flow">
+          <span data-task-flow={task.workflow}>{flow?.title ?? task.workflow}</span>
+        </Row>
         <Row label="Owner">{task.owner || "nobody"}</Row>
         <Row label="Tags">
           {tags === null ? (
@@ -865,6 +950,37 @@ function Info(props: {
           ) : null}
         </section>
       ) : null}
+
+      {closed ? null : (
+        <section className="flex flex-col gap-1.5" data-task-seats>
+          <h3 className="text-xs font-medium text-muted-foreground">Seats that take part</h3>
+          <SeatSettingsPanel
+            environmentId={props.environmentId}
+            settings={task.settings.map((item) => ({ ...item, now: item.effective }))}
+            chosen={{}}
+            taking={flow?.seats}
+            switchesOnly
+            onChange={(seat, choice) =>
+              void switchSeat(seat, {
+                ...set[seat],
+                active: choice.active === "" || choice.active === undefined ? "" : choice.active,
+              })
+            }
+          />
+          {problems.length > 0 ? (
+            <ul className="list-disc pl-5 text-[11px] text-warning" data-delivery-problem>
+              {problems.map((item) => (
+                <li key={item}>{item}</li>
+              ))}
+            </ul>
+          ) : null}
+          <p className="text-[11px] text-muted-foreground">
+            {task.workflow === "chat"
+              ? "A change counts from the next message on."
+              : "A run keeps the seats it started with. A change counts for the next run. A seat that is working when it is switched off is asked to stop."}
+          </p>
+        </section>
+      )}
 
       <section className="flex flex-col gap-1.5" data-task-roster>
         <h3 className="text-xs font-medium text-muted-foreground">
@@ -971,7 +1087,7 @@ export function TaskWorkspace(props: {
   }
 
   const primary = task?.actions.filter((action) =>
-    ["approve", "reject", "submit"].includes(action),
+    ["approve", "reject", "submit", "deliver"].includes(action),
   );
   const others = task?.actions.filter((action) => !primary?.includes(action)) ?? [];
 

@@ -5,7 +5,7 @@ import {
   type ProviderDriverKind,
   type ResolvedKeybindingsConfig,
 } from "@t3tools/contracts";
-import { memo, useEffect, useMemo, useState } from "react";
+import { memo, useEffect, useMemo, useState, type ReactNode } from "react";
 import type { VariantProps } from "class-variance-authority";
 import { Badge } from "../ui/badge";
 import { buttonVariants } from "../ui/button";
@@ -60,15 +60,31 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
   getModelDisabledReason?: (instanceId: ProviderInstanceId, model: string) => string | null;
   onInstanceModelChange: (instanceId: ProviderInstanceId, model: string) => void;
   /**
-   * Offers "Orchestrator" beside the harnesses: a whole team in place of one
-   * model. Choosing a model again goes back to a single harness.
+   * Offers "Orchestrator" as the first entry beside the harnesses: a whole
+   * team in place of one model. Its setup is shown where the models of a
+   * harness are. Choosing a model again goes back to a single harness.
    */
-  orchestrator?: { readonly active: boolean; readonly onSelect: () => void } | undefined;
+  orchestrator?:
+    | {
+        readonly active: boolean;
+        readonly onSelect: () => void;
+        readonly panel: ReactNode;
+      }
+    | undefined;
 }) {
   const triggerLabelOverride = props.orchestrator?.active ? "Orchestrator" : props.triggerLabel;
   const composerFloatingLayerProps = useComposerMenuProps();
   const [uncontrolledIsMenuOpen, setUncontrolledIsMenuOpen] = useState(false);
   const isMenuOpen = props.open ?? uncontrolledIsMenuOpen;
+  // The team is shown where the models are while Orchestrator is chosen in the rail. Opened,
+  // the picker shows what is in use: the team, when the composer prepares work for one.
+  const orchestratorActive = props.orchestrator?.active ?? false;
+  const [teamShown, setTeamShown] = useState(orchestratorActive);
+  const [shownFor, setShownFor] = useState(isMenuOpen);
+  if (shownFor !== isMenuOpen) {
+    setShownFor(isMenuOpen);
+    if (isMenuOpen) setTeamShown(orchestratorActive);
+  }
   const size = props.size ?? "sm";
 
   // Resolve the active instance entry by exact routing key. The composer
@@ -296,34 +312,26 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
       <PopoverPopup
         {...(props.isComposerOwned ? composerFloatingLayerProps : {})}
         align="start"
-        className="before:hidden [--viewport-inline-padding:0]"
+        className={cn(
+          "before:hidden [--viewport-inline-padding:0]",
+          // A team needs more room than a list of models, and the popup is sized for what it
+          // held when it opened.
+          teamShown &&
+            props.orchestrator &&
+            "h-[min(36rem,calc(100vh-8rem))]! w-[min(46rem,calc(100vw-1rem))]!",
+        )}
         viewportClassName="overflow-hidden! rounded-[calc(var(--radius-lg)-1px)] p-0 [clip-path:inset(0_round_calc(var(--radius-lg)-1px))]"
       >
-        {props.orchestrator ? (
-          <button
-            type="button"
-            data-model-picker-orchestrator
-            aria-pressed={props.orchestrator.active}
-            className={cn(
-              "flex w-full cursor-pointer items-center gap-2 border-b border-border px-3 py-2 text-left text-sm hover:bg-accent",
-              props.orchestrator.active && "bg-accent",
-            )}
-            onClick={() => {
-              props.orchestrator?.onSelect();
-              setIsMenuOpen(false);
-            }}
-          >
-            <UsersIcon className="size-4 shrink-0" />
-            <span className="flex min-w-0 flex-col">
-              <span className="font-medium">Orchestrator</span>
-              <span className="truncate text-xs text-muted-foreground">
-                A whole team works on it, with a model for each seat. Choose a model below for a
-                single harness.
-              </span>
-            </span>
-          </button>
-        ) : null}
         <ModelPickerContent
+          {...(props.orchestrator
+            ? {
+                orchestrator: {
+                  ...props.orchestrator,
+                  shown: teamShown,
+                  onShownChange: setTeamShown,
+                },
+              }
+            : {})}
           activeInstanceId={activeInstanceId}
           model={props.model}
           {...(props.selectedModels !== undefined ? { selectedModels: props.selectedModels } : {})}

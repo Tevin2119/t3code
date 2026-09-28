@@ -167,7 +167,8 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
   const routePanelAnimationsActive = panelAnimationsActive && !panelAnimationsSuppressed;
   const isOnSettings = pathname === "/settings" || pathname.startsWith("/settings/");
   // The Board and the Orchestrator show tasks in the sidebar, in place of threads.
-  const isOnBoard = pathname === "/board" || pathname === "/orchestrator";
+  const isOnBoard =
+    pathname === "/board" || pathname === "/orchestrator" || pathname === "/profiles";
   const isMacosDesktop = isElectron && isMacPlatform(navigator.platform);
   const [sidebarWidth, setSidebarWidth] = useState(readInitialThreadSidebarWidth);
   // Subscribed rather than read once: the clamp must track live window size,

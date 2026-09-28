@@ -26,6 +26,8 @@ export const ACTION_LABEL: Record<string, string> = {
   "start-anyway": "Start without waiting",
   approve: "Approve",
   reject: "Send back",
+  deliver: "Start delivery",
+  close: "Close",
 };
 
 export const ACTION_HELP: Record<string, string> = {
@@ -39,6 +41,9 @@ export const ACTION_HELP: Record<string, string> = {
   "start-anyway": "The task stops waiting for the tasks it depends on.",
   approve: "Recorded against the commit that was tested. Nothing is merged.",
   reject: "Sent back with what is to be redone. The task is triaged and built again.",
+  deliver:
+    "The plan is built as it was agreed. It is not made again. The plan and what you said go into the task, and it then goes through build, checks, review and QA to your decision.",
+  close: "Nothing more is done for it. What was said and found is kept.",
 };
 
 type Target = Pick<DeliveryCard, "id" | "title" | "number" | "run">;
@@ -86,7 +91,9 @@ export function useTaskActions(
         return;
       }
       if (action === "submit") void send(`/api/tasks/${card.id}/submit`, { by: person });
-      else if (action === "discard") {
+      else if (action === "deliver" || action === "close") {
+        void send(`/api/tasks/${card.id}/control`, { action, by: person });
+      } else if (action === "discard") {
         void send(`/api/tasks/${card.id}/discard`, {}).then(
           (done) => done && onDiscarded?.(card.id),
         );

@@ -83,6 +83,7 @@ export function withTeamModels<Option extends ModelOption>(
 export function seatValues(base: SeatSettingValues, choice: SeatChoice): SeatSettingValues {
   const moved = choice.harness !== undefined && choice.harness !== base.harness;
   return {
+    active: choice.active ?? base.active ?? "on",
     harness: choice.harness ?? base.harness,
     // What was set for the harness it left means nothing to the one it moved to.
     model: choice.model ?? (moved ? null : base.model),

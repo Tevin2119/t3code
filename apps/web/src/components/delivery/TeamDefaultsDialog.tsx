@@ -191,6 +191,7 @@ export function TeamDefaultsDialog(props: {
                             return `${item?.title ?? seat}: ${describeSeatValues(
                               seatValues(
                                 item?.defined ?? {
+                                  active: null,
                                   harness: null,
                                   model: null,
                                   reasoning: null,

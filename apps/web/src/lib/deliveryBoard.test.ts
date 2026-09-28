@@ -113,6 +113,10 @@ describe("laneAccepts", () => {
     expect(laneAccepts(card({ lane: "paused", held: true }), "ready")).toBe("Resume");
     expect(laneAccepts(card({ lane: "intake", submitted: null }), "triage")).toBe("Submit");
     expect(laneAccepts(card({ lane: "completed", state: "approved" }), "triage")).toBeNull();
+    // What is not a delivery is not moved through the lanes of one.
+    expect(laneAccepts(card({ lane: "chat", state: "chat" }), "paused")).toBeNull();
+    expect(laneAccepts(building, "chat")).toBeNull();
+    expect(laneAccepts(card({ lane: "human-review", state: "planned" }), "triage")).toBeNull();
   });
 });
 

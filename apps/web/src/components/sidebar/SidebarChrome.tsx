@@ -153,7 +153,9 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
                 ? "board"
                 : location.pathname === "/orchestrator"
                   ? "orchestrator"
-                  : null,
+                  : location.pathname === "/profiles"
+                    ? "profiles"
+                    : null,
   });
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const deliveryEnabled = useDeliveryEnabled(primaryEnvironmentId);
