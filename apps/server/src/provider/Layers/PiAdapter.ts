@@ -28,6 +28,7 @@ import {
   type ToolLifecycleItemType,
   type TurnCompletedPayload,
 } from "@t3tools/contracts";
+import { getModelSelectionStringOptionValue } from "@t3tools/shared/model";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
 import * as Cause from "effect/Cause";
 import * as Crypto from "effect/Crypto";
@@ -51,6 +52,7 @@ import {
 } from "../Errors.ts";
 import * as DeliveryThreadSession from "../../delivery/DeliveryThreadSession.ts";
 import { makePiRpcSession, type PiRpcRecord, type PiRpcSession } from "../pi/PiRpcSession.ts";
+import { PI_DEFAULT_THINKING_LEVEL, PI_THINKING_LEVELS } from "./PiProvider.ts";
 import type { ProviderAdapterShape } from "../Services/ProviderAdapter.ts";
 
 const PROVIDER = ProviderDriverKind.make("pi");
@@ -65,6 +67,8 @@ type Adapter = ProviderAdapterShape<ProviderAdapterError>;
 export function buildPiRpcArgs(input: {
   readonly provider: string;
   readonly model: string | undefined;
+  /** What is chosen as Reasoning. Left out, pi decides for itself. */
+  readonly thinking?: string | undefined;
   /** For a thread bound to a team: `--append-system-prompt` and `--skill` with their paths. */
   readonly teamArgs?: ReadonlyArray<string>;
 }): ReadonlyArray<string> {
@@ -74,6 +78,7 @@ export function buildPiRpcArgs(input: {
     "--provider",
     input.provider,
     ...(input.model ? ["--model", input.model] : []),
+    ...(input.thinking ? ["--thinking", input.thinking] : []),
     ...(input.teamArgs ?? []),
   ];
 }
@@ -331,9 +336,18 @@ export const makePiAdapter = Effect.fn("makePiAdapter")(function* (
           const command = settings.binaryPath || "pi";
           const model = input.modelSelection?.model?.trim() || undefined;
           const team = DeliveryThreadSession.deliveryPiLaunch(input.threadId);
+          // The level shown is the level run: with none chosen, the one the picker shows.
+          const chosen = input.modelSelection
+            ? getModelSelectionStringOptionValue(input.modelSelection, "thinking")
+            : undefined;
+          const thinking =
+            chosen && (PI_THINKING_LEVELS as ReadonlyArray<string>).includes(chosen)
+              ? chosen
+              : PI_DEFAULT_THINKING_LEVEL;
           const args = buildPiRpcArgs({
             provider: settings.provider.trim() || "kimi-coding",
             model,
+            thinking,
             teamArgs: team.args,
           });
           // The team's tools read who they serve from the environment pi runs in.

@@ -249,6 +249,7 @@ import {
   OrchestratorPrimaryActions,
 } from "../delivery/OrchestratorComposerControls";
 import { OrchestratorPanel } from "../delivery/OrchestratorPanel";
+import { TeamBadge } from "../delivery/TeamBadge";
 import { TeamPicker } from "../delivery/TeamPicker";
 import {
   useDeliveryEnabled,
@@ -4947,7 +4948,14 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
             ),
           },
         ]
-      : []),
+      : activeThreadId && !orchestratorMode
+        ? [
+            {
+              id: "team",
+              content: <TeamBadge environmentId={environmentId} threadId={activeThreadId} />,
+            },
+          ]
+        : []),
     ...(providerTraitsPicker
       ? [
           {

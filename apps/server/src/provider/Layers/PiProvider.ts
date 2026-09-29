@@ -45,7 +45,44 @@ const PI_PRESENTATION = {
   supportsConversationRollback: false,
 } as const;
 
-const EMPTY_CAPABILITIES: ModelCapabilities = createModelCapabilities({ optionDescriptors: [] });
+/** The levels `pi --thinking` takes. A model that cannot reason runs as if it were off. */
+export const PI_THINKING_LEVELS = [
+  "off",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+] as const;
+export const PI_DEFAULT_THINKING_LEVEL = "medium";
+
+const PI_THINKING_LABELS: Record<(typeof PI_THINKING_LEVELS)[number], string> = {
+  off: "Off",
+  minimal: "Minimal",
+  low: "Low",
+  medium: "Medium",
+  high: "High",
+  xhigh: "Extra High",
+  max: "Max",
+};
+
+// Named EMPTY while pi exposed no options. It now holds the one pi takes on its command line.
+const EMPTY_CAPABILITIES: ModelCapabilities = createModelCapabilities({
+  optionDescriptors: [
+    {
+      id: "thinking",
+      label: "Reasoning",
+      type: "select",
+      options: PI_THINKING_LEVELS.map((level) => ({
+        id: level,
+        label: PI_THINKING_LABELS[level],
+        ...(level === PI_DEFAULT_THINKING_LEVEL ? { isDefault: true } : {}),
+      })),
+      currentValue: PI_DEFAULT_THINKING_LEVEL,
+    },
+  ],
+});
 
 const VERSION_PROBE_TIMEOUT_MS = 4_000;
 const MODEL_PROBE_TIMEOUT_MS = 15_000;
