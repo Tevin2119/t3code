@@ -116,6 +116,15 @@ export function piFailureFromRecord(record: PiRpcRecord): string | undefined {
 }
 import type { ProviderAdapterShape } from "../Services/ProviderAdapter.ts";
 import { PI_RUNTIME_MODES, runtimeModeProblem } from "../runtimeModeSupport.ts";
+import * as FileSystem from "effect/FileSystem";
+import * as Option from "effect/Option";
+import {
+  decodePiResumeCursor,
+  piCursorFrom,
+  piRestoredProblem,
+  piRestorePlan,
+  piSessionStateFrom,
+} from "../pi/piSession.ts";
 
 const PROVIDER = ProviderDriverKind.make("pi");
 
@@ -133,6 +142,8 @@ export function buildPiRpcArgs(input: {
   readonly thinking?: string | undefined;
   /** For a thread bound to a team: `--append-system-prompt` and `--skill` with their paths. */
   readonly teamArgs?: ReadonlyArray<string>;
+  /** The file of the session to take up again. Left out, pi starts a session that is new. */
+  readonly sessionFile?: string | undefined;
 }): ReadonlyArray<string> {
   return [
     "--mode",
@@ -141,6 +152,7 @@ export function buildPiRpcArgs(input: {
     input.provider,
     ...(input.model ? ["--model", input.model] : []),
     ...(input.thinking ? ["--thinking", input.thinking] : []),
+    ...(input.sessionFile ? ["--session", input.sessionFile] : []),
     ...(input.teamArgs ?? []),
   ];
 }
@@ -211,6 +223,7 @@ export const makePiAdapter = Effect.fn("makePiAdapter")(function* (
   options: PiAdapterOptions,
 ) {
   const crypto = yield* Crypto.Crypto;
+  const fileSystem = yield* FileSystem.FileSystem;
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const ownerScope = yield* Effect.scope;
   const environment = options.environment ?? process.env;
@@ -475,6 +488,32 @@ export const makePiAdapter = Effect.fn("makePiAdapter")(function* (
             issue: "The session requires a workspace directory.",
           });
         }
+        // The session of the thread is taken up again, or the thread is not started.
+        const cursor = decodePiResumeCursor(input.resumeCursor);
+        if (
+          input.resumeCursor !== undefined &&
+          input.resumeCursor !== null &&
+          Option.isNone(cursor)
+        ) {
+          return yield* new ProviderAdapterValidationError({
+            provider: PROVIDER,
+            operation: "startSession",
+            issue:
+              "The saved pi session of this thread cannot be read, so its conversation cannot be taken up. Nothing was started. Start a new thread.",
+          });
+        }
+        const had = Option.getOrUndefined(cursor);
+        const there = had
+          ? yield* fileSystem.exists(had.sessionFile).pipe(Effect.orElseSucceed(() => false))
+          : false;
+        const plan = piRestorePlan(had, () => there);
+        if ("problem" in plan) {
+          return yield* new ProviderAdapterValidationError({
+            provider: PROVIDER,
+            operation: "startSession",
+            issue: plan.problem,
+          });
+        }
         const previous = sessions.get(input.threadId);
         if (previous) yield* stopContext(previous);
 
@@ -497,6 +536,7 @@ export const makePiAdapter = Effect.fn("makePiAdapter")(function* (
             model,
             thinking,
             teamArgs: team.args,
+            ...(plan.restore && had ? { sessionFile: had.sessionFile } : {}),
           });
           // The team's tools read who they serve from the environment pi runs in.
           const spawnEnvironment = { ...environment, ...team.env };
@@ -536,6 +576,22 @@ export const makePiAdapter = Effect.fn("makePiAdapter")(function* (
             ),
           );
 
+          const opened = piSessionStateFrom(
+            (yield* rpc
+              .request({ type: "get_state" })
+              .pipe(Effect.catch(() => Effect.succeed(undefined))))?.data,
+          );
+          if (plan.restore && had) {
+            const problem = piRestoredProblem(had, opened);
+            if (problem) {
+              return yield* new ProviderAdapterValidationError({
+                provider: PROVIDER,
+                operation: "startSession",
+                issue: problem,
+              });
+            }
+          }
+          const resumeCursor = piCursorFrom(opened);
           const createdAt = yield* nowIso;
           const session: ProviderSession = {
             provider: PROVIDER,
@@ -545,6 +601,7 @@ export const makePiAdapter = Effect.fn("makePiAdapter")(function* (
             status: "ready",
             runtimeMode: input.runtimeMode,
             ...(model ? { model } : {}),
+            ...(resumeCursor ? { resumeCursor } : {}),
             createdAt,
             updatedAt: createdAt,
           };
@@ -598,6 +655,28 @@ export const makePiAdapter = Effect.fn("makePiAdapter")(function* (
             provider: PROVIDER,
             threadId: input.threadId,
             payload: { state: "ready", reason: "pi RPC session ready" },
+          });
+          yield* emit({
+            type: "session.configured",
+            ...(yield* stamp),
+            provider: PROVIDER,
+            threadId: input.threadId,
+            payload: {
+              config: {
+                session: {
+                  // Said by pi itself, after it was started.
+                  id: opened.sessionId ?? null,
+                  messages: opened.messages ?? null,
+                  takenUpAgain: plan.restore,
+                  ...(plan.restore && had ? { heldBefore: had.messages } : {}),
+                },
+                passed: {
+                  arguments: args.map((word) =>
+                    word === had?.sessionFile ? "<the file of the session>" : word,
+                  ),
+                },
+              },
+            },
           });
           yield* syncReasoning(context, thinking);
           yield* emit({
@@ -729,7 +808,21 @@ export const makePiAdapter = Effect.fn("makePiAdapter")(function* (
         ...(outcome.error ? { errorMessage: outcome.error } : {}),
       }),
     );
-    return { threadId: input.threadId, turnId: turn.turnId };
+    const held = context.stopped
+      ? undefined
+      : piCursorFrom(
+          piSessionStateFrom(
+            (yield* context.rpc
+              .request({ type: "get_state" })
+              .pipe(Effect.catch(() => Effect.succeed(undefined))))?.data,
+          ),
+        );
+    if (held) context.session = { ...context.session, resumeCursor: held };
+    return {
+      threadId: input.threadId,
+      turnId: turn.turnId,
+      ...(held ? { resumeCursor: held } : {}),
+    };
   });
 
   const interruptTurn: Adapter["interruptTurn"] = (threadId) =>
