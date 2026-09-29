@@ -16,7 +16,6 @@
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
-import * as Schedule from "effect/Schedule";
 
 export interface KimiTurnEnd {
   readonly endedWell: boolean;
@@ -71,6 +70,9 @@ export function kimiTurnEndFrom(
   return { endedWell: false, file, why: `Kimi reports that the turn ${how}: ${named}` };
 }
 
+/** The record is asked for this often, a third of a second apart, before it is given up. */
+const TIMES_ASKED = 20;
+
 const SESSION_ID = /^[\w-]+$/;
 
 /** Kimi keeps a session in `<home>/sessions/<workspace>/<session>/agents/main/wire.jsonl`. */
@@ -106,24 +108,23 @@ export const readKimiTurnEnd = Effect.fn("KimiTurnEnd.read")(function* (input: {
   readonly endsBefore?: number;
 }) {
   const fileSystem = yield* FileSystem.FileSystem;
-  const attempt = Effect.gen(function* () {
+  // What the record holds now: the end of this turn, or nothing of it yet.
+  const look = Effect.gen(function* () {
     const file = yield* findRecord(input);
-    if (!file) return yield* Effect.fail({ file: undefined as string | undefined });
-    const record = yield* fileSystem
-      .readFileString(file)
-      .pipe(Effect.mapError(() => ({ file: file as string | undefined })));
+    if (!file) return { file, event: undefined };
+    const record = yield* fileSystem.readFileString(file).pipe(Effect.orElseSucceed(() => ""));
     const ends = record.split("\n").filter((line) => line.includes('"turn.ended"')).length;
     if (input.endsBefore !== undefined && ends <= input.endsBefore) {
-      return yield* Effect.fail({ file: file as string | undefined });
+      return { file, event: undefined };
     }
-    const event = lastKimiTurnEnded(record);
-    if (!event) return yield* Effect.fail({ file: file as string | undefined });
-    return kimiTurnEndFrom(event, file);
+    return { file, event: lastKimiTurnEnded(record) };
   });
-  return yield* attempt.pipe(
-    Effect.retry(Schedule.spaced("300 millis").pipe(Schedule.both(Schedule.recurs(20)))),
-    Effect.catch((cause) => Effect.succeed(kimiTurnEndFrom(undefined, cause.file))),
-  );
+  let seen = yield* look;
+  for (let asked = 0; asked < TIMES_ASKED && !seen.event; asked += 1) {
+    yield* Effect.sleep("300 millis");
+    seen = yield* look;
+  }
+  return kimiTurnEndFrom(seen.event, seen.file);
 });
 
 /** How many turns the record of a session holds as ended, before another is started. */

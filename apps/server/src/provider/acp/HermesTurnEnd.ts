@@ -17,7 +17,6 @@
 import * as NodeSqlite from "node:sqlite";
 
 import * as Effect from "effect/Effect";
-import * as Schedule from "effect/Schedule";
 
 export interface HermesTurnEnd {
   readonly endedWell: boolean;
@@ -86,22 +85,19 @@ export const readHermesTurnEnd = Effect.fn("HermesTurnEnd.read")(function* (inpu
   readonly sessionId: string;
   readonly storeFile: string;
 }) {
-  const attempt = Effect.try({
+  const look = Effect.try({
     try: () => readLast(input.storeFile, input.sessionId),
-    catch: () => "unreadable" as const,
-  }).pipe(
-    Effect.flatMap((last) =>
-      last &&
-      (last.displayKind === "failed_turn" || (last.role === "assistant" && last.finishReason))
-        ? Effect.succeed(last)
-        : Effect.fail(last ?? ("unreadable" as const)),
-    ),
-  );
-  return yield* attempt.pipe(
-    Effect.retry(Schedule.spaced("300 millis").pipe(Schedule.both(Schedule.recurs(20)))),
-    Effect.map(hermesTurnEndFrom),
-    Effect.catch((last) =>
-      Effect.succeed(hermesTurnEndFrom(last === "unreadable" ? undefined : last)),
-    ),
-  );
+    catch: () => undefined,
+  }).pipe(Effect.orElseSucceed(() => undefined));
+  const settled = (last: HermesLastMessage | undefined) =>
+    last !== undefined &&
+    (last.displayKind === "failed_turn" ||
+      (last.role === "assistant" && last.finishReason !== undefined));
+  let last = yield* look;
+  // Asked again a third of a second apart, twenty times, before it is given up.
+  for (let asked = 0; asked < 20 && !settled(last); asked += 1) {
+    yield* Effect.sleep("300 millis");
+    last = yield* look;
+  }
+  return hermesTurnEndFrom(last);
 });
