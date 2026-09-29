@@ -96,6 +96,13 @@ export type AcpParsedSessionEvent =
       readonly rawPayload: unknown;
     }
   | {
+      /** What the session holds of its context window, as the harness counts it. */
+      readonly _tag: "UsageUpdated";
+      readonly usedTokens: number;
+      readonly maxTokens: number | undefined;
+      readonly rawPayload: unknown;
+    }
+  | {
       readonly _tag: "AssistantItemStarted";
       readonly itemId: string;
     }
@@ -874,6 +881,19 @@ export function parseSessionUpdateEvent(params: EffectAcpSchema.SessionNotificat
         events.push({
           _tag: "ThoughtDelta",
           text: upd.content.text,
+          rawPayload: params,
+        });
+      }
+      break;
+    }
+    case "usage_update": {
+      const used = Number(upd.used);
+      const size = Number(upd.size);
+      if (Number.isInteger(used) && used >= 0) {
+        events.push({
+          _tag: "UsageUpdated",
+          usedTokens: used,
+          maxTokens: Number.isInteger(size) && size > 0 ? size : undefined,
           rawPayload: params,
         });
       }

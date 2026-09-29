@@ -42,7 +42,7 @@ import { RefreshIcon } from "../ui/refresh-icon";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { SidebarInset } from "../ui/sidebar";
 import { WorkspacePageHeader } from "../WorkspacePageHeader";
-import { ACTION_LABEL, useTaskActions } from "./taskActions";
+import { actionLabel, useTaskActions } from "./taskActions";
 import { TaskEditor } from "./TaskEditor";
 import {
   Age,
@@ -178,7 +178,7 @@ function DraggableCard(props: {
                       props.onAction(card, action);
                     }}
                   >
-                    {ACTION_LABEL[action] ?? action}
+                    {actionLabel(action, card)}
                   </MenuItem>
                 ))}
               </MenuPopup>

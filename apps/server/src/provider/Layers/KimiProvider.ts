@@ -35,6 +35,7 @@ import {
   spawnAndCollect,
   type ServerProviderDraft,
 } from "../providerSnapshot.ts";
+import { ACP_OPTION_HARNESS_DEFAULT } from "../acp/AcpSessionOption.ts";
 
 const KIMI_PRESENTATION = {
   displayName: "Kimi",
@@ -44,7 +45,34 @@ const KIMI_PRESENTATION = {
   reportsContextWindow: true,
 } as const;
 
-const EMPTY_CAPABILITIES: ModelCapabilities = createModelCapabilities({ optionDescriptors: [] });
+/**
+ * The level of reasoning, which the harness offers over ACP as the session option `thinking`.
+ * The values differ with the model, so this list is what the picker shows and no more: a
+ * value is sent only when a person chose it and the session offers it.
+ */
+export const KIMI_THINKING_OPTION_ID = "thinking";
+export const KIMI_THINKING_LEVELS = ["on", "low", "high", "max"] as const;
+
+const LEVEL_LABELS: Record<string, string> = { on: "On", low: "Low", high: "High", max: "Max" };
+
+// Named EMPTY while no option was offered. It now holds the level of reasoning.
+const EMPTY_CAPABILITIES: ModelCapabilities = createModelCapabilities({
+  optionDescriptors: [
+    {
+      id: KIMI_THINKING_OPTION_ID,
+      label: "Reasoning",
+      type: "select",
+      options: [
+        { id: ACP_OPTION_HARNESS_DEFAULT, label: "Harness default", isDefault: true },
+        ...KIMI_THINKING_LEVELS.map((level) => ({
+          id: level,
+          label: LEVEL_LABELS[level] ?? level,
+        })),
+      ],
+      currentValue: ACP_OPTION_HARNESS_DEFAULT,
+    },
+  ],
+});
 
 const VERSION_PROBE_TIMEOUT_MS = 4_000;
 

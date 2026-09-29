@@ -64,7 +64,7 @@ import { Textarea } from "../ui/textarea";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { WorkspacePageHeader } from "../WorkspacePageHeader";
 import { SeatSettingsPanel } from "./SeatSettingsPanel";
-import { ACTION_HELP, ACTION_LABEL, useTaskActions } from "./taskActions";
+import { actionHelp, actionLabel, useTaskActions } from "./taskActions";
 import { TaskEditor } from "./TaskEditor";
 import {
   AttachButton,
@@ -1131,9 +1131,9 @@ export function TaskWorkspace(props: {
                           />
                         }
                       >
-                        {ACTION_LABEL[action] ?? action}
+                        {actionLabel(action, task.card)}
                       </TooltipTrigger>
-                      <TooltipPopup side="bottom">{ACTION_HELP[action]}</TooltipPopup>
+                      <TooltipPopup side="bottom">{actionHelp(action, task.card)}</TooltipPopup>
                     </Tooltip>
                   ))
                 : null}
@@ -1159,9 +1159,9 @@ export function TaskWorkspace(props: {
                         onClick={() => actions.run(task.card, action)}
                       >
                         <span className="flex max-w-80 flex-col">
-                          <span>{ACTION_LABEL[action] ?? action}</span>
+                          <span>{actionLabel(action, task.card)}</span>
                           <span className="text-xs text-muted-foreground">
-                            {ACTION_HELP[action]}
+                            {actionHelp(action, task.card)}
                           </span>
                         </span>
                       </MenuItem>

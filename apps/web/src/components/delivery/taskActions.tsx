@@ -46,7 +46,23 @@ export const ACTION_HELP: Record<string, string> = {
   close: "Nothing more is done for it. What was said and found is kept.",
 };
 
-type Target = Pick<DeliveryCard, "id" | "title" | "number" | "run">;
+/** What an action is called on this task. On a part of a split task, approving is a review. */
+export function actionLabel(action: string, card: Pick<DeliveryCard, "partOf"> | null): string {
+  if (card?.partOf && action === "approve") return "Mark part as reviewed";
+  if (card?.partOf && action === "reject") return "Send part back";
+  return ACTION_LABEL[action] ?? action;
+}
+
+/** What an action does, said for this task. */
+export function actionHelp(action: string, card: Pick<DeliveryCard, "partOf"> | null): string {
+  if (card?.partOf && action === "approve")
+    return `Records that you reviewed this part as it stands. It does not approve the whole, #${card.partOf.number}, which is decided on its own.`;
+  if (card?.partOf && action === "reject")
+    return `Sends this part back to be built again. The whole, #${card.partOf.number}, is put together and tested again after it.`;
+  return ACTION_HELP[action] ?? "";
+}
+
+type Target = Pick<DeliveryCard, "id" | "title" | "number" | "run" | "partOf" | "parts">;
 type Decision = { readonly card: Target; readonly decision: "approve" | "reject" };
 
 /**
@@ -153,15 +169,37 @@ function DecisionDialog(props: {
   const [notes, setNotes] = useState("");
   const { card, decision } = props.decision;
   const approving = decision === "approve";
+  const whole = card.partOf;
+  const parts = card.parts.length;
+  const verb = approving ? (whole ? "Mark as reviewed" : "Approve") : "Send back";
   return (
     <Dialog open onOpenChange={(open) => !open && props.onClose()}>
       <DialogPopup data-delivery-decision={decision}>
         <DialogHeader>
           <DialogTitle>
-            {approving ? "Approve" : "Send back"}: #{card.number} {card.title}
+            {verb}: #{card.number} {card.title}
           </DialogTitle>
         </DialogHeader>
         <DialogPanel className="flex flex-col gap-3 text-sm">
+          {whole ? (
+            <p
+              className="rounded-md border border-border bg-muted/40 p-2"
+              data-delivery-decision-part
+            >
+              {approving
+                ? `This is a part of #${whole.number} ${whole.title}. Marking it as reviewed does not approve the whole. The whole is decided on its own, when every part is built and they were tested together.`
+                : `This is a part of #${whole.number} ${whole.title}. Sent back, this part is built again, and the whole is put together and tested again after it.`}
+            </p>
+          ) : parts > 0 ? (
+            <p
+              className="rounded-md border border-border bg-muted/40 p-2"
+              data-delivery-decision-whole
+            >
+              {approving
+                ? `This decides the whole, and with it each of its ${parts} parts. It can be approved only while every part is the one that was tested together and the checks of the whole passed.`
+                : `This sends the whole back, and with it each of its ${parts} parts.`}
+            </p>
+          ) : null}
           <p className="text-muted-foreground">
             A decision is recorded against the commit that was tested
             {card.run?.candidate ? ` (${card.run.candidate.slice(0, 10)})` : ""}. Nothing is merged.
@@ -217,7 +255,7 @@ function DecisionDialog(props: {
                 });
             }}
           >
-            {approving ? "Approve" : "Send back"}
+            {verb}
           </Button>
         </DialogFooter>
       </DialogPopup>

@@ -41,15 +41,45 @@ import {
   spawnAndCollect,
   type ServerProviderDraft,
 } from "../providerSnapshot.ts";
+import { ACP_OPTION_HARNESS_DEFAULT } from "../acp/AcpSessionOption.ts";
 
 const DEEPSEEK_PRESENTATION = {
+  // The harness says what its session holds of the context window, in `usage_update`.
+  reportsContextWindow: true,
   displayName: "DeepSeek",
   badgeLabel: "Early Access",
   // The ACP agent exposes no history rewind, so the UI must not offer one.
   supportsConversationRollback: false,
 } as const;
 
-const EMPTY_CAPABILITIES: ModelCapabilities = createModelCapabilities({ optionDescriptors: [] });
+/**
+ * The level of reasoning, which the harness offers over ACP as the session option `reasoning_effort`.
+ * The values differ with the model, so this list is what the picker shows and no more: a
+ * value is sent only when a person chose it and the session offers it.
+ */
+export const DEEPSEEK_REASONING_OPTION_ID = "reasoning_effort";
+export const DEEPSEEK_REASONING_LEVELS = ["off", "low", "high", "max"] as const;
+
+const LEVEL_LABELS: Record<string, string> = { off: "Off", low: "Low", high: "High", max: "Max" };
+
+// Named EMPTY while no option was offered. It now holds the level of reasoning.
+const EMPTY_CAPABILITIES: ModelCapabilities = createModelCapabilities({
+  optionDescriptors: [
+    {
+      id: DEEPSEEK_REASONING_OPTION_ID,
+      label: "Reasoning",
+      type: "select",
+      options: [
+        { id: ACP_OPTION_HARNESS_DEFAULT, label: "Harness default", isDefault: true },
+        ...DEEPSEEK_REASONING_LEVELS.map((level) => ({
+          id: level,
+          label: LEVEL_LABELS[level] ?? level,
+        })),
+      ],
+      currentValue: ACP_OPTION_HARNESS_DEFAULT,
+    },
+  ],
+});
 
 // dsh composes its profile before it answers, which takes longer than a plain CLI.
 const VERSION_PROBE_TIMEOUT_MS = 10_000;

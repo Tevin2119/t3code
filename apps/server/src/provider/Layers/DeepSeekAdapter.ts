@@ -76,7 +76,11 @@ import {
 } from "../acp/AcpCoreRuntimeEvents.ts";
 import { makeAcpNativeLoggerFactory } from "../acp/AcpNativeLogging.ts";
 import { parsePermissionRequest } from "../acp/AcpRuntimeModel.ts";
+import type { ModelSelection } from "@t3tools/contracts";
+import { getModelSelectionStringOptionValue } from "@t3tools/shared/model";
+import { applyAcpSessionOption, type AcpSessionOptionOutcome } from "../acp/AcpSessionOption.ts";
 import type * as AcpSessionRuntime from "../acp/AcpSessionRuntime.ts";
+import { DEEPSEEK_REASONING_OPTION_ID } from "./DeepSeekProvider.ts";
 import {
   currentDeepSeekModelIdFromSessionSetup,
   deepseekModelSlugFromConfigValue,
@@ -96,11 +100,20 @@ const decodeResumeCursor = Schema.decodeUnknownOption(ResumeCursor);
 const isAcpError = Schema.is(EffectAcpErrors.AcpError);
 
 type Adapter = ProviderAdapterShape<ProviderAdapterError>;
+
+/** What a person chose as Reasoning. Undefined leaves the harness on its own setting. */
+const chosenLevel = (selection: ModelSelection | undefined): string | undefined =>
+  selection
+    ? getModelSelectionStringOptionValue(selection, DEEPSEEK_REASONING_OPTION_ID)
+    : undefined;
+
 type Runtime = Pick<
   AcpSessionRuntime.AcpSessionRuntime["Service"],
   | "handleRequestPermission"
   | "start"
   | "setModel"
+  | "getConfigOptions"
+  | "setConfigOption"
   | "getEvents"
   | "drainEvents"
   | "prompt"
@@ -347,6 +360,45 @@ export const makeDeepSeekAdapter = Effect.fn("makeDeepSeekAdapter")(function* (
     }).pipe(Effect.ensuring(Effect.sync(() => context.approvals.delete(requestId))));
   });
 
+  /**
+   * Says what the session runs on for its level of reasoning, as the harness reports it, and
+   * says so plainly when a chosen level was not taken.
+   */
+  const reportReasoning = Effect.fn("DeepSeekAdapter.reportReasoning")(function* (
+    threadId: ThreadId,
+    outcome: AcpSessionOptionOutcome,
+  ) {
+    yield* emit({
+      type: "session.configured",
+      ...(yield* stamp),
+      provider: PROVIDER,
+      threadId,
+      payload: {
+        config: {
+          reasoning: {
+            option: outcome.option,
+            chosen: outcome.chosen ?? null,
+            effective: outcome.effective ?? null,
+            offered: outcome.offered,
+            applied: outcome.applied,
+          },
+        },
+      },
+    });
+    if (outcome.why) {
+      yield* emit({
+        type: "runtime.warning",
+        ...(yield* stamp),
+        provider: PROVIDER,
+        threadId,
+        payload: {
+          message: `The reasoning level "${outcome.chosen}" was not set: ${outcome.why}. The session runs on ${outcome.effective ? `"${outcome.effective}"` : "the harness's own setting"}.`,
+          detail: outcome,
+        },
+      });
+    }
+  });
+
   const handleEvent = Effect.fn("DeepSeekAdapter.handleEvent")(function* (
     context: SessionContext,
     event: AcpSessionRuntime.AcpSessionRuntimeEvent,
@@ -359,6 +411,22 @@ export const makeDeepSeekAdapter = Effect.fn("makeDeepSeekAdapter")(function* (
     switch (event._tag) {
       case "ModeChanged":
       case "ConfigOptionsUpdated":
+        return;
+      case "UsageUpdated":
+        yield* emit({
+          type: "thread.token-usage.updated",
+          ...(yield* stamp),
+          provider: PROVIDER,
+          threadId: context.threadId,
+          ...(context.activeTurnId ? { turnId: context.activeTurnId } : {}),
+          payload: {
+            usage: {
+              usedTokens: event.usedTokens,
+              ...(event.maxTokens === undefined ? {} : { maxTokens: event.maxTokens }),
+            },
+          },
+          raw: { source: "acp.jsonrpc", method: "session/update", payload: event.rawPayload },
+        });
         return;
       case "AvailableCommandsUpdated":
         yield* options.onAvailableCommands?.(event.availableCommands, context.cwd) ?? Effect.void;
@@ -529,6 +597,11 @@ export const makeDeepSeekAdapter = Effect.fn("makeDeepSeekAdapter")(function* (
           if (requestedModel && requestedModel !== currentModel) {
             yield* runtime.setModel(requestedModel);
           }
+          const reasoningAtStart = yield* applyAcpSessionOption(
+            runtime,
+            DEEPSEEK_REASONING_OPTION_ID,
+            chosenLevel(input.modelSelection),
+          );
           yield* options.onSessionStarted?.(started, cwd) ?? Effect.void;
           const createdAt = yield* nowIso;
           const session: ProviderSession = {
@@ -583,6 +656,7 @@ export const makeDeepSeekAdapter = Effect.fn("makeDeepSeekAdapter")(function* (
             threadId: input.threadId,
             payload: { state: "ready", reason: "DeepSeek ACP session ready" },
           });
+          yield* reportReasoning(input.threadId, reasoningAtStart);
           yield* emit({
             type: "thread.started",
             ...(yield* stamp),
@@ -682,6 +756,16 @@ export const makeDeepSeekAdapter = Effect.fn("makeDeepSeekAdapter")(function* (
           if (selectedModel) {
             yield* context.runtime.setModel(selectedModel);
           }
+          // Asked again at each turn: the person may have chosen another level, or another model
+          // may offer other levels. Nothing is sent when the session is on the level already.
+          yield* reportReasoning(
+            input.threadId,
+            yield* applyAcpSessionOption(
+              context.runtime,
+              DEEPSEEK_REASONING_OPTION_ID,
+              chosenLevel(input.modelSelection),
+            ),
+          );
           context.session = {
             ...context.session,
             status: "running",

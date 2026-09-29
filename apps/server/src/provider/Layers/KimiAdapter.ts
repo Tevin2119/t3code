@@ -70,7 +70,11 @@ import {
 } from "../acp/AcpCoreRuntimeEvents.ts";
 import { makeAcpNativeLoggerFactory } from "../acp/AcpNativeLogging.ts";
 import { parsePermissionRequest } from "../acp/AcpRuntimeModel.ts";
+import type { ModelSelection } from "@t3tools/contracts";
+import { getModelSelectionStringOptionValue } from "@t3tools/shared/model";
+import { applyAcpSessionOption, type AcpSessionOptionOutcome } from "../acp/AcpSessionOption.ts";
 import type * as AcpSessionRuntime from "../acp/AcpSessionRuntime.ts";
+import { KIMI_THINKING_OPTION_ID } from "./KimiProvider.ts";
 import {
   currentKimiModelIdFromSessionSetup,
   resolveKimiAcpModelId,
@@ -89,11 +93,18 @@ const decodeResumeCursor = Schema.decodeUnknownOption(ResumeCursor);
 const isAcpError = Schema.is(EffectAcpErrors.AcpError);
 
 type Adapter = ProviderAdapterShape<ProviderAdapterError>;
+
+/** What a person chose as Reasoning. Undefined leaves the harness on its own setting. */
+const chosenLevel = (selection: ModelSelection | undefined): string | undefined =>
+  selection ? getModelSelectionStringOptionValue(selection, KIMI_THINKING_OPTION_ID) : undefined;
+
 type Runtime = Pick<
   AcpSessionRuntime.AcpSessionRuntime["Service"],
   | "handleRequestPermission"
   | "start"
   | "setSessionModel"
+  | "getConfigOptions"
+  | "setConfigOption"
   | "getEvents"
   | "drainEvents"
   | "prompt"
@@ -337,6 +348,45 @@ export const makeKimiAdapter = Effect.fn("makeKimiAdapter")(function* (
     }).pipe(Effect.ensuring(Effect.sync(() => context.approvals.delete(requestId))));
   });
 
+  /**
+   * Says what the session runs on for its level of reasoning, as the harness reports it, and
+   * says so plainly when a chosen level was not taken.
+   */
+  const reportReasoning = Effect.fn("KimiAdapter.reportReasoning")(function* (
+    threadId: ThreadId,
+    outcome: AcpSessionOptionOutcome,
+  ) {
+    yield* emit({
+      type: "session.configured",
+      ...(yield* stamp),
+      provider: PROVIDER,
+      threadId,
+      payload: {
+        config: {
+          reasoning: {
+            option: outcome.option,
+            chosen: outcome.chosen ?? null,
+            effective: outcome.effective ?? null,
+            offered: outcome.offered,
+            applied: outcome.applied,
+          },
+        },
+      },
+    });
+    if (outcome.why) {
+      yield* emit({
+        type: "runtime.warning",
+        ...(yield* stamp),
+        provider: PROVIDER,
+        threadId,
+        payload: {
+          message: `The reasoning level "${outcome.chosen}" was not set: ${outcome.why}. The session runs on ${outcome.effective ? `"${outcome.effective}"` : "the harness's own setting"}.`,
+          detail: outcome,
+        },
+      });
+    }
+  });
+
   const handleEvent = Effect.fn("KimiAdapter.handleEvent")(function* (
     context: SessionContext,
     event: AcpSessionRuntime.AcpSessionRuntimeEvent,
@@ -349,6 +399,22 @@ export const makeKimiAdapter = Effect.fn("makeKimiAdapter")(function* (
     switch (event._tag) {
       case "ModeChanged":
       case "ConfigOptionsUpdated":
+        return;
+      case "UsageUpdated":
+        yield* emit({
+          type: "thread.token-usage.updated",
+          ...(yield* stamp),
+          provider: PROVIDER,
+          threadId: context.threadId,
+          ...(context.activeTurnId ? { turnId: context.activeTurnId } : {}),
+          payload: {
+            usage: {
+              usedTokens: event.usedTokens,
+              ...(event.maxTokens === undefined ? {} : { maxTokens: event.maxTokens }),
+            },
+          },
+          raw: { source: "acp.jsonrpc", method: "session/update", payload: event.rawPayload },
+        });
         return;
       case "AvailableCommandsUpdated":
         yield* options.onAvailableCommands?.(event.availableCommands, context.cwd) ?? Effect.void;
@@ -514,6 +580,11 @@ export const makeKimiAdapter = Effect.fn("makeKimiAdapter")(function* (
           if (requestedModel) {
             yield* runtime.setSessionModel(resolveKimiAcpModelId(requestedModel));
           }
+          const reasoningAtStart = yield* applyAcpSessionOption(
+            runtime,
+            KIMI_THINKING_OPTION_ID,
+            chosenLevel(input.modelSelection),
+          );
           yield* options.onSessionStarted?.(started, cwd) ?? Effect.void;
           const createdAt = yield* nowIso;
           const session: ProviderSession = {
@@ -568,6 +639,7 @@ export const makeKimiAdapter = Effect.fn("makeKimiAdapter")(function* (
             threadId: input.threadId,
             payload: { state: "ready", reason: "Kimi ACP session ready" },
           });
+          yield* reportReasoning(input.threadId, reasoningAtStart);
           yield* emit({
             type: "thread.started",
             ...(yield* stamp),
@@ -668,6 +740,16 @@ export const makeKimiAdapter = Effect.fn("makeKimiAdapter")(function* (
               resolveKimiAcpModelId(input.modelSelection.model),
             );
           }
+          // Asked again at each turn: the person may have chosen another level, or another model
+          // may offer other levels. Nothing is sent when the session is on the level already.
+          yield* reportReasoning(
+            input.threadId,
+            yield* applyAcpSessionOption(
+              context.runtime,
+              KIMI_THINKING_OPTION_ID,
+              chosenLevel(input.modelSelection),
+            ),
+          );
           context.session = {
             ...context.session,
             status: "running",

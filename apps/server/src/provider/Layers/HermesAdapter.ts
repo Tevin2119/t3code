@@ -358,6 +358,22 @@ export const makeHermesAdapter = Effect.fn("makeHermesAdapter")(function* (
       case "ModeChanged":
       case "ConfigOptionsUpdated":
         return;
+      case "UsageUpdated":
+        yield* emit({
+          type: "thread.token-usage.updated",
+          ...(yield* stamp),
+          provider: PROVIDER,
+          threadId: context.threadId,
+          ...(context.activeTurnId ? { turnId: context.activeTurnId } : {}),
+          payload: {
+            usage: {
+              usedTokens: event.usedTokens,
+              ...(event.maxTokens === undefined ? {} : { maxTokens: event.maxTokens }),
+            },
+          },
+          raw: { source: "acp.jsonrpc", method: "session/update", payload: event.rawPayload },
+        });
+        return;
       case "AvailableCommandsUpdated":
         yield* options.onAvailableCommands?.(event.availableCommands, context.cwd) ?? Effect.void;
         return;

@@ -44,6 +44,8 @@ import {
 } from "../providerSnapshot.ts";
 
 const HERMES_PRESENTATION = {
+  // The harness says what its session holds of the context window, in `usage_update`.
+  reportsContextWindow: true,
   displayName: "Hermes",
   badgeLabel: "Early Access",
   // The ACP agent exposes no history rewind, so the UI must not offer one.

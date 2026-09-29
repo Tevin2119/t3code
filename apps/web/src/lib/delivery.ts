@@ -689,6 +689,10 @@ export interface DeliveryCard {
   readonly questions: number;
   readonly proposals: number;
   readonly waitsFor: ReadonlyArray<TaskBrief>;
+  /** For a part of a split task: the task it is a part of. Its decision is made there. */
+  readonly partOf: { readonly id: string; readonly number: number; readonly title: string } | null;
+  /** For a part: who reviewed it as it stands. A review of a part does not approve the whole. */
+  readonly reviewedBy: string | null;
   readonly messages: number;
   /** Said by the team or the engine since a person last opened the task. */
   readonly unread: number;
@@ -803,6 +807,14 @@ export const parseCard = (value: Json): DeliveryCard => {
     questions: count(value.questions),
     proposals: count(value.proposals),
     waitsFor: records(value.waitsFor).map(parseBrief),
+    partOf: isRecord(value.partOf)
+      ? {
+          id: text(value.partOf.id),
+          number: count(value.partOf.number),
+          title: text(value.partOf.title),
+        }
+      : null,
+    reviewedBy: typeof value.reviewedBy === "string" && value.reviewedBy ? value.reviewedBy : null,
     messages: count(value.messages),
     unread: count(value.unread),
     unanswered: count(value.unanswered),
