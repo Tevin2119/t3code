@@ -30,6 +30,8 @@ import { makeHermesTextGeneration } from "../../textGeneration/HermesTextGenerat
 import { makeHermesAcpRuntime, makeHermesEnvironment } from "../acp/HermesAcpSupport.ts";
 import { makeCliAuth } from "../CliAuth.ts";
 import { ProviderDriverError } from "../Errors.ts";
+import { readHermesTurnEnd } from "../acp/HermesTurnEnd.ts";
+import { expandHomePath } from "../../pathExpansion.ts";
 import { makeHermesAdapter, type HermesAdapterOptions } from "../Layers/HermesAdapter.ts";
 import {
   buildInitialHermesProviderSnapshot,
@@ -116,9 +118,19 @@ export const HermesDriver: ProviderDriver<HermesSettings, HermesDriverEnv> = {
           childProcessSpawner: spawner,
         }).pipe(Effect.provideService(Crypto.Crypto, crypto));
 
+      // Where Hermes keeps its sessions: the home it was given, or its own.
+      const hermesHome =
+        effectiveConfig.homePath.trim().length > 0
+          ? expandHomePath(effectiveConfig.homePath)
+          : processEnv["HERMES_HOME"]?.trim() ||
+            (processEnv["LOCALAPPDATA"]
+              ? `${processEnv["LOCALAPPDATA"]}/hermes`
+              : expandHomePath("~/.hermes"));
       const adapter = yield* makeHermesAdapter(effectiveConfig, {
         instanceId,
         makeRuntime,
+        turnEnd: (sessionId) =>
+          readHermesTurnEnd({ sessionId, storeFile: `${hermesHome}/state.db` }),
         ...(eventLoggers.native ? { nativeEventLogger: eventLoggers.native } : {}),
       });
       const textGeneration = yield* makeHermesTextGeneration(effectiveConfig, processEnv);

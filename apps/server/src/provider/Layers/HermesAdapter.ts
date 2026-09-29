@@ -85,6 +85,7 @@ import {
   type HermesAcpRuntimeInput,
 } from "../acp/HermesAcpSupport.ts";
 import type { ProviderAdapterShape } from "../Services/ProviderAdapter.ts";
+import type { HermesTurnEnd } from "../acp/HermesTurnEnd.ts";
 import { HERMES_RUNTIME_MODES, runtimeModeProblem } from "../runtimeModeSupport.ts";
 import type { EventNdjsonLogger } from "./EventNdjsonLogger.ts";
 
@@ -202,6 +203,12 @@ export interface HermesAdapterOptions {
   ) => Effect.Effect<void>;
   readonly defaultModel?: Effect.Effect<string | undefined>;
   readonly nativeEventLogger?: EventNdjsonLogger;
+  /**
+   * Reads from Hermes's own store how a turn ended. Hermes answers `end_turn` for a turn
+   * that failed as for one that ended well, so its answer alone is not taken for a turn that
+   * ended well. Left out, as in a test of the protocol alone, the answer is all there is.
+   */
+  readonly turnEnd?: (sessionId: string) => Effect.Effect<HermesTurnEnd>;
 }
 
 /** Keeps one `hermes acp` process per thread and drains a cancelled prompt before steering. */
@@ -751,11 +758,21 @@ export const makeHermesAdapter = Effect.fn("makeHermesAdapter")(function* (
       const record = context.turns.find((turn) => turn.id === launch.turn.turnId);
       if (record) record.items.push(result);
       else context.turns.push({ id: launch.turn.turnId, items: [result] });
+      // What Hermes answered is held against what it recorded of the turn.
+      const ended =
+        result.stopReason === "end_turn" && options.turnEnd
+          ? yield* options.turnEnd(context.nativeSessionId)
+          : undefined;
       yield* context.promptLock.withPermit(
-        finishTurn(launch.turn, {
-          state: result.stopReason === "cancelled" ? "cancelled" : "completed",
-          stopReason: result.stopReason,
-        }),
+        finishTurn(
+          launch.turn,
+          ended && !ended.endedWell
+            ? { state: "failed", errorMessage: ended.why ?? "Hermes reports that the turn failed." }
+            : {
+                state: result.stopReason === "cancelled" ? "cancelled" : "completed",
+                stopReason: result.stopReason,
+              },
+        ),
       );
       return {
         threadId: input.threadId,
