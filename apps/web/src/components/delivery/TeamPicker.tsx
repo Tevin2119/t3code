@@ -11,6 +11,7 @@ import {
   type SeatForThread,
 } from "../../lib/deliverySeats";
 import {
+  SEAT_TAKEOVER_OVER,
   useDeliveryDraftStore,
   useDeliveryEnabled,
   useDeliveryRead,
@@ -81,10 +82,12 @@ export function TeamPicker(props: {
   // seat that is chosen, here, because the seat also changes when the harness does.
   useEffect(() => {
     if (!enabled || !inheritKey || !threadSeat || inheritedFor === inheritKey) return;
+    if (inheritedFor === SEAT_TAKEOVER_OVER) return;
     onSeat(threadSeat, takeOverFor(inheritedFor, threadSeat));
     markInherited(threadId, inheritKey);
   }, [enabled, inheritKey, threadSeat, inheritedFor, onSeat, markInherited, threadId]);
-  const overrides = threadSeat ? seatOverrides(threadSeat, chosen) : [];
+  const overrides =
+    threadSeat && inheritedFor !== SEAT_TAKEOVER_OVER ? seatOverrides(threadSeat, chosen) : [];
 
   if (!enabled) return null;
 

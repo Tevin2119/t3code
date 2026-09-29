@@ -226,6 +226,28 @@ describe("what a thread takes over from its seat", () => {
     ]);
   });
 
+  it("counts a level chosen over a seat that leaves it to the harness", () => {
+    const own = seatForThread(
+      [seat({ now: values({ harness: "claude", model: "claude-fable-5-1", access: "full" }) })],
+      "claude",
+      "research-lead",
+    );
+    expect(
+      seatOverrides(own, {
+        model: "claude-fable-5-1",
+        reasoning: "low",
+        runtimeMode: "full-access",
+      }),
+    ).toEqual([{ setting: "reasoning", seat: "the level of the harness", chosen: "low" }]);
+    expect(
+      seatOverrides(own, {
+        model: "claude-fable-5-1",
+        reasoning: null,
+        runtimeMode: "full-access",
+      }),
+    ).toEqual([]);
+  });
+
   it("holds full access against a seat that is restricted", () => {
     const restricted = seatForThread(
       [seat({ now: values({ harness: "claude", access: "read-only" }) })],

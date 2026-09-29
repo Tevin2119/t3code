@@ -282,9 +282,9 @@ export interface SeatOverride {
 }
 
 /**
- * Where what is chosen for a thread is not what its seat has. Only what the
- * seat names can be overridden: a seat that leaves its model or its level to
- * the harness is matched by any choice. Of the access modes only full access
+ * Where what is chosen for a thread is not what its seat has. A seat that
+ * names no model runs on the model of its harness, and is matched by any
+ * model: a thread always names one. Of the access modes only full access
  * has a counterpart in a seat, so it is the one held against a seat's access.
  */
 export function seatOverrides(
@@ -299,10 +299,12 @@ export function seatOverrides(
   if (seat.model && chosen.model && seat.model !== chosen.model) {
     found.push({ setting: "model", seat: seat.model, chosen: chosen.model });
   }
-  if (seat.reasoning && (chosen.reasoning ?? "harness default") !== seat.reasoning) {
+  // A seat that names no level leaves it to the harness, and a level chosen over that
+  // is as much an override as one chosen over a level the seat names.
+  if ((chosen.reasoning ?? null) !== (seat.reasoning ?? null)) {
     found.push({
       setting: "reasoning",
-      seat: seat.reasoning,
+      seat: seat.reasoning ?? "the level of the harness",
       chosen: chosen.reasoning ?? "harness default",
     });
   }

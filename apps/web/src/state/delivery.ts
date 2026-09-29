@@ -167,6 +167,23 @@ interface DeliveryDraftState {
 
 const MAX_INHERITED_MARKS = 200;
 
+/**
+ * The mark of a thread that was sent. What it runs on is the person's from
+ * then on: no seat is taken over any more, whatever the picker shows while
+ * the thread is on its way.
+ */
+export const SEAT_TAKEOVER_OVER = "sent";
+
+const withMark = (marks: Record<string, string>, threadId: string, key: string) => ({
+  // The newest are kept. A thread that was sent long ago needs no mark.
+  ...Object.fromEntries(
+    Object.entries(marks)
+      .filter(([id]) => id !== threadId)
+      .slice(-(MAX_INHERITED_MARKS - 1)),
+  ),
+  [threadId]: key,
+});
+
 /** The team chosen for a thread that has not been sent yet. Kept across reloads. */
 export const useDeliveryDraftStore = create<DeliveryDraftState>()(
   persist(
@@ -176,22 +193,20 @@ export const useDeliveryDraftStore = create<DeliveryDraftState>()(
       setChoice: (threadId, choice) =>
         set((state) => ({ choices: { ...state.choices, [threadId]: choice } })),
       markInherited: (threadId, key) =>
-        set((state) => {
-          if (state.inherited[threadId] === key) return state;
-          // The newest are kept. A thread that was sent long ago needs no mark.
-          const kept = Object.entries(state.inherited)
-            .filter(([id]) => id !== threadId)
-            .slice(-(MAX_INHERITED_MARKS - 1));
-          return { inherited: { ...Object.fromEntries(kept), [threadId]: key } };
-        }),
+        set((state) =>
+          state.inherited[threadId] === key || state.inherited[threadId] === SEAT_TAKEOVER_OVER
+            ? state
+            : { inherited: withMark(state.inherited, threadId, key) },
+        ),
       clearChoice: (threadId) =>
         set((state) => {
-          // The mark that the seat was taken over stays: the choice is cleared when the
-          // thread is sent, while the picker is still shown, and the seat must not be
-          // taken over again over what the person chose.
-          if (!(threadId in state.choices)) return state;
+          // The choice is cleared when the thread is sent, while the picker is still
+          // shown. It then shows the default team, whose seat must not be taken over.
           const { [threadId]: _removed, ...rest } = state.choices;
-          return { choices: rest };
+          return {
+            choices: rest,
+            inherited: withMark(state.inherited, threadId, SEAT_TAKEOVER_OVER),
+          };
         }),
     }),
     { name: "t3code:delivery-draft-teams:v1" },

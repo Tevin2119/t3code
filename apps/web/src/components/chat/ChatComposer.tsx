@@ -2079,7 +2079,12 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       if (how !== "inherit-level" && seat.model && seat.model !== selectedModel) {
         onProviderModelSelect(selectedInstanceId, seat.model, { focusComposer: false });
       }
-      if (seat.reasoning && reasoningOptionId) {
+      // A seat that leaves the level to the harness takes away a level left over from
+      // another thread, which is nobody's choice for this one.
+      const level = (selectedModelOptionsForDispatch ?? []).find(
+        (option) => option.id === reasoningOptionId,
+      )?.value;
+      if (reasoningOptionId && (seat.reasoning ?? undefined) !== level) {
         setSeatModelOptions(
           composerDraftTarget,
           selectedProvider,
@@ -2087,7 +2092,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
             ...(selectedModelOptionsForDispatch ?? []).filter(
               (option) => option.id !== reasoningOptionId,
             ),
-            { id: reasoningOptionId, value: seat.reasoning },
+            ...(seat.reasoning ? [{ id: reasoningOptionId, value: seat.reasoning }] : []),
           ],
           { instanceId: selectedInstanceId, model },
         );
