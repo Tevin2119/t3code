@@ -1,10 +1,4 @@
-import {
-  ArrowLeftIcon,
-  ChartNoAxesColumnIcon,
-  KanbanIcon,
-  SettingsIcon,
-  UsersIcon,
-} from "lucide-react";
+import { ArrowLeftIcon, ChartNoAxesColumnIcon, SettingsIcon, UsersIcon } from "lucide-react";
 import type { ReactNode } from "react";
 import { memo, useCallback } from "react";
 import { Link, useCanGoBack, useLocation, useNavigate } from "@tanstack/react-router";
@@ -36,6 +30,7 @@ import { readPullRequestListPreferences } from "../pullRequest/pullRequestListPr
 import { SidebarProviderUpdatePill } from "./SidebarProviderUpdatePill";
 import { SidebarUpdateArchitectureWarning, SidebarUpdatePill } from "./SidebarUpdatePill";
 import { PullRequestGlyph } from "~/components/pullRequest/pullRequestIcons";
+import { BoardIcon } from "../delivery/BoardIcon";
 
 export const SidebarChromeHeader = memo(function SidebarChromeHeader({
   isElectron,
@@ -237,7 +232,7 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
           />
           {deliveryEnabled ? (
             <>
-              <SidebarUtilityItem icon={<KanbanIcon />} label="Board" onClick={handleBoardClick} />
+              <SidebarUtilityItem icon={<BoardIcon />} label="Board" onClick={handleBoardClick} />
               <SidebarUtilityItem
                 icon={<UsersIcon />}
                 label="Orchestrator"

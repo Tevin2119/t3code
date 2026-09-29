@@ -1,5 +1,5 @@
 import { useLocation, useNavigate } from "@tanstack/react-router";
-import { KanbanIcon, PlusIcon, SearchIcon, UsersIcon, XIcon } from "lucide-react";
+import { PlusIcon, SearchIcon, UsersIcon, XIcon } from "lucide-react";
 import { useMemo } from "react";
 
 import {
@@ -22,6 +22,7 @@ import { Input } from "../ui/input";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { SidebarContent, SidebarGroup, useSidebar } from "../ui/sidebar";
 import { Age, CardSigns, laneTone, PriorityPill } from "./taskParts";
+import { BoardIcon } from "./BoardIcon";
 
 const ANY = "__any__";
 
@@ -198,7 +199,7 @@ export function BoardSidebarPanel() {
               void navigate({ to: "/board" });
             }}
           >
-            <KanbanIcon />
+            <BoardIcon />
           </Button>
         </div>
 

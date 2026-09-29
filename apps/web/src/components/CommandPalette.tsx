@@ -47,7 +47,6 @@ import {
   FileSearchIcon,
   FolderIcon,
   FolderPlusIcon,
-  KanbanIcon,
   LinkIcon,
   MessageSquareIcon,
   MonitorIcon,
@@ -198,6 +197,7 @@ import {
 import type { Project } from "../types";
 import { PullRequestGlyph } from "~/components/pullRequest/pullRequestIcons";
 import { readPullRequestListPreferences } from "~/components/pullRequest/pullRequestListPreferences";
+import { BoardIcon } from "./delivery/BoardIcon";
 
 const EMPTY_BROWSE_ENTRIES: FilesystemBrowseResult["entries"] = [];
 
@@ -2039,7 +2039,7 @@ function OpenCommandPaletteDialog(props: {
       value: "action:board",
       searchTerms: ["board", "kanban", "tasks", "lanes", "delivery", "approve", "review"],
       title: "Open board",
-      icon: <KanbanIcon className={ITEM_ICON_CLASS} />,
+      icon: <BoardIcon className={ITEM_ICON_CLASS} />,
       run: async () => {
         await navigate({ to: "/board" });
       },
