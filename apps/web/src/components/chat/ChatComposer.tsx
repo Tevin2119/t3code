@@ -2071,10 +2071,10 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     };
   }, [reasoningOptionId, runtimeMode, selectedModel, selectedModelOptionsForDispatch]);
   // Sets the draft to what the seat of the thread runs on. What the seat leaves
-  // to the harness is left as it is, and an access the provider cannot honour
-  // is not chosen for it.
+  // to the harness is left as it is. The access is set only when a person goes
+  // back to the seat, and never to a mode the provider cannot honour.
   const handleSeatForThread = useCallback(
-    (seat: SeatForThread) => {
+    (seat: SeatForThread, how: "inherit" | "reset") => {
       const model = seat.model ?? selectedModel;
       if (seat.model && seat.model !== selectedModel) {
         onProviderModelSelect(selectedInstanceId, seat.model, { focusComposer: false });
@@ -2092,7 +2092,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           { instanceId: selectedInstanceId, model },
         );
       }
-      const mode = (seat.access ?? "full") === "full" ? "full-access" : null;
+      const mode = how === "reset" && (seat.access ?? "full") === "full" ? "full-access" : null;
       if (
         mode &&
         runtimeModeUnavailableReason(selectedProviderStatus?.runtimeModes, mode) === undefined

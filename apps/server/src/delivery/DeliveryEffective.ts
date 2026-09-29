@@ -152,9 +152,16 @@ export function patchFromRuntimeEvent(event: ProviderRuntimeEvent): EffectivePat
       : null;
   }
 
-  // What the Claude adapter handed over when it started the session.
+  // What the Claude adapter handed over when it started the session. The model is handed
+  // over with the context window it is to have, as in `claude-fable-5-1[1m]`, and Claude
+  // names the model without it: the two are the same model.
   if (event.provider === "claudeAgent" && (config.model || config.effort)) {
-    return { passed: { model: text(config.model), reasoning: text(config.effort) } };
+    return {
+      passed: {
+        model: text(config.model)?.replace(/\[[^\]]*\]$/, "") ?? null,
+        reasoning: text(config.effort),
+      },
+    };
   }
   return null;
 }

@@ -35,13 +35,19 @@ export function TeamPicker(props: {
     readonly reasoning: string | null;
     readonly runtimeMode: string | null;
   };
-  /** Sets the thread to what its seat runs on. Called once for each choice of a seat. */
-  readonly onSeat: (seat: SeatForThread) => void;
+  /**
+   * Sets the thread to what its seat runs on. `inherit` is asked once for each
+   * choice of a seat and leaves the access as the person has it: a thread is
+   * never given more access by itself. `reset` is a person going back to the
+   * seat, access included.
+   */
+  readonly onSeat: (seat: SeatForThread, how: "inherit" | "reset") => void;
 }) {
   const enabled = useDeliveryEnabled(props.environmentId);
   const choice = useDraftTeamChoice(props.threadId);
   const setChoice = useDeliveryDraftStore((state) => state.setChoice);
   const markInherited = useDeliveryDraftStore((state) => state.markInherited);
+  const inheritedFor = useDeliveryDraftStore((state) => state.inherited[props.threadId] ?? null);
   const teamsRead = useDeliveryRead(enabled ? props.environmentId : null, "/api/teams");
   const teams = useMemo(
     () => parseTeams(teamsRead.body).filter((team) => team.team !== "triage"),
@@ -67,10 +73,10 @@ export function TeamPicker(props: {
   // chooses otherwise after that. The draft is set from the seat once for each
   // seat that is chosen, here, because the seat also changes when the harness does.
   useEffect(() => {
-    if (!enabled || !inheritKey || !threadSeat || choice.inheritedFor === inheritKey) return;
-    onSeat(threadSeat);
+    if (!enabled || !inheritKey || !threadSeat || inheritedFor === inheritKey) return;
+    onSeat(threadSeat, "inherit");
     markInherited(threadId, inheritKey);
-  }, [enabled, inheritKey, threadSeat, choice.inheritedFor, onSeat, markInherited, threadId]);
+  }, [enabled, inheritKey, threadSeat, inheritedFor, onSeat, markInherited, threadId]);
   const overrides = threadSeat ? seatOverrides(threadSeat, chosen) : [];
 
   if (!enabled) return null;
@@ -179,7 +185,7 @@ export function TeamPicker(props: {
                 variant="ghost"
                 className="min-w-0 gap-1 px-1.5 font-normal text-warning"
                 data-delivery-seat-overrides={overrides.map((item) => item.setting).join(" ")}
-                onClick={() => onSeat(threadSeat)}
+                onClick={() => onSeat(threadSeat, "reset")}
               />
             }
           >

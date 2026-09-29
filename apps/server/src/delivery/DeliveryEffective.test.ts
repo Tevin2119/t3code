@@ -144,7 +144,7 @@ describe("patchFromRuntimeEvent", () => {
     });
     expect(
       patchFromRuntimeEvent(
-        configured("claudeAgent", { model: "claude-fable-5-1", effort: "high" }),
+        configured("claudeAgent", { model: "claude-fable-5-1[1m]", effort: "high" }),
       ),
     ).toEqual({ passed: { model: "claude-fable-5-1", reasoning: "high" } });
   });

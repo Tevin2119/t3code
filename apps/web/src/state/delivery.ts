@@ -149,16 +149,17 @@ export interface DraftTeamChoice {
   /** Null is "No team": the thread starts as an ordinary one. */
   readonly team: string | null;
   readonly role: string | null;
-  /**
-   * What of the seat the draft has taken over, as one key. What the seat runs
-   * on is taken over once for each choice of a seat, so that what a person
-   * chooses after that stands.
-   */
-  readonly inheritedFor?: string | null;
 }
 
 interface DeliveryDraftState {
   readonly choices: Record<string, DraftTeamChoice>;
+  /**
+   * What of its seat each draft has taken over, as one key. What the seat runs
+   * on is taken over once for each seat, so that what a person chooses after
+   * that stands. Kept apart from the choices: a draft in the default team has
+   * a seat too, and has made no choice.
+   */
+  readonly inherited: Record<string, string>;
   readonly setChoice: (threadId: string, choice: DraftTeamChoice) => void;
   readonly markInherited: (threadId: string, key: string) => void;
   readonly clearChoice: (threadId: string) => void;
@@ -169,19 +170,21 @@ export const useDeliveryDraftStore = create<DeliveryDraftState>()(
   persist(
     (set) => ({
       choices: {},
+      inherited: {},
       setChoice: (threadId, choice) =>
         set((state) => ({ choices: { ...state.choices, [threadId]: choice } })),
       markInherited: (threadId, key) =>
-        set((state) => {
-          const choice = state.choices[threadId];
-          if (!choice || choice.inheritedFor === key) return state;
-          return { choices: { ...state.choices, [threadId]: { ...choice, inheritedFor: key } } };
-        }),
+        set((state) =>
+          state.inherited[threadId] === key
+            ? state
+            : { inherited: { ...state.inherited, [threadId]: key } },
+        ),
       clearChoice: (threadId) =>
         set((state) => {
-          if (!(threadId in state.choices)) return state;
+          if (!(threadId in state.choices) && !(threadId in state.inherited)) return state;
           const { [threadId]: _removed, ...rest } = state.choices;
-          return { choices: rest };
+          const { [threadId]: _taken, ...inherited } = state.inherited;
+          return { choices: rest, inherited };
         }),
     }),
     { name: "t3code:delivery-draft-teams:v1" },
