@@ -48,6 +48,8 @@ import {
   withCodexAppServerClient,
 } from "../Layers/CodexProvider.ts";
 import { resolveCodexLaunchArgs } from "../Layers/codexLaunchArgs.ts";
+import { checkCodexSandbox } from "../Layers/codexSandboxCheck.ts";
+import { codexRuntimeModes } from "../runtimeModeSupport.ts";
 import { ProviderEventLoggers } from "../Layers/ProviderEventLoggers.ts";
 import { makeManagedServerProvider } from "../makeManagedServerProvider.ts";
 import * as ModelManifest from "../ModelManifest.ts";
@@ -181,9 +183,19 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv> = {
       // here; the registry only has to worry about snapshot-build and
       // spawner-availability failures surfaced from `checkCodexProviderStatus`
       // below.
+      // Asked of Codex once and kept for a while: the answer takes seconds to come.
+      const sandboxProblem = yield* Effect.cachedWithTTL(
+        checkCodexSandbox({
+          binaryPath: effectiveConfig.binaryPath,
+          homePath: effectiveConfig.homePath,
+          environment: processEnv,
+        }).pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner)),
+        "10 minutes",
+      );
       const adapter = yield* makeCodexAdapter(effectiveConfig, {
         instanceId,
         environment: processEnv,
+        sandboxProblem,
         ...(eventLoggers.native ? { nativeEventLogger: eventLoggers.native } : {}),
       });
 
@@ -197,7 +209,12 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv> = {
       const checkProvider = modelManifest.refreshInBackground.pipe(
         Effect.andThen(
           Effect.zipWith(
-            checkCodexProviderStatus(effectiveConfig, undefined, processEnv),
+            Effect.zipWith(
+              checkCodexProviderStatus(effectiveConfig, undefined, processEnv),
+              effectiveConfig.enabled ? sandboxProblem : Effect.succeed(undefined),
+              (draft, problem) => ({ ...draft, runtimeModes: codexRuntimeModes(problem) }),
+              { concurrent: true },
+            ),
             modelManifest.current,
             (draft, manifest) =>
               stampIdentity(ModelManifest.applyModelManifest(draft, manifest, DRIVER_KIND)),

@@ -115,6 +115,7 @@ export function piFailureFromRecord(record: PiRpcRecord): string | undefined {
   return undefined;
 }
 import type { ProviderAdapterShape } from "../Services/ProviderAdapter.ts";
+import { PI_RUNTIME_MODES, runtimeModeProblem } from "../runtimeModeSupport.ts";
 
 const PROVIDER = ProviderDriverKind.make("pi");
 
@@ -437,6 +438,15 @@ export const makePiAdapter = Effect.fn("makePiAdapter")(function* (
     withThreadLock(
       input.threadId,
       Effect.gen(function* () {
+        // Never run as another mode: a mode this provider cannot honour is refused.
+        const modeProblem = runtimeModeProblem(PI_RUNTIME_MODES, input.runtimeMode);
+        if (modeProblem) {
+          return yield* new ProviderAdapterValidationError({
+            provider: PROVIDER,
+            operation: "startSession",
+            issue: modeProblem,
+          });
+        }
         if (!settings.enabled) {
           return yield* new ProviderAdapterValidationError({
             provider: PROVIDER,

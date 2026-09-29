@@ -78,6 +78,7 @@ import {
   codexUsageLimitMessage,
   mergeCodexRateLimits,
 } from "./codexUsageLimits.ts";
+import { codexRuntimeModes, runtimeModeProblem } from "../runtimeModeSupport.ts";
 const isCodexAppServerProcessExitedError = Schema.is(CodexErrors.CodexAppServerProcessExitedError);
 const isCodexAppServerTransportError = Schema.is(CodexErrors.CodexAppServerTransportError);
 const isCodexSessionRuntimeThreadIdMissingError = Schema.is(
@@ -99,6 +100,8 @@ export interface CodexAdapterLiveOptions {
   >;
   readonly nativeEventLogPath?: string;
   readonly nativeEventLogger?: EventNdjsonLogger;
+  /** Why the sandbox of Codex cannot start on this host, when it cannot. */
+  readonly sandboxProblem?: Effect.Effect<string | undefined>;
 }
 
 interface CodexAdapterSessionContext {
@@ -2244,6 +2247,22 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
             operation: "startSession",
             issue: `Expected provider '${PROVIDER}' but received '${input.provider}'.`,
           });
+        }
+
+        // Never run as another mode: a mode that needs the sandbox is refused while the
+        // sandbox cannot start. The setting of Codex is the person's and is left alone.
+        if (input.runtimeMode !== "full-access" && options?.sandboxProblem) {
+          const modeProblem = runtimeModeProblem(
+            codexRuntimeModes(yield* options.sandboxProblem),
+            input.runtimeMode,
+          );
+          if (modeProblem) {
+            return yield* new ProviderAdapterValidationError({
+              provider: PROVIDER,
+              operation: "startSession",
+              issue: modeProblem,
+            });
+          }
         }
 
         const existing = sessions.get(input.threadId);

@@ -12,10 +12,18 @@ import {
 import { ComposerControl, ComposerControlIcon } from "./ComposerControl";
 import { useComposerMenuProps } from "./composerEventScope";
 import { useComposerMenuState } from "./useComposerMenuState";
+import {
+  runtimeModeConfig,
+  runtimeModeOptions,
+  runtimeModeUnavailableReason,
+  type RuntimeModeSupport,
+} from "./runtimeModeConfig";
 
 export const CompactComposerControlsMenu = memo(function CompactComposerControlsMenu(props: {
   interactionMode: ProviderInteractionMode;
   runtimeMode: RuntimeMode;
+  /** What the chosen provider can honour. A mode it cannot is shown and cannot be picked. */
+  runtimeModeSupport: RuntimeModeSupport;
   showInteractionModeToggle: boolean;
   traitsMenuContent?: ReactNode;
   size?: "sm" | "xs";
@@ -80,10 +88,21 @@ export const CompactComposerControlsMenu = memo(function CompactComposerControls
             props.onRuntimeModeChange(value as RuntimeMode);
           }}
         >
-          <MenuRadioItem value="approval-required">Supervised</MenuRadioItem>
-          <MenuRadioItem value="auto-accept-edits">Auto-accept edits</MenuRadioItem>
-          <MenuRadioItem value="auto">Auto</MenuRadioItem>
-          <MenuRadioItem value="full-access">Full access</MenuRadioItem>
+          {runtimeModeOptions.map((mode) => {
+            const unavailable = runtimeModeUnavailableReason(props.runtimeModeSupport, mode);
+            return (
+              <MenuRadioItem
+                key={mode}
+                value={mode}
+                disabled={unavailable !== undefined}
+                data-runtime-mode-option={mode}
+                title={unavailable}
+              >
+                {runtimeModeConfig[mode].label}
+                {unavailable ? " (unavailable)" : null}
+              </MenuRadioItem>
+            );
+          })}
         </MenuRadioGroup>
       </MenuPopup>
     </Menu>

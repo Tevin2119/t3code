@@ -3,6 +3,7 @@ import { expect, it } from "@effect/vitest";
 
 import {
   hermesModelsFromRuntimeConfig,
+  hermesReasoningCapabilities,
   parseHermesAuthStatus,
   parseHermesConfigValue,
 } from "./HermesProvider.ts";
@@ -42,4 +43,17 @@ it("offers the default alias itself when Hermes reports no configuration", () =>
   expect(hermesModelsFromRuntimeConfig(undefined).map((model) => model.slug)).toEqual([
     HERMES_DEFAULT_MODEL,
   ]);
+});
+
+it("shows that the level of reasoning is the one of Hermes, and names it where it is sure", () => {
+  const labels = (configured: Parameters<typeof hermesReasoningCapabilities>[0]) =>
+    hermesReasoningCapabilities(configured).optionDescriptors?.flatMap((descriptor) =>
+      descriptor.type === "select" ? descriptor.options.map((option) => option.label) : [],
+    );
+  expect(labels({ level: "medium", perModel: false })).toEqual([
+    "Uses Hermes configuration (medium)",
+  ]);
+  // A level set for one model outranks the general one, so none is named.
+  expect(labels({ level: "medium", perModel: true })).toEqual(["Uses Hermes configuration"]);
+  expect(labels(undefined)).toEqual(["Uses Hermes configuration"]);
 });

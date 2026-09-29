@@ -37,8 +37,10 @@ import {
   spawnAndCollect,
   type ServerProviderDraft,
 } from "../providerSnapshot.ts";
+import { PI_RUNTIME_MODES } from "../runtimeModeSupport.ts";
 
 const PI_PRESENTATION = {
+  runtimeModes: PI_RUNTIME_MODES,
   displayName: "pi",
   badgeLabel: "Early Access",
   // pi's RPC mode exposes no history rewind.

@@ -1,4 +1,4 @@
-import type { RuntimeMode } from "@t3tools/contracts";
+import type { RuntimeMode, ServerProvider } from "@t3tools/contracts";
 import { type LucideIcon, LockIcon, LockOpenIcon, PenLineIcon, SparklesIcon } from "lucide-react";
 
 export const runtimeModeConfig: Record<
@@ -28,3 +28,16 @@ export const runtimeModeConfig: Record<
 };
 
 export const runtimeModeOptions = Object.keys(runtimeModeConfig) as RuntimeMode[];
+
+export type RuntimeModeSupport = ServerProvider["runtimeModes"];
+
+/** Why the chosen provider cannot run in this mode, or undefined when it can. */
+export function runtimeModeUnavailableReason(
+  support: RuntimeModeSupport,
+  mode: RuntimeMode,
+): string | undefined {
+  const entry = support?.find((item) => item.mode === mode);
+  return entry && !entry.available
+    ? (entry.reason ?? "This provider cannot run in this mode.")
+    : undefined;
+}

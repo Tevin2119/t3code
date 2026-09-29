@@ -41,9 +41,11 @@ import {
   spawnAndCollect,
   type ServerProviderDraft,
 } from "../providerSnapshot.ts";
+import { DEEPSEEK_RUNTIME_MODES } from "../runtimeModeSupport.ts";
 import { ACP_OPTION_HARNESS_DEFAULT } from "../acp/AcpSessionOption.ts";
 
 const DEEPSEEK_PRESENTATION = {
+  runtimeModes: DEEPSEEK_RUNTIME_MODES,
   // The harness says what its session holds of the context window, in `usage_update`.
   reportsContextWindow: true,
   displayName: "DeepSeek",

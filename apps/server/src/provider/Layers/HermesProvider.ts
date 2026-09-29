@@ -42,8 +42,11 @@ import {
   spawnAndCollect,
   type ServerProviderDraft,
 } from "../providerSnapshot.ts";
+import { HERMES_RUNTIME_MODES } from "../runtimeModeSupport.ts";
+import { ACP_OPTION_HARNESS_DEFAULT } from "../acp/AcpSessionOption.ts";
 
 const HERMES_PRESENTATION = {
+  runtimeModes: HERMES_RUNTIME_MODES,
   // The harness says what its session holds of the context window, in `usage_update`.
   reportsContextWindow: true,
   displayName: "Hermes",
@@ -52,7 +55,20 @@ const HERMES_PRESENTATION = {
   supportsConversationRollback: false,
 } as const;
 
-const EMPTY_CAPABILITIES: ModelCapabilities = createModelCapabilities({ optionDescriptors: [] });
+// For a model Hermes was not asked about: the same one entry, with no level named.
+const EMPTY_CAPABILITIES: ModelCapabilities = createModelCapabilities({
+  optionDescriptors: [
+    {
+      id: "reasoning",
+      label: "Reasoning",
+      type: "select",
+      options: [
+        { id: ACP_OPTION_HARNESS_DEFAULT, label: "Uses Hermes configuration", isDefault: true },
+      ],
+      currentValue: ACP_OPTION_HARNESS_DEFAULT,
+    },
+  ],
+});
 
 // Cold Python startup competes with the other harness probes on Windows.
 const VERSION_PROBE_TIMEOUT_MS = 20_000;
@@ -72,9 +88,45 @@ const HERMES_FALLBACK_MODELS: ReadonlyArray<ServerProviderModel> = [
   },
 ];
 
+/**
+ * Hermes takes its level of reasoning from its own configuration, and from nowhere else when
+ * it runs as `hermes acp`: the flag `--reasoning` is dropped by that command, the session
+ * offers no option for it, and a home of its own needs a sign-in of its own. So the picker
+ * shows one entry that says so, with the level Hermes itself reports, and sends nothing.
+ *
+ * A level set for one model (`agent.reasoning_overrides`) outranks the general one. Where
+ * such a setting exists the level is not named, since it may not be the one that applies.
+ */
+export const HERMES_REASONING_OPTION_ID = "reasoning";
+
+export function hermesReasoningCapabilities(
+  configured: { readonly level: string | undefined; readonly perModel: boolean } | undefined,
+): ModelCapabilities {
+  const level = configured && !configured.perModel ? configured.level : undefined;
+  return createModelCapabilities({
+    optionDescriptors: [
+      {
+        id: HERMES_REASONING_OPTION_ID,
+        label: "Reasoning",
+        type: "select",
+        options: [
+          {
+            id: ACP_OPTION_HARNESS_DEFAULT,
+            label: level ? `Uses Hermes configuration (${level})` : "Uses Hermes configuration",
+            isDefault: true,
+          },
+        ],
+        currentValue: ACP_OPTION_HARNESS_DEFAULT,
+      },
+    ],
+  });
+}
+
 export interface HermesRuntimeConfig {
   readonly provider: string;
   readonly model: string;
+  /** The level of reasoning in the configuration of Hermes, if it names one. */
+  readonly reasoning?: { readonly level: string | undefined; readonly perModel: boolean };
 }
 
 /** `hermes config get <key>` prints the resolved value, or exits non-zero. */
@@ -109,7 +161,7 @@ export function hermesModelsFromRuntimeConfig(
       isCustom: false,
       isDefault: true,
       aliases: [HERMES_DEFAULT_MODEL],
-      capabilities: EMPTY_CAPABILITIES,
+      capabilities: hermesReasoningCapabilities(runtime.reasoning),
     },
   ];
 }
@@ -180,7 +232,24 @@ export const readHermesRuntimeConfig = Effect.fn("readHermesRuntimeConfig")(func
     (yield* runHermesCliValue(hermesSettings, ["config", "get", "model.default"], environment)) ??
       "",
   );
-  return model === undefined ? undefined : { provider, model };
+  if (model === undefined) return undefined;
+  // Read, never written: `config get` prints what the configuration holds.
+  const level = parseHermesConfigValue(
+    (yield* runHermesCliValue(
+      hermesSettings,
+      ["config", "get", "agent.reasoning_effort"],
+      environment,
+    )) ?? "",
+  );
+  const overrides = parseHermesConfigValue(
+    (yield* runHermesCliValue(
+      hermesSettings,
+      ["config", "get", "agent.reasoning_overrides"],
+      environment,
+    )) ?? "",
+  );
+  const perModel = overrides !== undefined && !/^(\{\s*\}|\[\s*\]|null)$/i.test(overrides);
+  return { provider, model, reasoning: { level, perModel } };
 });
 
 /**

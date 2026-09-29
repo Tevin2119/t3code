@@ -61,6 +61,7 @@ import {
   type OpenCodeServerConnection,
 } from "../opencodeRuntime.ts";
 import * as Option from "effect/Option";
+import { OPENCODE_RUNTIME_MODES, runtimeModeProblem } from "../runtimeModeSupport.ts";
 
 const PROVIDER = ProviderDriverKind.make("opencode");
 
@@ -2830,6 +2831,15 @@ export function makeOpenCodeAdapter(
 
     const startSession: OpenCodeAdapterShape["startSession"] = Effect.fn("startSession")(
       function* (input) {
+        // Never run as another mode: a mode this provider cannot honour is refused.
+        const modeProblem = runtimeModeProblem(OPENCODE_RUNTIME_MODES, input.runtimeMode);
+        if (modeProblem) {
+          return yield* new ProviderAdapterValidationError({
+            provider: PROVIDER,
+            operation: "startSession",
+            issue: modeProblem,
+          });
+        }
         const binaryPath = openCodeSettings.binaryPath;
         const serverUrl = openCodeSettings.serverUrl;
         const serverPassword = openCodeSettings.serverPassword;

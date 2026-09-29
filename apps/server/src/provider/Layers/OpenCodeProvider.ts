@@ -20,6 +20,7 @@ import {
   providerModelsFromSettings,
   type ServerProviderDraft,
 } from "../providerSnapshot.ts";
+import { OPENCODE_RUNTIME_MODES } from "../runtimeModeSupport.ts";
 import {
   MINIMUM_OPENCODE_VERSION,
   OpenCodeRuntime,
@@ -30,6 +31,7 @@ import type { Agent, ProviderListResponse } from "@opencode-ai/sdk/v2";
 import * as OpenCodeServerOwner from "../OpenCodeServerOwner.ts";
 
 const OPENCODE_PRESENTATION = {
+  runtimeModes: OPENCODE_RUNTIME_MODES,
   displayName: "OpenCode",
   showInteractionModeToggle: false,
 } as const;

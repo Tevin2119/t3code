@@ -23,6 +23,7 @@ import {
 } from "./keybindings.ts";
 import { EditorId, FileManagerRevealKind, RemoteOpenTarget } from "./editor.ts";
 import { ModelCapabilities } from "./model.ts";
+import { RuntimeMode } from "./orchestration.ts";
 import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance.ts";
 import { ServerProviderUsageLimits, UsageLimitSourceSnapshots } from "./providerUsageLimits.ts";
 import { ServerSettings } from "./settings.ts";
@@ -185,6 +186,14 @@ export const ServerProviderUpdateState = Schema.Struct({
 });
 export type ServerProviderUpdateState = typeof ServerProviderUpdateState.Type;
 
+/** Whether a provider can honour one access mode, and why not when it cannot. */
+export const ServerProviderRuntimeModeSupport = Schema.Struct({
+  mode: RuntimeMode,
+  available: Schema.Boolean,
+  reason: Schema.optional(TrimmedNonEmptyString),
+});
+export type ServerProviderRuntimeModeSupport = typeof ServerProviderRuntimeModeSupport.Type;
+
 export const ServerProvider = Schema.Struct({
   // Routing key for the configured instance this snapshot represents. This
   // is the only stable identity consumers may use for provider routing.
@@ -200,6 +209,9 @@ export const ServerProvider = Schema.Struct({
   // The driver streams context window usage, so a started thread will have a
   // meter once its activities load. Clients reserve the meter's space on it.
   reportsContextWindow: Schema.optional(Schema.Boolean),
+  // The access modes this provider can honour. A mode it cannot honour is shown as
+  // unavailable with its reason, and is never run as another mode. Absent means all four.
+  runtimeModes: Schema.optional(Schema.Array(ServerProviderRuntimeModeSupport)),
   requiresNewThreadForModelChange: Schema.optional(Schema.Boolean),
   supportsConversationRollback: Schema.optional(Schema.Boolean),
   supportsTextGeneration: Schema.optional(Schema.Boolean),

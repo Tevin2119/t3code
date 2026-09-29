@@ -81,6 +81,7 @@ import {
   type KimiAcpRuntimeInput,
 } from "../acp/KimiAcpSupport.ts";
 import type { ProviderAdapterShape } from "../Services/ProviderAdapter.ts";
+import { KIMI_RUNTIME_MODES, runtimeModeProblem } from "../runtimeModeSupport.ts";
 import type { EventNdjsonLogger } from "./EventNdjsonLogger.ts";
 
 const PROVIDER = ProviderDriverKind.make("kimi");
@@ -485,6 +486,15 @@ export const makeKimiAdapter = Effect.fn("makeKimiAdapter")(function* (
     withThreadLock(
       input.threadId,
       Effect.gen(function* () {
+        // Never run as another mode: a mode this provider cannot honour is refused.
+        const modeProblem = runtimeModeProblem(KIMI_RUNTIME_MODES, input.runtimeMode);
+        if (modeProblem) {
+          return yield* new ProviderAdapterValidationError({
+            provider: PROVIDER,
+            operation: "startSession",
+            issue: modeProblem,
+          });
+        }
         if (!settings.enabled) {
           return yield* new ProviderAdapterValidationError({
             provider: PROVIDER,

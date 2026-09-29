@@ -35,9 +35,11 @@ import {
   spawnAndCollect,
   type ServerProviderDraft,
 } from "../providerSnapshot.ts";
+import { KIMI_RUNTIME_MODES } from "../runtimeModeSupport.ts";
 import { ACP_OPTION_HARNESS_DEFAULT } from "../acp/AcpSessionOption.ts";
 
 const KIMI_PRESENTATION = {
+  runtimeModes: KIMI_RUNTIME_MODES,
   displayName: "Kimi",
   badgeLabel: "Early Access",
   // The ACP agent exposes no history rewind, so the UI must not offer one.

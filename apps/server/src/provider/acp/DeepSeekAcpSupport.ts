@@ -41,7 +41,15 @@ export interface DeepSeekAcpRuntimeInput extends Omit<
   readonly childProcessSpawner: ChildProcessSpawner.ChildProcessSpawner["Service"];
   readonly deepseekSettings: DeepSeekAcpRuntimeSettings | null | undefined;
   readonly environment?: NodeJS.ProcessEnv;
+  /**
+   * True for a thread with full access. dsh keeps writes inside the workspace unless its own
+   * permission mode says otherwise, and answering yes to what it asks does not lift that.
+   */
+  readonly fullAccess?: boolean;
 }
+
+export const DSH_PERMISSION_MODE = "DSH_PERMISSION_MODE";
+export const DSH_FULL_ACCESS = "danger-full-access";
 
 export function deepseekAcpSpawnArgs(): ReadonlyArray<string> {
   // Approval policy is negotiated per tool call over ACP `session/request_permission`.
@@ -67,10 +75,14 @@ export function buildDeepSeekAcpSpawnInput(
   deepseekSettings: DeepSeekAcpRuntimeSettings | null | undefined,
   cwd: string,
   environment?: NodeJS.ProcessEnv,
+  fullAccess = false,
 ): AcpSessionRuntime.AcpSpawnInput {
-  const env = deepseekSettings?.homePath.trim()
+  const base = deepseekSettings?.homePath.trim()
     ? makeDeepSeekEnvironment(deepseekSettings, environment)
     : environment;
+  const env = fullAccess
+    ? { ...(base ?? process.env), [DSH_PERMISSION_MODE]: DSH_FULL_ACCESS }
+    : base;
   return {
     command: deepseekSettings?.binaryPath || "dsh",
     args: [...deepseekAcpSpawnArgs()],
@@ -90,7 +102,12 @@ export const makeDeepSeekAcpRuntime = (
     const acpContext = yield* Layer.build(
       AcpSessionRuntime.layer({
         ...input,
-        spawn: buildDeepSeekAcpSpawnInput(input.deepseekSettings, input.cwd, input.environment),
+        spawn: buildDeepSeekAcpSpawnInput(
+          input.deepseekSettings,
+          input.cwd,
+          input.environment,
+          input.fullAccess,
+        ),
         authMethodId: DEEPSEEK_AUTH_METHOD_ID,
       }).pipe(
         Layer.provide(

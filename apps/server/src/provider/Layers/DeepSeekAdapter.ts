@@ -88,6 +88,7 @@ import {
   type DeepSeekAcpRuntimeInput,
 } from "../acp/DeepSeekAcpSupport.ts";
 import type { ProviderAdapterShape } from "../Services/ProviderAdapter.ts";
+import { DEEPSEEK_RUNTIME_MODES, runtimeModeProblem } from "../runtimeModeSupport.ts";
 import type { EventNdjsonLogger } from "./EventNdjsonLogger.ts";
 
 const PROVIDER = ProviderDriverKind.make("deepseek");
@@ -497,6 +498,15 @@ export const makeDeepSeekAdapter = Effect.fn("makeDeepSeekAdapter")(function* (
     withThreadLock(
       input.threadId,
       Effect.gen(function* () {
+        // Never run as another mode: a mode this provider cannot honour is refused.
+        const modeProblem = runtimeModeProblem(DEEPSEEK_RUNTIME_MODES, input.runtimeMode);
+        if (modeProblem) {
+          return yield* new ProviderAdapterValidationError({
+            provider: PROVIDER,
+            operation: "startSession",
+            issue: modeProblem,
+          });
+        }
         if (!settings.enabled) {
           return yield* new ProviderAdapterValidationError({
             provider: PROVIDER,
@@ -549,6 +559,7 @@ export const makeDeepSeekAdapter = Effect.fn("makeDeepSeekAdapter")(function* (
           const runtime = yield* options.makeRuntime({
             cwd,
             clientInfo: { name: "t3-code", version: "0.0.0" },
+            fullAccess: input.runtimeMode === "full-access",
             // dsh offers session/resume and has no session/load.
             ...(Option.isSome(cursor)
               ? { resumeSessionId: cursor.value.sessionId, resumeMethod: "resume" as const }

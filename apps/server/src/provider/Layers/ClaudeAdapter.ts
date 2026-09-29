@@ -4877,7 +4877,10 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         effort,
         modelSelection?.model,
       );
+      // DIVERGES FROM UPSTREAM, which sends no mode for Supervised: Claude then takes the
+      // default mode of the person's own settings, which can be one that asks nothing.
       const runtimeModeToPermission: Record<string, PermissionMode> = {
+        "approval-required": "default",
         "auto-accept-edits": "acceptEdits",
         auto: "auto",
         "full-access": "bypassPermissions",
