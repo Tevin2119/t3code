@@ -258,9 +258,10 @@ export const make = Effect.gen(function* () {
       dir: string;
       volumeId: string;
       fileName?: string;
+      extension?: string;
     }> = [];
     const seen = new Set<string>();
-    for (const driver of ["claudeAgent", "codex", "grok"] as const) {
+    for (const driver of ["claudeAgent", "codex", "grok", "deepseek"] as const) {
       // Disabled accounts still have history. Explicit default slots replace
       // the legacy settings, just as they do in the provider registry.
       const instances: Array<Pick<ProviderInstanceConfig, "config" | "environment">> =
@@ -290,12 +291,20 @@ export const make = Effect.gen(function* () {
           home = configured
             ? expandHomePath(configured)
             : environment.CLAUDE_CONFIG_DIR?.trim() || path.join(NodeOS.homedir(), ".claude");
+        } else if (driver === "deepseek") {
+          home = expandHomePath(
+            environment.DSH_HOME?.trim() || path.join(NodeOS.homedir(), ".dsh"),
+          );
         } else {
           home = expandHomePath(
             environment.GROK_HOME?.trim() || path.join(NodeOS.homedir(), ".grok"),
           );
         }
-        const directory = path.resolve(home, provider === "claude" ? "projects" : "sessions");
+        // The DeepSeek harness keeps the running totals of each session in its store.
+        const directory =
+          provider === "deepseek"
+            ? path.resolve(home, "storages", "session_projcache", "sessions")
+            : path.resolve(home, provider === "claude" ? "projects" : "sessions");
         const sourceKey = provider + "\0" + directory;
         const previous = sourceCache.get(sourceKey);
         // Keep canonical paths and source fingerprints stable after root cleanup,
@@ -330,6 +339,7 @@ export const make = Effect.gen(function* () {
           dir,
           volumeId,
           ...(provider === "grok" ? { fileName: "updates.jsonl" } : {}),
+          ...(provider === "deepseek" ? { extension: ".json" } : {}),
         });
       }
     }
@@ -463,7 +473,7 @@ export const make = Effect.gen(function* () {
       Effect.provideService(Path.Path, path),
     );
     const scanned: ScannedDir[] = [];
-    for (const { provider, dir, volumeId, fileName } of dirs) {
+    for (const { provider, dir, volumeId, fileName, extension } of dirs) {
       const exists = yield* fileSystem
         .exists(dir)
         .pipe(Effect.catchCause(() => Effect.succeed(false)));
@@ -472,7 +482,10 @@ export const make = Effect.gen(function* () {
         continue;
       }
       const files = yield* Effect.promise(() =>
-        listTranscriptFiles(dir, windowStartMs, fileName === undefined ? undefined : { fileName }),
+        listTranscriptFiles(dir, windowStartMs, {
+          ...(fileName === undefined ? {} : { fileName }),
+          ...(extension === undefined ? {} : { extension }),
+        }),
       );
       const parsedFiles: { path: string; records: readonly UsageRecord[] }[] = [];
       for (const file of files) {

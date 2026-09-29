@@ -21,6 +21,7 @@ import * as NodePath from "node:path";
 import type { UsageProviderKind } from "@t3tools/contracts";
 
 import {
+  parseDeepSeekSession,
   initialCodexScanState,
   mightCarryUsage,
   parseClaudeLine,
@@ -97,13 +98,32 @@ function fnv1a(buffer: Buffer): number {
  * Grok sessions also ship multi-megabyte `chat_history` and `events` logs that
  * never carry usage, so the basename filter keeps a cold scan off those files.
  */
+async function readDeepSeekSessionFile(filePath: string): Promise<TranscriptParseResult | null> {
+  try {
+    const [text, stats] = await Promise.all([
+      NodeFSP.readFile(filePath, "utf8"),
+      NodeFSP.stat(filePath),
+    ]);
+    const record = parseDeepSeekSession(text, NodePath.basename(filePath, ".json"), stats.mtimeMs);
+    return {
+      records: record ? [record] : [],
+      tailRecords: [],
+      position: { resumeOffset: 0, guardLength: 0, guardHash: 0, codexState: null },
+      resumed: false,
+    };
+  } catch {
+    return null;
+  }
+}
+
 export async function listTranscriptFiles(
   root: string,
   sinceMs: number,
-  options?: { readonly fileName?: string },
+  options?: { readonly fileName?: string; readonly extension?: string },
 ): Promise<readonly TranscriptFile[]> {
   const found: TranscriptFile[] = [];
   const fileName = options?.fileName;
+  const extension = options?.extension ?? ".jsonl";
 
   const walk = async (dir: string): Promise<void> => {
     let entries;
@@ -120,7 +140,7 @@ export async function listTranscriptFiles(
       }
       if (fileName !== undefined) {
         if (entry.name !== fileName) continue;
-      } else if (!entry.name.endsWith(".jsonl")) {
+      } else if (!entry.name.endsWith(extension)) {
         continue;
       }
       try {
@@ -195,6 +215,8 @@ export async function readTranscriptRecords(
   provider: UsageProviderKind,
   resumeFrom?: TranscriptParsePosition,
 ): Promise<TranscriptParseResult | null> {
+  // A DeepSeek session is one document the harness writes again whole. It is read whole.
+  if (provider === "deepseek") return readDeepSeekSessionFile(filePath);
   let handle: NodeFSP.FileHandle;
   try {
     handle = await NodeFSP.open(filePath, "r");

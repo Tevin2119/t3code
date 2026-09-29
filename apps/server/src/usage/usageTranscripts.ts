@@ -74,6 +74,53 @@ export function mightCarryUsage(line: string, provider: UsageProviderKind): bool
 }
 
 /**
+ * The model a DeepSeek session ran on. The DeepSeek harness keeps the tokens of a session and
+ * not the model that used them, so its usage is shown under this name and is never priced.
+ */
+export const DEEPSEEK_MODEL_NOT_RECORDED = "model not recorded by DeepSeek";
+
+/**
+ * A session of the DeepSeek harness, from its own store
+ * (`~/.dsh/storages/session_projcache/sessions/<id>.json`). The store holds the running totals
+ * of the session, not a record of each turn. So a session is one record, dated by the last
+ * time the harness wrote it: a session that ran over midnight counts on the later day.
+ */
+export function parseDeepSeekSession(
+  text: string,
+  sessionId: string,
+  lastWrittenMs: number,
+): UsageRecord | null {
+  let document: unknown;
+  try {
+    document = JSON.parse(text);
+  } catch {
+    return null;
+  }
+  const record = (
+    document as { record?: { rows?: { tokenUsage?: { val?: { totals?: unknown } } } } }
+  )?.record;
+  const totals = record?.rows?.tokenUsage?.val?.totals as Record<string, unknown> | undefined;
+  if (!totals || typeof totals !== "object") return null;
+  const usage: UsageTokenTotals = {
+    uncachedInputTokens: int(totals.uncachedInputTokens),
+    cachedInputTokens: int(totals.cacheReadTokens),
+    cacheCreationTokens: int(totals.cacheWriteTokens),
+    outputTokens: int(totals.outputTokens),
+    reasoningTokens: 0,
+  };
+  if (totalTokens(usage) === 0) return null;
+  return {
+    provider: "deepseek",
+    timestampMs: lastWrittenMs,
+    model: DEEPSEEK_MODEL_NOT_RECORDED,
+    sessionId,
+    totals: usage,
+    reportedCostUsd: null,
+    dedupeKey: `deepseek:${sessionId}`,
+  };
+}
+
+/**
  * Grok reports cost in integer ticks where `1 USD = 10^10` ticks. See Grok
  * headless `total_cost_usd_ticks`. Convert to dollars for pricing.
  */

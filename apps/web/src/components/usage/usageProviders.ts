@@ -1,6 +1,6 @@
 import type { UsageProviderKind } from "@t3tools/contracts";
 
-import { ClaudeAI, GrokIcon, type Icon, OpenAI } from "../Icons";
+import { ClaudeAI, DeepSeekIcon, GrokIcon, type Icon, OpenAI } from "../Icons";
 
 type UsageProviderPresentation = {
   readonly label: string;
@@ -29,6 +29,12 @@ export const PROVIDER_PRESENTATION = {
     // Contrast-aware neutral between the Codex series and muted chart chrome.
     color: "color-mix(in oklab, var(--contrast-foreground) 72%, var(--background))",
     mark: GrokIcon,
+  },
+  deepseek: {
+    // Its tokens only: the DeepSeek harness records neither the model nor a price.
+    label: "DeepSeek",
+    color: "#4d6bfe",
+    mark: DeepSeekIcon,
   },
 } satisfies Record<UsageProviderKind, UsageProviderPresentation>;
 
