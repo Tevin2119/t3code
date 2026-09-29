@@ -708,8 +708,6 @@ export const makeKimiAdapter = Effect.fn("makeKimiAdapter")(function* (
     let intent: TurnIntent | undefined;
     // How many turns the record of Kimi held as ended before this one was asked for.
     let endsBefore = 0;
-    // How many turns the record of Kimi held as ended before this one was asked for.
-    let endsBefore = 0;
     const finishTurn = (turn: TurnIntent, payload: TurnCompletedPayload) =>
       Effect.gen(function* () {
         if (turn.settled || context.stopped || context.generation !== turn.generation) return;
