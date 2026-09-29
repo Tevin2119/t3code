@@ -277,17 +277,34 @@ describe("buildTurnStartParams", () => {
         mode: "default",
         settings: {
           model: "gpt-5.3-codex",
-          reasoning_effort: "medium",
+          // No level was chosen, so none is sent and Codex runs on its own.
+          reasoning_effort: null,
           developer_instructions: buildCodexDeveloperInstructions("default", {
             model: "gpt-5.3-codex",
-            reasoningEffort: "medium",
+            reasoningEffort: "the default of Codex for this model",
           }),
         },
       },
     });
   });
 
-  it("reports the same fallback model and effort in settings and instructions", () => {
+  it.effect("sends the level that was chosen, in settings and instructions", () =>
+    Effect.gen(function* () {
+      const params = yield* buildTurnStartParams({
+        threadId: "provider-thread-1",
+        runtimeMode: "full-access",
+        prompt: "Go",
+        interactionMode: "default",
+        model: "gpt-5.3-codex",
+        effort: "high",
+      });
+      const settings = params.collaborationMode?.settings;
+      NodeAssert.equal(settings?.reasoning_effort, "high");
+      NodeAssert.ok(settings?.developer_instructions?.includes("with high"));
+    }),
+  );
+
+  it("reports the fallback model, and no level of its own, when nothing was chosen", () => {
     const params = Effect.runSync(
       buildTurnStartParams({
         threadId: "provider-thread-1",
@@ -299,8 +316,12 @@ describe("buildTurnStartParams", () => {
 
     const settings = params.collaborationMode?.settings;
     NodeAssert.equal(settings?.model, DEFAULT_MODEL);
-    NodeAssert.equal(settings?.reasoning_effort, "medium");
-    NodeAssert.ok(settings?.developer_instructions?.includes(`as ${DEFAULT_MODEL} with medium`));
+    NodeAssert.equal(settings?.reasoning_effort, null);
+    NodeAssert.ok(
+      settings?.developer_instructions?.includes(
+        `as ${DEFAULT_MODEL} with the default of Codex for this model`,
+      ),
+    );
   });
 
   it.effect("routes approvals to the auto reviewer in auto mode", () =>

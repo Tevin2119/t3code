@@ -593,7 +593,10 @@ function buildCodexCollaborationMode(input: {
     return undefined;
   }
   const model = normalizeCodexModelSlug(input.model) ?? DEFAULT_MODEL;
-  const reasoningEffort = input.effort ?? "medium";
+  // DIVERGES FROM UPSTREAM. Upstream sends "medium" when no level was chosen, which replaces
+  // the level a person set in Codex itself and the default of the model, where that is
+  // another. With none chosen, none is sent, and Codex runs on its own.
+  const reasoningEffort = input.effort ?? null;
   return {
     mode: input.interactionMode,
     settings: {
@@ -601,7 +604,11 @@ function buildCodexCollaborationMode(input: {
       reasoning_effort: reasoningEffort,
       developer_instructions: buildCodexDeveloperInstructions(
         input.interactionMode,
-        { model, reasoningEffort, threadId: input.t3ThreadId },
+        {
+          model,
+          reasoningEffort: reasoningEffort ?? "the default of Codex for this model",
+          threadId: input.t3ThreadId,
+        },
         input.browserToolsAvailable ?? true,
       ),
     },
