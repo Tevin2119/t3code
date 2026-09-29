@@ -42,14 +42,29 @@ export interface DeepSeekAcpRuntimeInput extends Omit<
   readonly deepseekSettings: DeepSeekAcpRuntimeSettings | null | undefined;
   readonly environment?: NodeJS.ProcessEnv;
   /**
-   * True for a thread with full access. dsh keeps writes inside the workspace unless its own
-   * permission mode says otherwise, and answering yes to what it asks does not lift that.
+   * The permission mode dsh is started in, which it reads once, at its start.
+   * Left out, dsh takes its own default, in which it writes inside the
+   * workspace without asking.
    */
-  readonly fullAccess?: boolean;
+  readonly permissionMode?: DeepSeekPermissionMode;
 }
 
 export const DSH_PERMISSION_MODE = "DSH_PERMISSION_MODE";
-export const DSH_FULL_ACCESS = "danger-full-access";
+export type DeepSeekPermissionMode = "danger-full-access" | "read-only";
+
+/**
+ * The permission mode of dsh that honours an access mode of a thread.
+ *
+ * Full access is the mode of that name: nothing is asked and nothing is
+ * confined. Supervised is the read-only mode, in which dsh may read and has
+ * to ask a person before anything that writes. In its default mode dsh
+ * writes inside the workspace without asking, which is no mode of a thread.
+ */
+export function deepseekPermissionModeFor(runtimeMode: string): DeepSeekPermissionMode | undefined {
+  if (runtimeMode === "full-access") return "danger-full-access";
+  if (runtimeMode === "approval-required") return "read-only";
+  return undefined;
+}
 
 export function deepseekAcpSpawnArgs(): ReadonlyArray<string> {
   // Approval policy is negotiated per tool call over ACP `session/request_permission`.
@@ -75,13 +90,13 @@ export function buildDeepSeekAcpSpawnInput(
   deepseekSettings: DeepSeekAcpRuntimeSettings | null | undefined,
   cwd: string,
   environment?: NodeJS.ProcessEnv,
-  fullAccess = false,
+  permissionMode?: DeepSeekPermissionMode,
 ): AcpSessionRuntime.AcpSpawnInput {
   const base = deepseekSettings?.homePath.trim()
     ? makeDeepSeekEnvironment(deepseekSettings, environment)
     : environment;
-  const env = fullAccess
-    ? { ...(base ?? process.env), [DSH_PERMISSION_MODE]: DSH_FULL_ACCESS }
+  const env = permissionMode
+    ? { ...(base ?? process.env), [DSH_PERMISSION_MODE]: permissionMode }
     : base;
   return {
     command: deepseekSettings?.binaryPath || "dsh",
@@ -106,7 +121,7 @@ export const makeDeepSeekAcpRuntime = (
           input.deepseekSettings,
           input.cwd,
           input.environment,
-          input.fullAccess,
+          input.permissionMode,
         ),
         authMethodId: DEEPSEEK_AUTH_METHOD_ID,
       }).pipe(

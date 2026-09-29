@@ -7,7 +7,7 @@ export const runtimeModeConfig: Record<
 > = {
   "approval-required": {
     label: "Supervised",
-    description: "Ask before commands and file changes.",
+    description: "Ask before anything is written or changed. What only reads may run.",
     icon: LockIcon,
   },
   "auto-accept-edits": {

@@ -3,8 +3,9 @@
  *
  * A mode means the same thing for every provider:
  *
- *   approval-required   every command and file change is asked of the person first
- *   auto-accept-edits   file changes are made without asking, everything else is asked
+ *   approval-required   a person is asked before anything is written or changed, by a file
+ *                       tool or by a command. What only reads may run without asking.
+ *   auto-accept-edits   file changes are made without asking, commands are asked about
  *   auto                a reviewer of the provider's own approves routine actions
  *   full-access         nothing is asked and nothing is refused
  *
@@ -47,8 +48,8 @@ export function runtimeModeProblem(
     : undefined;
 }
 
-const ASKS_EVERYTHING = (name: string, more = "") =>
-  `${name} asks before every action it needs leave for, or before none. It has no mode that lets file changes through and asks about the rest.${more}`;
+const ASKS_EVERYTHING = (name: string) =>
+  `${name} asks before every action it needs leave for, or before none. It has no mode that lets file changes through and asks about the rest.`;
 const NO_REVIEWER = (name: string) =>
   `${name} has no reviewer of its own to approve routine actions.`;
 
@@ -70,11 +71,14 @@ export const DEEPSEEK_RUNTIME_MODES = runtimeModeSupport({
   auto: NO_REVIEWER("The DeepSeek harness"),
 });
 
+// Tried through T3 Code on 2026-09-29: asked to run a shell command that writes a file,
+// Hermes ran it without asking. It asks before its file tool changes a file, and before a
+// command it takes for dangerous, and a command can change a file as well as the tool can.
+const HERMES_ASKS_IN_PART =
+  "Hermes asks before its file tool changes a file, and runs shell commands without asking unless it takes them for dangerous. A command can change a file too, so nothing here would be supervised.";
 export const HERMES_RUNTIME_MODES = runtimeModeSupport({
-  "auto-accept-edits": ASKS_EVERYTHING(
-    "Hermes",
-    " Hermes has a mode that accepts edits, which T3 Code does not set yet.",
-  ),
+  "approval-required": HERMES_ASKS_IN_PART,
+  "auto-accept-edits": `${HERMES_ASKS_IN_PART} Hermes has a mode that accepts edits, which T3 Code does not set.`,
   auto: NO_REVIEWER("Hermes"),
 });
 

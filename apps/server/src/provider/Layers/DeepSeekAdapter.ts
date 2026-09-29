@@ -84,6 +84,7 @@ import { DEEPSEEK_REASONING_OPTION_ID } from "./DeepSeekProvider.ts";
 import {
   currentDeepSeekModelIdFromSessionSetup,
   deepseekModelSlugFromConfigValue,
+  deepseekPermissionModeFor,
   resolveDeepSeekAcpModelId,
   type DeepSeekAcpRuntimeInput,
 } from "../acp/DeepSeekAcpSupport.ts";
@@ -557,10 +558,11 @@ export const makeDeepSeekAdapter = Effect.fn("makeDeepSeekAdapter")(function* (
 
         return yield* Effect.gen(function* () {
           const mcp = McpProviderSession.readMcpProviderSession(input.threadId);
+          const permissionMode = deepseekPermissionModeFor(input.runtimeMode);
           const runtime = yield* options.makeRuntime({
             cwd,
             clientInfo: { name: "t3-code", version: "0.0.0" },
-            fullAccess: input.runtimeMode === "full-access",
+            ...(permissionMode ? { permissionMode } : {}),
             // dsh offers session/resume and has no session/load.
             ...(Option.isSome(cursor)
               ? { resumeSessionId: cursor.value.sessionId, resumeMethod: "resume" as const }

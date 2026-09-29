@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { buildDeepSeekAcpSpawnInput } from "./acp/DeepSeekAcpSupport.ts";
+import { buildDeepSeekAcpSpawnInput, deepseekPermissionModeFor } from "./acp/DeepSeekAcpSupport.ts";
 import { codexSandboxProblemFrom } from "./Layers/codexSandboxCheck.ts";
 import {
   codexRuntimeModes,
@@ -46,10 +46,17 @@ describe("runtimeModeSupport", () => {
     expect(runtimeModeProblem(PI_RUNTIME_MODES, "full-access")).toBeUndefined();
   });
 
-  it("offers the ACP providers the two modes they can honour", () => {
-    for (const support of [KIMI_RUNTIME_MODES, DEEPSEEK_RUNTIME_MODES, HERMES_RUNTIME_MODES]) {
+  it("offers Kimi and the DeepSeek harness the two modes they can honour", () => {
+    for (const support of [KIMI_RUNTIME_MODES, DEEPSEEK_RUNTIME_MODES]) {
       expect(available(support)).toEqual(["approval-required", "full-access"]);
     }
+  });
+
+  it("offers Hermes full access only, since it runs commands without asking", () => {
+    expect(available(HERMES_RUNTIME_MODES)).toEqual(["full-access"]);
+    expect(runtimeModeProblem(HERMES_RUNTIME_MODES, "approval-required")).toContain(
+      "runs shell commands without asking",
+    );
   });
 
   it("offers OpenCode everything but a reviewer it does not have", () => {
@@ -99,13 +106,17 @@ describe("codexSandboxProblemFrom", () => {
 });
 
 describe("buildDeepSeekAcpSpawnInput", () => {
-  it("sets the permission mode of dsh for full access and leaves it alone otherwise", () => {
-    const base = { PATH: "x", DSH_PERMISSION_MODE: "read-only" };
-    expect(buildDeepSeekAcpSpawnInput(null, "/work", base, true).env).toMatchObject({
+  it("starts dsh in the permission mode that honours the access mode of the thread", () => {
+    expect(deepseekPermissionModeFor("full-access")).toBe("danger-full-access");
+    // In its default mode dsh writes inside the workspace without asking.
+    expect(deepseekPermissionModeFor("approval-required")).toBe("read-only");
+    expect(deepseekPermissionModeFor("auto-accept-edits")).toBeUndefined();
+
+    const base = { PATH: "x", DSH_PERMISSION_MODE: "workspace-write" };
+    expect(buildDeepSeekAcpSpawnInput(null, "/work", base, "read-only").env).toMatchObject({
       PATH: "x",
-      DSH_PERMISSION_MODE: "danger-full-access",
+      DSH_PERMISSION_MODE: "read-only",
     });
-    expect(buildDeepSeekAcpSpawnInput(null, "/work", base, false).env).toBe(base);
     expect(buildDeepSeekAcpSpawnInput(null, "/work", base).env).toBe(base);
   });
 });
