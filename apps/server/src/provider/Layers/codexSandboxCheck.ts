@@ -28,9 +28,14 @@ export function codexSandboxProblemFrom(result: {
   const said = `${result.stdout}\n${result.stderr}`
     .split(/\r?\n/)
     .map((line) => line.trim())
-    .filter((line) => line.length > 0)
-    .at(-1);
-  return (said ?? `codex sandbox ended with code ${result.code}`).slice(0, 200);
+    .findLast((line) => line.length > 0);
+  const problem = (said ?? `codex sandbox ended with code ${result.code}`).slice(0, 200);
+  // The runner of the sandbox is started as an account of Codex's own. Where T3 Code runs in
+  // session 0 (a service, or a job started in the background), that account is refused the
+  // desktop and the runner ends at once, so Codex waits for it in vain. Seen on Windows 11.
+  return /runner pipe/i.test(problem)
+    ? `${problem}. The runner of the sandbox did not start: this is what is seen when T3 Code runs in a background or service session. Start T3 Code in the signed-in session, or use Full access`
+    : `${problem}. Put the sandbox right in Codex, or use Full access`;
 }
 
 /** The problem with the sandbox of Codex, or undefined when it starts or need not be asked. */
@@ -38,9 +43,9 @@ export const checkCodexSandbox = Effect.fn("checkCodexSandbox")(function* (input
   readonly binaryPath: string;
   readonly homePath?: string;
   readonly environment?: NodeJS.ProcessEnv;
-  readonly platform?: NodeJS.Platform;
+  readonly platform: NodeJS.Platform;
 }): Effect.fn.Return<string | undefined, never, ChildProcessSpawner.ChildProcessSpawner> {
-  if ((input.platform ?? process.platform) !== "win32") return undefined;
+  if (input.platform !== "win32") return undefined;
   const environment = {
     ...(input.environment ?? process.env),
     ...(input.homePath ? { CODEX_HOME: input.homePath } : {}),

@@ -48,6 +48,7 @@ import {
   withCodexAppServerClient,
 } from "../Layers/CodexProvider.ts";
 import { resolveCodexLaunchArgs } from "../Layers/codexLaunchArgs.ts";
+import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import { checkCodexSandbox } from "../Layers/codexSandboxCheck.ts";
 import { codexRuntimeModes } from "../runtimeModeSupport.ts";
 import { ProviderEventLoggers } from "../Layers/ProviderEventLoggers.ts";
@@ -189,6 +190,7 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv> = {
           binaryPath: effectiveConfig.binaryPath,
           homePath: effectiveConfig.homePath,
           environment: processEnv,
+          platform: yield* HostProcessPlatform,
         }).pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner)),
         "10 minutes",
       );

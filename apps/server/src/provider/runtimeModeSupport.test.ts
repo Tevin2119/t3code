@@ -83,6 +83,12 @@ describe("runtimeModeSupport", () => {
 
   it("leaves Codex full access only while its sandbox cannot start", () => {
     expect(available(codexRuntimeModes(undefined))).toHaveLength(4);
+    // With its sandbox working, what was seen of the modes that ask less is said beside them.
+    const noteOf = (mode: string) =>
+      codexRuntimeModes(undefined).find((item) => item.mode === mode)?.note;
+    expect(noteOf("auto")).toContain("was not seen to stop anything");
+    expect(noteOf("auto-accept-edits")).toContain("refused by the sandbox");
+    expect(noteOf("approval-required")).toBeUndefined();
     const broken = codexRuntimeModes("timed out connecting runner pipe-in");
     expect(available(broken)).toEqual(["full-access"]);
     expect(runtimeModeProblem(broken, "approval-required")).toContain(
@@ -105,12 +111,14 @@ describe("codexSandboxProblemFrom", () => {
         stdout: "",
         stderr: "starting\nError: timed out after 15000ms connecting runner pipe-in\n",
       }),
-    ).toBe("Error: timed out after 15000ms connecting runner pipe-in");
+    ).toBe(
+      "Error: timed out after 15000ms connecting runner pipe-in. The runner of the sandbox did not start: this is what is seen when T3 Code runs in a background or service session. Start T3 Code in the signed-in session, or use Full access",
+    );
   });
 
   it("does not take a clean exit without the word for a sandbox that works", () => {
     expect(codexSandboxProblemFrom({ code: 0, stdout: "", stderr: "" })).toBe(
-      "codex sandbox ended with code 0",
+      "codex sandbox ended with code 0. Put the sandbox right in Codex, or use Full access",
     );
   });
 });

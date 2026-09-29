@@ -108,10 +108,20 @@ export const OPENCODE_RUNTIME_MODES = runtimeModeSupport({
   auto: `${NO_REVIEWER("OpenCode")} It would ask as Supervised does.`,
 });
 
+// What was seen of Codex's modes through T3 Code, with its sandbox working: a write outside the
+// working folder was refused or asked about in Supervised and Auto-accept edits. In Auto the
+// reviewer of Codex approved a file write outside the working folder that the person had asked
+// for, and nobody was asked. A command outside was refused by the sandbox in both.
+const CODEX_NOTES = {
+  "auto-accept-edits":
+    "Codex runs a command that stays inside the working folder without asking. What reaches outside it is refused by the sandbox, or asked about.",
+  auto: "Codex's own reviewer decides what runs without asking. It was seen to approve a file write outside the working folder that had been asked for, and was not seen to stop anything. Use Supervised where a person is to be asked.",
+} as const;
+
 /** What a Codex sandbox that cannot start takes away: every mode that runs inside it. */
 export function codexRuntimeModes(sandboxProblem: string | undefined) {
-  if (!sandboxProblem) return runtimeModeSupport();
-  const reason = `Codex runs this mode inside its sandbox, which cannot start on this host: ${sandboxProblem}. Put the sandbox right in Codex, or use Full access.`;
+  if (!sandboxProblem) return runtimeModeSupport({}, CODEX_NOTES);
+  const reason = `Codex runs this mode inside its sandbox, which cannot start here: ${sandboxProblem}`;
   return runtimeModeSupport({
     "approval-required": reason,
     "auto-accept-edits": reason,
