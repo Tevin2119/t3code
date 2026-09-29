@@ -32,6 +32,7 @@ import {
   spawnAndCollect,
   type ServerProviderDraft,
 } from "../providerSnapshot.ts";
+import { CLAUDE_RUNTIME_MODES } from "../runtimeModeSupport.ts";
 import { resolveClaudeSdkExecutablePath } from "../Drivers/ClaudeExecutable.ts";
 import { makeClaudeEnvironment } from "../Drivers/ClaudeHome.ts";
 import { discoverClaudeSkills } from "../Drivers/ClaudeSkills.ts";
@@ -53,6 +54,7 @@ const DEFAULT_CLAUDE_MODEL_CAPABILITIES: ModelCapabilities = createModelCapabili
 });
 
 const CLAUDE_PRESENTATION = {
+  runtimeModes: CLAUDE_RUNTIME_MODES,
   displayName: "Claude",
   showInteractionModeToggle: true,
   reportsContextWindow: true,

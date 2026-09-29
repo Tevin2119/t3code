@@ -30,10 +30,13 @@ const ALL_MODES: ReadonlyArray<RuntimeMode> = [
 /** Every mode, each available unless a reason is given for it. */
 export function runtimeModeSupport(
   unavailable: Partial<Record<RuntimeMode, string>> = {},
+  notes: Partial<Record<RuntimeMode, string>> = {},
 ): ReadonlyArray<ServerProviderRuntimeModeSupport> {
   return ALL_MODES.map((mode) => {
     const reason = unavailable[mode];
-    return reason ? { mode, available: false, reason } : { mode, available: true };
+    const note = notes[mode];
+    if (reason) return { mode, available: false, reason };
+    return note ? { mode, available: true, note } : { mode, available: true };
   });
 }
 
@@ -53,6 +56,16 @@ const ASKS_EVERYTHING = (name: string) =>
 const NO_REVIEWER = (name: string) =>
   `${name} has no reviewer of its own to approve routine actions.`;
 
+// Tried through T3 Code on 2026-09-29. Claude reported the mode as in effect. Asked by the
+// person to delete a folder outside the working folder, the reviewer let the command run. It
+// was not seen to stop anything: what was tried beside that, Claude declined by itself.
+export const CLAUDE_RUNTIME_MODES = runtimeModeSupport(
+  {},
+  {
+    auto: "Claude's own reviewer decides what runs without asking. It was seen to let a delete outside the working folder run when the person had asked for it, and was not seen to stop anything. Use Supervised where a person is to be asked.",
+  },
+);
+
 export const PI_RUNTIME_MODES = runtimeModeSupport({
   "approval-required":
     "pi has no way to ask a person before it acts, and no sandbox. It would run with full access.",
@@ -66,10 +79,19 @@ export const KIMI_RUNTIME_MODES = runtimeModeSupport({
   auto: NO_REVIEWER("Kimi"),
 });
 
-export const DEEPSEEK_RUNTIME_MODES = runtimeModeSupport({
-  "auto-accept-edits": ASKS_EVERYTHING("The DeepSeek harness"),
-  auto: NO_REVIEWER("The DeepSeek harness"),
-});
+// Supervised on the DeepSeek harness is its read-only mode. Tried through T3 Code on
+// 2026-09-29: it asked before its file tool wrote and before a command that writes, did what
+// was approved and left what was declined, and asked again for the next write.
+export const DEEPSEEK_RUNTIME_MODES = runtimeModeSupport(
+  {
+    "auto-accept-edits": ASKS_EVERYTHING("The DeepSeek harness"),
+    auto: NO_REVIEWER("The DeepSeek harness"),
+  },
+  {
+    "approval-required":
+      "The DeepSeek harness runs in its read-only mode: it reads without asking, and asks before anything that writes, by its file tool or by a command.",
+  },
+);
 
 // Tried through T3 Code on 2026-09-29: asked to run a shell command that writes a file,
 // Hermes ran it without asking. It asks before its file tool changes a file, and before a

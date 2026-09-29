@@ -3,6 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 import { buildDeepSeekAcpSpawnInput, deepseekPermissionModeFor } from "./acp/DeepSeekAcpSupport.ts";
 import { codexSandboxProblemFrom } from "./Layers/codexSandboxCheck.ts";
 import {
+  CLAUDE_RUNTIME_MODES,
   codexRuntimeModes,
   DEEPSEEK_RUNTIME_MODES,
   HERMES_RUNTIME_MODES,
@@ -34,6 +35,7 @@ describe("runtimeModeSupport", () => {
       ]);
       for (const item of support) {
         expect(Boolean(item.reason)).toBe(!item.available);
+        if (!item.available) expect(item.note).toBeUndefined();
       }
     }
   });
@@ -65,6 +67,14 @@ describe("runtimeModeSupport", () => {
       "auto-accept-edits",
       "full-access",
     ]);
+  });
+
+  it("offers Claude every mode, and says of Auto what was seen of it", () => {
+    expect(available(CLAUDE_RUNTIME_MODES)).toHaveLength(4);
+    const auto = CLAUDE_RUNTIME_MODES.find((item) => item.mode === "auto");
+    expect(auto?.available).toBe(true);
+    expect(auto?.note).toContain("was not seen to stop anything");
+    expect(runtimeModeProblem(CLAUDE_RUNTIME_MODES, "auto")).toBeUndefined();
   });
 
   it("treats a provider that says nothing as able to run every mode", () => {

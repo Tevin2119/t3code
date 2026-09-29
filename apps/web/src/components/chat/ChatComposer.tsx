@@ -3,6 +3,7 @@ import { isLocalEnvironmentDisabled } from "../../localEnvironment";
 import { usePrimaryEnvironmentId } from "../../state/environments";
 import {
   runtimeModeConfig,
+  runtimeModeNote,
   runtimeModeOptions,
   runtimeModeUnavailableReason,
   type RuntimeModeSupport,
@@ -1167,6 +1168,9 @@ const ComposerFooterModeControls = memo(function ComposerFooterModeControls(prop
                   hideIndicator
                   disabled={unavailable !== undefined}
                   data-runtime-mode-option={mode}
+                  data-runtime-mode-note={
+                    runtimeModeNote(props.runtimeModeSupport, mode) ? "true" : undefined
+                  }
                   className="min-w-64 max-w-80 py-2"
                 >
                   <div className="flex min-w-0 items-center gap-3">
@@ -1177,7 +1181,9 @@ const ComposerFooterModeControls = memo(function ComposerFooterModeControls(prop
                         {unavailable ? " (unavailable)" : null}
                       </span>
                       <span className="text-muted-foreground text-xs leading-4">
-                        {unavailable ?? option.description}
+                        {unavailable ??
+                          runtimeModeNote(props.runtimeModeSupport, mode) ??
+                          option.description}
                       </span>
                     </div>
                   </div>
@@ -1189,7 +1195,8 @@ const ComposerFooterModeControls = memo(function ComposerFooterModeControls(prop
         <TooltipPopup side="top">
           {chosenUnavailable
             ? `${chosenUnavailable} Choose another access mode before sending.`
-            : runtimeModeOption.description}
+            : (runtimeModeNote(props.runtimeModeSupport, props.runtimeMode) ??
+              runtimeModeOption.description)}
         </TooltipPopup>
       </Tooltip>
 

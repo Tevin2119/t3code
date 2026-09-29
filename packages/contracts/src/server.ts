@@ -191,6 +191,8 @@ export const ServerProviderRuntimeModeSupport = Schema.Struct({
   mode: RuntimeMode,
   available: Schema.Boolean,
   reason: Schema.optional(TrimmedNonEmptyString),
+  /** For a mode that is offered: what was seen of it on this provider that a person should know. */
+  note: Schema.optional(TrimmedNonEmptyString),
 });
 export type ServerProviderRuntimeModeSupport = typeof ServerProviderRuntimeModeSupport.Type;
 

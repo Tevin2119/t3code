@@ -31,6 +31,15 @@ export const runtimeModeOptions = Object.keys(runtimeModeConfig) as RuntimeMode[
 
 export type RuntimeModeSupport = ServerProvider["runtimeModes"];
 
+/** What was seen of a mode that is offered on the chosen provider, where there is something to say. */
+export function runtimeModeNote(
+  support: RuntimeModeSupport,
+  mode: RuntimeMode,
+): string | undefined {
+  const entry = support?.find((item) => item.mode === mode);
+  return entry?.available ? entry.note : undefined;
+}
+
 /** Why the chosen provider cannot run in this mode, or undefined when it can. */
 export function runtimeModeUnavailableReason(
   support: RuntimeModeSupport,
