@@ -32,6 +32,8 @@ import {
 } from "../acp/KimiAcpSupport.ts";
 import { makeCliAuth } from "../CliAuth.ts";
 import { ProviderDriverError } from "../Errors.ts";
+import { countKimiTurnEnds, readKimiTurnEnd } from "../acp/KimiTurnEnd.ts";
+import { expandHomePath } from "../../pathExpansion.ts";
 import { makeKimiAdapter, type KimiAdapterOptions } from "../Layers/KimiAdapter.ts";
 import {
   buildInitialKimiProviderSnapshot,
@@ -113,9 +115,21 @@ export const KimiDriver: ProviderDriver<KimiSettings, KimiDriverEnv> = {
           childProcessSpawner: spawner,
         }).pipe(Effect.provideService(Crypto.Crypto, crypto));
 
+      // Where Kimi keeps its sessions: the home it was given, or its own.
+      const kimiHome = processEnv["KIMI_CODE_HOME"]?.trim() || expandHomePath("~/.kimi-code");
+      const withFiles = <A>(effect: Effect.Effect<A, never, FileSystem.FileSystem | Path.Path>) =>
+        effect.pipe(
+          Effect.provideService(FileSystem.FileSystem, fileSystem),
+          Effect.provideService(Path.Path, path),
+        );
       const adapter = yield* makeKimiAdapter(effectiveConfig, {
         instanceId,
         makeRuntime,
+        turnEnd: {
+          count: (sessionId) => withFiles(countKimiTurnEnds({ sessionId, home: kimiHome })),
+          read: (sessionId, endsBefore) =>
+            withFiles(readKimiTurnEnd({ sessionId, home: kimiHome, endsBefore })),
+        },
         ...(eventLoggers.native ? { nativeEventLogger: eventLoggers.native } : {}),
       });
       const textGeneration = yield* makeKimiTextGeneration(effectiveConfig, processEnv);

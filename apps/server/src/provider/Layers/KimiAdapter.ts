@@ -81,6 +81,7 @@ import {
   type KimiAcpRuntimeInput,
 } from "../acp/KimiAcpSupport.ts";
 import type { ProviderAdapterShape } from "../Services/ProviderAdapter.ts";
+import type { KimiTurnEnd } from "../acp/KimiTurnEnd.ts";
 import { KIMI_RUNTIME_MODES, runtimeModeProblem } from "../runtimeModeSupport.ts";
 import type { EventNdjsonLogger } from "./EventNdjsonLogger.ts";
 
@@ -205,6 +206,15 @@ export interface KimiAdapterOptions {
   ) => Effect.Effect<void>;
   readonly defaultModel?: Effect.Effect<string | undefined>;
   readonly nativeEventLogger?: EventNdjsonLogger;
+  /**
+   * Reads from Kimi's own record how a turn ended. Kimi answers `end_turn` for a turn that
+   * failed as for one that ended well, so its answer alone is not taken for a turn that
+   * ended well. Left out, as in a test of the protocol alone, the answer is all there is.
+   */
+  readonly turnEnd?: {
+    readonly count: (sessionId: string) => Effect.Effect<number>;
+    readonly read: (sessionId: string, endsBefore: number) => Effect.Effect<KimiTurnEnd>;
+  };
 }
 
 /** Keeps one `kimi acp` process per thread and drains a cancelled prompt before steering. */
@@ -696,6 +706,10 @@ export const makeKimiAdapter = Effect.fn("makeKimiAdapter")(function* (
       });
     }
     let intent: TurnIntent | undefined;
+    // How many turns the record of Kimi held as ended before this one was asked for.
+    let endsBefore = 0;
+    // How many turns the record of Kimi held as ended before this one was asked for.
+    let endsBefore = 0;
     const finishTurn = (turn: TurnIntent, payload: TurnCompletedPayload) =>
       Effect.gen(function* () {
         if (turn.settled || context.stopped || context.generation !== turn.generation) return;
@@ -768,6 +782,7 @@ export const makeKimiAdapter = Effect.fn("makeKimiAdapter")(function* (
             ...(model ? { model } : {}),
             updatedAt: yield* nowIso,
           };
+          endsBefore = options.turnEnd ? yield* options.turnEnd.count(context.nativeSessionId) : 0;
           const dispatched = yield* Deferred.make<void>();
           const fiber = yield* context.runtime
             .prompt(
@@ -811,11 +826,21 @@ export const makeKimiAdapter = Effect.fn("makeKimiAdapter")(function* (
       const record = context.turns.find((turn) => turn.id === launch.turn.turnId);
       if (record) record.items.push(result);
       else context.turns.push({ id: launch.turn.turnId, items: [result] });
+      // What Kimi answered is held against what it recorded of the turn.
+      const ended =
+        result.stopReason === "end_turn" && options.turnEnd
+          ? yield* options.turnEnd.read(context.nativeSessionId, endsBefore)
+          : undefined;
       yield* context.promptLock.withPermit(
-        finishTurn(launch.turn, {
-          state: result.stopReason === "cancelled" ? "cancelled" : "completed",
-          stopReason: result.stopReason,
-        }),
+        finishTurn(
+          launch.turn,
+          ended && !ended.endedWell
+            ? { state: "failed", errorMessage: ended.why ?? "Kimi reports that the turn failed." }
+            : {
+                state: result.stopReason === "cancelled" ? "cancelled" : "completed",
+                stopReason: result.stopReason,
+              },
+        ),
       );
       return {
         threadId: input.threadId,
