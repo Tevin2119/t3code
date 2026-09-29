@@ -44,6 +44,17 @@ export type DeliveryResponse = typeof DeliveryResponse.Type;
  * What a thread was started with. Pinned at bind time: a thread keeps its
  * team, role and configuration revision even when the team is edited later.
  */
+/** What the seat of a thread runs on, which the thread takes over unless a person chooses otherwise. */
+export const DeliverySeatSettings = Schema.Struct({
+  harness: TrimmedNonEmptyString,
+  model: Schema.NullOr(Schema.String),
+  reasoning: Schema.NullOr(Schema.String),
+  access: Schema.NullOr(Schema.String),
+  /** Where the values come from: the team's definition, or the defaults a person saved. */
+  from: Schema.String,
+});
+export type DeliverySeatSettings = typeof DeliverySeatSettings.Type;
+
 export const DeliveryThreadBinding = Schema.Struct({
   threadId: ThreadId,
   /** The engine's session id, used to fetch this thread's instructions and tools. */
@@ -60,6 +71,8 @@ export const DeliveryThreadBinding = Schema.Struct({
   /** `team@revision#digest`, as written on the engine's receipt. */
   configuration: TrimmedNonEmptyString,
   requestedModel: Schema.NullOr(Schema.String),
+  /** Absent on a thread bound before seats carried their settings. */
+  seatSettings: Schema.optional(DeliverySeatSettings),
   memoryScope: TrimmedNonEmptyString,
   tools: Schema.Array(Schema.String),
   project: Schema.String,

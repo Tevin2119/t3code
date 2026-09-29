@@ -1,7 +1,8 @@
 import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import { LockIcon, UsersIcon } from "lucide-react";
 
-import { deliveryEnvironment, useDeliveryEnabled } from "../../state/delivery";
+import { describeEffective, parseSessionEffective } from "../../lib/deliverySeats";
+import { deliveryEnvironment, useDeliveryEnabled, useDeliveryRead } from "../../state/delivery";
 import { useEnvironmentQuery } from "../../state/query";
 import { Button } from "../ui/button";
 import { Popover, PopoverPopup, PopoverTitle, PopoverTrigger } from "../ui/popover";
@@ -25,6 +26,13 @@ export function TeamBadge(props: {
         })
       : null,
   );
+  const session = state.data?.binding?.session ?? null;
+  const sessionRead = useDeliveryRead(
+    enabled && session ? props.environmentId : null,
+    `/api/sessions/${session ?? ""}`,
+    // What the harness confirms arrives after the session has started.
+    { pollMs: 15_000 },
+  );
   if (!enabled) return null;
   const binding = state.data?.binding ?? null;
   // A thread that was sent with no team says so, where the team would stand.
@@ -40,11 +48,52 @@ export function TeamBadge(props: {
       </span>
     );
   }
+  const seat = binding.seatSettings ?? null;
+  const effective = parseSessionEffective(sessionRead.body);
+  const overrides = effective?.overrides ?? [];
   const rows: ReadonlyArray<readonly [string, string]> = [
     ["Team profile", binding.team],
     ["Role", binding.role],
     ["Seat", binding.seat],
     ["Harness", binding.harness],
+    [
+      "Seat runs on",
+      seat
+        ? [
+            seat.model ?? "the model of the harness",
+            seat.reasoning ? `${seat.reasoning} reasoning` : "the level of the harness",
+            `${seat.access ?? "full"} access`,
+            `from ${seat.from}`,
+          ].join(", ")
+        : "not recorded when this thread was bound",
+    ],
+    ...(effective
+      ? [
+          ...describeEffective(effective),
+          [
+            "Overrides",
+            overrides.length > 0
+              ? overrides
+                  .map(
+                    (item) =>
+                      `${item.setting}: ${item.chosen ?? "nothing"}, where the seat has ${item.seat ?? "nothing"}`,
+                  )
+                  .join("; ")
+              : "none, the thread runs as its seat does",
+          ] as const,
+          ...effective.notApplied.map(
+            (item) => [`Not applied: ${item.setting}`, item.why] as const,
+          ),
+          ...effective.disagrees.map(
+            (item) =>
+              [
+                `Differs: ${item.setting}`,
+                `${item.passed ?? "nothing"} was passed, the harness reports ${item.confirmed ?? "nothing"}`,
+              ] as const,
+          ),
+          ["Recorded", `${effective.at}, ${effective.reason ?? "no reason given"}`] as const,
+        ]
+      : ([["This thread runs on", "not reported yet"]] as const)),
     ["Configuration", binding.configuration],
     ["Keeps", binding.memoryScope === "profile" ? "the notes of the profile" : "this conversation"],
     ["Tools", binding.tools.length > 0 ? binding.tools.join(", ") : "none"],
@@ -62,6 +111,7 @@ export function TeamBadge(props: {
             aria-label={`Team ${binding.team}, role ${binding.role}. Fixed for this thread.`}
             data-delivery-team-badge={binding.team}
             data-delivery-team-role={binding.role}
+            data-delivery-team-overrides={overrides.map((item) => item.setting).join(" ")}
           />
         }
       >
@@ -69,6 +119,11 @@ export function TeamBadge(props: {
         <span className="truncate">{binding.team}</span>
         <span className="text-muted-foreground">/</span>
         <span className="truncate">{binding.role}</span>
+        {overrides.length > 0 ? (
+          <span className="shrink-0 text-warning">
+            {overrides.length === 1 ? "1 override" : `${overrides.length} overrides`}
+          </span>
+        ) : null}
         <LockIcon className="size-3 shrink-0 text-muted-foreground" />
       </PopoverTrigger>
       <PopoverPopup align="start" className="w-[min(36rem,calc(100vw-2rem))]">

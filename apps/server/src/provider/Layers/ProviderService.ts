@@ -82,6 +82,7 @@ import * as ProviderSessionDirectory from "../Services/ProviderSessionDirectory.
 import { type EventNdjsonLogger } from "./EventNdjsonLogger.ts";
 import * as ProviderEventLoggers from "./ProviderEventLoggers.ts";
 import * as AnalyticsService from "../../telemetry/AnalyticsService.ts";
+import * as DeliveryEffective from "../../delivery/DeliveryEffective.ts";
 import * as DeliveryThreadSession from "../../delivery/DeliveryThreadSession.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import * as McpSessionRegistry from "../../mcp/McpSessionRegistry.ts";
@@ -977,6 +978,13 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
 
   const publishRuntimeEvent = (event: ProviderRuntimeEvent): Effect.Effect<void> =>
     Effect.succeed(event).pipe(
+      // What a harness says of the session of a team thread goes on the team's record.
+      Effect.tap((canonicalEvent) => {
+        const patch = DeliveryEffective.patchFromRuntimeEvent(canonicalEvent);
+        return patch
+          ? DeliveryThreadSession.reportDeliveryPatch(canonicalEvent.threadId, patch)
+          : Effect.void;
+      }),
       Effect.tap((canonicalEvent) =>
         canonicalEventLogger
           ? canonicalEventLogger.write(canonicalEvent, canonicalEvent.threadId)
@@ -1309,6 +1317,15 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         { ...resumed, providerInstanceId: bindingInstanceId },
         input.binding.threadId,
       );
+      yield* DeliveryThreadSession.reportDeliveryStart(input.binding.threadId, {
+        reason: "the session was resumed",
+        requested: DeliveryEffective.requestedOf({
+          driver: input.binding.provider,
+          modelSelection: persistedModelSelection,
+          runtimeMode: input.binding.runtimeMode ?? "full-access",
+        }),
+        ...DeliveryEffective.confirmedBySession(input.binding.provider, resumed.model),
+      });
       yield* analytics.record("provider.session.recovered", {
         provider: resumed.provider,
         strategy: "resume-thread",
@@ -1547,6 +1564,18 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         });
         yield* upsertSessionBinding(sessionWithInstance, threadId, {
           modelSelection: input.modelSelection,
+        });
+        yield* DeliveryThreadSession.reportDeliveryStart(threadId, {
+          reason:
+            effectiveResumeCursor !== undefined
+              ? "the session was started again"
+              : "the session was started",
+          requested: DeliveryEffective.requestedOf({
+            driver: resolvedProvider,
+            modelSelection: input.modelSelection,
+            runtimeMode: input.runtimeMode,
+          }),
+          ...DeliveryEffective.confirmedBySession(resolvedProvider, session.model),
         });
         yield* analytics.record("provider.session.started", {
           provider: sessionWithInstance.provider,

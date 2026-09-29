@@ -149,11 +149,18 @@ export interface DraftTeamChoice {
   /** Null is "No team": the thread starts as an ordinary one. */
   readonly team: string | null;
   readonly role: string | null;
+  /**
+   * What of the seat the draft has taken over, as one key. What the seat runs
+   * on is taken over once for each choice of a seat, so that what a person
+   * chooses after that stands.
+   */
+  readonly inheritedFor?: string | null;
 }
 
 interface DeliveryDraftState {
   readonly choices: Record<string, DraftTeamChoice>;
   readonly setChoice: (threadId: string, choice: DraftTeamChoice) => void;
+  readonly markInherited: (threadId: string, key: string) => void;
   readonly clearChoice: (threadId: string) => void;
 }
 
@@ -164,6 +171,12 @@ export const useDeliveryDraftStore = create<DeliveryDraftState>()(
       choices: {},
       setChoice: (threadId, choice) =>
         set((state) => ({ choices: { ...state.choices, [threadId]: choice } })),
+      markInherited: (threadId, key) =>
+        set((state) => {
+          const choice = state.choices[threadId];
+          if (!choice || choice.inheritedFor === key) return state;
+          return { choices: { ...state.choices, [threadId]: { ...choice, inheritedFor: key } } };
+        }),
       clearChoice: (threadId) =>
         set((state) => {
           if (!(threadId in state.choices)) return state;

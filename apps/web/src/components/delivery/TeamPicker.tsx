@@ -1,8 +1,9 @@
 import { DELIVERY_HARNESS_BY_DRIVER, type EnvironmentId } from "@t3tools/contracts";
 import { InfoIcon, UsersIcon } from "lucide-react";
-import { useMemo } from "react";
+import { useEffect, useMemo } from "react";
 
 import { parseTeams, resolveTeamChoice, rolesForHarness } from "../../lib/delivery";
+import { seatForThread, seatKey, seatOverrides, type SeatForThread } from "../../lib/deliverySeats";
 import {
   useDeliveryDraftStore,
   useDeliveryEnabled,
@@ -28,10 +29,19 @@ export function TeamPicker(props: {
   readonly threadId: string;
   /** The driver of the harness chosen for this thread, e.g. `claudeAgent`. */
   readonly driver: string | null;
+  /** What is chosen for the thread now, to be held against what its seat has. */
+  readonly chosen: {
+    readonly model: string | null;
+    readonly reasoning: string | null;
+    readonly runtimeMode: string | null;
+  };
+  /** Sets the thread to what its seat runs on. Called once for each choice of a seat. */
+  readonly onSeat: (seat: SeatForThread) => void;
 }) {
   const enabled = useDeliveryEnabled(props.environmentId);
   const choice = useDraftTeamChoice(props.threadId);
   const setChoice = useDeliveryDraftStore((state) => state.setChoice);
+  const markInherited = useDeliveryDraftStore((state) => state.markInherited);
   const teamsRead = useDeliveryRead(enabled ? props.environmentId : null, "/api/teams");
   const teams = useMemo(
     () => parseTeams(teamsRead.body).filter((team) => team.team !== "triage"),
@@ -47,9 +57,25 @@ export function TeamPicker(props: {
     driver: props.driver,
   });
 
+  const readyRole = resolved.state === "ready" ? resolved.role : null;
+  const threadSeat =
+    team && harness && readyRole ? seatForThread(team.settings, harness, readyRole) : null;
+  const inheritKey =
+    team && readyRole && threadSeat ? seatKey(team.team, readyRole, threadSeat) : null;
+  const { threadId, onSeat, chosen } = props;
+  // A thread bound to a seat runs on what the seat runs on, unless a person
+  // chooses otherwise after that. The draft is set from the seat once for each
+  // seat that is chosen, here, because the seat also changes when the harness does.
+  useEffect(() => {
+    if (!enabled || !inheritKey || !threadSeat || choice.inheritedFor === inheritKey) return;
+    onSeat(threadSeat);
+    markInherited(threadId, inheritKey);
+  }, [enabled, inheritKey, threadSeat, choice.inheritedFor, onSeat, markInherited, threadId]);
+  const overrides = threadSeat ? seatOverrides(threadSeat, chosen) : [];
+
   if (!enabled) return null;
 
-  const role = resolved.state === "ready" ? resolved.role : null;
+  const role = readyRole;
   const seat =
     team && harness && role
       ? (team.seats.find((item) => item.harness === harness && item.role === role) ?? null)
@@ -141,6 +167,40 @@ export function TeamPicker(props: {
             ))}
           </SelectPopup>
         </Select>
+      ) : null}
+
+      {threadSeat && overrides.length > 0 ? (
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <Button
+                type="button"
+                size="xs"
+                variant="ghost"
+                className="min-w-0 gap-1 px-1.5 font-normal text-warning"
+                data-delivery-seat-overrides={overrides.map((item) => item.setting).join(" ")}
+                onClick={() => onSeat(threadSeat)}
+              />
+            }
+          >
+            {overrides.length === 1 ? "1 override" : `${overrides.length} overrides`}
+          </TooltipTrigger>
+          <TooltipPopup side="top" className="max-w-96">
+            <span className="flex flex-col gap-0.5">
+              <span>This thread does not run as its seat does:</span>
+              {overrides.map((item) => (
+                <span key={item.setting}>
+                  {item.setting}: {item.chosen}, where the seat has {item.seat}
+                </span>
+              ))}
+              <span>Your choice stands and is recorded. Click to go back to the seat.</span>
+            </span>
+          </TooltipPopup>
+        </Tooltip>
+      ) : threadSeat ? (
+        <span className="sr-only" data-delivery-seat-overrides="">
+          Runs as its seat does
+        </span>
       ) : null}
 
       {team ? (

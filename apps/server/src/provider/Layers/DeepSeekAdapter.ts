@@ -382,6 +382,7 @@ export const makeDeepSeekAdapter = Effect.fn("makeDeepSeekAdapter")(function* (
             effective: outcome.effective ?? null,
             offered: outcome.offered,
             applied: outcome.applied,
+            ...(outcome.why ? { why: outcome.why } : {}),
           },
         },
       },

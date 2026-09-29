@@ -1,12 +1,14 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { parseSeatSettings } from "./delivery";
+import { parseSeatSettings, type SeatSettings, type SeatSettingValues } from "./delivery";
 import {
   describeSeatValues,
   driverOfHarness,
   entriesForSeat,
   entryForHarness,
   harnessOfDriver,
+  seatForThread,
+  seatOverrides,
   seatValues,
   sharePercentages,
   withTeamModels,
@@ -118,5 +120,106 @@ describe("what a seat runs on", () => {
       developer: 0,
       "developer-2": 0,
     });
+  });
+});
+
+describe("what a thread takes over from its seat", () => {
+  const values = (over: Partial<SeatSettingValues>): SeatSettingValues => ({
+    active: "on",
+    harness: null,
+    model: null,
+    reasoning: null,
+    access: null,
+    ...over,
+  });
+  const seat = (over: Partial<SeatSettings>): SeatSettings =>
+    ({
+      seat: "lead",
+      title: "Lead",
+      role: "research-lead",
+      duties: [],
+      harness: "claude",
+      provider: "anthropic",
+      defined: values({ harness: "claude" }),
+      now: values({
+        harness: "claude",
+        model: "claude-fable-5-1",
+        reasoning: "high",
+        access: "full",
+      }),
+      saved: {},
+      models: [],
+      may: { harness: [], model: true, reasoning: [], access: [] },
+      byHarness: {},
+      why: values({}),
+      set: {},
+      effective: values({}),
+      ...over,
+    }) as SeatSettings;
+
+  it("takes the seat the harness holds in the role, as the team has it now", () => {
+    expect(seatForThread([seat({})], "claude", "research-lead")).toEqual({
+      seat: "lead",
+      harness: "claude",
+      model: "claude-fable-5-1",
+      reasoning: "high",
+      access: "full",
+    });
+  });
+
+  it("follows a seat the saved defaults moved to another harness", () => {
+    const moved = seat({ now: values({ harness: "codex", model: "gpt-6-luna" }) });
+    expect(seatForThread([moved], "codex", "research-lead").seat).toBe("lead");
+    expect(seatForThread([moved], "claude", "research-lead").seat).toBeNull();
+  });
+
+  it("gives a role taken by choice the model of a seat on the harness, and no level", () => {
+    expect(seatForThread([seat({})], "claude", "critic")).toEqual({
+      seat: null,
+      harness: "claude",
+      model: "claude-fable-5-1",
+      reasoning: null,
+      access: "full",
+    });
+  });
+
+  it("finds no override in a thread that runs as its seat does", () => {
+    const mine = seatForThread([seat({})], "claude", "research-lead");
+    expect(
+      seatOverrides(mine, {
+        model: "claude-fable-5-1",
+        reasoning: "high",
+        runtimeMode: "full-access",
+      }),
+    ).toEqual([]);
+  });
+
+  it("names each setting that is not what the seat has", () => {
+    const mine = seatForThread([seat({})], "claude", "research-lead");
+    expect(
+      seatOverrides(mine, {
+        model: "claude-sonnet-5-5",
+        reasoning: null,
+        runtimeMode: "approval-required",
+      }),
+    ).toEqual([
+      { setting: "model", seat: "claude-fable-5-1", chosen: "claude-sonnet-5-5" },
+      { setting: "reasoning", seat: "high", chosen: "harness default" },
+      { setting: "access", seat: "full access", chosen: "approval-required" },
+    ]);
+  });
+
+  it("holds full access against a seat that is restricted", () => {
+    const restricted = seatForThread(
+      [seat({ now: values({ harness: "claude", access: "read-only" }) })],
+      "claude",
+      "research-lead",
+    );
+    expect(
+      seatOverrides(restricted, { model: null, reasoning: null, runtimeMode: "full-access" }),
+    ).toEqual([{ setting: "access", seat: "read-only access", chosen: "full-access" }]);
+    expect(
+      seatOverrides(restricted, { model: null, reasoning: null, runtimeMode: "approval-required" }),
+    ).toEqual([]);
   });
 });

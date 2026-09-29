@@ -41,6 +41,7 @@ import { HttpClient, HttpClientRequest } from "effect/unstable/http";
 import { writeFileStringAtomically } from "../atomicWrite.ts";
 import { ServerConfig } from "../config.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import type * as DeliveryEffective from "./DeliveryEffective.ts";
 import * as DeliveryThreadSession from "./DeliveryThreadSession.ts";
 
 const BindingsFile = Schema.fromJsonString(
@@ -60,6 +61,15 @@ const Identity = Schema.Struct({
   harness: Schema.String,
   configuration: Schema.String,
   requestedModel: Schema.optional(Schema.NullOr(Schema.String)),
+  seatSettings: Schema.optional(
+    Schema.Struct({
+      harness: Schema.String,
+      model: Schema.NullOr(Schema.String),
+      reasoning: Schema.NullOr(Schema.String),
+      access: Schema.NullOr(Schema.String),
+      from: Schema.String,
+    }),
+  ),
   memoryScope: Schema.String,
   tools: Schema.Array(Schema.String),
   project: Schema.String,
@@ -399,6 +409,7 @@ export const make = Effect.gen(function* () {
           workspace,
           configuration: identity.configuration,
           requestedModel: identity.requestedModel ?? null,
+          ...(identity.seatSettings ? { seatSettings: identity.seatSettings } : {}),
           memoryScope: identity.memoryScope,
           tools: identity.tools,
           project: identity.project,
@@ -549,8 +560,29 @@ export const make = Effect.gen(function* () {
         ]),
       ),
     });
+    DeliveryThreadSession.beginDeliveryEffective(threadId);
     return true;
   });
+
+  // The record is kept by the engine. A report it does not take is logged and
+  // does not stop the thread, which runs on what it was given either way.
+  const reportEffective = (threadId: ThreadId, report: DeliveryEffective.EffectiveReport) => {
+    const binding = bindings.get(threadId);
+    if (!binding) return Effect.void;
+    return request("POST", `/api/sessions/${binding.session}/effective`, {
+      by: "T3 Code",
+      ...report,
+    }).pipe(
+      Effect.asVoid,
+      Effect.catch((cause) =>
+        Effect.logWarning("Could not record what a team thread ran on", {
+          threadId,
+          session: binding.session,
+          detail: cause.detail,
+        }),
+      ),
+    );
+  };
 
   // Terminals read the entry script without an Effect, so it is kept current here.
   const entryScriptOf = (settings: { enabled: boolean; terminalEntryScript: string }) =>
@@ -566,10 +598,12 @@ export const make = Effect.gen(function* () {
   );
 
   DeliveryThreadSession.registerDeliveryPreparer(prepareThread);
+  DeliveryThreadSession.registerDeliveryReporter(reportEffective);
   DeliveryThreadSession.registerDeliveryTeamLookup((threadId) => bindings.get(threadId)?.team);
   yield* Effect.addFinalizer(() =>
     Effect.sync(() => {
       DeliveryThreadSession.registerDeliveryPreparer(undefined);
+      DeliveryThreadSession.registerDeliveryReporter(undefined);
       DeliveryThreadSession.registerDeliveryTeamLookup(undefined);
       DeliveryThreadSession.setDeliveryTerminalEntryScript(null);
       DeliveryThreadSession.clearAllDeliveryThreadSessions();

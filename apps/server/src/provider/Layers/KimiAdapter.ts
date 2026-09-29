@@ -370,6 +370,7 @@ export const makeKimiAdapter = Effect.fn("makeKimiAdapter")(function* (
             effective: outcome.effective ?? null,
             offered: outcome.offered,
             applied: outcome.applied,
+            ...(outcome.why ? { why: outcome.why } : {}),
           },
         },
       },

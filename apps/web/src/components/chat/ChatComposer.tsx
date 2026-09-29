@@ -256,6 +256,7 @@ import {
 import { OrchestratorPanel } from "../delivery/OrchestratorPanel";
 import { TeamBadge } from "../delivery/TeamBadge";
 import { TeamPicker } from "../delivery/TeamPicker";
+import { REASONING_OPTION_BY_DRIVER, type SeatForThread } from "../../lib/deliverySeats";
 import {
   useDeliveryEnabled,
   useOrchestratorDraft,
@@ -2057,6 +2058,61 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     [selectedInstanceId, selectedModel, selectedModelOptionsForDispatch],
   );
   const selectedModelForPicker = selectedModel;
+  const setSeatModelOptions = useComposerDraftStore((store) => store.setProviderModelOptions);
+  const reasoningOptionId = REASONING_OPTION_BY_DRIVER[selectedProvider] ?? null;
+  const chosenForSeat = useMemo(() => {
+    const level = reasoningOptionId
+      ? selectedModelOptionsForDispatch?.find((option) => option.id === reasoningOptionId)?.value
+      : undefined;
+    return {
+      model: selectedModel || null,
+      reasoning: typeof level === "string" && level !== "harness-default" ? level : null,
+      runtimeMode,
+    };
+  }, [reasoningOptionId, runtimeMode, selectedModel, selectedModelOptionsForDispatch]);
+  // Sets the draft to what the seat of the thread runs on. What the seat leaves
+  // to the harness is left as it is, and an access the provider cannot honour
+  // is not chosen for it.
+  const handleSeatForThread = useCallback(
+    (seat: SeatForThread) => {
+      const model = seat.model ?? selectedModel;
+      if (seat.model && seat.model !== selectedModel) {
+        onProviderModelSelect(selectedInstanceId, seat.model, { focusComposer: false });
+      }
+      if (seat.reasoning && reasoningOptionId) {
+        setSeatModelOptions(
+          composerDraftTarget,
+          selectedProvider,
+          [
+            ...(selectedModelOptionsForDispatch ?? []).filter(
+              (option) => option.id !== reasoningOptionId,
+            ),
+            { id: reasoningOptionId, value: seat.reasoning },
+          ],
+          { instanceId: selectedInstanceId, model },
+        );
+      }
+      const mode = (seat.access ?? "full") === "full" ? "full-access" : null;
+      if (
+        mode &&
+        runtimeModeUnavailableReason(selectedProviderStatus?.runtimeModes, mode) === undefined
+      ) {
+        handleRuntimeModeChange(mode);
+      }
+    },
+    [
+      composerDraftTarget,
+      handleRuntimeModeChange,
+      onProviderModelSelect,
+      reasoningOptionId,
+      selectedInstanceId,
+      selectedModel,
+      selectedModelOptionsForDispatch,
+      selectedProvider,
+      selectedProviderStatus?.runtimeModes,
+      setSeatModelOptions,
+    ],
+  );
   // Instance-keyed option list so the picker can show each configured
   // instance (built-in + custom) as a first-class sidebar entry. The
   // options are server-reported models plus that exact instance's
@@ -4976,6 +5032,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   environmentId={environmentId}
                   threadId={activeThreadId}
                   driver={selectedProvider}
+                  chosen={chosenForSeat}
+                  onSeat={handleSeatForThread}
                 />
               </>
             ),
