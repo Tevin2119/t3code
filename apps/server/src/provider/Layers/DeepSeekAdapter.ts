@@ -92,6 +92,7 @@ import type { ProviderAdapterShape } from "../Services/ProviderAdapter.ts";
 import { DEEPSEEK_RUNTIME_MODES, runtimeModeProblem } from "../runtimeModeSupport.ts";
 import type { EventNdjsonLogger } from "./EventNdjsonLogger.ts";
 import { passedPayload } from "../passedRecord.ts";
+import { turnFailed, turnFailureMessage } from "../acp/TurnFailure.ts";
 
 const PROVIDER = ProviderDriverKind.make("deepseek");
 
@@ -875,12 +876,19 @@ export const makeDeepSeekAdapter = Effect.fn("makeDeepSeekAdapter")(function* (
           ? mapAcpToAdapterError(PROVIDER, input.threadId, "session/prompt", cause)
           : cause,
       ),
-      Effect.tapError((cause) =>
+      // A turn ends as failed whatever ended it: an error of the protocol, or one that
+      // reached the adapter as a defect. A turn that was stopped is ended below.
+      Effect.onError((cause) =>
         Effect.suspend(() =>
-          intent
-            ? context.promptLock.withPermit(
-                finishTurn(intent, { state: "failed", errorMessage: cause.message }),
-              )
+          intent && turnFailed(cause)
+            ? context.promptLock
+                .withPermit(
+                  finishTurn(intent, {
+                    state: "failed",
+                    errorMessage: turnFailureMessage(cause, "DeepSeek"),
+                  }),
+                )
+                .pipe(Effect.ignore)
             : Effect.void,
         ),
       ),
