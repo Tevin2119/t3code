@@ -146,7 +146,65 @@ describe("patchFromRuntimeEvent", () => {
       patchFromRuntimeEvent(
         configured("claudeAgent", { model: "claude-fable-5-1[1m]", effort: "high" }),
       ),
-    ).toEqual({ passed: { model: "claude-fable-5-1", reasoning: "high" } });
+    ).toEqual({
+      passed: { model: "claude-fable-5-1", reasoning: "high" },
+      passedDetail: [
+        {
+          at: expect.any(String),
+          when: "session",
+          model: "claude-fable-5-1",
+          reasoning: "high",
+          settings: { model: "claude-fable-5-1[1m]", effort: "high" },
+        },
+      ],
+    });
+  });
+
+  it("keeps the permission mode the Claude adapter handed over apart from the one Claude names", () => {
+    expect(
+      patchFromRuntimeEvent(
+        configured("claudeAgent", {
+          model: "claude-sonnet-5-5",
+          effort: "low",
+          permissionMode: "bypassPermissions",
+          cwd: "/work",
+        }),
+      ),
+    ).toEqual({
+      passed: { model: "claude-sonnet-5-5", reasoning: "low", access: "bypassPermissions" },
+      passedDetail: [
+        {
+          at: expect.any(String),
+          when: "session",
+          model: "claude-sonnet-5-5",
+          reasoning: "low",
+          access: "bypassPermissions",
+          settings: {
+            model: "claude-sonnet-5-5",
+            effort: "low",
+            permissionMode: "bypassPermissions",
+            allowDangerouslySkipPermissions: true,
+            cwd: "/work",
+          },
+        },
+      ],
+    });
+    expect(
+      patchFromRuntimeEvent(
+        configured("claudeAgent", {
+          type: "system",
+          subtype: "init",
+          model: "claude-sonnet-5-5",
+          permissionMode: "default",
+        }),
+      ),
+    ).toEqual({
+      confirmed: { model: "claude-sonnet-5-5", access: "default" },
+      confirmedBy: {
+        model: "the first message of Claude itself",
+        access: "the first message of Claude itself",
+      },
+    });
   });
 
   it("finds nothing in an event that reports neither", () => {

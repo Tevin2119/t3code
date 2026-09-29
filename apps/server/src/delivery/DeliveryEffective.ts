@@ -168,20 +168,46 @@ export function patchFromRuntimeEvent(event: ProviderRuntimeEvent): EffectivePat
   // The first message of Claude itself, which names the model and the mode it runs in.
   if (config.type === "system" && config.subtype === "init") {
     const model = text(config.model);
-    return model
-      ? { confirmed: { model }, confirmedBy: { model: "the first message of Claude itself" } }
+    const mode = text(config.permissionMode);
+    const by = "the first message of Claude itself";
+    return model || mode
+      ? {
+          confirmed: { ...(model ? { model } : {}), ...(mode ? { access: mode } : {}) },
+          confirmedBy: { ...(model ? { model: by } : {}), ...(mode ? { access: by } : {}) },
+        }
       : null;
   }
 
   // What the Claude adapter handed over when it started the session. The model is handed
   // over with the context window it is to have, as in `claude-fable-5-1[1m]`, and Claude
   // names the model without it: the two are the same model.
-  if (event.provider === "claudeAgent" && (config.model || config.effort)) {
+  if (
+    event.provider === "claudeAgent" &&
+    (config.model || config.effort || config.permissionMode)
+  ) {
+    const model = text(config.model)?.replace(/\[[^\]]*\]$/, "") ?? null;
+    const reasoning = text(config.effort);
+    const mode = text(config.permissionMode);
     return {
-      passed: {
-        model: text(config.model)?.replace(/\[[^\]]*\]$/, "") ?? null,
-        reasoning: text(config.effort),
-      },
+      passed: { model, reasoning, ...(mode ? { access: mode } : {}) },
+      // The options the query of Claude was opened with, by the names Claude gives them.
+      passedDetail: [
+        {
+          at: event.createdAt,
+          when: "session",
+          model,
+          reasoning,
+          ...(mode ? { access: mode } : {}),
+          settings: {
+            ...(text(config.model) ? { model: text(config.model) } : {}),
+            ...(reasoning ? { effort: reasoning } : {}),
+            ...(mode ? { permissionMode: mode } : {}),
+            ...(mode === "bypassPermissions" ? { allowDangerouslySkipPermissions: true } : {}),
+            ...(text(config.cwd) ? { cwd: text(config.cwd) } : {}),
+            ...(config.fastMode === true ? { fastMode: true } : {}),
+          },
+        },
+      ],
     };
   }
   return null;
