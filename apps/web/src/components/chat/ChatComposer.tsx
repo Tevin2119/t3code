@@ -2074,9 +2074,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   // to the harness is left as it is. The access is set only when a person goes
   // back to the seat, and never to a mode the provider cannot honour.
   const handleSeatForThread = useCallback(
-    (seat: SeatForThread, how: "inherit" | "reset") => {
-      const model = seat.model ?? selectedModel;
-      if (seat.model && seat.model !== selectedModel) {
+    (seat: SeatForThread, how: "inherit" | "inherit-level" | "reset") => {
+      const model = how === "inherit-level" ? selectedModel : (seat.model ?? selectedModel);
+      if (how !== "inherit-level" && seat.model && seat.model !== selectedModel) {
         onProviderModelSelect(selectedInstanceId, seat.model, { focusComposer: false });
       }
       if (seat.reasoning && reasoningOptionId) {

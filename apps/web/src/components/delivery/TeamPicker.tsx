@@ -3,7 +3,13 @@ import { InfoIcon, UsersIcon } from "lucide-react";
 import { useEffect, useMemo } from "react";
 
 import { parseTeams, resolveTeamChoice, rolesForHarness } from "../../lib/delivery";
-import { seatForThread, seatKey, seatOverrides, type SeatForThread } from "../../lib/deliverySeats";
+import {
+  seatForThread,
+  seatKey,
+  seatOverrides,
+  takeOverFor,
+  type SeatForThread,
+} from "../../lib/deliverySeats";
 import {
   useDeliveryDraftStore,
   useDeliveryEnabled,
@@ -38,10 +44,11 @@ export function TeamPicker(props: {
   /**
    * Sets the thread to what its seat runs on. `inherit` is asked once for each
    * choice of a seat and leaves the access as the person has it: a thread is
-   * never given more access by itself. `reset` is a person going back to the
+   * never given more access by itself. `inherit-level` leaves the model too,
+   * where the person has just picked it. `reset` is a person going back to the
    * seat, access included.
    */
-  readonly onSeat: (seat: SeatForThread, how: "inherit" | "reset") => void;
+  readonly onSeat: (seat: SeatForThread, how: "inherit" | "inherit-level" | "reset") => void;
 }) {
   const enabled = useDeliveryEnabled(props.environmentId);
   const choice = useDraftTeamChoice(props.threadId);
@@ -74,7 +81,7 @@ export function TeamPicker(props: {
   // seat that is chosen, here, because the seat also changes when the harness does.
   useEffect(() => {
     if (!enabled || !inheritKey || !threadSeat || inheritedFor === inheritKey) return;
-    onSeat(threadSeat, "inherit");
+    onSeat(threadSeat, takeOverFor(inheritedFor, threadSeat));
     markInherited(threadId, inheritKey);
   }, [enabled, inheritKey, threadSeat, inheritedFor, onSeat, markInherited, threadId]);
   const overrides = threadSeat ? seatOverrides(threadSeat, chosen) : [];

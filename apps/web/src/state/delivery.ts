@@ -165,6 +165,8 @@ interface DeliveryDraftState {
   readonly clearChoice: (threadId: string) => void;
 }
 
+const MAX_INHERITED_MARKS = 200;
+
 /** The team chosen for a thread that has not been sent yet. Kept across reloads. */
 export const useDeliveryDraftStore = create<DeliveryDraftState>()(
   persist(
@@ -174,17 +176,22 @@ export const useDeliveryDraftStore = create<DeliveryDraftState>()(
       setChoice: (threadId, choice) =>
         set((state) => ({ choices: { ...state.choices, [threadId]: choice } })),
       markInherited: (threadId, key) =>
-        set((state) =>
-          state.inherited[threadId] === key
-            ? state
-            : { inherited: { ...state.inherited, [threadId]: key } },
-        ),
+        set((state) => {
+          if (state.inherited[threadId] === key) return state;
+          // The newest are kept. A thread that was sent long ago needs no mark.
+          const kept = Object.entries(state.inherited)
+            .filter(([id]) => id !== threadId)
+            .slice(-(MAX_INHERITED_MARKS - 1));
+          return { inherited: { ...Object.fromEntries(kept), [threadId]: key } };
+        }),
       clearChoice: (threadId) =>
         set((state) => {
-          if (!(threadId in state.choices) && !(threadId in state.inherited)) return state;
+          // The mark that the seat was taken over stays: the choice is cleared when the
+          // thread is sent, while the picker is still shown, and the seat must not be
+          // taken over again over what the person chose.
+          if (!(threadId in state.choices)) return state;
           const { [threadId]: _removed, ...rest } = state.choices;
-          const { [threadId]: _taken, ...inherited } = state.inherited;
-          return { choices: rest, inherited };
+          return { choices: rest };
         }),
     }),
     { name: "t3code:delivery-draft-teams:v1" },

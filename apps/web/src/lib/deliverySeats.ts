@@ -255,6 +255,22 @@ export function seatForThread(
   };
 }
 
+/**
+ * How much of a seat a draft takes over when its seat changes.
+ *
+ * The harness of a draft is changed in one way only: a person picks a model
+ * of another harness. That model is what they chose, so it stands, and the
+ * rest of the new seat is taken over. A seat that changed with the team or the
+ * role is taken over whole, as is the first seat of a draft.
+ */
+export function takeOverFor(
+  previousKey: string | null,
+  seat: SeatForThread,
+): "inherit" | "inherit-level" {
+  const previousHarness = previousKey?.split("|")[2] ?? null;
+  return previousHarness !== null && previousHarness !== seat.harness ? "inherit-level" : "inherit";
+}
+
 /** One key for what was taken over, so that it is taken over once and not again. */
 export const seatKey = (team: string, role: string, seat: SeatForThread): string =>
   [team, role, seat.harness, seat.model ?? "", seat.reasoning ?? "", seat.access ?? ""].join("|");

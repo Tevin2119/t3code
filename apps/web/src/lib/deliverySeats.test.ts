@@ -11,6 +11,7 @@ import {
   seatOverrides,
   seatValues,
   sharePercentages,
+  takeOverFor,
   withTeamModels,
 } from "./deliverySeats";
 
@@ -120,6 +121,22 @@ describe("what a seat runs on", () => {
       developer: 0,
       "developer-2": 0,
     });
+  });
+});
+
+describe("how much of a seat is taken over", () => {
+  const seat = { seat: "developer-2", harness: "pi", model: "m", reasoning: null, access: "full" };
+
+  it("takes the first seat of a draft over whole", () => {
+    expect(takeOverFor(null, seat)).toBe("inherit");
+  });
+
+  it("takes a seat over whole when the team or the role changed", () => {
+    expect(takeOverFor("rnd|researcher|pi|m||full", seat)).toBe("inherit");
+  });
+
+  it("leaves the model a person picked on another harness", () => {
+    expect(takeOverFor("development|qa-validate|kimi|||full", seat)).toBe("inherit-level");
   });
 });
 
