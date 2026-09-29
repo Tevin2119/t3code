@@ -43,6 +43,8 @@ const PI_PRESENTATION = {
   badgeLabel: "Early Access",
   // pi's RPC mode exposes no history rewind.
   supportsConversationRollback: false,
+  // pi says what its session holds of the context window, in `get_session_stats`.
+  reportsContextWindow: true,
 } as const;
 
 /** The levels `pi --thinking` takes. A model that cannot reason runs as if it were off. */
@@ -55,7 +57,8 @@ export const PI_THINKING_LEVELS = [
   "xhigh",
   "max",
 ] as const;
-export const PI_DEFAULT_THINKING_LEVEL = "medium";
+/** The choice that leaves pi on its own level: nothing is passed and nothing is set. */
+export const PI_THINKING_HARNESS_DEFAULT = "harness-default";
 
 const PI_THINKING_LABELS: Record<(typeof PI_THINKING_LEVELS)[number], string> = {
   off: "Off",
@@ -74,12 +77,11 @@ const EMPTY_CAPABILITIES: ModelCapabilities = createModelCapabilities({
       id: "thinking",
       label: "Reasoning",
       type: "select",
-      options: PI_THINKING_LEVELS.map((level) => ({
-        id: level,
-        label: PI_THINKING_LABELS[level],
-        ...(level === PI_DEFAULT_THINKING_LEVEL ? { isDefault: true } : {}),
-      })),
-      currentValue: PI_DEFAULT_THINKING_LEVEL,
+      options: [
+        { id: PI_THINKING_HARNESS_DEFAULT, label: "Harness default", isDefault: true },
+        ...PI_THINKING_LEVELS.map((level) => ({ id: level, label: PI_THINKING_LABELS[level] })),
+      ],
+      currentValue: PI_THINKING_HARNESS_DEFAULT,
     },
   ],
 });

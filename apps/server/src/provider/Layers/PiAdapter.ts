@@ -28,6 +28,7 @@ import {
   type ToolLifecycleItemType,
   type TurnCompletedPayload,
 } from "@t3tools/contracts";
+import type { ModelSelection } from "@t3tools/contracts";
 import { getModelSelectionStringOptionValue } from "@t3tools/shared/model";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
 import * as Cause from "effect/Cause";
@@ -52,7 +53,67 @@ import {
 } from "../Errors.ts";
 import * as DeliveryThreadSession from "../../delivery/DeliveryThreadSession.ts";
 import { makePiRpcSession, type PiRpcRecord, type PiRpcSession } from "../pi/PiRpcSession.ts";
-import { PI_DEFAULT_THINKING_LEVEL, PI_THINKING_LEVELS } from "./PiProvider.ts";
+import { PI_THINKING_LEVELS } from "./PiProvider.ts";
+
+/** What a person chose as Reasoning. Undefined leaves pi on its own level. */
+export const chosenPiThinkingLevel = (
+  selection: ModelSelection | undefined,
+): string | undefined => {
+  const chosen = selection ? getModelSelectionStringOptionValue(selection, "thinking") : undefined;
+  return chosen && (PI_THINKING_LEVELS as ReadonlyArray<string>).includes(chosen)
+    ? chosen
+    : undefined;
+};
+
+/**
+ * What `get_session_stats` says, as the usage of a thread. pi counts what the context holds
+ * apart from what the session has used in all.
+ */
+export function piUsageFromStats(data: unknown):
+  | {
+      readonly usedTokens: number;
+      readonly maxTokens?: number;
+      readonly totalProcessedTokens?: number;
+      readonly inputTokens?: number;
+      readonly outputTokens?: number;
+      readonly cachedInputTokens?: number;
+    }
+  | undefined {
+  const stats = asRecord(data);
+  const tokens = asRecord(stats?.["tokens"]);
+  const context = asRecord(stats?.["contextUsage"]);
+  const whole = (value: unknown) =>
+    typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : undefined;
+  const used = whole(context?.["tokens"]) ?? whole(tokens?.["total"]);
+  if (used === undefined) return undefined;
+  const size = whole(context?.["contextWindow"]);
+  const total = whole(tokens?.["total"]);
+  const input = whole(tokens?.["input"]);
+  const output = whole(tokens?.["output"]);
+  const cached = whole(tokens?.["cacheRead"]);
+  return {
+    usedTokens: used,
+    ...(size ? { maxTokens: size } : {}),
+    ...(total === undefined ? {} : { totalProcessedTokens: total }),
+    ...(input === undefined ? {} : { inputTokens: input }),
+    ...(output === undefined ? {} : { outputTokens: output }),
+    ...(cached === undefined ? {} : { cachedInputTokens: cached }),
+  };
+}
+
+/** Why a turn of pi failed, read from the record that says so, or undefined. */
+export function piFailureFromRecord(record: PiRpcRecord): string | undefined {
+  if (record.type === "auto_retry_end" && record["success"] === false) {
+    return asString(record["finalError"]) ?? "pi gave up after retrying.";
+  }
+  if (record.type === "message_end") {
+    const message = asRecord(record["message"]);
+    if (message?.["role"] === "assistant" && message["stopReason"] === "error") {
+      return asString(message["errorMessage"]) ?? "The model call failed.";
+    }
+  }
+  return undefined;
+}
 import type { ProviderAdapterShape } from "../Services/ProviderAdapter.ts";
 
 const PROVIDER = ProviderDriverKind.make("pi");
@@ -133,6 +194,10 @@ interface SessionContext {
   stopped: boolean;
   closed: boolean;
   disconnected: boolean;
+  /** The level last asked of pi, so that it is asked again only when it changes. */
+  thinkingAsked: string | undefined;
+  /** Why the model call of the turn that is running failed, when it did. */
+  turnFailure: string | undefined;
 }
 
 export interface PiAdapterOptions {
@@ -220,12 +285,88 @@ export const makePiAdapter = Effect.fn("makePiAdapter")(function* (
    * execution becomes item events, and the run-settled records release the
    * waiting `sendTurn`.
    */
+  /**
+   * Asks pi for the level a person chose, when it is another than the one asked for last, and
+   * says what pi then runs on. pi lowers a level the model does not take without saying so,
+   * so what it reports is what is shown.
+   */
+  const syncReasoning = Effect.fn("PiAdapter.syncReasoning")(function* (
+    context: SessionContext,
+    chosen: string | undefined,
+  ) {
+    if (chosen !== undefined && chosen !== context.thinkingAsked) {
+      const set = yield* context.rpc
+        .request({ type: "set_thinking_level", level: chosen })
+        .pipe(Effect.catch(() => Effect.succeed(undefined)));
+      if (set?.success !== false) context.thinkingAsked = chosen;
+    }
+    const state = yield* context.rpc
+      .request({ type: "get_state" })
+      .pipe(Effect.catch(() => Effect.succeed(undefined)));
+    const effective = asString(asRecord(state?.data)?.["thinkingLevel"]);
+    yield* emit({
+      type: "session.configured",
+      ...(yield* stamp),
+      provider: PROVIDER,
+      threadId: context.threadId,
+      payload: {
+        config: {
+          reasoning: {
+            option: "thinking",
+            chosen: chosen ?? null,
+            effective: effective ?? null,
+            applied: chosen !== undefined && effective === chosen,
+          },
+        },
+      },
+    });
+    if (chosen !== undefined && effective !== undefined && effective !== chosen) {
+      yield* emit({
+        type: "runtime.warning",
+        ...(yield* stamp),
+        provider: PROVIDER,
+        threadId: context.threadId,
+        payload: {
+          message: `The reasoning level "${chosen}" was asked for and pi runs on "${effective}", which is what this model takes.`,
+          detail: { chosen, effective },
+        },
+      });
+    }
+  });
+
+  /** Says what the session holds of its context window and what it has used, as pi counts it. */
+  const reportUsage = Effect.fn("PiAdapter.reportUsage")(function* (
+    context: SessionContext,
+    turnId: TurnId | undefined,
+  ) {
+    const stats = yield* context.rpc
+      .request({ type: "get_session_stats" })
+      .pipe(Effect.catch(() => Effect.succeed(undefined)));
+    const usage = stats?.success === false ? undefined : piUsageFromStats(stats?.data);
+    if (!usage) return;
+    yield* emit({
+      type: "thread.token-usage.updated",
+      ...(yield* stamp),
+      provider: PROVIDER,
+      threadId: context.threadId,
+      ...(turnId ? { turnId } : {}),
+      payload: { usage },
+      raw: { source: "pi.rpc.event", method: "get_session_stats", payload: stats?.data },
+    });
+  });
+
   const handleRecord = Effect.fn("PiAdapter.handleRecord")(function* (
     context: SessionContext,
     record: PiRpcRecord,
   ) {
     if (context.stopped) return;
     const turnId = context.activeTurnId;
+    // A model call that failed is a turn that failed, though pi settles it like any other.
+    const failure = piFailureFromRecord(record);
+    if (failure) context.turnFailure = failure;
+    else if (record.type === "auto_retry_end" && record["success"] === true) {
+      context.turnFailure = undefined;
+    }
     switch (record.type) {
       case "message_update": {
         const delta = asRecord(record["assistantMessageEvent"]);
@@ -274,7 +415,10 @@ export const makePiAdapter = Effect.fn("makePiAdapter")(function* (
       case "agent_settled": {
         const intent = context.activeIntent;
         if (intent && !intent.settled) {
-          yield* Deferred.succeed(intent.done, { cancelled: false });
+          yield* Deferred.succeed(intent.done, {
+            cancelled: false,
+            ...(context.turnFailure ? { error: context.turnFailure } : {}),
+          });
         }
         return;
       }
@@ -336,14 +480,8 @@ export const makePiAdapter = Effect.fn("makePiAdapter")(function* (
           const command = settings.binaryPath || "pi";
           const model = input.modelSelection?.model?.trim() || undefined;
           const team = DeliveryThreadSession.deliveryPiLaunch(input.threadId);
-          // The level shown is the level run: with none chosen, the one the picker shows.
-          const chosen = input.modelSelection
-            ? getModelSelectionStringOptionValue(input.modelSelection, "thinking")
-            : undefined;
-          const thinking =
-            chosen && (PI_THINKING_LEVELS as ReadonlyArray<string>).includes(chosen)
-              ? chosen
-              : PI_DEFAULT_THINKING_LEVEL;
+          // With no level chosen nothing is passed, and pi runs on its own.
+          const thinking = chosenPiThinkingLevel(input.modelSelection);
           const args = buildPiRpcArgs({
             provider: settings.provider.trim() || "kimi-coding",
             model,
@@ -374,6 +512,8 @@ export const makePiAdapter = Effect.fn("makePiAdapter")(function* (
               env: spawnEnvironment,
               ...(spawnCommand.shell === undefined ? {} : { shell: spawnCommand.shell }),
             },
+            // What pi writes beside its records is read, so that its pipe never fills.
+            onStderr: (text) => Effect.logDebug("pi stderr", { text: text.slice(0, 2000) }),
           }).pipe(
             Effect.mapError(
               (cause) =>
@@ -413,6 +553,8 @@ export const makePiAdapter = Effect.fn("makePiAdapter")(function* (
             stopped: false,
             closed: false,
             disconnected: false,
+            thinkingAsked: thinking,
+            turnFailure: undefined,
           };
           sessions.set(input.threadId, context);
 
@@ -447,6 +589,7 @@ export const makePiAdapter = Effect.fn("makePiAdapter")(function* (
             threadId: input.threadId,
             payload: { state: "ready", reason: "pi RPC session ready" },
           });
+          yield* syncReasoning(context, thinking);
           yield* emit({
             type: "thread.started",
             ...(yield* stamp),
@@ -531,6 +674,9 @@ export const makePiAdapter = Effect.fn("makePiAdapter")(function* (
           ...(model ? { model } : {}),
           updatedAt: yield* nowIso,
         };
+        context.turnFailure = undefined;
+        // A level chosen since the last turn is asked of pi before the prompt.
+        yield* syncReasoning(context, chosenPiThinkingLevel(input.modelSelection));
         // `prompt` is acknowledged as accepted; the work itself streams back as
         // events and ends with `agent_settled`.
         const response = yield* context.rpc.request({ type: "prompt", message: text }).pipe(
@@ -556,6 +702,7 @@ export const makePiAdapter = Effect.fn("makePiAdapter")(function* (
     );
 
     const outcome = yield* Deferred.await(turn.done);
+    if (!context.stopped) yield* reportUsage(context, turn.turnId);
     if (context.stopped && !outcome.cancelled) {
       return yield* new ProviderAdapterSessionClosedError({
         provider: PROVIDER,
