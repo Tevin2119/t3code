@@ -34,6 +34,7 @@ import { getModelSelectionStringOptionValue } from "@t3tools/shared/model";
 
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
+import * as DeliveryEffective from "../../delivery/DeliveryEffective.ts";
 import * as DeliveryThreadSession from "../../delivery/DeliveryThreadSession.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
@@ -62,6 +63,7 @@ import {
 } from "../opencodeRuntime.ts";
 import * as Option from "effect/Option";
 import { OPENCODE_RUNTIME_MODES, runtimeModeProblem } from "../runtimeModeSupport.ts";
+import { passedPayload } from "../passedRecord.ts";
 
 const PROVIDER = ProviderDriverKind.make("opencode");
 
@@ -3272,6 +3274,29 @@ export function makeOpenCodeAdapter(
             return yield* Effect.interrupt;
           }
 
+          // What goes to OpenCode with this prompt, apart from what it confirms. Written to
+          // the record of a team thread, and not into the stream of events, whose order is
+          // upstream's and is left as it is.
+          const handedOver = passedPayload({
+            when: "turn",
+            model: `${parsedModel.providerID}/${parsedModel.modelID}`,
+            reasoning: context.activeVariant ?? null,
+            access: `the rules for ${context.session.runtimeMode}`,
+            settings: {
+              agent: context.activeAgent ?? null,
+              variant: context.activeVariant ?? null,
+              sent: nativeCommand ? "session.command" : "session.promptAsync",
+            },
+          }).config["passed"];
+          if (typeof handedOver === "object" && handedOver !== null) {
+            yield* DeliveryThreadSession.reportDeliveryPatch(
+              input.threadId,
+              DeliveryEffective.patchFromPassed(
+                handedOver as Record<string, unknown>,
+                yield* nowIso,
+              ),
+            );
+          }
           let promptTimedOut = false;
           const submissionMethod = nativeCommand ? "session.command" : "session.promptAsync";
           // Native commands expand provider-owned templates. Their API does not

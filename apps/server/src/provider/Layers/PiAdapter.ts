@@ -671,6 +671,10 @@ export const makePiAdapter = Effect.fn("makePiAdapter")(function* (
                   ...(plan.restore && had ? { heldBefore: had.messages } : {}),
                 },
                 passed: {
+                  when: "session",
+                  model: model ?? null,
+                  reasoning: thinking ?? null,
+                  access: "pi has no setting for it",
                   arguments: args.map((word) =>
                     word === had?.sessionFile ? "<the file of the session>" : word,
                   ),

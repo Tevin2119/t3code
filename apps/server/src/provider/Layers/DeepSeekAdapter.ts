@@ -91,6 +91,7 @@ import {
 import type { ProviderAdapterShape } from "../Services/ProviderAdapter.ts";
 import { DEEPSEEK_RUNTIME_MODES, runtimeModeProblem } from "../runtimeModeSupport.ts";
 import type { EventNdjsonLogger } from "./EventNdjsonLogger.ts";
+import { passedPayload } from "../passedRecord.ts";
 
 const PROVIDER = ProviderDriverKind.make("deepseek");
 
@@ -617,6 +618,33 @@ export const makeDeepSeekAdapter = Effect.fn("makeDeepSeekAdapter")(function* (
             chosenLevel(input.modelSelection),
           );
           yield* options.onSessionStarted?.(started, cwd) ?? Effect.void;
+          // What was handed to the DeepSeek harness when the session was opened, apart from what it confirms.
+          yield* emit({
+            type: "session.configured",
+            ...(yield* stamp),
+            provider: PROVIDER,
+            threadId: input.threadId,
+            payload: passedPayload({
+              when: "session",
+              access: permissionMode ?? "the mode the harness starts in",
+              model: input.modelSelection?.model ?? null,
+              settings: {
+                cwd,
+                "config option model":
+                  requestedModel && requestedModel !== currentModel ? requestedModel : null,
+                "model of the session when it was opened": currentModel ?? null,
+                DSH_PERMISSION_MODE: permissionMode ?? "left as the harness has it",
+                "answers to what the harness asks":
+                  input.runtimeMode === "full-access" ? "yes" : "asked of the person",
+                "tool servers": [
+                  ...(mcp ? ["t3-code"] : []),
+                  ...DeliveryThreadSession.deliveryAcpServers(input.threadId).map(
+                    (server) => server.name,
+                  ),
+                ].join(", "),
+              },
+            }),
+          });
           const createdAt = yield* nowIso;
           const session: ProviderSession = {
             provider: PROVIDER,

@@ -32,6 +32,8 @@ export interface EffectiveReport {
   readonly confirmed: EffectiveValues;
   readonly confirmedBy: Readonly<Record<string, string>>;
   readonly notApplied: ReadonlyArray<{ readonly setting: string; readonly why: string }>;
+  /** What the adapter handed over, as it was sent: arguments and settings, with no secret. */
+  readonly passedDetail?: ReadonlyArray<Readonly<Record<string, unknown>>>;
 }
 
 /** The option of each driver that sets how hard the model reasons. */
@@ -108,13 +110,32 @@ const text = (value: unknown): string | null =>
   typeof value === "string" && value.trim().length > 0 ? value : null;
 
 export type EffectivePatch = Partial<
-  Pick<EffectiveReport, "passed" | "confirmed" | "confirmedBy" | "notApplied">
+  Pick<EffectiveReport, "passed" | "confirmed" | "confirmedBy" | "notApplied" | "passedDetail">
 >;
+
+/** What an adapter handed over, as a patch of the record. */
+export function patchFromPassed(
+  passed: Readonly<Record<string, unknown>>,
+  at: string,
+): EffectivePatch {
+  const has = (name: string) => Object.hasOwn(passed, name);
+  return {
+    passed: {
+      ...(has("model") ? { model: text(passed["model"]) } : {}),
+      ...(has("reasoning") ? { reasoning: text(passed["reasoning"]) } : {}),
+      ...(has("access") ? { access: text(passed["access"]) } : {}),
+    },
+    passedDetail: [{ at, ...passed }],
+  };
+}
 
 /** What an event of a session says of what was passed and what the harness confirmed. */
 export function patchFromRuntimeEvent(event: ProviderRuntimeEvent): EffectivePatch | null {
   if (event.type !== "session.configured") return null;
   const config = event.payload.config;
+
+  // What an adapter says it handed over, at the start of the session or with a turn.
+  if (isRecord(config.passed)) return patchFromPassed(config.passed, event.createdAt);
 
   // The harness read back after a level was set: pi, Kimi and the DeepSeek harness.
   if (isRecord(config.reasoning)) {
@@ -180,9 +201,23 @@ export function withPatch(report: EffectiveReport, patch: EffectivePatch): Effec
       ...report.notApplied.filter((item) => !settings.has(item.setting)),
       ...(patch.notApplied ?? []),
     ],
+    // The last of each kind is kept: what the session was opened with, and the last turn.
+    ...(report.passedDetail || patch.passedDetail
+      ? {
+          passedDetail: [
+            ...(report.passedDetail ?? []).filter(
+              (item) => !(patch.passedDetail ?? []).some((next) => next["when"] === item["when"]),
+            ),
+            ...(patch.passedDetail ?? []),
+          ],
+        }
+      : {}),
   };
 }
 
 export const sameReport = (a: EffectiveReport, b: EffectiveReport): boolean =>
-  JSON.stringify([a.passed, a.confirmed, a.confirmedBy, a.notApplied]) ===
-  JSON.stringify([b.passed, b.confirmed, b.confirmedBy, b.notApplied]);
+  JSON.stringify([a.passed, a.confirmed, a.confirmedBy, a.notApplied, withoutTimes(a)]) ===
+  JSON.stringify([b.passed, b.confirmed, b.confirmedBy, b.notApplied, withoutTimes(b)]);
+
+const withoutTimes = (report: EffectiveReport) =>
+  (report.passedDetail ?? []).map(({ at: _at, ...rest }) => rest);

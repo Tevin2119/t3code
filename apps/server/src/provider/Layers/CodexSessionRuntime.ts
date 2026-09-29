@@ -508,6 +508,9 @@ function readResumeCursorThreadId(
   return isCodexResumeCursorSchema(resumeCursor) ? resumeCursor.threadId : undefined;
 }
 
+/** What a thread of Codex is opened with for an access mode, for the record of it. */
+export const codexThreadConfigFor = (mode: RuntimeMode) => runtimeModeToThreadConfig(mode);
+
 function runtimeModeToThreadConfig(input: RuntimeMode): {
   readonly approvalPolicy: EffectCodexSchema.V2ThreadStartParams__AskForApproval;
   readonly sandbox: EffectCodexSchema.V2ThreadStartParams__SandboxMode;

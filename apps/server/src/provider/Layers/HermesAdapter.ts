@@ -88,6 +88,7 @@ import type { ProviderAdapterShape } from "../Services/ProviderAdapter.ts";
 import type { HermesTurnEnd } from "../acp/HermesTurnEnd.ts";
 import { HERMES_RUNTIME_MODES, runtimeModeProblem } from "../runtimeModeSupport.ts";
 import type { EventNdjsonLogger } from "./EventNdjsonLogger.ts";
+import { passedPayload } from "../passedRecord.ts";
 
 const PROVIDER = ProviderDriverKind.make("hermes");
 
@@ -556,6 +557,38 @@ export const makeHermesAdapter = Effect.fn("makeHermesAdapter")(function* (
             yield* runtime.setSessionModel(requestedModel);
           }
           yield* options.onSessionStarted?.(started, cwd) ?? Effect.void;
+          // What was handed to Hermes when the session was opened, apart from what it confirms.
+          yield* emit({
+            type: "session.configured",
+            ...(yield* stamp),
+            provider: PROVIDER,
+            threadId: input.threadId,
+            payload: passedPayload({
+              when: "session",
+              access:
+                input.runtimeMode === "full-access"
+                  ? "every request answered with yes"
+                  : "every request asked of the person",
+              model: requestedModel ?? null,
+              settings: {
+                cwd,
+                "session/set_model":
+                  requestedModel && requestedModel !== currentModel ? requestedModel : null,
+                "model of the session when it was opened": currentModel ?? null,
+                "session mode": "left as Hermes has it",
+                "answers to what Hermes asks":
+                  input.runtimeMode === "full-access"
+                    ? "yes, for the session"
+                    : "asked of the person",
+                "tool servers": [
+                  ...(mcp ? ["t3-code"] : []),
+                  ...DeliveryThreadSession.deliveryAcpServers(input.threadId).map(
+                    (server) => server.name,
+                  ),
+                ].join(", "),
+              },
+            }),
+          });
           const createdAt = yield* nowIso;
           const session: ProviderSession = {
             provider: PROVIDER,

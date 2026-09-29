@@ -84,6 +84,7 @@ import type { ProviderAdapterShape } from "../Services/ProviderAdapter.ts";
 import type { KimiTurnEnd } from "../acp/KimiTurnEnd.ts";
 import { KIMI_RUNTIME_MODES, runtimeModeProblem } from "../runtimeModeSupport.ts";
 import type { EventNdjsonLogger } from "./EventNdjsonLogger.ts";
+import { passedPayload } from "../passedRecord.ts";
 
 const PROVIDER = ProviderDriverKind.make("kimi");
 
@@ -607,6 +608,36 @@ export const makeKimiAdapter = Effect.fn("makeKimiAdapter")(function* (
             chosenLevel(input.modelSelection),
           );
           yield* options.onSessionStarted?.(started, cwd) ?? Effect.void;
+          // What was handed to Kimi when the session was opened, apart from what it confirms.
+          yield* emit({
+            type: "session.configured",
+            ...(yield* stamp),
+            provider: PROVIDER,
+            threadId: input.threadId,
+            payload: passedPayload({
+              when: "session",
+              access:
+                input.runtimeMode === "full-access"
+                  ? "every request answered with yes"
+                  : "every request asked of the person",
+              model: requestedModel ?? null,
+              settings: {
+                cwd,
+                "session/set_model": requestedModel ? resolveKimiAcpModelId(requestedModel) : null,
+                "model of the session when it was opened":
+                  currentKimiModelIdFromSessionSetup(started.sessionSetupResult) ?? null,
+                "session mode": "left as Kimi has it",
+                "answers to what Kimi asks":
+                  input.runtimeMode === "full-access" ? "yes" : "asked of the person",
+                "tool servers": [
+                  ...(mcp ? ["t3-code"] : []),
+                  ...DeliveryThreadSession.deliveryAcpServers(input.threadId).map(
+                    (server) => server.name,
+                  ),
+                ].join(", "),
+              },
+            }),
+          });
           const createdAt = yield* nowIso;
           const session: ProviderSession = {
             provider: PROVIDER,

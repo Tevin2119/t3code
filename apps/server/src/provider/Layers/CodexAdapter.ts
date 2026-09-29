@@ -34,6 +34,7 @@ import {
 import * as Effect from "effect/Effect";
 import * as NodeCrypto from "node:crypto";
 import * as Crypto from "effect/Crypto";
+import * as DateTime from "effect/DateTime";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
@@ -47,6 +48,7 @@ import * as EffectCodexSchema from "effect-codex-app-server/schema";
 
 import { getModelSelectionStringOptionValue } from "@t3tools/shared/model";
 import { getCodexServiceTierOptionValue } from "../../codexModelOptions.ts";
+import * as DeliveryEffective from "../../delivery/DeliveryEffective.ts";
 import * as DeliveryThreadSession from "../../delivery/DeliveryThreadSession.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 
@@ -79,6 +81,8 @@ import {
   mergeCodexRateLimits,
 } from "./codexUsageLimits.ts";
 import { codexRuntimeModes, runtimeModeProblem } from "../runtimeModeSupport.ts";
+import { passedPayload, type PassedRecord } from "../passedRecord.ts";
+import { codexThreadConfigFor } from "./CodexSessionRuntime.ts";
 const isCodexAppServerProcessExitedError = Schema.is(CodexErrors.CodexAppServerProcessExitedError);
 const isCodexAppServerTransportError = Schema.is(CodexErrors.CodexAppServerTransportError);
 const isCodexSessionRuntimeThreadIdMissingError = Schema.is(
@@ -2237,6 +2241,18 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
     options?.nativeEventLogger === undefined ? nativeEventLogger : undefined;
   const runtimeEventQueue = yield* Queue.unbounded<ProviderRuntimeEvent>();
   const sessions = new Map<ThreadId, CodexAdapterSessionContext>();
+  // Written to the record of a team thread, and not into the stream of events, whose
+  // order is upstream's and is left as it is.
+  const offerPassed = (threadId: ThreadId, passed: PassedRecord): Effect.Effect<void> =>
+    Effect.gen(function* () {
+      const at = DateTime.formatIso(yield* DateTime.now);
+      const said = passedPayload(passed).config["passed"];
+      if (typeof said !== "object" || said === null) return;
+      yield* DeliveryThreadSession.reportDeliveryPatch(
+        threadId,
+        DeliveryEffective.patchFromPassed(said as Record<string, unknown>, at),
+      );
+    });
 
   const startSession: CodexAdapterShape["startSession"] = (input) =>
     Effect.scoped(
@@ -2487,6 +2503,25 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
           ),
         );
 
+        // What was handed to Codex when the thread was opened, apart from what it confirms.
+        const threadConfig = codexThreadConfigFor(input.runtimeMode);
+        yield* offerPassed(input.threadId, {
+          when: "session",
+          model: runtimeInput.model ?? null,
+          access: `approval ${String(threadConfig.approvalPolicy)}, sandbox ${String(threadConfig.sandbox)}`,
+          arguments: [
+            ...(runtimeInput.launchArgs ? [runtimeInput.launchArgs] : []),
+            ...(runtimeInput.appServerArgs ?? []),
+          ],
+          settings: {
+            cwd: runtimeInput.cwd,
+            approvalPolicy: String(threadConfig.approvalPolicy),
+            sandbox: String(threadConfig.sandbox),
+            serviceTier: runtimeInput.serviceTier ?? null,
+            resumed: runtimeInput.resumeCursor !== undefined,
+          },
+        });
+
         sessions.set(input.threadId, {
           threadId: input.threadId,
           scope: sessionScope,
@@ -2552,6 +2587,15 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
       input.modelSelection?.instanceId === boundInstanceId
         ? getCodexServiceTierOptionValue(input.modelSelection)
         : undefined;
+    // What goes to Codex with this turn. With no level chosen none is sent, and Codex
+    // takes its own for the model.
+    yield* offerPassed(input.threadId, {
+      when: "turn",
+      model:
+        input.modelSelection?.instanceId === boundInstanceId ? input.modelSelection.model : null,
+      reasoning: reasoningEffort ?? null,
+      settings: { serviceTier: serviceTier ?? null },
+    });
     return yield* session.runtime
       .sendTurn({
         ...(input.input !== undefined ? { input: input.input } : {}),
