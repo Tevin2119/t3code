@@ -15,7 +15,9 @@ import { isElectron } from "../../env";
 import { useThread } from "../../state/entities";
 import {
   parseCards,
+  parseTarget,
   parseTask,
+  targetLine,
   flowFor,
   flowStartLabel,
   parseTeams,
@@ -196,6 +198,7 @@ export function TaskEditor(props: {
                 title: String(item.title),
                 description: "description" in item ? String(item.description ?? "") : "",
                 kind: "own" as const,
+                target: "target" in item ? parseTarget(item.target) : null,
               },
             ]
           : [],
@@ -203,13 +206,43 @@ export function TaskEditor(props: {
     [boardsRead.body],
   );
   const [boardChoice, setBoardChoice] = useState<string | null>(null);
+  // A saved task keeps its own target; a new one takes the chosen board's.
+  const chosenBoardTarget = boards.find((item) => item.id === boardChoiceNow())?.target ?? null;
+  function boardChoiceNow() {
+    return boardChoice ?? (saved ? (saved.card.set ?? "") : (props.board?.id ?? ""));
+  }
+  const taskTarget = saved ? saved.target : chosenBoardTarget;
+  // A saved draft put on a board bound elsewhere may take that board's target, when a person says so.
+  const retargetTo =
+    saved &&
+    saved.state === "draft" &&
+    chosenBoardTarget?.ok &&
+    (chosenBoardTarget.repository !== saved.target?.repository ||
+      chosenBoardTarget.base !== saved.target?.base)
+      ? chosenBoardTarget
+      : null;
+  const retarget = async () => {
+    if (!props.taskId || !retargetTo) return;
+    const result = await act(`/api/tasks/${props.taskId}/target`, {
+      repository: retargetTo.repository,
+      base: retargetTo.base,
+      by: person,
+    });
+    if (!result.ok) setProblems([result.why]);
+    taskRead.refresh();
+  };
   // A board made or edited from the form, as on the Board.
   const [boardDialog, setBoardDialog] = useState<{ readonly editing: PickerItem | null } | null>(
     null,
   );
   const [boardBusy, setBoardBusy] = useState(false);
   const [boardProblem, setBoardProblem] = useState<string | null>(null);
-  const saveBoard = async (input: { readonly title: string; readonly description: string }) => {
+  const saveBoard = async (input: {
+    readonly title: string;
+    readonly description: string;
+    readonly repository?: string;
+    readonly base?: string;
+  }) => {
     setBoardBusy(true);
     setBoardProblem(null);
     const editing = boardDialog?.editing ?? null;
@@ -410,7 +443,12 @@ export function TaskEditor(props: {
     ? (teamTaskBlock(team, flow) ??
       (chosenFlow && chosenFlow.problems.length > 0 ? chosenFlow.problems.join(" ") : null))
     : null;
-  const canSubmit = form.text.trim().length > 0 && teamBlock === null && busy === null;
+  // Nothing is submitted without a repository it can be done in: there is no fallback.
+  const targetBlock = taskTarget?.ok
+    ? null
+    : `${targetLine(taskTarget)}. Choose a board bound to a repository first.`;
+  const canSubmit =
+    form.text.trim().length > 0 && teamBlock === null && targetBlock === null && busy === null;
   const engineDown = teamsRead.error ?? taskRead.error;
   const state = !props.taskId ? "Not saved yet" : changed ? "Changed since it was saved" : "Saved";
 
@@ -517,9 +555,11 @@ export function TaskEditor(props: {
                 <TooltipPopup side="bottom">
                   {teamBlock
                     ? teamBlock
-                    : form.text.trim().length === 0
-                      ? "Write what is asked first."
-                      : `Saves it and gives it to team ${form.team}. ${chosenFlow?.summary ?? ""}`}
+                    : targetBlock
+                      ? targetBlock
+                      : form.text.trim().length === 0
+                        ? "Write what is asked first."
+                        : `Saves it and gives it to team ${form.team}. ${chosenFlow?.summary ?? ""}`}
                 </TooltipPopup>
               </Tooltip>
             </div>
@@ -642,10 +682,49 @@ export function TaskEditor(props: {
                   <span className="text-[11px] text-muted-foreground">
                     Where the task will show once saved or submitted. It can be moved later.
                   </span>
+                  {/* Where the work is done: taken from the board when the task is made, and kept. */}
+                  <div
+                    className="flex flex-col gap-1 rounded-md border border-border px-2 py-1.5"
+                    data-task-editor-target={taskTarget?.ok ? "ok" : "none"}
+                  >
+                    <span className="text-xs font-medium">Repository · base branch</span>
+                    <span
+                      className={`text-xs ${taskTarget?.ok ? "" : "text-warning"}`}
+                      data-task-editor-target-line
+                    >
+                      {targetLine(taskTarget)}
+                    </span>
+                    {taskTarget?.ok && taskTarget.path ? (
+                      <span className="truncate font-mono text-[11px] text-muted-foreground">
+                        {taskTarget.path}
+                      </span>
+                    ) : null}
+                    <span className="text-[11px] text-muted-foreground">
+                      {saved
+                        ? "Kept by the task. Moving it to another board does not change it."
+                        : taskTarget?.repository
+                          ? "Taken from the board. The team works in a worktree of its own from this branch."
+                          : "Choose a board bound to a repository. A task is not submitted without one."}
+                    </span>
+                    {retargetTo ? (
+                      <Button
+                        size="xs"
+                        variant="outline"
+                        className="self-start"
+                        disabled={busy !== null}
+                        onClick={() => void retarget()}
+                        data-task-editor-retarget
+                      >
+                        Use {targetLine(retargetTo)}
+                      </Button>
+                    ) : null}
+                  </div>
                   {boardDialog ? (
                     <BoardDialog
                       kind="board"
                       editing={boardDialog.editing}
+                      environmentId={props.environmentId}
+                      by={person}
                       busy={boardBusy}
                       problem={boardProblem}
                       onClose={() => {

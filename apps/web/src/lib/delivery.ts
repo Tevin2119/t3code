@@ -773,6 +773,8 @@ export interface DeliveryBoard {
     /** "own" for a board a person made, "kept" for the qualification, "built-in" otherwise. */
     readonly kind: string;
     readonly count: number;
+    /** The repository and base branch its tasks are done in; null for a board that holds none. */
+    readonly target: DeliveryTarget | null;
   }>;
   /** Cards that wait for a person. */
   readonly waiting: number;
@@ -907,6 +909,7 @@ export function parseBoard(body: unknown): DeliveryBoard | null {
       description: text(item.description),
       kind: text(item.kind, "built-in"),
       count: count(item.count),
+      target: parseTarget(item.target),
     })),
     lanes: records(body.lanes).map((lane) => ({
       lane: text(lane.lane),
@@ -1183,6 +1186,8 @@ export interface TaskView {
     readonly run: string | null;
     readonly blockers: ReadonlyArray<string>;
   };
+  /** Where its work is done. */
+  readonly target: DeliveryTarget | null;
   /** The conversation this task was made from: `<environment>/<thread>`. */
   readonly source: {
     readonly kind: "thread";
@@ -1372,6 +1377,7 @@ export function parseTask(body: unknown): TaskView | null {
         blockers: strings(publishing.blockers),
       };
     })(),
+    target: parseTarget(body.target),
     source: (() => {
       const source = isRecord(body.source) ? body.source : null;
       const ref = source ? text(source.ref) : "";
@@ -1385,6 +1391,67 @@ export function parseTask(body: unknown): TaskView | null {
         : null;
     })(),
   };
+}
+
+/** Where a task's work is done: a repository, the branch it starts from, and whether it can be. */
+export interface DeliveryTarget {
+  readonly repository: string | null;
+  readonly base: string | null;
+  readonly title: string | null;
+  readonly path: string | null;
+  readonly ok: boolean;
+  readonly problem: string | null;
+}
+
+export function parseTarget(value: unknown): DeliveryTarget | null {
+  if (!isRecord(value)) return null;
+  return {
+    repository: textOrNull(value.repository),
+    base: textOrNull(value.base),
+    title: textOrNull(value.title),
+    path: textOrNull(value.path),
+    ok: value.ok === true,
+    problem: textOrNull(value.problem),
+  };
+}
+
+/** A target in one line: "PolyMania · main", or why work cannot be done there. */
+export function targetLine(target: DeliveryTarget | null): string {
+  if (!target?.repository) return "Repository not configured";
+  const name = target.title ?? target.repository;
+  if (!target.ok) return `${name}: ${target.problem ?? "cannot be worked on"}`;
+  return `${name} · ${target.base ?? "its checkout as it stands"}`;
+}
+
+/** A repository a board can be bound to, with its branches. */
+export interface DeliveryRepository {
+  readonly id: string;
+  readonly title: string;
+  readonly path: string;
+  readonly defaultBase: string | null;
+  readonly branches: ReadonlyArray<string>;
+  readonly kind: string;
+  readonly ok: boolean;
+  readonly problem: string | null;
+}
+
+export function parseRepositories(body: unknown): ReadonlyArray<DeliveryRepository> {
+  return (Array.isArray(body) ? body : []).flatMap((item: unknown) =>
+    isRecord(item) && typeof item.id === "string"
+      ? [
+          {
+            id: item.id,
+            title: text(item.title, item.id),
+            path: text(item.path),
+            defaultBase: textOrNull(item.defaultBase),
+            branches: strings(item.branches),
+            kind: text(item.kind, "own"),
+            ok: item.ok === true,
+            problem: textOrNull(item.problem),
+          },
+        ]
+      : [],
+  );
 }
 
 /** What the engine lists when it refuses, e.g. each seat setting that cannot be used. */

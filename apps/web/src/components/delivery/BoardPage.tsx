@@ -446,6 +446,8 @@ export function BoardPage() {
     readonly title: string;
     readonly description: string;
     readonly lanes?: ReadonlyArray<string>;
+    readonly repository?: string;
+    readonly base?: string;
   }) => {
     if (!dialog) return;
     setDialogBusy(true);
@@ -675,6 +677,8 @@ export function BoardPage() {
               <BoardDialog
                 kind={dialog.kind}
                 editing={dialog.editing}
+                environmentId={active}
+                by={person}
                 columns={(parsed?.lanes ?? []).map((lane) => ({
                   lane: lane.lane,
                   title: lane.title,
