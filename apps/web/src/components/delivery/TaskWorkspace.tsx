@@ -864,10 +864,16 @@ function Info(props: {
   );
   // What is set for the task, which the switches change.
   const set = Object.fromEntries(task.settings.map((item) => [item.seat, item.set]));
+  // The seat choices last sent. A second switch made before the task is read again builds on
+  // the first, instead of on the read from before it, which would undo it.
+  const sentSeats = useRef<{ readonly from: unknown; readonly set: typeof set } | null>(null);
   const switchSeat = async (seat: string, choice: Record<string, string>) => {
     setProblems([]);
+    const base = sentSeats.current?.from === task.settings ? sentSeats.current.set : set;
+    const next = withSeatChoice(base, seat, choice);
+    sentSeats.current = { from: task.settings, set: next };
     const result = await act(`/api/tasks/${task.id}/edit`, {
-      seats: seatSettingsToSend(task.settings, withSeatChoice(set, seat, choice)),
+      seats: seatSettingsToSend(task.settings, next),
       by: person,
     });
     if (!result.ok) setProblems(result.problems.length > 0 ? result.problems : [result.why]);
