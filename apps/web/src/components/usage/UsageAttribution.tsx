@@ -340,7 +340,11 @@ export function UsageAccountsEditor(props: {
           : [
               [
                 connectionKey(model.provider, model.modelProvider),
-                { harness: model.provider, modelProvider: model.modelProvider },
+                {
+                  harness: model.provider,
+                  modelProvider: model.modelProvider,
+                  source: model.modelProviderSource,
+                },
               ] as const,
             ],
       ),
@@ -368,7 +372,10 @@ export function UsageAccountsEditor(props: {
     for (const connection of connections) {
       const name = names.get(connectionKey(connection.harness, connection.modelProvider))?.trim();
       if (!name) continue;
-      (accounts[name] ??= { members: [] }).members.push(connection);
+      (accounts[name] ??= { members: [] }).members.push({
+        harness: connection.harness,
+        modelProvider: connection.modelProvider,
+      });
     }
     // Connections not seen in this window keep the account they were given.
     for (const environment of props.environments) {
@@ -435,8 +442,10 @@ export function UsageAccountsEditor(props: {
                 <span className="text-sm">
                   {PROVIDER_PRESENTATION[connection.harness].label}
                   <span className="text-muted-foreground">
-                    {" "}
-                    · records {connection.modelProvider}
+                    {" · "}
+                    {connection.source === "harness"
+                      ? `${connection.modelProvider} (not recorded; the harness's only provider)`
+                      : `records ${connection.modelProvider}`}
                   </span>
                 </span>
                 <Input
