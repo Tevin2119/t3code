@@ -23,7 +23,20 @@ import type { CodexScanState, UsageRecord } from "./usageTranscripts.ts";
 // entries would keep serving double-counted records forever.
 // v3: entries carry the parse position and reducer state so a grown file
 // re-parses only its appended bytes instead of starting over.
-const USAGE_SCAN_CACHE_VERSION = 3 as const;
+// v4: records carry the model provider, and pi and Kimi files are cached too.
+const USAGE_SCAN_CACHE_VERSION = 4 as const;
+
+const CACHED_PROVIDERS: ReadonlySet<string> = new Set([
+  "claude",
+  "codex",
+  "grok",
+  "deepseek",
+  "pi",
+  "kimi",
+]);
+
+/** How the model provider is known, stored as a small number. */
+const PROVIDER_SOURCE_CODES = [null, "recorded", "harness"] as const;
 
 export interface CachedFile {
   readonly size: number;
@@ -58,6 +71,9 @@ type SerializedRecord = readonly [
   reasoningTokens: number,
   dedupeKey: string | null,
   reportedCostUsd: number | null,
+  /** Index into the model table, or -1 when no provider was recorded. */
+  modelProviderIndex: number,
+  modelProviderSource: number,
 ];
 
 interface SerializedFile {
@@ -109,6 +125,8 @@ export function encodeScanCache(cache: ScanCache): SerializedCache {
     record.totals.reasoningTokens,
     record.dedupeKey,
     record.reportedCostUsd,
+    record.modelProvider === null ? -1 : intern(models, modelIndex, record.modelProvider),
+    PROVIDER_SOURCE_CODES.indexOf(record.modelProviderSource),
   ];
 
   const files: Record<string, SerializedFile> = {};
@@ -165,7 +183,7 @@ export function decodeScanCache(document: unknown): ScanCache {
   ): UsageRecord[] | null => {
     const records: UsageRecord[] = [];
     for (const row of rows) {
-      if (!isRecordArray(row) || row.length < 10) return null;
+      if (!isRecordArray(row) || row.length < 12) return null;
       const [
         timestampMs,
         modelIndex,
@@ -177,13 +195,25 @@ export function decodeScanCache(document: unknown): ScanCache {
         reasoning,
         dedupeKey,
         reportedCostUsd,
+        modelProviderIndex,
+        modelProviderSource,
       ] = row as SerializedRecord;
+      const modelProvider =
+        typeof modelProviderIndex === "number" && modelProviderIndex >= 0
+          ? models[modelProviderIndex]
+          : null;
+      const providerSource =
+        typeof modelProviderSource === "number"
+          ? PROVIDER_SOURCE_CODES[modelProviderSource]
+          : undefined;
 
       const model = typeof modelIndex === "number" ? models[modelIndex] : undefined;
       if (
         typeof timestampMs !== "number" ||
         !Number.isFinite(timestampMs) ||
         model === undefined ||
+        modelProvider === undefined ||
+        providerSource === undefined ||
         !Number.isFinite(uncached) ||
         !Number.isFinite(cached) ||
         !Number.isFinite(cacheCreation) ||
@@ -197,6 +227,8 @@ export function decodeScanCache(document: unknown): ScanCache {
         provider,
         timestampMs,
         model,
+        modelProvider,
+        modelProviderSource: providerSource,
         sessionId: (typeof sessionIndex === "number" ? sessions[sessionIndex] : undefined) ?? "",
         totals: {
           uncachedInputTokens: uncached,
@@ -216,8 +248,7 @@ export function decodeScanCache(document: unknown): ScanCache {
     if (typeof raw !== "object" || raw === null) continue;
     const entry = raw as Partial<SerializedFile>;
     if (typeof entry.s !== "number" || typeof entry.m !== "number") continue;
-    if (entry.p !== "claude" && entry.p !== "codex" && entry.p !== "grok" && entry.p !== "deepseek")
-      continue;
+    if (typeof entry.p !== "string" || !CACHED_PROVIDERS.has(entry.p)) continue;
     if (!isRecordArray(entry.r) || !isRecordArray(entry.t)) continue;
     // Position fields feed byte offsets and a Buffer allocation in the reader,
     // so anything outside their real ranges must reject the entry: a bogus
@@ -274,6 +305,7 @@ function decodeCodexState(value: unknown): CodexScanState | null | undefined {
   const state = value as Partial<CodexScanState>;
   if (
     typeof state.model !== "string" ||
+    typeof state.modelProvider !== "string" ||
     typeof state.sessionId !== "string" ||
     (state.lastUsageSignature !== null && typeof state.lastUsageSignature !== "string") ||
     typeof state.sawSessionMeta !== "boolean" ||
@@ -285,6 +317,7 @@ function decodeCodexState(value: unknown): CodexScanState | null | undefined {
   }
   return {
     model: state.model,
+    modelProvider: state.modelProvider,
     sessionId: state.sessionId,
     lastUsageSignature: state.lastUsageSignature ?? null,
     sawSessionMeta: state.sawSessionMeta,

@@ -15,6 +15,8 @@ function record(overrides: Partial<UsageRecord> = {}): UsageRecord {
     provider: "claude",
     timestampMs: 1_786_000_000_000,
     model: "claude-fable-5",
+    modelProvider: "anthropic",
+    modelProviderSource: "harness",
     sessionId: "session-a",
     totals: {
       uncachedInputTokens: 2,
@@ -79,6 +81,7 @@ describe("scan cache round trip", () => {
       position: position({
         codexState: {
           model: "gpt-5.2-codex",
+          modelProvider: "openai",
           sessionId: "session-c",
           lastUsageSignature: '{"input_tokens":1}',
           sawSessionMeta: true,
@@ -135,7 +138,7 @@ describe("scan cache round trip", () => {
       cacheWith([["/a.jsonl", 100, [record(), record({ dedupeKey: "msg_2:" }), record()]]]),
     );
 
-    expect(encoded.models).toEqual(["claude-fable-5"]);
+    expect(encoded.models).toEqual(["claude-fable-5", "anthropic"]);
     expect(encoded.sessions).toEqual(["session-a"]);
   });
 

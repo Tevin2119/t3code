@@ -103,6 +103,10 @@ const serviceLayers = (input: {
       Layer.succeed(HostProcessEnvironment, {
         GROK_HOME: NodePath.join(input.home, "grok"),
         DSH_HOME: NodePath.join(input.home, "dsh"),
+        PI_CODING_AGENT_DIR: NodePath.join(input.home, "pi"),
+        KIMI_CODE_HOME: NodePath.join(input.home, "kimi"),
+        XDG_DATA_HOME: NodePath.join(input.home, "data"),
+        HERMES_HOME: NodePath.join(input.home, "hermes"),
         ...input.environment,
       }),
     ),

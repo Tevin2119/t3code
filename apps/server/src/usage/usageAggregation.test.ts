@@ -22,6 +22,8 @@ function record(overrides: Partial<UsageRecord> = {}): UsageRecord {
     // 2026-08-07T04:05Z is still Aug 6 in Los Angeles.
     timestampMs: Date.parse("2026-08-07T04:05:13.944Z"),
     model: "claude-fable-5",
+    modelProvider: "anthropic",
+    modelProviderSource: "harness",
     sessionId: "session-a",
     totals: {
       uncachedInputTokens: 100,

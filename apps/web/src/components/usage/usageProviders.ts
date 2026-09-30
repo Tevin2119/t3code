@@ -1,6 +1,16 @@
-import type { UsageProviderKind } from "@t3tools/contracts";
+import type { UsageModelProviderSource, UsageProviderKind } from "@t3tools/contracts";
 
-import { ClaudeAI, DeepSeekIcon, GrokIcon, type Icon, OpenAI } from "../Icons";
+import {
+  ClaudeAI,
+  DeepSeekIcon,
+  GrokIcon,
+  HermesIcon,
+  type Icon,
+  KimiIcon,
+  OpenAI,
+  OpenCodeIcon,
+  PiAgentIcon,
+} from "../Icons";
 
 type UsageProviderPresentation = {
   readonly label: string;
@@ -36,7 +46,40 @@ export const PROVIDER_PRESENTATION = {
     color: "#4d6bfe",
     mark: DeepSeekIcon,
   },
+  pi: {
+    label: "pi",
+    color: "#22a06b",
+    mark: PiAgentIcon,
+  },
+  opencode: {
+    label: "OpenCode",
+    color: "#d9a53f",
+    mark: OpenCodeIcon,
+  },
+  kimi: {
+    label: "Kimi Code",
+    color: "#2f9fd8",
+    mark: KimiIcon,
+  },
+  hermes: {
+    label: "Hermes",
+    color: "#a26bd6",
+    mark: HermesIcon,
+  },
 } satisfies Record<UsageProviderKind, UsageProviderPresentation>;
+
+/**
+ * The company whose model answered, as a person reads it. A provider known only
+ * because its harness calls no other is said to be so, and none recorded is
+ * said plainly rather than guessed.
+ */
+export function modelProviderLabel(
+  modelProvider: string | null,
+  source: UsageModelProviderSource | null,
+): string {
+  if (modelProvider === null) return "provider not recorded";
+  return source === "harness" ? `${modelProvider} (the harness's only provider)` : modelProvider;
+}
 
 /** Stable provider reading order across charts, summaries, tables, and hover rows. */
 export const PROVIDER_ORDER = Object.keys(PROVIDER_PRESENTATION) as UsageProviderKind[];

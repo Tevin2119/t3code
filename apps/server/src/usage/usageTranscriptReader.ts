@@ -27,6 +27,8 @@ import {
   parseClaudeLine,
   parseCodexLine,
   parseGrokLine,
+  parseKimiLine,
+  parsePiLine,
   type CodexScanState,
   type UsageRecord,
 } from "./usageTranscripts.ts";
@@ -119,11 +121,17 @@ async function readDeepSeekSessionFile(filePath: string): Promise<TranscriptPars
 export async function listTranscriptFiles(
   root: string,
   sinceMs: number,
-  options?: { readonly fileName?: string; readonly extension?: string },
+  options?: {
+    readonly fileName?: string;
+    readonly extension?: string;
+    /** Only files directly inside a folder of this name (the engine's `pi-session`). */
+    readonly parentName?: string;
+  },
 ): Promise<readonly TranscriptFile[]> {
   const found: TranscriptFile[] = [];
   const fileName = options?.fileName;
   const extension = options?.extension ?? ".jsonl";
+  const parentName = options?.parentName;
 
   const walk = async (dir: string): Promise<void> => {
     let entries;
@@ -143,6 +151,7 @@ export async function listTranscriptFiles(
       } else if (!entry.name.endsWith(extension)) {
         continue;
       }
+      if (parentName !== undefined && NodePath.basename(dir) !== parentName) continue;
       try {
         const stats = await NodeFSP.stat(child);
         if (stats.mtimeMs >= sinceMs) {
@@ -156,6 +165,18 @@ export async function listTranscriptFiles(
 
   await walk(root);
   return found;
+}
+
+/**
+ * The session a line-per-call record belongs to, from where the harness keeps it.
+ * pi names its file `<time>_<session id>.jsonl`; Kimi keeps one `wire.jsonl`
+ * in the folder of each session.
+ */
+export function sessionIdFromPath(filePath: string, provider: UsageProviderKind): string {
+  if (provider === "kimi") return NodePath.basename(NodePath.dirname(filePath));
+  const name = NodePath.basename(filePath, ".jsonl");
+  const underscore = name.lastIndexOf("_");
+  return underscore >= 0 ? name.slice(underscore + 1) : name;
 }
 
 /**
@@ -239,6 +260,7 @@ export async function readTranscriptRecords(
       resumed = true;
     }
 
+    const sessionId = sessionIdFromPath(filePath, provider);
     const parseLine = (line: string, state: CodexScanState, out: UsageRecord[]): void => {
       if (provider === "codex") {
         if (
@@ -253,6 +275,12 @@ export async function readTranscriptRecords(
         return;
       }
       if (!mightCarryUsage(line, provider)) return;
+      if (provider === "pi" || provider === "kimi") {
+        const record =
+          provider === "pi" ? parsePiLine(line, sessionId) : parseKimiLine(line, sessionId);
+        if (record !== null) out.push(record);
+        return;
+      }
       if (provider === "grok") {
         for (const grokRecord of parseGrokLine(line)) out.push(grokRecord);
         return;

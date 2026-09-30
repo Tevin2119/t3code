@@ -6,12 +6,20 @@
  *
  * @module usageTranscripts
  */
-import type { UsageProviderKind, UsageTokenTotals } from "@t3tools/contracts";
+import type {
+  UsageModelProviderSource,
+  UsageProviderKind,
+  UsageTokenTotals,
+} from "@t3tools/contracts";
 
 export interface UsageRecord {
+  /** The harness whose record this is. */
   readonly provider: UsageProviderKind;
   readonly timestampMs: number;
   readonly model: string;
+  /** The company whose model answered, or `null` when the harness did not record it. */
+  readonly modelProvider: string | null;
+  readonly modelProviderSource: UsageModelProviderSource | null;
   readonly sessionId: string;
   readonly totals: UsageTokenTotals;
   readonly reportedCostUsd: number | null;
@@ -68,9 +76,15 @@ export function totalTokens(totals: UsageTokenTotals): number {
  * an order of magnitude.
  */
 export function mightCarryUsage(line: string, provider: UsageProviderKind): boolean {
-  if (provider === "claude") return line.includes('"usage"');
+  if (provider === "claude" || provider === "pi") return line.includes('"usage"');
   if (provider === "grok") return line.includes('"turn_completed"');
+  if (provider === "kimi") return line.includes('"usage.record"');
   return line.includes('"token_count"');
+}
+
+/** A cost the harness wrote. Zero is no cost figure: harnesses write it for plans they do not price. */
+function reportedCost(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : null;
 }
 
 /**
@@ -113,6 +127,9 @@ export function parseDeepSeekSession(
     provider: "deepseek",
     timestampMs: lastWrittenMs,
     model: DEEPSEEK_MODEL_NOT_RECORDED,
+    // Nor the provider: the harness can be pointed at another endpoint.
+    modelProvider: null,
+    modelProviderSource: null,
     sessionId,
     totals: usage,
     reportedCostUsd: null,
@@ -182,6 +199,9 @@ export function parseClaudeLine(line: string): UsageRecord | null {
     provider: "claude",
     timestampMs,
     model,
+    // Claude Code records no provider and, on this environment, calls only Anthropic.
+    modelProvider: "anthropic",
+    modelProviderSource: "harness",
     sessionId: typeof record["sessionId"] === "string" ? record["sessionId"] : "",
     totals: {
       uncachedInputTokens: int(usageRecord["input_tokens"]),
@@ -209,6 +229,8 @@ export function parseClaudeLine(line: string): UsageRecord | null {
  */
 export interface CodexScanState {
   model: string;
+  /** `model_provider` of the rollout's own `session_meta`, empty until it is seen. */
+  modelProvider: string;
   sessionId: string;
   lastUsageSignature: string | null;
   sawSessionMeta: boolean;
@@ -220,6 +242,7 @@ export interface CodexScanState {
 export function initialCodexScanState(): CodexScanState {
   return {
     model: "",
+    modelProvider: "",
     sessionId: "",
     lastUsageSignature: null,
     sawSessionMeta: false,
@@ -280,6 +303,8 @@ export function parseCodexLine(line: string, state: CodexScanState): UsageRecord
     state.sawSessionMeta = true;
     const id = payloadRecord["id"] ?? payloadRecord["session_id"];
     if (typeof id === "string") state.sessionId = id;
+    const modelProvider = payloadRecord["model_provider"];
+    if (typeof modelProvider === "string") state.modelProvider = modelProvider;
     const metaTimestampMs = parseTimestampMs(record["timestamp"]);
     if (metaTimestampMs !== null && isForkedSessionMeta(payloadRecord)) {
       state.suppressingForkCopies = true;
@@ -347,6 +372,8 @@ export function parseCodexLine(line: string, state: CodexScanState): UsageRecord
     provider: "codex",
     timestampMs,
     model: state.model,
+    modelProvider: state.modelProvider.length > 0 ? state.modelProvider : null,
+    modelProviderSource: state.modelProvider.length > 0 ? "recorded" : null,
     sessionId: state.sessionId,
     totals,
     // Codex does not report cost in the rollout.
@@ -477,6 +504,8 @@ export function parseGrokLine(line: string): readonly UsageRecord[] {
         provider: "grok",
         timestampMs,
         model: "grok",
+        modelProvider: null,
+        modelProviderSource: null,
         sessionId,
         totals: grokTotalsToUsage(topLevel),
         reportedCostUsd: grokCostTicksToUsd(topLevel.costUsdTicks),
@@ -523,6 +552,8 @@ export function parseGrokLine(line: string): readonly UsageRecord[] {
       provider: "grok",
       timestampMs,
       model: entry.model,
+      modelProvider: null,
+      modelProviderSource: null,
       sessionId,
       totals,
       reportedCostUsd,
@@ -530,6 +561,130 @@ export function parseGrokLine(line: string): readonly UsageRecord[] {
     });
   }
   return results;
+}
+
+/* -------------------------------------------------------------------------- */
+/* pi                                                                         */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Parses one line of a pi session file (`<agent dir>/sessions/<cwd>/<time>_<id>.jsonl`,
+ * or the session folder the delivery engine gives pi for an attempt).
+ *
+ * Each assistant message carries the provider and model that answered it and
+ * the usage of that one call. pi's `input` excludes the cached input, and its
+ * `reasoning` is a part of `output` (its own total adds input, output and the
+ * two cache figures only). pi prices the call from its own model table; that
+ * figure is kept as the reported cost.
+ */
+export function parsePiLine(line: string, sessionId: string): UsageRecord | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(line);
+  } catch {
+    return null;
+  }
+  if (typeof parsed !== "object" || parsed === null) return null;
+  const record = parsed as Record<string, unknown>;
+  if (record["type"] !== "message") return null;
+  const message = record["message"];
+  if (typeof message !== "object" || message === null) return null;
+  const messageRecord = message as Record<string, unknown>;
+  if (messageRecord["role"] !== "assistant") return null;
+  const usage = messageRecord["usage"];
+  if (typeof usage !== "object" || usage === null) return null;
+  const usageRecord = usage as Record<string, unknown>;
+
+  const timestampMs =
+    parseTimestampMs(record["timestamp"]) ??
+    (typeof messageRecord["timestamp"] === "number" ? messageRecord["timestamp"] : null);
+  if (timestampMs === null) return null;
+  const model = typeof messageRecord["model"] === "string" ? messageRecord["model"] : "";
+  if (model.length === 0) return null;
+  const provider = typeof messageRecord["provider"] === "string" ? messageRecord["provider"] : "";
+
+  const outputTokens = int(usageRecord["output"]);
+  const totals: UsageTokenTotals = {
+    uncachedInputTokens: int(usageRecord["input"]),
+    cachedInputTokens: int(usageRecord["cacheRead"]),
+    cacheCreationTokens: int(usageRecord["cacheWrite"]),
+    outputTokens,
+    reasoningTokens: Math.min(outputTokens, int(usageRecord["reasoning"])),
+  };
+  if (totalTokens(totals) === 0) return null;
+  const cost = usageRecord["cost"];
+  const id = typeof record["id"] === "string" ? record["id"] : null;
+  return {
+    provider: "pi",
+    timestampMs,
+    model,
+    modelProvider: provider.length > 0 ? provider : null,
+    modelProviderSource: provider.length > 0 ? "recorded" : null,
+    sessionId,
+    totals,
+    reportedCostUsd:
+      typeof cost === "object" && cost !== null
+        ? reportedCost((cost as Record<string, unknown>)["total"])
+        : null,
+    // A session reopened elsewhere keeps its entries' ids.
+    dedupeKey: id === null ? null : `pi:${sessionId}:${id}`,
+  };
+}
+
+/* -------------------------------------------------------------------------- */
+/* Kimi Code                                                                  */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Parses one line of a Kimi Code session log (`~/.kimi-code/sessions/<...>/<id>/wire.jsonl`).
+ *
+ * Kimi writes a `usage.record` for each call to its model, with the model as
+ * Kimi names it: `<provider key>/<model>`, the provider key being the one of
+ * Kimi's configuration (`kimi-code`). A model with no provider key, such as the
+ * one set by environment for a test, is kept as written, with no provider.
+ * `inputOther` is the uncached input. Kimi records no cost.
+ */
+export function parseKimiLine(line: string, sessionId: string): UsageRecord | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(line);
+  } catch {
+    return null;
+  }
+  if (typeof parsed !== "object" || parsed === null) return null;
+  const record = parsed as Record<string, unknown>;
+  if (record["type"] !== "usage.record") return null;
+  const usage = record["usage"];
+  if (typeof usage !== "object" || usage === null) return null;
+  const usageRecord = usage as Record<string, unknown>;
+  const time = record["time"];
+  if (typeof time !== "number" || !Number.isFinite(time)) return null;
+  const named = typeof record["model"] === "string" ? record["model"] : "";
+  if (named.length === 0) return null;
+  const slash = named.indexOf("/");
+  const modelProvider = slash > 0 ? named.slice(0, slash) : null;
+  const model = slash > 0 ? named.slice(slash + 1) : named;
+
+  const totals: UsageTokenTotals = {
+    uncachedInputTokens: int(usageRecord["inputOther"]),
+    cachedInputTokens: int(usageRecord["inputCacheRead"]),
+    cacheCreationTokens: int(usageRecord["inputCacheCreation"]),
+    outputTokens: int(usageRecord["output"]),
+    reasoningTokens: 0,
+  };
+  if (totalTokens(totals) === 0) return null;
+  return {
+    provider: "kimi",
+    timestampMs: time,
+    model,
+    modelProvider,
+    modelProviderSource: modelProvider === null ? null : "recorded",
+    sessionId,
+    totals,
+    reportedCostUsd: null,
+    // One log per session, written by that session only.
+    dedupeKey: null,
+  };
 }
 
 export { EMPTY_TOTALS };

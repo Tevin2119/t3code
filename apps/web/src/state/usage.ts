@@ -18,7 +18,12 @@ import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/unstable/reactivity";
 import { useCallback, useMemo } from "react";
 
-import { mergeUsage, type EnvironmentUsage, type MergedUsage } from "@t3tools/shared/usageMerge";
+import {
+  mergeUsage,
+  type EnvironmentUsage,
+  type MergedUsage,
+  type UsageFilter,
+} from "@t3tools/shared/usageMerge";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { environmentPresentations } from "./presentation";
 import { serverEnvironment } from "./server";
@@ -59,7 +64,10 @@ const usageByWindowAtom = Atom.family((windowKey: string) =>
 );
 
 export interface UsageView {
+  /** The window's usage, narrowed by the filter. */
   readonly merged: MergedUsage;
+  /** The window's usage, not narrowed: what the filter can choose from. */
+  readonly all: MergedUsage;
   readonly environments: readonly EnvironmentUsageStatus[];
   readonly selectedEnvironments: readonly EnvironmentUsageStatus[];
   /** True until at least one selected environment has answered. */
@@ -76,6 +84,7 @@ export interface UsageView {
 export function useUsage(
   input: UsageSummaryInput,
   selectedEnvironmentIds: ReadonlySet<EnvironmentId> | null = null,
+  filter: UsageFilter = {},
 ): UsageView {
   const windowKey = useMemo(
     () =>
@@ -120,7 +129,7 @@ export function useUsage(
     [selectedEnvironments, windowKey],
   );
 
-  const merged = useMemo(() => {
+  const answered = useMemo(() => {
     const answered: EnvironmentUsage[] = selectedEnvironments.flatMap((environment) =>
       environment.summary === null
         ? []
@@ -132,8 +141,19 @@ export function useUsage(
             },
           ],
     );
-    return mergeUsage(answered, USAGE_CONTRACT_VERSION);
+    return answered;
   }, [selectedEnvironments]);
+  const all = useMemo(() => mergeUsage(answered, USAGE_CONTRACT_VERSION), [answered]);
+  const merged = useMemo(
+    () =>
+      (filter.harnesses?.size ?? 0) +
+        (filter.modelProviders?.size ?? 0) +
+        (filter.models?.size ?? 0) >
+      0
+        ? mergeUsage(answered, USAGE_CONTRACT_VERSION, filter)
+        : all,
+    [all, answered, filter],
+  );
 
   const answeredCount = selectedEnvironments.filter(
     (environment) => environment.summary !== null,
@@ -144,6 +164,7 @@ export function useUsage(
 
   return {
     merged,
+    all,
     environments,
     selectedEnvironments,
     isPending: answeredCount === 0 && stillReporting > 0,

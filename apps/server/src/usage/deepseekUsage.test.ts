@@ -44,6 +44,8 @@ describe("parseDeepSeekSession", () => {
       provider: "deepseek",
       timestampMs: 1_790_000_500_000,
       model: DEEPSEEK_MODEL_NOT_RECORDED,
+      modelProvider: null,
+      modelProviderSource: null,
       sessionId: "abc",
       totals: {
         uncachedInputTokens: 100,

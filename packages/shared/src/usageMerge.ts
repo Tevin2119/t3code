@@ -7,6 +7,7 @@
  * @module usageMerge
  */
 import {
+  type UsageModelProviderSource,
   USAGE_MERGE_COMPATIBLE_SINCE,
   type EnvironmentId,
   type UsageBucket,
@@ -33,7 +34,11 @@ export interface ProviderTotals {
 
 export interface ModelTotals {
   readonly model: string;
+  /** The harness the model was used through. */
   readonly provider: UsageProviderKind;
+  /** The company whose model it is, or `null` when the harness did not record it. */
+  readonly modelProvider: string | null;
+  readonly modelProviderSource: UsageModelProviderSource | null;
   readonly costUsd: number;
   readonly totalTokens: number;
   readonly records: number;
@@ -51,6 +56,29 @@ export interface ModelTotals {
  */
 export function isModelCostUnknown(model: ModelTotals): boolean {
   return model.records > 0 && model.unpricedRecords >= model.records;
+}
+
+/** Usage by the company whose models answered, across harnesses. */
+export interface ModelProviderTotals {
+  /** `null` gathers the usage whose provider no harness recorded. */
+  readonly modelProvider: string | null;
+  /** `harness` when every figure's provider is known only from its harness. */
+  readonly modelProviderSource: UsageModelProviderSource | null;
+  readonly costUsd: number;
+  readonly totalTokens: number;
+  readonly records: number;
+  readonly unpricedRecords: number;
+  readonly harnesses: readonly UsageProviderKind[];
+}
+
+/**
+ * Narrows the usage merged. Empty or absent sets do not narrow. A provider of
+ * `""` stands for usage whose provider was not recorded.
+ */
+export interface UsageFilter {
+  readonly harnesses?: ReadonlySet<UsageProviderKind>;
+  readonly modelProviders?: ReadonlySet<string>;
+  readonly models?: ReadonlySet<string>;
 }
 
 export interface DailyTotals {
@@ -87,6 +115,13 @@ export interface MergedUsage {
   readonly sessions: number;
   readonly providers: readonly ProviderTotals[];
   readonly models: readonly ModelTotals[];
+  readonly modelProviders: readonly ModelProviderTotals[];
+  /**
+   * True when a provider or model filter narrowed the usage. Sessions are
+   * counted per harness store, not per model, so the session counts are then
+   * those of the harnesses as a whole and must not be read as the filter's.
+   */
+  readonly sessionsUnfiltered: boolean;
   readonly daily: readonly DailyTotals[];
   readonly hourly: readonly HourlyTotals[];
   readonly costQuality: CostQuality;
@@ -206,6 +241,8 @@ const EMPTY_MERGED: MergedUsage = {
   sessions: 0,
   providers: [],
   models: [],
+  modelProviders: [],
+  sessionsUnfiltered: false,
   daily: [],
   hourly: [],
   costQuality: {
@@ -231,8 +268,18 @@ const EMPTY_MERGED: MergedUsage = {
 export function mergeUsage(
   environments: readonly EnvironmentUsage[],
   expectedContractVersion: number,
+  filter: UsageFilter = {},
 ): MergedUsage {
   if (environments.length === 0) return EMPTY_MERGED;
+  const narrows = <T>(set: ReadonlySet<T> | undefined): set is ReadonlySet<T> =>
+    set !== undefined && set.size > 0;
+  const keepsHarness = (provider: UsageProviderKind) =>
+    !narrows(filter.harnesses) || filter.harnesses.has(provider);
+  const keepsBucket = (bucket: UsageBucket) =>
+    keepsHarness(bucket.provider) &&
+    (!narrows(filter.modelProviders) || filter.modelProviders.has(bucket.modelProvider ?? "")) &&
+    (!narrows(filter.models) || filter.models.has(bucket.model));
+  const sessionsUnfiltered = narrows(filter.modelProviders) || narrows(filter.models);
 
   const current: EnvironmentUsage[] = [];
   const staleEnvironments: EnvironmentId[] = [];
@@ -264,10 +311,25 @@ export function mergeUsage(
     UsageProviderKind,
     { costUsd: number; totalTokens: number; records: number; sessions: number }
   >();
+  const modelProviderAccumulator = new Map<
+    string,
+    {
+      modelProvider: string | null;
+      sources: Set<UsageModelProviderSource | null>;
+      costUsd: number;
+      totalTokens: number;
+      records: number;
+      unpricedRecords: number;
+      harnesses: Set<UsageProviderKind>;
+    }
+  >();
   const modelAccumulator = new Map<
     string,
     {
       provider: UsageProviderKind;
+      model: string;
+      modelProvider: string | null;
+      modelProviderSource: UsageModelProviderSource | null;
       costUsd: number;
       totalTokens: number;
       records: number;
@@ -295,10 +357,12 @@ export function mergeUsage(
   const contributingEnvironments: EnvironmentId[] = [];
 
   for (const environment of current) {
-    const { buckets, sessionsByProvider } = ownedContribution(environment, ownerByFingerprint);
+    const owned = ownedContribution(environment, ownerByFingerprint);
+    const buckets = owned.buckets.filter(keepsBucket);
     if (buckets.length > 0) contributingEnvironments.push(environment.environmentId);
 
-    for (const [providerKind, providerSessions] of sessionsByProvider) {
+    for (const [providerKind, providerSessions] of owned.sessionsByProvider) {
+      if (!keepsHarness(providerKind)) continue;
       sessions += providerSessions;
       if (providerSessions === 0) continue;
       const provider = providerAccumulator.get(providerKind) ?? {
@@ -336,9 +400,30 @@ export function mergeUsage(
       provider.records += bucket.records;
       providerAccumulator.set(bucket.provider, provider);
 
-      const modelKey = `${bucket.provider} ${bucket.model}`;
+      const modelProvider = bucket.modelProvider ?? null;
+      const providerEntry = modelProviderAccumulator.get(modelProvider ?? "") ?? {
+        modelProvider,
+        sources: new Set<UsageModelProviderSource | null>(),
+        costUsd: 0,
+        totalTokens: 0,
+        records: 0,
+        unpricedRecords: 0,
+        harnesses: new Set<UsageProviderKind>(),
+      };
+      providerEntry.sources.add(bucket.modelProviderSource ?? null);
+      providerEntry.costUsd += bucket.costUsd;
+      providerEntry.totalTokens += tokens;
+      providerEntry.records += bucket.records;
+      providerEntry.unpricedRecords += bucket.unpricedRecords;
+      providerEntry.harnesses.add(bucket.provider);
+      modelProviderAccumulator.set(modelProvider ?? "", providerEntry);
+
+      const modelKey = [bucket.provider, modelProvider ?? "", bucket.model].join("\u0000");
       const model = modelAccumulator.get(modelKey) ?? {
         provider: bucket.provider,
+        model: bucket.model,
+        modelProvider,
+        modelProviderSource: bucket.modelProviderSource ?? null,
         costUsd: 0,
         totalTokens: 0,
         records: 0,
@@ -399,10 +484,12 @@ export function mergeUsage(
     }))
     .sort((a, b) => b.costUsd - a.costUsd);
 
-  const models: ModelTotals[] = [...modelAccumulator.entries()]
-    .map(([key, totals]) => ({
-      model: key.slice(key.indexOf(" ") + 1),
+  const models: ModelTotals[] = [...modelAccumulator.values()]
+    .map((totals) => ({
+      model: totals.model,
       provider: totals.provider,
+      modelProvider: totals.modelProvider,
+      modelProviderSource: totals.modelProviderSource,
       costUsd: totals.costUsd,
       totalTokens: totals.totalTokens,
       records: totals.records,
@@ -410,6 +497,23 @@ export function mergeUsage(
       costShare: costUsd === 0 ? 0 : totals.costUsd / costUsd,
     }))
     .sort((a, b) => b.costUsd - a.costUsd || b.totalTokens - a.totalTokens);
+
+  const modelProviders: ModelProviderTotals[] = [...modelProviderAccumulator.values()]
+    .map((totals) => ({
+      modelProvider: totals.modelProvider,
+      // Recorded by one harness and known by another's alone is still recorded.
+      modelProviderSource: totals.sources.has("recorded")
+        ? ("recorded" as const)
+        : totals.sources.has("harness")
+          ? ("harness" as const)
+          : null,
+      costUsd: totals.costUsd,
+      totalTokens: totals.totalTokens,
+      records: totals.records,
+      unpricedRecords: totals.unpricedRecords,
+      harnesses: [...totals.harnesses].sort(),
+    }))
+    .sort((a, b) => b.totalTokens - a.totalTokens);
 
   const daily: DailyTotals[] = [...dailyAccumulator.entries()]
     .map(([day, totals]) => ({
@@ -436,6 +540,8 @@ export function mergeUsage(
     sessions,
     providers,
     models,
+    modelProviders,
+    sessionsUnfiltered,
     daily,
     hourly,
     costQuality: {

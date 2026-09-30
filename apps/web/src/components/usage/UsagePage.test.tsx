@@ -84,6 +84,8 @@ const modelTotals = Object.freeze([
   {
     model: "expensive-model",
     provider: "claude" as const,
+    modelProvider: "anthropic",
+    modelProviderSource: "harness" as const,
     costUsd: 10,
     totalTokens: 100,
     records: 1,
@@ -93,6 +95,8 @@ const modelTotals = Object.freeze([
   {
     model: "token-heavy-model",
     provider: "codex" as const,
+    modelProvider: null,
+    modelProviderSource: null,
     costUsd: 5,
     totalTokens: 1_000,
     records: 1,
@@ -102,6 +106,8 @@ const modelTotals = Object.freeze([
   {
     model: "token-heavy-cheaper-model",
     provider: "codex" as const,
+    modelProvider: null,
+    modelProviderSource: null,
     costUsd: 1,
     totalTokens: 1_000,
     records: 1,
@@ -111,6 +117,8 @@ const modelTotals = Object.freeze([
   {
     model: "unpriced-model",
     provider: "codex" as const,
+    modelProvider: null,
+    modelProviderSource: null,
     costUsd: 0,
     totalTokens: 500,
     records: 2,
@@ -143,6 +151,7 @@ beforeEach(() => {
   testState.metric = "cost";
   testState.breakdown = "time";
   testState.useUsage.mockReturnValue({
+    all: mergeUsage([], USAGE_CONTRACT_VERSION),
     merged: {
       ...mergeUsage([], USAGE_CONTRACT_VERSION),
       models: modelTotals,

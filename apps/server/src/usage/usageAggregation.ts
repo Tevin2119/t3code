@@ -1,7 +1,8 @@
 // @effect-diagnostics globalDate:off
 /**
- * Folds parsed transcript records into `(day, hourStart?, provider, model)`
- * buckets.
+ * Folds parsed transcript records into
+ * `(day, hourStart?, provider, modelProvider?, model)` buckets. The same model
+ * reached through two harnesses, or from two providers, stays in two buckets.
  *
  * `Intl.DateTimeFormat` is the only reliable way to resolve a wall-clock day in
  * an arbitrary IANA zone, and it takes a `Date`. That is why the raw `Date`
@@ -146,7 +147,14 @@ export class UsageAggregator {
             this.#hourlyWindow.sinceTimeMs +
               Math.floor((record.timestampMs - this.#hourlyWindow.sinceTimeMs) / HOUR_MS) * HOUR_MS,
           ).toISOString();
-    const key = `${day}\u0000${hourStart}\u0000${record.provider}\u0000${record.model}`;
+    const key = [
+      day,
+      hourStart,
+      record.provider,
+      record.model,
+      record.modelProvider ?? "",
+      record.modelProviderSource ?? "",
+    ].join("\u0000");
     let bucket = this.#buckets.get(key);
     if (bucket === undefined) {
       bucket = {
@@ -187,11 +195,26 @@ export class UsageAggregator {
   finish(): AggregateResult {
     const buckets: UsageBucket[] = [];
     for (const [key, bucket] of this.#buckets) {
-      const [day = "", hourStart = "", provider = "", model = ""] = key.split("\u0000");
+      const [
+        day = "",
+        hourStart = "",
+        provider = "",
+        model = "",
+        modelProvider = "",
+        modelProviderSource = "",
+      ] = key.split("\u0000");
       buckets.push({
         day: day as UsageDay,
         ...(hourStart === "" ? {} : { hourStart }),
         provider: provider as UsageBucket["provider"],
+        ...(modelProvider === ""
+          ? {}
+          : {
+              modelProvider,
+              modelProviderSource: modelProviderSource as NonNullable<
+                UsageBucket["modelProviderSource"]
+              >,
+            }),
         model,
         totals: bucket.totals,
         costUsd: bucket.costUsd,
@@ -208,7 +231,8 @@ export class UsageAggregator {
         a.day.localeCompare(b.day) ||
         (a.hourStart ?? "").localeCompare(b.hourStart ?? "") ||
         a.provider.localeCompare(b.provider) ||
-        a.model.localeCompare(b.model),
+        a.model.localeCompare(b.model) ||
+        (a.modelProvider ?? "").localeCompare(b.modelProvider ?? ""),
     );
 
     return {

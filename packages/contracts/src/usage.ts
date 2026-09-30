@@ -1,13 +1,19 @@
 /**
  * Usage reporting contract.
  *
- * Each environment scans the provider CLIs' own on-disk session transcripts
+ * Each environment scans the harnesses' own on-disk session records
  * (`~/.claude/projects/**\/*.jsonl`, `~/.codex/sessions/**\/*.jsonl`,
- * `~/.grok/sessions/**\/updates.jsonl`) rather than relying on T3 Code's own
- * orchestration projections, so usage stays complete even for turns that were
- * never driven through T3 Code. This mirrors the approach `ccusage` takes.
+ * `~/.grok/sessions/**\/updates.jsonl`, pi's session files, Kimi's `wire.jsonl`,
+ * the OpenCode and Hermes databases, the DeepSeek session store) rather than
+ * relying on T3 Code's own orchestration projections, so usage stays complete
+ * even for turns that were never driven through T3 Code. This mirrors the
+ * approach `ccusage` takes. A turn of a T3 thread or of a delivery engine run is
+ * in its harness's own record already, so it is counted once, from there.
  *
- * Environments return pre-aggregated `(day, hourStart?, provider, model)`
+ * `provider` names the harness that made the calls. The company whose model
+ * answered them is `modelProvider`, which is present only where it is known.
+ *
+ * Environments return pre-aggregated `(day, hourStart?, provider, modelProvider?, model)`
  * buckets. Raw transcript records never cross the wire.
  *
  * @module usage
@@ -21,18 +27,29 @@ import { NonNegativeInt, TrimmedNonEmptyString } from "./baseSchemas.ts";
  * client renders partial coverage when an environment reports an older version
  * rather than failing the whole page.
  */
-export const USAGE_CONTRACT_VERSION = 6 as const;
+export const USAGE_CONTRACT_VERSION = 7 as const;
 
 /**
  * Oldest {@link UsageSummary} version a current client will still merge.
  *
- * v5 only adds `grok` to {@link UsageProviderKind}, and v6 only adds `deepseek`; v4 Claude/Codex buckets
+ * v5 only adds `grok` to {@link UsageProviderKind}, v6 only adds `deepseek`, and v7 adds `pi`,
+ * `opencode`, `kimi` and `hermes` and the optional model provider; v4 Claude/Codex buckets
  * remain valid, so mixed-version environments keep those totals instead of
  * treating every older server as stale.
  */
 export const USAGE_MERGE_COMPATIBLE_SINCE = 4 as const;
 
-export const UsageProviderKind = Schema.Literals(["claude", "codex", "grok", "deepseek"]);
+/** The harness whose record the usage came from. */
+export const UsageProviderKind = Schema.Literals([
+  "claude",
+  "codex",
+  "grok",
+  "deepseek",
+  "pi",
+  "opencode",
+  "kimi",
+  "hermes",
+]);
 export type UsageProviderKind = typeof UsageProviderKind.Type;
 
 /**
@@ -61,6 +78,16 @@ export type UsageResolution = typeof UsageResolution.Type;
  */
 export const UsageCostSource = Schema.Literals(["providerReported", "modelPriced", "unpriced"]);
 export type UsageCostSource = typeof UsageCostSource.Type;
+
+/**
+ * How the model provider of a bucket is known.
+ *
+ * - `recorded` - the harness wrote it into its record of the call.
+ * - `harness` - the harness records none, and on this environment calls only
+ *   that one provider (Claude Code, Anthropic).
+ */
+export const UsageModelProviderSource = Schema.Literals(["recorded", "harness"]);
+export type UsageModelProviderSource = typeof UsageModelProviderSource.Type;
 
 /**
  * Token counts for a bucket.
@@ -92,6 +119,9 @@ export const UsageBucket = Schema.Struct({
   day: UsageDay,
   hourStart: Schema.optional(TrimmedNonEmptyString),
   provider: UsageProviderKind,
+  /** Absent when the harness recorded no provider for these calls. */
+  modelProvider: Schema.optional(TrimmedNonEmptyString),
+  modelProviderSource: Schema.optional(UsageModelProviderSource),
   model: TrimmedNonEmptyString,
   totals: UsageTokenTotals,
   costUsd: Schema.Number,

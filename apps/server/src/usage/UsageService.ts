@@ -1,9 +1,14 @@
 /**
  * UsageService - scans provider transcripts and returns priced usage buckets.
  *
- * The scan reads the provider CLIs' own session files (Claude Code, Codex, and
- * Grok Build) rather than T3 Code's orchestration projections, so usage covers
- * turns driven outside T3 Code too. This is the approach `ccusage` takes.
+ * The scan reads the harnesses' own session records (Claude Code, Codex, Grok
+ * Build, DeepSeek, pi, Kimi Code, OpenCode and Hermes) rather than T3 Code's
+ * orchestration projections, so usage covers turns driven outside T3 Code too.
+ * This is the approach `ccusage` takes. T3 threads and delivery engine runs
+ * write into those same records, so each call is counted once, from there;
+ * neither is added on its own. The one exception is pi under the delivery
+ * engine, which keeps each attempt's session in the attempt's folder: the
+ * engine names that folder, and it is read as a source of its own.
  *
  * Transcripts are append-only, so parsed records are memoised per file by
  * `(size, mtime)`. A cold 30-day scan of ~1.4 GB lands around 2-3 seconds; warm
@@ -17,6 +22,7 @@ import * as NodeOS from "node:os";
 import {
   ClaudeSettings,
   CodexSettings,
+  HermesSettings,
   type ProviderInstanceConfig,
   USAGE_CONTRACT_VERSION,
   type ServerSettings as ServerSettingsValue,
@@ -62,6 +68,7 @@ import {
   type ScanCache,
 } from "./usageScanCache.ts";
 import type { UsageRecord } from "./usageTranscripts.ts";
+import { readHermesRecords, readOpenCodeRecords } from "./usageDatabases.ts";
 
 const LITELLM_RATES_URL =
   "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json";
@@ -84,6 +91,27 @@ const CACHE_RETENTION_DAYS = 90;
 
 const decodeCodexSettings = Schema.decodeOption(CodexSettings);
 const decodeClaudeSettings = Schema.decodeOption(ClaudeSettings);
+const decodeHermesSettings = Schema.decodeOption(HermesSettings);
+const EngineUsageSources = Schema.Struct({
+  sources: Schema.Array(
+    Schema.Struct({ harness: Schema.String, dir: Schema.String, parentName: Schema.String }),
+  ),
+});
+const decodeEngineUsageSources = Schema.decodeUnknownOption(EngineUsageSources);
+
+/** Where a harness keeps its usage, and how it is read. */
+interface TranscriptSource {
+  readonly provider: UsageProviderKind;
+  readonly dir: string;
+  readonly volumeId: string;
+  readonly fileName?: string;
+  readonly extension?: string;
+  readonly parentName?: string;
+  /** A SQLite store in `dir`, read whole rather than file by file. */
+  readonly database?: string;
+  /** Said of the source when it cannot be read. */
+  readonly missingMessage?: string;
+}
 
 /** On-disk shape of the rate snapshot. */
 const RatesCacheFile = Schema.Struct({
@@ -253,15 +281,18 @@ export const make = Effect.gen(function* () {
     settings: ServerSettingsValue,
     retentionCutoffMs: number,
   ) {
-    const dirs: Array<{
-      provider: UsageProviderKind;
-      dir: string;
-      volumeId: string;
-      fileName?: string;
-      extension?: string;
-    }> = [];
+    const dirs: TranscriptSource[] = [];
     const seen = new Set<string>();
-    for (const driver of ["claudeAgent", "codex", "grok", "deepseek"] as const) {
+    for (const driver of [
+      "claudeAgent",
+      "codex",
+      "grok",
+      "deepseek",
+      "pi",
+      "kimi",
+      "opencode",
+      "hermes",
+    ] as const) {
       // Disabled accounts still have history. Explicit default slots replace
       // the legacy settings, just as they do in the provider registry.
       const instances: Array<Pick<ProviderInstanceConfig, "config" | "environment">> =
@@ -295,16 +326,40 @@ export const make = Effect.gen(function* () {
           home = expandHomePath(
             environment.DSH_HOME?.trim() || path.join(NodeOS.homedir(), ".dsh"),
           );
+        } else if (driver === "pi") {
+          home = expandHomePath(
+            environment.PI_CODING_AGENT_DIR?.trim() || path.join(NodeOS.homedir(), ".pi", "agent"),
+          );
+        } else if (driver === "kimi") {
+          home = expandHomePath(
+            environment.KIMI_CODE_HOME?.trim() || path.join(NodeOS.homedir(), ".kimi-code"),
+          );
+        } else if (driver === "opencode") {
+          const dataHome =
+            environment.XDG_DATA_HOME?.trim() || path.join(NodeOS.homedir(), ".local", "share");
+          home = path.join(expandHomePath(dataHome), "opencode");
+        } else if (driver === "hermes") {
+          const decoded = decodeHermesSettings(instance.config ?? {});
+          const configured = Option.isSome(decoded) ? decoded.value.homePath.trim() : "";
+          home = configured
+            ? expandHomePath(configured)
+            : environment.HERMES_HOME?.trim() ||
+              (environment.LOCALAPPDATA?.trim()
+                ? path.join(environment.LOCALAPPDATA.trim(), "hermes")
+                : path.join(NodeOS.homedir(), ".hermes"));
         } else {
           home = expandHomePath(
             environment.GROK_HOME?.trim() || path.join(NodeOS.homedir(), ".grok"),
           );
         }
         // The DeepSeek harness keeps the running totals of each session in its store.
+        // OpenCode and Hermes keep theirs in a database in their home.
         const directory =
           provider === "deepseek"
             ? path.resolve(home, "storages", "session_projcache", "sessions")
-            : path.resolve(home, provider === "claude" ? "projects" : "sessions");
+            : provider === "opencode" || provider === "hermes"
+              ? path.resolve(home)
+              : path.resolve(home, provider === "claude" ? "projects" : "sessions");
         const sourceKey = provider + "\0" + directory;
         const previous = sourceCache.get(sourceKey);
         // Keep canonical paths and source fingerprints stable after root cleanup,
@@ -339,11 +394,70 @@ export const make = Effect.gen(function* () {
           dir,
           volumeId,
           ...(provider === "grok" ? { fileName: "updates.jsonl" } : {}),
+          ...(provider === "kimi" ? { fileName: "wire.jsonl" } : {}),
           ...(provider === "deepseek" ? { extension: ".json" } : {}),
+          ...(provider === "opencode" ? { database: path.join(dir, "opencode.db") } : {}),
+          ...(provider === "hermes" ? { database: path.join(dir, "state.db") } : {}),
         });
       }
     }
+    for (const source of yield* engineSources(settings)) {
+      const key = `${source.provider}\0${source.dir}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      dirs.push({
+        ...source,
+        volumeId: yield* Effect.promise(() => readDirectoryVolumeId(source.dir)),
+      });
+    }
     return dirs;
+  });
+
+  /**
+   * Stores of usage the delivery engine keeps outside the harnesses' own: pi's
+   * sessions of the engine's attempts, in the engine's folder of runs. The
+   * engine names them; it is asked only on this host, and only when delivery
+   * is on. An engine that does not answer is reported, not guessed at.
+   */
+  const engineSources = Effect.fn("UsageService.engineSources")(function* (
+    settings: ServerSettingsValue,
+  ) {
+    const engineUrl = settings.delivery.enabled ? settings.delivery.engineUrl.trim() : "";
+    if (!engineUrl) return [] as TranscriptSource[];
+    let url: string;
+    try {
+      const base = new URL(engineUrl);
+      if (!["127.0.0.1", "localhost", "[::1]"].includes(base.hostname)) return [];
+      url = new URL("/api/usage/sources", base).toString();
+    } catch {
+      return [];
+    }
+    const body = yield* httpClient.get(url).pipe(
+      Effect.flatMap(HttpClientResponse.filterStatusOk),
+      Effect.flatMap((response) => response.json),
+      Effect.timeout(3_000),
+      Effect.catchCause(() => Effect.succeed(null)),
+    );
+    const decoded = body === null ? Option.none() : decodeEngineUsageSources(body);
+    if (Option.isNone(decoded)) {
+      return [
+        {
+          provider: "pi",
+          dir: engineUrl,
+          volumeId: "",
+          missingMessage:
+            "The delivery engine did not name its pi sessions, so pi runs of the engine are not counted.",
+        },
+      ] satisfies TranscriptSource[];
+    }
+    return decoded.value.sources
+      .filter((source) => source.harness === "pi" && source.dir.trim().length > 0)
+      .map((source): TranscriptSource => ({
+        provider: "pi",
+        dir: path.resolve(source.dir),
+        volumeId: "",
+        parentName: source.parentName,
+      }));
   });
 
   /**
@@ -456,6 +570,8 @@ export const make = Effect.gen(function* () {
     readonly provider: UsageProviderKind;
     readonly dir: string;
     readonly volumeId: string;
+    /** Why the source gave nothing, when it could not be read. */
+    readonly failure?: string;
     /** Parsed records per file, or `null` when the directory does not exist. */
     readonly files:
       | readonly { readonly path: string; readonly records: readonly UsageRecord[] }[]
@@ -473,18 +589,48 @@ export const make = Effect.gen(function* () {
       Effect.provideService(Path.Path, path),
     );
     const scanned: ScannedDir[] = [];
-    for (const { provider, dir, volumeId, fileName, extension } of dirs) {
+    for (const {
+      provider,
+      dir,
+      volumeId,
+      fileName,
+      extension,
+      parentName,
+      database,
+      missingMessage,
+    } of dirs) {
+      if (missingMessage !== undefined) {
+        scanned.push({ provider, dir, volumeId, files: null, failure: missingMessage });
+        continue;
+      }
       const exists = yield* fileSystem
-        .exists(dir)
+        .exists(database ?? dir)
         .pipe(Effect.catchCause(() => Effect.succeed(false)));
       if (!exists) {
         scanned.push({ provider, dir, volumeId, files: null });
+        continue;
+      }
+      if (database !== undefined) {
+        const read = provider === "hermes" ? readHermesRecords : readOpenCodeRecords;
+        const records = yield* Effect.sync(() => read(database, windowStartMs));
+        scanned.push(
+          records === null
+            ? {
+                provider,
+                dir,
+                volumeId,
+                files: null,
+                failure: `The store ${path.basename(database)} could not be read.`,
+              }
+            : { provider, dir, volumeId, files: [{ path: database, records }] },
+        );
         continue;
       }
       const files = yield* Effect.promise(() =>
         listTranscriptFiles(dir, windowStartMs, {
           ...(fileName === undefined ? {} : { fileName }),
           ...(extension === undefined ? {} : { extension }),
+          ...(parentName === undefined ? {} : { parentName }),
         }),
       );
       const parsedFiles: { path: string; records: readonly UsageRecord[] }[] = [];
@@ -568,7 +714,7 @@ export const make = Effect.gen(function* () {
 
     const sources: UsageSource[] = [];
 
-    for (const { provider, dir, volumeId, files } of scannedDirs) {
+    for (const { provider, dir, volumeId, files, failure } of scannedDirs) {
       const retainedFiles = [...(files ?? [])];
       const livePaths = new Set(retainedFiles.map((file) => file.path));
       // Cleanup may remove transcripts, but the usage we already saved still
@@ -623,12 +769,18 @@ export const make = Effect.gen(function* () {
       sources.push({
         fingerprint: { hostId, provider, resolvedHomePath: dir, volumeId },
         // Clients exclude missing sources, so saved records remain an available source.
-        status: files === null && scannedFiles === 0 ? "missing" : "ok",
+        status:
+          failure !== undefined && scannedFiles === 0
+            ? "failed"
+            : files === null && scannedFiles === 0
+              ? "missing"
+              : "ok",
         scannedFiles,
         skippedFiles,
         malformedRecords: 0,
         distinctSessions: sessionIds.size,
-        message: files === null ? "No transcript directory on this environment." : null,
+        message:
+          failure ?? (files === null ? "No transcript directory on this environment." : null),
       });
     }
 

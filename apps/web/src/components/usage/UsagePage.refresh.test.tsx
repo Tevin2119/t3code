@@ -20,6 +20,7 @@ vi.mock("../../hooks/useSettings", () => ({ usePrimarySettings: () => "24h" }));
 vi.mock("../../state/usage", () => ({
   useUsage: () => ({
     merged: mergeUsage([], USAGE_CONTRACT_VERSION),
+    all: mergeUsage([], USAGE_CONTRACT_VERSION),
     environments: [
       {
         environmentId: EnvironmentId.make("test"),

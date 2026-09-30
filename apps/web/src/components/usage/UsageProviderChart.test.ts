@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import { buildPeriodColumns, niceScale } from "./UsageProviderChart";
-import { providersWithUsage } from "./usageProviders";
+import { PROVIDER_ORDER, providersWithUsage } from "./usageProviders";
 
 describe("niceScale", () => {
   it("never puts the peak above the top of the scale", () => {
@@ -85,11 +85,13 @@ describe("buildPeriodColumns", () => {
     // permanently above Codex regardless of which provider spent more.
     const [first] = buildPeriodColumns(days, byDay, "cost");
 
-    expect(first?.bands).toEqual([
-      { provider: "codex", value: 10 },
-      { provider: "claude", value: 20 },
-      { provider: "grok", value: 0 },
-    ]);
+    // One band per harness, in the shared reading order; harnesses with no usage are zero.
+    expect(first?.bands).toEqual(
+      PROVIDER_ORDER.map((provider) => ({
+        provider,
+        value: provider === "codex" ? 10 : provider === "claude" ? 20 : 0,
+      })),
+    );
   });
 
   it("reports the total as the sum of its bands", () => {

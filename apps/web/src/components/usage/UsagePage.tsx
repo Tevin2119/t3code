@@ -60,10 +60,23 @@ import {
 } from "../WorkspaceBreadcrumb";
 import { WorkspacePageContainer } from "../WorkspacePageContainer";
 import { WorkspacePageHeader } from "../WorkspacePageHeader";
+import {
+  hasUsageFilter,
+  NO_USAGE_FILTER,
+  ProviderBreakdownTable,
+  UsageCountedNote,
+  UsageFilterBar,
+  type UsageFilterState,
+} from "./UsageAttribution";
 import { UsageLimitsSection } from "./UsageLimits";
 import { UsagePriceOverrides } from "./UsagePriceOverrides";
 import { UsageProviderChart, type UsageChartMetric } from "./UsageProviderChart";
-import { PROVIDER_ORDER, PROVIDER_PRESENTATION, providersWithUsage } from "./usageProviders";
+import {
+  modelProviderLabel,
+  PROVIDER_ORDER,
+  PROVIDER_PRESENTATION,
+  providersWithUsage,
+} from "./usageProviders";
 import {
   readUsagePagePreferences,
   saveUsagePagePreferences,
@@ -107,15 +120,15 @@ export function UsagePage() {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [limitsNow, setLimitsNow] = useState(() => Date.now());
   const refreshingRef = useRef(false);
-  const [breakdown, setBreakdown] = useState<"model" | "time">("model");
+  const [breakdown, setBreakdown] = useState<"model" | "provider" | "time">("model");
   const [selectedEnvironmentIds, setSelectedEnvironmentIds] =
     useState<ReadonlySet<EnvironmentId> | null>(null);
+  const [usageFilter, setUsageFilter] = useState<UsageFilterState>(NO_USAGE_FILTER);
   const { days: windowDays, window } = windowSelection;
   const isPast24Hours = windowDays === 1;
-  const { merged, environments, selectedEnvironments, isPending, isPartial, refresh } = useUsage(
-    window,
-    selectedEnvironmentIds,
-  );
+  const { merged, all, environments, selectedEnvironments, isPending, isPartial, refresh } =
+    useUsage(window, selectedEnvironmentIds, usageFilter);
+  const sessionsWord = merged.sessionsUnfiltered ? "sessions of these harnesses" : "sessions";
   const presentations = useAtomValue(environmentPresentations.presentationsAtom);
   const refreshProviders = useAtomCommand(serverEnvironment.refreshProviders, {
     reportFailure: false,
@@ -386,6 +399,10 @@ export function UsagePage() {
               <UsageSkeleton />
             ) : (
               <>
+                <section className="flex flex-col gap-2">
+                  <UsageFilterBar all={all} filter={usageFilter} onChange={setUsageFilter} />
+                  <UsageCountedNote environments={selectedEnvironments} />
+                </section>
                 <section className="grid gap-6 lg:grid-cols-[minmax(0,18rem)_minmax(0,1fr)]">
                   <div className="flex min-w-0 flex-col gap-5">
                     <div className="flex flex-col gap-1">
@@ -396,12 +413,12 @@ export function UsagePage() {
                       </span>
                       <span className="text-xs text-muted-foreground">
                         {metric !== "cost"
-                          ? `${formatCount(merged.sessions)} sessions`
+                          ? `${formatCount(merged.sessions)} ${sessionsWord}`
                           : merged.costQuality.unpricedShare > 0
-                            ? `${formatCount(merged.sessions)} sessions · API estimate excludes ${formatPercent(
+                            ? `${formatCount(merged.sessions)} ${sessionsWord} · API estimate excludes ${formatPercent(
                                 merged.costQuality.unpricedShare,
                               )} unpriced records`
-                            : `${formatCount(merged.sessions)} sessions · API estimate`}
+                            : `${formatCount(merged.sessions)} ${sessionsWord} · API estimate`}
                       </span>
                     </div>
 
@@ -495,12 +512,14 @@ export function UsagePage() {
                       value={[breakdown]}
                       onValueChange={(next) => {
                         const value = next[0];
-                        if (value === "model" || value === "time") setBreakdown(value);
+                        if (value === "model" || value === "provider" || value === "time")
+                          setBreakdown(value);
                       }}
                     >
                       {(
                         [
                           { value: "model", label: "Model" },
+                          { value: "provider", label: "Provider" },
                           { value: "time", label: isPast24Hours ? "Hour" : "Day" },
                         ] as const
                       ).map((option) => (
@@ -511,7 +530,23 @@ export function UsagePage() {
                     </ToggleGroup>
                   </div>
 
-                  {breakdown === "model" ? (
+                  {breakdown !== "time" ? (
+                    <p className="text-xs text-muted-foreground" data-usage-drill-hint>
+                      Choose a row to narrow the page to it: a model shows every harness it was used
+                      through, a provider every model and harness of it.
+                    </p>
+                  ) : null}
+                  {breakdown === "provider" ? (
+                    <ProviderBreakdownTable
+                      rows={merged.modelProviders}
+                      onChoose={(modelProvider) =>
+                        setUsageFilter({
+                          ...usageFilter,
+                          modelProviders: new Set([modelProvider ?? ""]),
+                        })
+                      }
+                    />
+                  ) : breakdown === "model" ? (
                     <table className="w-full table-fixed text-sm">
                       <colgroup>
                         <col className="w-2/5" />
@@ -521,7 +556,7 @@ export function UsagePage() {
                       </colgroup>
                       <thead>
                         <tr className="border-b border-border text-left text-xs text-muted-foreground">
-                          <th className="py-2 font-normal">Model</th>
+                          <th className="py-2 font-normal">Model, harness and provider</th>
                           <th className="py-2 text-right font-normal">Cost</th>
                           <th className="py-2 text-right font-normal">Share</th>
                           <th className="py-2 text-right font-normal">Tokens</th>
@@ -537,13 +572,33 @@ export function UsagePage() {
                         ) : (
                           breakdownModels.map((model) => (
                             <tr
-                              key={`${model.provider}:${model.model}`}
-                              className="border-b border-border/50 transition-colors hover:bg-muted/50"
+                              key={`${model.provider}:${model.modelProvider ?? ""}:${model.model}`}
+                              className="cursor-pointer border-b border-border/50 transition-colors hover:bg-muted/50"
+                              onClick={() =>
+                                setUsageFilter({
+                                  ...usageFilter,
+                                  harnesses: new Set(),
+                                  models: new Set([model.model]),
+                                })
+                              }
+                              data-usage-model-row
                             >
                               <td className="py-2 text-foreground">
-                                <span className="flex items-center gap-2">
-                                  <ProviderMark provider={model.provider} className="size-3.5" />
-                                  {model.model}
+                                <span className="flex items-start gap-2">
+                                  <ProviderMark
+                                    provider={model.provider}
+                                    className="mt-0.5 size-3.5"
+                                  />
+                                  <span className="flex min-w-0 flex-col">
+                                    <span className="truncate">{model.model}</span>
+                                    <span className="truncate text-[11px] text-muted-foreground">
+                                      {PROVIDER_PRESENTATION[model.provider].label} ·{" "}
+                                      {modelProviderLabel(
+                                        model.modelProvider,
+                                        model.modelProviderSource,
+                                      )}
+                                    </span>
+                                  </span>
                                 </span>
                               </td>
                               <td className="py-2 text-right text-foreground tabular-nums">
