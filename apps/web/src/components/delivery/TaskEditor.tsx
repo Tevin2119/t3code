@@ -61,6 +61,7 @@ import {
   useFileIntake,
   useTaskUploads,
 } from "./taskFiles";
+import { BoardDialog, BoardPicker, type PickerItem } from "./BoardPicker";
 import { PriorityPill } from "./taskParts";
 import { TeamDefaultsDialog } from "./TeamDefaultsDialog";
 
@@ -189,12 +190,58 @@ export function TaskEditor(props: {
     () =>
       (Array.isArray(boardsRead.body) ? boardsRead.body : []).flatMap((item: unknown) =>
         item && typeof item === "object" && "id" in item && "title" in item
-          ? [{ id: String(item.id), title: String(item.title) }]
+          ? [
+              {
+                id: String(item.id),
+                title: String(item.title),
+                description: "description" in item ? String(item.description ?? "") : "",
+                kind: "own" as const,
+              },
+            ]
           : [],
       ),
     [boardsRead.body],
   );
   const [boardChoice, setBoardChoice] = useState<string | null>(null);
+  // A board made or edited from the form, as on the Board.
+  const [boardDialog, setBoardDialog] = useState<{ readonly editing: PickerItem | null } | null>(
+    null,
+  );
+  const [boardBusy, setBoardBusy] = useState(false);
+  const [boardProblem, setBoardProblem] = useState<string | null>(null);
+  const saveBoard = async (input: { readonly title: string; readonly description: string }) => {
+    setBoardBusy(true);
+    setBoardProblem(null);
+    const editing = boardDialog?.editing ?? null;
+    const result = await act(editing ? `/api/boards/${editing.id}/edit` : "/api/boards", {
+      ...input,
+      by: person,
+    });
+    setBoardBusy(false);
+    if (!result.ok) {
+      setBoardProblem(result.why);
+      return;
+    }
+    const made = result.body as { readonly id?: string } | null;
+    // A board made here is the one the task goes on.
+    if (!editing && made?.id) setBoardChoice(made.id);
+    setBoardDialog(null);
+    boardsRead.refresh();
+  };
+  const removeBoard = async () => {
+    const editing = boardDialog?.editing ?? null;
+    if (!editing) return;
+    setBoardBusy(true);
+    const result = await act(`/api/boards/${editing.id}/remove`, { by: person });
+    setBoardBusy(false);
+    if (!result.ok) {
+      setBoardProblem(result.why);
+      return;
+    }
+    if (boardNow === editing.id) setBoardChoice("");
+    setBoardDialog(null);
+    boardsRead.refresh();
+  };
   const boardNow = boardChoice ?? (saved ? (saved.card.set ?? "") : (props.board?.id ?? ""));
   const [busy, setBusy] = useState<"save" | "submit" | null>(null);
   const working = useRef(false);
@@ -568,32 +615,45 @@ export function TaskEditor(props: {
 
             <aside className="flex min-w-0 flex-col gap-4">
               {saved?.card.set === "qualification" ? null : (
-                <Field label="Board" hint="Where the task shows. It can be moved later.">
-                  <Select
+                <div className="flex flex-col gap-1" data-task-editor-board={boardNow}>
+                  <span className="text-xs font-medium">Board</span>
+                  {/* The Board's own picker: the boards to file onto, and a new one made here. */}
+                  <BoardPicker
+                    label="Task board"
+                    marker="task-board"
+                    items={[
+                      {
+                        id: NO_BOARD,
+                        title: "Not on a board",
+                        description: "Shown under Not on a board until it is put on one.",
+                        kind: "built-in",
+                      },
+                      ...boards,
+                    ]}
                     value={boardNow || NO_BOARD}
-                    onValueChange={(value) =>
-                      setBoardChoice(value === NO_BOARD ? "" : String(value))
-                    }
-                  >
-                    <SelectTrigger
-                      aria-label="Board"
-                      size="compact"
-                      data-task-editor-board={boardNow}
-                    >
-                      <SelectValue>
-                        {boards.find((item) => item.id === boardNow)?.title ?? "Not on a board"}
-                      </SelectValue>
-                    </SelectTrigger>
-                    <SelectPopup alignItemWithTrigger={false}>
-                      <SelectItem value={NO_BOARD}>Not on a board</SelectItem>
-                      {boards.map((item) => (
-                        <SelectItem key={item.id} value={item.id}>
-                          {item.title}
-                        </SelectItem>
-                      ))}
-                    </SelectPopup>
-                  </Select>
-                </Field>
+                    newLabel="New board…"
+                    onChoose={(id) => setBoardChoice(id === NO_BOARD ? "" : id)}
+                    onCreate={() => setBoardDialog({ editing: null })}
+                    onEdit={(item) => setBoardDialog({ editing: item })}
+                  />
+                  <span className="text-[11px] text-muted-foreground">
+                    Where the task will show once saved or submitted. It can be moved later.
+                  </span>
+                  {boardDialog ? (
+                    <BoardDialog
+                      kind="board"
+                      editing={boardDialog.editing}
+                      busy={boardBusy}
+                      problem={boardProblem}
+                      onClose={() => {
+                        setBoardDialog(null);
+                        setBoardProblem(null);
+                      }}
+                      onSave={(input) => void saveBoard(input)}
+                      onRemove={() => void removeBoard()}
+                    />
+                  ) : null}
+                </div>
               )}
               <Field label="Team">
                 <Select

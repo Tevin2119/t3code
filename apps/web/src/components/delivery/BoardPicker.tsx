@@ -34,7 +34,7 @@ export function BoardPicker(props: {
   readonly items: ReadonlyArray<PickerItem>;
   readonly value: string;
   /** The entry that shows everything, chosen by the icon beside the search. */
-  readonly everything: { readonly id: string; readonly label: string };
+  readonly everything?: { readonly id: string; readonly label: string };
   readonly newLabel: string;
   readonly onChoose: (id: string) => void;
   readonly onCreate: () => void;
@@ -95,16 +95,17 @@ export function BoardPicker(props: {
               <XIcon />
             </Button>
           ) : null}
-          <Button
-            size="icon-xs"
-            variant={props.value === props.everything.id ? "outline" : "ghost"}
-            aria-label={props.everything.label}
-            title={undefined}
-            onClick={() => choose(props.everything.id)}
-            data-board-picker-everything
-          >
-            <LayersIcon />
-          </Button>
+          {props.everything ? (
+            <Button
+              size="icon-xs"
+              variant={props.value === props.everything.id ? "outline" : "ghost"}
+              aria-label={props.everything.label}
+              onClick={() => props.everything && choose(props.everything.id)}
+              data-board-picker-everything
+            >
+              <LayersIcon />
+            </Button>
+          ) : null}
         </div>
         {/* First and pinned: reachable however long the list below grows. */}
         <div className="border-b border-border p-1">
