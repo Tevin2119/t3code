@@ -166,6 +166,23 @@ export function activeFilters(
   return found;
 }
 
+/**
+ * What starting a task does, in words, for its flow. Starting is the one way a task comes onto
+ * the Board: a message in a thread never makes one. The Orchestrator's composer says it for
+ * Start, the task form for Submit.
+ */
+export function whatStartDoes(flow: string, verb: "Start" | "Submit"): string {
+  const then: Readonly<Record<string, string>> = {
+    chat: "a Team chat task on the Board (under Team chats). The team talks it over; nothing is built.",
+    plan: "a task on the Board. It is triaged and planned, and stops at the plan for you to read. Nothing is built until you start the delivery.",
+    review:
+      "a task on the Board. The seats examine what is there and write down what they find. Nothing is changed.",
+    standard:
+      "a task on the Board. It is triaged, planned, built, checked, reviewed and tested, and stops at Your sign-off for your decision. Nothing is merged.",
+  };
+  return `${verb} makes ${then[flow] ?? then.standard} Saving keeps it as a draft, which runs nothing.`;
+}
+
 /** Which tasks the board shows. Qualification tasks are kept as evidence, and apart. */
 export const BOARD_SETS = ["pilot", "qualification", "all"] as const;
 export type BoardSet = (typeof BOARD_SETS)[number];

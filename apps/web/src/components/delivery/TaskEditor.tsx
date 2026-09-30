@@ -25,7 +25,13 @@ import {
   type TaskPriority,
   type TaskView,
 } from "../../lib/delivery";
-import { linesFromText, PRIORITY_LABEL, queryValue, tagsFromText } from "../../lib/deliveryBoard";
+import {
+  whatStartDoes,
+  linesFromText,
+  PRIORITY_LABEL,
+  queryValue,
+  tagsFromText,
+} from "../../lib/deliveryBoard";
 import { cn } from "../../lib/utils";
 import {
   useDeliveryAct,
@@ -315,6 +321,12 @@ export function TaskEditor(props: {
             <span className="text-xs text-muted-foreground" data-task-editor-state>
               {state}. Nothing runs for a draft.
             </span>
+            <p
+              className="order-last w-full text-[11px] text-muted-foreground"
+              data-delivery-what-starts={flow}
+            >
+              {whatStartDoes(flow, "Submit")}
+            </p>
             <div className="ml-auto flex items-center gap-1">
               {props.taskId ? (
                 <Button
