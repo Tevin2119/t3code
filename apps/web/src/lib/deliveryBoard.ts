@@ -472,6 +472,8 @@ export const LANE_TITLE: Readonly<Record<string, string>> = {
   "human-review": "Your sign-off",
   paused: "Paused or recovering",
   rework: "Rework",
+  approved: "Approved, not published",
+  "pull-request": "Pull request open",
   completed: "Done",
 };
 
@@ -506,3 +508,47 @@ export function messageStateLabel(state: string | null, revision: number | null)
 /** The engine's id of a task, which is what an address carries. */
 export const isTaskId = (value: unknown): value is string =>
   typeof value === "string" && /^(task|thread)-[0-9a-f]{6,32}$/.test(value);
+
+/** A conversation of the window, as an address carries it: `<environment>/<thread>`. */
+export const isConversationRef = (value: unknown): value is string =>
+  typeof value === "string" && /^[A-Za-z0-9][\w.-]{0,79}\/[A-Za-z0-9][\w.-]{0,79}$/.test(value);
+
+/** How much of one message goes into a task made from a conversation. */
+const QUOTE_LIMIT = 2000;
+const quoted = (text: string): string => {
+  const trimmed = text.trim();
+  return trimmed.length > QUOTE_LIMIT ? `${trimmed.slice(0, QUOTE_LIMIT)}…` : trimmed;
+};
+
+/**
+ * A task drafted from a conversation, for a person to review before anything is asked of
+ * anyone: what was first asked, where the conversation ended, and what was asked since. It is
+ * a starting point, written from the conversation as it stands, and names where it came from.
+ */
+export function taskFromConversation(input: {
+  readonly title: string;
+  readonly ref: string;
+  readonly messages: ReadonlyArray<{ readonly role: string; readonly text: string }>;
+}): { readonly title: string; readonly text: string } {
+  const spoken = input.messages.filter(
+    (message) => (message.role === "user" || message.role === "assistant") && message.text.trim(),
+  );
+  const asked = spoken.filter((message) => message.role === "user");
+  const lastAnswer = spoken.filter((message) => message.role === "assistant").at(-1) ?? null;
+  const later = asked.slice(1).map((message) => message.text.trim().split("\n")[0]!.slice(0, 200));
+  const sections = [
+    `Made from the conversation "${input.title}" (${input.ref}). Written from the conversation as it stands: read it and change what is not right before saving. Nothing is asked of a team until the task is submitted.`,
+    ...(asked[0] ? ["## What was asked", quoted(asked[0].text)] : []),
+    ...(later.length
+      ? [
+          "## Asked since",
+          later
+            .slice(-8)
+            .map((line) => `- ${line}`)
+            .join("\n"),
+        ]
+      : []),
+    ...(lastAnswer ? ["## Where the conversation ended", quoted(lastAnswer.text)] : []),
+  ];
+  return { title: input.title.trim().slice(0, 120), text: sections.join("\n\n") };
+}

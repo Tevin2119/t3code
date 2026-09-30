@@ -1,4 +1,6 @@
-import type { EnvironmentId } from "@t3tools/contracts";
+import { EnvironmentId, ThreadId } from "@t3tools/contracts";
+import { scopeThreadRef } from "@t3tools/client-runtime/environment";
+import { useNavigate } from "@tanstack/react-router";
 import {
   ArrowLeftIcon,
   PaperclipIcon,
@@ -10,6 +12,7 @@ import {
 import { useMemo, useRef, useState } from "react";
 
 import { isElectron } from "../../env";
+import { useThread } from "../../state/entities";
 import {
   parseCards,
   parseTask,
@@ -26,6 +29,7 @@ import {
   type TaskView,
 } from "../../lib/delivery";
 import {
+  taskFromConversation,
   whatStartDoes,
   linesFromText,
   PRIORITY_LABEL,
@@ -127,8 +131,20 @@ export function TaskEditor(props: {
   readonly onClose: () => void;
   /** Called with the task's id once it has one, and again when it is submitted. */
   readonly onSaved: (taskId: string) => void;
+  /** A conversation of the window this new task is made from: `<environment>/<thread>`. */
+  readonly fromConversation?: string | null;
 }) {
   const person = usePersonName();
+  const navigate = useNavigate();
+  const conversationRef = useMemo(() => {
+    const ref = props.taskId ? null : (props.fromConversation ?? null);
+    if (!ref) return null;
+    const [environmentId, threadId] = ref.split("/");
+    return environmentId && threadId
+      ? scopeThreadRef(EnvironmentId.make(environmentId), ThreadId.make(threadId))
+      : null;
+  }, [props.fromConversation, props.taskId]);
+  const conversation = useThread(conversationRef);
   const act = useDeliveryAct(props.environmentId, "task draft");
   const teamsRead = useDeliveryRead(props.environmentId, "/api/teams");
   const teams = useMemo(
@@ -149,6 +165,17 @@ export function TaskEditor(props: {
     setLoaded(saved.id);
     setForm(formOf(saved));
     setClean(formOf(saved));
+  }
+  // A new task made from a conversation is written from it once, for the person to review.
+  const conversationKey = conversationRef ? `conversation:${props.fromConversation}` : null;
+  if (conversationKey && conversation && loaded !== conversationKey) {
+    setLoaded(conversationKey);
+    const made = taskFromConversation({
+      title: conversation.title,
+      ref: props.fromConversation ?? "",
+      messages: conversation.messages,
+    });
+    setForm({ ...EMPTY, title: made.title, text: made.text });
   }
   const [busy, setBusy] = useState<"save" | "submit" | null>(null);
   const working = useRef(false);
@@ -195,6 +222,8 @@ export function TaskEditor(props: {
     seats: seatsToSend,
     workflow: flow,
     by: person,
+    // Where it came from goes with it, so the task and the conversation lead to each other.
+    ...(conversationRef && !props.taskId ? { origin: `thread:${props.fromConversation}` } : {}),
   });
 
   /** Saves the draft and answers with its id, or null when the engine refused. */
@@ -327,6 +356,37 @@ export function TaskEditor(props: {
             >
               {whatStartDoes(flow, "Submit")}
             </p>
+            {conversationRef ? (
+              <p
+                className="order-last w-full rounded-md border border-border bg-muted/40 px-2 py-1.5 text-xs"
+                data-task-editor-conversation
+              >
+                {conversation ? (
+                  <>
+                    Made from the conversation{" "}
+                    <button
+                      type="button"
+                      className="text-primary underline-offset-2 hover:underline"
+                      onClick={() =>
+                        void navigate({
+                          to: "/$environmentId/$threadId",
+                          params: {
+                            environmentId: conversationRef.environmentId,
+                            threadId: conversationRef.threadId,
+                          },
+                        })
+                      }
+                    >
+                      {conversation.title}
+                    </button>
+                    . The summary below was written from it as it stands: read it and change what is
+                    not right. The task keeps a link to the conversation.
+                  </>
+                ) : (
+                  "Reading the conversation this task is made from…"
+                )}
+              </p>
+            ) : null}
             <div className="ml-auto flex items-center gap-1">
               {props.taskId ? (
                 <Button

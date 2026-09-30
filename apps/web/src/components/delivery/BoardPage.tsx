@@ -391,7 +391,7 @@ export function BoardPage() {
   const enabled = useDeliveryEnabled(environmentId);
   const active = enabled ? environmentId : null;
   const navigate = useNavigate();
-  const search = useSearch({ strict: false }) as { task?: string; new?: boolean };
+  const search = useSearch({ strict: false }) as { task?: string; new?: boolean; from?: string };
   const view = useBoardStore((state) => state.view);
   const setView = useBoardStore((state) => state.setView);
   const filters = useBoardStore((state) => state.filters);
@@ -433,6 +433,7 @@ export function BoardPage() {
         onClose={() => open(null)}
         onSaved={(task) => open(task)}
         from="Board"
+        fromConversation={search.from ?? null}
       />
     );
   }

@@ -210,6 +210,13 @@ export function useThreadActionMenu(input: {
             });
             return;
           }
+          case "create-task": {
+            void router.navigate({
+              to: "/board",
+              search: { new: true, from: `${threadRef.environmentId}/${threadRef.threadId}` },
+            });
+            return;
+          }
           case "new-thread-on-branch": {
             // Explicit branch carry-over: reuse the thread's worktree when it
             // has one, otherwise its branch on the local checkout.

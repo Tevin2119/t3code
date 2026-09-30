@@ -33,7 +33,15 @@ describe("buildThreadActionMenuItems", () => {
         ...baseState,
         supports: { settlement: false, snooze: false, pinning: false, titleRegeneration: false },
       }),
-    ).toEqual(["rename", "mark-unread", "copy", "project-settings", "archive", "delete"]);
+    ).toEqual([
+      "create-task",
+      "rename",
+      "mark-unread",
+      "copy",
+      "project-settings",
+      "archive",
+      "delete",
+    ]);
   });
 
   it("groups project settings with utility actions before archive", () => {
@@ -52,6 +60,8 @@ describe("buildThreadActionMenuItems", () => {
     expect(withBranch).toContain("new-thread-on-branch");
     expect(withBranch).toContain("copy-branch");
     expect(allIds(baseState)).not.toContain("new-thread-on-branch");
+    // Making a task of a conversation is offered on every thread.
+    expect(allIds(baseState)).toContain("create-task");
     expect(allIds(baseState)).not.toContain("copy-branch");
   });
 

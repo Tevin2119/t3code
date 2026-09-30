@@ -7,7 +7,7 @@ import { Popover, PopoverPopup, PopoverTitle, PopoverTrigger } from "../ui/popov
 const PARTS: ReadonlyArray<readonly [string, string]> = [
   [
     "Thread",
-    "A conversation with one harness. With a team and a role chosen, it is a conversation with that seat. Sending in a thread never puts anything on the Board.",
+    "A conversation with one harness. With a team and a role chosen, it is a conversation with that seat. Sending in a thread puts nothing on the Board; Create task from conversation (in the thread's menu) makes a task of it, for you to review first, and the two then link to each other.",
   ],
   [
     "Task",
@@ -31,11 +31,11 @@ const PARTS: ReadonlyArray<readonly [string, string]> = [
   ],
   [
     "Approve and Send back",
-    "The decision on a task that passed its checks, review and QA. Approve records acceptance of what was tested; Send back gives the reason to redo it. Neither merges anything.",
+    "The decision on a task that passed its checks, review and QA. Approve records acceptance of the commit that was tested, and is the gate for publishing it; Send back gives the reason to redo it. Neither merges anything.",
   ],
   [
     "Pull request",
-    "None is opened by the team today: merging is switched off. Ready for PR means the change is on its own branch, waiting for your decision.",
+    "Where publishing is set up, your approval pushes the approved commit to its own branch and opens one pull request for it; a failed attempt can be tried again. Where it is not, the task says so and nothing is pushed. Merging is done on the repository host, never by the team. The columns keep these apart: Your sign-off, Approved (not published), Pull request open, Done (merged).",
   ],
 ];
 

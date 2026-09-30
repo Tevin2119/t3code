@@ -28,6 +28,7 @@ export const ACTION_LABEL: Record<string, string> = {
   reject: "Send back",
   deliver: "Start delivery",
   close: "Close",
+  publish: "Publish",
 };
 
 export const ACTION_HELP: Record<string, string> = {
@@ -39,15 +40,22 @@ export const ACTION_HELP: Record<string, string> = {
   retry: "The stopped step is started again.",
   retriage: "What was built so far becomes history and the task is triaged again.",
   "start-anyway": "The task stops waiting for the tasks it depends on.",
-  approve: "Recorded against the commit that was tested. Nothing is merged.",
+  approve:
+    "Recorded against the commit that was tested. Where publishing is on, that commit is then pushed and one pull request opened. Nothing is merged.",
   reject: "Sent back with what is to be redone. The task is triaged and built again.",
   deliver:
     "The plan is built as it was agreed. It is not made again. The plan and what you said go into the task, and it then goes through build, checks, review and QA to your decision.",
   close: "Nothing more is done for it. What was said and found is kept.",
+  publish:
+    "Pushes the approved commit to its own branch and opens one pull request for it, or finds the one already open. Nothing is merged.",
 };
 
 /** What an action is called on this task. On a part of a split task, approving is a review. */
-export function actionLabel(action: string, card: Pick<DeliveryCard, "partOf"> | null): string {
+export function actionLabel(
+  action: string,
+  card: Pick<DeliveryCard, "partOf" | "publication"> | null,
+): string {
+  if (action === "publish" && card?.publication?.state === "failed") return "Try publishing again";
   if (card?.partOf && action === "approve") return "Mark part as reviewed";
   if (card?.partOf && action === "reject") return "Send part back";
   return ACTION_LABEL[action] ?? action;
@@ -62,8 +70,11 @@ export function actionHelp(action: string, card: Pick<DeliveryCard, "partOf"> | 
   return ACTION_HELP[action] ?? "";
 }
 
-type Target = Pick<DeliveryCard, "id" | "title" | "number" | "run" | "partOf" | "parts">;
-type Decision = { readonly card: Target; readonly decision: "approve" | "reject" };
+type Target = Pick<
+  DeliveryCard,
+  "id" | "title" | "number" | "run" | "partOf" | "parts" | "publication"
+>;
+type Decision = { readonly card: Target; readonly decision: "approve" | "reject" | "publish" };
 
 /**
  * What a person may ask the engine to do with a task. Every one of these is
@@ -101,7 +112,8 @@ export function useTaskActions(
 
   const run = useCallback(
     (card: Target, action: string) => {
-      if (action === "approve" || action === "reject") {
+      // A decision, and publishing what was approved, each need a person's name and the key.
+      if (action === "approve" || action === "reject" || action === "publish") {
         setProblem(null);
         setDecision({ card, decision: action });
         return;
@@ -139,12 +151,14 @@ export function useTaskActions(
         problem={problem}
         onClose={() => setDecision(null)}
         onDecide={(input) =>
-          decision.card.run
-            ? send(`/api/runs/${decision.card.run.id}/decide`, {
-                decision: decision.decision,
-                ...input,
-              })
-            : Promise.resolve(false)
+          decision.decision === "publish"
+            ? send(`/api/tasks/${decision.card.id}/publish`, { by: input.actor, key: input.key })
+            : decision.card.run
+              ? send(`/api/runs/${decision.card.run.id}/decide`, {
+                  decision: decision.decision,
+                  ...input,
+                })
+              : Promise.resolve(false)
         }
       />
     ) : null,
@@ -169,9 +183,18 @@ function DecisionDialog(props: {
   const [notes, setNotes] = useState("");
   const { card, decision } = props.decision;
   const approving = decision === "approve";
+  const publishing = decision === "publish";
   const whole = card.partOf;
   const parts = card.parts.length;
-  const verb = approving ? (whole ? "Mark as reviewed" : "Approve") : "Send back";
+  const verb = publishing
+    ? card.publication?.state === "failed"
+      ? "Try publishing again"
+      : "Publish"
+    : approving
+      ? whole
+        ? "Mark as reviewed"
+        : "Approve"
+      : "Send back";
   return (
     <Dialog open onOpenChange={(open) => !open && props.onClose()}>
       <DialogPopup data-delivery-decision={decision}>
@@ -200,12 +223,24 @@ function DecisionDialog(props: {
                 : `This sends the whole back, and with it each of its ${parts} parts.`}
             </p>
           ) : null}
-          <p className="text-muted-foreground">
-            A decision is recorded against the commit that was tested
-            {card.run?.candidate ? ` (${card.run.candidate.slice(0, 10)})` : ""}. Nothing is merged.
-            The approval key is shown on the terminal the engine was started from, and is not stored
-            here.
-          </p>
+          {publishing ? (
+            <p className="text-muted-foreground" data-delivery-decision-publish>
+              Pushes the approved commit
+              {card.run?.candidate ? ` ${card.run.candidate.slice(0, 10)}` : ""} to its own branch
+              and opens one pull request for it, or finds the one already open. It is checked again
+              first: the approval must still stand for that commit and every check must have passed.
+              Nothing is merged; that is done on the repository host. The approval key is shown on
+              the terminal the engine was started from, and is not stored here.
+            </p>
+          ) : (
+            <p className="text-muted-foreground">
+              A decision is recorded against the commit that was tested
+              {card.run?.candidate ? ` (${card.run.candidate.slice(0, 10)})` : ""}. Approving is not
+              merging. Where publishing is on, the approved commit is then pushed and one pull
+              request opened for review. The approval key is shown on the terminal the engine was
+              started from, and is not stored here.
+            </p>
+          )}
           <Input
             aria-label="Your name"
             placeholder="Your name"
@@ -220,7 +255,7 @@ function DecisionDialog(props: {
             value={approvalKey}
             onChange={(event) => setApprovalKey(event.target.value)}
           />
-          {approving ? null : (
+          {approving || publishing ? null : (
             <Textarea
               aria-label="What to redo"
               placeholder="What to redo"
@@ -239,7 +274,12 @@ function DecisionDialog(props: {
             Cancel
           </Button>
           <Button
-            disabled={props.busy || !actor.trim() || !approvalKey || (!approving && !notes.trim())}
+            disabled={
+              props.busy ||
+              !actor.trim() ||
+              !approvalKey ||
+              (!approving && !publishing && !notes.trim())
+            }
             onClick={() => {
               if (!person) setPerson(actor.trim());
               void props

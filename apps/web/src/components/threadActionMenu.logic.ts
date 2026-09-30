@@ -8,6 +8,7 @@ import type { SnoozePreset } from "@t3tools/client-runtime/state/thread-settled"
  */
 export type ThreadActionMenuId =
   | "new-thread-on-branch"
+  | "create-task"
   | "project-settings"
   | "pin"
   | "unpin"
@@ -62,6 +63,9 @@ export function buildThreadActionMenuItems(
           },
         ]
       : []),
+    // A thread is a conversation; it becomes work for a team only when a person makes a task of
+    // it, which opens the task form written from the conversation, for review before saving.
+    { id: "create-task", label: "Create task from conversation", icon: "square-kanban" },
     ...(state.supports.pinning
       ? [
           state.isPinned

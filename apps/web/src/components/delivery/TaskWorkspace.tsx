@@ -1046,20 +1046,43 @@ function Info(props: {
         </Row>
         <p className="text-[11px] text-muted-foreground">
           The task and its Orchestrator conversation are one record: what is said in either is said
-          on the task. Threads in the chat list are separate conversations and never become tasks.
+          on the task. A thread in the chat list is a conversation of its own; it becomes a task
+          only when you create one from it.
         </p>
+        {task.source ? (
+          <Row label="Made from">
+            <button
+              type="button"
+              className="text-primary underline-offset-2 hover:underline"
+              data-task-related-source
+              onClick={() =>
+                void navigate({
+                  to: "/$environmentId/$threadId",
+                  params: {
+                    environmentId: task.source!.environmentId,
+                    threadId: task.source!.threadId,
+                  },
+                })
+              }
+            >
+              the conversation it came from
+            </button>
+          </Row>
+        ) : null}
+        {card.run ? (
+          <Row label="Run">
+            <span className="font-mono text-[10px]" data-task-related-run>
+              {card.run.id}
+              {card.run.candidate ? ` · commit ${card.run.candidate.slice(0, 10)}` : ""}
+            </span>
+          </Row>
+        ) : null}
         {card.waitingOn ? (
           <Row label="Waiting on you">
             <span data-task-related-waiting>yes: {card.waitingOn}</span>
           </Row>
         ) : null}
-        <Row label="Pull request">
-          <span className="text-right" data-task-related-pr>
-            {task.lane === "human-review"
-              ? "None opened: merging is switched off. Approving records acceptance; it opens and merges nothing."
-              : "None. The team opens none while merging is switched off."}
-          </span>
-        </Row>
+        <PublicationRows task={task} />
       </section>
 
       {closed ? null : (
@@ -1161,6 +1184,74 @@ function Info(props: {
   );
 }
 
+/**
+ * What became of the approved change, told apart: awaiting your decision, approved and not
+ * published, a pull request open, merged, or a failed attempt with its reason. Approval is never
+ * shown as publication, nor publication as a merge.
+ */
+function PublicationRows(props: { readonly task: TaskView }) {
+  const { task } = props;
+  const publication = task.publications.at(-1) ?? null;
+  const url = publication?.pullRequest?.url ?? null;
+  const external = url !== null && /^https?:\/\//.test(url);
+  const said =
+    publication === null
+      ? task.state === "approved"
+        ? task.publishing.enabled
+          ? `Approved, not published yet${task.publishing.blockers.length ? `: ${task.publishing.blockers.join("; ")}` : "."}`
+          : `Approved, not published. ${task.publishing.why ?? ""}`
+        : task.lane === "human-review"
+          ? `None yet. Approving records acceptance${task.publishing.enabled ? "; then the approved commit is pushed and one pull request opened" : `. ${task.publishing.why ?? ""}`}. Nothing is merged.`
+          : task.publishing.enabled
+            ? "None yet. One is opened when a person approves the tested commit."
+            : `None. ${task.publishing.why ?? ""}`
+      : publication.state === "failed"
+        ? `Publishing failed (attempt ${publication.attempts}): ${publication.error ?? "no reason given"}. Nothing was merged.`
+        : publication.state === "merged"
+          ? "Merged on the repository host."
+          : publication.state === "closed"
+            ? "Closed on the repository host without a merge."
+            : publication.state === "pr-open"
+              ? "Open for review. Merging is done on the repository host, not by the team."
+              : `${publication.state}.`;
+  return (
+    <>
+      <Row label="Pull request">
+        <span
+          className="flex flex-col items-end gap-0.5 text-right"
+          data-task-related-pr={publication?.state ?? "none"}
+        >
+          {url ? (
+            external ? (
+              <a
+                href={url}
+                target="_blank"
+                rel="noreferrer"
+                className="text-primary underline-offset-2 hover:underline"
+                data-task-related-pr-link
+              >
+                #{publication?.pullRequest?.number} on the repository host
+              </a>
+            ) : (
+              <span className="font-mono text-[10px]" data-task-related-pr-link>
+                {url} (stand-in host)
+              </span>
+            )
+          ) : null}
+          <span>{said}</span>
+        </span>
+      </Row>
+      {publication ? (
+        <Row label="Branch">
+          <span className="font-mono text-[10px] break-all" data-task-related-branch>
+            {publication.branch} · {publication.commit.slice(0, 10)}
+          </span>
+        </Row>
+      ) : null}
+    </>
+  );
+}
+
 type Tab = "details" | "history" | "info";
 
 /**
@@ -1213,7 +1304,7 @@ export function TaskWorkspace(props: {
   }
 
   const primary = task?.actions.filter((action) =>
-    ["approve", "reject", "submit", "deliver"].includes(action),
+    ["approve", "reject", "publish", "submit", "deliver"].includes(action),
   );
   const others = task?.actions.filter((action) => !primary?.includes(action)) ?? [];
 

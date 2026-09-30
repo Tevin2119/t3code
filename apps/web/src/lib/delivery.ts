@@ -711,8 +711,38 @@ export interface DeliveryCard {
   readonly waitingOn: string | null;
   /** "qualification" for a task of the engine's qualification, kept apart from the pilot's work. */
   readonly set: string | null;
+  /** What became of the approved change: pushed, a pull request, merged, or a failed attempt. */
+  readonly publication: DeliveryPublication | null;
   readonly actions: ReadonlyArray<string>;
 }
+
+/**
+ * The approved commit put up for review. Approval is a record; this is what happened after it.
+ * `state`: pushing, pushed, pr-open, merged, closed or failed.
+ */
+export interface DeliveryPublication {
+  readonly run: string | null;
+  readonly state: string;
+  readonly branch: string;
+  readonly commit: string;
+  readonly pullRequest: { readonly number: number; readonly url: string } | null;
+  readonly error: string | null;
+  readonly attempts: number;
+}
+
+const parsePublication = (value: unknown): DeliveryPublication | null => {
+  if (!isRecord(value)) return null;
+  const pull = isRecord(value.pullRequest) ? value.pullRequest : null;
+  return {
+    run: textOrNull(value.run),
+    state: text(value.state),
+    branch: text(value.branch),
+    commit: text(value.commit),
+    pullRequest: pull ? { number: count(pull.number), url: text(pull.url) } : null,
+    error: textOrNull(value.error),
+    attempts: count(value.attempts),
+  };
+};
 
 export interface DeliveryLane {
   readonly lane: string;
@@ -836,6 +866,7 @@ export const parseCard = (value: Json): DeliveryCard => {
     blocker: textOrNull(value.blocker),
     waitingOn: textOrNull(value.waitingOn),
     set: textOrNull(value.set),
+    publication: parsePublication(value.publication),
     actions: strings(value.actions),
   };
 };
@@ -1112,6 +1143,23 @@ export interface TaskView {
   }>;
   readonly council: TaskCouncil | null;
   readonly pendingFromPerson: number;
+  /** Every publication of this task's approved runs, oldest first. */
+  readonly publications: ReadonlyArray<DeliveryPublication>;
+  /** Whether this engine publishes, and what stands in the way for this task now. */
+  readonly publishing: {
+    readonly enabled: boolean;
+    readonly why: string | null;
+    readonly host: string | null;
+    readonly base: string | null;
+    readonly run: string | null;
+    readonly blockers: ReadonlyArray<string>;
+  };
+  /** The conversation this task was made from: `<environment>/<thread>`. */
+  readonly source: {
+    readonly kind: "thread";
+    readonly environmentId: string;
+    readonly threadId: string;
+  } | null;
 }
 
 const parseCouncil = (council: Json): TaskCouncil => {
@@ -1283,6 +1331,30 @@ export function parseTask(body: unknown): TaskView | null {
     })),
     council: council ? parseCouncil(council) : null,
     pendingFromPerson: count(body.pendingFromPerson),
+    publications: records(body.publications).flatMap((item) => parsePublication(item) ?? []),
+    publishing: (() => {
+      const publishing = isRecord(body.publishing) ? body.publishing : {};
+      return {
+        enabled: publishing.enabled === true,
+        why: textOrNull(publishing.why),
+        host: textOrNull(publishing.host),
+        base: textOrNull(publishing.base),
+        run: textOrNull(publishing.run),
+        blockers: strings(publishing.blockers),
+      };
+    })(),
+    source: (() => {
+      const source = isRecord(body.source) ? body.source : null;
+      const ref = source ? text(source.ref) : "";
+      const slash = ref.indexOf("/");
+      return source?.kind === "thread" && slash > 0
+        ? {
+            kind: "thread" as const,
+            environmentId: ref.slice(0, slash),
+            threadId: ref.slice(slash + 1),
+          }
+        : null;
+    })(),
   };
 }
 

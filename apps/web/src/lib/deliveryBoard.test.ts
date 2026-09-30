@@ -2,6 +2,8 @@ import { describe, expect, it } from "vite-plus/test";
 
 import { parseCard } from "./delivery";
 import {
+  isConversationRef,
+  taskFromConversation,
   activeFilters,
   ageLabel,
   fileKindOf,
@@ -273,5 +275,33 @@ describe("filtering by column", () => {
     ]);
     expect(on.find((item) => item.label === "Your sign-off")?.clear).toEqual({ lanes: ["intake"] });
     expect(activeFilters(NO_FILTERS, (lane) => lane)).toEqual([]);
+  });
+});
+
+describe("a task made from a conversation", () => {
+  it("names the conversation, and keeps the first request, the later ones and the last answer", () => {
+    const made = taskFromConversation({
+      title: "Fix the export",
+      ref: "env-1/thread-9",
+      messages: [
+        { role: "user", text: "The CSV export drops the last row." },
+        { role: "reasoning", text: "thinking" },
+        { role: "assistant", text: "It is an off-by-one in writer.ts." },
+        { role: "user", text: "Also keep the header.\nMore detail." },
+        { role: "assistant", text: "Fixed both; tests added." },
+      ],
+    });
+    expect(made.title).toBe("Fix the export");
+    expect(made.text).toContain('Made from the conversation "Fix the export" (env-1/thread-9).');
+    expect(made.text).toContain("## What was asked\n\nThe CSV export drops the last row.");
+    expect(made.text).toContain("## Asked since\n\n- Also keep the header.");
+    expect(made.text).toContain("## Where the conversation ended\n\nFixed both; tests added.");
+    expect(made.text).not.toContain("thinking");
+  });
+
+  it("recognises a conversation address", () => {
+    expect(isConversationRef("env-1/thread-9")).toBe(true);
+    expect(isConversationRef("../etc")).toBe(false);
+    expect(isConversationRef("a/b/c")).toBe(false);
   });
 });
