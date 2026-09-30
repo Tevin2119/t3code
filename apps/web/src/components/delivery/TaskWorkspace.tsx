@@ -350,7 +350,8 @@ function Composer(props: {
           data-task-composer-reply
         >
           <CornerDownRightIcon className="mt-0.5 size-3 shrink-0" />
-          <span className="min-w-0 flex-1">
+          {/* Two lines are enough to say which question: the whole of it is in the history above. */}
+          <span className="line-clamp-2 min-w-0 flex-1" title={replying.text}>
             Answering {replying.by}: <span className="text-muted-foreground">{replying.text}</span>
           </span>
           <button
