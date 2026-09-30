@@ -101,6 +101,7 @@ import {
   useState,
 } from "react";
 import { flushSync } from "react-dom";
+import { taskStandsIn, useThreadTasks } from "./delivery/ThreadTaskLinks";
 import { useLocation, useNavigate } from "@tanstack/react-router";
 import { assistantCitationsToPlainText } from "@t3tools/shared/assistantCitations";
 import { assistantCitationFromLocation } from "../lib/assistantCitationNavigation";
@@ -230,6 +231,7 @@ import { BranchToolbar, type BranchToolbarHandle } from "./BranchToolbar";
 import { resolveShortcutCommand, shortcutLabelForCommand } from "../keybindings";
 import ThreadTerminalDrawer from "./ThreadTerminalDrawer";
 import {
+  SquareKanbanIcon,
   AlarmClockIcon,
   CheckCircle2Icon,
   ChevronDownIcon,
@@ -6364,6 +6366,42 @@ export default function ChatView(props: ChatViewProps) {
       onDismiss: acknowledgeActiveThreadWoke,
     };
   }, [acknowledgeActiveThreadWoke, activeThread?.id, activeThreadWokeVisible]);
+  // The tasks a person made from this conversation, shown above the composer at every width.
+  const threadTasks = useThreadTasks(
+    activeThreadEnvironmentId,
+    isServerThread ? (activeThread?.id ?? null) : null,
+  );
+  const threadTasksBannerItem = useMemo<ComposerBannerStackItem | null>(() => {
+    const newest = threadTasks[0];
+    if (!newest) return null;
+    return {
+      id: `thread-tasks:${activeThread?.id ?? "unknown"}`,
+      variant: "info",
+      priority: "notice",
+      compact: true,
+      icon: <SquareKanbanIcon />,
+      title: (
+        <span data-thread-task-links>
+          {threadTasks.length === 1
+            ? `Task #${newest.number} was made from this conversation`
+            : `${threadTasks.length} tasks were made from this conversation`}
+        </span>
+      ),
+      description: threadTasks
+        .slice(0, 3)
+        .map((task) => `#${task.number} ${taskStandsIn(task)}`)
+        .join(" · "),
+      actions: (
+        <Button
+          size="xs"
+          variant="ghost"
+          onClick={() => void navigate({ to: "/board", search: { task: newest.id } })}
+        >
+          Open #{newest.number}
+        </Button>
+      ),
+    };
+  }, [activeThread?.id, navigate, threadTasks]);
   const parkedThreadBannerItem = useMemo<ComposerBannerStackItem | null>(() => {
     if (!activeThreadSnoozed && !activeThreadSettled) {
       return null;
@@ -6534,7 +6572,10 @@ export default function ChatView(props: ChatViewProps) {
     const resumeCompactionItems =
       resumeCompactionBannerItem === null ? [] : [resumeCompactionBannerItem];
     const wokeThreadItems = wokeThreadBannerItem === null ? [] : [wokeThreadBannerItem];
-    const parkedThreadItems = parkedThreadBannerItem === null ? [] : [parkedThreadBannerItem];
+    const parkedThreadItems = [
+      ...(threadTasksBannerItem === null ? [] : [threadTasksBannerItem]),
+      ...(parkedThreadBannerItem === null ? [] : [parkedThreadBannerItem]),
+    ];
     // The user asked for this one, so it leads the notice tier instead of trailing it.
     const usageLimitsItems = usageLimitsBanner === null ? [] : [usageLimitsBanner];
     const projectCloneItems = projectCloneBannerItem === null ? [] : [projectCloneBannerItem];
@@ -6606,6 +6647,7 @@ export default function ChatView(props: ChatViewProps) {
     isRestoringThreadBranch,
     localCheckoutBranchMismatch,
     parkedThreadBannerItem,
+    threadTasksBannerItem,
     projectCloneBannerItem,
     resumeCompactionBannerItem,
     showBranchMismatchBanner,

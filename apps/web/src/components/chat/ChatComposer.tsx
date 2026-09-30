@@ -256,7 +256,6 @@ import {
 } from "../delivery/OrchestratorComposerControls";
 import { OrchestratorPanel } from "../delivery/OrchestratorPanel";
 import { TeamBadge } from "../delivery/TeamBadge";
-import { ThreadTaskLinks } from "../delivery/ThreadTaskLinks";
 import { TeamPicker } from "../delivery/TeamPicker";
 import { REASONING_OPTION_BY_DRIVER, type SeatForThread } from "../../lib/deliverySeats";
 import {
@@ -5057,11 +5056,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
             {
               id: "team",
               content: <TeamBadge environmentId={environmentId} threadId={activeThreadId} />,
-            },
-            {
-              // Tasks made from this conversation, each a way to its card.
-              id: "tasks",
-              content: <ThreadTaskLinks environmentId={environmentId} threadId={activeThreadId} />,
             },
           ]
         : []),
