@@ -10,6 +10,7 @@ import { useAtomValue } from "@effect/atom-react";
 import {
   USAGE_CONTRACT_VERSION,
   type EnvironmentId,
+  type UsageAccount,
   type UsageSummary,
   type UsageSummaryInput,
 } from "@t3tools/contracts";
@@ -34,6 +35,8 @@ export interface EnvironmentUsageStatus {
   readonly isPending: boolean;
   readonly error: string | null;
   readonly summary: UsageSummary | null;
+  /** The accounts this environment's user grouped connections under. */
+  readonly accounts: Readonly<Record<string, UsageAccount>>;
 }
 
 /**
@@ -57,6 +60,7 @@ const usageByWindowAtom = Atom.family((windowKey: string) =>
         isPending: result.waiting,
         error: result._tag === "Failure" ? "This environment could not report usage." : null,
         summary: Option.getOrNull(AsyncResult.value(result)),
+        accounts: get(serverEnvironment.settingsValueAtom(environmentId))?.usageAccounts ?? {},
       });
     }
     return statuses;
@@ -138,6 +142,7 @@ export function useUsage(
               environmentId: environment.environmentId,
               label: environment.label,
               summary: environment.summary,
+              accounts: environment.accounts,
             },
           ],
     );
@@ -148,7 +153,8 @@ export function useUsage(
     () =>
       (filter.harnesses?.size ?? 0) +
         (filter.modelProviders?.size ?? 0) +
-        (filter.models?.size ?? 0) >
+        (filter.models?.size ?? 0) +
+        (filter.accounts?.size ?? 0) >
       0
         ? mergeUsage(answered, USAGE_CONTRACT_VERSION, filter)
         : all,

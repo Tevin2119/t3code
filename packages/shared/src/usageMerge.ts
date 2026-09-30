@@ -14,12 +14,62 @@ import {
   type UsageProviderKind,
   type UsageSourceFingerprint,
   type UsageSummary,
+  type UsageAccount,
 } from "@t3tools/contracts";
 
 export interface EnvironmentUsage {
   readonly environmentId: EnvironmentId;
   readonly label: string;
   readonly summary: UsageSummary;
+  /** The accounts this environment's user confirmed, by name. Absent: none. */
+  readonly accounts?: Readonly<Record<string, UsageAccount>>;
+}
+
+/**
+ * The account a bucket belongs to: the one that names its harness and its recorded
+ * provider exactly. A bucket with no recorded provider belongs to none.
+ */
+export function accountOf(
+  accounts: Readonly<Record<string, UsageAccount>> | undefined,
+  bucket: Pick<UsageBucket, "provider" | "modelProvider">,
+): string | null {
+  if (!accounts || !bucket.modelProvider) return null;
+  for (const name of [...Object.keys(accounts)].sort()) {
+    const members = accounts[name]?.members ?? [];
+    if (
+      members.some(
+        (member) =>
+          member.harness === bucket.provider && member.modelProvider === bucket.modelProvider,
+      )
+    ) {
+      return name;
+    }
+  }
+  return null;
+}
+
+/**
+ * Usage by account where the user grouped connections, and by recorded provider
+ * elsewhere. Every member keeps its harness and the provider it recorded, and its
+ * share is of this row's recorded tokens: not of an allowance, and not of cost.
+ */
+export interface AccountTotals {
+  /** The account's name, or `null` for a provider no account groups. */
+  readonly account: string | null;
+  /** For an ungrouped row: the provider as recorded (`null` when none was). */
+  readonly modelProvider: string | null;
+  readonly modelProviderSource: UsageModelProviderSource | null;
+  readonly costUsd: number;
+  readonly totalTokens: number;
+  readonly records: number;
+  readonly unpricedRecords: number;
+  readonly members: readonly {
+    readonly harness: UsageProviderKind;
+    readonly modelProvider: string | null;
+    readonly totalTokens: number;
+    readonly costUsd: number;
+    readonly tokenShare: number;
+  }[];
 }
 
 export interface ProviderTotals {
@@ -86,6 +136,8 @@ export interface UsageFilter {
   readonly harnesses?: ReadonlySet<UsageProviderKind>;
   readonly modelProviders?: ReadonlySet<string>;
   readonly models?: ReadonlySet<string>;
+  /** Account names the user grouped connections under. */
+  readonly accounts?: ReadonlySet<string>;
 }
 
 export interface DailyTotals {
@@ -123,6 +175,8 @@ export interface MergedUsage {
   readonly providers: readonly ProviderTotals[];
   readonly models: readonly ModelTotals[];
   readonly modelProviders: readonly ModelProviderTotals[];
+  /** Usage by the accounts the user grouped, and by recorded provider for the rest. */
+  readonly accounts: readonly AccountTotals[];
   /**
    * True when a provider or model filter narrowed the usage. Sessions are
    * counted per harness store, not per model, so the session counts are then
@@ -249,6 +303,7 @@ const EMPTY_MERGED: MergedUsage = {
   providers: [],
   models: [],
   modelProviders: [],
+  accounts: [],
   sessionsUnfiltered: false,
   daily: [],
   hourly: [],
@@ -282,11 +337,34 @@ export function mergeUsage(
     set !== undefined && set.size > 0;
   const keepsHarness = (provider: UsageProviderKind) =>
     !narrows(filter.harnesses) || filter.harnesses.has(provider);
-  const keepsBucket = (bucket: UsageBucket) =>
+  const keepsBucket = (bucket: UsageBucket, account: string | null) =>
     keepsHarness(bucket.provider) &&
     (!narrows(filter.modelProviders) || filter.modelProviders.has(bucket.modelProvider ?? "")) &&
-    (!narrows(filter.models) || filter.models.has(bucket.model));
-  const sessionsUnfiltered = narrows(filter.modelProviders) || narrows(filter.models);
+    (!narrows(filter.models) || filter.models.has(bucket.model)) &&
+    (!narrows(filter.accounts) || (account !== null && filter.accounts.has(account)));
+  const sessionsUnfiltered =
+    narrows(filter.modelProviders) || narrows(filter.models) || narrows(filter.accounts);
+  const accountAccumulator = new Map<
+    string,
+    {
+      account: string | null;
+      modelProvider: string | null;
+      sources: Set<UsageModelProviderSource | null>;
+      costUsd: number;
+      totalTokens: number;
+      records: number;
+      unpricedRecords: number;
+      members: Map<
+        string,
+        {
+          harness: UsageProviderKind;
+          modelProvider: string | null;
+          totalTokens: number;
+          costUsd: number;
+        }
+      >;
+    }
+  >();
 
   const current: EnvironmentUsage[] = [];
   const staleEnvironments: EnvironmentId[] = [];
@@ -366,7 +444,12 @@ export function mergeUsage(
 
   for (const environment of current) {
     const owned = ownedContribution(environment, ownerByFingerprint);
-    const buckets = owned.buckets.filter(keepsBucket);
+    const accountOfBucket = new Map(
+      owned.buckets.map((bucket) => [bucket, accountOf(environment.accounts, bucket)] as const),
+    );
+    const buckets = owned.buckets.filter((bucket) =>
+      keepsBucket(bucket, accountOfBucket.get(bucket) ?? null),
+    );
     if (buckets.length > 0) contributingEnvironments.push(environment.environmentId);
 
     for (const [providerKind, providerSessions] of owned.sessionsByProvider) {
@@ -433,6 +516,36 @@ export function mergeUsage(
       through.costUsd += bucket.costUsd;
       providerEntry.byHarness.set(bucket.provider, through);
       modelProviderAccumulator.set(modelProvider ?? "", providerEntry);
+
+      const account = accountOfBucket.get(bucket) ?? null;
+      const accountKey =
+        account === null ? `provider\u0000${modelProvider ?? ""}` : `account\u0000${account}`;
+      const accountEntry = accountAccumulator.get(accountKey) ?? {
+        account,
+        modelProvider: account === null ? modelProvider : null,
+        sources: new Set<UsageModelProviderSource | null>(),
+        costUsd: 0,
+        totalTokens: 0,
+        records: 0,
+        unpricedRecords: 0,
+        members: new Map(),
+      };
+      accountEntry.sources.add(bucket.modelProviderSource ?? null);
+      accountEntry.costUsd += bucket.costUsd;
+      accountEntry.totalTokens += tokens;
+      accountEntry.records += bucket.records;
+      accountEntry.unpricedRecords += bucket.unpricedRecords;
+      const memberKey = `${bucket.provider}\u0000${modelProvider ?? ""}`;
+      const member = accountEntry.members.get(memberKey) ?? {
+        harness: bucket.provider,
+        modelProvider,
+        totalTokens: 0,
+        costUsd: 0,
+      };
+      member.totalTokens += tokens;
+      member.costUsd += bucket.costUsd;
+      accountEntry.members.set(memberKey, member);
+      accountAccumulator.set(accountKey, accountEntry);
 
       const modelKey = [bucket.provider, modelProvider ?? "", bucket.model].join("\u0000");
       const model = modelAccumulator.get(modelKey) ?? {
@@ -514,6 +627,32 @@ export function mergeUsage(
     }))
     .sort((a, b) => b.costUsd - a.costUsd || b.totalTokens - a.totalTokens);
 
+  const accounts: AccountTotals[] = [...accountAccumulator.values()]
+    .map((totals) => ({
+      account: totals.account,
+      modelProvider: totals.modelProvider,
+      // An account row names the account; its members say how each provider was known.
+      modelProviderSource:
+        totals.account !== null
+          ? null
+          : totals.sources.has("recorded")
+            ? ("recorded" as const)
+            : totals.sources.has("harness")
+              ? ("harness" as const)
+              : null,
+      costUsd: totals.costUsd,
+      totalTokens: totals.totalTokens,
+      records: totals.records,
+      unpricedRecords: totals.unpricedRecords,
+      members: [...totals.members.values()]
+        .map((member) => ({
+          ...member,
+          tokenShare: totals.totalTokens === 0 ? 0 : member.totalTokens / totals.totalTokens,
+        }))
+        .sort((a, b) => b.totalTokens - a.totalTokens),
+    }))
+    .sort((a, b) => b.totalTokens - a.totalTokens);
+
   const modelProviders: ModelProviderTotals[] = [...modelProviderAccumulator.values()]
     .map((totals) => ({
       modelProvider: totals.modelProvider,
@@ -565,6 +704,7 @@ export function mergeUsage(
     providers,
     models,
     modelProviders,
+    accounts,
     sessionsUnfiltered,
     daily,
     hourly,

@@ -33,9 +33,15 @@ function bucket(overrides: Partial<UsageBucket>): UsageBucket {
   };
 }
 
-const HARNESSES = ["pi", "opencode", "hermes", "deepseek", "claude"] as const;
+const HARNESSES = ["pi", "opencode", "hermes", "deepseek", "claude", "codex"] as const;
 
-function merged(buckets: readonly UsageBucket[], filter = {}) {
+function merged(
+  buckets: readonly UsageBucket[],
+  filter = {},
+  accounts?: Readonly<
+    Record<string, { members: { harness: UsageBucket["provider"]; modelProvider: string }[] }>
+  >,
+) {
   const summary: UsageSummary = {
     contractVersion: USAGE_CONTRACT_VERSION,
     readAt: "2026-09-29T00:00:00.000Z",
@@ -56,7 +62,14 @@ function merged(buckets: readonly UsageBucket[], filter = {}) {
     scanDurationMs: 1,
   };
   return mergeUsage(
-    [{ environmentId: "env" as EnvironmentId, label: "env", summary }],
+    [
+      {
+        environmentId: "env" as EnvironmentId,
+        label: "env",
+        summary,
+        ...(accounts ? { accounts } : {}),
+      },
+    ],
     USAGE_CONTRACT_VERSION,
     filter,
   );
@@ -121,6 +134,85 @@ describe("usage by harness, provider and model", () => {
         ["pi", 100, 100 / 700],
       ],
     );
+  });
+
+  describe("accounts the user grouped", () => {
+    const CONNECTIONS = [
+      bucket({
+        provider: "codex",
+        model: "gpt-6-astra",
+        modelProvider: "openai",
+        modelProviderSource: "recorded",
+        totals: totals(900),
+      }),
+      bucket({
+        provider: "pi",
+        model: "gpt-6-astra",
+        modelProvider: "openai-codex",
+        modelProviderSource: "recorded",
+        totals: totals(100),
+      }),
+      // Another key's connection: the same harness, another recorded provider.
+      bucket({
+        provider: "pi",
+        model: "glm-5.3",
+        modelProvider: "zai",
+        modelProviderSource: "recorded",
+        totals: totals(50),
+      }),
+      bucket({ provider: "deepseek", model: "model not recorded by DeepSeek", totals: totals(30) }),
+    ];
+    const ACCOUNTS = {
+      ChatGPT: {
+        members: [
+          { harness: "codex" as const, modelProvider: "openai" },
+          { harness: "pi" as const, modelProvider: "openai-codex" },
+        ],
+      },
+    };
+
+    it("groups exactly the confirmed connections, and keeps each one's harness and provider", () => {
+      const rows = merged(CONNECTIONS, {}, ACCOUNTS).accounts;
+      expect(rows.map((row) => [row.account, row.modelProvider, row.totalTokens])).toEqual([
+        ["ChatGPT", null, 1000],
+        [null, "zai", 50],
+        [null, null, 30],
+      ]);
+      expect(rows[0]?.members).toEqual([
+        {
+          harness: "codex",
+          modelProvider: "openai",
+          totalTokens: 900,
+          costUsd: 0,
+          tokenShare: 0.9,
+        },
+        {
+          harness: "pi",
+          modelProvider: "openai-codex",
+          totalTokens: 100,
+          costUsd: 0,
+          tokenShare: 0.1,
+        },
+      ]);
+    });
+
+    it("without accounts, every provider stays its own row", () => {
+      expect(merged(CONNECTIONS).accounts.map((row) => row.account)).toEqual([
+        null,
+        null,
+        null,
+        null,
+      ]);
+    });
+
+    it("narrows to an account, and says the sessions are the harnesses' whole", () => {
+      const narrowed = merged(CONNECTIONS, { accounts: new Set(["ChatGPT"]) }, ACCOUNTS);
+      expect([narrowed.totalTokens, narrowed.sessionsUnfiltered]).toEqual([1000, true]);
+      expect(narrowed.models.map((model) => [model.provider, model.modelProvider])).toEqual([
+        ["codex", "openai"],
+        ["pi", "openai-codex"],
+      ]);
+    });
   });
 
   it("narrows by harness, with the sessions of those harnesses", () => {

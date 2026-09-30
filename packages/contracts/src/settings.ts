@@ -10,6 +10,7 @@ import {
   TrimmedString,
 } from "./baseSchemas.ts";
 import { UsageLimitSourceId } from "./usageLimitSourceId.ts";
+import { UsageProviderKind } from "./usage.ts";
 import { EnvironmentMachineKind, ThreadEnvMode } from "./environment.ts";
 import { KeybindingShortcut } from "./keybindings.ts";
 import {
@@ -498,6 +499,23 @@ export const UsageModelPriceOverride = Schema.Struct({
   cacheWriteCostPerMillionTokens: Schema.optionalKey(UsageModelTokenPrice),
 });
 export type UsageModelPriceOverride = typeof UsageModelPriceOverride.Type;
+
+/**
+ * One connection whose recorded usage belongs to an account: a harness and the
+ * provider name it records, exactly. Nothing else is matched: another harness, or
+ * the same harness recording another provider, stays apart.
+ */
+export const UsageAccountMember = Schema.Struct({
+  harness: UsageProviderKind,
+  modelProvider: TrimmedNonEmptyString,
+});
+export type UsageAccountMember = typeof UsageAccountMember.Type;
+
+/** Connections the user has confirmed share one account, such as one subscription. */
+export const UsageAccount = Schema.Struct({
+  members: Schema.Array(UsageAccountMember),
+});
+export type UsageAccount = typeof UsageAccount.Type;
 
 const makeBinaryPathSetting = (fallback: string) =>
   TrimmedString.pipe(
@@ -1428,6 +1446,10 @@ export const ServerSettings = Schema.Struct({
   usagePriceOverrides: Schema.Record(TrimmedNonEmptyString, UsageModelPriceOverride).pipe(
     Schema.withDecodingDefault(Effect.succeed({})),
   ),
+  /** Accounts by name, each the connections the user confirmed share it. */
+  usageAccounts: Schema.Record(TrimmedNonEmptyString, UsageAccount).pipe(
+    Schema.withDecodingDefault(Effect.succeed({})),
+  ),
 });
 export type ServerSettings = typeof ServerSettings.Type;
 
@@ -1738,6 +1760,10 @@ export const ServerSettingsPatch = Schema.Struct({
   /** Each entry replaces one model's rates; `null` restores automatic pricing. */
   usagePriceOverrides: Schema.optionalKey(
     Schema.Record(TrimmedNonEmptyString, Schema.NullOr(UsageModelPriceOverride)),
+  ),
+  /** Each entry replaces one account's connections; `null` removes the account. */
+  usageAccounts: Schema.optionalKey(
+    Schema.Record(TrimmedNonEmptyString, Schema.NullOr(UsageAccount)),
   ),
 });
 export type ServerSettingsPatch = typeof ServerSettingsPatch.Type;

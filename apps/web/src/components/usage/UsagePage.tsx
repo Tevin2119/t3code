@@ -61,9 +61,10 @@ import {
 import { WorkspacePageContainer } from "../WorkspacePageContainer";
 import { WorkspacePageHeader } from "../WorkspacePageHeader";
 import {
+  AccountBreakdownTable,
   hasUsageFilter,
   NO_USAGE_FILTER,
-  ProviderBreakdownTable,
+  UsageAccountsEditor,
   UsageCountedNote,
   UsageFilterBar,
   type UsageFilterState,
@@ -124,6 +125,7 @@ export function UsagePage() {
   const [selectedEnvironmentIds, setSelectedEnvironmentIds] =
     useState<ReadonlySet<EnvironmentId> | null>(null);
   const [usageFilter, setUsageFilter] = useState<UsageFilterState>(NO_USAGE_FILTER);
+  const [editingAccounts, setEditingAccounts] = useState(false);
   const { days: windowDays, window } = windowSelection;
   const isPast24Hours = windowDays === 1;
   const { merged, all, environments, selectedEnvironments, isPending, isPartial, refresh } =
@@ -400,7 +402,21 @@ export function UsagePage() {
             ) : (
               <>
                 <section className="flex flex-col gap-2">
-                  <UsageFilterBar all={all} filter={usageFilter} onChange={setUsageFilter} />
+                  <UsageFilterBar
+                    all={all}
+                    filter={usageFilter}
+                    onChange={setUsageFilter}
+                    onEditAccounts={() => setEditingAccounts(true)}
+                  />
+                  {editingAccounts ? (
+                    <UsageAccountsEditor
+                      all={all}
+                      environments={selectedEnvironments.filter(
+                        (environment) => environment.summary !== null,
+                      )}
+                      onOpenChange={setEditingAccounts}
+                    />
+                  ) : null}
                   <UsageCountedNote environments={selectedEnvironments} />
                 </section>
                 <section className="grid gap-6 lg:grid-cols-[minmax(0,18rem)_minmax(0,1fr)]">
@@ -537,13 +553,17 @@ export function UsagePage() {
                     </p>
                   ) : null}
                   {breakdown === "provider" ? (
-                    <ProviderBreakdownTable
-                      rows={merged.modelProviders}
-                      onChoose={(modelProvider) =>
-                        setUsageFilter({
-                          ...usageFilter,
-                          modelProviders: new Set([modelProvider ?? ""]),
-                        })
+                    <AccountBreakdownTable
+                      rows={merged.accounts}
+                      onChoose={(row) =>
+                        setUsageFilter(
+                          row.account !== null
+                            ? { ...usageFilter, accounts: new Set([row.account]) }
+                            : {
+                                ...usageFilter,
+                                modelProviders: new Set([row.modelProvider ?? ""]),
+                              },
+                        )
                       }
                     />
                   ) : breakdown === "model" ? (
