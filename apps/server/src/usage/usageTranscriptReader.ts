@@ -174,7 +174,8 @@ export async function listTranscriptFiles(
  */
 export function sessionIdFromPath(filePath: string, provider: UsageProviderKind): string {
   if (provider === "kimi") {
-    const folders = NodePath.dirname(filePath).split(/[\\/]/);
+    // Split by hand: a path written on Windows keeps its backslashes on any host.
+    const folders = filePath.split(/[\\/]/).slice(0, -1);
     const session = folders.findLast((folder) => folder.startsWith("session_"));
     return session ?? folders.at(-1) ?? "";
   }
