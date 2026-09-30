@@ -405,6 +405,8 @@ interface BoardState {
   readonly showDetail: boolean;
   /** Lanes a person folded or opened by hand. A lane not named here is folded while it is empty. */
   readonly laneFolds: Readonly<Record<string, boolean>>;
+  /** Groups of the Board's sidebar a person folded (true) or opened (false) by hand. */
+  readonly panelFolds: Readonly<Record<string, boolean>>;
   readonly setPerson: (person: string) => void;
   readonly setView: (view: string) => void;
   readonly setFilters: (patch: Partial<BoardFilters>) => void;
@@ -412,6 +414,7 @@ interface BoardState {
   readonly setGrouping: (grouping: BoardGrouping) => void;
   readonly setShowDetail: (showDetail: boolean) => void;
   readonly foldLane: (lane: string, folded: boolean) => void;
+  readonly foldPanel: (group: string, folded: boolean) => void;
 }
 
 /** How this person looks at the board. Kept across reloads, on this device. */
@@ -424,6 +427,7 @@ export const useBoardStore = create<BoardState>()(
       grouping: "none",
       showDetail: false,
       laneFolds: {},
+      panelFolds: {},
       setPerson: (person) => set({ person: person.slice(0, 60) }),
       setView: (view) => set({ view }),
       setFilters: (patch) => set((state) => ({ filters: { ...state.filters, ...patch } })),
@@ -432,6 +436,8 @@ export const useBoardStore = create<BoardState>()(
       setShowDetail: (showDetail) => set({ showDetail }),
       foldLane: (lane, folded) =>
         set((state) => ({ laneFolds: { ...state.laneFolds, [lane]: folded } })),
+      foldPanel: (group, folded) =>
+        set((state) => ({ panelFolds: { ...state.panelFolds, [group]: folded } })),
     }),
     {
       name: "t3code:delivery-board:v1",
@@ -448,6 +454,7 @@ export const useBoardStore = create<BoardState>()(
         grouping: state.grouping,
         showDetail: state.showDetail,
         laneFolds: state.laneFolds,
+        panelFolds: state.panelFolds,
       }),
     },
   ),

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import { parseCard } from "./delivery";
 import {
+  activeFilters,
   ageLabel,
   fileKindOf,
   filterLanes,
@@ -235,5 +236,42 @@ describe("what is typed", () => {
     expect(isSendKey(key({ metaKey: true }), "mod-enter-multiline", "two\nlines")).toBe(true);
     expect(isSendKey(key({ isComposing: true }), "enter", "x")).toBe(false);
     expect(isSendKey(key({ key: "a" }), "enter", "x")).toBe(false);
+  });
+});
+
+describe("filtering by column", () => {
+  const lanes = [
+    { lane: "intake", title: "Intake", cards: [card({ lane: "intake" })] },
+    {
+      lane: "human-review",
+      title: "Your sign-off",
+      cards: [card({ lane: "human-review", number: 1002 })],
+    },
+  ] as unknown as Parameters<typeof filterLanes>[0];
+
+  it("shows only the columns that were chosen, and a card only when its column is one of them", () => {
+    const shown = filterLanes(lanes, { ...NO_FILTERS, lanes: ["human-review"] });
+    expect(shown.map((lane) => lane.lane)).toEqual(["human-review"]);
+    expect(matchesCard(card({ lane: "intake" }), { ...NO_FILTERS, lanes: ["human-review"] })).toBe(
+      false,
+    );
+    expect(
+      matchesCard(card({ lane: "human-review" }), { ...NO_FILTERS, lanes: ["human-review"] }),
+    ).toBe(true);
+  });
+
+  it("says every filter that is on, by the names of the board, each with what turns it off", () => {
+    const on = activeFilters(
+      { ...NO_FILTERS, lanes: ["human-review", "intake"], waiting: true, priority: "high" },
+      (lane) => (lane === "human-review" ? "Your sign-off" : "Intake"),
+    );
+    expect(on.map((item) => item.label)).toEqual([
+      "Waiting on you",
+      "Your sign-off",
+      "Intake",
+      "High priority",
+    ]);
+    expect(on.find((item) => item.label === "Your sign-off")?.clear).toEqual({ lanes: ["intake"] });
+    expect(activeFilters(NO_FILTERS, (lane) => lane)).toEqual([]);
   });
 });

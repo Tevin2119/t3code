@@ -57,6 +57,10 @@ export const ComposerPendingApprovalPanel = memo(function ComposerPendingApprova
       >
         {approval.detail || fallbackLabel}
       </Detail>
+      <span className="text-[10px] text-muted-foreground" data-approval-scope>
+        Allows or refuses this one action of the harness. It does not approve a task or its work:
+        that is decided on the task, on the Board.
+      </span>
     </span>
   );
 });

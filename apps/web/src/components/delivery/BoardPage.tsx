@@ -55,6 +55,7 @@ import {
   WaitingOn,
 } from "./taskParts";
 import { TaskWorkspace } from "./TaskWorkspace";
+import { ActiveFilterChips, LaneFilterMenu } from "./BoardFilterControls";
 
 const CardFace = memo(function CardFace(props: {
   readonly card: DeliveryCard;
@@ -399,6 +400,17 @@ export function BoardPage() {
   });
   const parsed = useMemo(() => parseBoard(board.body), [board.body]);
   const lanes = useMemo(() => filterLanes(parsed?.lanes ?? [], filters), [filters, parsed]);
+  // The columns as the engine names them, with what each holds before any filter.
+  const laneChoices = useMemo(
+    () =>
+      (parsed?.lanes ?? []).map((lane) => ({
+        lane: lane.lane,
+        title: lane.title,
+        count: lane.cards.length,
+      })),
+    [parsed],
+  );
+  const laneTitle = (lane: string) => laneChoices.find((item) => item.lane === lane)?.title ?? lane;
   const stale = useStaleReading(board.readAt);
   const open = (task: string | null) =>
     void navigate({ to: "/board", search: task ? { task } : {} });
@@ -485,12 +497,11 @@ export function BoardPage() {
                 ))}
               </SelectPopup>
             </Select>
-            {hasFilters(filters) ? (
-              <Button size="xs" variant="ghost" onClick={clearFilters} data-board-clear-filters>
-                <XIcon />
-                {shown} shown, clear
-              </Button>
-            ) : null}
+            <LaneFilterMenu
+              lanes={laneChoices}
+              chosen={filters.lanes}
+              onChange={(chosen) => setFilters({ lanes: chosen })}
+            />
             {parsed && parsed.waiting > 0 ? (
               <Button
                 size="xs"
@@ -526,6 +537,16 @@ export function BoardPage() {
             </div>
           </div>
         </WorkspacePageHeader>
+        {hasFilters(filters) ? (
+          <ActiveFilterChips
+            className="px-4 pt-2"
+            filters={filters}
+            laneTitle={laneTitle}
+            shown={shown}
+            onClear={(patch) => setFilters(patch)}
+            onReset={clearFilters}
+          />
+        ) : null}
 
         {!enabled ? (
           <p className="p-6 text-sm text-muted-foreground">

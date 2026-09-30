@@ -34,6 +34,7 @@ import {
   type TimelineEntry,
 } from "../../lib/delivery";
 import {
+  COMPOSER_EFFECT,
   COMPOSER_KIND_HELP,
   COMPOSER_KIND_LABEL,
   isSendKey,
@@ -272,14 +273,19 @@ function Composer(props: {
   const [problem, setProblem] = useState<string | null>(null);
 
   const waits = task.questions.at(-1) ?? null;
-  // While a question waits, what is written is the answer to it unless the person says otherwise.
-  const replying = props.replyTo ?? null;
-  const kind: ComposerKind = replying ? "answer" : chosen;
+  // Answering is chosen by pressing Answer on the question, or here while a question waits.
+  const replying =
+    props.replyTo ??
+    (chosen === "answer" && waits ? { seq: waits.seq, by: waits.by, text: waits.text } : null);
+  const kind: ComposerKind = replying ? "answer" : chosen === "answer" ? "message" : chosen;
   // A chat has nothing that is asked of the team to change: what is written is the conversation.
   const chat = task.workflow === "chat";
-  const kinds: ReadonlyArray<ComposerKind> = chat
-    ? ["message", "status", "note"]
-    : ["message", "status", "change", "note"];
+  const kinds: ReadonlyArray<ComposerKind> = [
+    ...(waits ? (["answer"] as const) : []),
+    ...(chat
+      ? (["message", "note", "status"] as const)
+      : (["message", "note", "change", "status"] as const)),
+  ];
   const help = (item: ComposerKind) =>
     chat && item === "message"
       ? "Read by the seat that leads the chat, which answers, or brings in the seats it concerns. Each answers under its own name."
@@ -318,6 +324,7 @@ function Composer(props: {
     setChosen("message");
     props.onReplyTo(null);
   };
+  const effect = COMPOSER_EFFECT[kind];
 
   return (
     <div
@@ -353,7 +360,8 @@ function Composer(props: {
         </p>
       ) : waits ? (
         <p className="text-xs text-amber-700 dark:text-amber-300">
-          A question of {waits.by} waits for you. Press Answer on it to reply.
+          A question of {waits.by} waits for you. Choose Answer a question below, or press Answer on
+          it.
         </p>
       ) : null}
       <Textarea
@@ -396,19 +404,19 @@ function Composer(props: {
         >
           <PaperclipIcon />
         </AttachButton>
-        {replying ? (
+        {props.replyTo ? (
           <Badge size="sm" variant="outline">
             {COMPOSER_KIND_LABEL.answer}
           </Badge>
         ) : (
-          <Select value={chosen} onValueChange={(value) => setChosen(value as ComposerKind)}>
+          <Select value={kind} onValueChange={(value) => setChosen(value as ComposerKind)}>
             <SelectTrigger
               aria-label="What this message is"
               size="compact"
               variant="ghost"
               className="w-auto min-w-0"
             >
-              <SelectValue>{COMPOSER_KIND_LABEL[chosen]}</SelectValue>
+              <SelectValue>{COMPOSER_KIND_LABEL[kind]}</SelectValue>
             </SelectTrigger>
             <SelectPopup alignItemWithTrigger={false}>
               {kinds.map((item) => (
@@ -422,9 +430,7 @@ function Composer(props: {
             </SelectPopup>
           </Select>
         )}
-        <span className="hidden min-w-0 flex-1 truncate text-[11px] text-muted-foreground md:block">
-          {help(kind)}
-        </span>
+        <span className="min-w-0 flex-1" />
         <Tooltip>
           <TooltipTrigger
             render={
@@ -445,7 +451,72 @@ function Composer(props: {
           </TooltipPopup>
         </Tooltip>
       </div>
+      {/* What sending does, on every screen: whether the work moves because of it. */}
+      <p
+        className={cn(
+          "flex items-start gap-1.5 text-[11px]",
+          effect.moves ? "text-amber-700 dark:text-amber-300" : "text-muted-foreground",
+        )}
+        data-task-composer-effect={effect.moves ? "moves" : "records"}
+      >
+        <span className="shrink-0 font-medium">
+          {effect.moves ? "Moves the work:" : "Changes nothing:"}
+        </span>
+        <span className="min-w-0">{effect.label}</span>
+      </p>
+      <p className="text-[10px] text-muted-foreground">{help(kind)}</p>
     </div>
+  );
+}
+
+/**
+ * The decisions a person makes on the task: approve what was tested, send it back with a
+ * reason, start or submit it. Kept apart from the composer, and below every tab, so that
+ * what is written is never taken for a decision and the buttons are in reach on a phone.
+ */
+function DecisionBar(props: {
+  readonly task: TaskView;
+  readonly actions: ReadonlyArray<string>;
+  readonly busy: boolean;
+  readonly onAction: (action: string) => void;
+}) {
+  if (props.actions.length === 0) return null;
+  const deciding = props.actions.some((action) => action === "approve" || action === "reject");
+  return (
+    <section
+      className="flex flex-col gap-2 border-t border-border bg-muted/30 px-3 py-2 pb-[calc(env(safe-area-inset-bottom)+0.5rem)]"
+      aria-label="Your decision"
+      data-task-decisions
+    >
+      <p className="text-xs font-medium">
+        {deciding ? "Your decision" : "What you can do next"}
+        {deciding ? (
+          <span className="font-normal text-muted-foreground">
+            {" "}
+            Messages never count as a decision.
+          </span>
+        ) : null}
+      </p>
+      <div className="grid grid-cols-1 gap-2 sm:flex sm:flex-wrap">
+        {props.actions.map((action) => (
+          <div key={action} className="flex min-w-0 flex-col gap-0.5 sm:max-w-80">
+            <Button
+              size="sm"
+              variant={action === "reject" ? "outline" : "default"}
+              className="w-full justify-center"
+              disabled={props.busy}
+              onClick={() => props.onAction(action)}
+              data-task-action={action}
+            >
+              {actionLabel(action, props.task.card)}
+            </Button>
+            <span className="text-[10px] text-muted-foreground">
+              {actionHelp(action, props.task.card)}
+            </span>
+          </div>
+        ))}
+      </div>
+    </section>
   );
 }
 
@@ -1117,26 +1188,6 @@ export function TaskWorkspace(props: {
               </>
             ) : null}
             <div className="ml-auto flex items-center gap-1">
-              {task && primary
-                ? primary.map((action) => (
-                    <Tooltip key={action}>
-                      <TooltipTrigger
-                        render={
-                          <Button
-                            size="xs"
-                            variant={action === "reject" ? "outline" : "default"}
-                            disabled={actions.busy}
-                            onClick={() => actions.run(task.card, action)}
-                            data-task-action={action}
-                          />
-                        }
-                      >
-                        {actionLabel(action, task.card)}
-                      </TooltipTrigger>
-                      <TooltipPopup side="bottom">{actionHelp(action, task.card)}</TooltipPopup>
-                    </Tooltip>
-                  ))
-                : null}
               {task && others.length > 0 ? (
                 <Menu>
                   <MenuTrigger
@@ -1227,6 +1278,12 @@ export function TaskWorkspace(props: {
                 <Info environmentId={props.environmentId} task={task} onChanged={read.refresh} />
               </div>
             </div>
+            <DecisionBar
+              task={task}
+              actions={primary ?? []}
+              busy={actions.busy}
+              onAction={(action) => actions.run(task.card, action)}
+            />
           </>
         ) : read.error ? null : (
           <p className="p-6 text-sm text-muted-foreground">

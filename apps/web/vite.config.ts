@@ -1,3 +1,5 @@
+// @effect-diagnostics nodeBuiltinImport:off - the build config runs git once, at build time, to name the build.
+import * as NodeChildProcess from "node:child_process";
 import * as NodeZlib from "node:zlib";
 
 import react, { reactCompilerPreset } from "@vitejs/plugin-react";
@@ -41,6 +43,45 @@ const configuredRelayTracingDataset = repoEnv.VITE_RELAY_OTLP_TRACES_DATASET?.tr
 const configuredRelayTracingToken = repoEnv.VITE_RELAY_OTLP_TRACES_TOKEN?.trim() || "";
 const configuredHostedAppChannel = process.env.VITE_HOSTED_APP_CHANNEL?.trim() || "";
 const configuredAppVersion = process.env.APP_VERSION?.trim() || pkg.version;
+
+/**
+ * Which build this is: the commit it was built from, marked when the working tree had changes
+ * that are not in it, and when it was built. Shown in the app and written beside it as
+ * build-info.json, so that any device can tell which build a server serves.
+ */
+function readBuildIdentity() {
+  const git = (args: string[]) => {
+    try {
+      return NodeChildProcess.execFileSync("git", args, {
+        cwd: import.meta.dirname,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+      }).trim();
+    } catch {
+      return "";
+    }
+  };
+  const commit = git(["rev-parse", "--short=9", "HEAD"]) || "unknown";
+  const changed =
+    git(["status", "--porcelain", "--untracked-files=no", "--", ".", "../../packages"]).length > 0;
+  return { commit, changed, builtAt: new Date().toISOString() };
+}
+const buildIdentity = readBuildIdentity();
+const buildIdentityLabel = `${buildIdentity.commit}${buildIdentity.changed ? "+changes" : ""} · ${buildIdentity.builtAt.slice(0, 16).replace("T", " ")} UTC`;
+
+function buildInfoPlugin(): Plugin {
+  return {
+    name: "t3code-build-info",
+    apply: "build",
+    generateBundle() {
+      this.emitFile({
+        type: "asset",
+        fileName: "build-info.json",
+        source: `${JSON.stringify({ ...buildIdentity, version: configuredAppVersion }, null, 2)}\n`,
+      });
+    },
+  };
+}
 const configuredHostedAppUrl = (() => {
   const explicitHostedAppUrl = process.env.VITE_HOSTED_APP_URL?.trim();
   if (explicitHostedAppUrl) {
@@ -157,6 +198,7 @@ export default defineConfig(() => {
   return {
     assetsInclude: ["**/*.wasm"],
     plugins: [
+      buildInfoPlugin(),
       devCompressionPlugin(),
       thirdPartyLicensesPlugin({
         bundleName: "web",
@@ -216,6 +258,7 @@ export default defineConfig(() => {
       "import.meta.env.VITE_HOSTED_APP_URL": JSON.stringify(configuredHostedAppUrl ?? ""),
       "import.meta.env.VITE_HOSTED_APP_CHANNEL": JSON.stringify(configuredHostedAppChannel),
       "import.meta.env.APP_VERSION": JSON.stringify(configuredAppVersion),
+      "import.meta.env.APP_BUILD": JSON.stringify(buildIdentityLabel),
     },
     resolve: {
       tsconfigPaths: true,

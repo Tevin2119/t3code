@@ -54,6 +54,8 @@ export interface BoardFilters {
   readonly owner: string | null;
   /** Only what waits for a person. */
   readonly waiting: boolean;
+  /** Only these columns of the board, by the names the engine gives them. None: every column. */
+  readonly lanes: ReadonlyArray<string>;
 }
 
 export const NO_FILTERS: BoardFilters = {
@@ -63,6 +65,7 @@ export const NO_FILTERS: BoardFilters = {
   tag: null,
   owner: null,
   waiting: false,
+  lanes: [],
 };
 
 export const hasFilters = (filters: BoardFilters): boolean =>
@@ -71,7 +74,8 @@ export const hasFilters = (filters: BoardFilters): boolean =>
   filters.team !== null ||
   filters.tag !== null ||
   filters.owner !== null ||
-  filters.waiting;
+  filters.waiting ||
+  filters.lanes.length > 0;
 
 /**
  * Whether a card is kept by a search. A number, with or without `#`, finds
@@ -84,6 +88,7 @@ export function matchesCard(card: DeliveryCard, filters: BoardFilters): boolean 
   if (filters.tag && !card.tags.includes(filters.tag)) return false;
   if (filters.owner && card.owner.toLowerCase() !== filters.owner.toLowerCase()) return false;
   if (filters.waiting && card.waitingOn !== "person") return false;
+  if (filters.lanes.length > 0 && !filters.lanes.includes(card.lane)) return false;
   const q = filters.q.trim().toLowerCase();
   if (!q) return true;
   const number = /^#?(\d+)$/.exec(q)?.[1];
@@ -114,10 +119,51 @@ export function filterLanes(
   filters: BoardFilters,
 ): ReadonlyArray<DeliveryLane> {
   if (!hasFilters(filters)) return lanes;
-  return lanes.map((lane) => ({
+  // Columns that were not chosen are not shown at all.
+  const shown =
+    filters.lanes.length > 0 ? lanes.filter((lane) => filters.lanes.includes(lane.lane)) : lanes;
+  return shown.map((lane) => ({
     ...lane,
     cards: lane.cards.filter((card) => matchesCard(card, filters)),
   }));
+}
+
+/** A filter that is on, as a person reads it, with what turns it off. */
+export interface ActiveFilter {
+  readonly key: string;
+  readonly label: string;
+  readonly clear: Partial<BoardFilters>;
+}
+
+/** Every filter that is on, in words, so that what is hidden is never a surprise. */
+export function activeFilters(
+  filters: BoardFilters,
+  laneTitle: (lane: string) => string,
+): ReadonlyArray<ActiveFilter> {
+  const found: ActiveFilter[] = [];
+  const q = filters.q.trim();
+  if (q) found.push({ key: "q", label: `"${q}"`, clear: { q: "" } });
+  if (filters.waiting)
+    found.push({ key: "waiting", label: "Waiting on you", clear: { waiting: false } });
+  for (const lane of filters.lanes) {
+    found.push({
+      key: `lane:${lane}`,
+      label: laneTitle(lane),
+      clear: { lanes: filters.lanes.filter((item) => item !== lane) },
+    });
+  }
+  if (filters.priority)
+    found.push({
+      key: "priority",
+      label: `${PRIORITY_LABEL[filters.priority]} priority`,
+      clear: { priority: null },
+    });
+  if (filters.team)
+    found.push({ key: "team", label: `Team ${filters.team}`, clear: { team: null } });
+  if (filters.tag) found.push({ key: "tag", label: `#${filters.tag}`, clear: { tag: null } });
+  if (filters.owner)
+    found.push({ key: "owner", label: `Owner ${filters.owner}`, clear: { owner: null } });
+  return found;
 }
 
 export const BOARD_GROUPINGS = ["none", "priority", "team", "owner", "tag"] as const;
@@ -307,11 +353,37 @@ export const FLOW_LABEL: Readonly<Record<string, string>> = {
 export type ComposerKind = "message" | "status" | "change" | "note" | "answer";
 
 export const COMPOSER_KIND_LABEL: Record<ComposerKind, string> = {
-  message: "Message to the team",
-  answer: "Answer",
+  message: "Discuss with the team",
+  answer: "Answer a question",
   status: "Ask for status",
-  change: "Change what is asked",
-  note: "Note for the record",
+  change: "Request a requirements change",
+  note: "Add a note",
+};
+
+/**
+ * What sending does, said beside the composer on every screen. `moves` is whether the work
+ * of the task may move because of it. A message is never an approval: that is a decision of
+ * its own, made with the buttons for it.
+ */
+export const COMPOSER_EFFECT: Record<
+  ComposerKind,
+  { readonly label: string; readonly moves: boolean }
+> = {
+  message: {
+    label: "Asks the team for a reply. Nothing is approved or changed by it.",
+    moves: false,
+  },
+  answer: {
+    label: "Answers the question that waits. The work that waited for it goes on.",
+    moves: true,
+  },
+  status: { label: "Answered from the record at once. Nothing changes.", moves: false },
+  change: {
+    label:
+      "Changes what is asked: a new revision, earlier approvals end, and the task goes back to triage.",
+    moves: true,
+  },
+  note: { label: "Recorded only. Nobody is asked to do anything.", moves: false },
 };
 
 export const COMPOSER_KIND_HELP: Record<ComposerKind, string> = {
