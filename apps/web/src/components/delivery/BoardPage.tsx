@@ -506,7 +506,11 @@ export function BoardPage() {
       return;
     }
     // What was shown is gone: the Board shows what is always there.
-    if (dialog.kind === "board" && dialog.editing.id === boardSet) setBoardSet("unsorted");
+    if (dialog.kind === "board") {
+      const gone = dialog.editing.id;
+      setKnownBoards((boards) => boards.filter((item) => item.id !== gone));
+      if (gone === boardSet) setBoardSet("unsorted");
+    }
     if (dialog.kind === "view" && dialog.editing.id === view) setView("development");
     setDialog(null);
     board.refresh();

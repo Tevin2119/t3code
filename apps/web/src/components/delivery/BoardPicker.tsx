@@ -486,9 +486,16 @@ export function BoardDialog(props: {
             <p className="text-xs text-muted-foreground" data-board-dialog-why>
               {!repository
                 ? "Choose the repository its tasks are done in."
-                : chosen && chosen.branches.length === 0
-                  ? `${chosen.title} has no branch to start work from.`
-                  : "Choose the branch work starts from."}
+                : chosen && !chosen.ok
+                  ? `${chosen.title}: ${chosen.problem ?? "it cannot be read"}.`
+                  : chosen && chosen.branches.length === 0
+                    ? `${chosen.title} has no branch to start work from.`
+                    : "Choose the branch work starts from."}
+            </p>
+          ) : null}
+          {props.kind === "view" && (!name || lanes.length === 0) ? (
+            <p className="text-xs text-muted-foreground" data-board-dialog-why>
+              {!name ? "Give the view a name." : "Choose at least one column."}
             </p>
           ) : null}
           {props.problem ? <p className="text-xs text-warning">{props.problem}</p> : null}
