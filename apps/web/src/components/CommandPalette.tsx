@@ -2046,12 +2046,12 @@ function OpenCommandPaletteDialog(props: {
     });
     actionItems.push({
       kind: "action",
-      value: "action:orchestrator",
-      searchTerms: ["orchestrator", "team", "council", "delivery", "roster"],
-      title: "Open orchestrator",
+      value: "action:new-task",
+      searchTerms: ["new task", "task", "orchestrator", "team", "delivery", "board"],
+      title: "New task",
       icon: <UsersIcon className={ITEM_ICON_CLASS} />,
       run: async () => {
-        await navigate({ to: "/orchestrator" });
+        await navigate({ to: "/board", search: { new: true } });
       },
     });
   }

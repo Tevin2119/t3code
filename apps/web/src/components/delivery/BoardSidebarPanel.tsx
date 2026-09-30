@@ -159,7 +159,7 @@ function Section(props: {
 }
 
 /**
- * The sidebar while the Board or the Orchestrator is open: tasks in place of
+ * The sidebar while the Board is open: tasks in place of
  * threads. A task is started, found and opened from here, and what waits for
  * a person is at the top.
  */
@@ -174,7 +174,6 @@ export function BoardSidebarPanel() {
       search: at.search as { task?: string; thread?: string },
     }),
   });
-  const onOrchestrator = location.pathname === "/orchestrator";
   const selected = location.search.task ?? location.search.thread ?? null;
   const filters = useBoardStore((state) => state.filters);
   const setFilters = useBoardStore((state) => state.setFilters);
@@ -228,11 +227,7 @@ export function BoardSidebarPanel() {
   };
   const open = (card: DeliveryCard) => {
     close();
-    void navigate(
-      onOrchestrator
-        ? { to: "/orchestrator", search: { thread: card.id } }
-        : { to: "/board", search: { task: card.id } },
-    );
+    void navigate({ to: "/board", search: { task: card.id } });
   };
   // Until the tasks are read, an empty list says nothing about the board.
   const unread =

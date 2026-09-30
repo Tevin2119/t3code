@@ -140,7 +140,7 @@ export function TeamProfilePanel(props: {
             <p>Memory scope: {profile.memoryScope}.</p>
             <p className="text-muted-foreground">
               A single chat in this team is one harness with the team's setup. It runs no stages and
-              no QA gate: those belong to a workflow started through the Orchestrator.
+              no QA gate: those belong to a workflow started with New task.
             </p>
           </Block>
         ) : null}

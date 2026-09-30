@@ -162,7 +162,7 @@ export function OrchestratorComposerControls(props: {
       onPromptCleared();
       leave(threadId);
       // What is written next is written on the task, in its own composer.
-      void navigate({ to: "/orchestrator", search: { thread: id } });
+      void navigate({ to: "/board", search: { task: id } });
     });
   }, [act, blocked, leave, navigate, once, onPromptCleared, person, save, threadId]);
 

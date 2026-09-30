@@ -1098,26 +1098,9 @@ function Info(props: {
 
       <section className="flex flex-col gap-1.5" data-task-related>
         <h3 className="text-xs font-medium text-muted-foreground">Where else it shows</h3>
-        <Row label={props.from === "Board" ? "Orchestrator" : "Board"}>
-          <button
-            type="button"
-            className="text-primary underline-offset-2 hover:underline"
-            data-task-related-open={props.from === "Board" ? "orchestrator" : "board"}
-            onClick={() =>
-              void navigate(
-                props.from === "Board"
-                  ? { to: "/orchestrator", search: { thread: task.id } }
-                  : { to: "/board", search: { task: task.id } },
-              )
-            }
-          >
-            {props.from === "Board" ? "Open its conversation" : "Open its card"}
-          </button>
-        </Row>
         <p className="text-[11px] text-muted-foreground">
-          The task and its Orchestrator conversation are one record: what is said in either is said
-          on the task. A thread in the chat list is a conversation of its own; it becomes a task
-          only when you create one from it.
+          What is said on this task is its conversation with the team. A thread in the chat list is
+          a conversation of its own; it becomes a task only when you create one from it.
         </p>
         {task.source ? (
           <Row label="Made from">

@@ -1,4 +1,4 @@
-import { ArrowLeftIcon, ChartNoAxesColumnIcon, SettingsIcon, UsersIcon } from "lucide-react";
+import { ArrowLeftIcon, ChartNoAxesColumnIcon, SettingsIcon } from "lucide-react";
 import type { ReactNode } from "react";
 import { memo, useCallback } from "react";
 import { Link, useCanGoBack, useLocation, useNavigate } from "@tanstack/react-router";
@@ -146,11 +146,9 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
               ? "pull-requests"
               : location.pathname === "/board"
                 ? "board"
-                : location.pathname === "/orchestrator"
-                  ? "orchestrator"
-                  : location.pathname === "/profiles"
-                    ? "profiles"
-                    : null,
+                : location.pathname === "/profiles"
+                  ? "profiles"
+                  : null,
   });
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const deliveryEnabled = useDeliveryEnabled(primaryEnvironmentId);
@@ -187,10 +185,6 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
   const handleBoardClick = useCallback(() => {
     closeMobileSidebar();
     void navigate({ to: "/board" });
-  }, [closeMobileSidebar, navigate]);
-  const handleOrchestratorClick = useCallback(() => {
-    closeMobileSidebar();
-    void navigate({ to: "/orchestrator" });
   }, [closeMobileSidebar, navigate]);
 
   const handleBackClick = useCallback(() => {
@@ -231,14 +225,7 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
             onClick={handleUsageClick}
           />
           {deliveryEnabled ? (
-            <>
-              <SidebarUtilityItem icon={<BoardIcon />} label="Board" onClick={handleBoardClick} />
-              <SidebarUtilityItem
-                icon={<UsersIcon />}
-                label="Orchestrator"
-                onClick={handleOrchestratorClick}
-              />
-            </>
+            <SidebarUtilityItem icon={<BoardIcon />} label="Board" onClick={handleBoardClick} />
           ) : null}
         </>
       )}

@@ -11,7 +11,7 @@ const PARTS: ReadonlyArray<readonly [string, string]> = [
   ],
   [
     "Task",
-    "A card on the Board: work given to a team. It is made by Start in the Orchestrator, by New task, or by the engine from a finding. It keeps what was asked, said and decided.",
+    "A card on the Board: work given to a team. It is made by New task (on the Board, in the sidebar or from the command palette), from a conversation, or by the engine from a finding, and goes on the board you choose. It keeps what was asked, said and decided.",
   ],
   [
     "Flow",

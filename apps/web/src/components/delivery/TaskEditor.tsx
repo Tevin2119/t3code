@@ -79,6 +79,9 @@ interface Form {
   readonly seats: Readonly<Record<string, SeatChoice>>;
 }
 
+/** The value of the board choice for a task on no board. */
+const NO_BOARD = "__no_board__";
+
 const EMPTY: Form = {
   title: "",
   text: "",
@@ -180,6 +183,19 @@ export function TaskEditor(props: {
     });
     setForm({ ...EMPTY, title: made.title, text: made.text });
   }
+  // The board the task goes on: the one chosen on the Board if it is a person's own, else none.
+  const boardsRead = useDeliveryRead(props.environmentId, "/api/boards");
+  const boards = useMemo(
+    () =>
+      (Array.isArray(boardsRead.body) ? boardsRead.body : []).flatMap((item: unknown) =>
+        item && typeof item === "object" && "id" in item && "title" in item
+          ? [{ id: String(item.id), title: String(item.title) }]
+          : [],
+      ),
+    [boardsRead.body],
+  );
+  const [boardChoice, setBoardChoice] = useState<string | null>(null);
+  const boardNow = boardChoice ?? (saved ? (saved.card.set ?? "") : (props.board?.id ?? ""));
   const [busy, setBusy] = useState<"save" | "submit" | null>(null);
   const working = useRef(false);
   const [problems, setProblems] = useState<ReadonlyArray<string>>([]);
@@ -227,7 +243,7 @@ export function TaskEditor(props: {
     by: person,
     // Where it came from goes with it, so the task and the conversation lead to each other.
     ...(conversationRef && !props.taskId ? { origin: `thread:${props.fromConversation}` } : {}),
-    ...(props.board && !props.taskId ? { board: props.board.id } : {}),
+    ...(!props.taskId && boardNow ? { board: boardNow } : {}),
   });
 
   /** Saves the draft and answers with its id, or null when the engine refused. */
@@ -248,6 +264,16 @@ export function TaskEditor(props: {
     if (!task) {
       setProblems(["The delivery engine answered with something that is not a task."]);
       return null;
+    }
+    if (props.taskId && boardChoice !== null && boardChoice !== (saved?.card.set ?? "")) {
+      const moved = await act(`/api/tasks/${task.id}/board`, {
+        board: boardChoice || null,
+        by: person,
+      });
+      if (!moved.ok) {
+        setProblems([moved.why]);
+        return null;
+      }
     }
     setClean(form);
     taskRead.refresh();
@@ -357,14 +383,7 @@ export function TaskEditor(props: {
             <InfoPopover label="What Submit does" marker={{ "data-delivery-what-starts": flow }}>
               {whatStartDoes(flow, "Submit")}
             </InfoPopover>
-            {props.board && !props.taskId ? (
-              <span
-                className="text-xs text-muted-foreground"
-                data-task-editor-board={props.board.id}
-              >
-                On the board {props.board.title}
-              </span>
-            ) : null}
+
             {conversationRef ? (
               <p
                 className="order-last w-full rounded-md border border-border bg-muted/40 px-2 py-1.5 text-xs"
@@ -548,6 +567,34 @@ export function TaskEditor(props: {
             </div>
 
             <aside className="flex min-w-0 flex-col gap-4">
+              {saved?.card.set === "qualification" ? null : (
+                <Field label="Board" hint="Where the task shows. It can be moved later.">
+                  <Select
+                    value={boardNow || NO_BOARD}
+                    onValueChange={(value) =>
+                      setBoardChoice(value === NO_BOARD ? "" : String(value))
+                    }
+                  >
+                    <SelectTrigger
+                      aria-label="Board"
+                      size="compact"
+                      data-task-editor-board={boardNow}
+                    >
+                      <SelectValue>
+                        {boards.find((item) => item.id === boardNow)?.title ?? "Not on a board"}
+                      </SelectValue>
+                    </SelectTrigger>
+                    <SelectPopup alignItemWithTrigger={false}>
+                      <SelectItem value={NO_BOARD}>Not on a board</SelectItem>
+                      {boards.map((item) => (
+                        <SelectItem key={item.id} value={item.id}>
+                          {item.title}
+                        </SelectItem>
+                      ))}
+                    </SelectPopup>
+                  </Select>
+                </Field>
+              )}
               <Field label="Team">
                 <Select
                   value={form.team}
