@@ -444,9 +444,13 @@ export function TaskEditor(props: {
       (chosenFlow && chosenFlow.problems.length > 0 ? chosenFlow.problems.join(" ") : null))
     : null;
   // Nothing is submitted without a repository it can be done in: there is no fallback.
-  const targetBlock = taskTarget?.ok
-    ? null
-    : `${targetLine(taskTarget)}. Choose a board bound to a repository first.`;
+  // Both the flag and the repository: a target is usable only when it names one and it works.
+  const targetBlock =
+    taskTarget?.ok && taskTarget.repository
+      ? null
+      : saved && taskTarget?.repository
+        ? `${targetLine(taskTarget)}. The task keeps this target: put it on a board whose repository works and press Use, or fix the repository.`
+        : `${targetLine(taskTarget)}. Choose a board bound to a repository first.`;
   const canSubmit =
     form.text.trim().length > 0 && teamBlock === null && targetBlock === null && busy === null;
   const engineDown = teamsRead.error ?? taskRead.error;

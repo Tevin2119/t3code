@@ -482,6 +482,15 @@ export function BoardDialog(props: {
               ))}
             </div>
           ) : null}
+          {isBoard && !bindingReady ? (
+            <p className="text-xs text-muted-foreground" data-board-dialog-why>
+              {!repository
+                ? "Choose the repository its tasks are done in."
+                : chosen && chosen.branches.length === 0
+                  ? `${chosen.title} has no branch to start work from.`
+                  : "Choose the branch work starts from."}
+            </p>
+          ) : null}
           {props.problem ? <p className="text-xs text-warning">{props.problem}</p> : null}
           {confirming ? (
             <p className="rounded-md border border-border bg-muted/40 p-2 text-xs">
