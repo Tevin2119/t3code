@@ -433,11 +433,15 @@ export function BoardPage() {
   const actions = useTaskActions(active, { onDone: board.refresh });
   const chosenBoard = parsed?.sets.find((item) => item.id === boardSet) ?? null;
   // A board or view that was removed, here or elsewhere, gives way to what is always there.
+  // The engine refuses a board or view it no longer has, so its refusal also sends the Board back.
+  const gone = board.error ?? "";
   useEffect(() => {
+    if (/no board "/.test(gone) && boardSet !== "unsorted") setBoardSet("unsorted");
+    if (/no view "/.test(gone) && view !== "development") setView("development");
     if (!parsed) return;
     if (!parsed.sets.some((item) => item.id === boardSet)) setBoardSet("unsorted");
     if (!parsed.views.some((item) => item.id === view)) setView("development");
-  }, [boardSet, parsed, setBoardSet, setView, view]);
+  }, [boardSet, gone, parsed, setBoardSet, setView, view]);
   const saveDialog = async (input: {
     readonly title: string;
     readonly description: string;
@@ -471,6 +475,9 @@ export function BoardPage() {
       setDialogProblem(result.why);
       return;
     }
+    // What was shown is gone: the Board shows what is always there.
+    if (dialog.kind === "board" && dialog.editing.id === boardSet) setBoardSet("unsorted");
+    if (dialog.kind === "view" && dialog.editing.id === view) setView("development");
     setDialog(null);
     board.refresh();
   };
