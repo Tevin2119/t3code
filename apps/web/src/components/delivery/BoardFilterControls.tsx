@@ -6,6 +6,7 @@ import { Button } from "../ui/button";
 import {
   Menu,
   MenuCheckboxItem,
+  MenuGroup,
   MenuGroupLabel,
   MenuItem,
   MenuPopup,
@@ -46,32 +47,35 @@ export function LaneFilterMenu(props: {
           : `${chosen.length} column${chosen.length === 1 ? "" : "s"}`}
       </MenuTrigger>
       <MenuPopup align="start" className="w-64">
-        <MenuGroupLabel>Show only these columns</MenuGroupLabel>
-        {props.lanes.length === 0 ? (
-          <MenuItem disabled>The board has not been read yet</MenuItem>
-        ) : (
-          props.lanes.map((lane) => (
-            <MenuCheckboxItem
-              key={lane.lane}
-              className="grid-cols-[1rem_minmax(0,1fr)]"
-              checked={chosen.includes(lane.lane)}
-              closeOnClick={false}
-              onCheckedChange={(next) =>
-                props.onChange(
-                  next ? [...chosen, lane.lane] : chosen.filter((item) => item !== lane.lane),
-                )
-              }
-              data-board-lane-choice={lane.lane}
-            >
-              <span className="flex min-w-0 items-center gap-2">
-                <span className="min-w-0 flex-1 truncate">{lane.title}</span>
-                <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
-                  {lane.count}
+        {/* A group label needs a MenuGroup around it, or Base UI throws (error 31). */}
+        <MenuGroup>
+          <MenuGroupLabel>Show only these columns</MenuGroupLabel>
+          {props.lanes.length === 0 ? (
+            <MenuItem disabled>The board has not been read yet</MenuItem>
+          ) : (
+            props.lanes.map((lane) => (
+              <MenuCheckboxItem
+                key={lane.lane}
+                className="grid-cols-[1rem_minmax(0,1fr)]"
+                checked={chosen.includes(lane.lane)}
+                closeOnClick={false}
+                onCheckedChange={(next) =>
+                  props.onChange(
+                    next ? [...chosen, lane.lane] : chosen.filter((item) => item !== lane.lane),
+                  )
+                }
+                data-board-lane-choice={lane.lane}
+              >
+                <span className="flex min-w-0 items-center gap-2">
+                  <span className="min-w-0 flex-1 truncate">{lane.title}</span>
+                  <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
+                    {lane.count}
+                  </span>
                 </span>
-              </span>
-            </MenuCheckboxItem>
-          ))
-        )}
+              </MenuCheckboxItem>
+            ))
+          )}
+        </MenuGroup>
         {chosen.length > 0 ? (
           <MenuItem onClick={() => props.onChange([])} data-board-lane-all>
             Show every column
