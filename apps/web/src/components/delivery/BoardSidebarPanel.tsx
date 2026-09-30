@@ -16,7 +16,7 @@ import {
   matchesCard,
   PRIORITY_LABEL,
   queryValue,
-  SET_LABEL,
+  boardSetOf,
 } from "../../lib/deliveryBoard";
 import { cn } from "../../lib/utils";
 import {
@@ -180,7 +180,7 @@ export function BoardSidebarPanel() {
   const setFilters = useBoardStore((state) => state.setFilters);
   const clearFilters = useBoardStore((state) => state.clearFilters);
   const view = useBoardStore((state) => state.view);
-  const boardSet = useBoardStore((state) => state.boardSet);
+  const boardSet = useBoardStore((state) => boardSetOf(state.boardSet));
   const now = useMinuteClock();
 
   const q = filters.q.trim();
@@ -304,12 +304,13 @@ export function BoardSidebarPanel() {
           />
         </span>
 
-        {boardSet !== "pilot" ? (
+        {boardSet !== "unsorted" ? (
           <p
             className="px-1 text-[10px] text-sidebar-muted-foreground"
             data-board-panel-set={boardSet}
           >
-            Showing: {SET_LABEL[boardSet]}. Change it at the top of the Board.
+            Showing: {board?.sets.find((item) => item.id === boardSet)?.title ?? boardSet}. Change
+            it at the top of the Board.
           </p>
         ) : null}
         <Group

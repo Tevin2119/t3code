@@ -13,12 +13,7 @@ import {
   isStaleReading,
   type SeatChoice,
 } from "../lib/delivery";
-import {
-  type BoardSet,
-  NO_FILTERS,
-  type BoardFilters,
-  type BoardGrouping,
-} from "../lib/deliveryBoard";
+import { NO_FILTERS, type BoardFilters, type BoardGrouping } from "../lib/deliveryBoard";
 import { useEnvironmentQuery } from "./query";
 import { useAtomCommand } from "./use-atom-command";
 
@@ -413,8 +408,9 @@ interface BoardState {
   /** Groups of the Board's sidebar a person folded (true) or opened (false) by hand. */
   readonly panelFolds: Readonly<Record<string, boolean>>;
   /** Which tasks the board shows: the pilot's work, the qualification's, or both. */
-  readonly boardSet: BoardSet;
-  readonly setBoardSet: (set: BoardSet) => void;
+  /** The board shown; see boardSetOf. */
+  readonly boardSet: string;
+  readonly setBoardSet: (set: string) => void;
   readonly setPerson: (person: string) => void;
   readonly setView: (view: string) => void;
   readonly setFilters: (patch: Partial<BoardFilters>) => void;
@@ -436,7 +432,7 @@ export const useBoardStore = create<BoardState>()(
       showDetail: false,
       laneFolds: {},
       panelFolds: {},
-      boardSet: "pilot",
+      boardSet: "unsorted",
       setBoardSet: (boardSet) => set({ boardSet }),
       setPerson: (person) => set({ person: person.slice(0, 60) }),
       setView: (view) => set({ view }),

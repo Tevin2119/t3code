@@ -134,6 +134,8 @@ export function TaskEditor(props: {
   readonly onSaved: (taskId: string) => void;
   /** A conversation of the window this new task is made from: `<environment>/<thread>`. */
   readonly fromConversation?: string | null;
+  /** A board of the person's own that is chosen: a new task is filed onto it. */
+  readonly board?: { readonly id: string; readonly title: string } | null;
 }) {
   const person = usePersonName();
   const navigate = useNavigate();
@@ -225,6 +227,7 @@ export function TaskEditor(props: {
     by: person,
     // Where it came from goes with it, so the task and the conversation lead to each other.
     ...(conversationRef && !props.taskId ? { origin: `thread:${props.fromConversation}` } : {}),
+    ...(props.board && !props.taskId ? { board: props.board.id } : {}),
   });
 
   /** Saves the draft and answers with its id, or null when the engine refused. */
@@ -354,6 +357,14 @@ export function TaskEditor(props: {
             <InfoPopover label="What Submit does" marker={{ "data-delivery-what-starts": flow }}>
               {whatStartDoes(flow, "Submit")}
             </InfoPopover>
+            {props.board && !props.taskId ? (
+              <span
+                className="text-xs text-muted-foreground"
+                data-task-editor-board={props.board.id}
+              >
+                On the board {props.board.title}
+              </span>
+            ) : null}
             {conversationRef ? (
               <p
                 className="order-last w-full rounded-md border border-border bg-muted/40 px-2 py-1.5 text-xs"

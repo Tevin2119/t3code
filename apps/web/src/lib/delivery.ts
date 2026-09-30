@@ -754,12 +754,26 @@ export interface DeliveryLane {
 
 export interface DeliveryBoard {
   readonly view: string;
-  readonly views: ReadonlyArray<{ readonly id: string; readonly title: string }>;
+  /** The four views that come with the engine, then a person's own ("own"), with their columns. */
+  readonly views: ReadonlyArray<{
+    readonly id: string;
+    readonly title: string;
+    readonly description: string;
+    readonly kind: string;
+    readonly lanes: ReadonlyArray<string> | null;
+  }>;
   readonly teams: ReadonlyArray<string>;
   readonly lanes: ReadonlyArray<DeliveryLane>;
   /** Which tasks the board shows, and how many each choice holds. */
   readonly set: string;
-  readonly sets: ReadonlyArray<{ readonly id: string; readonly count: number }>;
+  readonly sets: ReadonlyArray<{
+    readonly id: string;
+    readonly title: string;
+    readonly description: string;
+    /** "own" for a board a person made, "kept" for the qualification, "built-in" otherwise. */
+    readonly kind: string;
+    readonly count: number;
+  }>;
   /** Cards that wait for a person. */
   readonly waiting: number;
   readonly notices: ReadonlyArray<{
@@ -878,10 +892,22 @@ export function parseBoard(body: unknown): DeliveryBoard | null {
   if (!isRecord(body) || !Array.isArray(body.lanes)) return null;
   return {
     view: text(body.view),
-    views: records(body.views).map((view) => ({ id: text(view.id), title: text(view.title) })),
+    views: records(body.views).map((view) => ({
+      id: text(view.id),
+      title: text(view.title),
+      description: text(view.description),
+      kind: text(view.kind, "built-in"),
+      lanes: Array.isArray(view.lanes) ? strings(view.lanes) : null,
+    })),
     teams: strings(body.teams),
     set: text(body.set) || "pilot",
-    sets: records(body.sets).map((item) => ({ id: text(item.id), count: count(item.count) })),
+    sets: records(body.sets).map((item) => ({
+      id: text(item.id),
+      title: text(item.title, text(item.id)),
+      description: text(item.description),
+      kind: text(item.kind, "built-in"),
+      count: count(item.count),
+    })),
     lanes: records(body.lanes).map((lane) => ({
       lane: text(lane.lane),
       title: text(lane.title),

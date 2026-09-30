@@ -183,23 +183,14 @@ export function whatStartDoes(flow: string, verb: "Start" | "Submit"): string {
   return `${verb} makes ${then[flow] ?? then.standard} Saving keeps it as a draft, which runs nothing.`;
 }
 
-/** Which tasks the board shows. Qualification tasks are kept as evidence, and apart. */
-export const BOARD_SETS = ["pilot", "qualification", "all"] as const;
-export type BoardSet = (typeof BOARD_SETS)[number];
-export const SET_LABEL: Record<BoardSet, string> = {
-  pilot: "Pilot work",
-  qualification: "Qualification",
-  all: "Everything",
-};
-export const SET_HELP: Record<BoardSet, string> = {
-  pilot:
-    "Work outside the engine's qualification. The qualification's tasks are kept, and shown by the view of their own.",
-  qualification:
-    "The tasks the engine's qualification made, kept as its evidence. They were left where they stopped on purpose: nothing needs doing on them, and none is approved to clear the board.",
-  all: "Every task, the qualification's marked as such.",
-};
-export const isBoardSet = (value: string): value is BoardSet =>
-  (BOARD_SETS as ReadonlyArray<string>).includes(value);
+/**
+ * Which board is shown: a board a person made, "unsorted" (tasks on no board), the
+ * qualification's, or "all". The engine lists them; "pilot" is the earlier name of "unsorted".
+ */
+export const boardSetOf = (stored: string): string =>
+  stored === "pilot" || !stored ? "unsorted" : stored;
+/** Boards that come with every engine, which a new task is not filed onto. */
+export const BUILT_IN_BOARDS: ReadonlyArray<string> = ["unsorted", "qualification", "all"];
 
 export const BOARD_GROUPINGS = ["none", "priority", "team", "owner", "tag"] as const;
 export type BoardGrouping = (typeof BOARD_GROUPINGS)[number];

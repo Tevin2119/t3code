@@ -12,16 +12,12 @@ import {
 } from "@dnd-kit/core";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import { ChevronsLeftRightIcon, EllipsisIcon, PlusIcon, SearchIcon, XIcon } from "lucide-react";
-import { memo, useMemo, useState } from "react";
+import { memo, useEffect, useMemo, useState } from "react";
 
 import { isElectron } from "../../env";
 import { parseBoard, type DeliveryCard, type DeliveryLane } from "../../lib/delivery";
 import {
-  BOARD_SETS,
-  type BoardSet,
-  isBoardSet,
-  SET_HELP,
-  SET_LABEL,
+  boardSetOf,
   BOARD_GROUPINGS,
   filterLanes,
   FLOW_LABEL,
@@ -34,7 +30,9 @@ import {
 import { cn } from "../../lib/utils";
 import {
   useBoardStore,
+  useDeliveryAct,
   useDeliveryEnabled,
+  usePersonName,
   useDeliveryRead,
   useMinuteClock,
   useStaleReading,
@@ -61,6 +59,7 @@ import {
 } from "./taskParts";
 import { TaskWorkspace } from "./TaskWorkspace";
 import { ActiveFilterChips, LaneFilterMenu } from "./BoardFilterControls";
+import { BoardDialog, BoardPicker, type PickerItem } from "./BoardPicker";
 import { HowItFits } from "./HowItFits";
 
 const CardFace = memo(function CardFace(props: {
@@ -401,8 +400,17 @@ export function BoardPage() {
   const setGrouping = useBoardStore((state) => state.setGrouping);
 
   const showingBoard = !search.task && !search.new;
-  const boardSet = useBoardStore((state) => state.boardSet);
+  const boardSet = useBoardStore((state) => boardSetOf(state.boardSet));
   const setBoardSet = useBoardStore((state) => state.setBoardSet);
+  const person = usePersonName();
+  const boardAct = useDeliveryAct(active, "board setup");
+  // A board or view being made or edited, and what the engine said when it refused.
+  const [dialog, setDialog] = useState<{
+    readonly kind: "board" | "view";
+    readonly editing: PickerItem | null;
+  } | null>(null);
+  const [dialogBusy, setDialogBusy] = useState(false);
+  const [dialogProblem, setDialogProblem] = useState<string | null>(null);
   const board = useDeliveryRead(active, `/api/lanes?view=${view}&set=${boardSet}`, {
     pollMs: showingBoard ? 4_000 : 15_000,
   });
@@ -423,6 +431,49 @@ export function BoardPage() {
   const open = (task: string | null) =>
     void navigate({ to: "/board", search: task ? { task } : {} });
   const actions = useTaskActions(active, { onDone: board.refresh });
+  const chosenBoard = parsed?.sets.find((item) => item.id === boardSet) ?? null;
+  // A board or view that was removed, here or elsewhere, gives way to what is always there.
+  useEffect(() => {
+    if (!parsed) return;
+    if (!parsed.sets.some((item) => item.id === boardSet)) setBoardSet("unsorted");
+    if (!parsed.views.some((item) => item.id === view)) setView("development");
+  }, [boardSet, parsed, setBoardSet, setView, view]);
+  const saveDialog = async (input: {
+    readonly title: string;
+    readonly description: string;
+    readonly lanes?: ReadonlyArray<string>;
+  }) => {
+    if (!dialog) return;
+    setDialogBusy(true);
+    setDialogProblem(null);
+    const base = dialog.kind === "board" ? "/api/boards" : "/api/views";
+    const result = await boardAct(dialog.editing ? `${base}/${dialog.editing.id}/edit` : base, {
+      ...input,
+      by: person,
+    });
+    setDialogBusy(false);
+    if (!result.ok) {
+      setDialogProblem(result.why);
+      return;
+    }
+    const made = result.body as { readonly id?: string } | null;
+    if (!dialog.editing && made?.id) (dialog.kind === "board" ? setBoardSet : setView)(made.id);
+    setDialog(null);
+    board.refresh();
+  };
+  const removeDialog = async () => {
+    if (!dialog?.editing) return;
+    setDialogBusy(true);
+    const base = dialog.kind === "board" ? "/api/boards" : "/api/views";
+    const result = await boardAct(`${base}/${dialog.editing.id}/remove`, { by: person });
+    setDialogBusy(false);
+    if (!result.ok) {
+      setDialogProblem(result.why);
+      return;
+    }
+    setDialog(null);
+    board.refresh();
+  };
   const shown = lanes.reduce((sum, lane) => sum + lane.cards.length, 0);
 
   if (search.new) {
@@ -434,6 +485,9 @@ export function BoardPage() {
         onSaved={(task) => open(task)}
         from="Board"
         fromConversation={search.from ?? null}
+        board={
+          chosenBoard?.kind === "own" ? { id: chosenBoard.id, title: chosenBoard.title } : null
+        }
       />
     );
   }
@@ -455,56 +509,34 @@ export function BoardPage() {
         <WorkspacePageHeader electron={isElectron} className="h-auto">
           <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2 py-2">
             <h1 className="text-sm font-medium">Board</h1>
-            <Select value={view} onValueChange={(value) => setView(String(value))}>
-              <SelectTrigger
-                aria-label="Board view"
-                size="compact"
-                variant="ghost"
-                className="w-auto min-w-0"
-              >
-                <SelectValue>
-                  {parsed?.views.find((item) => item.id === view)?.title ?? view}
-                </SelectValue>
-              </SelectTrigger>
-              <SelectPopup alignItemWithTrigger={false}>
-                {(parsed?.views ?? [{ id: "development", title: "Development" }]).map((item) => (
-                  <SelectItem key={item.id} value={item.id}>
-                    {item.title}
-                  </SelectItem>
-                ))}
-              </SelectPopup>
-            </Select>
-            <Select
+            <BoardPicker
+              label="Board"
+              marker="board"
+              items={
+                parsed?.sets ?? [
+                  { id: boardSet, title: boardSet, description: "", kind: "built-in" },
+                ]
+              }
               value={boardSet}
-              onValueChange={(value) => {
-                if (isBoardSet(String(value))) setBoardSet(String(value) as BoardSet);
-              }}
-            >
-              <SelectTrigger
-                aria-label="Which tasks"
-                size="compact"
-                variant={boardSet === "pilot" ? "ghost" : "default"}
-                className="w-auto min-w-0"
-                data-board-set={boardSet}
-              >
-                <SelectValue>{SET_LABEL[boardSet]}</SelectValue>
-              </SelectTrigger>
-              <SelectPopup alignItemWithTrigger={false}>
-                {BOARD_SETS.map((item) => (
-                  <SelectItem key={item} value={item}>
-                    <span className="flex max-w-80 flex-col">
-                      <span>
-                        {SET_LABEL[item]}
-                        <span className="ml-1 text-xs text-muted-foreground tabular-nums">
-                          {parsed?.sets.find((entry) => entry.id === item)?.count ?? ""}
-                        </span>
-                      </span>
-                      <span className="text-xs text-muted-foreground">{SET_HELP[item]}</span>
-                    </span>
-                  </SelectItem>
-                ))}
-              </SelectPopup>
-            </Select>
+              everything={{ id: "all", label: "Show every task" }}
+              newLabel="New board…"
+              onChoose={setBoardSet}
+              onCreate={() => setDialog({ kind: "board", editing: null })}
+              onEdit={(item) => setDialog({ kind: "board", editing: item })}
+            />
+            <BoardPicker
+              label="Board view"
+              marker="view"
+              items={
+                parsed?.views ?? [{ id: view, title: view, description: "", kind: "built-in" }]
+              }
+              value={view}
+              everything={{ id: "development", label: "Show every column" }}
+              newLabel="New view…"
+              onChoose={setView}
+              onCreate={() => setDialog({ kind: "view", editing: null })}
+              onEdit={(item) => setDialog({ kind: "view", editing: item })}
+            />
             <span className="relative flex items-center">
               <SearchIcon className="pointer-events-none absolute left-2 z-10 size-3.5 text-muted-foreground" />
               <Input
@@ -616,20 +648,43 @@ export function BoardPage() {
                 </button>
               </p>
             ) : null}
-            {boardSet !== "pilot" ? (
+            {chosenBoard && chosenBoard.id !== "unsorted" && chosenBoard.description ? (
               <p className="px-4 pt-2 text-xs text-muted-foreground" data-board-set-note>
-                {SET_HELP[boardSet]}
+                {chosenBoard.title}: {chosenBoard.description}
               </p>
             ) : null}
-            {boardSet === "pilot" &&
-            parsed !== null &&
-            parsed.lanes.every((lane) => lane.cards.length === 0) ? (
+            {parsed !== null && parsed.lanes.every((lane) => lane.cards.length === 0) ? (
               <p className="px-4 pt-2 text-xs text-muted-foreground" data-board-empty-pilot>
-                No pilot work yet. New task starts some.
+                {chosenBoard?.kind === "own"
+                  ? `Nothing on ${chosenBoard.title} yet. A task made while it is chosen goes on it.`
+                  : "Nothing here yet. New task starts some; a board of your own keeps a section of work apart."}
                 {(parsed.sets.find((entry) => entry.id === "qualification")?.count ?? 0) > 0
-                  ? ` The qualification's ${parsed.sets.find((entry) => entry.id === "qualification")?.count} tasks are kept, as its evidence, under Qualification at the top.`
+                  ? ` The qualification's ${parsed.sets.find((entry) => entry.id === "qualification")?.count} tasks are kept, as its evidence, under Qualification.`
                   : ""}
               </p>
+            ) : null}
+            {dialog ? (
+              <BoardDialog
+                kind={dialog.kind}
+                editing={dialog.editing}
+                columns={(parsed?.lanes ?? []).map((lane) => ({
+                  lane: lane.lane,
+                  title: lane.title,
+                }))}
+                chosenColumns={
+                  dialog.editing
+                    ? (parsed?.views.find((item) => item.id === dialog.editing?.id)?.lanes ?? [])
+                    : []
+                }
+                busy={dialogBusy}
+                problem={dialogProblem}
+                onClose={() => {
+                  setDialog(null);
+                  setDialogProblem(null);
+                }}
+                onSave={(input) => void saveDialog(input)}
+                onRemove={() => void removeDialog()}
+              />
             ) : null}
             {parsed?.note ? (
               <p className="px-4 pt-2 text-xs text-muted-foreground">{parsed.note}</p>

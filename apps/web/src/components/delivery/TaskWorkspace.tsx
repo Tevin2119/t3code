@@ -849,6 +849,17 @@ function Info(props: {
   const closed = ["approved", "rejected", "closed"].includes(task.state);
   const flow = task.flows.find((item) => item.id === task.workflow) ?? null;
   const navigate = useNavigate();
+  // The boards of the person's own, to move the task between.
+  const boardsRead = useDeliveryRead(props.environmentId, "/api/boards");
+  const boards = useMemo(
+    () =>
+      (Array.isArray(boardsRead.body) ? boardsRead.body : []).flatMap((item: unknown) =>
+        item && typeof item === "object" && "id" in item && "title" in item
+          ? [{ id: String(item.id), title: String(item.title) }]
+          : [],
+      ),
+    [boardsRead.body],
+  );
   // What is set for the task, which the switches change.
   const set = Object.fromEntries(task.settings.map((item) => [item.seat, item.set]));
   const switchSeat = async (seat: string, choice: Record<string, string>) => {
@@ -885,7 +896,43 @@ function Info(props: {
           <Row label="Kept as">
             <span data-task-set="qualification">the qualification's evidence, not pilot work</span>
           </Row>
-        ) : null}
+        ) : (
+          <Row label="Board">
+            <Select
+              value={card.set ?? NO_BOARD}
+              onValueChange={(value) =>
+                void act(`/api/tasks/${task.id}/board`, {
+                  board: value === NO_BOARD ? null : String(value),
+                  by: person,
+                }).then((result) => {
+                  if (!result.ok) setProblem(result.why);
+                  props.onChanged();
+                })
+              }
+            >
+              <SelectTrigger
+                aria-label="Board"
+                size="compact"
+                variant="ghost"
+                className="w-auto min-w-0"
+                data-task-board={card.set ?? ""}
+              >
+                <SelectValue>
+                  {boards.find((item) => item.id === card.set)?.title ??
+                    (card.set ? card.set : "Not on a board")}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectPopup alignItemWithTrigger={false}>
+                <SelectItem value={NO_BOARD}>Not on a board</SelectItem>
+                {boards.map((item) => (
+                  <SelectItem key={item.id} value={item.id}>
+                    {item.title}
+                  </SelectItem>
+                ))}
+              </SelectPopup>
+            </Select>
+          </Row>
+        )}
         <Row label="Now">
           <WaitingOn card={card} />
         </Row>
@@ -1274,6 +1321,9 @@ function PublicationRows(props: { readonly task: TaskView }) {
     </>
   );
 }
+
+/** The value of the board choice for a task on no board. */
+const NO_BOARD = "__no_board__";
 
 type Tab = "details" | "history" | "info";
 
