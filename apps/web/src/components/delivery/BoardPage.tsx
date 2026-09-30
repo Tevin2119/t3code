@@ -415,6 +415,12 @@ export function BoardPage() {
     pollMs: showingBoard ? 4_000 : 15_000,
   });
   const parsed = useMemo(() => parseBoard(board.body), [board.body]);
+  // The boards last read stay listed while another board is being read, one just made with them.
+  type KnownBoard = NonNullable<typeof parsed>["sets"][number];
+  const [knownBoards, setKnownBoards] = useState<ReadonlyArray<KnownBoard>>([]);
+  useEffect(() => {
+    if (parsed) setKnownBoards(parsed.sets);
+  }, [parsed]);
   const lanes = useMemo(() => filterLanes(parsed?.lanes ?? [], filters), [filters, parsed]);
   // The columns as the engine names them, with what each holds before any filter.
   const laneChoices = useMemo(
@@ -463,6 +469,20 @@ export function BoardPage() {
       return;
     }
     const made = result.body as { readonly id?: string } | null;
+    if (!dialog.editing && made?.id && dialog.kind === "board") {
+      const id = made.id;
+      setKnownBoards((boards) => [
+        {
+          id,
+          title: input.title,
+          description: input.description,
+          kind: "own",
+          count: 0,
+          target: null,
+        },
+        ...boards.filter((item) => item.id !== id),
+      ]);
+    }
     if (!dialog.editing && made?.id) (dialog.kind === "board" ? setBoardSet : setView)(made.id);
     setDialog(null);
     board.refresh();
@@ -522,9 +542,10 @@ export function BoardPage() {
               label="Board"
               marker="board"
               items={
-                parsed?.sets ?? [
-                  { id: boardSet, title: boardSet, description: "", kind: "built-in" },
-                ]
+                parsed?.sets ??
+                (knownBoards.length > 0
+                  ? knownBoards
+                  : [{ id: boardSet, title: boardSet, description: "", kind: "built-in" }])
               }
               value={boardSet}
               everything={{ id: "all", label: "Show every task" }}

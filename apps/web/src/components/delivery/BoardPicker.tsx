@@ -288,6 +288,13 @@ export function BoardDialog(props: {
   const [base, setBase] = useState(props.editing?.target?.base ?? "");
   const [adding, setAdding] = useState(false);
   const [folder, setFolder] = useState("");
+  const [repoName, setRepoName] = useState("");
+  const folderName =
+    folder
+      .trim()
+      .replace(/[\\/]+$/, "")
+      .split(/[\\/]/)
+      .pop() ?? "";
   const [addProblem, setAddProblem] = useState<string | null>(null);
   const chosen = repositories.find((item) => item.id === repository) ?? null;
   const name = title.trim() || (isBoard && !props.editing ? (chosen?.title ?? "") : "");
@@ -299,7 +306,11 @@ export function BoardDialog(props: {
   const bindingReady = !needsBinding || (Boolean(repository) && Boolean(base));
   const addRepository = async () => {
     setAddProblem(null);
-    const result = await addAct("/api/repositories", { path: folder.trim(), by: props.by });
+    const result = await addAct("/api/repositories", {
+      path: folder.trim(),
+      title: repoName.trim() || folderName,
+      by: props.by,
+    });
     if (!result.ok) {
       setAddProblem(result.why);
       return;
@@ -312,6 +323,7 @@ export function BoardDialog(props: {
     }
     setAdding(false);
     setFolder("");
+    setRepoName("");
   };
   return (
     <Dialog open onOpenChange={(open) => (!open && !props.busy ? props.onClose() : undefined)}>
@@ -382,6 +394,13 @@ export function BoardDialog(props: {
                     value={folder}
                     onChange={(event) => setFolder(event.target.value)}
                     data-board-dialog-folder
+                  />
+                  <Input
+                    aria-label="Name of the repository"
+                    placeholder={folderName ? `Name (${folderName})` : "Name of the repository"}
+                    value={repoName}
+                    onChange={(event) => setRepoName(event.target.value)}
+                    data-board-dialog-repository-name
                   />
                   <span className="text-[11px] text-muted-foreground">
                     The folder is read, not changed. Work is done in worktrees made beside it.
