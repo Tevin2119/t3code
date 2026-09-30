@@ -383,33 +383,37 @@ export function OrchestratorPrimaryActions(props: {
 
   return (
     <div className="flex items-center gap-1.5" data-delivery-primary-actions>
-      <Tooltip>
-        <TooltipTrigger
-          render={
+      {/* A new draft has nothing to say yet; once saved or changed, it says which, in words too. */}
+      {activity.saved === "new" ? null : (
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <span
+                tabIndex={0}
+                role="status"
+                aria-label={SAVED_LABEL[activity.saved]}
+                data-delivery-draft-state={activity.saved}
+                className="flex items-center gap-1 text-[10px] text-muted-foreground"
+              />
+            }
+          >
             <span
-              tabIndex={0}
-              role="status"
-              aria-label={SAVED_LABEL[activity.saved]}
-              data-delivery-draft-state={activity.saved}
-              className="flex size-4 items-center justify-center"
+              className={cn(
+                "size-1.5 rounded-full",
+                activity.saved === "saved"
+                  ? "bg-emerald-500"
+                  : activity.saved === "changed"
+                    ? "bg-amber-500"
+                    : "bg-muted-foreground/40",
+              )}
             />
-          }
-        >
-          <span
-            className={cn(
-              "size-1.5 rounded-full",
-              activity.saved === "saved"
-                ? "bg-emerald-500"
-                : activity.saved === "changed"
-                  ? "bg-amber-500"
-                  : "bg-muted-foreground/40",
-            )}
-          />
-        </TooltipTrigger>
-        <TooltipPopup side="top">
-          {SAVED_LABEL[activity.saved]}. Nothing runs for a draft.
-        </TooltipPopup>
-      </Tooltip>
+            {activity.saved === "saved" ? "saved" : "unsaved"}
+          </TooltipTrigger>
+          <TooltipPopup side="top">
+            {SAVED_LABEL[activity.saved]}. Nothing runs for a draft.
+          </TooltipPopup>
+        </Tooltip>
+      )}
       <Tooltip>
         <TooltipTrigger
           render={
