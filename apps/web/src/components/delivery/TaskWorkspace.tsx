@@ -881,6 +881,11 @@ function Info(props: {
             {LANE_TITLE[task.lane ?? ""] ?? task.state}
           </span>
         </Row>
+        {card.set === "qualification" ? (
+          <Row label="Kept as">
+            <span data-task-set="qualification">the qualification's evidence, not pilot work</span>
+          </Row>
+        ) : null}
         <Row label="Now">
           <WaitingOn card={card} />
         </Row>
