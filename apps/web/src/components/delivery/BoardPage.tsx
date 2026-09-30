@@ -418,9 +418,11 @@ export function BoardPage() {
   // The boards last read stay listed while another board is being read, one just made with them.
   type KnownBoard = NonNullable<typeof parsed>["sets"][number];
   const [knownBoards, setKnownBoards] = useState<ReadonlyArray<KnownBoard>>([]);
-  useEffect(() => {
-    if (parsed) setKnownBoards(parsed.sets);
-  }, [parsed]);
+  const [readSets, setReadSets] = useState<ReadonlyArray<KnownBoard> | null>(null);
+  if (parsed && parsed.sets !== readSets) {
+    setReadSets(parsed.sets);
+    setKnownBoards(parsed.sets);
+  }
   const lanes = useMemo(() => filterLanes(parsed?.lanes ?? [], filters), [filters, parsed]);
   // The columns as the engine names them, with what each holds before any filter.
   const laneChoices = useMemo(
