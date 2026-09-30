@@ -447,8 +447,14 @@ export function BoardPage() {
     if (/no board "/.test(gone) && boardSet !== "unsorted") setBoardSet("unsorted");
     if (/no view "/.test(gone) && view !== "development") setView("development");
     if (!parsed) return;
-    if (!parsed.sets.some((item) => item.id === boardSet)) setBoardSet("unsorted");
-    if (!parsed.views.some((item) => item.id === view)) setView("development");
+    // Only a read made for the current choice says whether it is there: an earlier read does
+    // not list a board or view made since, and one that is gone is refused by the engine.
+    if (parsed.set === boardSet && !parsed.sets.some((item) => item.id === boardSet)) {
+      setBoardSet("unsorted");
+    }
+    if (parsed.view === view && !parsed.views.some((item) => item.id === view)) {
+      setView("development");
+    }
   }, [boardSet, gone, parsed, setBoardSet, setView, view]);
   const saveDialog = async (input: {
     readonly title: string;
