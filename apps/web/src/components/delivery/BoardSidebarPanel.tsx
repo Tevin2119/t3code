@@ -234,6 +234,13 @@ export function BoardSidebarPanel() {
         : { to: "/board", search: { task: card.id } },
     );
   };
+  // Until the tasks are read, an empty list says nothing about the board.
+  const unread =
+    read.readAt === null
+      ? read.error
+        ? "The engine did not answer."
+        : "Reading the board..."
+      : null;
   const searching = hasFilters(filters);
   const filterCount = activeFilters(filters, laneTitle).filter((item) => item.key !== "q").length;
   const live = kept.filter((card) => !["completed", "draft", "chat"].includes(card.lane));
@@ -422,7 +429,7 @@ export function BoardSidebarPanel() {
             name="found"
             title="Found"
             cards={kept}
-            empty="No task matches."
+            empty={unread ?? "No task matches."}
             now={now}
             selected={selected}
             onOpen={open}
@@ -433,7 +440,7 @@ export function BoardSidebarPanel() {
               name="waiting"
               title="Waiting on you"
               cards={waiting}
-              empty="Nothing waits for you."
+              empty={unread ?? "Nothing waits for you."}
               now={now}
               selected={selected}
               onOpen={open}
