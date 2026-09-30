@@ -41,6 +41,28 @@ export const ServerProviderResetCredits = Schema.Struct({
 export type ServerProviderResetCredits = typeof ServerProviderResetCredits.Type;
 
 /**
+ * Prepaid credit a pay-as-you-go account holds (DeepSeek's API balance). Money, not a
+ * share of an allowance, so it is kept apart from `windows`. Amounts are the provider's
+ * own decimal strings, unrounded, each in the currency it names.
+ */
+export const ServerProviderBalance = Schema.Struct({
+  /** `read`: amounts are the provider's answer at `checkedAt`. Otherwise `message` says why not. */
+  status: Schema.Literals(["read", "unavailable", "failed"]),
+  message: Schema.optional(TrimmedNonEmptyString),
+  /** The provider's own flag for whether the balance allows further calls. */
+  sufficient: Schema.optional(Schema.Boolean),
+  amounts: Schema.Array(
+    Schema.Struct({
+      currency: TrimmedNonEmptyString,
+      total: TrimmedNonEmptyString,
+      granted: Schema.optional(TrimmedNonEmptyString),
+      toppedUp: Schema.optional(TrimmedNonEmptyString),
+    }),
+  ),
+});
+export type ServerProviderBalance = typeof ServerProviderBalance.Type;
+
+/**
  * Subscription usage the provider knows about the signed-in account.
  *
  * `unavailable` distinguishes an account that can never report windows (API
@@ -58,6 +80,8 @@ export const ServerProviderUsageLimits = Schema.Struct({
     }),
   ),
   resetCredits: Schema.optional(ServerProviderResetCredits),
+  /** A prepaid balance, for an account billed by use rather than by plan windows. */
+  balance: Schema.optional(ServerProviderBalance),
   unavailable: Schema.optional(
     Schema.Struct({
       reason: Schema.Literals(["unsupported", "probeFailed"]),

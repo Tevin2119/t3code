@@ -243,6 +243,8 @@ export function collectLimitNotices(presentations: LimitPresentations): readonly
       // An account that can never report (API key) is left out; one that
       // failed, or reported nothing at all, is worth a line.
       if (provider.usageLimits?.unavailable?.reason === "unsupported") continue;
+      // A prepaid balance says its own state on its card.
+      if (provider.usageLimits?.balance !== undefined) continue;
       const notice = provider.usageLimits ? limitsNotice(provider.usageLimits) : null;
       const name = provider.displayName?.trim() || String(provider.driver);
       if (notice) notices.push(`${label(environmentLabel, name)}: ${notice}`);
@@ -256,6 +258,36 @@ export function collectLimitNotices(presentations: LimitPresentations): readonly
     }
   }
   return notices;
+}
+
+/** A prepaid balance one provider reports, with where and when it was read. */
+export interface LimitBalance {
+  readonly key: string;
+  readonly driver: ServerProvider["driver"];
+  readonly name: string;
+  readonly environmentLabel: string;
+  readonly checkedAt: string;
+  readonly balance: NonNullable<ServerProviderUsageLimits["balance"]>;
+}
+
+/** Every provider on the selected environments that reports a prepaid balance. */
+export function collectLimitBalances(presentations: LimitPresentations): readonly LimitBalance[] {
+  const balances: LimitBalance[] = [];
+  for (const [environmentId, presentation] of presentations) {
+    for (const provider of providersWithLimits(presentation.serverConfig?.providers ?? [])) {
+      const limits = provider.usageLimits;
+      if (!limits?.balance) continue;
+      balances.push({
+        key: `${environmentId}:${provider.instanceId}`,
+        driver: provider.driver,
+        name: provider.displayName?.trim() || String(provider.driver),
+        environmentLabel: presentation.entry.target.label,
+        checkedAt: limits.checkedAt,
+        balance: limits.balance,
+      });
+    }
+  }
+  return balances;
 }
 
 export interface LimitPoolMember {

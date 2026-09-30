@@ -18,6 +18,7 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
+import { HttpClient } from "effect/unstable/http";
 import { ChildProcessSpawner } from "effect/unstable/process";
 
 import * as BackgroundPolicy from "../../background/BackgroundPolicy.ts";
@@ -27,6 +28,7 @@ import { makeDeepSeekAcpRuntime, makeDeepSeekEnvironment } from "../acp/DeepSeek
 import { makeCliAuth } from "../CliAuth.ts";
 import { ProviderDriverError } from "../Errors.ts";
 import { makeDeepSeekAdapter, type DeepSeekAdapterOptions } from "../Layers/DeepSeekAdapter.ts";
+import { readDeepSeekBalance } from "../Layers/deepseekBalance.ts";
 import {
   buildInitialDeepSeekProviderSnapshot,
   checkDeepSeekProviderStatus,
@@ -61,6 +63,7 @@ export type DeepSeekDriverEnv =
   | ChildProcessSpawner.ChildProcessSpawner
   | Crypto.Crypto
   | FileSystem.FileSystem
+  | HttpClient.HttpClient
   | Path.Path
   | ProviderEventLoggers
   | ServerSettingsService;
@@ -78,6 +81,7 @@ export const DeepSeekDriver: ProviderDriver<DeepSeekSettings, DeepSeekDriverEnv>
       const crypto = yield* Crypto.Crypto;
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
       const fileSystem = yield* FileSystem.FileSystem;
+      const httpClient = yield* HttpClient.HttpClient;
       const path = yield* Path.Path;
       const serverSettings = yield* ServerSettingsService;
       const eventLoggers = yield* ProviderEventLoggers;
@@ -115,8 +119,17 @@ export const DeepSeekDriver: ProviderDriver<DeepSeekSettings, DeepSeekDriverEnv>
       });
       const textGeneration = yield* makeDeepSeekTextGeneration(effectiveConfig, processEnv);
 
+      // DeepSeek bills prepaid credit rather than plan windows: its balance goes with the check.
       const checkProvider = checkDeepSeekProviderStatus(effectiveConfig, processEnv).pipe(
+        Effect.flatMap((snapshot) =>
+          effectiveConfig.enabled && snapshot.installed
+            ? readDeepSeekBalance(processEnv).pipe(
+                Effect.map((usageLimits) => ({ ...snapshot, usageLimits })),
+              )
+            : Effect.succeed(snapshot),
+        ),
         Effect.map(stampIdentity),
+        Effect.provideService(HttpClient.HttpClient, httpClient),
         Effect.provideService(FileSystem.FileSystem, fileSystem),
         Effect.provideService(Path.Path, path),
         Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),

@@ -1,10 +1,12 @@
 import {
   collectLimitAccounts,
   collectLimitNotices,
+  collectLimitBalances,
   collectLimitPools,
   formatDuration,
   formatResetsIn,
   type LimitAccount,
+  type LimitBalance,
   type LimitPool,
   type LimitPoolMember,
   type LimitPoolWindow,
@@ -574,9 +576,10 @@ export function UsageLimitsPooled({
 }) {
   const pools = collectLimitPools(collectLimitAccounts(presentations), now);
   const notices = collectLimitNotices(presentations);
+  const balances = collectLimitBalances(presentations);
   return (
     <div className="flex flex-col gap-8">
-      {pools.length === 0 && notices.length === 0 ? (
+      {pools.length === 0 && notices.length === 0 && balances.length === 0 ? (
         <p className="text-sm text-muted-foreground">
           No provider on the selected environments reports subscription limits.
         </p>
@@ -584,8 +587,97 @@ export function UsageLimitsPooled({
       {pools.map((pool) => (
         <PoolSection key={pool.driver} pool={pool} now={now} />
       ))}
+      {balances.map((entry) => (
+        <BalanceSection
+          key={entry.key}
+          entry={entry}
+          now={now}
+          showEnvironment={presentations.size > 1}
+        />
+      ))}
       <LimitNotices notices={notices} />
     </div>
+  );
+}
+
+/** Older than this, a balance is marked stale rather than shown as current. */
+const BALANCE_STALE_MS = 30 * 60 * 1000;
+
+/**
+ * A prepaid balance: money left on the account, not a share of an allowance. It is the
+ * provider's own figure for all use of the account, which the tokens recorded on the
+ * Usage page need not all explain.
+ */
+function BalanceSection({
+  entry,
+  now,
+  showEnvironment,
+}: {
+  readonly entry: LimitBalance;
+  readonly now: number;
+  readonly showEnvironment: boolean;
+}) {
+  const { balance } = entry;
+  const age = now - Date.parse(entry.checkedAt);
+  const stale = Number.isFinite(age) && age > BALANCE_STALE_MS;
+  return (
+    <section className="flex flex-col gap-3" data-usage-balance={balance.status}>
+      <h2 className="flex items-center gap-2 text-sm font-medium text-foreground">
+        <ProviderInstanceIcon
+          driverKind={entry.driver}
+          displayName={entry.name}
+          indicatorBackground="var(--background)"
+          className="size-5"
+          iconClassName="size-4 text-foreground/80"
+        />
+        {entry.name} balance{showEnvironment ? ` · ${entry.environmentLabel}` : ""}
+      </h2>
+      <p className="text-xs text-muted-foreground">
+        Prepaid credit on the account, not an allowance. It covers all use of the account; the
+        tokens recorded under Usage need not explain all of it.
+      </p>
+      <div className="flex flex-col gap-2 rounded-lg border border-border/60 p-4">
+        {balance.status === "read" && balance.amounts.length > 0 ? (
+          balance.amounts.map((amount) => (
+            <div key={amount.currency} className="flex flex-col gap-1">
+              <span className="flex items-baseline gap-2">
+                <span className="text-3xl font-semibold text-foreground tabular-nums">
+                  {amount.total}
+                </span>
+                <span className="text-sm text-muted-foreground">{amount.currency}</span>
+              </span>
+              {amount.granted !== undefined || amount.toppedUp !== undefined ? (
+                <span className="text-xs text-muted-foreground tabular-nums">
+                  {[
+                    amount.toppedUp !== undefined ? `topped up ${amount.toppedUp}` : null,
+                    amount.granted !== undefined ? `granted ${amount.granted}` : null,
+                  ]
+                    .filter(Boolean)
+                    .join(" · ")}
+                </span>
+              ) : null}
+            </div>
+          ))
+        ) : (
+          <p className="text-sm text-muted-foreground" data-usage-balance-message>
+            {balance.message ?? "No balance was reported."}
+          </p>
+        )}
+        {balance.status === "read" && balance.sufficient === false ? (
+          <p className="text-xs text-warning">
+            DeepSeek reports the balance is not enough for further calls.
+          </p>
+        ) : null}
+        <p
+          className={cn("text-xs", stale ? "text-warning" : "text-muted-foreground")}
+          data-usage-balance-checked
+        >
+          {balance.status === "failed" ? "Last attempt" : "Checked"}{" "}
+          {Number.isFinite(age) ? `${formatDuration(Math.max(0, age))} ago` : "at an unknown time"}
+          {stale ? ": stale, refresh to read it again" : ""}
+        </p>
+      </div>
+    </section>
   );
 }
 
