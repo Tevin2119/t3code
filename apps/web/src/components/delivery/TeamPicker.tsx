@@ -103,8 +103,8 @@ export function TeamPicker(props: {
       : resolved.state === "choose-role"
         ? "Choose the role this harness is to take in the team."
         : resolved.state === "ready"
-          ? `Team ${resolved.team}, role ${resolved.role}. Fixed once the thread is sent.`
-          : "No team: an ordinary thread, with no team instructions or tools.";
+          ? `Team ${resolved.team}, role ${resolved.role}. A conversation with that seat: sending here puts nothing on the Board. Work for the team is started from the Orchestrator. Fixed once the thread is sent.`
+          : "No team: an ordinary thread, with no team instructions or tools. Sending here puts nothing on the Board.";
   const attention = Boolean(teamsRead.error) || resolved.state === "blocked";
 
   return (
@@ -147,6 +147,13 @@ export function TeamPicker(props: {
                 <span className="text-xs text-muted-foreground">An ordinary thread</span>
               </span>
             </SelectItem>
+            <p
+              className="max-w-72 border-t border-border px-2 pt-1.5 pb-1 text-[11px] text-muted-foreground"
+              data-delivery-thread-note
+            >
+              A thread is a conversation, with or without a team seat. Sending here puts nothing on
+              the Board; tasks are started from the Orchestrator.
+            </p>
           </SelectPopup>
         </Select>
         <TooltipPopup side="top">{detail}</TooltipPopup>

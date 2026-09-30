@@ -189,6 +189,14 @@ export function CardSigns(props: { readonly card: DeliveryCard }) {
   const { card } = props;
   return (
     <span className="flex flex-wrap items-center gap-x-2 gap-y-0.5" data-card-signs>
+      {card.set === "qualification" ? (
+        <span
+          className="rounded border border-border px-1 text-[10px] text-muted-foreground"
+          data-card-set="qualification"
+        >
+          Qualification
+        </span>
+      ) : null}
       <Count
         icon={<CircleHelpIcon />}
         count={card.questions + card.proposals}

@@ -709,6 +709,8 @@ export interface DeliveryCard {
   readonly blocker: string | null;
   /** `person`, `team`, `clock`, `task`, or null for a closed task. */
   readonly waitingOn: string | null;
+  /** "qualification" for a task of the engine's qualification, kept apart from the pilot's work. */
+  readonly set: string | null;
   readonly actions: ReadonlyArray<string>;
 }
 
@@ -723,6 +725,9 @@ export interface DeliveryBoard {
   readonly views: ReadonlyArray<{ readonly id: string; readonly title: string }>;
   readonly teams: ReadonlyArray<string>;
   readonly lanes: ReadonlyArray<DeliveryLane>;
+  /** Which tasks the board shows, and how many each choice holds. */
+  readonly set: string;
+  readonly sets: ReadonlyArray<{ readonly id: string; readonly count: number }>;
   /** Cards that wait for a person. */
   readonly waiting: number;
   readonly notices: ReadonlyArray<{
@@ -830,6 +835,7 @@ export const parseCard = (value: Json): DeliveryCard => {
       : null,
     blocker: textOrNull(value.blocker),
     waitingOn: textOrNull(value.waitingOn),
+    set: textOrNull(value.set),
     actions: strings(value.actions),
   };
 };
@@ -840,6 +846,8 @@ export function parseBoard(body: unknown): DeliveryBoard | null {
     view: text(body.view),
     views: records(body.views).map((view) => ({ id: text(view.id), title: text(view.title) })),
     teams: strings(body.teams),
+    set: text(body.set) || "pilot",
+    sets: records(body.sets).map((item) => ({ id: text(item.id), count: count(item.count) })),
     lanes: records(body.lanes).map((lane) => ({
       lane: text(lane.lane),
       title: text(lane.title),

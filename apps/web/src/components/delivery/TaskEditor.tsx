@@ -168,7 +168,9 @@ export function TaskEditor(props: {
 
   const lookup = useDeliveryRead(
     props.environmentId,
-    related.trim().length >= 2 ? `/api/tasks?q=${queryValue(related.trim())}&limit=6` : null,
+    related.trim().length >= 2
+      ? `/api/tasks?q=${queryValue(related.trim())}&limit=6&set=all`
+      : null,
   );
   const found = useMemo(
     () => parseCards(lookup.body).filter((card) => card.id !== props.taskId),

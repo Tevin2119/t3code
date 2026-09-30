@@ -13,6 +13,7 @@ import {
   sharePercentages,
   takeOverFor,
   withTeamModels,
+  seatsChangedForTask,
 } from "./deliverySeats";
 
 const entries = [
@@ -260,5 +261,40 @@ describe("what a thread takes over from its seat", () => {
     expect(
       seatOverrides(restricted, { model: null, reasoning: null, runtimeMode: "approval-required" }),
     ).toEqual([]);
+  });
+});
+
+describe("seatsChangedForTask", () => {
+  const values = (over: Record<string, string | null> = {}) => ({
+    active: "on",
+    harness: "claude",
+    model: "claude-fable-5-1",
+    reasoning: null,
+    access: "full",
+    ...over,
+  });
+  it("names a seat moved for the task, and one switched off, and nothing that is as the team has it", () => {
+    expect(
+      seatsChangedForTask([
+        {
+          title: "Senior developer 1",
+          now: values(),
+          effective: values({ harness: "codex", model: "gpt-6-astra", access: "workspace" }),
+        },
+        {
+          title: "Senior developer 2",
+          now: values({ harness: "pi" }),
+          effective: values({ harness: "pi", active: "off" }),
+        },
+        {
+          title: "Lead developer",
+          now: values({ harness: "codex" }),
+          effective: values({ harness: "codex" }),
+        },
+      ]),
+    ).toEqual([
+      "Senior developer 1 runs on codex, gpt-6-astra, workspace access for this task, in place of the team's claude, claude-fable-5-1, full access.",
+      "Senior developer 2 is switched off for this task.",
+    ]);
   });
 });

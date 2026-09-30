@@ -205,6 +205,63 @@ export function describeEffective(
 }
 
 /** The option of each driver that sets how hard the model reasons. */
+/**
+ * How the seats of a task differ from the team's own setting of them, in words. A task may
+ * move a seat to another harness, model or access, or switch it off, for itself alone.
+ */
+export function seatsChangedForTask(
+  settings: ReadonlyArray<{
+    readonly title: string;
+    readonly now: {
+      readonly active: string | null;
+      readonly harness: string | null;
+      readonly model: string | null;
+      readonly reasoning: string | null;
+      readonly access: string | null;
+    };
+    readonly effective: {
+      readonly active: string | null;
+      readonly harness: string | null;
+      readonly model: string | null;
+      readonly reasoning: string | null;
+      readonly access: string | null;
+    };
+  }>,
+): ReadonlyArray<string> {
+  const describe = (values: {
+    readonly harness: string | null;
+    readonly model: string | null;
+    readonly reasoning: string | null;
+    readonly access: string | null;
+  }) =>
+    [
+      values.harness,
+      values.model,
+      values.reasoning,
+      values.access ? `${values.access} access` : null,
+    ]
+      .filter(Boolean)
+      .join(", ");
+  const found: string[] = [];
+  for (const item of settings) {
+    const [team, task] = [item.now, item.effective];
+    if ((team.active ?? "on") !== "off" && task.active === "off") {
+      found.push(`${item.title} is switched off for this task.`);
+      continue;
+    }
+    if ((team.active ?? "on") === "off" && task.active !== "off" && task.active !== null)
+      found.push(`${item.title} is switched on for this task.`);
+    const differs = (["harness", "model", "reasoning", "access"] as const).some(
+      (key) => task[key] !== null && task[key] !== team[key],
+    );
+    if (differs)
+      found.push(
+        `${item.title} runs on ${describe(task)} for this task, in place of the team's ${describe(team)}.`,
+      );
+  }
+  return found;
+}
+
 export const REASONING_OPTION_BY_DRIVER: Readonly<Record<string, string>> = {
   claudeAgent: "effort",
   codex: "reasoningEffort",

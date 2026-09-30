@@ -17,6 +17,11 @@ import { memo, useMemo, useState } from "react";
 import { isElectron } from "../../env";
 import { parseBoard, type DeliveryCard, type DeliveryLane } from "../../lib/delivery";
 import {
+  BOARD_SETS,
+  type BoardSet,
+  isBoardSet,
+  SET_HELP,
+  SET_LABEL,
   BOARD_GROUPINGS,
   filterLanes,
   FLOW_LABEL,
@@ -56,6 +61,7 @@ import {
 } from "./taskParts";
 import { TaskWorkspace } from "./TaskWorkspace";
 import { ActiveFilterChips, LaneFilterMenu } from "./BoardFilterControls";
+import { HowItFits } from "./HowItFits";
 
 const CardFace = memo(function CardFace(props: {
   readonly card: DeliveryCard;
@@ -395,7 +401,9 @@ export function BoardPage() {
   const setGrouping = useBoardStore((state) => state.setGrouping);
 
   const showingBoard = !search.task && !search.new;
-  const board = useDeliveryRead(active, `/api/lanes?view=${view}`, {
+  const boardSet = useBoardStore((state) => state.boardSet);
+  const setBoardSet = useBoardStore((state) => state.setBoardSet);
+  const board = useDeliveryRead(active, `/api/lanes?view=${view}&set=${boardSet}`, {
     pollMs: showingBoard ? 4_000 : 15_000,
   });
   const parsed = useMemo(() => parseBoard(board.body), [board.body]);
@@ -465,6 +473,37 @@ export function BoardPage() {
                 ))}
               </SelectPopup>
             </Select>
+            <Select
+              value={boardSet}
+              onValueChange={(value) => {
+                if (isBoardSet(String(value))) setBoardSet(String(value) as BoardSet);
+              }}
+            >
+              <SelectTrigger
+                aria-label="Which tasks"
+                size="compact"
+                variant={boardSet === "pilot" ? "ghost" : "default"}
+                className="w-auto min-w-0"
+                data-board-set={boardSet}
+              >
+                <SelectValue>{SET_LABEL[boardSet]}</SelectValue>
+              </SelectTrigger>
+              <SelectPopup alignItemWithTrigger={false}>
+                {BOARD_SETS.map((item) => (
+                  <SelectItem key={item} value={item}>
+                    <span className="flex max-w-80 flex-col">
+                      <span>
+                        {SET_LABEL[item]}
+                        <span className="ml-1 text-xs text-muted-foreground tabular-nums">
+                          {parsed?.sets.find((entry) => entry.id === item)?.count ?? ""}
+                        </span>
+                      </span>
+                      <span className="text-xs text-muted-foreground">{SET_HELP[item]}</span>
+                    </span>
+                  </SelectItem>
+                ))}
+              </SelectPopup>
+            </Select>
             <span className="relative flex items-center">
               <SearchIcon className="pointer-events-none absolute left-2 z-10 size-3.5 text-muted-foreground" />
               <Input
@@ -526,6 +565,7 @@ export function BoardPage() {
                 <PlusIcon />
                 New task
               </Button>
+              <HowItFits />
               <Button
                 size="icon-sm"
                 variant="ghost"
@@ -573,6 +613,11 @@ export function BoardPage() {
                 >
                   <XIcon className="size-3.5" />
                 </button>
+              </p>
+            ) : null}
+            {boardSet !== "pilot" ? (
+              <p className="px-4 pt-2 text-xs text-muted-foreground" data-board-set-note>
+                {SET_HELP[boardSet]}
               </p>
             ) : null}
             {parsed?.note ? (

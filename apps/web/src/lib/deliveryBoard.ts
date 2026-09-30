@@ -166,6 +166,24 @@ export function activeFilters(
   return found;
 }
 
+/** Which tasks the board shows. Qualification tasks are kept as evidence, and apart. */
+export const BOARD_SETS = ["pilot", "qualification", "all"] as const;
+export type BoardSet = (typeof BOARD_SETS)[number];
+export const SET_LABEL: Record<BoardSet, string> = {
+  pilot: "Pilot work",
+  qualification: "Qualification",
+  all: "Everything",
+};
+export const SET_HELP: Record<BoardSet, string> = {
+  pilot:
+    "Work outside the engine's qualification. The qualification's tasks are kept, and shown by the view of their own.",
+  qualification:
+    "The tasks the engine's qualification made, kept as its evidence. They were left where they stopped on purpose: nothing needs doing on them, and none is approved to clear the board.",
+  all: "Every task, the qualification's marked as such.",
+};
+export const isBoardSet = (value: string): value is BoardSet =>
+  (BOARD_SETS as ReadonlyArray<string>).includes(value);
+
 export const BOARD_GROUPINGS = ["none", "priority", "team", "owner", "tag"] as const;
 export type BoardGrouping = (typeof BOARD_GROUPINGS)[number];
 

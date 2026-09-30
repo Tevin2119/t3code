@@ -311,6 +311,11 @@ export function OrchestratorComposerControls(props: {
         </Popover>
       ) : null}
 
+      {/* Said where it is seen on a phone too: what Start does, and where it goes. */}
+      <p className="w-full text-[11px] text-muted-foreground" data-delivery-what-starts={flow}>
+        {WHAT_STARTS[flow] ?? WHAT_STARTS.standard}
+      </p>
+
       {problems.length > 0 ? (
         <span
           className="ml-auto max-w-[32rem] text-xs text-warning"
@@ -338,6 +343,19 @@ const SAVED_LABEL = {
   saved: "Draft saved",
   changed: "Changed since it was saved",
 } as const;
+
+/**
+ * What pressing Start does, on every screen. Here, unlike in a thread, sending makes a task on
+ * the Board: it is the one place where it does.
+ */
+const WHAT_STARTS: Readonly<Record<string, string>> = {
+  chat: "Start makes a Team chat task on the Board (under Team chats). The team talks it over; nothing is built. Save draft keeps it without starting it.",
+  plan: "Start makes a task on the Board. It is triaged and planned, and stops at the plan for you to read. Nothing is built until you start the delivery.",
+  review:
+    "Start makes a task on the Board. The seats examine what is there and write down what they find. Nothing is changed.",
+  standard:
+    "Start makes a task on the Board. It is triaged, planned, built, checked, reviewed and tested, and stops at Your sign-off for your decision. Nothing is merged.",
+};
 
 const START_HELP: Readonly<Record<string, string>> = {
   chat: "which talks it over with you. The lead brings in the seats a message concerns. Nothing is built.",

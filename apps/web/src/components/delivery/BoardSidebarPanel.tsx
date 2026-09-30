@@ -16,6 +16,7 @@ import {
   matchesCard,
   PRIORITY_LABEL,
   queryValue,
+  SET_LABEL,
 } from "../../lib/deliveryBoard";
 import { cn } from "../../lib/utils";
 import {
@@ -179,19 +180,26 @@ export function BoardSidebarPanel() {
   const setFilters = useBoardStore((state) => state.setFilters);
   const clearFilters = useBoardStore((state) => state.clearFilters);
   const view = useBoardStore((state) => state.view);
+  const boardSet = useBoardStore((state) => state.boardSet);
   const now = useMinuteClock();
 
   const q = filters.q.trim();
   // The engine looks in what is asked too, which a card does not carry.
   const read = useDeliveryRead(
     enabled ? environmentId : null,
-    q ? `/api/tasks?q=${queryValue(q)}&limit=100` : "/api/tasks?limit=200",
+    q
+      ? `/api/tasks?q=${queryValue(q)}&limit=100&set=${boardSet}`
+      : `/api/tasks?limit=200&set=${boardSet}`,
     { pollMs: 6_000 },
   );
   // The columns of the board, as the engine names them, for the filter by column.
-  const lanesRead = useDeliveryRead(enabled ? environmentId : null, `/api/lanes?view=${view}`, {
-    pollMs: 15_000,
-  });
+  const lanesRead = useDeliveryRead(
+    enabled ? environmentId : null,
+    `/api/lanes?view=${view}&set=${boardSet}`,
+    {
+      pollMs: 15_000,
+    },
+  );
   const board = useMemo(() => parseBoard(lanesRead.body), [lanesRead.body]);
   const laneChoices = useMemo(
     () =>
@@ -289,6 +297,14 @@ export function BoardSidebarPanel() {
           />
         </span>
 
+        {boardSet !== "pilot" ? (
+          <p
+            className="px-1 text-[10px] text-sidebar-muted-foreground"
+            data-board-panel-set={boardSet}
+          >
+            Showing: {SET_LABEL[boardSet]}. Change it at the top of the Board.
+          </p>
+        ) : null}
         <Group
           name="filters"
           title="Filters"

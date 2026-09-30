@@ -21,6 +21,8 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
+import { useNavigate } from "@tanstack/react-router";
+
 import { isElectron } from "../../env";
 import { usePrimarySettings } from "../../hooks/useSettings";
 import {
@@ -44,7 +46,7 @@ import {
   tagsFromText,
   type ComposerKind,
 } from "../../lib/deliveryBoard";
-import { harnessLabel } from "../../lib/deliverySeats";
+import { seatsChangedForTask, harnessLabel } from "../../lib/deliverySeats";
 import { cn } from "../../lib/utils";
 import {
   useBoardStore,
@@ -829,6 +831,7 @@ const ACTIVITY_VARIANT: Record<string, "success" | "info" | "warning" | "seconda
 
 function Info(props: {
   readonly environmentId: EnvironmentId | null;
+  readonly from: "Board" | "Orchestrator";
   readonly task: TaskView;
   readonly onChanged: () => void;
 }) {
@@ -844,6 +847,7 @@ function Info(props: {
   const [problems, setProblems] = useState<ReadonlyArray<string>>([]);
   const closed = ["approved", "rejected", "closed"].includes(task.state);
   const flow = task.flows.find((item) => item.id === task.workflow) ?? null;
+  const navigate = useNavigate();
   // What is set for the task, which the switches change.
   const set = Object.fromEntries(task.settings.map((item) => [item.seat, item.set]));
   const switchSeat = async (seat: string, choice: Record<string, string>) => {
@@ -1022,6 +1026,42 @@ function Info(props: {
         </section>
       ) : null}
 
+      <section className="flex flex-col gap-1.5" data-task-related>
+        <h3 className="text-xs font-medium text-muted-foreground">Where else it shows</h3>
+        <Row label={props.from === "Board" ? "Orchestrator" : "Board"}>
+          <button
+            type="button"
+            className="text-primary underline-offset-2 hover:underline"
+            data-task-related-open={props.from === "Board" ? "orchestrator" : "board"}
+            onClick={() =>
+              void navigate(
+                props.from === "Board"
+                  ? { to: "/orchestrator", search: { thread: task.id } }
+                  : { to: "/board", search: { task: task.id } },
+              )
+            }
+          >
+            {props.from === "Board" ? "Open its conversation" : "Open its card"}
+          </button>
+        </Row>
+        <p className="text-[11px] text-muted-foreground">
+          The task and its Orchestrator conversation are one record: what is said in either is said
+          on the task. Threads in the chat list are separate conversations and never become tasks.
+        </p>
+        {card.waitingOn ? (
+          <Row label="Waiting on you">
+            <span data-task-related-waiting>yes: {card.waitingOn}</span>
+          </Row>
+        ) : null}
+        <Row label="Pull request">
+          <span className="text-right" data-task-related-pr>
+            {task.lane === "human-review"
+              ? "None opened: merging is switched off. Approving records acceptance; it opens and merges nothing."
+              : "None. The team opens none while merging is switched off."}
+          </span>
+        </Row>
+      </section>
+
       {closed ? null : (
         <section className="flex flex-col gap-1.5" data-task-seats>
           <h3 className="text-xs font-medium text-muted-foreground">Seats that take part</h3>
@@ -1038,6 +1078,21 @@ function Info(props: {
               })
             }
           />
+          {seatsChangedForTask(task.settings).length > 0 ? (
+            <div
+              className="rounded border border-border bg-muted/40 px-2 py-1.5 text-[11px]"
+              data-task-seats-changed
+            >
+              <p className="font-medium">
+                Changed for this task only. The team's own setting is as it was.
+              </p>
+              <ul className="list-disc pl-4 text-muted-foreground">
+                {seatsChangedForTask(task.settings).map((line) => (
+                  <li key={line}>{line}</li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
           {problems.length > 0 ? (
             <ul className="list-disc pl-5 text-[11px] text-warning" data-delivery-problem>
               {problems.map((item) => (
@@ -1275,7 +1330,12 @@ export function TaskWorkspace(props: {
                 />
               </div>
               <div className={cn("min-h-0 xl:flex", tab === "info" ? "flex" : "hidden")}>
-                <Info environmentId={props.environmentId} task={task} onChanged={read.refresh} />
+                <Info
+                  environmentId={props.environmentId}
+                  from={props.from}
+                  task={task}
+                  onChanged={read.refresh}
+                />
               </div>
             </div>
             <DecisionBar
