@@ -65,7 +65,12 @@ describe("pi", () => {
     expect(sessionIdFromPath("/p/2026-09-28T12-28-44-844Z_01a0e7fd-2fab.jsonl", "pi")).toBe(
       "01a0e7fd-2fab",
     );
-    expect(sessionIdFromPath("/k/sessions/abc/sess-1/wire.jsonl", "kimi")).toBe("sess-1");
+    expect(
+      sessionIdFromPath("/k/sessions/wd_x/session_75398f63/agents/main/wire.jsonl", "kimi"),
+    ).toBe("session_75398f63");
+    expect(
+      sessionIdFromPath("C:\\k\\sessions\\wd_x\\session_1\\agents\\agent-0\\wire.jsonl", "kimi"),
+    ).toBe("session_1");
   });
 });
 

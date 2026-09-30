@@ -169,11 +169,15 @@ export async function listTranscriptFiles(
 
 /**
  * The session a line-per-call record belongs to, from where the harness keeps it.
- * pi names its file `<time>_<session id>.jsonl`; Kimi keeps one `wire.jsonl`
- * in the folder of each session.
+ * pi names its file `<time>_<session id>.jsonl`; Kimi keeps a `wire.jsonl` for each
+ * agent of a session, in `session_<id>/agents/<agent>/`.
  */
 export function sessionIdFromPath(filePath: string, provider: UsageProviderKind): string {
-  if (provider === "kimi") return NodePath.basename(NodePath.dirname(filePath));
+  if (provider === "kimi") {
+    const folders = NodePath.dirname(filePath).split(/[\\/]/);
+    const session = folders.findLast((folder) => folder.startsWith("session_"));
+    return session ?? folders.at(-1) ?? "";
+  }
   const name = NodePath.basename(filePath, ".jsonl");
   const underscore = name.lastIndexOf("_");
   return underscore >= 0 ? name.slice(underscore + 1) : name;
