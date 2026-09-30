@@ -683,7 +683,9 @@ export interface DeliveryCard {
   readonly approvals: ReadonlyArray<{
     readonly actor: string;
     readonly decision: string;
+    /** As last proved for display, at `verifiedAt`. Approving and publishing prove it again. */
     readonly stands: boolean;
+    readonly verifiedAt: string | null;
   }>;
   /** Questions of the team that wait for a person. */
   readonly questions: number;
@@ -838,6 +840,7 @@ export const parseCard = (value: Json): DeliveryCard => {
       actor: text(approval.actor),
       decision: text(approval.decision),
       stands: flag(approval.stands),
+      verifiedAt: textOrNull(approval.verifiedAt),
     })),
     questions: count(value.questions),
     proposals: count(value.proposals),

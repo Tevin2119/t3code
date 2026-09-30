@@ -52,6 +52,7 @@ import { Textarea } from "../ui/textarea";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { WorkspacePageHeader } from "../WorkspacePageHeader";
 import { FlowChoice, useFlowPreview } from "./OrchestratorPanel";
+import { InfoPopover } from "./InfoPopover";
 import { SeatSettingsPanel } from "./SeatSettingsPanel";
 import {
   AttachButton,
@@ -350,12 +351,9 @@ export function TaskEditor(props: {
             <span className="text-xs text-muted-foreground" data-task-editor-state>
               {state}. Nothing runs for a draft.
             </span>
-            <p
-              className="order-last w-full text-[11px] text-muted-foreground"
-              data-delivery-what-starts={flow}
-            >
+            <InfoPopover label="What Submit does" marker={{ "data-delivery-what-starts": flow }}>
               {whatStartDoes(flow, "Submit")}
-            </p>
+            </InfoPopover>
             {conversationRef ? (
               <p
                 className="order-last w-full rounded-md border border-border bg-muted/40 px-2 py-1.5 text-xs"

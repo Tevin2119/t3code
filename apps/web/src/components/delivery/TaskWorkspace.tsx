@@ -36,6 +36,7 @@ import {
   type TimelineEntry,
 } from "../../lib/delivery";
 import {
+  ageLabel,
   COMPOSER_EFFECT,
   COMPOSER_KIND_HELP,
   COMPOSER_KIND_LABEL,
@@ -915,8 +916,25 @@ function Info(props: {
         ) : null}
         {card.approvals.map((approval) => (
           <Row key={`${approval.actor}:${approval.decision}:${approval.stands}`} label="Decision">
-            {approval.decision} by {approval.actor},{" "}
-            {approval.stands ? "stands" : "no longer stands"}
+            <span
+              className="flex flex-col items-end"
+              data-task-approval-verified={approval.verifiedAt ?? ""}
+            >
+              <span>
+                {approval.decision} by {approval.actor},{" "}
+                {approval.stands ? "stands" : "no longer stands"}
+              </span>
+              {approval.verifiedAt ? (
+                <span className="text-[10px] text-muted-foreground">
+                  checked{" "}
+                  {ageLabel(approval.verifiedAt, now) === "now" ||
+                  !ageLabel(approval.verifiedAt, now)
+                    ? "just now"
+                    : `${ageLabel(approval.verifiedAt, now)} ago`}
+                  ; proved again before anything is published
+                </span>
+              ) : null}
+            </span>
           </Row>
         ))}
       </section>

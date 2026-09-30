@@ -1,4 +1,5 @@
 import type { EnvironmentId } from "@t3tools/contracts";
+import { InfoPopover } from "./InfoPopover";
 import { useNavigate } from "@tanstack/react-router";
 
 import { whatStartDoes } from "../../lib/deliveryBoard";
@@ -313,10 +314,10 @@ export function OrchestratorComposerControls(props: {
         </Popover>
       ) : null}
 
-      {/* Said where it is seen on a phone too: what Start does, and where it goes. */}
-      <p className="w-full text-[11px] text-muted-foreground" data-delivery-what-starts={flow}>
+      {/* What Start does, a tap away: kept out of the way, and reachable on a phone. */}
+      <InfoPopover label="What Start does" marker={{ "data-delivery-what-starts": flow }}>
         {whatStartDoes(flow, "Start")}
-      </p>
+      </InfoPopover>
 
       {problems.length > 0 ? (
         <span
