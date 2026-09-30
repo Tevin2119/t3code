@@ -29,6 +29,7 @@ import {
   parseTask,
   seatSettingsToSend,
   TASK_PRIORITIES,
+  targetLine,
   type TaskBrief,
   type TaskFile,
   type TaskPriority,
@@ -1019,6 +1020,20 @@ function Info(props: {
               </SelectPopup>
             </Select>
           )}
+        </Row>
+        {/* Where its work is done. A task keeps it; moving it to another board does not change it. */}
+        <Row label="Repository">
+          <span
+            className="flex min-w-0 flex-col"
+            data-task-target={task.target?.ok ? "ok" : "none"}
+          >
+            <span className={task.target?.ok ? "" : "text-warning"}>{targetLine(task.target)}</span>
+            {task.target?.ok && task.target.path ? (
+              <span className="truncate font-mono text-[11px] text-muted-foreground">
+                {task.target.path}
+              </span>
+            ) : null}
+          </span>
         </Row>
         <Row label="Team">{task.team}</Row>
         <Row label="Flow">
