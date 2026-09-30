@@ -10,6 +10,7 @@ import {
   MenuGroupLabel,
   MenuItem,
   MenuPopup,
+  MenuSeparator,
   MenuTrigger,
 } from "../ui/menu";
 
@@ -47,6 +48,15 @@ export function LaneFilterMenu(props: {
           : `${chosen.length} column${chosen.length === 1 ? "" : "s"}`}
       </MenuTrigger>
       <MenuPopup align="start" className="w-64">
+        {/* The way back to every column comes first, before the list. */}
+        {chosen.length > 0 ? (
+          <>
+            <MenuItem onClick={() => props.onChange([])} data-board-lane-all>
+              Show every column
+            </MenuItem>
+            <MenuSeparator />
+          </>
+        ) : null}
         {/* A group label needs a MenuGroup around it, or Base UI throws (error 31). */}
         <MenuGroup>
           <MenuGroupLabel>Show only these columns</MenuGroupLabel>
@@ -76,11 +86,6 @@ export function LaneFilterMenu(props: {
             ))
           )}
         </MenuGroup>
-        {chosen.length > 0 ? (
-          <MenuItem onClick={() => props.onChange([])} data-board-lane-all>
-            Show every column
-          </MenuItem>
-        ) : null}
       </MenuPopup>
     </Menu>
   );

@@ -23,7 +23,14 @@ import {
   DialogTitle,
 } from "../ui/dialog";
 import { Input } from "../ui/input";
-import { Menu, MenuCheckboxItem, MenuPopup, MenuTrigger } from "../ui/menu";
+import {
+  Menu,
+  MenuCheckboxItem,
+  MenuItem,
+  MenuPopup,
+  MenuSeparator,
+  MenuTrigger,
+} from "../ui/menu";
 import { modelProviderLabel, PROVIDER_ORDER, PROVIDER_PRESENTATION } from "./usageProviders";
 
 export interface UsageFilterState {
@@ -66,6 +73,7 @@ function FilterMenu(props: {
   readonly options: ReadonlyArray<{ readonly value: string; readonly label: string }>;
   readonly chosen: ReadonlySet<string>;
   readonly onChange: (value: string, on: boolean) => void;
+  readonly onClear: () => void;
 }) {
   return (
     <Menu>
@@ -78,20 +86,31 @@ function FilterMenu(props: {
           </Button>
         }
       />
-      <MenuPopup align="start" className="max-h-80 w-72 max-w-[calc(100vw-2rem)] overflow-y-auto">
-        {props.options.length === 0 ? (
-          <p className="px-2 py-2 text-xs text-muted-foreground">Nothing in this window.</p>
+      <MenuPopup align="start" className="w-72 max-w-[calc(100vw-2rem)]">
+        {/* First and pinned: the way back to everything, however long the list grows. */}
+        {props.chosen.size > 0 ? (
+          <>
+            <MenuItem onClick={props.onClear} data-usage-filter-clear={props.label}>
+              Show all {props.label.toLowerCase()}s
+            </MenuItem>
+            <MenuSeparator />
+          </>
         ) : null}
-        {props.options.map((option) => (
-          <MenuCheckboxItem
-            key={option.value}
-            checked={props.chosen.has(option.value)}
-            closeOnClick={false}
-            onCheckedChange={(on) => props.onChange(option.value, on)}
-          >
-            <span className="truncate">{option.label}</span>
-          </MenuCheckboxItem>
-        ))}
+        <div className="max-h-72 overflow-y-auto">
+          {props.options.length === 0 ? (
+            <p className="px-2 py-2 text-xs text-muted-foreground">Nothing in this window.</p>
+          ) : null}
+          {props.options.map((option) => (
+            <MenuCheckboxItem
+              key={option.value}
+              checked={props.chosen.has(option.value)}
+              closeOnClick={false}
+              onCheckedChange={(on) => props.onChange(option.value, on)}
+            >
+              <span className="truncate">{option.label}</span>
+            </MenuCheckboxItem>
+          ))}
+        </div>
       </MenuPopup>
     </Menu>
   );
@@ -154,6 +173,7 @@ export function UsageFilterBar(props: {
         {accounts.length > 0 ? (
           <FilterMenu
             label="Account"
+            onClear={() => onChange({ ...filter, accounts: new Set() })}
             options={accounts}
             chosen={filter.accounts}
             onChange={(value, on) =>
@@ -163,6 +183,7 @@ export function UsageFilterBar(props: {
         ) : null}
         <FilterMenu
           label="Harness"
+          onClear={() => onChange({ ...filter, harnesses: new Set() })}
           options={harnesses}
           chosen={filter.harnesses}
           onChange={(value, on) =>
@@ -174,6 +195,7 @@ export function UsageFilterBar(props: {
         />
         <FilterMenu
           label="Provider"
+          onClear={() => onChange({ ...filter, modelProviders: new Set() })}
           options={providers}
           chosen={filter.modelProviders}
           onChange={(value, on) =>
@@ -182,6 +204,7 @@ export function UsageFilterBar(props: {
         />
         <FilterMenu
           label="Model"
+          onClear={() => onChange({ ...filter, models: new Set() })}
           options={models}
           chosen={filter.models}
           onChange={(value, on) =>

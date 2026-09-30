@@ -106,6 +106,22 @@ export function BoardPicker(props: {
             <LayersIcon />
           </Button>
         </div>
+        {/* First and pinned: reachable however long the list below grows. */}
+        <div className="border-b border-border p-1">
+          <Button
+            size="xs"
+            variant="ghost"
+            className="w-full justify-start"
+            onClick={() => {
+              setOpen(false);
+              props.onCreate();
+            }}
+            data-board-picker-new={props.marker}
+          >
+            <PlusIcon />
+            {props.newLabel}
+          </Button>
+        </div>
         <div
           className="flex max-h-72 flex-col overflow-y-auto p-1"
           role="listbox"
@@ -168,21 +184,6 @@ export function BoardPicker(props: {
               ) : null}
             </div>
           ))}
-        </div>
-        <div className="border-t border-border p-1">
-          <Button
-            size="xs"
-            variant="ghost"
-            className="w-full justify-start"
-            onClick={() => {
-              setOpen(false);
-              props.onCreate();
-            }}
-            data-board-picker-new={props.marker}
-          >
-            <PlusIcon />
-            {props.newLabel}
-          </Button>
         </div>
       </PopoverPopup>
     </Popover>
