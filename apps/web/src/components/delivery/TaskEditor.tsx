@@ -621,11 +621,14 @@ export function TaskEditor(props: {
                   <BoardPicker
                     label="Task board"
                     marker="task-board"
+                    look="field"
+                    noneYet="You have no boards yet. New board… makes one, named for the work it groups, and puts this task on it."
                     items={[
                       {
                         id: NO_BOARD,
                         title: "Not on a board",
-                        description: "Shown under Not on a board until it is put on one.",
+                        description:
+                          "The default. The task shows under Not on a board until you put it on one.",
                         kind: "built-in",
                       },
                       ...boards,

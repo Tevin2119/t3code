@@ -14,6 +14,7 @@ import {
 } from "../ui/dialog";
 import { Input } from "../ui/input";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
+import { selectTriggerVariants } from "../ui/select";
 import { Textarea } from "../ui/textarea";
 
 export interface PickerItem {
@@ -40,6 +41,10 @@ export function BoardPicker(props: {
   readonly onCreate: () => void;
   readonly onEdit: (item: PickerItem) => void;
   readonly marker: string;
+  /** "field" in a form, shaped like the form's other choices; a header button otherwise. */
+  readonly look?: "field";
+  /** Said under the list while a person has made none of their own. */
+  readonly noneYet?: string;
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -59,18 +64,33 @@ export function BoardPicker(props: {
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger
         render={
-          <Button
-            size="xs"
-            variant="ghost"
-            aria-label={props.label}
-            className="max-w-48 min-w-0"
-            data-board-picker={props.marker}
-            data-board-picker-value={props.value}
-          />
+          props.look === "field" ? (
+            <button
+              type="button"
+              aria-label={props.label}
+              className={selectTriggerVariants({ size: "compact" })}
+              data-board-picker={props.marker}
+              data-board-picker-value={props.value}
+            />
+          ) : (
+            <Button
+              size="xs"
+              variant="ghost"
+              aria-label={props.label}
+              className="max-w-48 min-w-0"
+              data-board-picker={props.marker}
+              data-board-picker-value={props.value}
+            />
+          )
         }
       >
-        <span className="truncate">{current?.title ?? props.value}</span>
-        <ChevronDownIcon className="size-3 opacity-60" aria-hidden />
+        <span className={props.look === "field" ? "flex-1 truncate" : "truncate"}>
+          {current?.title ?? props.value}
+        </span>
+        <ChevronDownIcon
+          className={props.look === "field" ? "-me-1 size-3 opacity-50" : "size-3 opacity-60"}
+          aria-hidden
+        />
       </PopoverTrigger>
       <PopoverPopup align="start" className="w-80 max-w-[calc(100vw-2rem)] p-0">
         <div className="flex items-center gap-1 border-b border-border p-2">
@@ -186,6 +206,14 @@ export function BoardPicker(props: {
             </div>
           ))}
         </div>
+        {props.noneYet && !words && !props.items.some((item) => item.kind === "own") ? (
+          <p
+            className="border-t border-border px-3 py-2 text-xs text-muted-foreground"
+            data-board-picker-none-yet
+          >
+            {props.noneYet}
+          </p>
+        ) : null}
       </PopoverPopup>
     </Popover>
   );

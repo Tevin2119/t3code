@@ -527,6 +527,7 @@ export function BoardPage() {
               value={boardSet}
               everything={{ id: "all", label: "Show every task" }}
               newLabel="New board…"
+              noneYet="You have no boards yet. New board… makes one to group tasks, such as Pilot work; tasks are put on it from New task or a task's page."
               onChoose={setBoardSet}
               onCreate={() => setDialog({ kind: "board", editing: null })}
               onEdit={(item) => setDialog({ kind: "board", editing: item })}
