@@ -620,6 +620,16 @@ export function BoardPage() {
                 {SET_HELP[boardSet]}
               </p>
             ) : null}
+            {boardSet === "pilot" &&
+            parsed !== null &&
+            parsed.lanes.every((lane) => lane.cards.length === 0) ? (
+              <p className="px-4 pt-2 text-xs text-muted-foreground" data-board-empty-pilot>
+                No pilot work yet. New task starts some.
+                {(parsed.sets.find((entry) => entry.id === "qualification")?.count ?? 0) > 0
+                  ? ` The qualification's ${parsed.sets.find((entry) => entry.id === "qualification")?.count} tasks are kept, as its evidence, under Qualification at the top.`
+                  : ""}
+              </p>
+            ) : null}
             {parsed?.note ? (
               <p className="px-4 pt-2 text-xs text-muted-foreground">{parsed.note}</p>
             ) : null}
