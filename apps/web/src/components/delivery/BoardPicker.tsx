@@ -493,6 +493,12 @@ export function BoardDialog(props: {
                     : "Choose the branch work starts from."}
             </p>
           ) : null}
+          {isBoard && bindingReady && chosen && !chosen.ok ? (
+            <p className="text-xs text-warning" data-board-dialog-why>
+              {chosen.title}: {chosen.problem ?? "it cannot be read"}. Tasks filed on this board
+              cannot be submitted until it can.
+            </p>
+          ) : null}
           {props.kind === "view" && (!name || lanes.length === 0) ? (
             <p className="text-xs text-muted-foreground" data-board-dialog-why>
               {!name ? "Give the view a name." : "Choose at least one column."}
