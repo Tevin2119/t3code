@@ -141,13 +141,14 @@ it.layer(NodeServices.layer)("readHermesUsageLimits", (it) => {
 });
 
 describe("kimiUsageResponseToLimits", () => {
-  it("turns used ratios into percentages and labels the coding allowance", () => {
+  it("turns used ratios into percentages, and shows Code as a part of the monthly limit", () => {
+    // Shaped after the real response of 2026-09-30.
     const limits = kimiUsageResponseToLimits(
       {
         usages: {
           limit_5h: { used_ratio: 0.25, reset_time: "2026-09-27T13:48:00Z" },
-          limit_month_total: { used_ratio: 0.0007, reset_time: "2026-10-26T00:00:00Z" },
-          limit_month_code: { used_ratio: 1.4, reset_time: "2026-10-26T00:00:00Z" },
+          limit_month_total: { used_ratio: 0.0454, reset_time: "2026-10-26T00:00:00Z" },
+          limit_month_code: { used_ratio: 0.01, reset_time: "2026-10-26T00:00:00Z" },
         },
       },
       checkedAt,
@@ -156,9 +157,20 @@ describe("kimiUsageResponseToLimits", () => {
       limits.windows.map((window) => [window.id, window.kind, window.label, window.usedPercent]),
     ).toEqual([
       ["kimi_limit_5h", "session", "Session", 25],
-      ["kimi_limit_month_code", "monthly", "Monthly · Code", 100],
-      ["kimi_limit_month_total", "monthly", "Monthly", expect.closeTo(0.07, 5)],
+      [
+        "kimi_limit_month_total",
+        "monthly",
+        "Monthly · used by Code 1%, by Kimi 3.5%",
+        expect.closeTo(4.54, 5),
+      ],
     ]);
+    // With no Code figure, the monthly window keeps its plain name.
+    expect(
+      kimiUsageResponseToLimits(
+        { usages: { limit_month_total: { used_ratio: 0.2 } } },
+        checkedAt,
+      ).windows.map((window) => window.label),
+    ).toEqual(["Monthly"]);
     expect(limits.windows[0]?.resetsAt).toBe("2026-09-27T13:48:00.000Z");
     expect(kimiUsageResponseToLimits({}, checkedAt).unavailable?.reason).toBe("unsupported");
   });

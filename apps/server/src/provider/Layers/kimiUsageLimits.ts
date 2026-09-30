@@ -74,8 +74,7 @@ function windowForUsage(
         : kind === "monthly"
           ? "Monthly"
           : "Quota";
-  // The plan counts coding requests apart from the account total.
-  const label = name.endsWith("_code") ? `${base} · Code` : base;
+  const label = base;
   const reset = entry.reset_time ? DateTime.make(entry.reset_time) : Option.none();
   return {
     id: `kimi_${name}`,
@@ -88,13 +87,47 @@ function windowForUsage(
   };
 }
 
+/** One share of a ratio, as a person reads it: 4.5%, <0.1%, 0%. */
+const shareText = (ratio: number): string => {
+  const percent = clampPercent(ratio * 100);
+  if (percent === 0) return "0%";
+  if (percent < 0.1) return "<0.1%";
+  return `${Math.round(percent * 10) / 10}%`;
+};
+
+/**
+ * `limit_month_code` is not an allowance of its own. Kimi's own CLI and web app show one
+ * monthly limit (`limit_month_total`) and split what was used of it in two: Code, the ratio
+ * of `limit_month_code`, and Kimi, the rest (total minus code). So Code is folded into the
+ * monthly window's label, in Kimi's words, and never shown as a quota with its own "left".
+ * Which use Kimi counts as Code is not documented, and the label does not guess.
+ */
 export function kimiUsageResponseToLimits(
   response: typeof KimiUsageResponse.Type,
   checkedAt: string,
 ): ServerProviderUsageLimits {
-  const windows = Object.entries(response.usages ?? {}).flatMap(([name, entry]) => {
+  const usages = response.usages ?? {};
+  const code = usages["limit_month_code"]?.used_ratio;
+  const total = usages["limit_month_total"]?.used_ratio;
+  const windows = Object.entries(usages).flatMap(([name, entry]) => {
+    if (name === "limit_month_code") return [];
     const window = windowForUsage(name, entry);
-    return window ? [window] : [];
+    if (!window) return [];
+    if (
+      name === "limit_month_total" &&
+      total !== undefined &&
+      code !== undefined &&
+      Number.isFinite(code)
+    ) {
+      const other = Math.max(0, Math.round((total - code) * 1e6) / 1e6);
+      return [
+        {
+          ...window,
+          label: `Monthly · used by Code ${shareText(code)}, by Kimi ${shareText(other)}`,
+        },
+      ];
+    }
+    return [window];
   });
   if (windows.length === 0) return makeUnavailableUsageLimits({ checkedAt, reason: "unsupported" });
   return makeUsageLimits({ checkedAt, windows });
