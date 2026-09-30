@@ -184,7 +184,7 @@ export function ProviderBreakdownTable(props: {
       <thead>
         <tr className="border-b border-border text-left text-xs text-muted-foreground">
           <th className="py-2 font-normal">Provider</th>
-          <th className="py-2 font-normal">Through</th>
+          <th className="py-2 font-normal">Through (share of tokens)</th>
           <th className="py-2 text-right font-normal">Cost</th>
           <th className="py-2 text-right font-normal">Tokens</th>
         </tr>
@@ -208,8 +208,31 @@ export function ProviderBreakdownTable(props: {
                   {modelProviderLabel(row.modelProvider, row.modelProviderSource)}
                 </span>
               </td>
-              <td className="py-2 text-xs text-muted-foreground">
-                {row.harnesses.map((kind) => PROVIDER_PRESENTATION[kind].label).join(", ")}
+              <td className="py-2 text-xs text-muted-foreground" data-usage-provider-through>
+                {/* Each harness's share of this provider's tokens, as a bar and in words. */}
+                <span className="flex h-1.5 w-full max-w-40 overflow-hidden rounded-full bg-muted">
+                  {row.byHarness.map((part) => (
+                    <span
+                      key={part.harness}
+                      style={{
+                        width: `${part.tokenShare * 100}%`,
+                        backgroundColor: PROVIDER_PRESENTATION[part.harness].color,
+                      }}
+                    />
+                  ))}
+                </span>
+                <span className="mt-1 flex flex-wrap gap-x-2">
+                  {row.byHarness.map((part) => (
+                    <span key={part.harness} className="whitespace-nowrap tabular-nums">
+                      {PROVIDER_PRESENTATION[part.harness].label}{" "}
+                      {part.tokenShare >= 0.995
+                        ? "100%"
+                        : part.tokenShare < 0.005
+                          ? "<1%"
+                          : `${Math.round(part.tokenShare * 100)}%`}
+                    </span>
+                  ))}
+                </span>
               </td>
               <td className="py-2 text-right tabular-nums">
                 {row.records > 0 && row.unpricedRecords >= row.records ? (

@@ -69,6 +69,13 @@ export interface ModelProviderTotals {
   readonly records: number;
   readonly unpricedRecords: number;
   readonly harnesses: readonly UsageProviderKind[];
+  /** Each harness's part of this provider's usage, largest first. Shares are of tokens. */
+  readonly byHarness: readonly {
+    readonly harness: UsageProviderKind;
+    readonly totalTokens: number;
+    readonly costUsd: number;
+    readonly tokenShare: number;
+  }[];
 }
 
 /**
@@ -321,6 +328,7 @@ export function mergeUsage(
       records: number;
       unpricedRecords: number;
       harnesses: Set<UsageProviderKind>;
+      byHarness: Map<UsageProviderKind, { totalTokens: number; costUsd: number }>;
     }
   >();
   const modelAccumulator = new Map<
@@ -409,6 +417,7 @@ export function mergeUsage(
         records: 0,
         unpricedRecords: 0,
         harnesses: new Set<UsageProviderKind>(),
+        byHarness: new Map<UsageProviderKind, { totalTokens: number; costUsd: number }>(),
       };
       providerEntry.sources.add(bucket.modelProviderSource ?? null);
       providerEntry.costUsd += bucket.costUsd;
@@ -416,6 +425,13 @@ export function mergeUsage(
       providerEntry.records += bucket.records;
       providerEntry.unpricedRecords += bucket.unpricedRecords;
       providerEntry.harnesses.add(bucket.provider);
+      const through = providerEntry.byHarness.get(bucket.provider) ?? {
+        totalTokens: 0,
+        costUsd: 0,
+      };
+      through.totalTokens += tokens;
+      through.costUsd += bucket.costUsd;
+      providerEntry.byHarness.set(bucket.provider, through);
       modelProviderAccumulator.set(modelProvider ?? "", providerEntry);
 
       const modelKey = [bucket.provider, modelProvider ?? "", bucket.model].join("\u0000");
@@ -512,6 +528,14 @@ export function mergeUsage(
       records: totals.records,
       unpricedRecords: totals.unpricedRecords,
       harnesses: [...totals.harnesses].sort(),
+      byHarness: [...totals.byHarness]
+        .map(([harness, through]) => ({
+          harness,
+          totalTokens: through.totalTokens,
+          costUsd: through.costUsd,
+          tokenShare: totals.totalTokens === 0 ? 0 : through.totalTokens / totals.totalTokens,
+        }))
+        .sort((a, b) => b.totalTokens - a.totalTokens),
     }))
     .sort((a, b) => b.totalTokens - a.totalTokens);
 

@@ -112,6 +112,17 @@ describe("usage by harness, provider and model", () => {
     ]);
   });
 
+  it("gives each harness its share of a provider's tokens", () => {
+    const zai = merged(BUCKETS).modelProviders.find((entry) => entry.modelProvider === "zai");
+    expect(zai?.byHarness.map((part) => [part.harness, part.totalTokens, part.tokenShare])).toEqual(
+      [
+        ["hermes", 400, 400 / 700],
+        ["opencode", 200, 200 / 700],
+        ["pi", 100, 100 / 700],
+      ],
+    );
+  });
+
   it("narrows by harness, with the sessions of those harnesses", () => {
     const narrowed = merged(BUCKETS, { harnesses: new Set(["pi", "hermes"]) });
     expect([narrowed.totalTokens, narrowed.sessions, narrowed.sessionsUnfiltered]).toEqual([
