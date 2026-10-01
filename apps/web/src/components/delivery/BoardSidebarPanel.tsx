@@ -1,6 +1,6 @@
 import { useLocation, useNavigate } from "@tanstack/react-router";
-import { ChevronRightIcon, PlusIcon, SearchIcon, UsersIcon } from "lucide-react";
-import { useMemo, type ReactNode } from "react";
+import { ChevronRightIcon, PlusIcon, SearchIcon, UsersIcon, XIcon } from "lucide-react";
+import { useMemo, useState, type ReactNode } from "react";
 
 import {
   parseBoard,
@@ -168,6 +168,7 @@ export function BoardSidebarPanel() {
   const enabled = useDeliveryEnabled(environmentId);
   const navigate = useNavigate();
   const { isMobile, setOpenMobile } = useSidebar();
+  const [mobileSearchOpen, setMobileSearchOpen] = useState(false);
   const location = useLocation({
     select: (at) => ({
       pathname: at.pathname,
@@ -284,9 +285,19 @@ export function BoardSidebarPanel() {
           >
             <BoardIcon />
           </Button>
+          <Button
+            size="icon-sm"
+            variant={filters.q ? "secondary" : "ghost"}
+            aria-label={mobileSearchOpen ? "Close task search" : "Search tasks"}
+            aria-expanded={mobileSearchOpen}
+            className="md:hidden"
+            onClick={() => setMobileSearchOpen((open) => !open)}
+          >
+            {mobileSearchOpen ? <XIcon /> : <SearchIcon />}
+          </Button>
         </div>
 
-        <span className="relative flex items-center">
+        <span className="relative hidden items-center md:flex">
           <SearchIcon className="pointer-events-none absolute left-2 z-10 size-3.5 text-sidebar-muted-foreground" />
           <Input
             type="search"
@@ -298,6 +309,21 @@ export function BoardSidebarPanel() {
             data-board-panel-search
           />
         </span>
+        {mobileSearchOpen ? (
+          <span className="relative flex items-center md:hidden">
+            <SearchIcon className="pointer-events-none absolute left-2 z-10 size-3.5 text-sidebar-muted-foreground" />
+            <Input
+              type="search"
+              aria-label="Search tasks"
+              placeholder="#1001, a title, a tag"
+              className="h-8 pl-7 text-xs"
+              value={filters.q}
+              onChange={(event) => setFilters({ q: event.target.value })}
+              data-board-panel-search
+              autoFocus
+            />
+          </span>
+        ) : null}
 
         {boardSet !== "unsorted" ? (
           <p
