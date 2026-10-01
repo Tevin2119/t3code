@@ -411,6 +411,7 @@ export function BoardPage() {
   } | null>(null);
   const [dialogBusy, setDialogBusy] = useState(false);
   const [dialogProblem, setDialogProblem] = useState<string | null>(null);
+  const [mobileSearchOpen, setMobileSearchOpen] = useState(false);
   const board = useDeliveryRead(active, `/api/lanes?view=${view}&set=${boardSet}`, {
     pollMs: showingBoard ? 4_000 : 15_000,
   });
@@ -580,7 +581,7 @@ export function BoardPage() {
               onCreate={() => setDialog({ kind: "view", editing: null })}
               onEdit={(item) => setDialog({ kind: "view", editing: item })}
             />
-            <span className="relative flex items-center">
+            <span className="relative hidden items-center md:flex">
               <SearchIcon className="pointer-events-none absolute left-2 z-10 size-3.5 text-muted-foreground" />
               <Input
                 aria-label="Search tasks"
@@ -590,6 +591,30 @@ export function BoardPage() {
                 onChange={(event) => setFilters({ q: event.target.value })}
               />
             </span>
+            <Button
+              size="icon-xs"
+              variant={filters.q ? "secondary" : "ghost"}
+              aria-label={mobileSearchOpen ? "Close board search" : "Search the board"}
+              aria-expanded={mobileSearchOpen}
+              className="md:hidden"
+              onClick={() => setMobileSearchOpen((open) => !open)}
+              data-board-search-toggle
+            >
+              {mobileSearchOpen ? <XIcon /> : <SearchIcon />}
+            </Button>
+            {mobileSearchOpen ? (
+              <span className="relative flex min-w-0 flex-1 items-center md:hidden">
+                <SearchIcon className="pointer-events-none absolute left-2 z-10 size-3.5 text-muted-foreground" />
+                <Input
+                  aria-label="Search tasks"
+                  placeholder="Search by #number, title, tag, owner"
+                  className="h-7 w-full pl-7 text-xs"
+                  value={filters.q}
+                  onChange={(event) => setFilters({ q: event.target.value })}
+                  autoFocus
+                />
+              </span>
+            ) : null}
             <Select
               value={grouping}
               onValueChange={(value) => setGrouping(String(value) as BoardGrouping)}
