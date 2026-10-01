@@ -13,6 +13,7 @@ import {
   EllipsisIcon,
   FileIcon,
   GitCommitHorizontalIcon,
+  InfoIcon,
   ListChecksIcon,
   PaperclipIcon,
   PencilIcon,
@@ -63,6 +64,7 @@ import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
+import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { SidebarInset } from "../ui/sidebar";
 import { Textarea } from "../ui/textarea";
@@ -257,12 +259,31 @@ function Happening(props: { readonly entry: TimelineEntry }) {
   );
 }
 
+function MobileHelp(props: { readonly label: string; readonly children: React.ReactNode }) {
+  return (
+    <Popover>
+      <PopoverTrigger
+        render={
+          <Button size="icon-sm" variant="ghost" className="sm:hidden" aria-label={props.label} />
+        }
+      >
+        <InfoIcon />
+      </PopoverTrigger>
+      <PopoverPopup side="top" className="max-w-[min(20rem,calc(100vw-2rem))] text-xs">
+        {props.children}
+      </PopoverPopup>
+    </Popover>
+  );
+}
+
 function Composer(props: {
   readonly environmentId: EnvironmentId | null;
   readonly task: TaskView;
   readonly replyTo: TimelineEntry | null;
   readonly onReplyTo: (entry: TimelineEntry | null) => void;
   readonly onSent: () => void;
+  readonly expanded: boolean;
+  readonly onExpandedChange: (expanded: boolean) => void;
 }) {
   const { task } = props;
   const person = usePersonName();
@@ -333,143 +354,174 @@ function Composer(props: {
   return (
     <div
       className={cn(
-        "flex flex-col gap-2 border-t border-border p-3",
+        "flex min-h-0 shrink-0 flex-col border-t border-border p-2 sm:p-3 max-sm:max-h-[45%]",
         intake.over && "outline-2 -outline-offset-4 outline-ring outline-dashed",
       )}
       data-task-composer
       {...intake.handlers}
     >
-      {problem ? (
-        <p className="text-sm text-warning" data-delivery-problem>
-          {problem}
-        </p>
-      ) : null}
-      {replying ? (
-        <p
-          className="flex items-start gap-1 rounded border border-amber-500/60 bg-amber-500/5 px-2 py-1 text-xs"
-          data-task-composer-reply
-        >
-          <CornerDownRightIcon className="mt-0.5 size-3 shrink-0" />
-          {/* Two lines are enough to say which question: the whole of it is in the history above. */}
-          <span className="line-clamp-2 min-w-0 flex-1">
-            Answering {replying.by}: <span className="text-muted-foreground">{replying.text}</span>
-          </span>
-          <button
-            type="button"
-            aria-label="Do not answer this question"
-            className="cursor-pointer"
-            onClick={() => props.onReplyTo(null)}
-          >
-            <XIcon className="size-3" />
-          </button>
-        </p>
-      ) : waits ? (
-        <p className="text-xs text-amber-700 dark:text-amber-300">
-          A question of {waits.by} waits for you. Choose Answer a question below, or press Answer on
-          it.
-        </p>
-      ) : null}
-      <Textarea
-        aria-label="Message on the task"
-        placeholder={
-          closed
-            ? "This is closed. What was said is kept."
-            : kind === "answer"
-              ? "Your answer"
-              : kind === "status"
-                ? "What do you want to know? The record is read out."
-                : kind === "change"
-                  ? "What is to change in what is asked"
-                  : kind === "note"
-                    ? "A note for the record"
-                    : "Write to the team. Paste or drop files here."
-        }
-        disabled={closed}
-        value={text}
-        onChange={(event) => setText(event.target.value)}
-        onKeyDown={(event) => {
-          if (isSendKey(event.nativeEvent, sendShortcut, text)) {
-            event.preventDefault();
-            void send();
-          }
-        }}
-      />
-      <TaskFileList
-        environmentId={props.environmentId}
-        files={files}
-        compact
-        onRemove={(file) => setFiles((current) => current.filter((item) => item.id !== file.id))}
-      />
-      <FilesInTransit transit={uploads.transit} onDismiss={uploads.dismiss} />
-      <div className="flex items-center gap-1">
-        <AttachButton
-          label="Attach files"
-          disabled={closed}
-          onFiles={(picked) => void attach(picked)}
-        >
-          <PaperclipIcon />
-        </AttachButton>
-        {props.replyTo ? (
-          <Badge size="sm" variant="outline">
-            {COMPOSER_KIND_LABEL.answer}
-          </Badge>
-        ) : (
-          <Select value={kind} onValueChange={(value) => setChosen(value as ComposerKind)}>
-            <SelectTrigger
-              aria-label="What this message is"
-              size="compact"
-              variant="ghost"
-              className="w-auto min-w-0"
-            >
-              <SelectValue>{COMPOSER_KIND_LABEL[kind]}</SelectValue>
-            </SelectTrigger>
-            <SelectPopup alignItemWithTrigger={false}>
-              {kinds.map((item) => (
-                <SelectItem key={item} value={item}>
-                  <span className="flex max-w-96 flex-col">
-                    <span>{COMPOSER_KIND_LABEL[item]}</span>
-                    <span className="text-xs text-muted-foreground">{help(item)}</span>
-                  </span>
-                </SelectItem>
-              ))}
-            </SelectPopup>
-          </Select>
-        )}
-        <span className="min-w-0 flex-1" />
-        <Tooltip>
-          <TooltipTrigger
-            render={
-              <Button
-                size="icon-sm"
-                className="ml-auto rounded-full"
-                aria-label={`Send: ${COMPOSER_KIND_LABEL[kind]}`}
-                disabled={!canSend}
-                onClick={() => void send()}
-                data-task-send
-              />
-            }
-          >
-            <SendIcon />
-          </TooltipTrigger>
-          <TooltipPopup side="top">
-            {uploading ? "Files are still on their way." : `Send: ${COMPOSER_KIND_LABEL[kind]}`}
-          </TooltipPopup>
-        </Tooltip>
-      </div>
-      {/* What sending does, on every screen: whether the work moves because of it. */}
-      <p
-        className={cn(
-          "flex items-start gap-1.5 text-[11px]",
-          effect.moves ? "text-amber-700 dark:text-amber-300" : "text-muted-foreground",
-        )}
-        data-task-composer-effect={effect.moves ? "moves" : "records"}
+      <Button
+        size="sm"
+        variant="ghost"
+        className="shrink-0 justify-start sm:hidden"
+        aria-expanded={props.expanded}
+        aria-controls={`composer-${task.id}`}
+        onClick={() => props.onExpandedChange(!props.expanded)}
+        data-task-composer-toggle
       >
-        <span className="shrink-0 font-medium">
-          {effect.moves ? "Moves the work:" : "Changes nothing:"}
-        </span>
-        <span className="min-w-0">{effect.label}</span>
-      </p>
-      <p className="text-[10px] text-muted-foreground">{help(kind)}</p>
+        <PencilIcon />
+        {props.expanded
+          ? "Hide message"
+          : text.trim() || files.length
+            ? "Continue draft"
+            : "Write to the team"}
+      </Button>
+      <div
+        id={`composer-${task.id}`}
+        className={cn(
+          "min-h-0 flex-col gap-2 overflow-y-auto sm:flex",
+          props.expanded ? "flex" : "hidden",
+        )}
+      >
+        {problem ? (
+          <p className="text-sm text-warning" data-delivery-problem>
+            {problem}
+          </p>
+        ) : null}
+        {replying ? (
+          <p
+            className="flex items-start gap-1 rounded border border-amber-500/60 bg-amber-500/5 px-2 py-1 text-xs"
+            data-task-composer-reply
+          >
+            <CornerDownRightIcon className="mt-0.5 size-3 shrink-0" />
+            {/* Two lines are enough to say which question: the whole of it is in the history above. */}
+            <span className="line-clamp-2 min-w-0 flex-1">
+              Answering {replying.by}:{" "}
+              <span className="text-muted-foreground">{replying.text}</span>
+            </span>
+            <button
+              type="button"
+              aria-label="Do not answer this question"
+              className="cursor-pointer"
+              onClick={() => props.onReplyTo(null)}
+            >
+              <XIcon className="size-3" />
+            </button>
+          </p>
+        ) : waits ? (
+          <p className="text-xs text-amber-700 dark:text-amber-300">
+            A question of {waits.by} waits for you. Choose Answer a question below, or press Answer
+            on it.
+          </p>
+        ) : null}
+        <Textarea
+          aria-label="Message on the task"
+          placeholder={
+            closed
+              ? "This is closed. What was said is kept."
+              : kind === "answer"
+                ? "Your answer"
+                : kind === "status"
+                  ? "What do you want to know? The record is read out."
+                  : kind === "change"
+                    ? "What is to change in what is asked"
+                    : kind === "note"
+                      ? "A note for the record"
+                      : "Write to the team. Paste or drop files here."
+          }
+          disabled={closed}
+          value={text}
+          onChange={(event) => setText(event.target.value)}
+          onKeyDown={(event) => {
+            if (isSendKey(event.nativeEvent, sendShortcut, text)) {
+              event.preventDefault();
+              void send();
+            }
+          }}
+        />
+        <TaskFileList
+          environmentId={props.environmentId}
+          files={files}
+          compact
+          onRemove={(file) => setFiles((current) => current.filter((item) => item.id !== file.id))}
+        />
+        <FilesInTransit transit={uploads.transit} onDismiss={uploads.dismiss} />
+        <div className="flex items-center gap-1">
+          <AttachButton
+            label="Attach files"
+            disabled={closed}
+            onFiles={(picked) => void attach(picked)}
+          >
+            <PaperclipIcon />
+          </AttachButton>
+          {props.replyTo ? (
+            <Badge size="sm" variant="outline">
+              {COMPOSER_KIND_LABEL.answer}
+            </Badge>
+          ) : (
+            <Select value={kind} onValueChange={(value) => setChosen(value as ComposerKind)}>
+              <SelectTrigger
+                aria-label="What this message is"
+                size="compact"
+                variant="ghost"
+                className="w-auto min-w-0"
+              >
+                <SelectValue>{COMPOSER_KIND_LABEL[kind]}</SelectValue>
+              </SelectTrigger>
+              <SelectPopup alignItemWithTrigger={false}>
+                {kinds.map((item) => (
+                  <SelectItem key={item} value={item}>
+                    <span className="flex max-w-96 flex-col">
+                      <span>{COMPOSER_KIND_LABEL[item]}</span>
+                      <span className="text-xs text-muted-foreground">{help(item)}</span>
+                    </span>
+                  </SelectItem>
+                ))}
+              </SelectPopup>
+            </Select>
+          )}
+          <span className="min-w-0 flex-1" />
+          <MobileHelp label="About this message">
+            <p>
+              {effect.moves ? "Moves the work:" : "Changes nothing:"} {effect.label}
+            </p>
+            <p className="mt-2 text-muted-foreground">{help(kind)}</p>
+          </MobileHelp>
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Button
+                  size="icon-sm"
+                  className="ml-auto rounded-full"
+                  aria-label={`Send: ${COMPOSER_KIND_LABEL[kind]}`}
+                  disabled={!canSend}
+                  onClick={() => void send()}
+                  data-task-send
+                />
+              }
+            >
+              <SendIcon />
+            </TooltipTrigger>
+            <TooltipPopup side="top">
+              {uploading ? "Files are still on their way." : `Send: ${COMPOSER_KIND_LABEL[kind]}`}
+            </TooltipPopup>
+          </Tooltip>
+        </div>
+        {/* What sending does, on every screen: whether the work moves because of it. */}
+        <p
+          className={cn(
+            "hidden items-start gap-1.5 text-[11px] sm:flex",
+            effect.moves ? "text-amber-700 dark:text-amber-300" : "text-muted-foreground",
+          )}
+          data-task-composer-effect={effect.moves ? "moves" : "records"}
+        >
+          <span className="shrink-0 font-medium">
+            {effect.moves ? "Moves the work:" : "Changes nothing:"}
+          </span>
+          <span className="min-w-0">{effect.label}</span>
+        </p>
+        <p className="hidden text-[10px] text-muted-foreground sm:block">{help(kind)}</p>
+      </div>
     </div>
   );
 }
@@ -489,11 +541,11 @@ function DecisionBar(props: {
   const deciding = props.actions.some((action) => action === "approve" || action === "reject");
   return (
     <section
-      className="flex flex-col gap-2 border-t border-border bg-muted/30 px-3 py-2 pb-[calc(env(safe-area-inset-bottom)+0.5rem)]"
+      className="flex shrink-0 flex-col gap-1 border-t border-border bg-muted/30 px-3 py-1 pb-[calc(env(safe-area-inset-bottom)+0.25rem)] sm:gap-2 sm:py-2"
       aria-label="Your decision"
       data-task-decisions
     >
-      <p className="text-xs font-medium">
+      <p className="hidden text-xs font-medium sm:block">
         {deciding ? "Your decision" : "What you can do next"}
         {deciding ? (
           <span className="font-normal text-muted-foreground">
@@ -502,9 +554,12 @@ function DecisionBar(props: {
           </span>
         ) : null}
       </p>
-      <div className="grid grid-cols-1 gap-2 sm:flex sm:flex-wrap">
+      <div className="flex items-center gap-2 sm:flex-wrap">
         {props.actions.map((action) => (
-          <div key={action} className="flex min-w-0 flex-col gap-0.5 sm:max-w-80">
+          <div
+            key={action}
+            className="flex min-w-0 flex-1 flex-col gap-0.5 sm:max-w-80 sm:flex-none"
+          >
             <Button
               size="sm"
               variant={action === "reject" ? "outline" : "default"}
@@ -513,13 +568,22 @@ function DecisionBar(props: {
               onClick={() => props.onAction(action)}
               data-task-action={action}
             >
-              {actionLabel(action, props.task.card)}
+              <span className="truncate">{actionLabel(action, props.task.card)}</span>
             </Button>
-            <span className="text-[10px] text-muted-foreground">
+            <span className="hidden text-[10px] text-muted-foreground sm:block">
               {actionHelp(action, props.task.card)}
             </span>
           </div>
         ))}
+        <MobileHelp label="About your decision">
+          {deciding ? <p>Messages never count as a decision.</p> : null}
+          {props.actions.map((item) => (
+            <p key={item} className="mt-2">
+              <strong>{actionLabel(item, props.task.card)}: </strong>
+              {actionHelp(item, props.task.card)}
+            </p>
+          ))}
+        </MobileHelp>
       </div>
     </section>
   );
@@ -536,6 +600,7 @@ function Communications(props: {
   const setShowDetail = useBoardStore((state) => state.setShowDetail);
   const act = useDeliveryAct(props.environmentId, "task proposal");
   const [replyTo, setReplyTo] = useState<TimelineEntry | null>(null);
+  const [composerExpanded, setComposerExpanded] = useState(false);
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
   const entries = useMemo(
@@ -609,7 +674,10 @@ function Communications(props: {
               entry={entry}
               repliedTo={entry.replyTo !== null ? (bySeq.get(entry.replyTo) ?? null) : null}
               busy={busy}
-              onReply={setReplyTo}
+              onReply={(entry) => {
+                setReplyTo(entry);
+                setComposerExpanded(true);
+              }}
               onSettle={(item, accept) => void settle(item, accept)}
             />
           ) : (
@@ -629,6 +697,8 @@ function Communications(props: {
       </div>
       {problem ? <p className="px-3 pb-1 text-sm text-warning">{problem}</p> : null}
       <Composer
+        expanded={composerExpanded}
+        onExpandedChange={setComposerExpanded}
         environmentId={props.environmentId}
         task={task}
         replyTo={replying}
@@ -1395,28 +1465,45 @@ export function TaskWorkspace(props: {
     <SidebarInset className="isolate h-dvh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground">
       <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-task-workspace={props.taskId}>
         <WorkspacePageHeader electron={isElectron} className="h-auto">
-          <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2 py-2">
-            <Button size="xs" variant="ghost" onClick={props.onClose}>
+          <div className="flex min-w-0 flex-1 items-center gap-1 py-1 sm:flex-wrap sm:gap-2 sm:py-2">
+            <Button
+              size="xs"
+              variant="ghost"
+              onClick={props.onClose}
+              aria-label={`Back to ${props.from}`}
+            >
               <ArrowLeftIcon />
-              {props.from}
+              <span className="hidden sm:inline">{props.from}</span>
             </Button>
             {task ? (
               <>
-                <span className="font-mono text-xs text-muted-foreground" data-task-number>
+                <span className="shrink-0 font-mono text-xs text-muted-foreground" data-task-number>
                   #{task.number}
                 </span>
-                <h1 className="min-w-0 truncate text-sm font-medium">{task.title}</h1>
+                <h1 className="min-w-0 flex-1 truncate text-sm font-medium sm:flex-none">
+                  {task.title}
+                </h1>
                 <PriorityPill priority={task.priority} by={task.priorityBy} />
-                <Badge size="sm" variant="outline" data-task-state={task.state}>
+                <Badge
+                  size="sm"
+                  variant="outline"
+                  className="max-sm:hidden"
+                  data-task-state={task.state}
+                >
                   {LANE_TITLE[task.lane ?? ""] ?? task.state}
                   {task.held ? ", paused" : ""}
                 </Badge>
-                <span className="font-mono text-[10px] text-muted-foreground">
+                <span
+                  className={cn(
+                    "font-mono text-[10px] text-muted-foreground",
+                    !stale && "max-sm:hidden",
+                  )}
+                >
                   {stale ? "stale" : "live"}
                 </span>
               </>
             ) : null}
-            <div className="ml-auto flex items-center gap-1">
+            <div className="ml-auto flex shrink-0 items-center gap-1">
               {task && others.length > 0 ? (
                 <Menu>
                   <MenuTrigger
@@ -1498,6 +1585,7 @@ export function TaskWorkspace(props: {
               </div>
               <div className={cn("min-h-0 xl:flex", tab === "history" ? "flex" : "hidden")}>
                 <Communications
+                  key={task.id}
                   environmentId={props.environmentId}
                   task={task}
                   onChanged={read.refresh}
