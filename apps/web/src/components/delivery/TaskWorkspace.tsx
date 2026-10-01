@@ -259,12 +259,18 @@ function Happening(props: { readonly entry: TimelineEntry }) {
   );
 }
 
+// Expanded controls need both width and height: landscape phones still need room for history.
 function MobileHelp(props: { readonly label: string; readonly children: React.ReactNode }) {
   return (
     <Popover>
       <PopoverTrigger
         render={
-          <Button size="icon-sm" variant="ghost" className="sm:hidden" aria-label={props.label} />
+          <Button
+            size="icon-sm"
+            variant="ghost"
+            className="[@media(min-width:640px)_and_(min-height:600px)]:hidden"
+            aria-label={props.label}
+          />
         }
       >
         <InfoIcon />
@@ -354,7 +360,7 @@ function Composer(props: {
   return (
     <div
       className={cn(
-        "flex min-h-0 shrink-0 flex-col border-t border-border p-2 sm:p-3 max-sm:max-h-[45%]",
+        "flex min-h-0 shrink-0 flex-col border-t border-border p-2 [@media(min-width:640px)_and_(min-height:600px)]:p-3 max-h-[45%] [@media(min-width:640px)_and_(min-height:600px)]:max-h-none",
         intake.over && "outline-2 -outline-offset-4 outline-ring outline-dashed",
       )}
       data-task-composer
@@ -363,7 +369,7 @@ function Composer(props: {
       <Button
         size="sm"
         variant="ghost"
-        className="shrink-0 justify-start sm:hidden"
+        className="shrink-0 justify-start [@media(min-width:640px)_and_(min-height:600px)]:hidden"
         aria-expanded={props.expanded}
         aria-controls={`composer-${task.id}`}
         onClick={() => props.onExpandedChange(!props.expanded)}
@@ -379,7 +385,7 @@ function Composer(props: {
       <div
         id={`composer-${task.id}`}
         className={cn(
-          "min-h-0 flex-col gap-2 overflow-y-auto sm:flex",
+          "min-h-0 flex-col gap-2 overflow-y-auto [@media(min-width:640px)_and_(min-height:600px)]:flex",
           props.expanded ? "flex" : "hidden",
         )}
       >
@@ -510,7 +516,7 @@ function Composer(props: {
         {/* What sending does, on every screen: whether the work moves because of it. */}
         <p
           className={cn(
-            "hidden items-start gap-1.5 text-[11px] sm:flex",
+            "hidden items-start gap-1.5 text-[11px] [@media(min-width:640px)_and_(min-height:600px)]:flex",
             effect.moves ? "text-amber-700 dark:text-amber-300" : "text-muted-foreground",
           )}
           data-task-composer-effect={effect.moves ? "moves" : "records"}
@@ -520,7 +526,9 @@ function Composer(props: {
           </span>
           <span className="min-w-0">{effect.label}</span>
         </p>
-        <p className="hidden text-[10px] text-muted-foreground sm:block">{help(kind)}</p>
+        <p className="hidden text-[10px] text-muted-foreground [@media(min-width:640px)_and_(min-height:600px)]:block">
+          {help(kind)}
+        </p>
       </div>
     </div>
   );
@@ -541,11 +549,11 @@ function DecisionBar(props: {
   const deciding = props.actions.some((action) => action === "approve" || action === "reject");
   return (
     <section
-      className="flex shrink-0 flex-col gap-1 border-t border-border bg-muted/30 px-3 py-1 pb-[calc(env(safe-area-inset-bottom)+0.25rem)] sm:gap-2 sm:py-2"
+      className="flex shrink-0 flex-col gap-1 border-t border-border bg-muted/30 px-3 py-1 pb-[calc(env(safe-area-inset-bottom)+0.25rem)] [@media(min-width:640px)_and_(min-height:600px)]:gap-2 [@media(min-width:640px)_and_(min-height:600px)]:py-2"
       aria-label="Your decision"
       data-task-decisions
     >
-      <p className="hidden text-xs font-medium sm:block">
+      <p className="hidden text-xs font-medium [@media(min-width:640px)_and_(min-height:600px)]:block">
         {deciding ? "Your decision" : "What you can do next"}
         {deciding ? (
           <span className="font-normal text-muted-foreground">
@@ -554,11 +562,11 @@ function DecisionBar(props: {
           </span>
         ) : null}
       </p>
-      <div className="flex items-center gap-2 sm:flex-wrap">
+      <div className="flex items-center gap-2 [@media(min-width:640px)_and_(min-height:600px)]:flex-wrap">
         {props.actions.map((action) => (
           <div
             key={action}
-            className="flex min-w-0 flex-1 flex-col gap-0.5 sm:max-w-80 sm:flex-none"
+            className="flex min-w-0 flex-1 flex-col gap-0.5 [@media(min-width:640px)_and_(min-height:600px)]:max-w-80 [@media(min-width:640px)_and_(min-height:600px)]:flex-none"
           >
             <Button
               size="sm"
@@ -570,7 +578,7 @@ function DecisionBar(props: {
             >
               <span className="truncate">{actionLabel(action, props.task.card)}</span>
             </Button>
-            <span className="hidden text-[10px] text-muted-foreground sm:block">
+            <span className="hidden text-[10px] text-muted-foreground [@media(min-width:640px)_and_(min-height:600px)]:block">
               {actionHelp(action, props.task.card)}
             </span>
           </div>
@@ -1465,7 +1473,7 @@ export function TaskWorkspace(props: {
     <SidebarInset className="isolate h-dvh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground">
       <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-task-workspace={props.taskId}>
         <WorkspacePageHeader electron={isElectron} className="h-auto">
-          <div className="flex min-w-0 flex-1 items-center gap-1 py-1 sm:flex-wrap sm:gap-2 sm:py-2">
+          <div className="flex min-w-0 flex-1 items-center gap-1 py-1 [@media(min-width:640px)_and_(min-height:600px)]:flex-wrap [@media(min-width:640px)_and_(min-height:600px)]:gap-2 [@media(min-width:640px)_and_(min-height:600px)]:py-2">
             <Button
               size="xs"
               variant="ghost"
@@ -1473,21 +1481,23 @@ export function TaskWorkspace(props: {
               aria-label={`Back to ${props.from}`}
             >
               <ArrowLeftIcon />
-              <span className="hidden sm:inline">{props.from}</span>
+              <span className="hidden [@media(min-width:640px)_and_(min-height:600px)]:inline">
+                {props.from}
+              </span>
             </Button>
             {task ? (
               <>
                 <span className="shrink-0 font-mono text-xs text-muted-foreground" data-task-number>
                   #{task.number}
                 </span>
-                <h1 className="min-w-0 flex-1 truncate text-sm font-medium sm:flex-none">
+                <h1 className="min-w-0 flex-1 truncate text-sm font-medium [@media(min-width:640px)_and_(min-height:600px)]:flex-none">
                   {task.title}
                 </h1>
                 <PriorityPill priority={task.priority} by={task.priorityBy} />
                 <Badge
                   size="sm"
                   variant="outline"
-                  className="max-sm:hidden"
+                  className="hidden [@media(min-width:640px)_and_(min-height:600px)]:inline-flex"
                   data-task-state={task.state}
                 >
                   {LANE_TITLE[task.lane ?? ""] ?? task.state}
@@ -1496,7 +1506,7 @@ export function TaskWorkspace(props: {
                 <span
                   className={cn(
                     "font-mono text-[10px] text-muted-foreground",
-                    !stale && "max-sm:hidden",
+                    !stale && "hidden [@media(min-width:640px)_and_(min-height:600px)]:inline-flex",
                   )}
                 >
                   {stale ? "stale" : "live"}
