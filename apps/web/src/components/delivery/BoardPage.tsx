@@ -603,7 +603,7 @@ export function BoardPage() {
               {mobileSearchOpen ? <XIcon /> : <SearchIcon />}
             </Button>
             {mobileSearchOpen ? (
-              <span className="relative flex min-w-0 flex-1 items-center md:hidden">
+              <span className="relative flex min-w-0 basis-full items-center md:hidden">
                 <SearchIcon className="pointer-events-none absolute left-2 z-10 size-3.5 text-muted-foreground" />
                 <Input
                   aria-label="Search tasks"
