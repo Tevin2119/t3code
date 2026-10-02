@@ -96,8 +96,24 @@ export function BoardSeatsDialog(props: {
     }
     const body = result.body as { readonly note?: unknown } | null;
     setSaid(typeof body?.note === "string" ? body.note : "Saved.");
-    setChosen(null);
-    setFallbacks(null);
+    // The form shows what was saved, from the answer, until the next read: never the read from before.
+    const saved = parseBoardSeats(result.body);
+    setChosen(
+      Object.fromEntries(
+        saved.map((row) => [
+          row.team,
+          Object.fromEntries(row.settings.map((item) => [item.seat, item.board])),
+        ]),
+      ),
+    );
+    setFallbacks(
+      Object.fromEntries(
+        saved.map((row) => [
+          row.team,
+          Object.fromEntries(row.settings.map((item) => [item.seat, item.boardFallbacks])),
+        ]),
+      ),
+    );
     read.refresh();
   };
 
@@ -111,7 +127,7 @@ export function BoardSeatsDialog(props: {
             team's defaults; a task can still set its own.
           </DialogDescription>
         </DialogHeader>
-        <DialogPanel className="flex max-h-[70vh] flex-col gap-3 overflow-y-auto text-sm">
+        <DialogPanel className="flex flex-col gap-3 text-sm">
           {read.error ? (
             <p className="text-warning">Delivery engine not reachable. {read.error}</p>
           ) : null}

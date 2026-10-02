@@ -506,23 +506,33 @@ export function BoardDialog(props: {
               {!name ? "Give the view a name." : "Choose at least one column."}
             </p>
           ) : null}
-          {isBoard && props.editing && props.onSeats ? (
-            <div className="flex items-center justify-between gap-2 rounded-md border border-border p-2">
-              <span className="text-xs text-muted-foreground">
-                What the seats of each team run on for this board's tasks, and who stands in for
-                them.
-              </span>
-              <Button
-                size="xs"
-                variant="outline"
-                disabled={props.busy}
-                onClick={props.onSeats}
-                data-board-dialog-seats
-              >
-                Seats…
-              </Button>
-            </div>
-          ) : null}
+          {isBoard && props.editing && props.onSeats
+            ? (() => {
+                // Opening the seats closes this dialog: what was changed here is saved or let go first.
+                const unsaved =
+                  title !== (props.editing.title ?? "") ||
+                  description !== (props.editing.description ?? "") ||
+                  bindingChanged;
+                return (
+                  <div className="flex items-center justify-between gap-2 rounded-md border border-border p-2">
+                    <span className="text-xs text-muted-foreground">
+                      What the seats of each team run on for this board's tasks, and who stands in
+                      for them.
+                    </span>
+                    <Button
+                      size="xs"
+                      variant="outline"
+                      disabled={props.busy || unsaved}
+                      title={unsaved ? "Save or cancel the changes here first." : undefined}
+                      onClick={props.onSeats}
+                      data-board-dialog-seats
+                    >
+                      Seats…
+                    </Button>
+                  </div>
+                );
+              })()
+            : null}
           {props.problem ? <p className="text-xs text-warning">{props.problem}</p> : null}
           {confirming ? (
             <p className="rounded-md border border-border bg-muted/40 p-2 text-xs">

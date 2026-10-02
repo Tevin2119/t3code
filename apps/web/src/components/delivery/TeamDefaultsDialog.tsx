@@ -98,10 +98,20 @@ export function TeamDefaultsDialog(props: {
       setProblems(result.problems.length > 0 ? result.problems : [result.why]);
       return;
     }
-    setSaid(parseTeamDefaults(result.body)?.note ?? "Saved.");
-    setSeats(null);
-    setShares(null);
-    setFallbacks(null);
+    const saved = parseTeamDefaults(result.body);
+    setSaid(saved?.note ?? "Saved.");
+    // The form shows what was saved, from the answer, until the next read: never the read from before.
+    const settings = saved?.team.settings ?? [];
+    setSeats(Object.fromEntries(settings.map((item) => [item.seat, item.saved])));
+    setFallbacks(Object.fromEntries(settings.map((item) => [item.seat, item.savedFallbacks])));
+    setShares(
+      Object.fromEntries(
+        Object.entries(saved?.team.workload.build ?? {}).map(([seat, share]) => [
+          seat,
+          String(share),
+        ]),
+      ),
+    );
     setNote("");
     read.refresh();
     props.onSaved?.();
@@ -113,7 +123,7 @@ export function TeamDefaultsDialog(props: {
         <DialogHeader>
           <DialogTitle>Defaults of team {props.team}</DialogTitle>
         </DialogHeader>
-        <DialogPanel className="flex max-h-[70vh] flex-col gap-4 overflow-y-auto text-sm">
+        <DialogPanel className="flex flex-col gap-4 text-sm">
           <p className="text-xs text-muted-foreground">
             What each seat runs on unless a board or a task sets its own. A seat keeps its role and
             its rules; the harness and the model it runs on are chosen here, and who takes its place

@@ -1120,7 +1120,7 @@ export function ProfilePage() {
                 took, and what it decided, for every team and stage.
               </DialogDescription>
             </DialogHeader>
-            <DialogPanel className="max-h-[70vh] overflow-y-auto">
+            <DialogPanel>
               <TrackRecord environmentId={active} />
             </DialogPanel>
             <DialogFooter>

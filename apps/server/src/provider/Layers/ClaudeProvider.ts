@@ -173,8 +173,9 @@ function apiProviderAuthMetadata(
 // `undefined` and left the provider unverified and unselectable in the picker.
 const CAPABILITIES_PROBE_TIMEOUT_MS = 25_000;
 // The usage request alone takes about three seconds, and every provider is checked at once, so the
-// shared four-second budget left the limits "Could not read". It is optional and runs after the
-// account is read, so a longer wait delays only the limits, never the provider's status.
+// shared four-second budget left the limits "Could not read". It runs inside the capabilities
+// probe, which the status check awaits, so a usage request that hangs holds Claude's status back
+// by up to this long (within the capabilities budget above), where it used to be four seconds.
 const USAGE_PROBE_TIMEOUT_MS = 15_000;
 
 /**
