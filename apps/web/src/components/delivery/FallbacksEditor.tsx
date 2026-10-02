@@ -55,6 +55,7 @@ export function FallbacksEditor(props: {
       : (item.byHarness[harness]?.model ?? false);
 
   if (list === null) {
+    const none = () => props.onChange([]);
     return (
       <div
         className="flex flex-wrap items-center gap-1 text-[11px] text-muted-foreground"
@@ -86,6 +87,16 @@ export function FallbacksEditor(props: {
           <PlusIcon />
           Name fallbacks
         </Button>
+        {props.inherited.length > 0 ? (
+          <Button
+            size="xs"
+            variant="ghost"
+            aria-label={`No fallbacks for ${item.title}`}
+            onClick={none}
+          >
+            None
+          </Button>
+        ) : null}
       </div>
     );
   }
@@ -93,8 +104,9 @@ export function FallbacksEditor(props: {
   return (
     <div className="flex flex-col gap-1" data-seat-fallbacks="set">
       <span className="text-[11px] text-muted-foreground">
-        Fallbacks, in order. A usage limit moves the step to the next; a harness that cannot sign in
-        moves it to the next on another harness.
+        {list.length === 0
+          ? "No fallbacks: when this seat cannot answer, its step waits, and the team's own pair is not used either."
+          : "Fallbacks, in order. A usage limit moves the step to the next; a harness that cannot sign in is passed over for the rest of the step."}
       </span>
       {list.map((fallback, index) => {
         const models = modelsOf(fallback.harness);

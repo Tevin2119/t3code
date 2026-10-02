@@ -149,7 +149,7 @@ export function BoardSeatsDialog(props: {
                     environmentId={props.environmentId}
                     item={item}
                     value={currentFallbacks[shown.team]?.[item.seat] ?? null}
-                    inherited={item.fallbacks}
+                    inherited={item.fallbackChain}
                     inheritedLabel="Team default"
                     onChange={(next) =>
                       setFallbacks({

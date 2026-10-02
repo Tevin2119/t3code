@@ -13,7 +13,6 @@ import {
   initialsOf,
   isSendKey,
   isTaskId,
-  laneAccepts,
   linesFromText,
   matchesCard,
   messageStateLabel,
@@ -96,31 +95,6 @@ describe("groupCards", () => {
   it("groups by the first tag, and says so where there is none", () => {
     expect(groupCards(cards, "tag").map((group) => group.key)).toEqual(["cli", "docs", "untagged"]);
     expect(groupCards(cards, "none")).toEqual([{ key: "all", title: null, cards }]);
-  });
-});
-
-describe("laneAccepts", () => {
-  it("offers what the engine would do, and nothing where the engine refuses", () => {
-    const draft = card({ lane: "draft", state: "draft", submitted: null });
-    expect(laneAccepts(draft, "triage")).toBe("Submit");
-    expect(laneAccepts(draft, "implementation")).toBeNull();
-    expect(laneAccepts(draft, "paused")).toBeNull();
-
-    const building = card();
-    expect(laneAccepts(building, "paused")).toBe("Pause");
-    expect(laneAccepts(building, "triage")).toBe("Send to triage again");
-    expect(laneAccepts(building, "implementation")).toBe("Reorder");
-    expect(laneAccepts(building, "human-review")).toBeNull();
-    expect(laneAccepts(building, "completed")).toBeNull();
-    expect(laneAccepts(building, "draft")).toBeNull();
-
-    expect(laneAccepts(card({ lane: "paused", held: true }), "ready")).toBe("Resume");
-    expect(laneAccepts(card({ lane: "intake", submitted: null }), "triage")).toBe("Submit");
-    expect(laneAccepts(card({ lane: "completed", state: "approved" }), "triage")).toBeNull();
-    // What is not a delivery is not moved through the lanes of one.
-    expect(laneAccepts(card({ lane: "chat", state: "chat" }), "paused")).toBeNull();
-    expect(laneAccepts(building, "chat")).toBeNull();
-    expect(laneAccepts(card({ lane: "human-review", state: "planned" }), "triage")).toBeNull();
   });
 });
 
@@ -308,52 +282,71 @@ describe("a task made from a conversation", () => {
 });
 
 describe("moveIntent", () => {
-  const card = (lane: string, actions: ReadonlyArray<string> = []) => ({ lane, actions });
+  const card = (
+    lane: string,
+    actions: ReadonlyArray<string> = [],
+    more: { resumesIn?: string | null; recovering?: boolean } = {},
+  ) => ({ lane, actions, ...more });
 
-  it("takes a column that a decision leads to by that decision", () => {
-    expect(moveIntent(card("human-review", ["approve", "reject", "pause"]), "approved")).toEqual({
+  it("takes a column a decision leads to by that decision, named as its button is", () => {
+    expect(moveIntent(card("human-review", ["approve", "reject"]), "approved")).toEqual({
       kind: "action",
       action: "approve",
+      label: "Approve",
     });
-    expect(moveIntent(card("human-review", ["approve", "reject"]), "rework")).toEqual({
-      kind: "action",
+    expect(moveIntent(card("human-review", ["approve", "reject"]), "rework")).toMatchObject({
       action: "reject",
     });
-    expect(moveIntent(card("approved", ["publish"]), "pull-request")).toEqual({
-      kind: "action",
+    expect(moveIntent(card("approved", ["publish"]), "pull-request")).toMatchObject({
       action: "publish",
     });
-  });
-
-  it("closes a chat dropped on Done, and starts a plan's delivery dropped on Ready", () => {
-    expect(moveIntent(card("chat", ["close"]), "completed")).toEqual({
-      kind: "action",
-      action: "close",
-    });
-    expect(moveIntent(card("needs-decision", ["deliver", "close"]), "ready")).toEqual({
-      kind: "action",
-      action: "deliver",
-    });
-  });
-
-  it("refuses what no step leads to, with the reason, and leaves the card where it is", () => {
-    expect(moveIntent(card("implementation", ["pause"]), "approved").kind).toBe("refused");
-    expect(moveIntent(card("needs-decision", ["pause"]), "completed").kind).toBe("refused");
-    expect(moveIntent(card("triage", []), "validation").kind).toBe("refused");
-    expect(moveIntent(card("draft", ["submit"]), "completed").kind).toBe("refused");
-  });
-
-  it("leaves reordering, pausing, resuming and submitting to the engine's own move", () => {
-    expect(moveIntent(card("triage"), "triage")).toEqual({ kind: "move" });
-    expect(moveIntent(card("implementation", ["pause"]), "paused")).toEqual({ kind: "move" });
-    expect(moveIntent(card("paused", ["resume"]), "implementation")).toEqual({ kind: "move" });
-    expect(moveIntent(card("draft", ["submit"]), "triage")).toEqual({ kind: "move" });
-  });
-
-  it("asks before sending a task back to triage", () => {
-    expect(moveIntent(card("human-review", ["approve", "retriage"]), "triage")).toEqual({
-      kind: "action",
+    expect(moveIntent(card("chat", ["close"]), "completed")).toMatchObject({ action: "close" });
+    expect(moveIntent(card("human-review", ["approve", "retriage"]), "triage")).toMatchObject({
       action: "retriage",
     });
+  });
+
+  it("starts a plan's delivery only from Ready, where the engine puts it", () => {
+    expect(moveIntent(card("human-review", ["deliver", "close"]), "ready")).toMatchObject({
+      action: "deliver",
+    });
+    expect(moveIntent(card("human-review", ["deliver", "close"]), "implementation").kind).toBe(
+      "refused",
+    );
+  });
+
+  it("lets a paused card go on only where it stood, and leaves a recovering one alone", () => {
+    const paused = card("paused", ["resume", "approve"], { resumesIn: "human-review" });
+    expect(moveIntent(paused, "human-review")).toEqual({ kind: "move", label: "Resume" });
+    for (const lane of ["approved", "completed", "implementation", "triage"]) {
+      const intent = moveIntent(paused, lane);
+      expect(intent.kind).toBe("refused");
+      expect(intent.kind === "refused" && intent.why).toMatch(
+        /goes on where it stood, in Your sign-off/,
+      );
+    }
+    const recovering = card("paused", ["retry"], { recovering: true, resumesIn: null });
+    expect(moveIntent(recovering, "implementation").kind).toBe("refused");
+  });
+
+  it("names the engine's own moves, and refuses what no step leads to", () => {
+    expect(moveIntent(card("triage"), "triage")).toEqual({ kind: "move", label: "Reorder" });
+    expect(moveIntent(card("implementation", ["pause"]), "paused")).toEqual({
+      kind: "move",
+      label: "Pause",
+    });
+    expect(moveIntent(card("chat", ["close"]), "paused").kind).toBe("refused");
+    expect(moveIntent(card("draft", ["submit"]), "triage")).toEqual({
+      kind: "move",
+      label: "Submit",
+    });
+    expect(moveIntent(card("intake", ["submit"]), "triage")).toEqual({
+      kind: "move",
+      label: "Submit",
+    });
+    expect(moveIntent(card("draft", ["submit"]), "completed").kind).toBe("refused");
+    expect(moveIntent(card("implementation", ["pause"]), "approved").kind).toBe("refused");
+    expect(moveIntent(card("completed"), "triage").kind).toBe("refused");
+    expect(moveIntent(card("triage"), "validation").kind).toBe("refused");
   });
 });

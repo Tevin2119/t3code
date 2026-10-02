@@ -367,7 +367,13 @@ function ProfileList(props: {
             data-profile-card={item.profile}
             className="flex h-full w-full cursor-pointer flex-col gap-1 rounded-lg border border-border p-3 text-left text-xs hover:bg-accent"
           >
-            <span className="flex items-center gap-1.5 text-sm font-medium">
+            <span
+              className={cn(
+                "flex min-w-0 flex-wrap items-center gap-1.5 text-sm font-medium break-all",
+                // Room for the bin beside it, so a long name is never under it.
+                item.source === "custom" && "pr-7",
+              )}
+            >
               {item.profile}
               <Badge size="sm" variant={item.source === "custom" ? "secondary" : "outline"}>
                 {item.source === "custom" ? "yours" : "comes with the engine"}

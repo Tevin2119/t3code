@@ -141,7 +141,7 @@ export function TeamDefaultsDialog(props: {
                       environmentId={props.environmentId}
                       item={item}
                       value={named[item.seat] ?? null}
-                      inherited={item.savedFallbacks === null ? item.fallbacks : []}
+                      inherited={item.definedFallbackChain}
                       inheritedLabel="As defined"
                       onChange={(next) => setFallbacks({ ...named, [item.seat]: next })}
                     />

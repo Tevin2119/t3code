@@ -899,7 +899,7 @@ describe("seat layers and fallbacks", () => {
     expect(named.fallbacksAllowed).toBe(true);
   });
 
-  it("sends fallbacks only for the seats that name some, with a model only where one is given", () => {
+  it("sends fallbacks for the seats that name some or none, with a model only where one is given", () => {
     expect(
       withFallbacks(
         { lead: { model: "gpt-6-sol" } },
@@ -909,7 +909,10 @@ describe("seat layers and fallbacks", () => {
           tester: [],
         },
       ),
-    ).toEqual({ lead: { model: "gpt-6-sol", fallbacks: [{ harness: "kimi" }] } });
+    ).toEqual({
+      lead: { model: "gpt-6-sol", fallbacks: [{ harness: "kimi" }] },
+      tester: { fallbacks: [] },
+    });
   });
 
   it("reads a board's seats as the engine lists them and as it answers a saving", () => {

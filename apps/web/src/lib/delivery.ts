@@ -182,8 +182,12 @@ export interface SeatSettings {
   readonly effective: SeatSettingValues;
   /** Which layer gave each value of `now`: the team definition, the team defaults, or a board. */
   readonly source: Readonly<Partial<Record<SeatSettingKey | "fallbacks", string>>>;
-  /** Who takes the seat's place, in order, when it cannot answer. Empty: the team's own. */
+  /** The fallbacks set for the seat by the layers, empty when none are set. */
   readonly fallbacks: ReadonlyArray<SeatFallback>;
+  /** Who will actually take the seat's place, in order: what is set, else the team's own pair. */
+  readonly fallbackChain: ReadonlyArray<SeatFallback>;
+  /** What the team's definition alone would use. */
+  readonly definedFallbackChain: ReadonlyArray<SeatFallback>;
   readonly fallbacksAllowed: boolean;
   /** The fallbacks the saved defaults name, or null when they name none. */
   readonly savedFallbacks: ReadonlyArray<SeatFallback> | null;
@@ -267,6 +271,8 @@ export const parseSeatSettings = (value: Json): SeatSettings => {
       ),
     ),
     fallbacks: parseFallbacks(value.fallbacks),
+    fallbackChain: parseFallbacks(value.fallbackChain ?? value.fallbacks),
+    definedFallbackChain: parseFallbacks(value.definedFallbackChain),
     fallbacksAllowed: flag(value.fallbacksAllowed),
     savedFallbacks: fallbacksOrNull(value.saved),
     board: parseChoice(value.board),
@@ -288,7 +294,10 @@ export function seatSources(item: SeatSettings): ReadonlyArray<string> {
   ];
 }
 
-/** The fallbacks to send for one seat, or null when they are left as they are. */
+/**
+ * The fallbacks to send for one seat, or null when they are left as they are. An empty list is
+ * sent: it says "none", where leaving them out inherits.
+ */
 export function fallbacksToSend(
   wanted: ReadonlyArray<SeatFallback> | null | undefined,
 ): ReadonlyArray<{ harness: string; model?: string }> | null {
@@ -308,7 +317,7 @@ export function withFallbacks(
   const out: Record<string, Record<string, unknown>> = { ...seats };
   for (const [seat, wanted] of Object.entries(fallbacks)) {
     const sent = fallbacksToSend(wanted);
-    if (sent && sent.length > 0) out[seat] = { ...out[seat], fallbacks: sent };
+    if (sent) out[seat] = { ...out[seat], fallbacks: sent };
   }
   return out;
 }
@@ -786,6 +795,10 @@ export interface DeliveryCard {
   readonly updated: string;
   readonly submitted: string | null;
   readonly held: boolean;
+  /** For a card a person paused: the column it goes on in when resumed. */
+  readonly resumesIn: string | null;
+  /** In Paused because the engine holds it after a failure, not because a person paused it. */
+  readonly recovering: boolean;
   readonly parts: ReadonlyArray<TaskBrief>;
   readonly partsDelivered: number;
   readonly followUps: ReadonlyArray<TaskBrief>;
@@ -947,6 +960,8 @@ export const parseCard = (value: Json): DeliveryCard => {
     updated: text(value.updated),
     submitted: textOrNull(value.submitted),
     held: flag(value.held),
+    resumesIn: textOrNull(value.resumesIn),
+    recovering: flag(value.recovering),
     parts: records(value.parts).map(parseBrief),
     partsDelivered: count(value.partsDelivered),
     followUps: records(value.followUps).map(parseBrief),

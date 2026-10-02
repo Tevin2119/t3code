@@ -918,6 +918,8 @@ function Info(props: {
   readonly onChanged: () => void;
   /** Takes the task to a column, by the step that leads there; see moveIntent. */
   readonly onMoveTo: (lane: string) => void;
+  /** A request is out: nothing more is sent until it returns. */
+  readonly busy: boolean;
 }) {
   const { task } = props;
   const { card } = task;
@@ -998,6 +1000,7 @@ function Info(props: {
                 size="compact"
                 variant="ghost"
                 className="w-auto min-w-0"
+                disabled={props.busy}
                 data-task-lane={task.lane}
               >
                 <SelectValue>
@@ -1012,15 +1015,29 @@ function Info(props: {
                   .filter(([lane]) => lane !== "draft")
                   .map(([lane, title]) => {
                     const intent = moveIntent(card, lane);
+                    // What choosing it does, or why it cannot be chosen, is said to every reader.
+                    const said =
+                      intent.kind === "refused"
+                        ? intent.why
+                        : intent.kind === "action"
+                          ? actionLabel(intent.action, card)
+                          : lane === task.lane
+                            ? "Here now"
+                            : intent.label;
                     return (
-                      <SelectItem key={lane} value={lane} disabled={intent.kind === "refused"}>
+                      <SelectItem
+                        key={lane}
+                        value={lane}
+                        disabled={intent.kind === "refused"}
+                        aria-label={`${title}: ${said}`}
+                        title={intent.kind === "refused" ? intent.why : undefined}
+                        data-move={intent.kind}
+                      >
                         <span className="inline-flex items-center gap-1.5">
                           <span className={cn("size-2 rounded-full", laneTone(lane).bar)} />
                           {title}
-                          {intent.kind === "action" ? (
-                            <span className="text-[10px] text-muted-foreground">
-                              {actionLabel(intent.action, card)}
-                            </span>
+                          {intent.kind !== "refused" && lane !== task.lane ? (
+                            <span className="text-[10px] text-muted-foreground">{said}</span>
                           ) : null}
                         </span>
                       </SelectItem>
@@ -1655,6 +1672,7 @@ export function TaskWorkspace(props: {
                   task={task}
                   onChanged={read.refresh}
                   onMoveTo={(lane) => actions.moveTo(task.card, lane, null)}
+                  busy={actions.busy}
                 />
               </div>
             </div>

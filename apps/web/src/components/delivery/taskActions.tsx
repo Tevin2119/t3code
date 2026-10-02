@@ -1,8 +1,10 @@
 import type { EnvironmentId } from "@t3tools/contracts";
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 
 import type { DeliveryCard } from "../../lib/delivery";
-import { LANE_TITLE, moveIntent } from "../../lib/deliveryBoard";
+import { ACTION_LABEL, LANE_TITLE, moveIntent } from "../../lib/deliveryBoard";
+
+export { ACTION_LABEL };
 import { useBoardStore, useDeliveryAct, usePersonName } from "../../state/delivery";
 import { Button } from "../ui/button";
 import {
@@ -15,22 +17,6 @@ import {
 } from "../ui/dialog";
 import { Input } from "../ui/input";
 import { Textarea } from "../ui/textarea";
-
-export const ACTION_LABEL: Record<string, string> = {
-  submit: "Submit",
-  discard: "Discard draft",
-  pause: "Pause",
-  resume: "Resume",
-  stop: "Stop the running step",
-  retry: "Try again",
-  retriage: "Send to triage again",
-  "start-anyway": "Start without waiting",
-  approve: "Approve",
-  reject: "Send back",
-  deliver: "Start delivery",
-  close: "Close",
-  publish: "Publish",
-};
 
 export const ACTION_HELP: Record<string, string> = {
   submit: "The team takes it on. It goes to triage and on from there without being asked.",
@@ -98,12 +84,18 @@ export function useTaskActions(
   const [decision, setDecision] = useState<Decision | null>(null);
   const [confirming, setConfirming] = useState<Confirming | null>(null);
   const { onDone, onDiscarded } = options;
+  // One request at a time. A second press while one is out is dropped, not queued: the state it
+  // was pressed against may be gone by the time the first returns. A lost answer is not sent again.
+  const inFlight = useRef(false);
 
   const send = useCallback(
     async (path: string, body: Record<string, unknown>) => {
+      if (inFlight.current) return false;
+      inFlight.current = true;
       setBusy(true);
       setProblem(null);
       const result = await act(path, body);
+      inFlight.current = false;
       setBusy(false);
       onDone();
       if (!result.ok) {
@@ -224,6 +216,10 @@ export function useTaskActions(
             : decision.card.run
               ? send(`/api/runs/${decision.card.run.id}/decide`, {
                   decision: decision.decision,
+                  // The candidate the person was shown: if another is waiting now, nothing is decided.
+                  ...(decision.card.run.candidate
+                    ? { candidate: decision.card.run.candidate }
+                    : {}),
                   ...input,
                 })
               : Promise.resolve(false)

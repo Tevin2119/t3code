@@ -24,7 +24,7 @@ import {
   GROUPING_LABEL,
   groupCards,
   hasFilters,
-  laneAccepts,
+  moveIntent,
   type BoardGrouping,
 } from "../../lib/deliveryBoard";
 import { cn } from "../../lib/utils";
@@ -213,8 +213,10 @@ function Lane(props: {
   const { lane } = props;
   const tone = laneTone(lane.lane);
   const drop = useDroppable({ id: `lane:${lane.lane}`, data: { lane: lane.lane, before: null } });
-  const offer = props.dragged ? laneAccepts(props.dragged, lane.lane) : null;
-  const refused = props.dragged !== null && offer === null;
+  // The same table as the drop and the task view's column choice: what this lane would do.
+  const intent = props.dragged ? moveIntent(props.dragged, lane.lane) : null;
+  const offer = intent && intent.kind !== "refused" ? intent.label : null;
+  const refused = intent?.kind === "refused";
   const groups = groupCards(lane.cards, props.grouping);
 
   if (props.collapsed) {

@@ -1,8 +1,8 @@
 /**
  * What the board and the task workspace work out for themselves: how a card
  * is labelled, which cards a search keeps, and how a file is cut up to be
- * sent. Where a card may go is the engine's to decide; `laneAccepts` only
- * says which lanes are worth offering while a card is dragged.
+ * sent. Where a card may go is the engine's to decide; `moveIntent` says
+ * what a move would come to, for the drag, the column choice and the step.
  */
 import type { DeliveryCard, DeliveryLane, TaskPriority } from "./delivery";
 
@@ -237,29 +237,6 @@ export function groupCards(
     title: grouping === "priority" ? PRIORITY_LABEL[key as TaskPriority] : key,
     cards: groups.get(key)!,
   }));
-}
-
-/**
- * What dropping a card on a lane would ask of the engine, or null where the
- * engine is known to refuse. The engine answers the request either way.
- */
-export function laneAccepts(
-  card: Pick<DeliveryCard, "lane" | "held" | "submitted" | "state">,
-  lane: string,
-): string | null {
-  if (lane === card.lane) return "Reorder";
-  if (card.lane === "draft") return lane === "intake" || lane === "triage" ? "Submit" : null;
-  if (lane === "draft") return null;
-  if (card.lane === "completed") return null;
-  // A chat, a plan that is ready and a review that is ready are not moved by hand.
-  if (card.lane === "chat" || lane === "chat") return null;
-  if (["planned", "reviewed"].includes(card.state)) return null;
-  if (lane === "paused") return "Pause";
-  if (card.lane === "paused" && card.held) return "Resume";
-  if (lane === "intake" || lane === "triage") {
-    return card.submitted ? "Send to triage again" : "Submit";
-  }
-  return null;
 }
 
 export type FileKind = "image" | "video" | "audio" | "text" | "pdf" | "other";
@@ -544,62 +521,110 @@ export function taskFromConversation(input: {
   return { title: input.title.trim().slice(0, 120), text: sections.join("\n\n") };
 }
 
-/** What dropping a card on a column, or choosing that column for it, asks for. */
+/** What each step a person can take on a task is called. */
+export const ACTION_LABEL: Record<string, string> = {
+  submit: "Submit",
+  discard: "Discard draft",
+  pause: "Pause",
+  resume: "Resume",
+  stop: "Stop the running step",
+  retry: "Try again",
+  retriage: "Send to triage again",
+  "start-anyway": "Start without waiting",
+  approve: "Approve",
+  reject: "Send back",
+  deliver: "Start delivery",
+  close: "Close",
+  publish: "Publish",
+};
+
+/**
+ * What dropping a card on a column, or choosing that column for it, comes to. One table for the
+ * highlight while a card is dragged, the choices offered in the task view, and what is done.
+ */
 export type MoveIntent =
-  /** The engine's own move: reordering, pausing, resuming, submitting a draft. */
-  | { readonly kind: "move" }
+  /** The engine's own move: reordering, pausing, resuming where it stood, submitting a draft. */
+  | { readonly kind: "move"; readonly label: string }
   /** A step the card offers, taken the way its own button takes it: a decision asks for the key. */
-  | { readonly kind: "action"; readonly action: string }
-  /** Nothing a person can do by moving it there; the card stays where it is. */
+  | { readonly kind: "action"; readonly action: string; readonly label: string }
+  /** Nothing a person can do by moving it there; the card stays where it is, and this says why. */
   | { readonly kind: "refused"; readonly why: string };
 
-/** The columns a person can take a card to, each with the step that takes it there. */
+/** The columns a step leads to. Start delivery leads to Ready: the engine takes it on from there. */
 const STEP_FOR_LANE: Readonly<Record<string, ReadonlyArray<string>>> = {
   approved: ["approve"],
   rework: ["reject"],
   "pull-request": ["publish"],
   completed: ["close"],
   ready: ["deliver"],
-  planning: ["deliver"],
-  implementation: ["deliver"],
   triage: ["retriage"],
   intake: ["retriage"],
 };
 
+type MovableCard = Pick<DeliveryCard, "lane" | "actions"> &
+  Partial<Pick<DeliveryCard, "resumesIn" | "recovering">>;
+
 /**
- * What moving a card to a lane comes to. A column that a decision leads to is reached by that
- * decision, through the same dialog as its button; a column the engine fills by itself is
- * refused here with the reason, so a card is never left between two states.
+ * What moving a card to a lane comes to. A column a step leads to is reached by that step,
+ * through the same dialog as its button. A paused card goes on only where it stood. A column the
+ * engine fills by itself is refused with the reason, so a card is never left between two states.
+ * The engine checks every one of these again.
  */
-export function moveIntent(card: Pick<DeliveryCard, "lane" | "actions">, lane: string): MoveIntent {
-  if (lane === card.lane) return { kind: "move" };
-  const title = LANE_TITLE[lane] ?? lane;
+export function moveIntent(card: MovableCard, lane: string): MoveIntent {
+  if (lane === card.lane) return { kind: "move", label: "Reorder" };
+  const title = (name: string | null | undefined) => (name ? (LANE_TITLE[name] ?? name) : "");
   if (card.lane === "draft") {
     return lane === "triage" || lane === "intake"
-      ? { kind: "move" }
+      ? { kind: "move", label: "Submit" }
       : { kind: "refused", why: "A draft is submitted first. Drop it on Triage to submit it." };
   }
-  if (lane === "paused") return { kind: "move" };
-  const step = (STEP_FOR_LANE[lane] ?? []).find((action) => card.actions.includes(action));
-  if (step) return { kind: "action", action: step };
-  // Taken out of Paused, a card resumes from where it stood.
-  if (card.lane === "paused") return { kind: "move" };
   if (lane === "draft") {
     return {
       kind: "refused",
       why: "A task that was submitted is kept as a record. It cannot go back to being a draft.",
     };
   }
-  if (lane === "approved" || lane === "rework" || lane === "human-review") {
+  if (card.lane === "paused") {
+    if (card.recovering) {
+      return {
+        kind: "refused",
+        why: "The engine holds this task after a failure and goes on by itself when it can. Try the step again from the task, or wait; moving it does neither.",
+      };
+    }
+    if (card.resumesIn && lane === card.resumesIn) return { kind: "move", label: "Resume" };
     return {
       kind: "refused",
-      why: `A card reaches ${title} by a person's decision on a delivery that passed the QA gate. This one has none waiting.`,
+      why: card.resumesIn
+        ? `A paused task goes on where it stood, in ${title(card.resumesIn)}. Drop it there, or press Resume.`
+        : "A paused task goes on where it stood. Press Resume.",
     };
   }
-  if (lane === "completed") {
+  if (lane === "paused") {
+    return card.actions.includes("pause")
+      ? { kind: "move", label: "Pause" }
+      : { kind: "refused", why: "Nothing is started for this task that a pause would hold." };
+  }
+  if ((lane === "triage" || lane === "intake") && card.actions.includes("submit")) {
+    return { kind: "move", label: "Submit" };
+  }
+  const step = (STEP_FOR_LANE[lane] ?? []).find((action) => card.actions.includes(action));
+  if (step) return { kind: "action", action: step, label: ACTION_LABEL[step] ?? step };
+  if (card.lane === "completed") {
     return {
       kind: "refused",
-      why: "A delivery is done when it is approved and merged. A chat, a plan or a review can be closed; this card cannot be from here.",
+      why: "This task is closed. What was said and found is kept; a new task starts the work again.",
+    };
+  }
+  if (lane === "approved") {
+    return {
+      kind: "refused",
+      why: `A card reaches ${title(lane)} by a person's decision, with the approval key, on a delivery that passed the QA gate. This one has none waiting.`,
+    };
+  }
+  if (lane === "rework") {
+    return {
+      kind: "refused",
+      why: "A card reaches Rework when QA or a person sends the work back. This one has nothing waiting to be sent back.",
     };
   }
   if (lane === "pull-request") {
@@ -608,8 +633,14 @@ export function moveIntent(card: Pick<DeliveryCard, "lane" | "actions">, lane: s
       why: "A pull request is opened by publishing an approved change. This one has none to publish.",
     };
   }
+  if (lane === "completed") {
+    return {
+      kind: "refused",
+      why: "A delivery is done when it is approved and merged. A chat, a plan or a review can be closed; this card cannot be from here.",
+    };
+  }
   return {
     kind: "refused",
-    why: `The engine puts a card in ${title} when its work reaches that stage. A card can be paused, resumed, sent to triage again, or decided.`,
+    why: `The engine puts a card in ${title(lane)} when its work reaches that stage. A card can be paused, resumed where it stood, sent to triage again, or decided.`,
   };
 }
