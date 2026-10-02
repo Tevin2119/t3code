@@ -23,6 +23,10 @@ import { collectUint8StreamText } from "../stream/collectUint8StreamText.ts";
 export const DEFAULT_TIMEOUT_MS = 4_000;
 // Auth status checks involve disk/network lookups and can be slow on first run (especially Windows)
 export const AUTH_PROBE_TIMEOUT_MS = 10_000;
+// `<cli> --version` goes through a shim and a fresh runtime. On a loaded Windows host, with every
+// provider checked at once, it can take several seconds, and a miss marks the provider unavailable
+// until the next check.
+export const VERSION_PROBE_TIMEOUT_MS = 10_000;
 
 export const COMPACT_SLASH_COMMAND = {
   name: "compact",

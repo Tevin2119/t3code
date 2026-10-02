@@ -88,7 +88,7 @@ const EMPTY_CAPABILITIES: ModelCapabilities = createModelCapabilities({
   ],
 });
 
-const VERSION_PROBE_TIMEOUT_MS = 4_000;
+const VERSION_PROBE_TIMEOUT_MS = 10_000;
 const MODEL_PROBE_TIMEOUT_MS = 15_000;
 
 const KIMI_PROVIDER = "kimi-coding";

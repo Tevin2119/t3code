@@ -76,7 +76,7 @@ const EMPTY_CAPABILITIES: ModelCapabilities = createModelCapabilities({
   ],
 });
 
-const VERSION_PROBE_TIMEOUT_MS = 4_000;
+const VERSION_PROBE_TIMEOUT_MS = 10_000;
 
 /**
  * Fallback catalog used before the CLI answers, or when it cannot be reached.
