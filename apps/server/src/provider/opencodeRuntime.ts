@@ -606,9 +606,19 @@ const makeOpenCodeRuntime = Effect.gen(function* () {
           ...(input.environment ? { env: input.environment } : { extendEnv: true }),
         }),
       );
+      // On Windows, killing a command that has already exited can wait far longer than the command
+      // ran, and this clean-up runs inside the caller's deadline: a version probe that answered in a
+      // second was reported as timed out. So only a command still running is killed, and the
+      // clean-up never waits more than a second.
       const terminateCommandGroup =
         hostPlatform === "win32"
-          ? child.kill({ killSignal: "SIGKILL" }).pipe(Effect.asVoid)
+          ? child.isRunning.pipe(
+              Effect.flatMap((running) =>
+                running ? child.kill({ killSignal: "SIGKILL" }) : Effect.void,
+              ),
+              Effect.timeoutOption("1 second"),
+              Effect.asVoid,
+            )
           : Effect.sync(() => {
               try {
                 process.kill(-Number(child.pid), "SIGKILL");
