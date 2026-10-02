@@ -60,6 +60,7 @@ import {
 import { TaskWorkspace } from "./TaskWorkspace";
 import { ActiveFilterChips, LaneFilterMenu } from "./BoardFilterControls";
 import { BoardDialog, BoardPicker, type PickerItem } from "./BoardPicker";
+import { BoardSeatsDialog } from "./BoardSeatsDialog";
 import { HowItFits } from "./HowItFits";
 
 const CardFace = memo(function CardFace(props: {
@@ -410,6 +411,9 @@ export function BoardPage() {
     readonly editing: PickerItem | null;
   } | null>(null);
   const [dialogBusy, setDialogBusy] = useState(false);
+  const [seatsFor, setSeatsFor] = useState<{ readonly id: string; readonly title: string } | null>(
+    null,
+  );
   const [dialogProblem, setDialogProblem] = useState<string | null>(null);
   const [mobileSearchOpen, setMobileSearchOpen] = useState(false);
   const board = useDeliveryRead(active, `/api/lanes?view=${view}&set=${boardSet}`, {
@@ -754,6 +758,20 @@ export function BoardPage() {
                 }}
                 onSave={(input) => void saveDialog(input)}
                 onRemove={() => void removeDialog()}
+                onSeats={() => {
+                  const editing = dialog.editing;
+                  if (!editing) return;
+                  setDialog(null);
+                  setDialogProblem(null);
+                  setSeatsFor({ id: editing.id, title: editing.title });
+                }}
+              />
+            ) : null}
+            {seatsFor ? (
+              <BoardSeatsDialog
+                environmentId={active}
+                board={seatsFor}
+                onClose={() => setSeatsFor(null)}
               />
             ) : null}
             {parsed?.note ? (

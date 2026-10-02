@@ -267,6 +267,8 @@ export function BoardDialog(props: {
     readonly base?: string;
   }) => void;
   readonly onRemove?: () => void;
+  /** For a board being edited: opens what its seats run on. */
+  readonly onSeats?: () => void;
 }) {
   const [title, setTitle] = useState(props.editing?.title ?? "");
   const [description, setDescription] = useState(props.editing?.description ?? "");
@@ -503,6 +505,23 @@ export function BoardDialog(props: {
             <p className="text-xs text-muted-foreground" data-board-dialog-why>
               {!name ? "Give the view a name." : "Choose at least one column."}
             </p>
+          ) : null}
+          {isBoard && props.editing && props.onSeats ? (
+            <div className="flex items-center justify-between gap-2 rounded-md border border-border p-2">
+              <span className="text-xs text-muted-foreground">
+                What the seats of each team run on for this board's tasks, and who stands in for
+                them.
+              </span>
+              <Button
+                size="xs"
+                variant="outline"
+                disabled={props.busy}
+                onClick={props.onSeats}
+                data-board-dialog-seats
+              >
+                Seats…
+              </Button>
+            </div>
           ) : null}
           {props.problem ? <p className="text-xs text-warning">{props.problem}</p> : null}
           {confirming ? (

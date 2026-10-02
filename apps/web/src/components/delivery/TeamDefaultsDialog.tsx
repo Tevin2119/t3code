@@ -1,7 +1,13 @@
 import type { EnvironmentId } from "@t3tools/contracts";
 import { useMemo, useState } from "react";
 
-import { parseTeamDefaults, seatSettingsToSend, type SeatChoice } from "../../lib/delivery";
+import {
+  parseTeamDefaults,
+  seatSettingsToSend,
+  withFallbacks,
+  type SeatChoice,
+  type SeatFallback,
+} from "../../lib/delivery";
 import { describeSeatValues, seatValues, sharePercentages } from "../../lib/deliverySeats";
 import {
   useDeliveryAct,
@@ -19,7 +25,9 @@ import {
   DialogTitle,
 } from "../ui/dialog";
 import { Input } from "../ui/input";
+import { FallbacksEditor } from "./FallbacksEditor";
 import { SeatSettingsPanel } from "./SeatSettingsPanel";
+import { TrackRecord } from "./TrackRecord";
 
 /**
  * The defaults of a team: what each seat runs on unless a task says
@@ -39,6 +47,11 @@ export function TeamDefaultsDialog(props: {
   const act = useDeliveryAct(props.environmentId, "team defaults");
   const [seats, setSeats] = useState<Record<string, SeatChoice> | null>(null);
   const [shares, setShares] = useState<Record<string, string> | null>(null);
+  const [fallbacks, setFallbacks] = useState<Record<
+    string,
+    ReadonlyArray<SeatFallback> | null
+  > | null>(null);
+  const [showRecord, setShowRecord] = useState(false);
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
   const [problems, setProblems] = useState<ReadonlyArray<string>>([]);
@@ -48,6 +61,9 @@ export function TeamDefaultsDialog(props: {
   // What is saved is what the form starts from, until the person changes something.
   const chosen =
     seats ?? Object.fromEntries((team?.settings ?? []).map((item) => [item.seat, item.saved]));
+  const named =
+    fallbacks ??
+    Object.fromEntries((team?.settings ?? []).map((item) => [item.seat, item.savedFallbacks]));
   const weights =
     shares ??
     Object.fromEntries(
@@ -67,7 +83,7 @@ export function TeamDefaultsDialog(props: {
     setProblems([]);
     setSaid(null);
     const result = await act(`/api/teams/${props.team}/defaults`, {
-      seats: seatSettingsToSend(team.settings, chosen, "defined"),
+      seats: withFallbacks(seatSettingsToSend(team.settings, chosen, "defined"), named),
       // Shares that are what the team defines are not saved over it.
       workload: Object.entries(numbers).some(
         ([seat, share]) => share !== team.workload.defined[seat],
@@ -85,6 +101,7 @@ export function TeamDefaultsDialog(props: {
     setSaid(parseTeamDefaults(result.body)?.note ?? "Saved.");
     setSeats(null);
     setShares(null);
+    setFallbacks(null);
     setNote("");
     read.refresh();
     props.onSaved?.();
@@ -98,10 +115,12 @@ export function TeamDefaultsDialog(props: {
         </DialogHeader>
         <DialogPanel className="flex max-h-[70vh] flex-col gap-4 overflow-y-auto text-sm">
           <p className="text-xs text-muted-foreground">
-            What each seat runs on unless a task sets its own. A seat keeps its role and its rules;
-            the harness and the model it runs on are chosen here. The QA gate has to keep{" "}
-            {team?.qaGate?.minimum ?? 2} providers that did not build the change, and the engine
-            refuses defaults that would leave it with fewer.
+            What each seat runs on unless a board or a task sets its own. A seat keeps its role and
+            its rules; the harness and the model it runs on are chosen here, and who takes its place
+            when it cannot answer.
+            {team?.qaGate
+              ? ` The QA gate has to keep ${team.qaGate.minimum} providers that did not build the change, and the engine refuses defaults that would leave it with fewer.`
+              : ""}
           </p>
           {read.error ? (
             <p className="text-warning">Delivery engine not reachable. {read.error}</p>
@@ -117,7 +136,32 @@ export function TeamDefaultsDialog(props: {
                   over="defaults"
                   shares={percentages}
                   onChange={(seat, choice) => setSeats(withSeatChoice(chosen, seat, choice))}
+                  renderExtra={(item) => (
+                    <FallbacksEditor
+                      environmentId={props.environmentId}
+                      item={item}
+                      value={named[item.seat] ?? null}
+                      inherited={item.savedFallbacks === null ? item.fallbacks : []}
+                      inheritedLabel="As defined"
+                      onChange={(next) => setFallbacks({ ...named, [item.seat]: next })}
+                    />
+                  )}
                 />
+              </section>
+
+              <section className="flex flex-col gap-1">
+                <Button
+                  size="xs"
+                  variant="ghost"
+                  className="self-start"
+                  onClick={() => setShowRecord((open) => !open)}
+                  data-team-defaults-record
+                >
+                  {showRecord ? "Hide the track record" : "Track record: how each has done here"}
+                </Button>
+                {showRecord ? (
+                  <TrackRecord environmentId={props.environmentId} team={props.team} />
+                ) : null}
               </section>
 
               {Object.keys(weights).length > 1 ? (

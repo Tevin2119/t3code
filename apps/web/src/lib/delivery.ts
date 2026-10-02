@@ -180,7 +180,34 @@ export interface SeatSettings {
   readonly why: SeatSettingValues;
   readonly set: SeatChoice;
   readonly effective: SeatSettingValues;
+  /** Which layer gave each value of `now`: the team definition, the team defaults, or a board. */
+  readonly source: Readonly<Partial<Record<SeatSettingKey | "fallbacks", string>>>;
+  /** Who takes the seat's place, in order, when it cannot answer. Empty: the team's own. */
+  readonly fallbacks: ReadonlyArray<SeatFallback>;
+  readonly fallbacksAllowed: boolean;
+  /** The fallbacks the saved defaults name, or null when they name none. */
+  readonly savedFallbacks: ReadonlyArray<SeatFallback> | null;
+  /** What a board sets for this seat, when read for a board. */
+  readonly board: SeatChoice;
+  readonly boardFallbacks: ReadonlyArray<SeatFallback> | null;
 }
+
+/** A harness, with a model where it takes one, that stands in for a seat. */
+export interface SeatFallback {
+  readonly harness: string;
+  readonly model: string | null;
+}
+
+/** At most this many fallbacks for one seat; the engine holds the same limit. */
+export const MOST_FALLBACKS = 3;
+
+const parseFallbacks = (value: unknown): ReadonlyArray<SeatFallback> =>
+  records(value)
+    .filter((item) => text(item.harness).length > 0)
+    .map((item) => ({ harness: text(item.harness), model: textOrNull(item.model) }));
+
+const fallbacksOrNull = (value: unknown): ReadonlyArray<SeatFallback> | null =>
+  isRecord(value) && Array.isArray(value.fallbacks) ? parseFallbacks(value.fallbacks) : null;
 
 const parseValues = (value: unknown, harness: string | null = null): SeatSettingValues => {
   const from = isRecord(value) ? value : {};
@@ -234,8 +261,116 @@ export const parseSeatSettings = (value: Json): SeatSettings => {
     why: parseValues(value.why),
     set: parseChoice(value.set),
     effective: value.effective === undefined ? now : parseValues(value.effective, harness),
+    source: Object.fromEntries(
+      Object.entries(isRecord(value.source) ? value.source : {}).filter(
+        (entry): entry is [string, string] => typeof entry[1] === "string",
+      ),
+    ),
+    fallbacks: parseFallbacks(value.fallbacks),
+    fallbacksAllowed: flag(value.fallbacksAllowed),
+    savedFallbacks: fallbacksOrNull(value.saved),
+    board: parseChoice(value.board),
+    boardFallbacks: fallbacksOrNull(value.board),
   };
 };
+
+/**
+ * The layers that set what a seat runs on, other than the team's definition,
+ * in words: "team defaults r3", "board Pilot". Empty when it runs as defined.
+ */
+export function seatSources(item: SeatSettings): ReadonlyArray<string> {
+  return [
+    ...new Set(
+      Object.values(item.source).filter(
+        (source): source is string => Boolean(source) && source !== "team definition",
+      ),
+    ),
+  ];
+}
+
+/** The fallbacks to send for one seat, or null when they are left as they are. */
+export function fallbacksToSend(
+  wanted: ReadonlyArray<SeatFallback> | null | undefined,
+): ReadonlyArray<{ harness: string; model?: string }> | null {
+  if (!wanted) return null;
+  return wanted
+    .filter((item) => item.harness)
+    .map((item) =>
+      item.model ? { harness: item.harness, model: item.model } : { harness: item.harness },
+    );
+}
+
+/** Seat settings with each seat's fallbacks added where they are named. */
+export function withFallbacks(
+  seats: Record<string, Record<string, unknown>>,
+  fallbacks: Readonly<Record<string, ReadonlyArray<SeatFallback> | null>>,
+): Record<string, Record<string, unknown>> {
+  const out: Record<string, Record<string, unknown>> = { ...seats };
+  for (const [seat, wanted] of Object.entries(fallbacks)) {
+    const sent = fallbacksToSend(wanted);
+    if (sent && sent.length > 0) out[seat] = { ...out[seat], fallbacks: sent };
+  }
+  return out;
+}
+
+/** What a board sets for the seats of each team. */
+export interface BoardSeats {
+  readonly team: string;
+  readonly settings: ReadonlyArray<SeatSettings>;
+}
+
+export function parseBoardSeats(body: unknown): ReadonlyArray<BoardSeats> {
+  const rows = isRecord(body) && Array.isArray(body.teams) ? body.teams : body;
+  return records(rows)
+    .filter((row) => text(row.team).length > 0)
+    .map((row) => ({ team: text(row.team), settings: records(row.seats).map(parseSeatSettings) }));
+}
+
+/** How one harness and model has done in one stage of one team, on this host. */
+export interface TrackRecordRow {
+  readonly team: string;
+  readonly stage: string;
+  readonly harness: string;
+  readonly model: string | null;
+  readonly attempts: number;
+  readonly answered: number;
+  readonly answeredShare: number | null;
+  readonly medianSeconds: number | null;
+  readonly lastAt: string | null;
+  /** Why it did not answer, by kind: rate-limit, sign-in, timeout and the like. */
+  readonly notAnswered: Readonly<Record<string, number>>;
+  /** What triage decided, by bucket. */
+  readonly decisions: Readonly<Record<string, number>>;
+  /** What QA concluded, by verdict. */
+  readonly verdicts: Readonly<Record<string, number>>;
+  /** How often it took a seat's place after the seat could not answer. */
+  readonly steppedIn: number;
+}
+
+const tally = (value: unknown): Record<string, number> =>
+  Object.fromEntries(
+    Object.entries(isRecord(value) ? value : {}).filter(
+      (entry): entry is [string, number] => typeof entry[1] === "number" && entry[1] > 0,
+    ),
+  );
+
+export function parseTrackRecord(body: unknown): ReadonlyArray<TrackRecordRow> {
+  return records(isRecord(body) ? body.rows : null).map((row) => ({
+    team: text(row.team),
+    stage: text(row.stage),
+    harness: text(row.harness, "unknown"),
+    model: textOrNull(row.model),
+    attempts: count(row.attempts),
+    answered: count(row.answered),
+    answeredShare: typeof row.answeredShare === "number" ? row.answeredShare : null,
+    medianSeconds: typeof row.medianSeconds === "number" ? row.medianSeconds : null,
+    lastAt: textOrNull(row.lastAt),
+    notAnswered: tally(row.notAnswered),
+    decisions: tally(row.decisions),
+    verdicts: tally(row.verdicts),
+    steppedIn: count(row.steppedIn),
+  }));
+}
 
 /** Whether a seat is on, with what is chosen for it laid over what it is set to. */
 export const seatIsOn = (item: SeatSettings, choice: SeatChoice, over: "now" | "defined" = "now") =>

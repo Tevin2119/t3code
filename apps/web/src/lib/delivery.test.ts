@@ -8,17 +8,21 @@ import {
   deliveryFailureProblems,
   moveSeat,
   parseBoard,
+  parseBoardSeats,
   parseCards,
   parseSeatSettings,
   parseTask,
   parseTeamDefaults,
   parseTeamProfile,
   parseTeams,
+  parseTrackRecord,
   resolveTeamChoice,
   rolesForHarness,
   seatOfferFor,
   seatSettingsToSend,
+  seatSources,
   teamTaskBlock,
+  withFallbacks,
 } from "./delivery";
 
 const seat = (overrides: Record<string, unknown>) => ({
@@ -860,5 +864,91 @@ describe("decideTeamForSend", () => {
     expect(
       decideTeamForSend({ ...base, draft: { team: "rnd", role: null }, driver: "kimi" }),
     ).toEqual({ action: "blocked", why: "Choose a role in team rnd: challenger, scout." });
+  });
+});
+
+describe("seat layers and fallbacks", () => {
+  it("names the layers a seat's default comes from, other than its definition", () => {
+    const item = parseSeatSettings(
+      seatSetting({
+        source: { harness: "team definition", model: "board Pilot", access: "team defaults" },
+      }),
+    );
+    expect(seatSources(item)).toEqual(["board Pilot", "team defaults"]);
+    expect(seatSources(parseSeatSettings(seatSetting()))).toEqual([]);
+  });
+
+  it("tells fallbacks a layer names apart from none named", () => {
+    const named = parseSeatSettings(
+      seatSetting({
+        saved: {
+          model: "gpt-6-sol",
+          fallbacks: [{ harness: "kimi" }, { harness: "claude", model: "claude-opus-5-5" }],
+        },
+        board: {},
+        fallbacks: [{ harness: "kimi" }],
+        fallbacksAllowed: true,
+      }),
+    );
+    expect(named.saved).toEqual({ model: "gpt-6-sol" });
+    expect(named.savedFallbacks).toEqual([
+      { harness: "kimi", model: null },
+      { harness: "claude", model: "claude-opus-5-5" },
+    ]);
+    expect(named.boardFallbacks).toBeNull();
+    expect(named.fallbacksAllowed).toBe(true);
+  });
+
+  it("sends fallbacks only for the seats that name some, with a model only where one is given", () => {
+    expect(
+      withFallbacks(
+        { lead: { model: "gpt-6-sol" } },
+        {
+          lead: [{ harness: "kimi", model: null }],
+          reviewer: null,
+          tester: [],
+        },
+      ),
+    ).toEqual({ lead: { model: "gpt-6-sol", fallbacks: [{ harness: "kimi" }] } });
+  });
+
+  it("reads a board's seats as the engine lists them and as it answers a saving", () => {
+    const listed = [
+      { team: "development", seats: [seatSetting({ board: { model: "gpt-6-sol" } })] },
+    ];
+    expect(parseBoardSeats(listed)[0]?.settings[0]?.board).toEqual({ model: "gpt-6-sol" });
+    expect(parseBoardSeats({ teams: listed, note: "Saved." })).toHaveLength(1);
+  });
+
+  it("reads the track record and drops counts that are not numbers", () => {
+    const [row] = parseTrackRecord({
+      since: null,
+      rows: [
+        {
+          team: "triage",
+          stage: "triage",
+          harness: "kimi",
+          model: null,
+          attempts: 4,
+          answered: 3,
+          answeredShare: 75,
+          medianSeconds: 41,
+          notAnswered: { "rate-limit": 1, odd: "x" },
+          decisions: { build: 2, decide: 1 },
+          verdicts: {},
+          steppedIn: 1,
+        },
+      ],
+    });
+    expect(row).toMatchObject({
+      harness: "kimi",
+      model: null,
+      answered: 3,
+      answeredShare: 75,
+      notAnswered: { "rate-limit": 1 },
+      decisions: { build: 2, decide: 1 },
+      steppedIn: 1,
+    });
+    expect(parseTrackRecord(null)).toEqual([]);
   });
 });

@@ -1,11 +1,12 @@
 import type { EnvironmentId, ProviderInstanceId } from "@t3tools/contracts";
 import { RotateCcwIcon } from "lucide-react";
-import { useMemo } from "react";
+import { useMemo, type ReactNode } from "react";
 
 import { useEnvironmentSettings } from "../../hooks/useSettings";
 import {
   moveSeat,
   seatIsOn,
+  seatSources,
   seatOfferFor,
   type SeatChoice,
   type SeatSettings,
@@ -132,6 +133,8 @@ export function SeatSettingsPanel(props: {
   readonly taking?: ReadonlyArray<string> | undefined;
   /** Only the switches: what each seat runs on is set somewhere else. */
   readonly switchesOnly?: boolean;
+  /** More to set for a seat, shown under it: its fallbacks. */
+  readonly renderExtra?: ((item: SeatSettings) => ReactNode) | undefined;
 }) {
   const catalog = useSeatCatalog(props.environmentId);
   const locked = props.onChange === undefined;
@@ -337,6 +340,14 @@ export function SeatSettingsPanel(props: {
                   />
                 </div>
               )}
+              {over === "task" && !locked && seatSources(item).length > 0 ? (
+                <p className="pl-10 text-[11px] text-muted-foreground" data-seat-source>
+                  {baseLabel} set by {seatSources(item).join(" and ")}
+                </p>
+              ) : null}
+              {props.renderExtra && !props.switchesOnly ? (
+                <div className="pl-10">{props.renderExtra(item)}</div>
+              ) : null}
             </div>
           );
         })}

@@ -1,6 +1,15 @@
 import type { EnvironmentId } from "@t3tools/contracts";
 import { useNavigate, useSearch } from "@tanstack/react-router";
-import { ArrowLeftIcon, CopyIcon, PlusIcon, RefreshCwIcon, Trash2Icon, XIcon } from "lucide-react";
+import {
+  ArrowLeftIcon,
+  CopyIcon,
+  HistoryIcon,
+  PlusIcon,
+  RefreshCwIcon,
+  SlidersHorizontalIcon,
+  Trash2Icon,
+  XIcon,
+} from "lucide-react";
 import { useMemo, useRef, useState } from "react";
 
 import { isElectron } from "../../env";
@@ -28,6 +37,15 @@ import { ProviderModelPicker } from "../chat/ProviderModelPicker";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Checkbox } from "../ui/checkbox";
+import {
+  Dialog,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogPanel,
+  DialogPopup,
+  DialogTitle,
+} from "../ui/dialog";
 import { Input } from "../ui/input";
 import { ScrollArea } from "../ui/scroll-area";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
@@ -38,6 +56,8 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { WorkspacePageHeader } from "../WorkspacePageHeader";
 import { useSeatCatalog } from "./SeatSettingsPanel";
 import { SetupPanel } from "./SetupPanel";
+import { TeamDefaultsDialog } from "./TeamDefaultsDialog";
+import { TrackRecord } from "./TrackRecord";
 
 const NONE = "__none__";
 const FLOW_TITLE: Readonly<Record<string, string>> = {
@@ -386,6 +406,23 @@ function ProfileEditor(props: {
   const [problems, setProblems] = useState<ReadonlyArray<string>>([]);
   const [said, setSaid] = useState<string | null>(null);
   const [section, setSection] = useState<"profile" | "setup">("profile");
+  const [removing, setRemoving] = useState(false);
+  const [removeProblem, setRemoveProblem] = useState<string | null>(null);
+  const remove = async () => {
+    if (working.current) return;
+    working.current = true;
+    setBusy(true);
+    setRemoveProblem(null);
+    const result = await act(`/api/profiles/${view.profile}/remove`, { by: person });
+    working.current = false;
+    setBusy(false);
+    if (!result.ok) {
+      setRemoveProblem(result.why);
+      return;
+    }
+    setRemoving(false);
+    props.onRemoved();
+  };
   const locked = !view.editable;
   const changed = JSON.stringify(form) !== JSON.stringify(view.form);
   const set = (patch: Partial<ProfileForm>) => setForm((current) => ({ ...current, ...patch }));
@@ -452,8 +489,49 @@ function ProfileEditor(props: {
             <CopyIcon />
             Duplicate
           </Button>
+          {locked ? null : (
+            <Button
+              size="xs"
+              variant="ghost"
+              disabled={busy}
+              onClick={() => setRemoving(true)}
+              data-profile-remove
+            >
+              <Trash2Icon />
+              Remove
+            </Button>
+          )}
         </div>
       </div>
+      {removing ? (
+        <Dialog open onOpenChange={(open) => !open && !busy && setRemoving(false)}>
+          <DialogPopup className="max-w-md" data-profile-remove-confirm>
+            <DialogHeader>
+              <DialogTitle>Remove {view.profile}?</DialogTitle>
+              <DialogDescription>
+                It can no longer be chosen for a task or a conversation. Its files are moved to the
+                engine's history, not deleted. A profile with work under way or tasks still open is
+                not removed; the engine says which.
+              </DialogDescription>
+            </DialogHeader>
+            {removeProblem ? (
+              <DialogPanel>
+                <p className="text-xs text-warning" data-delivery-problem>
+                  {removeProblem}
+                </p>
+              </DialogPanel>
+            ) : null}
+            <DialogFooter>
+              <Button variant="outline" disabled={busy} onClick={() => setRemoving(false)}>
+                Keep it
+              </Button>
+              <Button variant="destructive" disabled={busy} onClick={() => void remove()}>
+                {busy ? "Removing" : "Remove the profile"}
+              </Button>
+            </DialogFooter>
+          </DialogPopup>
+        </Dialog>
+      ) : null}
       {locked ? (
         <p className="text-xs text-muted-foreground" data-profile-locked>
           This team comes with the engine and is changed in the repository. Duplicate it to have one
@@ -766,19 +844,6 @@ function ProfileEditor(props: {
               <Button disabled={busy || !changed} onClick={() => void save()} data-profile-save>
                 {busy ? "Saving" : changed ? `Save as revision ${view.revision + 1}` : "Saved"}
               </Button>
-              <Button
-                variant="ghost"
-                className="ml-auto"
-                disabled={busy}
-                onClick={() =>
-                  void act(`/api/profiles/${view.profile}/remove`, { by: person }).then((result) =>
-                    result.ok ? props.onRemoved() : setProblems([result.why]),
-                  )
-                }
-              >
-                <Trash2Icon />
-                Remove the profile
-              </Button>
             </div>
           )}
 
@@ -826,6 +891,7 @@ export function ProfilePage() {
   const oneRead = useDeliveryRead(active, search.name ? `/api/profiles/${search.name}` : null);
   const view = useMemo(() => parseProfile(oneRead.body), [oneRead.body]);
   const [reloaded, setReloaded] = useState<string | null>(null);
+  const [opened, setOpened] = useState<"triage" | "record" | null>(null);
   const go = (next: { name?: string; new?: boolean; from?: string }) =>
     void navigate({ to: "/profiles", search: next });
 
@@ -865,7 +931,45 @@ export function ProfilePage() {
             ) : (
               <h1 className="text-sm font-medium">Profiles</h1>
             )}
-            <div className="ml-auto flex items-center gap-1">
+            <div className="ml-auto flex flex-wrap items-center gap-1">
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <Button
+                      size="xs"
+                      variant="ghost"
+                      disabled={!enabled}
+                      onClick={() => setOpened("triage")}
+                      data-profile-triage
+                    />
+                  }
+                >
+                  <SlidersHorizontalIcon />
+                  Triage
+                </TooltipTrigger>
+                <TooltipPopup side="bottom">
+                  What triage runs on: the seats that sort each new task before a team takes it.
+                </TooltipPopup>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <Button
+                      size="xs"
+                      variant="ghost"
+                      disabled={!enabled}
+                      onClick={() => setOpened("record")}
+                      data-profile-record
+                    />
+                  }
+                >
+                  <HistoryIcon />
+                  Track record
+                </TooltipTrigger>
+                <TooltipPopup side="bottom">
+                  How each harness and model has done in each team and stage on this host.
+                </TooltipPopup>
+              </Tooltip>
               <Tooltip>
                 <TooltipTrigger
                   render={
@@ -949,6 +1053,30 @@ export function ProfilePage() {
           </ScrollArea>
         )}
       </div>
+      {opened === "triage" ? (
+        <TeamDefaultsDialog environmentId={active} team="triage" onClose={() => setOpened(null)} />
+      ) : null}
+      {opened === "record" ? (
+        <Dialog open onOpenChange={(open) => !open && setOpened(null)}>
+          <DialogPopup className="max-w-4xl" data-track-record-dialog>
+            <DialogHeader>
+              <DialogTitle>Track record</DialogTitle>
+              <DialogDescription>
+                How often each harness and model was asked and answered, why it did not, how long it
+                took, and what it decided, for every team and stage.
+              </DialogDescription>
+            </DialogHeader>
+            <DialogPanel className="max-h-[70vh] overflow-y-auto">
+              <TrackRecord environmentId={active} />
+            </DialogPanel>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setOpened(null)}>
+                Close
+              </Button>
+            </DialogFooter>
+          </DialogPopup>
+        </Dialog>
+      ) : null}
     </SidebarInset>
   );
 }
