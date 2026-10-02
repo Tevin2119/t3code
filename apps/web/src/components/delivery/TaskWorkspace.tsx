@@ -45,6 +45,7 @@ import {
   isSendKey,
   LANE_TITLE,
   messageStateLabel,
+  moveIntent,
   PRIORITY_LABEL,
   tagsFromText,
   type ComposerKind,
@@ -915,6 +916,8 @@ function Info(props: {
   readonly from: "Board" | "Orchestrator";
   readonly task: TaskView;
   readonly onChanged: () => void;
+  /** Takes the task to a column, by the step that leads there; see moveIntent. */
+  readonly onMoveTo: (lane: string) => void;
 }) {
   const { task } = props;
   const { card } = task;
@@ -978,10 +981,54 @@ function Info(props: {
     >
       <section className="flex flex-col gap-1.5">
         <Row label="Stands in">
-          <span className="inline-flex items-center gap-1.5" data-task-lane={task.lane ?? ""}>
-            <span className={cn("size-2 rounded-full", laneTone(task.lane).bar)} />
-            {LANE_TITLE[task.lane ?? ""] ?? task.state}
-          </span>
+          {task.isDraft || !task.lane ? (
+            <span className="inline-flex items-center gap-1.5" data-task-lane={task.lane ?? ""}>
+              <span className={cn("size-2 rounded-full", laneTone(task.lane).bar)} />
+              {LANE_TITLE[task.lane ?? ""] ?? task.state}
+            </span>
+          ) : (
+            <Select
+              value={task.lane}
+              onValueChange={(value) =>
+                value && value !== task.lane && props.onMoveTo(String(value))
+              }
+            >
+              <SelectTrigger
+                aria-label="Column"
+                size="compact"
+                variant="ghost"
+                className="w-auto min-w-0"
+                data-task-lane={task.lane}
+              >
+                <SelectValue>
+                  <span className="inline-flex items-center gap-1.5">
+                    <span className={cn("size-2 rounded-full", laneTone(task.lane).bar)} />
+                    {LANE_TITLE[task.lane] ?? task.state}
+                  </span>
+                </SelectValue>
+              </SelectTrigger>
+              <SelectPopup alignItemWithTrigger={false}>
+                {Object.entries(LANE_TITLE)
+                  .filter(([lane]) => lane !== "draft")
+                  .map(([lane, title]) => {
+                    const intent = moveIntent(card, lane);
+                    return (
+                      <SelectItem key={lane} value={lane} disabled={intent.kind === "refused"}>
+                        <span className="inline-flex items-center gap-1.5">
+                          <span className={cn("size-2 rounded-full", laneTone(lane).bar)} />
+                          {title}
+                          {intent.kind === "action" ? (
+                            <span className="text-[10px] text-muted-foreground">
+                              {actionLabel(intent.action, card)}
+                            </span>
+                          ) : null}
+                        </span>
+                      </SelectItem>
+                    );
+                  })}
+              </SelectPopup>
+            </Select>
+          )}
         </Row>
         {card.set === "qualification" ? (
           <Row label="Kept as">
@@ -1607,6 +1654,7 @@ export function TaskWorkspace(props: {
                   from={props.from}
                   task={task}
                   onChanged={read.refresh}
+                  onMoveTo={(lane) => actions.moveTo(task.card, lane, null)}
                 />
               </div>
             </div>

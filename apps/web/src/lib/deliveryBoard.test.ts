@@ -22,6 +22,7 @@ import {
   piecesOf,
   queryValue,
   tagsFromText,
+  moveIntent,
 } from "./deliveryBoard";
 
 const card = (overrides: Record<string, unknown> = {}) =>
@@ -303,5 +304,56 @@ describe("a task made from a conversation", () => {
     expect(isConversationRef("env-1/thread-9")).toBe(true);
     expect(isConversationRef("../etc")).toBe(false);
     expect(isConversationRef("a/b/c")).toBe(false);
+  });
+});
+
+describe("moveIntent", () => {
+  const card = (lane: string, actions: ReadonlyArray<string> = []) => ({ lane, actions });
+
+  it("takes a column that a decision leads to by that decision", () => {
+    expect(moveIntent(card("human-review", ["approve", "reject", "pause"]), "approved")).toEqual({
+      kind: "action",
+      action: "approve",
+    });
+    expect(moveIntent(card("human-review", ["approve", "reject"]), "rework")).toEqual({
+      kind: "action",
+      action: "reject",
+    });
+    expect(moveIntent(card("approved", ["publish"]), "pull-request")).toEqual({
+      kind: "action",
+      action: "publish",
+    });
+  });
+
+  it("closes a chat dropped on Done, and starts a plan's delivery dropped on Ready", () => {
+    expect(moveIntent(card("chat", ["close"]), "completed")).toEqual({
+      kind: "action",
+      action: "close",
+    });
+    expect(moveIntent(card("needs-decision", ["deliver", "close"]), "ready")).toEqual({
+      kind: "action",
+      action: "deliver",
+    });
+  });
+
+  it("refuses what no step leads to, with the reason, and leaves the card where it is", () => {
+    expect(moveIntent(card("implementation", ["pause"]), "approved").kind).toBe("refused");
+    expect(moveIntent(card("needs-decision", ["pause"]), "completed").kind).toBe("refused");
+    expect(moveIntent(card("triage", []), "validation").kind).toBe("refused");
+    expect(moveIntent(card("draft", ["submit"]), "completed").kind).toBe("refused");
+  });
+
+  it("leaves reordering, pausing, resuming and submitting to the engine's own move", () => {
+    expect(moveIntent(card("triage"), "triage")).toEqual({ kind: "move" });
+    expect(moveIntent(card("implementation", ["pause"]), "paused")).toEqual({ kind: "move" });
+    expect(moveIntent(card("paused", ["resume"]), "implementation")).toEqual({ kind: "move" });
+    expect(moveIntent(card("draft", ["submit"]), "triage")).toEqual({ kind: "move" });
+  });
+
+  it("asks before sending a task back to triage", () => {
+    expect(moveIntent(card("human-review", ["approve", "retriage"]), "triage")).toEqual({
+      kind: "action",
+      action: "retriage",
+    });
   });
 });

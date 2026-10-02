@@ -788,7 +788,7 @@ export function BoardPage() {
               busy={actions.busy}
               onOpen={(card) => open(card.id)}
               onAction={actions.run}
-              onMove={(card, lane, before) => void actions.move(card, lane, before)}
+              onMove={(card, lane, before) => actions.moveTo(card, lane, before)}
             />
           </>
         )}

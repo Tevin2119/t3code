@@ -543,3 +543,73 @@ export function taskFromConversation(input: {
   ];
   return { title: input.title.trim().slice(0, 120), text: sections.join("\n\n") };
 }
+
+/** What dropping a card on a column, or choosing that column for it, asks for. */
+export type MoveIntent =
+  /** The engine's own move: reordering, pausing, resuming, submitting a draft. */
+  | { readonly kind: "move" }
+  /** A step the card offers, taken the way its own button takes it: a decision asks for the key. */
+  | { readonly kind: "action"; readonly action: string }
+  /** Nothing a person can do by moving it there; the card stays where it is. */
+  | { readonly kind: "refused"; readonly why: string };
+
+/** The columns a person can take a card to, each with the step that takes it there. */
+const STEP_FOR_LANE: Readonly<Record<string, ReadonlyArray<string>>> = {
+  approved: ["approve"],
+  rework: ["reject"],
+  "pull-request": ["publish"],
+  completed: ["close"],
+  ready: ["deliver"],
+  planning: ["deliver"],
+  implementation: ["deliver"],
+  triage: ["retriage"],
+  intake: ["retriage"],
+};
+
+/**
+ * What moving a card to a lane comes to. A column that a decision leads to is reached by that
+ * decision, through the same dialog as its button; a column the engine fills by itself is
+ * refused here with the reason, so a card is never left between two states.
+ */
+export function moveIntent(card: Pick<DeliveryCard, "lane" | "actions">, lane: string): MoveIntent {
+  if (lane === card.lane) return { kind: "move" };
+  const title = LANE_TITLE[lane] ?? lane;
+  if (card.lane === "draft") {
+    return lane === "triage" || lane === "intake"
+      ? { kind: "move" }
+      : { kind: "refused", why: "A draft is submitted first. Drop it on Triage to submit it." };
+  }
+  if (lane === "paused") return { kind: "move" };
+  const step = (STEP_FOR_LANE[lane] ?? []).find((action) => card.actions.includes(action));
+  if (step) return { kind: "action", action: step };
+  // Taken out of Paused, a card resumes from where it stood.
+  if (card.lane === "paused") return { kind: "move" };
+  if (lane === "draft") {
+    return {
+      kind: "refused",
+      why: "A task that was submitted is kept as a record. It cannot go back to being a draft.",
+    };
+  }
+  if (lane === "approved" || lane === "rework" || lane === "human-review") {
+    return {
+      kind: "refused",
+      why: `A card reaches ${title} by a person's decision on a delivery that passed the QA gate. This one has none waiting.`,
+    };
+  }
+  if (lane === "completed") {
+    return {
+      kind: "refused",
+      why: "A delivery is done when it is approved and merged. A chat, a plan or a review can be closed; this card cannot be from here.",
+    };
+  }
+  if (lane === "pull-request") {
+    return {
+      kind: "refused",
+      why: "A pull request is opened by publishing an approved change. This one has none to publish.",
+    };
+  }
+  return {
+    kind: "refused",
+    why: `The engine puts a card in ${title} when its work reaches that stage. A card can be paused, resumed, sent to triage again, or decided.`,
+  };
+}

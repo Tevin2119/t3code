@@ -287,14 +287,80 @@ function SeatEditor(props: {
   );
 }
 
+/** Asks before removing a profile of one's own, and says what becomes of it. */
+function RemoveProfileDialog(props: {
+  readonly environmentId: EnvironmentId | null;
+  readonly profile: string;
+  readonly onClose: () => void;
+  readonly onRemoved: () => void;
+}) {
+  const person = usePersonName();
+  const act = useDeliveryAct(props.environmentId, "remove profile");
+  const [busy, setBusy] = useState(false);
+  const [problem, setProblem] = useState<string | null>(null);
+  const remove = async () => {
+    setBusy(true);
+    setProblem(null);
+    const result = await act(`/api/profiles/${props.profile}/remove`, { by: person });
+    setBusy(false);
+    if (!result.ok) {
+      setProblem(result.why);
+      return;
+    }
+    props.onRemoved();
+  };
+  return (
+    <Dialog open onOpenChange={(open) => !open && !busy && props.onClose()}>
+      <DialogPopup className="max-w-md" data-profile-remove-confirm>
+        <DialogHeader>
+          <DialogTitle>Remove {props.profile}?</DialogTitle>
+          <DialogDescription>
+            It can no longer be chosen for a task or a conversation. Its files are moved to the
+            engine's history, not deleted. A profile with work under way or tasks still open is not
+            removed; the engine says which.
+          </DialogDescription>
+        </DialogHeader>
+        {problem ? (
+          <DialogPanel>
+            <p className="text-xs text-warning" data-delivery-problem>
+              {problem}
+            </p>
+          </DialogPanel>
+        ) : null}
+        <DialogFooter>
+          <Button variant="outline" disabled={busy} onClick={props.onClose}>
+            Keep it
+          </Button>
+          <Button variant="destructive" disabled={busy} onClick={() => void remove()}>
+            {busy ? "Removing" : "Remove the profile"}
+          </Button>
+        </DialogFooter>
+      </DialogPopup>
+    </Dialog>
+  );
+}
+
 function ProfileList(props: {
   readonly profiles: ReadonlyArray<ProfileSummary>;
   readonly onOpen: (name: string) => void;
+  readonly onRemove: (name: string) => void;
 }) {
   return (
     <ul className="grid gap-2 p-5 md:grid-cols-2 xl:grid-cols-3" data-profile-list>
       {props.profiles.map((item) => (
-        <li key={item.profile}>
+        <li key={item.profile} className="relative">
+          {item.source === "custom" ? (
+            <Button
+              size="icon-xs"
+              variant="ghost"
+              className="absolute top-2 right-2 z-10"
+              aria-label={`Remove ${item.profile}`}
+              onClick={() => props.onRemove(item.profile)}
+              data-profile-card-remove={item.profile}
+            >
+              <Trash2Icon />
+            </Button>
+          ) : null}
           <button
             type="button"
             onClick={() => props.onOpen(item.profile)}
@@ -407,22 +473,6 @@ function ProfileEditor(props: {
   const [said, setSaid] = useState<string | null>(null);
   const [section, setSection] = useState<"profile" | "setup">("profile");
   const [removing, setRemoving] = useState(false);
-  const [removeProblem, setRemoveProblem] = useState<string | null>(null);
-  const remove = async () => {
-    if (working.current) return;
-    working.current = true;
-    setBusy(true);
-    setRemoveProblem(null);
-    const result = await act(`/api/profiles/${view.profile}/remove`, { by: person });
-    working.current = false;
-    setBusy(false);
-    if (!result.ok) {
-      setRemoveProblem(result.why);
-      return;
-    }
-    setRemoving(false);
-    props.onRemoved();
-  };
   const locked = !view.editable;
   const changed = JSON.stringify(form) !== JSON.stringify(view.form);
   const set = (patch: Partial<ProfileForm>) => setForm((current) => ({ ...current, ...patch }));
@@ -504,33 +554,15 @@ function ProfileEditor(props: {
         </div>
       </div>
       {removing ? (
-        <Dialog open onOpenChange={(open) => !open && !busy && setRemoving(false)}>
-          <DialogPopup className="max-w-md" data-profile-remove-confirm>
-            <DialogHeader>
-              <DialogTitle>Remove {view.profile}?</DialogTitle>
-              <DialogDescription>
-                It can no longer be chosen for a task or a conversation. Its files are moved to the
-                engine's history, not deleted. A profile with work under way or tasks still open is
-                not removed; the engine says which.
-              </DialogDescription>
-            </DialogHeader>
-            {removeProblem ? (
-              <DialogPanel>
-                <p className="text-xs text-warning" data-delivery-problem>
-                  {removeProblem}
-                </p>
-              </DialogPanel>
-            ) : null}
-            <DialogFooter>
-              <Button variant="outline" disabled={busy} onClick={() => setRemoving(false)}>
-                Keep it
-              </Button>
-              <Button variant="destructive" disabled={busy} onClick={() => void remove()}>
-                {busy ? "Removing" : "Remove the profile"}
-              </Button>
-            </DialogFooter>
-          </DialogPopup>
-        </Dialog>
+        <RemoveProfileDialog
+          environmentId={props.environmentId}
+          profile={view.profile}
+          onClose={() => setRemoving(false)}
+          onRemoved={() => {
+            setRemoving(false);
+            props.onRemoved();
+          }}
+        />
       ) : null}
       {locked ? (
         <p className="text-xs text-muted-foreground" data-profile-locked>
@@ -892,6 +924,7 @@ export function ProfilePage() {
   const view = useMemo(() => parseProfile(oneRead.body), [oneRead.body]);
   const [reloaded, setReloaded] = useState<string | null>(null);
   const [opened, setOpened] = useState<"triage" | "record" | null>(null);
+  const [removing, setRemoving] = useState<string | null>(null);
   const go = (next: { name?: string; new?: boolean; from?: string }) =>
     void navigate({ to: "/profiles", search: next });
 
@@ -1048,11 +1081,26 @@ export function ProfilePage() {
                 </p>
               )
             ) : (
-              <ProfileList profiles={profiles} onOpen={(name) => go({ name })} />
+              <ProfileList
+                profiles={profiles}
+                onOpen={(name) => go({ name })}
+                onRemove={setRemoving}
+              />
             )}
           </ScrollArea>
         )}
       </div>
+      {removing ? (
+        <RemoveProfileDialog
+          environmentId={active}
+          profile={removing}
+          onClose={() => setRemoving(null)}
+          onRemoved={() => {
+            setRemoving(null);
+            listRead.refresh();
+          }}
+        />
+      ) : null}
       {opened === "triage" ? (
         <TeamDefaultsDialog environmentId={active} team="triage" onClose={() => setOpened(null)} />
       ) : null}

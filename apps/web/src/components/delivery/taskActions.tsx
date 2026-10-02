@@ -2,6 +2,7 @@ import type { EnvironmentId } from "@t3tools/contracts";
 import { useCallback, useState } from "react";
 
 import type { DeliveryCard } from "../../lib/delivery";
+import { LANE_TITLE, moveIntent } from "../../lib/deliveryBoard";
 import { useBoardStore, useDeliveryAct, usePersonName } from "../../state/delivery";
 import { Button } from "../ui/button";
 import {
@@ -75,6 +76,9 @@ type Target = Pick<
   "id" | "title" | "number" | "run" | "partOf" | "parts" | "publication"
 >;
 type Decision = { readonly card: Target; readonly decision: "approve" | "reject" | "publish" };
+/** Steps that end or redo work: a drop on a column asks before taking them. */
+const ASKED_FIRST = new Set(["close", "deliver", "retriage"]);
+type Confirming = { readonly card: Target; readonly action: string; readonly lane: string };
 
 /**
  * What a person may ask the engine to do with a task. Every one of these is
@@ -92,6 +96,7 @@ export function useTaskActions(
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
   const [decision, setDecision] = useState<Decision | null>(null);
+  const [confirming, setConfirming] = useState<Confirming | null>(null);
   const { onDone, onDiscarded } = options;
 
   const send = useCallback(
@@ -138,13 +143,76 @@ export function useTaskActions(
     [person, send],
   );
 
+  /**
+   * A card taken to a column, by a drop or by choosing the column. A column a step leads to is
+   * reached by that step, asked for as its button asks; one no step leads to is refused with
+   * the reason, and the card stays where it was.
+   */
+  const moveTo = useCallback(
+    (
+      card: Target & Pick<DeliveryCard, "lane" | "actions">,
+      lane: string,
+      before: string | null,
+    ) => {
+      const intent = moveIntent(card, lane);
+      if (intent.kind === "move") return void move(card, lane, before);
+      if (intent.kind === "refused") return setProblem(intent.why);
+      if (ASKED_FIRST.has(intent.action)) {
+        setProblem(null);
+        setConfirming({ card, action: intent.action, lane });
+        return;
+      }
+      run(card, intent.action);
+    },
+    [move, run],
+  );
+
   return {
     busy,
     problem,
     clearProblem: () => setProblem(null),
     run,
     move,
-    dialog: decision ? (
+    moveTo,
+    dialog: confirming ? (
+      <Dialog open onOpenChange={(open) => !open && !busy && setConfirming(null)}>
+        <DialogPopup className="max-w-md" data-delivery-move-confirm={confirming.action}>
+          <DialogHeader>
+            <DialogTitle>
+              {actionLabel(confirming.action, confirming.card)}: #{confirming.card.number}{" "}
+              {confirming.card.title}
+            </DialogTitle>
+          </DialogHeader>
+          <DialogPanel className="flex flex-col gap-2 text-sm">
+            <p>
+              Moving it to {LANE_TITLE[confirming.lane] ?? confirming.lane} means this step.{" "}
+              {actionHelp(confirming.action, confirming.card)}
+            </p>
+            {problem ? (
+              <p className="text-warning" data-delivery-problem>
+                {problem}
+              </p>
+            ) : null}
+          </DialogPanel>
+          <DialogFooter>
+            <Button variant="outline" disabled={busy} onClick={() => setConfirming(null)}>
+              Leave it where it is
+            </Button>
+            <Button
+              disabled={busy}
+              onClick={() => {
+                const { card, action } = confirming;
+                setConfirming(null);
+                run(card, action);
+              }}
+              data-delivery-move-confirm-do
+            >
+              {actionLabel(confirming.action, confirming.card)}
+            </Button>
+          </DialogFooter>
+        </DialogPopup>
+      </Dialog>
+    ) : decision ? (
       <DecisionDialog
         decision={decision}
         busy={busy}
