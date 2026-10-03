@@ -20,7 +20,7 @@ import {
   SendIcon,
   XIcon,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 
 import { useNavigate } from "@tanstack/react-router";
 
@@ -36,6 +36,7 @@ import {
   type TaskPriority,
   repeatKeys,
   type TaskBriefing,
+  type TaskWrapUp,
   type TaskView,
   type TimelineEntry,
   waitingWords,
@@ -73,6 +74,7 @@ import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../
 import { SidebarInset } from "../ui/sidebar";
 import { Textarea } from "../ui/textarea";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { MessageCopyButton } from "../chat/MessageCopyButton";
 import { WorkspacePageHeader } from "../WorkspacePageHeader";
 import { SeatSettingsPanel } from "./SeatSettingsPanel";
 import { actionHelp, actionLabel, useTaskActions } from "./taskActions";
@@ -290,6 +292,60 @@ function MobileHelp(props: {
         {props.children}
       </PopoverPopup>
     </Popover>
+  );
+}
+
+/**
+ * Once the work is done or decided: what changed, what is left, who acts next. Folded until
+ * opened; a draft to copy where it is wanted, posted nowhere.
+ */
+function WrapUp(props: { readonly wrapUp: TaskWrapUp }) {
+  const { wrapUp } = props;
+  const [open, setOpen] = useState(false);
+  const rows: ReadonlyArray<readonly [string, ReadonlyArray<string>]> = [
+    ["Changed", wrapUp.changed],
+    ["Left", wrapUp.left],
+    ["Next", wrapUp.next],
+  ];
+  return (
+    <div className="shrink-0 border-b border-border px-3 py-2 text-xs" data-task-wrap-up>
+      <div className="flex items-start gap-2">
+        <button
+          type="button"
+          className="flex min-w-0 flex-1 cursor-pointer items-start gap-2 text-left"
+          aria-expanded={open}
+          onClick={() => setOpen(!open)}
+        >
+          <span className="mt-0.5 shrink-0 font-medium">Wrap-up</span>
+          <span className="min-w-0 flex-1 text-muted-foreground">{wrapUp.next[0] ?? ""}</span>
+          <span className="shrink-0 text-[10px] text-muted-foreground">
+            {open ? "Less" : "More"}
+          </span>
+        </button>
+        <MessageCopyButton
+          text={wrapUp.text}
+          size="icon-xs"
+          variant="ghost"
+          label="Copy the wrap-up"
+        />
+      </div>
+      {open ? (
+        <dl className="mt-1.5 grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1">
+          {rows.map(([label, lines]) => (
+            <Fragment key={label}>
+              <dt className="text-muted-foreground">{label}</dt>
+              <dd>
+                <ul className="flex flex-col gap-0.5">
+                  {lines.map((line) => (
+                    <li key={line}>{line}</li>
+                  ))}
+                </ul>
+              </dd>
+            </Fragment>
+          ))}
+        </dl>
+      ) : null}
+    </div>
   );
 }
 
@@ -770,6 +826,7 @@ function Communications(props: {
       {props.task.brief && props.task.card.waitingOn === "person" ? (
         <Briefing brief={props.task.brief} />
       ) : null}
+      {props.task.wrapUp ? <WrapUp wrapUp={props.task.wrapUp} /> : null}
       <div className="flex items-center justify-between gap-2 border-b border-border px-3 py-1.5">
         <h2 className="text-xs font-medium">History and messages</h2>
         <button

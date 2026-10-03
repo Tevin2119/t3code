@@ -1337,10 +1337,33 @@ export function parseBriefing(value: unknown): TaskBriefing | null {
   };
 }
 
+/**
+ * Once a task's work is done or decided: what changed, what is left and who acts next, with the
+ * same as one text to copy. A draft for the person; the engine posts it nowhere.
+ */
+export interface TaskWrapUp {
+  readonly changed: ReadonlyArray<string>;
+  readonly left: ReadonlyArray<string>;
+  readonly next: ReadonlyArray<string>;
+  readonly text: string;
+}
+
+export function parseWrapUp(value: unknown): TaskWrapUp | null {
+  if (!isRecord(value) || text(value.text).length === 0) return null;
+  return {
+    changed: strings(value.changed),
+    left: strings(value.left),
+    next: strings(value.next),
+    text: text(value.text),
+  };
+}
+
 /** A task as its workspace shows it. Board and Orchestrator read the same one. */
 export interface TaskView {
   /** Null unless the task waits on a person. */
   readonly brief: TaskBriefing | null;
+  /** Null until the task's work is done or decided. */
+  readonly wrapUp: TaskWrapUp | null;
   readonly id: string;
   readonly number: number;
   readonly title: string;
@@ -1548,6 +1571,7 @@ export function parseTask(body: unknown): TaskView | null {
     card: parseCard(body.card),
     actions: strings(body.actions),
     brief: parseBriefing(body.brief),
+    wrapUp: parseWrapUp(body.wrapUp),
     timeline: parseTimeline(body.timeline),
     questions: records(body.questions).map((question) => ({
       seq: count(question.seq),

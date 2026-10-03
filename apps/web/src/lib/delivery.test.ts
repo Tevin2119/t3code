@@ -14,6 +14,7 @@ import {
   parseBoardSeats,
   parseBriefing,
   repeatKeys,
+  parseWrapUp,
   parseCards,
   parseSeatSettings,
   parseTask,
@@ -1097,5 +1098,25 @@ describe("repeatKeys", () => {
     const keys = repeatKeys(["x", "x", "x#2", "2:x", ""]);
     expect(new Set(keys).size).toBe(5);
     expect(keys).toEqual(["1:x", "2:x", "1:x#2", "1:2:x", "1:"]);
+  });
+});
+
+describe("parseWrapUp", () => {
+  it("reads what changed, what is left and who acts next, and nothing without its text", () => {
+    expect(
+      parseWrapUp({
+        changed: ["Commit abc."],
+        left: ["Nothing the record knows of."],
+        next: ["Nobody: it is merged."],
+        text: "#7 T: wrap-up",
+      }),
+    ).toEqual({
+      changed: ["Commit abc."],
+      left: ["Nothing the record knows of."],
+      next: ["Nobody: it is merged."],
+      text: "#7 T: wrap-up",
+    });
+    expect(parseWrapUp(null)).toBeNull();
+    expect(parseWrapUp({ changed: ["x"] })).toBeNull();
   });
 });
