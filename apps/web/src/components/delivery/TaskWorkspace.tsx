@@ -34,6 +34,7 @@ import {
   type TaskBrief,
   type TaskFile,
   type TaskPriority,
+  type TaskBriefing,
   type TaskView,
   type TimelineEntry,
   waitingWords,
@@ -262,7 +263,12 @@ function Happening(props: { readonly entry: TimelineEntry }) {
 }
 
 // Expanded controls need both width and height: landscape phones still need room for history.
-function MobileHelp(props: { readonly label: string; readonly children: React.ReactNode }) {
+function MobileHelp(props: {
+  readonly label: string;
+  readonly children: React.ReactNode;
+  /** Shown on every screen, not only a small one. */
+  readonly always?: boolean;
+}) {
   return (
     <Popover>
       <PopoverTrigger
@@ -270,7 +276,9 @@ function MobileHelp(props: { readonly label: string; readonly children: React.Re
           <Button
             size="icon-sm"
             variant="ghost"
-            className="[@media(min-width:640px)_and_(min-height:600px)]:hidden"
+            className={
+              props.always ? undefined : "[@media(min-width:640px)_and_(min-height:600px)]:hidden"
+            }
             aria-label={props.label}
           />
         }
@@ -281,6 +289,90 @@ function MobileHelp(props: { readonly label: string; readonly children: React.Re
         {props.children}
       </PopoverPopup>
     </Popover>
+  );
+}
+
+/**
+ * What is needed of you, in plain words: the bottom line, then what the task is, what happened,
+ * why it stopped, and what each choice would do. The steps themselves are in the bar below.
+ */
+function Briefing(props: { readonly brief: TaskBriefing }) {
+  const { brief } = props;
+  const now = useMinuteClock();
+  const [open, setOpen] = useState(true);
+  return (
+    <div
+      className="shrink-0 border-b border-amber-500/40 bg-amber-500/5 px-3 py-2 text-xs"
+      data-task-brief
+    >
+      <button
+        type="button"
+        className="flex w-full cursor-pointer items-start gap-2 text-left"
+        aria-expanded={open}
+        onClick={() => setOpen(!open)}
+      >
+        <span className="mt-0.5 shrink-0 font-medium text-amber-700 dark:text-amber-300">
+          Needs you
+        </span>
+        <span className="min-w-0 flex-1 font-medium">{brief.headline}</span>
+        <span className="shrink-0 text-[10px] text-muted-foreground">{open ? "Less" : "More"}</span>
+      </button>
+      {open ? (
+        <dl className="mt-1.5 grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1">
+          <dt className="text-muted-foreground">What</dt>
+          <dd>{brief.what}</dd>
+          {brief.happened.length > 0 ? (
+            <>
+              <dt className="text-muted-foreground">Happened</dt>
+              <dd>
+                <ul className="flex flex-col gap-0.5">
+                  {brief.happened.map((line) => (
+                    <li key={line}>{line}</li>
+                  ))}
+                </ul>
+              </dd>
+            </>
+          ) : null}
+          {brief.why ? (
+            <>
+              <dt className="text-muted-foreground">Why</dt>
+              <dd>{brief.why}</dd>
+            </>
+          ) : null}
+          {brief.options.length > 0 ? (
+            <>
+              <dt className="text-muted-foreground">Choices</dt>
+              <dd>
+                <ul className="flex flex-col gap-0.5">
+                  {brief.options.map((option) => (
+                    <li key={option.action}>
+                      <span className="font-medium">{option.label}</span>
+                      {option.recommended ? (
+                        <span className="ml-1 rounded bg-amber-500/15 px-1 text-[10px] text-amber-700 dark:text-amber-300">
+                          suggested
+                        </span>
+                      ) : null}
+                      <span className="text-muted-foreground"> {option.does}</span>
+                    </li>
+                  ))}
+                  {brief.reply ? <li className="text-muted-foreground">{brief.reply}</li> : null}
+                </ul>
+              </dd>
+            </>
+          ) : null}
+          {brief.where || brief.since ? (
+            <>
+              <dt className="text-muted-foreground">Where</dt>
+              <dd className="text-muted-foreground">
+                {brief.where}
+                {brief.where && brief.since ? ", " : ""}
+                {brief.since ? <Age at={brief.since} now={now} label="Waiting since" /> : null}
+              </dd>
+            </>
+          ) : null}
+        </dl>
+      ) : null}
+    </div>
   );
 }
 
@@ -489,7 +581,7 @@ function Composer(props: {
             </Select>
           )}
           <span className="min-w-0 flex-1" />
-          <MobileHelp label="About this message">
+          <MobileHelp label="About this message" always>
             <p>
               {effect.moves ? "Moves the work:" : "Changes nothing:"} {effect.label}
             </p>
@@ -515,22 +607,16 @@ function Composer(props: {
             </TooltipPopup>
           </Tooltip>
         </div>
-        {/* What sending does, on every screen: whether the work moves because of it. */}
-        <p
-          className={cn(
-            "hidden items-start gap-1.5 text-[11px] [@media(min-width:640px)_and_(min-height:600px)]:flex",
-            effect.moves ? "text-amber-700 dark:text-amber-300" : "text-muted-foreground",
-          )}
-          data-task-composer-effect={effect.moves ? "moves" : "records"}
-        >
-          <span className="shrink-0 font-medium">
-            {effect.moves ? "Moves the work:" : "Changes nothing:"}
-          </span>
-          <span className="min-w-0">{effect.label}</span>
-        </p>
-        <p className="hidden text-[10px] text-muted-foreground [@media(min-width:640px)_and_(min-height:600px)]:block">
-          {help(kind)}
-        </p>
+        {/* Said only when sending moves the work; the rest is behind the info icon. */}
+        {effect.moves ? (
+          <p
+            className="hidden items-start gap-1.5 text-[11px] text-amber-700 dark:text-amber-300 [@media(min-width:640px)_and_(min-height:600px)]:flex"
+            data-task-composer-effect="moves"
+          >
+            <span className="shrink-0 font-medium">Moves the work:</span>
+            <span className="min-w-0">{effect.label}</span>
+          </p>
+        ) : null}
       </div>
     </div>
   );
@@ -653,6 +739,7 @@ function Communications(props: {
   const hidden = task.timeline.length - entries.length;
   return (
     <section className="flex min-h-0 min-w-0 flex-1 flex-col" data-task-communications>
+      {props.task.brief ? <Briefing brief={props.task.brief} /> : null}
       <div className="flex items-center justify-between gap-2 border-b border-border px-3 py-1.5">
         <h2 className="text-xs font-medium">History and messages</h2>
         <button

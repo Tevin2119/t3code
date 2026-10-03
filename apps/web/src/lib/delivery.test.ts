@@ -12,6 +12,7 @@ import {
   crewLine,
   nowLine,
   parseBoardSeats,
+  parseBriefing,
   parseCards,
   parseSeatSettings,
   parseTask,
@@ -1049,5 +1050,39 @@ describe("afterRead", () => {
       waiting: "memory headroom",
     };
     expect(nowLine({ workers: [worker], stage: null })).toBe("Waits for memory");
+  });
+});
+
+describe("parseBriefing", () => {
+  it("reads a brief, and none when there is no headline", () => {
+    const brief = parseBriefing({
+      headline:
+        "The reviewer turned the build down 3 times, so the engine stopped and waits for your call.",
+      what: "Keep the base branch fresh. Fetch it before a run.",
+      happened: [
+        "Built by developer (Kimi); checks: 3 of 3 passed.",
+        "Round 1, lead (Claude) asked for changes: never force.",
+      ],
+      why: "The engine allows 3 build rounds, and none was approved.",
+      options: [
+        {
+          action: "retry",
+          label: "Try again",
+          does: "The stopped step runs again as it is.",
+          recommended: true,
+        },
+        { action: "close", label: "Close", does: "Nothing more is done." },
+      ],
+      reply: "Or write to the team.",
+      where: "board Engine self-fix",
+      since: "2026-10-02T02:40:56.193Z",
+    });
+    expect(brief?.options.map((option) => [option.action, option.recommended])).toEqual([
+      ["retry", true],
+      ["close", false],
+    ]);
+    expect(brief?.happened).toHaveLength(2);
+    expect(parseBriefing({ what: "no headline" })).toBeNull();
+    expect(parseBriefing(null)).toBeNull();
   });
 });

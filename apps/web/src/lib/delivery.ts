@@ -1284,7 +1284,48 @@ export interface TaskLink extends TaskBrief {
 }
 
 /** A task as its workspace shows it. Board and Orchestrator read the same one. */
+/**
+ * What is needed of a person, in plain words, when a task waits on one: the bottom line first,
+ * then what the task is, what happened, why it stopped, each choice, where and since when.
+ */
+export interface TaskBriefing {
+  readonly headline: string;
+  readonly what: string;
+  readonly happened: ReadonlyArray<string>;
+  readonly why: string | null;
+  readonly options: ReadonlyArray<{
+    readonly action: string;
+    readonly label: string;
+    readonly does: string;
+    readonly recommended: boolean;
+  }>;
+  readonly reply: string | null;
+  readonly where: string | null;
+  readonly since: string | null;
+}
+
+export function parseBriefing(value: unknown): TaskBriefing | null {
+  if (!isRecord(value) || text(value.headline).length === 0) return null;
+  return {
+    headline: text(value.headline),
+    what: text(value.what),
+    happened: strings(value.happened),
+    why: textOrNull(value.why),
+    options: records(value.options).map((option) => ({
+      action: text(option.action),
+      label: text(option.label, text(option.action)),
+      does: text(option.does),
+      recommended: flag(option.recommended),
+    })),
+    reply: textOrNull(value.reply),
+    where: textOrNull(value.where),
+    since: textOrNull(value.since),
+  };
+}
+
 export interface TaskView {
+  /** Null unless the task waits on a person. */
+  readonly brief: TaskBriefing | null;
   readonly id: string;
   readonly number: number;
   readonly title: string;
@@ -1491,6 +1532,7 @@ export function parseTask(body: unknown): TaskView | null {
     parent: parent ? parseBrief(parent) : null,
     card: parseCard(body.card),
     actions: strings(body.actions),
+    brief: parseBriefing(body.brief),
     timeline: parseTimeline(body.timeline),
     questions: records(body.questions).map((question) => ({
       seq: count(question.seq),
