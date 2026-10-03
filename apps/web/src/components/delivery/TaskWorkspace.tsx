@@ -34,6 +34,7 @@ import {
   type TaskBrief,
   type TaskFile,
   type TaskPriority,
+  repeatKeys,
   type TaskBriefing,
   type TaskView,
   type TimelineEntry,
@@ -292,16 +293,6 @@ function MobileHelp(props: {
   );
 }
 
-/** A key for each value, the second and later of the same value numbered. */
-function repeatKeys(values: ReadonlyArray<string>): ReadonlyArray<string> {
-  const seen = new Map<string, number>();
-  return values.map((value) => {
-    const count = (seen.get(value) ?? 0) + 1;
-    seen.set(value, count);
-    return count === 1 ? value : `${value}#${count}`;
-  });
-}
-
 /**
  * What is needed of you, in plain words: the bottom line, then what the task is, what happened,
  * why it stopped, and what each choice would do. The steps themselves are in the bar below.
@@ -315,8 +306,10 @@ function Briefing(props: { readonly brief: TaskBriefing }) {
   const optionKeys = repeatKeys(brief.options.map((option) => option.action));
   const [open, setOpen] = useState(true);
   return (
+    // The whole panel, headline too, is held to part of the screen and scrolls within, so the
+    // history and the composer keep their room on a phone.
     <div
-      className="shrink-0 border-b border-amber-500/40 bg-amber-500/5 px-3 py-2 text-xs"
+      className="max-h-[40dvh] shrink-0 overflow-y-auto overscroll-contain border-b border-amber-500/40 bg-amber-500/5 px-3 py-2 text-xs"
       data-task-brief
     >
       <button
@@ -332,9 +325,7 @@ function Briefing(props: { readonly brief: TaskBriefing }) {
         <span className="shrink-0 text-[10px] text-muted-foreground">{open ? "Less" : "More"}</span>
       </button>
       {open ? (
-        // Held to part of the screen and scrolled within, so the history and the composer keep
-        // their room on a phone.
-        <dl className="mt-1.5 grid max-h-[40dvh] grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 overflow-y-auto overscroll-contain">
+        <dl className="mt-1.5 grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1">
           {brief.what ? (
             <>
               <dt className="text-muted-foreground">What</dt>

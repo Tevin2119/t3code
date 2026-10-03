@@ -1305,6 +1305,19 @@ export interface TaskBriefing {
   readonly since: string | null;
 }
 
+/**
+ * A key for each value: which repeat of it this is, then the value. The count leads up to the
+ * first colon, so no two values give the same key.
+ */
+export function repeatKeys(values: ReadonlyArray<string>): ReadonlyArray<string> {
+  const seen = new Map<string, number>();
+  return values.map((value) => {
+    const count = (seen.get(value) ?? 0) + 1;
+    seen.set(value, count);
+    return `${count}:${value}`;
+  });
+}
+
 export function parseBriefing(value: unknown): TaskBriefing | null {
   if (!isRecord(value) || text(value.headline).length === 0) return null;
   return {

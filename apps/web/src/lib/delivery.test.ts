@@ -13,6 +13,7 @@ import {
   nowLine,
   parseBoardSeats,
   parseBriefing,
+  repeatKeys,
   parseCards,
   parseSeatSettings,
   parseTask,
@@ -1088,5 +1089,13 @@ describe("parseBriefing", () => {
     expect(brief?.happened).toHaveLength(2);
     expect(parseBriefing({ what: "no headline" })).toBeNull();
     expect(parseBriefing(null)).toBeNull();
+  });
+});
+
+describe("repeatKeys", () => {
+  it("gives every value its own key, even one that looks like a repeat of another", () => {
+    const keys = repeatKeys(["x", "x", "x#2", "2:x", ""]);
+    expect(new Set(keys).size).toBe(5);
+    expect(keys).toEqual(["1:x", "2:x", "1:x#2", "1:2:x", "1:"]);
   });
 });
