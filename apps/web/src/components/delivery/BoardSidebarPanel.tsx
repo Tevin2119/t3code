@@ -36,6 +36,7 @@ import { APP_BUILD } from "../../branding";
 import { ActiveFilterChips, LaneFilterMenu } from "./BoardFilterControls";
 import { Age, CardSigns, laneTone, PriorityPill } from "./taskParts";
 import { BoardIcon } from "./BoardIcon";
+import { EngineDownNotice } from "./EngineStart";
 
 const ANY = "__any__";
 
@@ -450,7 +451,11 @@ export function BoardSidebarPanel() {
             Delivery is turned off for this environment.
           </p>
         ) : read.error ? (
-          <p className="px-2 text-xs text-warning">Delivery engine not reachable. {read.error}</p>
+          <EngineDownNotice
+            className="px-2 text-xs"
+            environmentId={environmentId}
+            message={`Delivery engine not reachable. ${read.error}`}
+          />
         ) : searching ? (
           <Section
             name="found"

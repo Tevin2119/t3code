@@ -38,6 +38,7 @@ import {
   useStaleReading,
 } from "../../state/delivery";
 import { usePrimaryEnvironmentId } from "../../state/environments";
+import { EngineDownNotice, EngineStartDialog } from "./EngineStart";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
@@ -561,6 +562,7 @@ export function BoardPage() {
 
   return (
     <SidebarInset className="isolate h-dvh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground">
+      <EngineStartDialog />
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         <WorkspacePageHeader electron={isElectron} className="h-auto">
           <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2 py-2">
@@ -709,9 +711,11 @@ export function BoardPage() {
             the board.
           </p>
         ) : board.error ? (
-          <p className="p-6 text-sm text-warning">
-            Delivery engine not reachable. {board.error} Nothing shown here is current.
-          </p>
+          <EngineDownNotice
+            className="p-6 text-sm"
+            environmentId={environmentId}
+            message={`Delivery engine not reachable. ${board.error} Nothing shown here is current.`}
+          />
         ) : (
           <>
             {actions.problem ? (
