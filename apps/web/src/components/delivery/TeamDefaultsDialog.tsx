@@ -1,7 +1,8 @@
 import type { EnvironmentId } from "@t3tools/contracts";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import {
+  afterRead,
   parseTeamDefaults,
   seatSettingsToSend,
   withFallbacks,
@@ -59,13 +60,25 @@ export function TeamDefaultsDialog(props: {
     readonly snapshot: string;
     readonly revision: number;
   } | null>(null);
+  // The form as it stands, for a save's answer to tell whether the person changed it meanwhile.
+  const snapshot = JSON.stringify([seats, shares, fallbacks]);
+  const now = useRef(snapshot);
+  useEffect(() => {
+    now.current = snapshot;
+  }, [snapshot]);
   if (seeded !== null && read.body !== seeded.from) {
-    setSeeded(null);
-    if (JSON.stringify([seats, shares, fallbacks]) === seeded.snapshot) {
+    const step = afterRead({
+      savedRevision: seeded.revision,
+      readRevision: current?.team.defaults.revision ?? 0,
+      changedSince: snapshot !== seeded.snapshot,
+    });
+    if (step === "take-read") {
+      setSeeded(null);
       setSeats(null);
       setShares(null);
       setFallbacks(null);
-    }
+    } else if (step === "keep-change") setSeeded(null);
+    else setSeeded({ ...seeded, from: read.body });
   }
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
@@ -97,6 +110,7 @@ export function TeamDefaultsDialog(props: {
     setBusy(true);
     setProblems([]);
     setSaid(null);
+    const pressed = now.current;
     const result = await act(`/api/teams/${props.team}/defaults`, {
       seats: withFallbacks(seatSettingsToSend(team.settings, chosen, "defined"), named),
       // Shares that are what the team defines are not saved over it.
@@ -113,7 +127,8 @@ export function TeamDefaultsDialog(props: {
     setBusy(false);
     if (!result.ok) {
       setProblems(result.problems.length > 0 ? result.problems : [result.why]);
-      // Read again, so that a save refused for another window's saving can be made over it.
+      // Refused: the person has been told and reads again; the next save is made over that reading.
+      setSeeded(null);
       read.refresh();
       return;
     }
@@ -138,9 +153,12 @@ export function TeamDefaultsDialog(props: {
     const nextShares = Object.fromEntries(
       Object.entries(saved.team.workload.build).map(([seat, share]) => [seat, String(share)]),
     );
-    setSeats(nextSeats);
-    setFallbacks(nextFallbacks);
-    setShares(nextShares);
+    // A change made while the save was out is the person's, and is kept over the save's answer.
+    if (now.current === pressed) {
+      setSeats(nextSeats);
+      setFallbacks(nextFallbacks);
+      setShares(nextShares);
+    }
     setSeeded({
       from: read.body,
       snapshot: JSON.stringify([nextSeats, nextShares, nextFallbacks]),

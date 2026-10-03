@@ -562,7 +562,7 @@ const STEP_FOR_LANE: Readonly<Record<string, ReadonlyArray<string>>> = {
 };
 
 type MovableCard = Pick<DeliveryCard, "lane" | "actions"> &
-  Partial<Pick<DeliveryCard, "resumesIn" | "recovering">>;
+  Partial<Pick<DeliveryCard, "resumesIn" | "recovering" | "workers">>;
 
 /**
  * What moving a card to a lane comes to. A column a step leads to is reached by that step,
@@ -612,9 +612,13 @@ export function moveIntent(card: MovableCard, lane: string): MoveIntent {
     card.actions.includes("stop") &&
     !card.actions.includes("retriage")
   ) {
+    const held =
+      (card.workers ?? []).length > 0 && (card.workers ?? []).every((worker) => worker.waiting);
     return {
       kind: "refused",
-      why: "A seat is working on it. Pause it, or wait for the step to end, then send it to triage again.",
+      why: held
+        ? "A seat is about to start on it, waiting for room. Pause it, then send it to triage again."
+        : "A seat is working on it. Pause it, or wait for the step to end, then send it to triage again.",
     };
   }
   const step = (STEP_FOR_LANE[lane] ?? []).find((action) => card.actions.includes(action));

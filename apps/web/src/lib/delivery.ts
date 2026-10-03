@@ -794,12 +794,13 @@ export const seatsAtWork = (card: Pick<DeliveryCard, "workers">) =>
  */
 export function nowLine(card: Pick<DeliveryCard, "workers" | "stage">): string | null {
   if (card.workers.length === 0) return null;
-  const stage = card.stage ?? card.workers[0]!.stage;
-  if (seatsAtWork(card).length > 0) return `Working: ${stage}`;
+  const stage = card.stage || card.workers[0]!.stage;
+  const on = stage ? `: ${stage}` : "";
+  if (seatsAtWork(card).length > 0) return `Working${on}`;
   const reasons = [...new Set(card.workers.map((worker) => waitingWords(worker.waiting)))];
   return reasons.length === 1
-    ? `${reasons[0]![0]!.toUpperCase()}${reasons[0]!.slice(1)}: ${stage}`
-    : `Waiting: ${stage}`;
+    ? `${reasons[0]![0]!.toUpperCase()}${reasons[0]!.slice(1)}${on}`
+    : `Waiting${on}`;
 }
 
 /** Who is on a card, each seat said once: those working, then each held seat with its own reason. */
@@ -811,6 +812,24 @@ export function crewLine(card: Pick<DeliveryCard, "workers">): string {
   return [working.length ? `${working.join(", ")} working` : null, ...held]
     .filter(Boolean)
     .join("; ");
+}
+
+/**
+ * What a settings form does when a reading arrives after its own save. An older reading is let
+ * pass. One of the save's own revision is taken, unless the person changed something since, whose
+ * change is then kept. A newer one (another window saved) is taken when nothing was changed; with a
+ * change, the form keeps it and the revision it was made against, so the next save is refused and
+ * the person looks again, rather than overwriting the other window's saving unseen.
+ */
+export function afterRead(input: {
+  readonly savedRevision: number;
+  readonly readRevision: number;
+  readonly changedSince: boolean;
+}): "take-read" | "keep-change" | "keep" {
+  if (input.readRevision < input.savedRevision) return "keep";
+  if (input.readRevision === input.savedRevision)
+    return input.changedSince ? "keep-change" : "take-read";
+  return input.changedSince ? "keep" : "take-read";
 }
 
 /** What a held seat waits for, in words. */

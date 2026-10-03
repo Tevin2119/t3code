@@ -8,6 +8,7 @@ import {
   deliveryFailureProblems,
   moveSeat,
   parseBoard,
+  afterRead,
   crewLine,
   nowLine,
   parseBoardSeats,
@@ -1023,5 +1024,30 @@ describe("seats at work and seats held", () => {
       seatSetting({ fallbackChain: [{ harness: "claude", model: "claude-opus-5-5" }] }),
     );
     expect(older.definedFallbackChain).toEqual([{ harness: "claude", model: "claude-opus-5-5" }]);
+  });
+});
+
+describe("afterRead", () => {
+  it("lets an older reading pass, takes its own unless changed, and keeps a change over another window's saving", () => {
+    expect(afterRead({ savedRevision: 3, readRevision: 2, changedSince: false })).toBe("keep");
+    expect(afterRead({ savedRevision: 3, readRevision: 3, changedSince: false })).toBe("take-read");
+    expect(afterRead({ savedRevision: 3, readRevision: 3, changedSince: true })).toBe(
+      "keep-change",
+    );
+    expect(afterRead({ savedRevision: 3, readRevision: 4, changedSince: false })).toBe("take-read");
+    // Another window saved, and the person has a change: keep it and the old revision, so the next save is refused.
+    expect(afterRead({ savedRevision: 3, readRevision: 4, changedSince: true })).toBe("keep");
+  });
+  it("says no stage when none is known", () => {
+    const worker = {
+      seat: "a",
+      harness: null,
+      role: null,
+      stage: "",
+      specialist: null,
+      since: null,
+      waiting: "memory headroom",
+    };
+    expect(nowLine({ workers: [worker], stage: null })).toBe("Waits for memory");
   });
 });

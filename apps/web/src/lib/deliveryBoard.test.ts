@@ -362,3 +362,27 @@ describe("moveIntent while a seat works", () => {
     });
   });
 });
+
+describe("moveIntent while every seat waits", () => {
+  it("says a seat is about to start, not that it works", () => {
+    const held = moveIntent(
+      {
+        lane: "implementation",
+        actions: ["pause", "stop"],
+        workers: [
+          {
+            seat: "developer",
+            harness: null,
+            role: null,
+            stage: "build",
+            specialist: null,
+            since: null,
+            waiting: "memory headroom",
+          },
+        ],
+      },
+      "triage",
+    );
+    expect(held.kind === "refused" && held.why).toMatch(/about to start on it, waiting for room/);
+  });
+});

@@ -1,7 +1,8 @@
 import type { EnvironmentId } from "@t3tools/contracts";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import {
+  afterRead,
   parseBoardSeats,
   seatSettingsToSend,
   withFallbacks,
@@ -61,13 +62,24 @@ export function BoardSeatsDialog(props: {
     readonly snapshot: string;
     readonly revision: number;
   } | null>(null);
+  // The form as it stands, for a save's answer to tell whether the person changed it meanwhile.
+  const snapshot = JSON.stringify([chosen, fallbacks]);
+  const now = useRef(snapshot);
+  useEffect(() => {
+    now.current = snapshot;
+  }, [snapshot]);
   if (seeded !== null && read.body !== seeded.from) {
-    setSeeded(null);
-    // What was changed since the save is kept; only the save's own answer gives way to the read.
-    if (JSON.stringify([chosen, fallbacks]) === seeded.snapshot) {
+    const step = afterRead({
+      savedRevision: seeded.revision,
+      readRevision: teams[0]?.revision ?? 0,
+      changedSince: snapshot !== seeded.snapshot,
+    });
+    if (step === "take-read") {
+      setSeeded(null);
       setChosen(null);
       setFallbacks(null);
-    }
+    } else if (step === "keep-change") setSeeded(null);
+    else setSeeded({ ...seeded, from: read.body });
   }
 
   // What the board has saved is what the form starts from, until the person changes something.
@@ -103,6 +115,7 @@ export function BoardSeatsDialog(props: {
       ]),
     );
     // Saved over the revision last read or saved: if another window saved since, it is refused.
+    const pressed = now.current;
     const result = await act(path, {
       seats,
       by: person,
@@ -111,6 +124,8 @@ export function BoardSeatsDialog(props: {
     setBusy(false);
     if (!result.ok) {
       setProblems(result.problems.length > 0 ? result.problems : [result.why]);
+      // Refused: the person has been told and reads again; the next save is made over that reading.
+      setSeeded(null);
       read.refresh();
       return;
     }
@@ -137,8 +152,11 @@ export function BoardSeatsDialog(props: {
         Object.fromEntries(row.settings.map((item) => [item.seat, item.boardFallbacks])),
       ]),
     );
-    setChosen(nextChosen);
-    setFallbacks(nextFallbacks);
+    // A change made while the save was out is the person's, and is kept over the save's answer.
+    if (now.current === pressed) {
+      setChosen(nextChosen);
+      setFallbacks(nextFallbacks);
+    }
     setSeeded({
       from: read.body,
       snapshot: JSON.stringify([nextChosen, nextFallbacks]),
