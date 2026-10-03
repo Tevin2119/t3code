@@ -123,6 +123,8 @@ const CardFace = memo(function CardFace(props: {
 
 function DraggableCard(props: {
   readonly card: DeliveryCard;
+  /** Whether a card dropped here would be taken; the ring shows only where it would. */
+  readonly accepts: boolean;
   readonly now: number;
   readonly busy: boolean;
   readonly onOpen: (card: DeliveryCard) => void;
@@ -152,7 +154,7 @@ function DraggableCard(props: {
       className={cn(
         "cursor-pointer rounded-md outline-hidden ring-ring focus-visible:ring-2",
         drag.isDragging && "opacity-30",
-        drop.isOver && !drag.isDragging && "ring-2 ring-ring/60",
+        drop.isOver && !drag.isDragging && props.accepts && "ring-2 ring-ring/60",
       )}
     >
       <CardFace
@@ -215,7 +217,12 @@ function Lane(props: {
   const drop = useDroppable({ id: `lane:${lane.lane}`, data: { lane: lane.lane, before: null } });
   // The same table as the drop and the task view's column choice: what this lane would do.
   const intent = props.dragged ? moveIntent(props.dragged, lane.lane) : null;
-  const offer = intent && intent.kind !== "refused" ? intent.label : null;
+  const offer =
+    intent && props.dragged && intent.kind !== "refused"
+      ? intent.kind === "action"
+        ? actionLabel(intent.action, props.dragged)
+        : intent.label
+      : null;
   const refused = intent?.kind === "refused";
   const groups = groupCards(lane.cards, props.grouping);
 
@@ -296,6 +303,7 @@ function Lane(props: {
               <DraggableCard
                 key={card.id}
                 card={card}
+                accepts={!props.dragged || offer !== null}
                 now={props.now}
                 busy={props.busy}
                 onOpen={props.onOpen}

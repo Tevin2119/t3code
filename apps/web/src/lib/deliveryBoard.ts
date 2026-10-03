@@ -607,6 +607,16 @@ export function moveIntent(card: MovableCard, lane: string): MoveIntent {
   if ((lane === "triage" || lane === "intake") && card.actions.includes("submit")) {
     return { kind: "move", label: "Submit" };
   }
+  if (
+    (lane === "triage" || lane === "intake") &&
+    card.actions.includes("stop") &&
+    !card.actions.includes("retriage")
+  ) {
+    return {
+      kind: "refused",
+      why: "A seat is working on it. Pause it, or wait for the step to end, then send it to triage again.",
+    };
+  }
   const step = (STEP_FOR_LANE[lane] ?? []).find((action) => card.actions.includes(action));
   if (step) return { kind: "action", action: step, label: ACTION_LABEL[step] ?? step };
   if (card.lane === "completed") {

@@ -90,7 +90,10 @@ export function useTaskActions(
 
   const send = useCallback(
     async (path: string, body: Record<string, unknown>) => {
-      if (inFlight.current) return false;
+      if (inFlight.current) {
+        setProblem("Another step is being sent. Wait for it, then try again.");
+        return false;
+      }
       inFlight.current = true;
       setBusy(true);
       setProblem(null);
@@ -130,8 +133,9 @@ export function useTaskActions(
   );
 
   const move = useCallback(
-    (card: Pick<DeliveryCard, "id">, lane: string, before: string | null) =>
-      send(`/api/tasks/${card.id}/move`, { lane, before, by: person }),
+    (card: Pick<DeliveryCard, "id" | "lane">, lane: string, before: string | null) =>
+      // Where the card was seen: if it stands elsewhere now, the engine refuses the move.
+      send(`/api/tasks/${card.id}/move`, { lane, before, by: person, seen: card.lane }),
     [person, send],
   );
 
@@ -212,7 +216,12 @@ export function useTaskActions(
         onClose={() => setDecision(null)}
         onDecide={(input) =>
           decision.decision === "publish"
-            ? send(`/api/tasks/${decision.card.id}/publish`, { by: input.actor, key: input.key })
+            ? send(`/api/tasks/${decision.card.id}/publish`, {
+                by: input.actor,
+                key: input.key,
+                // The commit the dialog names: if another is approved now, nothing is pushed.
+                ...(decision.card.run?.candidate ? { candidate: decision.card.run.candidate } : {}),
+              })
             : decision.card.run
               ? send(`/api/runs/${decision.card.run.id}/decide`, {
                   decision: decision.decision,

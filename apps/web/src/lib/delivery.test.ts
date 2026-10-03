@@ -233,7 +233,16 @@ const card = (overrides: Record<string, unknown> = {}) => ({
   partsDelivered: 1,
   run: { id: "run-1", state: "running", stage: "qa", candidate: "abc", configuration: "c" },
   stage: "qa",
-  workers: [{ seat: "qa-attack", harness: "opencode", role: "qa-attack", stage: "qa" }],
+  workers: [
+    { seat: "qa-attack", harness: "opencode", role: "qa-attack", stage: "qa" },
+    {
+      seat: "qa-validate",
+      harness: "kimi",
+      role: "qa-validate",
+      stage: "qa",
+      waiting: "memory headroom",
+    },
+  ],
   paused: null,
   qa: { votes: [{ seat: "qa-third", provider: "deepseek", verdict: "pass" }], needed: 2 },
   findings: { open: 1, all: 3 },
@@ -288,6 +297,17 @@ describe("parseBoard", () => {
         stage: "qa",
         specialist: null,
         since: null,
+        waiting: null,
+      },
+      // One the engine holds is read as waiting, with what for.
+      {
+        seat: "qa-validate",
+        harness: "kimi",
+        role: "qa-validate",
+        stage: "qa",
+        specialist: null,
+        since: null,
+        waiting: "memory headroom",
       },
     ]);
     expect([read?.questions, read?.unread, read?.unanswered, read?.files]).toEqual([1, 2, 1, 3]);

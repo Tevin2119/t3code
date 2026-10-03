@@ -175,7 +175,8 @@ const CAPABILITIES_PROBE_TIMEOUT_MS = 25_000;
 // The usage request alone takes about three seconds, and every provider is checked at once, so the
 // shared four-second budget left the limits "Could not read". It runs inside the capabilities
 // probe, which the status check awaits, so a usage request that hangs holds Claude's status back
-// by up to this long (within the capabilities budget above), where it used to be four seconds.
+// by up to this long, where it used to be four seconds. The capabilities budget above bounds only
+// the session's start, not this request.
 const USAGE_PROBE_TIMEOUT_MS = 15_000;
 
 /**

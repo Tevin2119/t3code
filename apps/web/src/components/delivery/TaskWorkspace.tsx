@@ -1029,16 +1029,23 @@ function Info(props: {
                       <SelectItem
                         key={lane}
                         value={lane}
-                        disabled={intent.kind === "refused"}
                         aria-label={`${title}: ${said}`}
-                        title={intent.kind === "refused" ? intent.why : undefined}
                         data-move={intent.kind}
                       >
-                        <span className="inline-flex items-center gap-1.5">
+                        <span
+                          className={cn(
+                            "inline-flex items-center gap-1.5",
+                            intent.kind === "refused" && "text-muted-foreground",
+                          )}
+                        >
                           <span className={cn("size-2 rounded-full", laneTone(lane).bar)} />
                           {title}
-                          {intent.kind !== "refused" && lane !== task.lane ? (
-                            <span className="text-[10px] text-muted-foreground">{said}</span>
+                          {lane !== task.lane ? (
+                            <span className="text-[10px] text-muted-foreground">
+                              {intent.kind === "refused"
+                                ? "not from here, choose to see why"
+                                : said}
+                            </span>
                           ) : null}
                         </span>
                       </SelectItem>

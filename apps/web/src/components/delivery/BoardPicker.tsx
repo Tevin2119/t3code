@@ -523,12 +523,19 @@ export function BoardDialog(props: {
                       size="xs"
                       variant="outline"
                       disabled={props.busy || unsaved}
-                      title={unsaved ? "Save or cancel the changes here first." : undefined}
                       onClick={props.onSeats}
                       data-board-dialog-seats
                     >
                       Seats…
                     </Button>
+                    {unsaved ? (
+                      <span
+                        className="text-[11px] text-muted-foreground"
+                        data-board-dialog-seats-why
+                      >
+                        Save or cancel the changes here first.
+                      </span>
+                    ) : null}
                   </div>
                 );
               })()

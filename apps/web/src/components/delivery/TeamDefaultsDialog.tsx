@@ -52,6 +52,14 @@ export function TeamDefaultsDialog(props: {
     ReadonlyArray<SeatFallback> | null
   > | null>(null);
   const [showRecord, setShowRecord] = useState(false);
+  // After a save the form shows the engine's answer until the next read arrives; then the read.
+  const [seededFrom, setSeededFrom] = useState<unknown>(null);
+  if (seededFrom !== null && read.body !== seededFrom) {
+    setSeededFrom(null);
+    setSeats(null);
+    setShares(null);
+    setFallbacks(null);
+  }
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
   const [problems, setProblems] = useState<ReadonlyArray<string>>([]);
@@ -92,6 +100,8 @@ export function TeamDefaultsDialog(props: {
         : {},
       by: person,
       note: note.trim() || null,
+      // Saved over what was read: if another window saved since, the engine refuses this one.
+      revision: team.defaults.revision,
     });
     setBusy(false);
     if (!result.ok) {
@@ -100,16 +110,24 @@ export function TeamDefaultsDialog(props: {
     }
     const saved = parseTeamDefaults(result.body);
     setSaid(saved?.note ?? "Saved.");
-    // The form shows what was saved, from the answer, until the next read: never the read from before.
-    const settings = saved?.team.settings ?? [];
+    // The form shows what was saved, from the answer, until the next read: never the read from
+    // before. An answer that cannot be read leaves the form to the next read, never empty.
+    if (!saved) {
+      setSeats(null);
+      setShares(null);
+      setFallbacks(null);
+      setNote("");
+      read.refresh();
+      props.onSaved?.();
+      return;
+    }
+    setSeededFrom(read.body);
+    const settings = saved.team.settings;
     setSeats(Object.fromEntries(settings.map((item) => [item.seat, item.saved])));
     setFallbacks(Object.fromEntries(settings.map((item) => [item.seat, item.savedFallbacks])));
     setShares(
       Object.fromEntries(
-        Object.entries(saved?.team.workload.build ?? {}).map(([seat, share]) => [
-          seat,
-          String(share),
-        ]),
+        Object.entries(saved.team.workload.build).map(([seat, share]) => [seat, String(share)]),
       ),
     );
     setNote("");

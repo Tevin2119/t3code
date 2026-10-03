@@ -55,6 +55,13 @@ export function BoardSeatsDialog(props: {
   const [problems, setProblems] = useState<ReadonlyArray<string>>([]);
   const [said, setSaid] = useState<string | null>(null);
   const [showRecord, setShowRecord] = useState(false);
+  // After a save the form shows the engine's answer until the next read arrives; then the read.
+  const [seededFrom, setSeededFrom] = useState<unknown>(null);
+  if (seededFrom !== null && read.body !== seededFrom) {
+    setSeededFrom(null);
+    setChosen(null);
+    setFallbacks(null);
+  }
 
   // What the board has saved is what the form starts from, until the person changes something.
   const current: Chosen =
@@ -98,6 +105,14 @@ export function BoardSeatsDialog(props: {
     setSaid(typeof body?.note === "string" ? body.note : "Saved.");
     // The form shows what was saved, from the answer, until the next read: never the read from before.
     const saved = parseBoardSeats(result.body);
+    // An answer that cannot be read leaves the form to the next read, never empty.
+    if (saved.length === 0) {
+      setChosen(null);
+      setFallbacks(null);
+      read.refresh();
+      return;
+    }
+    setSeededFrom(read.body);
     setChosen(
       Object.fromEntries(
         saved.map((row) => [

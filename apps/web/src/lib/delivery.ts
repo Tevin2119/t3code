@@ -272,7 +272,10 @@ export const parseSeatSettings = (value: Json): SeatSettings => {
     ),
     fallbacks: parseFallbacks(value.fallbacks),
     fallbackChain: parseFallbacks(value.fallbackChain ?? value.fallbacks),
-    definedFallbackChain: parseFallbacks(value.definedFallbackChain),
+    // An engine that does not say what the definition alone would use: the chain in use stands in.
+    definedFallbackChain: parseFallbacks(
+      value.definedFallbackChain ?? value.fallbackChain ?? value.fallbacks,
+    ),
     fallbacksAllowed: flag(value.fallbacksAllowed),
     savedFallbacks: fallbacksOrNull(value.saved),
     board: parseChoice(value.board),
