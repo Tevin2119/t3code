@@ -1285,7 +1285,6 @@ export interface TaskLink extends TaskBrief {
   readonly direction: string;
 }
 
-/** A task as its workspace shows it. Board and Orchestrator read the same one. */
 /**
  * What is needed of a person, in plain words, when a task waits on one: the bottom line first,
  * then what the task is, what happened, why it stopped, each choice, where and since when.
@@ -1325,6 +1324,7 @@ export function parseBriefing(value: unknown): TaskBriefing | null {
   };
 }
 
+/** A task as its workspace shows it. Board and Orchestrator read the same one. */
 export interface TaskView {
   /** Null unless the task waits on a person. */
   readonly brief: TaskBriefing | null;

@@ -292,6 +292,16 @@ function MobileHelp(props: {
   );
 }
 
+/** A key for each value, the second and later of the same value numbered. */
+function repeatKeys(values: ReadonlyArray<string>): ReadonlyArray<string> {
+  const seen = new Map<string, number>();
+  return values.map((value) => {
+    const count = (seen.get(value) ?? 0) + 1;
+    seen.set(value, count);
+    return count === 1 ? value : `${value}#${count}`;
+  });
+}
+
 /**
  * What is needed of you, in plain words: the bottom line, then what the task is, what happened,
  * why it stopped, and what each choice would do. The steps themselves are in the bar below.
@@ -299,6 +309,10 @@ function MobileHelp(props: {
 function Briefing(props: { readonly brief: TaskBriefing }) {
   const { brief } = props;
   const now = useMinuteClock();
+  const since = brief.since && !Number.isNaN(Date.parse(brief.since)) ? brief.since : null;
+  // Lines and actions come from the engine and can repeat: each key says which repeat it is.
+  const happenedKeys = repeatKeys(brief.happened);
+  const optionKeys = repeatKeys(brief.options.map((option) => option.action));
   const [open, setOpen] = useState(true);
   return (
     <div
@@ -321,15 +335,25 @@ function Briefing(props: { readonly brief: TaskBriefing }) {
         // Held to part of the screen and scrolled within, so the history and the composer keep
         // their room on a phone.
         <dl className="mt-1.5 grid max-h-[40dvh] grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 overflow-y-auto overscroll-contain">
-          <dt className="text-muted-foreground">What</dt>
-          <dd>{brief.what}</dd>
+          {brief.what ? (
+            <>
+              <dt className="text-muted-foreground">What</dt>
+              <dd>{brief.what}</dd>
+            </>
+          ) : null}
           {brief.happened.length > 0 ? (
             <>
               <dt className="text-muted-foreground">Happened</dt>
               <dd>
                 <ul className="flex flex-col gap-0.5">
-                  {brief.happened.map((line) => (
-                    <li key={line}>{line}</li>
+                  {brief.happened.map((line, index) => (
+                    // A line the engine indents belongs to the one above it.
+                    <li
+                      key={happenedKeys[index]}
+                      className={line.startsWith("  ") ? "pl-3 text-muted-foreground" : undefined}
+                    >
+                      {line.trim()}
+                    </li>
                   ))}
                 </ul>
               </dd>
@@ -346,8 +370,8 @@ function Briefing(props: { readonly brief: TaskBriefing }) {
               <dt className="text-muted-foreground">Choices</dt>
               <dd>
                 <ul className="flex flex-col gap-0.5">
-                  {brief.options.map((option) => (
-                    <li key={option.action}>
+                  {brief.options.map((option, index) => (
+                    <li key={optionKeys[index]}>
                       <span className="font-medium">{option.label}</span>
                       {option.recommended ? (
                         <span className="ml-1 rounded bg-amber-500/15 px-1 text-[10px] text-amber-700 dark:text-amber-300">
@@ -362,22 +386,22 @@ function Briefing(props: { readonly brief: TaskBriefing }) {
               </dd>
             </>
           ) : null}
-          {brief.where || brief.since ? (
+          {brief.where || since ? (
             <>
               <dt className="text-muted-foreground">Where</dt>
               <dd className="text-muted-foreground">
                 {brief.where}
-                {brief.where && brief.since ? ", " : ""}
-                {brief.since && !Number.isNaN(Date.parse(brief.since)) ? (
+                {brief.where && since ? ", " : ""}
+                {since ? (
                   <>
                     waiting since{" "}
-                    <time dateTime={brief.since}>
-                      {new Date(brief.since).toLocaleString([], {
+                    <time dateTime={since}>
+                      {new Date(since).toLocaleString([], {
                         dateStyle: "medium",
                         timeStyle: "short",
                       })}
                     </time>{" "}
-                    (<Age at={brief.since} now={now} label="Waiting since" />)
+                    (<Age at={since} now={now} label="Waiting since" />)
                   </>
                 ) : null}
               </dd>
@@ -752,7 +776,9 @@ function Communications(props: {
   const hidden = task.timeline.length - entries.length;
   return (
     <section className="flex min-h-0 min-w-0 flex-1 flex-col" data-task-communications>
-      {props.task.brief ? <Briefing brief={props.task.brief} /> : null}
+      {props.task.brief && props.task.card.waitingOn === "person" ? (
+        <Briefing brief={props.task.brief} />
+      ) : null}
       <div className="flex items-center justify-between gap-2 border-b border-border px-3 py-1.5">
         <h2 className="text-xs font-medium">History and messages</h2>
         <button
