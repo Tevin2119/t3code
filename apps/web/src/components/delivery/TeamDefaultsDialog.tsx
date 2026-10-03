@@ -52,13 +52,20 @@ export function TeamDefaultsDialog(props: {
     ReadonlyArray<SeatFallback> | null
   > | null>(null);
   const [showRecord, setShowRecord] = useState(false);
-  // After a save the form shows the engine's answer until the next read arrives; then the read.
-  const [seededFrom, setSeededFrom] = useState<unknown>(null);
-  if (seededFrom !== null && read.body !== seededFrom) {
-    setSeededFrom(null);
-    setSeats(null);
-    setShares(null);
-    setFallbacks(null);
+  // After a save the form shows the engine's answer, and saves over the revision it names, until
+  // the next read arrives. Then the read, unless the person changed something meanwhile.
+  const [seeded, setSeeded] = useState<{
+    readonly from: unknown;
+    readonly snapshot: string;
+    readonly revision: number;
+  } | null>(null);
+  if (seeded !== null && read.body !== seeded.from) {
+    setSeeded(null);
+    if (JSON.stringify([seats, shares, fallbacks]) === seeded.snapshot) {
+      setSeats(null);
+      setShares(null);
+      setFallbacks(null);
+    }
   }
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
@@ -101,11 +108,13 @@ export function TeamDefaultsDialog(props: {
       by: person,
       note: note.trim() || null,
       // Saved over what was read: if another window saved since, the engine refuses this one.
-      revision: team.defaults.revision,
+      revision: seeded?.revision ?? team.defaults.revision,
     });
     setBusy(false);
     if (!result.ok) {
       setProblems(result.problems.length > 0 ? result.problems : [result.why]);
+      // Read again, so that a save refused for another window's saving can be made over it.
+      read.refresh();
       return;
     }
     const saved = parseTeamDefaults(result.body);
@@ -121,15 +130,22 @@ export function TeamDefaultsDialog(props: {
       props.onSaved?.();
       return;
     }
-    setSeededFrom(read.body);
     const settings = saved.team.settings;
-    setSeats(Object.fromEntries(settings.map((item) => [item.seat, item.saved])));
-    setFallbacks(Object.fromEntries(settings.map((item) => [item.seat, item.savedFallbacks])));
-    setShares(
-      Object.fromEntries(
-        Object.entries(saved.team.workload.build).map(([seat, share]) => [seat, String(share)]),
-      ),
+    const nextSeats = Object.fromEntries(settings.map((item) => [item.seat, item.saved]));
+    const nextFallbacks = Object.fromEntries(
+      settings.map((item) => [item.seat, item.savedFallbacks]),
     );
+    const nextShares = Object.fromEntries(
+      Object.entries(saved.team.workload.build).map(([seat, share]) => [seat, String(share)]),
+    );
+    setSeats(nextSeats);
+    setFallbacks(nextFallbacks);
+    setShares(nextShares);
+    setSeeded({
+      from: read.body,
+      snapshot: JSON.stringify([nextSeats, nextShares, nextFallbacks]),
+      revision: saved.team.defaults.revision,
+    });
     setNote("");
     read.refresh();
     props.onSaved?.();

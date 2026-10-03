@@ -8,6 +8,8 @@ import {
   deliveryFailureProblems,
   moveSeat,
   parseBoard,
+  crewLine,
+  nowLine,
   parseBoardSeats,
   parseCards,
   parseSeatSettings,
@@ -973,5 +975,53 @@ describe("seat layers and fallbacks", () => {
       steppedIn: 1,
     });
     expect(parseTrackRecord(null)).toEqual([]);
+  });
+});
+
+describe("seats at work and seats held", () => {
+  const worker = (seat: string, waiting: string | null = null) => ({
+    seat,
+    harness: null,
+    role: null,
+    stage: "qa",
+    specialist: null,
+    since: null,
+    waiting,
+  });
+  it("says working while any seat works, and waiting, for what, while every seat is held", () => {
+    expect(
+      nowLine({
+        workers: [worker("qa-attack"), worker("qa-validate", "memory headroom")],
+        stage: "qa",
+      }),
+    ).toBe("Working: qa");
+    expect(nowLine({ workers: [worker("qa-validate", "memory headroom")], stage: "qa" })).toBe(
+      "Waits for memory: qa",
+    );
+    expect(
+      nowLine({
+        workers: [worker("a", "memory headroom"), worker("b", "a free slot")],
+        stage: "qa",
+      }),
+    ).toBe("Waiting: qa");
+    expect(nowLine({ workers: [], stage: "qa" })).toBeNull();
+  });
+  it("names every seat once, each held one with its own reason", () => {
+    expect(
+      crewLine({
+        workers: [
+          worker("qa-attack"),
+          worker("qa-validate", "memory headroom"),
+          worker("qa-third", "a free slot"),
+        ],
+      }),
+    ).toBe("qa-attack working; qa-validate waits for memory; qa-third waits for a free slot");
+  });
+  it("reads a board's seats revision, and the defined chain falls back for an older engine", () => {
+    expect(parseBoardSeats([{ team: "development", revision: 3, seats: [] }])[0]?.revision).toBe(3);
+    const older = parseSeatSettings(
+      seatSetting({ fallbackChain: [{ harness: "claude", model: "claude-opus-5-5" }] }),
+    );
+    expect(older.definedFallbackChain).toEqual([{ harness: "claude", model: "claude-opus-5-5" }]);
   });
 });

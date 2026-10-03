@@ -350,3 +350,15 @@ describe("moveIntent", () => {
     expect(moveIntent(card("triage"), "validation").kind).toBe("refused");
   });
 });
+
+describe("moveIntent while a seat works", () => {
+  it("refuses Triage with that reason, and still submits a card not yet submitted", () => {
+    const working = moveIntent({ lane: "implementation", actions: ["pause", "stop"] }, "triage");
+    expect(working.kind).toBe("refused");
+    expect(working.kind === "refused" && working.why).toMatch(/A seat is working on it/);
+    expect(moveIntent({ lane: "intake", actions: ["submit", "stop"] }, "triage")).toEqual({
+      kind: "move",
+      label: "Submit",
+    });
+  });
+});

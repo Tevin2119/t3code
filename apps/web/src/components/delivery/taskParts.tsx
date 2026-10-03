@@ -9,7 +9,7 @@ import {
 } from "lucide-react";
 import type { ReactNode } from "react";
 
-import { waitingWords, type DeliveryCard, type TaskPriority } from "../../lib/delivery";
+import { nowLine, waitingWords, type DeliveryCard, type TaskPriority } from "../../lib/delivery";
 import { ageLabel, initialsOf, PRIORITY_LABEL } from "../../lib/deliveryBoard";
 import { harnessLabel } from "../../lib/deliverySeats";
 import { cn } from "../../lib/utils";
@@ -300,7 +300,7 @@ export function WaitingOn(props: { readonly card: DeliveryCard; readonly classNa
     >
       <Icon />
       {card.workers.length > 0
-        ? `Working: ${card.stage ?? card.workers[0]!.stage}`
+        ? nowLine(card)
         : card.stage && card.waitingOn === "team"
           ? `At ${card.stage}`
           : (WAITING_LABEL[card.waitingOn] ?? card.waitingOn)}

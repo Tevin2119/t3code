@@ -328,6 +328,8 @@ export function withFallbacks(
 /** What a board sets for the seats of each team. */
 export interface BoardSeats {
   readonly team: string;
+  /** The revision of the board's seats this reading is of; a save names it. */
+  readonly revision: number;
   readonly settings: ReadonlyArray<SeatSettings>;
 }
 
@@ -335,7 +337,11 @@ export function parseBoardSeats(body: unknown): ReadonlyArray<BoardSeats> {
   const rows = isRecord(body) && Array.isArray(body.teams) ? body.teams : body;
   return records(rows)
     .filter((row) => text(row.team).length > 0)
-    .map((row) => ({ team: text(row.team), settings: records(row.seats).map(parseSeatSettings) }));
+    .map((row) => ({
+      team: text(row.team),
+      revision: count(row.revision),
+      settings: records(row.seats).map(parseSeatSettings),
+    }));
 }
 
 /** How one harness and model has done in one stage of one team, on this host. */
@@ -776,6 +782,35 @@ export interface DeliveryWorker {
   readonly since: string | null;
   /** Why it has not started yet, when the engine holds it (for memory, or a free slot); null at work. */
   readonly waiting: string | null;
+}
+
+/** The seats at work on a card, as opposed to those the engine holds before they start. */
+export const seatsAtWork = (card: Pick<DeliveryCard, "workers">) =>
+  card.workers.filter((worker) => !worker.waiting);
+
+/**
+ * The card's "now" in a few words: working on a stage while any seat works, waiting (and for
+ * what, when every held seat waits for the same) while every seat is held.
+ */
+export function nowLine(card: Pick<DeliveryCard, "workers" | "stage">): string | null {
+  if (card.workers.length === 0) return null;
+  const stage = card.stage ?? card.workers[0]!.stage;
+  if (seatsAtWork(card).length > 0) return `Working: ${stage}`;
+  const reasons = [...new Set(card.workers.map((worker) => waitingWords(worker.waiting)))];
+  return reasons.length === 1
+    ? `${reasons[0]![0]!.toUpperCase()}${reasons[0]!.slice(1)}: ${stage}`
+    : `Waiting: ${stage}`;
+}
+
+/** Who is on a card, each seat said once: those working, then each held seat with its own reason. */
+export function crewLine(card: Pick<DeliveryCard, "workers">): string {
+  const working = seatsAtWork(card).map((worker) => worker.seat);
+  const held = card.workers
+    .filter((worker) => worker.waiting)
+    .map((worker) => `${worker.seat} ${waitingWords(worker.waiting)}`);
+  return [working.length ? `${working.join(", ")} working` : null, ...held]
+    .filter(Boolean)
+    .join("; ");
 }
 
 /** What a held seat waits for, in words. */

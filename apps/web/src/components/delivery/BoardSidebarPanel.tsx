@@ -8,7 +8,8 @@ import {
   TASK_PRIORITIES,
   type DeliveryCard,
   type TaskPriority,
-  waitingWords,
+  crewLine,
+  seatsAtWork,
 } from "../../lib/delivery";
 import {
   activeFilters,
@@ -70,12 +71,7 @@ function Row(props: {
           <CardSigns card={card} />
           {card.workers.length > 0 ? (
             <span className="truncate text-[10px] text-sidebar-muted-foreground">
-              {card.workers.every((worker) => worker.waiting)
-                ? `${card.workers.map((worker) => worker.seat).join(", ")} ${waitingWords(card.workers[0]?.waiting ?? null)}`
-                : `${card.workers
-                    .filter((worker) => !worker.waiting)
-                    .map((worker) => worker.seat)
-                    .join(", ")} working`}
+              {crewLine(card)}
             </span>
           ) : null}
         </span>
@@ -248,8 +244,11 @@ export function BoardSidebarPanel() {
   const live = kept.filter((card) => !["completed", "draft", "chat"].includes(card.lane));
   const chats = kept.filter((card) => card.lane === "chat");
   const waiting = live.filter((card) => card.waitingOn === "person");
-  const working = live.filter((card) => card.waitingOn !== "person" && card.workers.length > 0);
-  const rest = live.filter((card) => card.waitingOn !== "person" && card.workers.length === 0);
+  // Being worked on: a seat is at work. A card whose seats are all held waits with the rest.
+  const working = live.filter(
+    (card) => card.waitingOn !== "person" && seatsAtWork(card).length > 0,
+  );
+  const rest = live.filter((card) => card.waitingOn !== "person" && seatsAtWork(card).length === 0);
 
   return (
     <SidebarContent className="overflow-x-hidden" data-board-panel>

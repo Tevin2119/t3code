@@ -56,11 +56,18 @@ export function BoardSeatsDialog(props: {
   const [said, setSaid] = useState<string | null>(null);
   const [showRecord, setShowRecord] = useState(false);
   // After a save the form shows the engine's answer until the next read arrives; then the read.
-  const [seededFrom, setSeededFrom] = useState<unknown>(null);
-  if (seededFrom !== null && read.body !== seededFrom) {
-    setSeededFrom(null);
-    setChosen(null);
-    setFallbacks(null);
+  const [seeded, setSeeded] = useState<{
+    readonly from: unknown;
+    readonly snapshot: string;
+    readonly revision: number;
+  } | null>(null);
+  if (seeded !== null && read.body !== seeded.from) {
+    setSeeded(null);
+    // What was changed since the save is kept; only the save's own answer gives way to the read.
+    if (JSON.stringify([chosen, fallbacks]) === seeded.snapshot) {
+      setChosen(null);
+      setFallbacks(null);
+    }
   }
 
   // What the board has saved is what the form starts from, until the person changes something.
@@ -95,10 +102,16 @@ export function BoardSeatsDialog(props: {
         ),
       ]),
     );
-    const result = await act(path, { seats, by: person });
+    // Saved over the revision last read or saved: if another window saved since, it is refused.
+    const result = await act(path, {
+      seats,
+      by: person,
+      revision: seeded?.revision ?? teams[0]?.revision ?? 0,
+    });
     setBusy(false);
     if (!result.ok) {
       setProblems(result.problems.length > 0 ? result.problems : [result.why]);
+      read.refresh();
       return;
     }
     const body = result.body as { readonly note?: unknown } | null;
@@ -112,23 +125,25 @@ export function BoardSeatsDialog(props: {
       read.refresh();
       return;
     }
-    setSeededFrom(read.body);
-    setChosen(
-      Object.fromEntries(
-        saved.map((row) => [
-          row.team,
-          Object.fromEntries(row.settings.map((item) => [item.seat, item.board])),
-        ]),
-      ),
+    const nextChosen = Object.fromEntries(
+      saved.map((row) => [
+        row.team,
+        Object.fromEntries(row.settings.map((item) => [item.seat, item.board])),
+      ]),
     );
-    setFallbacks(
-      Object.fromEntries(
-        saved.map((row) => [
-          row.team,
-          Object.fromEntries(row.settings.map((item) => [item.seat, item.boardFallbacks])),
-        ]),
-      ),
+    const nextFallbacks = Object.fromEntries(
+      saved.map((row) => [
+        row.team,
+        Object.fromEntries(row.settings.map((item) => [item.seat, item.boardFallbacks])),
+      ]),
     );
+    setChosen(nextChosen);
+    setFallbacks(nextFallbacks);
+    setSeeded({
+      from: read.body,
+      snapshot: JSON.stringify([nextChosen, nextFallbacks]),
+      revision: saved[0]?.revision ?? 0,
+    });
     read.refresh();
   };
 
