@@ -330,14 +330,14 @@ function WrapUp(props: { readonly wrapUp: TaskWrapUp }) {
         />
       </div>
       {open ? (
-        <dl className="mt-1.5 grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1">
+        <dl className="mt-1.5 grid max-h-[40dvh] grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 overflow-y-auto overscroll-contain">
           {rows.map(([label, lines]) => (
             <Fragment key={label}>
               <dt className="text-muted-foreground">{label}</dt>
               <dd>
                 <ul className="flex flex-col gap-0.5">
-                  {lines.map((line) => (
-                    <li key={line}>{line}</li>
+                  {lines.map((line, index) => (
+                    <li key={repeatKeys(lines)[index]}>{line}</li>
                   ))}
                 </ul>
               </dd>
