@@ -8,6 +8,7 @@ import {
   TASK_PRIORITIES,
   type DeliveryCard,
   type TaskPriority,
+  waitingWords,
 } from "../../lib/delivery";
 import {
   activeFilters,
@@ -69,7 +70,12 @@ function Row(props: {
           <CardSigns card={card} />
           {card.workers.length > 0 ? (
             <span className="truncate text-[10px] text-sidebar-muted-foreground">
-              {card.workers.map((worker) => worker.seat).join(", ")} working
+              {card.workers.every((worker) => worker.waiting)
+                ? `${card.workers.map((worker) => worker.seat).join(", ")} ${waitingWords(card.workers[0]?.waiting ?? null)}`
+                : `${card.workers
+                    .filter((worker) => !worker.waiting)
+                    .map((worker) => worker.seat)
+                    .join(", ")} working`}
             </span>
           ) : null}
         </span>

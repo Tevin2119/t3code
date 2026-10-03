@@ -771,7 +771,17 @@ export interface DeliveryWorker {
   readonly stage: string;
   readonly specialist: string | null;
   readonly since: string | null;
+  /** Why it has not started yet, when the engine holds it (for memory, or a free slot); null at work. */
+  readonly waiting: string | null;
 }
+
+/** What a held seat waits for, in words. */
+export const waitingWords = (reason: string | null): string =>
+  reason === "memory headroom" || reason === "host under memory pressure"
+    ? "waits for memory"
+    : reason
+      ? `waits for ${reason}`
+      : "is working";
 
 export interface DeliveryCard {
   readonly id: string;
@@ -982,6 +992,7 @@ export const parseCard = (value: Json): DeliveryCard => {
       stage: text(worker.stage),
       specialist: textOrNull(worker.specialist),
       since: textOrNull(worker.since),
+      waiting: textOrNull(worker.waiting),
     })),
     paused: paused
       ? {

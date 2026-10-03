@@ -36,6 +36,7 @@ import {
   type TaskPriority,
   type TaskView,
   type TimelineEntry,
+  waitingWords,
 } from "../../lib/delivery";
 import {
   ageLabel,
@@ -1105,8 +1106,12 @@ function Info(props: {
           </p>
         ) : null}
         {card.workers.map((worker) => (
-          <Row key={`${worker.seat}:${worker.stage}`} label="Working">
+          <Row
+            key={`${worker.seat}:${worker.stage}`}
+            label={worker.waiting ? "Waiting" : "Working"}
+          >
             {worker.seat} on {harnessLabel(worker.harness)}, {worker.stage}
+            {worker.waiting ? `, ${waitingWords(worker.waiting)}` : ""}
             {worker.specialist ? ` as ${worker.specialist}` : ""}{" "}
             <Age at={worker.since} now={now} label="Since" />
           </Row>

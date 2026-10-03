@@ -9,7 +9,7 @@ import {
 } from "lucide-react";
 import type { ReactNode } from "react";
 
-import type { DeliveryCard, TaskPriority } from "../../lib/delivery";
+import { waitingWords, type DeliveryCard, type TaskPriority } from "../../lib/delivery";
 import { ageLabel, initialsOf, PRIORITY_LABEL } from "../../lib/deliveryBoard";
 import { harnessLabel } from "../../lib/deliverySeats";
 import { cn } from "../../lib/utils";
@@ -270,11 +270,13 @@ export function CardPeople(props: { readonly card: DeliveryCard }) {
         <Avatar
           key={`${worker.seat}:${worker.stage}`}
           seat
-          working
+          working={!worker.waiting}
           name={worker.harness ?? worker.seat}
-          detail={`${worker.seat} on ${harnessLabel(worker.harness)} is working on ${worker.stage}${
-            worker.specialist ? ` as ${worker.specialist}` : ""
-          }`}
+          detail={`${worker.seat} on ${harnessLabel(worker.harness)} ${
+            worker.waiting
+              ? `${waitingWords(worker.waiting)} before ${worker.stage}`
+              : `is working on ${worker.stage}`
+          }${worker.specialist ? ` as ${worker.specialist}` : ""}`}
         />
       ))}
       {card.owner ? <Avatar name={card.owner} detail={`Owner: ${card.owner}`} /> : null}
