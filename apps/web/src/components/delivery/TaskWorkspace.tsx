@@ -318,7 +318,9 @@ function Briefing(props: { readonly brief: TaskBriefing }) {
         <span className="shrink-0 text-[10px] text-muted-foreground">{open ? "Less" : "More"}</span>
       </button>
       {open ? (
-        <dl className="mt-1.5 grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1">
+        // Held to part of the screen and scrolled within, so the history and the composer keep
+        // their room on a phone.
+        <dl className="mt-1.5 grid max-h-[40dvh] grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 overflow-y-auto overscroll-contain">
           <dt className="text-muted-foreground">What</dt>
           <dd>{brief.what}</dd>
           {brief.happened.length > 0 ? (
@@ -339,7 +341,7 @@ function Briefing(props: { readonly brief: TaskBriefing }) {
               <dd>{brief.why}</dd>
             </>
           ) : null}
-          {brief.options.length > 0 ? (
+          {brief.options.length > 0 || brief.reply ? (
             <>
               <dt className="text-muted-foreground">Choices</dt>
               <dd>
@@ -366,7 +368,18 @@ function Briefing(props: { readonly brief: TaskBriefing }) {
               <dd className="text-muted-foreground">
                 {brief.where}
                 {brief.where && brief.since ? ", " : ""}
-                {brief.since ? <Age at={brief.since} now={now} label="Waiting since" /> : null}
+                {brief.since && !Number.isNaN(Date.parse(brief.since)) ? (
+                  <>
+                    waiting since{" "}
+                    <time dateTime={brief.since}>
+                      {new Date(brief.since).toLocaleString([], {
+                        dateStyle: "medium",
+                        timeStyle: "short",
+                      })}
+                    </time>{" "}
+                    (<Age at={brief.since} now={now} label="Waiting since" />)
+                  </>
+                ) : null}
               </dd>
             </>
           ) : null}
