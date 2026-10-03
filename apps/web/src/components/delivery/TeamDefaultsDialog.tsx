@@ -2,7 +2,7 @@ import type { EnvironmentId } from "@t3tools/contracts";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import {
-  afterRead,
+  draftAgainstRead,
   parseTeamDefaults,
   seatSettingsToSend,
   withFallbacks,
@@ -26,6 +26,7 @@ import {
   DialogTitle,
 } from "../ui/dialog";
 import { Input } from "../ui/input";
+import { Behind } from "./Behind";
 import { FallbacksEditor } from "./FallbacksEditor";
 import { SeatSettingsPanel } from "./SeatSettingsPanel";
 import { TrackRecord } from "./TrackRecord";
@@ -53,33 +54,28 @@ export function TeamDefaultsDialog(props: {
     ReadonlyArray<SeatFallback> | null
   > | null>(null);
   const [showRecord, setShowRecord] = useState(false);
-  // After a save the form shows the engine's answer, and saves over the revision it names, until
-  // the next read arrives. Then the read, unless the person changed something meanwhile.
-  const [seeded, setSeeded] = useState<{
-    readonly from: unknown;
-    readonly snapshot: string;
-    readonly revision: number;
-  } | null>(null);
+  // The revision the person's changes were made against, kept as long as the changes are.
+  const [base, setBase] = useState<number | null>(null);
+  // The form as the engine answered the last save, while the form still shows it.
+  const [answered, setAnswered] = useState<string | null>(null);
   // The form as it stands, for a save's answer to tell whether the person changed it meanwhile.
   const snapshot = JSON.stringify([seats, shares, fallbacks]);
   const now = useRef(snapshot);
   useEffect(() => {
     now.current = snapshot;
   }, [snapshot]);
-  if (seeded !== null && read.body !== seeded.from) {
-    const step = afterRead({
-      savedRevision: seeded.revision,
-      readRevision: current?.team.defaults.revision ?? 0,
-      changedSince: snapshot !== seeded.snapshot,
-    });
-    if (step === "take-read") {
-      setSeeded(null);
-      setSeats(null);
-      setShares(null);
-      setFallbacks(null);
-    } else if (step === "keep-change") setSeeded(null);
-    else setSeeded({ ...seeded, from: read.body });
-  }
+  const readRevision = current?.team.defaults.revision ?? 0;
+  const standing = draftAgainstRead({ base, readRevision, asSaved: snapshot === answered });
+  const showRead = () => {
+    setBase(null);
+    setAnswered(null);
+    setSeats(null);
+    setShares(null);
+    setFallbacks(null);
+  };
+  if (standing === "take-read") showRead();
+  // A first change is made against the reading on screen.
+  const pin = () => setBase((was) => was ?? readRevision);
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
   const [problems, setProblems] = useState<ReadonlyArray<string>>([]);
@@ -111,6 +107,9 @@ export function TeamDefaultsDialog(props: {
     setProblems([]);
     setSaid(null);
     const pressed = now.current;
+    const sentNote = note;
+    // The note goes with this save; one written while it was out is the person's next.
+    const clearNote = () => setNote((was) => (was === sentNote ? "" : was));
     const result = await act(`/api/teams/${props.team}/defaults`, {
       seats: withFallbacks(seatSettingsToSend(team.settings, chosen, "defined"), named),
       // Shares that are what the team defines are not saved over it.
@@ -121,26 +120,26 @@ export function TeamDefaultsDialog(props: {
         : {},
       by: person,
       note: note.trim() || null,
-      // Saved over what was read: if another window saved since, the engine refuses this one.
-      revision: seeded?.revision ?? team.defaults.revision,
+      // Saved over the revision the changes were made against: if another window saved since,
+      // the engine refuses this one.
+      revision: base ?? readRevision,
     });
     setBusy(false);
     if (!result.ok) {
+      // Refused: the changes stay, with their revision, to be put right or set aside. A newer
+      // reading shows as one the changes are behind.
       setProblems(result.problems.length > 0 ? result.problems : [result.why]);
-      // Refused: the person has been told and reads again; the next save is made over that reading.
-      setSeeded(null);
       read.refresh();
       return;
     }
     const saved = parseTeamDefaults(result.body);
     setSaid(saved?.note ?? "Saved.");
+    clearNote();
     // The form shows what was saved, from the answer, until the next read: never the read from
-    // before. An answer that cannot be read leaves the form to the next read, never empty.
+    // before. An answer that cannot be read leaves the form to the next read, never empty; a
+    // change made meanwhile stays, against the revision it was made on.
     if (!saved) {
-      setSeats(null);
-      setShares(null);
-      setFallbacks(null);
-      setNote("");
+      if (now.current === pressed) showRead();
       read.refresh();
       props.onSaved?.();
       return;
@@ -154,17 +153,14 @@ export function TeamDefaultsDialog(props: {
       Object.entries(saved.team.workload.build).map(([seat, share]) => [seat, String(share)]),
     );
     // A change made while the save was out is the person's, and is kept over the save's answer.
+    // Either way the form now stands on the saved revision.
     if (now.current === pressed) {
       setSeats(nextSeats);
       setFallbacks(nextFallbacks);
       setShares(nextShares);
-    }
-    setSeeded({
-      from: read.body,
-      snapshot: JSON.stringify([nextSeats, nextShares, nextFallbacks]),
-      revision: saved.team.defaults.revision,
-    });
-    setNote("");
+      setAnswered(JSON.stringify([nextSeats, nextShares, nextFallbacks]));
+    } else setAnswered(null);
+    setBase(saved.team.defaults.revision);
     read.refresh();
     props.onSaved?.();
   };
@@ -197,7 +193,10 @@ export function TeamDefaultsDialog(props: {
                   chosen={chosen}
                   over="defaults"
                   shares={percentages}
-                  onChange={(seat, choice) => setSeats(withSeatChoice(chosen, seat, choice))}
+                  onChange={(seat, choice) => {
+                    pin();
+                    setSeats(withSeatChoice(chosen, seat, choice));
+                  }}
                   renderExtra={(item) => (
                     <FallbacksEditor
                       environmentId={props.environmentId}
@@ -205,7 +204,10 @@ export function TeamDefaultsDialog(props: {
                       value={named[item.seat] ?? null}
                       inherited={item.definedFallbackChain}
                       inheritedLabel="As defined"
-                      onChange={(next) => setFallbacks({ ...named, [item.seat]: next })}
+                      onChange={(next) => {
+                        pin();
+                        setFallbacks({ ...named, [item.seat]: next });
+                      }}
                     />
                   )}
                 />
@@ -248,9 +250,10 @@ export function TeamDefaultsDialog(props: {
                             className="h-7 w-16"
                             inputMode="decimal"
                             value={share}
-                            onChange={(event) =>
-                              setShares({ ...weights, [seat]: event.target.value })
-                            }
+                            onChange={(event) => {
+                              pin();
+                              setShares({ ...weights, [seat]: event.target.value });
+                            }}
                           />
                           <span className="text-muted-foreground">{percentages[seat] ?? 0}%</span>
                         </label>
@@ -275,6 +278,9 @@ export function TeamDefaultsDialog(props: {
                 </ul>
               ) : null}
               {said ? <p className="text-xs text-muted-foreground">{said}</p> : null}
+              {standing === "behind" ? (
+                <Behind revision={readRevision} base={base ?? 0} onShowRead={showRead} />
+              ) : null}
 
               <section>
                 <h3 className="pb-1 text-xs font-medium text-muted-foreground">
@@ -331,7 +337,10 @@ export function TeamDefaultsDialog(props: {
           <Button variant="outline" onClick={props.onClose}>
             Close
           </Button>
-          <Button disabled={busy || !team || !sharesAreNumbers} onClick={() => void save()}>
+          <Button
+            disabled={busy || !team || !sharesAreNumbers || standing === "behind"}
+            onClick={() => void save()}
+          >
             {busy ? "Saving" : "Save defaults"}
           </Button>
         </DialogFooter>

@@ -815,21 +815,23 @@ export function crewLine(card: Pick<DeliveryCard, "workers">): string {
 }
 
 /**
- * What a settings form does when a reading arrives after its own save. An older reading is let
- * pass. One of the save's own revision is taken, unless the person changed something since, whose
- * change is then kept. A newer one (another window saved) is taken when nothing was changed; with a
- * change, the form keeps it and the revision it was made against, so the next save is refused and
- * the person looks again, rather than overwriting the other window's saving unseen.
+ * Where a settings form stands with a reading. A draft is what the person changed, kept with the
+ * revision it was made against (`base`) for as long as it is kept. It gives way to a reading only
+ * when it is still what the form's own save answered and the reading is at least that save: then
+ * nothing of the person's is lost. A draft made against an older revision than the reading's is
+ * behind: saving it would be refused, and the form says so rather than saving over a reading the
+ * person has not seen.
  */
-export function afterRead(input: {
-  readonly savedRevision: number;
+export function draftAgainstRead(input: {
+  /** The revision the draft was made against; null when there is no draft. */
+  readonly base: number | null;
   readonly readRevision: number;
-  readonly changedSince: boolean;
-}): "take-read" | "keep-change" | "keep" {
-  if (input.readRevision < input.savedRevision) return "keep";
-  if (input.readRevision === input.savedRevision)
-    return input.changedSince ? "keep-change" : "take-read";
-  return input.changedSince ? "keep" : "take-read";
+  /** The draft is still exactly what the form's own last save answered. */
+  readonly asSaved: boolean;
+}): "none" | "take-read" | "keep" | "behind" {
+  if (input.base === null) return "none";
+  if (input.asSaved && input.readRevision >= input.base) return "take-read";
+  return input.readRevision > input.base ? "behind" : "keep";
 }
 
 /** What a held seat waits for, in words. */

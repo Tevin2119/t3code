@@ -8,7 +8,7 @@ import {
   deliveryFailureProblems,
   moveSeat,
   parseBoard,
-  afterRead,
+  draftAgainstRead,
   crewLine,
   nowLine,
   parseBoardSeats,
@@ -1028,16 +1028,20 @@ describe("seats at work and seats held", () => {
   });
 });
 
-describe("afterRead", () => {
-  it("lets an older reading pass, takes its own unless changed, and keeps a change over another window's saving", () => {
-    expect(afterRead({ savedRevision: 3, readRevision: 2, changedSince: false })).toBe("keep");
-    expect(afterRead({ savedRevision: 3, readRevision: 3, changedSince: false })).toBe("take-read");
-    expect(afterRead({ savedRevision: 3, readRevision: 3, changedSince: true })).toBe(
-      "keep-change",
-    );
-    expect(afterRead({ savedRevision: 3, readRevision: 4, changedSince: false })).toBe("take-read");
-    // Another window saved, and the person has a change: keep it and the old revision, so the next save is refused.
-    expect(afterRead({ savedRevision: 3, readRevision: 4, changedSince: true })).toBe("keep");
+describe("draftAgainstRead", () => {
+  it("lets an older reading pass, and takes a reading only over the form's own saved answer", () => {
+    expect(draftAgainstRead({ base: null, readRevision: 4, asSaved: false })).toBe("none");
+    expect(draftAgainstRead({ base: 3, readRevision: 2, asSaved: true })).toBe("keep");
+    expect(draftAgainstRead({ base: 3, readRevision: 3, asSaved: true })).toBe("take-read");
+    expect(draftAgainstRead({ base: 3, readRevision: 4, asSaved: true })).toBe("take-read");
+  });
+  it("keeps a change with the revision it was made against, through every reading after", () => {
+    // Saved as revision 3 while the person went on changing: the reading of 3 keeps the change...
+    expect(draftAgainstRead({ base: 3, readRevision: 3, asSaved: false })).toBe("keep");
+    // ...and when another window saves 4, the change is behind: saving it would be refused.
+    expect(draftAgainstRead({ base: 3, readRevision: 4, asSaved: false })).toBe("behind");
+    // A change begun on a reading, with no save of the form's own, is behind a newer one too.
+    expect(draftAgainstRead({ base: 7, readRevision: 8, asSaved: false })).toBe("behind");
   });
   it("says no stage when none is known", () => {
     const worker = {
