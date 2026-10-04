@@ -331,6 +331,7 @@ export interface OrchestratorActivity {
   readonly blocked: string | null;
   /** Whether the draft's team is still to be held against the list of teams. */
   readonly awaitingTeams: boolean;
+  readonly teamAvailabilityReason: string | null;
   readonly team: string | null;
   /** `new` before the first save, then `saved` or `changed`. */
   readonly saved: "new" | "saved" | "changed";
@@ -342,6 +343,7 @@ export const IDLE_ORCHESTRATOR_ACTIVITY: OrchestratorActivity = {
   busy: null,
   blocked: null,
   awaitingTeams: false,
+  teamAvailabilityReason: null,
   team: null,
   saved: "new",
   flow: null,
@@ -362,7 +364,7 @@ interface OrchestratorDraftState {
   readonly chooseTeam: (threadId: string, environmentId: string | null, team: string) => void;
   /**
    * Holds a new draft's team against the teams there are, once, when they are
-   * first read: a team that is gone gives way to the default team. A team a
+   * first read: prefer development if offered, else the first offered team. A team a
    * person chose, or one the draft was saved with, is never replaced.
    */
   readonly reconcileTeam: (threadId: string, teams: ReadonlyArray<string>) => void;
@@ -437,9 +439,14 @@ export const useOrchestratorDraftStore = create<OrchestratorDraftState>()(
           if (!current?.awaitingTeams) return state;
           const { awaitingTeams: _settled, ...settled } = current;
           const next =
-            current.engineThread !== null || teams.includes(current.team)
+            current.engineThread !== null || teams.includes(current.team) || teams.length === 0
               ? settled
-              : { ...settled, team: DELIVERY_DEFAULT_TEAM, workflow: "", seats: {} };
+              : {
+                  ...settled,
+                  team: teams.includes(DELIVERY_DEFAULT_TEAM) ? DELIVERY_DEFAULT_TEAM : teams[0]!,
+                  workflow: "",
+                  seats: {},
+                };
           return { drafts: { ...state.drafts, [threadId]: next } };
         }),
       setSeat: (threadId, seat, choice) =>
@@ -471,6 +478,7 @@ export const useOrchestratorDraftStore = create<OrchestratorDraftState>()(
             current.busy === activity.busy &&
             current.blocked === activity.blocked &&
             current.awaitingTeams === activity.awaitingTeams &&
+            current.teamAvailabilityReason === activity.teamAvailabilityReason &&
             current.team === activity.team &&
             current.flow === activity.flow &&
             current.saved === activity.saved
