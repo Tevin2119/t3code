@@ -841,7 +841,7 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
           "relative flex h-screen w-screen flex-row overflow-hidden",
           // A team has more to show than a list of models.
           teamShown && props.orchestrator
-            ? "max-h-[min(36rem,calc(100vh-8rem))] max-w-[min(46rem,calc(100vw-1rem))]"
+            ? "max-h-[min(36rem,calc(100vh-8rem),var(--available-height,100vh))] max-w-[min(46rem,calc(100vw-1rem))]"
             : "max-h-86.5 max-w-90",
         )}
         data-model-picker-content="true"
