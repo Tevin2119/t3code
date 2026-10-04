@@ -382,7 +382,9 @@ function RunPanel(props: {
     setBusy(false);
     if (result.ok) {
       setText("");
-      setSaid("Given. It is in the history, and the seat it is for starts again with it.");
+      setSaid(
+        "Given. It is in the history; the step starts again with it once its seats have stopped.",
+      );
     } else setSaid(result.why);
     props.onChanged();
   };
@@ -478,9 +480,9 @@ function RunPanel(props: {
             Give the instruction
           </Button>
           <p className="text-[10px] text-muted-foreground">
-            The seat at work it is for stops and starts its step again with it; the others are given
-            it when they next start. To change what is asked, write a change instead: that goes
-            through triage.
+            Every seat at work stops, and the step starts again once all have ended, with the
+            instruction given to the seat it names (or to all). To change what is asked, write a
+            change instead: that goes through triage.
           </p>
         </div>
       ) : null}
