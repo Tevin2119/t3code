@@ -189,6 +189,15 @@ export function CardSigns(props: { readonly card: DeliveryCard }) {
   const { card } = props;
   return (
     <span className="flex flex-wrap items-center gap-x-2 gap-y-0.5" data-card-signs>
+      {card.first ? (
+        <span
+          className="rounded bg-primary/15 px-1 text-[10px] font-medium text-primary"
+          data-card-first
+          aria-label="Next: put first for the next free slots"
+        >
+          Next
+        </span>
+      ) : null}
       {card.set === "qualification" ? (
         <span
           className="rounded border border-border px-1 text-[10px] text-muted-foreground"
@@ -274,7 +283,7 @@ export function CardPeople(props: { readonly card: DeliveryCard }) {
           name={worker.harness ?? worker.seat}
           detail={`${worker.seat} on ${harnessLabel(worker.harness)} ${
             worker.waiting
-              ? `${waitingWords(worker.waiting)} before ${worker.stage}`
+              ? `${waitingWords(worker.waiting)} before ${worker.stage}${worker.waitingWhy ? `: ${worker.waitingWhy}` : ""}`
               : `is working on ${worker.stage}`
           }${worker.specialist ? ` as ${worker.specialist}` : ""}`}
         />

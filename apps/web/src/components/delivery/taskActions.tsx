@@ -35,6 +35,9 @@ export const ACTION_HELP: Record<string, string> = {
   close: "Nothing more is done for it. What was said and found is kept.",
   publish:
     "Pushes the approved commit to its own branch and opens one pull request for it, or finds the one already open. Nothing is merged.",
+  first:
+    "Its seats take the next free slots, before other tasks. Nothing is skipped: it waits its turn for memory and limits like any task, but goes first in the queue.",
+  "not-first": "It goes back to waiting its turn with the rest.",
 };
 
 /** What an action is called on this task. On a part of a split task, approving is a review. */
@@ -125,6 +128,8 @@ export function useTaskActions(
         void send(`/api/tasks/${card.id}/discard`, {}).then(
           (done) => done && onDiscarded?.(card.id),
         );
+      } else if (action === "first" || action === "not-first") {
+        void send(`/api/tasks/${card.id}/first`, { on: action === "first", by: person });
       } else if (action === "stop") {
         if (card.run) void send(`/api/runs/${card.run.id}/stop`, {});
       } else void send(`/api/tasks/${card.id}/control`, { action, by: person });

@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  parseSeatLive,
+  waitingWords,
   deliveryEnvironmentChoice,
   decideTeamForSend,
   deliveryFailureText,
@@ -304,6 +306,7 @@ describe("parseBoard", () => {
         specialist: null,
         since: null,
         waiting: null,
+        waitingWhy: null,
       },
       // One the engine holds is read as waiting, with what for.
       {
@@ -314,6 +317,7 @@ describe("parseBoard", () => {
         specialist: null,
         since: null,
         waiting: "memory headroom",
+        waitingWhy: null,
       },
     ]);
     expect([read?.questions, read?.unread, read?.unanswered, read?.files]).toEqual([1, 2, 1, 3]);
@@ -1157,5 +1161,33 @@ describe("deliveryEnvironmentChoice", () => {
         enabled: on(),
       }),
     ).toBe("windows");
+  });
+});
+
+describe("the run panel's readings", () => {
+  it("reads what a seat at work last did, and nothing that is not tool, said or log", () => {
+    expect(
+      parseSeatLive({
+        started: "2026-10-04T09:00:00Z",
+        updated: "2026-10-04T09:01:00Z",
+        items: [
+          { kind: "tool", text: "Read: src/calc.mjs" },
+          { kind: "said", text: "Reading the calculator." },
+          { kind: "other", text: "x" },
+        ],
+      }),
+    ).toEqual({
+      started: "2026-10-04T09:00:00Z",
+      updated: "2026-10-04T09:01:00Z",
+      items: [
+        { kind: "tool", text: "Read: src/calc.mjs" },
+        { kind: "said", text: "Reading the calculator." },
+      ],
+    });
+    expect(parseSeatLive(null)).toBeNull();
+  });
+  it("says a wait for a slot plainly", () => {
+    expect(waitingWords("global limit")).toBe("waits for a free slot");
+    expect(waitingWords("memory headroom")).toBe("waits for memory");
   });
 });

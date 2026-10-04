@@ -35,6 +35,7 @@ import {
   type TaskFile,
   type TaskPriority,
   repeatKeys,
+  type SeatLive,
   type TaskBriefing,
   type TaskView,
   type TimelineEntry,
@@ -50,6 +51,7 @@ import {
   messageStateLabel,
   moveIntent,
   PRIORITY_LABEL,
+  sectionOf,
   tagsFromText,
   type ComposerKind,
 } from "../../lib/deliveryBoard";
@@ -64,6 +66,8 @@ import {
   useStaleReading,
   withSeatChoice,
 } from "../../state/delivery";
+import ChatMarkdown from "../ChatMarkdown";
+import { Dialog, DialogHeader, DialogPanel, DialogPopup, DialogTitle } from "../ui/dialog";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
@@ -143,7 +147,27 @@ const time = (iso: string) => {
       });
 };
 
+/** A link from a line of the history to the section it points at, if it points at one. */
+function ShowSection(props: {
+  readonly entry: TimelineEntry;
+  readonly onShow: ((section: "acceptance" | "plan") => void) | undefined;
+}) {
+  const section = sectionOf({ kind: props.entry.kind ?? null, text: props.entry.text ?? "" });
+  if (!section || !props.onShow) return null;
+  return (
+    <button
+      type="button"
+      className="ml-1 cursor-pointer text-primary underline-offset-2 hover:underline"
+      onClick={() => props.onShow?.(section)}
+      data-task-show={section}
+    >
+      {section === "acceptance" ? "See the checklist" : "Read the plan"}
+    </button>
+  );
+}
+
 function Message(props: {
+  readonly onShow?: ((section: "acceptance" | "plan") => void) | undefined;
   readonly environmentId: EnvironmentId | null;
   readonly entry: TimelineEntry;
   readonly repliedTo: TimelineEntry | null;
@@ -239,7 +263,10 @@ function Message(props: {
   );
 }
 
-function Happening(props: { readonly entry: TimelineEntry }) {
+function Happening(props: {
+  readonly entry: TimelineEntry;
+  readonly onShow?: ((section: "acceptance" | "plan") => void) | undefined;
+}) {
   const { entry } = props;
   const Icon = EVENT_ICON[entry.icon] ?? CircleDotIcon;
   return (
@@ -254,6 +281,7 @@ function Happening(props: { readonly entry: TimelineEntry }) {
       <Icon className={cn("mt-0.5 size-3.5 shrink-0", EVENT_TONE[entry.icon])} />
       <p className="min-w-0 flex-1 break-words">
         <span className="font-medium text-foreground/80">{entry.by}</span> {entry.text}
+        <ShowSection entry={entry} onShow={props.onShow} />
         {entry.evidence ? (
           <span className="block font-mono text-[10px] break-all">{entry.evidence}</span>
         ) : null}
@@ -290,6 +318,229 @@ function MobileHelp(props: {
         {props.children}
       </PopoverPopup>
     </Popover>
+  );
+}
+
+/** What a seat at work last did, newest last: the tools it called and what it said. */
+function SeatNow(props: { readonly live: SeatLive }) {
+  const items = props.live.items.slice(-4);
+  const keys = repeatKeys(items.map((item) => `${item.kind}:${item.text}`));
+  return (
+    <ul className="mt-0.5 flex flex-col gap-0.5 border-l border-border pl-2" data-seat-live>
+      {items.map((item, index) => (
+        <li
+          key={keys[index]}
+          className={cn(
+            "text-[10px] break-words",
+            item.kind === "said" ? "text-foreground/80" : "font-mono text-muted-foreground",
+          )}
+        >
+          {item.text}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+const DOCUMENT_LABEL: Record<string, string> = {
+  "PLAN.md": "Plan",
+  "REVIEW.md": "Review",
+  "PACK.md": "Evidence pack",
+};
+
+/**
+ * The run under way, for a person following it: the documents it wrote, to read here or have
+ * summarised, the instructions given to it, and a way to give one. An instruction reaches the
+ * seat at work it is for, which starts its step again with it; what is asked is changed by a
+ * change, which goes through triage, not here.
+ */
+function RunPanel(props: {
+  readonly environmentId: EnvironmentId | null;
+  readonly task: TaskView;
+  readonly onChanged: () => void;
+}) {
+  const { task } = props;
+  const council = task.council;
+  const person = usePersonName();
+  const act = useDeliveryAct(props.environmentId, "run");
+  const [reading, setReading] = useState<string | null>(null);
+  const [text, setText] = useState("");
+  const [seat, setSeat] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [said, setSaid] = useState<string | null>(null);
+  if (!council) return null;
+  const steerable = ["running", "paused", "needs-decision"].includes(council.state);
+  const steerKeys = repeatKeys(council.steers.map((steer) => `${steer.at}:${steer.text}`));
+  const give = async () => {
+    if (!text.trim() || busy) return;
+    setBusy(true);
+    const result = await act(`/api/tasks/${task.id}/steer`, {
+      text: text.trim(),
+      seat: seat || null,
+      by: person,
+    });
+    setBusy(false);
+    if (result.ok) {
+      setText("");
+      setSaid("Given. It is in the history, and the seat it is for starts again with it.");
+    } else setSaid(result.why);
+    props.onChanged();
+  };
+  const summarise = async (name: string) => {
+    setBusy(true);
+    const result = await act(`/api/tasks/${task.id}/messages`, {
+      kind: "message",
+      text: `Summarise the ${DOCUMENT_LABEL[name] ?? name} (${name}) of run ${council.run} for me in a few lines: what it says will be done, how it will be checked, and anything I should look at.`,
+      by: person,
+    });
+    setBusy(false);
+    setSaid(result.ok ? "Asked the coordinator. The answer comes in the history." : result.why);
+    props.onChanged();
+  };
+  return (
+    <section className="flex flex-col gap-2" data-task-run-panel>
+      <h3 className="text-xs font-medium text-muted-foreground">Run {council.run}</h3>
+      {council.documents.length > 0 ? (
+        <div className="flex flex-col gap-1" data-run-documents>
+          {council.documents.map((name) => (
+            <div key={name} className="flex items-center justify-between gap-2 text-xs">
+              <Button
+                size="xs"
+                variant="outline"
+                onClick={() => setReading(name)}
+                data-run-document={name}
+              >
+                Read the {(DOCUMENT_LABEL[name] ?? name).toLowerCase()}
+              </Button>
+              <Button
+                size="xs"
+                variant="ghost"
+                disabled={busy}
+                onClick={() => void summarise(name)}
+                data-run-summarise={name}
+              >
+                Summarise
+              </Button>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <p className="text-[11px] text-muted-foreground">
+          No plan, review or evidence written yet. Each shows here once the run writes it.
+        </p>
+      )}
+      {council.steers.length > 0 ? (
+        <ul className="flex flex-col gap-1 text-[11px]" data-run-steers>
+          {council.steers.map((steer, index) => (
+            <li key={steerKeys[index]} className="rounded border border-border px-2 py-1">
+              <span className="text-muted-foreground">
+                {steer.by} to {steer.seat ?? "every seat"}:{" "}
+              </span>
+              {steer.text}
+            </li>
+          ))}
+        </ul>
+      ) : null}
+      {steerable ? (
+        <div className="flex flex-col gap-1" data-run-steer>
+          <Select value={seat} onValueChange={(value) => setSeat(String(value ?? ""))}>
+            <SelectTrigger
+              aria-label="Who the instruction is for"
+              size="compact"
+              variant="ghost"
+              className="w-auto min-w-0 self-start"
+            >
+              <SelectValue>{seat ? `To ${seat}` : "To every seat"}</SelectValue>
+            </SelectTrigger>
+            <SelectPopup alignItemWithTrigger={false}>
+              <SelectItem value="">To every seat</SelectItem>
+              {council.seats.map((item) => (
+                <SelectItem key={item.seat} value={item.seat}>
+                  To {item.seat} ({harnessLabel(item.harness)})
+                </SelectItem>
+              ))}
+            </SelectPopup>
+          </Select>
+          <Textarea
+            aria-label="An instruction for the run"
+            placeholder="Steer the work: say what to do differently from now on"
+            className="text-xs"
+            value={text}
+            onChange={(event) => setText(event.target.value)}
+          />
+          <Button
+            size="xs"
+            className="self-start"
+            disabled={busy || !text.trim()}
+            onClick={() => void give()}
+            data-run-steer-give
+          >
+            Give the instruction
+          </Button>
+          <p className="text-[10px] text-muted-foreground">
+            The seat at work it is for stops and starts its step again with it; the others are given
+            it when they next start. To change what is asked, write a change instead: that goes
+            through triage.
+          </p>
+        </div>
+      ) : null}
+      {said ? <p className="text-[11px] text-muted-foreground">{said}</p> : null}
+      {reading ? (
+        <RunDocument
+          environmentId={props.environmentId}
+          run={council.run}
+          name={reading}
+          onClose={() => setReading(null)}
+        />
+      ) : null}
+    </section>
+  );
+}
+
+/** A document a run wrote (PLAN.md, REVIEW.md, PACK.md), read in a dialog. */
+function RunDocument(props: {
+  readonly environmentId: EnvironmentId | null;
+  readonly run: string;
+  readonly name: string;
+  readonly onClose: () => void;
+}) {
+  const read = useDeliveryRead(
+    props.environmentId,
+    `/api/runs/${props.run}/document?name=${encodeURIComponent(props.name)}`,
+  );
+  const body = read.body as { readonly text?: unknown; readonly cut?: unknown } | null;
+  const doc = typeof body?.text === "string" ? body.text : null;
+  return (
+    <Dialog open onOpenChange={(open) => !open && props.onClose()}>
+      <DialogPopup className="max-w-3xl" data-run-document-open={props.name}>
+        <DialogHeader>
+          <DialogTitle>
+            {DOCUMENT_LABEL[props.name] ?? props.name}, run {props.run}
+          </DialogTitle>
+        </DialogHeader>
+        <DialogPanel className="text-sm">
+          {doc !== null ? (
+            <>
+              <ChatMarkdown
+                text={doc}
+                cwd={undefined}
+                environmentId={props.environmentId ?? undefined}
+                parseRawHtml={false}
+              />
+              {body?.cut === true ? (
+                <p className="pt-2 text-xs text-muted-foreground">
+                  Only the first part is shown; the whole is in the run's evidence folder.
+                </p>
+              ) : null}
+            </>
+          ) : (
+            <p className="text-xs text-muted-foreground">
+              {read.error ? `It cannot be read: ${read.error}` : "Reading it."}
+            </p>
+          )}
+        </DialogPanel>
+      </DialogPopup>
+    </Dialog>
   );
 }
 
@@ -717,6 +968,8 @@ function Communications(props: {
   readonly environmentId: EnvironmentId | null;
   readonly task: TaskView;
   readonly onChanged: () => void;
+  /** Shows a section of the task: the checklist or the plan a line of the history points at. */
+  readonly onShow: (section: "acceptance" | "plan") => void;
 }) {
   const { task } = props;
   const person = usePersonName();
@@ -806,9 +1059,10 @@ function Communications(props: {
                 setComposerExpanded(true);
               }}
               onSettle={(item, accept) => void settle(item, accept)}
+              onShow={props.onShow}
             />
           ) : (
-            <Happening key={entry.id} entry={entry} />
+            <Happening key={entry.id} entry={entry} onShow={props.onShow} />
           ),
         )}
         {task.working ? (
@@ -836,10 +1090,15 @@ function Communications(props: {
   );
 }
 
-function Listed(props: { readonly title: string; readonly items: ReadonlyArray<string> }) {
+function Listed(props: {
+  readonly title: string;
+  readonly items: ReadonlyArray<string>;
+  /** A name a line of the history can point at; see sectionOf. */
+  readonly section?: string;
+}) {
   if (props.items.length === 0) return null;
   return (
-    <section>
+    <section data-task-section={props.section}>
       <h3 className="pb-1 text-xs font-medium text-muted-foreground">{props.title}</h3>
       <ul className="flex list-disc flex-col gap-0.5 pl-5 text-sm">
         {props.items.map((item) => (
@@ -904,7 +1163,11 @@ function Details(props: {
         <p className="text-sm break-words whitespace-pre-wrap">{task.body}</p>
       </section>
       {task.plan ? (
-        <section className="flex flex-col gap-2 rounded-md border border-border p-2" data-task-plan>
+        <section
+          className="flex flex-col gap-2 rounded-md border border-border p-2"
+          data-task-plan
+          data-task-section="plan"
+        >
           <h3 className="text-xs font-medium">
             The plan{task.plan.agreed ? ", agreed and being delivered" : ", for you to read"}
           </h3>
@@ -964,7 +1227,7 @@ function Details(props: {
         </section>
       ) : null}
       <Listed title="Requirements" items={task.requirements} />
-      <Listed title="Acceptance criteria" items={task.acceptance} />
+      <Listed title="Acceptance criteria" items={task.acceptance} section="acceptance" />
       {task.files.length > 0 ? (
         <section>
           <h3 className="pb-1 text-xs font-medium text-muted-foreground">
@@ -1236,6 +1499,9 @@ function Info(props: {
           >
             {worker.seat} on {harnessLabel(worker.harness)}, {worker.stage}
             {worker.waiting ? `, ${waitingWords(worker.waiting)}` : ""}
+            {worker.waitingWhy ? (
+              <span className="block text-[11px] text-muted-foreground">{worker.waitingWhy}</span>
+            ) : null}
             {worker.specialist ? ` as ${worker.specialist}` : ""}{" "}
             <Age at={worker.since} now={now} label="Since" />
           </Row>
@@ -1482,6 +1748,8 @@ function Info(props: {
         </section>
       )}
 
+      <RunPanel environmentId={props.environmentId} task={task} onChanged={props.onChanged} />
+
       <section className="flex flex-col gap-1.5" data-task-roster>
         <h3 className="text-xs font-medium text-muted-foreground">
           Team {task.team}
@@ -1497,6 +1765,12 @@ function Info(props: {
                   {seat.reasoning ? `, ${seat.reasoning}` : ""}
                   {seat.access && seat.access !== "full" ? `, ${seat.access}` : ""}
                 </span>
+                {seat.waitingWhy ? (
+                  <span className="block text-[10px] text-muted-foreground" data-seat-waiting-why>
+                    {seat.waitingWhy}
+                  </span>
+                ) : null}
+                {seat.live && seat.live.items.length > 0 ? <SeatNow live={seat.live} /> : null}
               </span>
               <span className="shrink-0 text-right">
                 <Badge size="sm" variant={ACTIVITY_VARIANT[seat.activity] ?? "secondary"}>
@@ -1792,6 +2066,15 @@ export function TaskWorkspace(props: {
                   environmentId={props.environmentId}
                   task={task}
                   onChanged={read.refresh}
+                  onShow={(section) => {
+                    // On a narrow screen the task is behind its own tab.
+                    setTab("details");
+                    requestAnimationFrame(() =>
+                      document
+                        .querySelector(`[data-task-section="${section}"]`)
+                        ?.scrollIntoView({ block: "start", behavior: "smooth" }),
+                    );
+                  }}
                 />
               </div>
               <div className={cn("min-h-0 xl:flex", tab === "info" ? "flex" : "hidden")}>

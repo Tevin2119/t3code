@@ -2,6 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import { parseCard } from "./delivery";
 import {
+  sectionOf,
   isConversationRef,
   taskFromConversation,
   activeFilters,
@@ -384,5 +385,24 @@ describe("moveIntent while every seat waits", () => {
       "triage",
     );
     expect(held.kind === "refused" && held.why).toMatch(/about to start on it, waiting for room/);
+  });
+});
+
+describe("sectionOf", () => {
+  it("points a history line at the checklist or the plan it speaks of", () => {
+    expect(
+      sectionOf({
+        kind: "note",
+        text: "Triage: ready, with 7 item(s) on the acceptance checklist.",
+      }),
+    ).toBe("acceptance");
+    expect(
+      sectionOf({
+        kind: "task.revised",
+        text: "Revision 2: Triage wrote the acceptance checklist.",
+      }),
+    ).toBe("acceptance");
+    expect(sectionOf({ kind: "run.planned", text: "Planned." })).toBe("plan");
+    expect(sectionOf({ kind: "note", text: "Run run-1 started." })).toBeNull();
   });
 });

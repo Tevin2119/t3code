@@ -782,6 +782,8 @@ export interface DeliveryWorker {
   readonly since: string | null;
   /** Why it has not started yet, when the engine holds it (for memory, or a free slot); null at work. */
   readonly waiting: string | null;
+  /** The same, in words a person can act on: who holds the slots, or the memory it waits for. */
+  readonly waitingWhy: string | null;
 }
 
 /** The seats at work on a card, as opposed to those the engine holds before they start. */
@@ -838,9 +840,11 @@ export function draftAgainstRead(input: {
 export const waitingWords = (reason: string | null): string =>
   reason === "memory headroom" || reason === "host under memory pressure"
     ? "waits for memory"
-    : reason
-      ? `waits for ${reason}`
-      : "is working";
+    : reason === "global limit"
+      ? "waits for a free slot"
+      : reason
+        ? `waits for ${reason}`
+        : "is working";
 
 export interface DeliveryCard {
   readonly id: string;
@@ -933,6 +937,8 @@ export interface DeliveryCard {
   /** What became of the approved change: pushed, a pull request, merged, or a failed attempt. */
   readonly publication: DeliveryPublication | null;
   readonly actions: ReadonlyArray<string>;
+  /** Put first by a person for the next free slots (Do next). */
+  readonly first: boolean;
 }
 
 /**
@@ -1052,6 +1058,7 @@ export const parseCard = (value: Json): DeliveryCard => {
       specialist: textOrNull(worker.specialist),
       since: textOrNull(worker.since),
       waiting: textOrNull(worker.waiting),
+      waitingWhy: textOrNull(worker.waitingWhy),
     })),
     paused: paused
       ? {
@@ -1107,6 +1114,7 @@ export const parseCard = (value: Json): DeliveryCard => {
     set: textOrNull(value.set),
     publication: parsePublication(value.publication),
     actions: strings(value.actions),
+    first: flag(value.first),
   };
 };
 
@@ -1166,9 +1174,28 @@ export interface CouncilSeat {
   readonly access: string | null;
   readonly activity: string;
   readonly blockedBy: string | null;
+  /** Why it waits, in words a person can act on. */
+  readonly waitingWhy: string | null;
   readonly stage: string | null;
   readonly verdict: string | null;
   readonly attempts: number;
+  /** What it is doing now, from its own output, while it works; null otherwise. */
+  readonly live: SeatLive | null;
+}
+
+/** What a seat at work last did: the tools it called and what it said, newest last. */
+export interface SeatLive {
+  readonly started: string | null;
+  readonly updated: string | null;
+  readonly items: ReadonlyArray<{ readonly kind: "tool" | "said" | "log"; readonly text: string }>;
+}
+
+/** An instruction a person gave a run while it was under way. */
+export interface RunSteer {
+  readonly at: string;
+  readonly by: string;
+  readonly seat: string | null;
+  readonly text: string;
 }
 
 export interface TaskCouncil {
@@ -1180,6 +1207,11 @@ export interface TaskCouncil {
   readonly evidence: string | null;
   readonly decision: string | null;
   readonly seats: ReadonlyArray<CouncilSeat>;
+  /** What the run wrote for a person to read: PLAN.md, REVIEW.md, PACK.md. */
+  readonly documents: ReadonlyArray<string>;
+  readonly steers: ReadonlyArray<RunSteer>;
+  /** Whether a person put the task first for the next free slots. */
+  readonly first: boolean;
   readonly votes: ReadonlyArray<{
     readonly seat: string;
     readonly provider: string;
@@ -1470,6 +1502,20 @@ export interface TaskView {
   } | null;
 }
 
+export function parseSeatLive(value: unknown): SeatLive | null {
+  if (!isRecord(value)) return null;
+  return {
+    started: textOrNull(value.started),
+    updated: textOrNull(value.updated),
+    items: records(value.items).flatMap((item) => {
+      const kind = text(item.kind);
+      return kind === "tool" || kind === "said" || kind === "log"
+        ? [{ kind, text: text(item.text) }]
+        : [];
+    }),
+  };
+}
+
 const parseCouncil = (council: Json): TaskCouncil => {
   const concurrency = isRecord(council.concurrency) ? council.concurrency : {};
   return {
@@ -1492,10 +1538,20 @@ const parseCouncil = (council: Json): TaskCouncil => {
       access: textOrNull(seat.access),
       activity: text(seat.activity, "waiting"),
       blockedBy: textOrNull(seat.blockedBy),
+      waitingWhy: textOrNull(seat.waitingWhy),
       stage: textOrNull(seat.stage),
       verdict: textOrNull(seat.verdict),
       attempts: list(seat.attempts).length,
+      live: parseSeatLive(seat.live),
     })),
+    documents: strings(council.documents),
+    steers: records(council.steers).map((steer) => ({
+      at: text(steer.at),
+      by: text(steer.by),
+      seat: textOrNull(steer.seat),
+      text: text(steer.text),
+    })),
+    first: flag(council.first),
     votes: records(council.votes).map((vote) => ({
       seat: text(vote.seat),
       provider: text(vote.provider),
