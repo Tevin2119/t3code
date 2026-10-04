@@ -4,7 +4,7 @@
  * sent. Where a card may go is the engine's to decide; `moveIntent` says
  * what a move would come to, for the drag, the column choice and the step.
  */
-import type { DeliveryCard, DeliveryLane, TaskPriority } from "./delivery";
+import { parseBoard, type DeliveryCard, type DeliveryLane, type TaskPriority } from "./delivery";
 
 export const PRIORITY_LABEL: Record<TaskPriority, string> = {
   urgent: "Urgent",
@@ -444,6 +444,39 @@ export const LANE_TITLE: Readonly<Record<string, string>> = {
   "pull-request": "Pull request open",
   completed: "Done",
 };
+
+/** The lanes where a task waits for the person: for an answer, or for a sign-off. */
+export const ATTENTION_LANES: ReadonlyArray<string> = ["needs-decision", "human-review"];
+
+/** The reading the attention count is taken from: every board, every lane, no filter. */
+export const ATTENTION_BOARD_PATH = "/api/lanes?view=development&set=all";
+
+const isLaneEntry = (lane: unknown): lane is { lane: string; cards: ReadonlyArray<unknown> } =>
+  typeof lane === "object" &&
+  lane !== null &&
+  typeof (lane as { lane?: unknown }).lane === "string" &&
+  Array.isArray((lane as { cards?: unknown }).cards);
+
+/**
+ * How many tasks wait for the person, from a reading of ATTENTION_BOARD_PATH.
+ * Null when the reading cannot be trusted, which is not the same as none: the
+ * engine lists every lane even when it is empty, so a lane that is missing or
+ * malformed says nothing about how many tasks are in it.
+ */
+export function boardAttentionCount(body: unknown): number | null {
+  // Checked on the body as it came: parseBoard reads a malformed lane as an empty one.
+  if (typeof body !== "object" || body === null) return null;
+  const raw = body as { view?: unknown; set?: unknown; lanes?: unknown };
+  if (raw.view !== "development" || raw.set !== "all") return null;
+  if (!Array.isArray(raw.lanes) || !raw.lanes.every(isLaneEntry)) return null;
+  const board = parseBoard(body);
+  if (!board || !ATTENTION_LANES.every((id) => board.lanes.some((lane) => lane.lane === id))) {
+    return null;
+  }
+  return board.lanes
+    .filter((lane) => ATTENTION_LANES.includes(lane.lane))
+    .reduce((total, lane) => total + lane.cards.length, 0);
+}
 
 /** What became of a message a person sent, in words a person would use. */
 export function messageStateLabel(state: string | null, revision: number | null): string | null {
