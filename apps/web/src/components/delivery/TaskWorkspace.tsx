@@ -533,6 +533,7 @@ function RunDocument(props: {
                 cwd={undefined}
                 environmentId={props.environmentId ?? undefined}
                 parseRawHtml={false}
+                allowMedia={false}
               />
               {body?.cut === true ? (
                 <p className="pt-2 text-xs text-muted-foreground">
