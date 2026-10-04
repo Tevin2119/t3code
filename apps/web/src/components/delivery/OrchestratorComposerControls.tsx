@@ -68,7 +68,7 @@ export function OrchestratorComposerControls(props: {
   const teamsLoaded = teamListStatus(teamsRead) === "loaded";
   const awaitingTeams = draft?.awaitingTeams === true;
   // A new draft starts from the remembered team before the teams are read. Once
-  // they are, a team that is gone gives way to the default team, one time.
+  // they are, prefer development if offered, else the first offered team, one time.
   useEffect(() => {
     if (!awaitingTeams || !teamsLoaded) return;
     reconcileTeam(
@@ -84,6 +84,14 @@ export function OrchestratorComposerControls(props: {
   const [editingDefaults, setEditingDefaults] = useState(false);
 
   const team = teams.find((candidate) => candidate.team === draft?.team) ?? null;
+  const teamAvailabilityReason =
+    teamsLoaded && !awaitingTeams
+      ? teams.length === 0
+        ? "No teams are available to choose from."
+        : !team
+          ? `Team ${draft?.team} is not offered here. Choose another team.`
+          : null
+      : null;
   const flow = flowFor(team, draft?.workflow ?? null);
   const text = props.prompt.trim();
   const seatsToSend = useMemo(
@@ -107,24 +115,37 @@ export function OrchestratorComposerControls(props: {
       ? `Delivery engine not reachable. ${teamsRead.error}`
       : awaitingTeams
         ? "Teams are still loading."
-        : team && teamTaskBlock(team, flow)
-          ? teamTaskBlock(team, flow)
-          : chosen && chosen.problems.length > 0
-            ? chosen.problems.join(" ")
-            : text.length === 0
-              ? "Write what the team is asked to do."
-              : null;
+        : teamAvailabilityReason
+          ? teamAvailabilityReason
+          : team && teamTaskBlock(team, flow)
+            ? teamTaskBlock(team, flow)
+            : chosen && chosen.problems.length > 0
+              ? chosen.problems.join(" ")
+              : text.length === 0
+                ? "Write what the team is asked to do."
+                : null;
 
   useEffect(() => {
     setActivity(props.threadId, {
       busy,
       blocked,
       awaitingTeams,
+      teamAvailabilityReason,
       team: draft?.team ?? null,
       saved,
       flow,
     });
-  }, [awaitingTeams, blocked, busy, draft?.team, flow, props.threadId, saved, setActivity]);
+  }, [
+    awaitingTeams,
+    blocked,
+    busy,
+    draft?.team,
+    flow,
+    props.threadId,
+    saved,
+    setActivity,
+    teamAvailabilityReason,
+  ]);
 
   const save = useCallback(async (): Promise<string | null> => {
     if (!draft) return null;
@@ -165,15 +186,16 @@ export function OrchestratorComposerControls(props: {
       setProblems(["Teams are still loading."]);
       return;
     }
+    if (teamAvailabilityReason) return;
     void once("save", async () => {
       await save();
     });
-  }, [awaitingTeams, once, save, text.length]);
+  }, [awaitingTeams, once, save, text.length, teamAvailabilityReason]);
 
   const { onPromptCleared, threadId } = props;
   const onStart = useCallback(() => {
     if (blocked) {
-      setProblems([blocked]);
+      if (!teamAvailabilityReason) setProblems([blocked]);
       return;
     }
     void once("start", async () => {
@@ -189,7 +211,18 @@ export function OrchestratorComposerControls(props: {
       // What is written next is written on the task, in its own composer.
       void navigate({ to: "/board", search: { task: id } });
     });
-  }, [act, blocked, leave, navigate, once, onPromptCleared, person, save, threadId]);
+  }, [
+    act,
+    blocked,
+    leave,
+    navigate,
+    once,
+    onPromptCleared,
+    person,
+    save,
+    threadId,
+    teamAvailabilityReason,
+  ]);
 
   // The buttons stand in the composer's own place for Send, and ask from there.
   const handledSave = useRef(saveRequest);
@@ -214,11 +247,12 @@ export function OrchestratorComposerControls(props: {
     >
       <Select
         value={draft.team}
+        disabled={teamsLoaded && teams.length === 0}
         onValueChange={(value) => chooseTeam(props.threadId, props.environmentId, String(value))}
       >
         <SelectTrigger aria-label="Team" size="compact" variant="ghost" className="w-auto min-w-0">
           <UsersIcon className="size-3.5" />
-          <SelectValue>{draft.team}</SelectValue>
+          <SelectValue>{teamsLoaded && teams.length === 0 ? "No teams" : draft.team}</SelectValue>
         </SelectTrigger>
         <SelectPopup alignItemWithTrigger={false}>
           {teams.map((item) => (
@@ -307,7 +341,7 @@ export function OrchestratorComposerControls(props: {
             <p className="text-xs text-warning">
               {teamsRead.error
                 ? `Delivery engine not reachable. ${teamsRead.error}`
-                : "Reading the team."}
+                : (teamAvailabilityReason ?? "Reading the team.")}
             </p>
           )}
         </PopoverPopup>
@@ -344,13 +378,13 @@ export function OrchestratorComposerControls(props: {
         {whatStartDoes(flow, "Start")}
       </InfoPopover>
 
-      {problems.length > 0 ? (
+      {teamAvailabilityReason || problems.length > 0 ? (
         <span
           className="ml-auto max-w-[32rem] text-xs text-warning"
           data-delivery-orchestrator-status
           role="alert"
         >
-          {problems.join(" ")}
+          {teamAvailabilityReason ?? problems.join(" ")}
         </span>
       ) : null}
 
@@ -448,7 +482,12 @@ export function OrchestratorPrimaryActions(props: {
               variant="ghost"
               className="rounded-full"
               aria-label="Save draft"
-              disabled={busy || activity.awaitingTeams || !props.promptHasText}
+              disabled={
+                busy ||
+                activity.awaitingTeams ||
+                activity.teamAvailabilityReason !== null ||
+                !props.promptHasText
+              }
               {...pointerFocusProps}
               onClick={() => requestSave(props.threadId)}
               data-delivery-save-draft
@@ -460,7 +499,8 @@ export function OrchestratorPrimaryActions(props: {
         <TooltipPopup side="top">
           {activity.awaitingTeams
             ? "Teams are still loading."
-            : "Save draft. It is kept on the engine and nothing is started."}
+            : (activity.teamAvailabilityReason ??
+              "Save draft. It is kept on the engine and nothing is started.")}
         </TooltipPopup>
       </Tooltip>
       <Tooltip>
