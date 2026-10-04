@@ -158,11 +158,25 @@ interface DeliveryDraftState {
   /**
    * What of its seat each draft has taken over, as one key. What the seat runs
    * on is taken over once for each seat, so that what a person chooses after
-   * that stands. Kept apart from the choices: a draft in the default team has
-   * a seat too, and has made no choice.
+   * that stands. Kept apart from the choices: a draft that starts from the
+   * remembered team has a seat too, and has made no choice.
    */
   readonly inherited: Record<string, string>;
+  /**
+   * The team last chosen on each environment, by environment id. Null is "No
+   * team". New threads there start from it. Only the team's name is kept.
+   */
+  readonly remembered: Record<string, string | null>;
+  /** Sets the choice of this thread alone. What is remembered for the environment stands. */
   readonly setChoice: (threadId: string, choice: DraftTeamChoice) => void;
+  /** A person choosing in the picker: the thread's choice, remembered for the environment. */
+  readonly chooseTeam: (
+    threadId: string,
+    environmentId: string | null,
+    choice: DraftTeamChoice,
+  ) => void;
+  /** Remembers a team chosen elsewhere, as in Orchestrator mode. */
+  readonly rememberTeam: (environmentId: string | null, team: string | null) => void;
   readonly markInherited: (threadId: string, key: string) => void;
   readonly clearChoice: (threadId: string) => void;
 }
@@ -192,8 +206,20 @@ export const useDeliveryDraftStore = create<DeliveryDraftState>()(
     (set) => ({
       choices: {},
       inherited: {},
+      remembered: {},
       setChoice: (threadId, choice) =>
         set((state) => ({ choices: { ...state.choices, [threadId]: choice } })),
+      chooseTeam: (threadId, environmentId, choice) =>
+        set((state) => ({
+          choices: { ...state.choices, [threadId]: choice },
+          ...(environmentId
+            ? { remembered: { ...state.remembered, [environmentId]: choice.team } }
+            : {}),
+        })),
+      rememberTeam: (environmentId, team) =>
+        set((state) =>
+          environmentId ? { remembered: { ...state.remembered, [environmentId]: team } } : state,
+        ),
       markInherited: (threadId, key) =>
         set((state) =>
           state.inherited[threadId] === key || state.inherited[threadId] === SEAT_TAKEOVER_OVER
@@ -203,7 +229,7 @@ export const useDeliveryDraftStore = create<DeliveryDraftState>()(
       clearChoice: (threadId) =>
         set((state) => {
           // The choice is cleared when the thread is sent, while the picker is still
-          // shown. It then shows the default team, whose seat must not be taken over.
+          // shown. It then shows the remembered team, whose seat must not be taken over.
           const { [threadId]: _removed, ...rest } = state.choices;
           return {
             choices: rest,
@@ -215,25 +241,57 @@ export const useDeliveryDraftStore = create<DeliveryDraftState>()(
   ),
 );
 
-export const DEFAULT_DRAFT_TEAM_CHOICE: DraftTeamChoice = {
-  team: DELIVERY_DEFAULT_TEAM,
-  role: null,
-};
+/** A new thread is an ordinary one, with no team, unless the person chose otherwise. */
+export const DEFAULT_DRAFT_TEAM_CHOICE: DraftTeamChoice = { team: null, role: null };
 
-/** A new thread is in the default team unless the person chose otherwise. */
-export function readDraftTeamChoice(threadId: string): DraftTeamChoice {
-  return useDeliveryDraftStore.getState().choices[threadId] ?? DEFAULT_DRAFT_TEAM_CHOICE;
+const rememberedTeam = (
+  remembered: Record<string, string | null>,
+  environmentId: string | null | undefined,
+): string | null => (environmentId ? (remembered[environmentId] ?? null) : null);
+
+/** The team last chosen on this environment, or null for "No team" and for none. */
+export function readRememberedTeam(environmentId: string | null | undefined): string | null {
+  return rememberedTeam(useDeliveryDraftStore.getState().remembered, environmentId);
 }
 
-/** Whether the person chose for this thread, as opposed to the default standing in. */
+const inheritedChoice = (team: string | null): DraftTeamChoice =>
+  team === null ? DEFAULT_DRAFT_TEAM_CHOICE : { team, role: null };
+
+/**
+ * What the person chose for this thread, else the team remembered for its
+ * environment, else "No team". A remembered team may be gone since: the
+ * choice is held against the list of teams with `resolveDraftTeam`.
+ */
+export function readDraftTeamChoice(
+  threadId: string,
+  environmentId: string | null | undefined,
+): DraftTeamChoice {
+  const state = useDeliveryDraftStore.getState();
+  return (
+    state.choices[threadId] ?? inheritedChoice(rememberedTeam(state.remembered, environmentId))
+  );
+}
+
+/** Whether the person chose for this thread, as opposed to the remembered team standing in. */
 export function hasDraftTeamChoice(threadId: string): boolean {
   return threadId in useDeliveryDraftStore.getState().choices;
 }
 
-export function useDraftTeamChoice(threadId: string | null): DraftTeamChoice {
-  return useDeliveryDraftStore((state) =>
-    threadId ? (state.choices[threadId] ?? DEFAULT_DRAFT_TEAM_CHOICE) : DEFAULT_DRAFT_TEAM_CHOICE,
+export function useHasDraftTeamChoice(threadId: string | null): boolean {
+  return useDeliveryDraftStore((state) => threadId !== null && threadId in state.choices);
+}
+
+export function useDraftTeamChoice(
+  threadId: string | null,
+  environmentId: string | null | undefined,
+): DraftTeamChoice {
+  const chosen = useDeliveryDraftStore((state) =>
+    threadId ? (state.choices[threadId] ?? null) : null,
   );
+  const remembered = useDeliveryDraftStore((state) =>
+    rememberedTeam(state.remembered, environmentId),
+  );
+  return useMemo(() => chosen ?? inheritedChoice(remembered), [chosen, remembered]);
 }
 
 /** Replaces what is chosen for a seat, dropping what was set back to the team default. */
@@ -258,6 +316,12 @@ export interface OrchestratorDraft {
   readonly engineThread: string | null;
   /** The text as it was when last saved, to tell a saved draft from a changed one. */
   readonly savedText: string | null;
+  /**
+   * Set on a draft whose team was taken from what is remembered and has not
+   * been held against the list of teams yet. Nothing is saved or started
+   * until it has. A draft without it is not waiting.
+   */
+  readonly awaitingTeams?: boolean;
 }
 
 /** What the composer's controls are doing, for the buttons that stand in the place of Send. */
@@ -265,6 +329,8 @@ export interface OrchestratorActivity {
   readonly busy: "save" | "start" | null;
   /** Why the workflow cannot be started now, or null when it can. */
   readonly blocked: string | null;
+  /** Whether the draft's team is still to be held against the list of teams. */
+  readonly awaitingTeams: boolean;
   readonly team: string | null;
   /** `new` before the first save, then `saved` or `changed`. */
   readonly saved: "new" | "saved" | "changed";
@@ -275,6 +341,7 @@ export interface OrchestratorActivity {
 export const IDLE_ORCHESTRATOR_ACTIVITY: OrchestratorActivity = {
   busy: null,
   blocked: null,
+  awaitingTeams: false,
   team: null,
   saved: "new",
   flow: null,
@@ -287,9 +354,18 @@ interface OrchestratorDraftState {
   readonly saveRequests: Record<string, number>;
   readonly startRequests: Record<string, number>;
   readonly activity: Record<string, OrchestratorActivity>;
-  readonly enter: (threadId: string) => void;
+  /** Starts a draft from the team remembered for the environment, else the default team. */
+  readonly enter: (threadId: string, environmentId: string | null) => void;
   readonly leave: (threadId: string) => void;
   readonly update: (threadId: string, patch: Partial<OrchestratorDraft>) => void;
+  /** A person choosing a team: it stands whatever the list says, and is remembered. */
+  readonly chooseTeam: (threadId: string, environmentId: string | null, team: string) => void;
+  /**
+   * Holds a new draft's team against the teams there are, once, when they are
+   * first read: a team that is gone gives way to the default team. A team a
+   * person chose, or one the draft was saved with, is never replaced.
+   */
+  readonly reconcileTeam: (threadId: string, teams: ReadonlyArray<string>) => void;
   /** Replaces what is chosen for one seat. */
   readonly setSeat: (threadId: string, seat: string, choice: SeatChoice) => void;
   readonly requestSave: (threadId: string) => void;
@@ -297,14 +373,15 @@ interface OrchestratorDraftState {
   readonly setActivity: (threadId: string, activity: OrchestratorActivity) => void;
 }
 
-const NEW_ORCHESTRATOR_DRAFT: OrchestratorDraft = {
-  team: DELIVERY_DEFAULT_TEAM,
+const newOrchestratorDraft = (team: string): OrchestratorDraft => ({
+  team,
   // Empty until the team is read: the flow is then the one the team runs by default.
   workflow: "",
   seats: {},
   engineThread: null,
   savedText: null,
-};
+  awaitingTeams: true,
+});
 
 export const useOrchestratorDraftStore = create<OrchestratorDraftState>()(
   persist(
@@ -313,11 +390,18 @@ export const useOrchestratorDraftStore = create<OrchestratorDraftState>()(
       saveRequests: {},
       startRequests: {},
       activity: {},
-      enter: (threadId) =>
+      enter: (threadId, environmentId) =>
         set((state) =>
           threadId in state.drafts
             ? state
-            : { drafts: { ...state.drafts, [threadId]: NEW_ORCHESTRATOR_DRAFT } },
+            : {
+                drafts: {
+                  ...state.drafts,
+                  [threadId]: newOrchestratorDraft(
+                    readRememberedTeam(environmentId) ?? DELIVERY_DEFAULT_TEAM,
+                  ),
+                },
+              },
         ),
       leave: (threadId) =>
         set((state) => {
@@ -336,6 +420,27 @@ export const useOrchestratorDraftStore = create<OrchestratorDraftState>()(
               ? {}
               : (patch.seats ?? current.seats);
           return { drafts: { ...state.drafts, [threadId]: { ...current, ...patch, seats } } };
+        }),
+      chooseTeam: (threadId, environmentId, team) => {
+        set((state) => {
+          const current = state.drafts[threadId];
+          if (!current) return state;
+          const { awaitingTeams: _settled, ...settled } = current;
+          const seats = team === current.team ? current.seats : {};
+          return { drafts: { ...state.drafts, [threadId]: { ...settled, team, seats } } };
+        });
+        useDeliveryDraftStore.getState().rememberTeam(environmentId, team);
+      },
+      reconcileTeam: (threadId, teams) =>
+        set((state) => {
+          const current = state.drafts[threadId];
+          if (!current?.awaitingTeams) return state;
+          const { awaitingTeams: _settled, ...settled } = current;
+          const next =
+            current.engineThread !== null || teams.includes(current.team)
+              ? settled
+              : { ...settled, team: DELIVERY_DEFAULT_TEAM, workflow: "", seats: {} };
+          return { drafts: { ...state.drafts, [threadId]: next } };
         }),
       setSeat: (threadId, seat, choice) =>
         set((state) => {
@@ -365,6 +470,7 @@ export const useOrchestratorDraftStore = create<OrchestratorDraftState>()(
             current &&
             current.busy === activity.busy &&
             current.blocked === activity.blocked &&
+            current.awaitingTeams === activity.awaitingTeams &&
             current.team === activity.team &&
             current.flow === activity.flow &&
             current.saved === activity.saved

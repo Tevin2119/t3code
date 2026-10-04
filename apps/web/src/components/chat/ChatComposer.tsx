@@ -5205,7 +5205,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           orchestratorOffered && activeThreadId
             ? {
                 active: orchestratorMode,
-                onSelect: () => enterOrchestrator(activeThreadId),
+                onSelect: () => enterOrchestrator(activeThreadId, environmentId),
                 panel: (
                   <OrchestratorPanel
                     environmentId={environmentId}
