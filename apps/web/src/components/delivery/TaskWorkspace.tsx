@@ -212,7 +212,12 @@ function Message(props: {
             </span>
           </p>
         ) : null}
-        {entry.text ? <p className="break-words whitespace-pre-wrap">{entry.text}</p> : null}
+        {entry.text ? (
+          <p className="break-words whitespace-pre-wrap">
+            {entry.text}
+            <ShowSection entry={entry} onShow={props.onShow} />
+          </p>
+        ) : null}
         {entry.change ? (
           <p className="rounded border border-border bg-muted/40 px-2 py-1 text-xs whitespace-pre-wrap">
             {entry.change}
