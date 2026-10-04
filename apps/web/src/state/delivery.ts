@@ -316,8 +316,9 @@ export interface OrchestratorDraft {
   readonly savedText: string | null;
   /**
    * Set on a draft whose team was taken from what is remembered and has not
-   * been held against the list of teams yet. Nothing is saved or started
-   * until it has. A draft without it is not waiting.
+   * been held against a list that offers a team yet: an empty list leaves an
+   * unsaved draft waiting. Nothing is saved or started until it has. A draft
+   * without it is not waiting.
    */
   readonly awaitingTeams?: boolean;
 }
@@ -361,9 +362,11 @@ interface OrchestratorDraftState {
   /** A person choosing a team: it stands whatever the list says, and is remembered. */
   readonly chooseTeam: (threadId: string, environmentId: string | null, team: string) => void;
   /**
-   * Holds a new draft's team against the teams there are, once, when they are
-   * first read: prefer development if offered, else the first offered team. A team a
-   * person chose, or one the draft was saved with, is never replaced.
+   * Holds a new draft's team against the teams there are, once, on the first
+   * reading that offers any: keep the draft's team if offered, else prefer
+   * development, else the first offered team. An empty list leaves an unsaved
+   * draft waiting for a later one. A team a person chose, or one the draft was
+   * saved with, is never replaced.
    */
   readonly reconcileTeam: (threadId: string, teams: ReadonlyArray<string>) => void;
   /** Replaces what is chosen for one seat. */
@@ -435,9 +438,10 @@ export const useOrchestratorDraftStore = create<OrchestratorDraftState>()(
         set((state) => {
           const current = state.drafts[threadId];
           if (!current?.awaitingTeams) return state;
+          if (current.engineThread === null && teams.length === 0) return state;
           const { awaitingTeams: _settled, ...settled } = current;
           const next =
-            current.engineThread !== null || teams.includes(current.team) || teams.length === 0
+            current.engineThread !== null || teams.includes(current.team)
               ? settled
               : {
                   ...settled,

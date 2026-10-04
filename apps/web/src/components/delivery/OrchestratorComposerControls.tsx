@@ -68,7 +68,7 @@ export function OrchestratorComposerControls(props: {
   const teamsLoaded = teamListStatus(teamsRead) === "loaded";
   const awaitingTeams = draft?.awaitingTeams === true;
   // A new draft starts from the remembered team before the teams are read. Once
-  // they are, prefer development if offered, else the first offered team, one time.
+  // a reading offers any, prefer development if offered, else the first offered team, one time.
   useEffect(() => {
     if (!awaitingTeams || !teamsLoaded) return;
     reconcileTeam(
@@ -84,14 +84,14 @@ export function OrchestratorComposerControls(props: {
   const [editingDefaults, setEditingDefaults] = useState(false);
 
   const team = teams.find((candidate) => candidate.team === draft?.team) ?? null;
-  const teamAvailabilityReason =
-    teamsLoaded && !awaitingTeams
-      ? teams.length === 0
-        ? "No teams are available to choose from."
-        : !team
-          ? `Team ${draft?.team} is not offered here. Choose another team.`
-          : null
-      : null;
+  // A draft still waiting may yet give its team up, so only a settled one is called unavailable.
+  const teamAvailabilityReason = !teamsLoaded
+    ? null
+    : teams.length === 0
+      ? "No teams are available to choose from."
+      : !awaitingTeams && !team
+        ? `Team ${draft?.team} is not offered here. Choose another team.`
+        : null;
   const flow = flowFor(team, draft?.workflow ?? null);
   const text = props.prompt.trim();
   const seatsToSend = useMemo(
@@ -113,10 +113,10 @@ export function OrchestratorComposerControls(props: {
     ? "No environment is connected."
     : teamsRead.error
       ? `Delivery engine not reachable. ${teamsRead.error}`
-      : awaitingTeams
-        ? "Teams are still loading."
-        : teamAvailabilityReason
-          ? teamAvailabilityReason
+      : teamAvailabilityReason
+        ? teamAvailabilityReason
+        : awaitingTeams
+          ? "Teams are still loading."
           : team && teamTaskBlock(team, flow)
             ? teamTaskBlock(team, flow)
             : chosen && chosen.problems.length > 0
@@ -181,12 +181,12 @@ export function OrchestratorComposerControls(props: {
 
   const onSave = useCallback(() => {
     if (text.length === 0) return;
+    if (teamAvailabilityReason) return;
     // The team may still give way to another: nothing is saved under it until it is settled.
     if (awaitingTeams) {
       setProblems(["Teams are still loading."]);
       return;
     }
-    if (teamAvailabilityReason) return;
     void once("save", async () => {
       await save();
     });
@@ -497,10 +497,10 @@ export function OrchestratorPrimaryActions(props: {
           {activity.busy === "save" ? <Spinner className="size-3.5" /> : <SaveIcon />}
         </TooltipTrigger>
         <TooltipPopup side="top">
-          {activity.awaitingTeams
-            ? "Teams are still loading."
-            : (activity.teamAvailabilityReason ??
-              "Save draft. It is kept on the engine and nothing is started.")}
+          {activity.teamAvailabilityReason ??
+            (activity.awaitingTeams
+              ? "Teams are still loading."
+              : "Save draft. It is kept on the engine and nothing is started.")}
         </TooltipPopup>
       </Tooltip>
       <Tooltip>
