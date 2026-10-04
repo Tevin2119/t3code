@@ -2,7 +2,9 @@ import { describe, expect, it } from "vite-plus/test";
 
 import { parseCard } from "./delivery";
 import {
+  linkedSection,
   sectionOf,
+  steerSaid,
   isConversationRef,
   taskFromConversation,
   activeFilters,
@@ -414,6 +416,37 @@ describe("sectionOf", () => {
       }),
     ).toBeNull();
     expect(sectionOf({ kind: "run.planned", text: "Planned." })).toBe("plan");
+    // What a person wrote gets no link.
+    expect(
+      sectionOf({ kind: "message", text: "I updated the acceptance checklist.", sender: "person" }),
+    ).toBeNull();
     expect(sectionOf({ kind: "note", text: "Run run-1 started." })).toBeNull();
+  });
+});
+
+describe("linkedSection", () => {
+  it("links only to a section the task view has", () => {
+    const note = {
+      kind: "task.revised",
+      text: "Revision 2: Triage updated the acceptance checklist.",
+    };
+    expect(linkedSection(note, { acceptance: ["It works."], plan: null })).toBe("acceptance");
+    expect(linkedSection(note, { acceptance: [], plan: null })).toBeNull();
+    const planned = { kind: "run.planned", text: "Planned." };
+    expect(linkedSection(planned, { acceptance: [], plan: { approach: "x" } })).toBe("plan");
+    expect(linkedSection(planned, { acceptance: [], plan: null })).toBeNull();
+  });
+});
+
+describe("steerSaid", () => {
+  it("says what an instruction did, as the engine does it", () => {
+    expect(steerSaid("running", true)).toMatch(
+      /the step starts again with it once its seats have stopped/,
+    );
+    expect(steerSaid("running", false)).toMatch(
+      /no seat was at work, and the next to start is given it/,
+    );
+    expect(steerSaid("paused", false)).toMatch(/the run is paused/);
+    expect(steerSaid("needs-decision", false)).toMatch(/waits for a decision/);
   });
 });

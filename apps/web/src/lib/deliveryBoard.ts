@@ -528,7 +528,10 @@ export function taskFromConversation(input: {
 export function sectionOf(entry: {
   readonly kind: string | null;
   readonly text: string;
+  readonly sender?: string | null;
 }): "acceptance" | "plan" | null {
+  // What a person wrote is theirs: it is not read for a link.
+  if (entry.sender === "person") return null;
   if (
     /[1-9]\d* item\(s\) on the acceptance checklist|(wrote|updated) the acceptance checklist/i.test(
       entry.text,
@@ -541,6 +544,31 @@ export function sectionOf(entry: {
     /\bthe plan is (settled|ready|written)\b/i.test(entry.text)
   )
     return "plan";
+  return null;
+}
+
+/**
+ * What giving a run an instruction did, as the engine does it: a run at work stops its seats and
+ * starts the step again; a paused or waiting run, or one with no seat at work, keeps it for later.
+ */
+export function steerSaid(state: string, working: boolean): string {
+  if (state === "paused")
+    return "Given. It is in the history; the run is paused, and its seats are given it when the work goes on.";
+  if (state === "needs-decision")
+    return "Given. It is in the history; the run waits for a decision, and its seats are given it when the work goes on.";
+  if (!working)
+    return "Given. It is in the history; no seat was at work, and the next to start is given it.";
+  return "Given. It is in the history; the step starts again with it once its seats have stopped.";
+}
+
+/** The section a history line links to, only when the task view has that section to show. */
+export function linkedSection(
+  entry: { readonly kind: string | null; readonly text: string; readonly sender?: string | null },
+  task: { readonly acceptance: ReadonlyArray<string>; readonly plan: unknown },
+): "acceptance" | "plan" | null {
+  const section = sectionOf(entry);
+  if (section === "acceptance") return task.acceptance.length > 0 ? section : null;
+  if (section === "plan") return task.plan ? section : null;
   return null;
 }
 

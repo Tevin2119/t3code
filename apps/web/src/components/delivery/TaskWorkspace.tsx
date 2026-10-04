@@ -51,7 +51,9 @@ import {
   messageStateLabel,
   moveIntent,
   PRIORITY_LABEL,
+  linkedSection,
   sectionOf,
+  steerSaid,
   tagsFromText,
   type ComposerKind,
 } from "../../lib/deliveryBoard";
@@ -152,7 +154,11 @@ function ShowSection(props: {
   readonly entry: TimelineEntry;
   readonly onShow: ((section: "acceptance" | "plan") => void) | undefined;
 }) {
-  const section = sectionOf({ kind: props.entry.kind ?? null, text: props.entry.text ?? "" });
+  const section = sectionOf({
+    kind: props.entry.kind ?? null,
+    text: props.entry.text ?? "",
+    sender: props.entry.sender,
+  });
   if (!section || !props.onShow) return null;
   return (
     <button
@@ -355,9 +361,9 @@ const DOCUMENT_LABEL: Record<string, string> = {
 
 /**
  * The run under way, for a person following it: the documents it wrote, to read here or have
- * summarised, the instructions given to it, and a way to give one. An instruction reaches the
- * seat at work it is for, which starts its step again with it; what is asked is changed by a
- * change, which goes through triage, not here.
+ * summarised, the instructions given to it, and a way to give one. An instruction stops every
+ * seat at work, and the step starts again once all have ended; only the seat it names (or every
+ * seat) is given it. What is asked is changed by a change, which goes through triage, not here.
  */
 function RunPanel(props: {
   readonly environmentId: EnvironmentId | null;
@@ -379,6 +385,9 @@ function RunPanel(props: {
   const give = async () => {
     if (!text.trim() || busy) return;
     setBusy(true);
+    // What happens depends on the run as it was given: said as the engine says it.
+    const working = council.seats.some((item) => item.activity === "active");
+    const state = council.state;
     const result = await act(`/api/tasks/${task.id}/steer`, {
       text: text.trim(),
       seat: seat || null,
@@ -387,9 +396,7 @@ function RunPanel(props: {
     setBusy(false);
     if (result.ok) {
       setText("");
-      setSaid(
-        "Given. It is in the history; the step starts again with it once its seats have stopped.",
-      );
+      setSaid(steerSaid(state, working));
     } else setSaid(result.why);
     props.onChanged();
   };
@@ -1066,10 +1073,14 @@ function Communications(props: {
                 setComposerExpanded(true);
               }}
               onSettle={(item, accept) => void settle(item, accept)}
-              onShow={props.onShow}
+              onShow={linkedSection(entry, task) ? props.onShow : undefined}
             />
           ) : (
-            <Happening key={entry.id} entry={entry} onShow={props.onShow} />
+            <Happening
+              key={entry.id}
+              entry={entry}
+              onShow={linkedSection(entry, task) ? props.onShow : undefined}
+            />
           ),
         )}
         {task.working ? (
