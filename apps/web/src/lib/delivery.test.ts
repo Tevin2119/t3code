@@ -21,11 +21,15 @@ import {
   parseTeamProfile,
   parseTeams,
   parseTrackRecord,
+  resolveDraftTeam,
+  resolveInheritedTeam,
   resolveTeamChoice,
   rolesForHarness,
   seatOfferFor,
   seatSettingsToSend,
   seatSources,
+  selectableTeams,
+  teamListStatus,
   teamTaskBlock,
   withFallbacks,
 } from "./delivery";
@@ -184,7 +188,104 @@ describe("resolveTeamChoice", () => {
     );
     expect(
       resolveTeamChoice({ teams, team: "sales", role: null, driver: "claudeAgent" }),
-    ).toMatchObject({ state: "blocked", why: "This team is not set up." });
+    ).toMatchObject({
+      state: "blocked",
+      why: "This team is not set up. Choose another team, or No team.",
+    });
+  });
+});
+
+describe("the team a draft starts from", () => {
+  const offered = selectableTeams([
+    { team: "development", seats: [seat({})] },
+    { team: "rnd", seats: [seat({ seat: "scout", role: "scout", harness: "kimi" })] },
+    { team: "triage", seats: [seat({})] },
+  ]);
+  const inherited = (team: string | null) => ({ team, role: null });
+
+  it("offers every team but triage", () => {
+    expect(offered.map((team) => team.team)).toEqual(["development", "rnd"]);
+    expect(selectableTeams(null)).toEqual([]);
+  });
+
+  it("tells teams not read yet from a reading that failed and from a list, even an empty one", () => {
+    expect(teamListStatus({ body: null, error: null })).toBe("pending");
+    expect(teamListStatus({ body: null, error: "No answer." })).toBe("failed");
+    expect(teamListStatus({ body: [{ team: "rnd" }], error: "No answer." })).toBe("failed");
+    expect(teamListStatus({ body: [], error: null })).toBe("loaded");
+  });
+
+  it("falls back to No team for a thread and to development for Orchestrator mode", () => {
+    const start = (remembered: string | null | undefined, mode: "plain" | "orchestrator") =>
+      resolveInheritedTeam({ remembered, teams: offered, status: "loaded", mode });
+    // Nothing remembered: the two fallbacks, apart.
+    expect(start(undefined, "plain")).toBeNull();
+    expect(start(undefined, "orchestrator")).toBe("development");
+    // No team remembered.
+    expect(start(null, "plain")).toBeNull();
+    expect(start(null, "orchestrator")).toBe("development");
+    // A team that is offered.
+    expect(start("rnd", "plain")).toBe("rnd");
+    expect(start("rnd", "orchestrator")).toBe("rnd");
+    expect(start("development", "plain")).toBe("development");
+    // A team no longer offered, triage among them.
+    expect(start("old", "plain")).toBeNull();
+    expect(start("old", "orchestrator")).toBe("development");
+    expect(start("triage", "plain")).toBeNull();
+    expect(start("triage", "orchestrator")).toBe("development");
+  });
+
+  it("gives a remembered team up only when the teams were read", () => {
+    for (const mode of ["plain", "orchestrator"] as const) {
+      for (const status of ["pending", "failed"] as const) {
+        expect(resolveInheritedTeam({ remembered: "old", teams: [], status, mode })).toBe("old");
+      }
+    }
+    expect(
+      resolveInheritedTeam({ remembered: "rnd", teams: [], status: "loaded", mode: "plain" }),
+    ).toBeNull();
+    expect(
+      resolveInheritedTeam({
+        remembered: "rnd",
+        teams: [],
+        status: "loaded",
+        mode: "orchestrator",
+      }),
+    ).toBe("development");
+  });
+
+  it("shows and sends a remembered team that is gone as No team, and keeps a person's choice", () => {
+    const stale = resolveDraftTeam({
+      draft: inherited("old"),
+      explicit: false,
+      teams: offered,
+      status: "loaded",
+    });
+    expect(stale).toEqual({ team: null, role: null });
+    // The picker says nothing is wrong, and the send starts an ordinary thread.
+    expect(resolveTeamChoice({ teams: offered, ...stale, driver: "claudeAgent" })).toEqual({
+      state: "manual",
+    });
+
+    const listed = inherited("rnd");
+    expect(
+      resolveDraftTeam({ draft: listed, explicit: false, teams: offered, status: "loaded" }),
+    ).toBe(listed);
+    const waiting = inherited("old");
+    for (const status of ["pending", "failed"] as const) {
+      expect(resolveDraftTeam({ draft: waiting, explicit: false, teams: [], status })).toBe(
+        waiting,
+      );
+    }
+    // What the person chose for the thread is not replaced without a word.
+    const chosen = { team: "old", role: "scout" };
+    expect(
+      resolveDraftTeam({ draft: chosen, explicit: true, teams: offered, status: "loaded" }),
+    ).toBe(chosen);
+    const none = inherited(null);
+    expect(
+      resolveDraftTeam({ draft: none, explicit: true, teams: offered, status: "loaded" }),
+    ).toBe(none);
   });
 });
 
@@ -802,12 +903,113 @@ describe("decideTeamForSend", () => {
     bound: false,
     held: null,
     stateError: null,
+    // The person chose development for this thread.
     draft: { team: "development", role: null },
-    draftIsExplicit: false,
+    draftIsExplicit: true,
     teams,
     teamsError: null,
     driver: "claudeAgent",
   };
+  /** The send's own input: what is stored for the thread, held against the teams. */
+  const sendOf = (
+    stored: { team: string | null; role: string | null },
+    explicit: boolean,
+    status: "pending" | "failed" | "loaded" = "loaded",
+  ) => ({
+    ...base,
+    teams: status === "loaded" ? teams : [],
+    teamsError: status === "failed" ? "No answer." : null,
+    teamsPending: status === "pending",
+    draft: resolveDraftTeam({
+      draft: stored,
+      explicit,
+      teams: status === "loaded" ? teams : [],
+      status,
+    }),
+    draftIsExplicit: explicit,
+  });
+
+  it("starts an ordinary thread when no team was chosen or remembered", () => {
+    expect(decideTeamForSend(sendOf({ team: null, role: null }, false))).toEqual({
+      action: "none",
+    });
+    expect(decideTeamForSend(sendOf({ team: null, role: null }, true))).toEqual({
+      action: "none",
+    });
+    // Whatever the teams' reading has come to: No team needs no team.
+    expect(decideTeamForSend(sendOf({ team: null, role: null }, false, "pending"))).toEqual({
+      action: "none",
+    });
+    expect(decideTeamForSend(sendOf({ team: null, role: null }, false, "failed"))).toEqual({
+      action: "none",
+    });
+  });
+
+  it("starts an ordinary thread when the remembered team is gone, and binds to one that is there", () => {
+    expect(decideTeamForSend(sendOf({ team: "sales", role: null }, false))).toEqual({
+      action: "none",
+    });
+    expect(decideTeamForSend(sendOf({ team: "development", role: null }, false))).toEqual({
+      action: "bind",
+      team: "development",
+      role: "lead-developer",
+    });
+    // A team the person chose for the thread, and that is gone, stops the send.
+    expect(decideTeamForSend(sendOf({ team: "sales", role: null }, true))).toEqual({
+      action: "blocked",
+      why: "This team is not set up. Choose another team, or No team.",
+    });
+  });
+
+  it("stops the send, with a reason, while a remembered team cannot be held against the teams", () => {
+    const pending = decideTeamForSend(
+      sendOf({ team: "development", role: null }, false, "pending"),
+    );
+    expect(pending).toMatchObject({ action: "blocked" });
+    expect(pending).toHaveProperty("why", expect.stringContaining("still loading"));
+    const failed = decideTeamForSend(sendOf({ team: "development", role: null }, false, "failed"));
+    expect(failed).toHaveProperty("why", expect.stringContaining("not reachable"));
+  });
+
+  it("stops the send, with a reason, when the harness has no seat in the remembered team", () => {
+    const noSeat = decideTeamForSend({
+      ...sendOf({ team: "development", role: null }, false),
+      driver: "cursor",
+    });
+    expect(noSeat).toEqual({
+      action: "blocked",
+      why: "Teams are not set up for this harness. Choose another harness, or No team.",
+    });
+    const noRole = decideTeamForSend({
+      ...sendOf({ team: "rnd", role: null }, false),
+      driver: "claudeAgent",
+    });
+    expect(noRole).toEqual({
+      action: "blocked",
+      why: "Choose a role in team rnd: challenger, scout.",
+    });
+  });
+
+  it("retries a held team before a remembered one, and before a remembered No team", () => {
+    const held = { team: "rnd", role: "scout" };
+    expect(
+      decideTeamForSend({
+        ...sendOf({ team: "development", role: null }, false),
+        held,
+        driver: "kimi",
+      }),
+    ).toEqual({ action: "bind", team: "rnd", role: "scout" });
+    expect(
+      decideTeamForSend({ ...sendOf({ team: null, role: null }, false), held, driver: "kimi" }),
+    ).toEqual({ action: "bind", team: "rnd", role: "scout" });
+    // The person chose again, in the picker or with the footer's way out.
+    expect(
+      decideTeamForSend({ ...sendOf({ team: null, role: null }, true), held, driver: "kimi" }),
+    ).toEqual({ action: "release" });
+    expect(
+      decideTeamForSend({ ...sendOf({ team: "development", role: null }, true), held }),
+    ).toEqual({ action: "bind", team: "development", role: "lead-developer" });
+  });
 
   it("binds a new thread to its team before the first turn", () => {
     expect(decideTeamForSend(base)).toEqual({
@@ -831,7 +1033,7 @@ describe("decideTeamForSend", () => {
   it("sets the team up again when the first send failed, draft or not", () => {
     const held = { team: "rnd", role: "scout" };
     // The thread was never created: still a draft, and the choice is still there.
-    expect(decideTeamForSend({ ...base, held, driver: "kimi" })).toEqual({
+    expect(decideTeamForSend({ ...base, draftIsExplicit: false, held, driver: "kimi" })).toEqual({
       action: "bind",
       team: "rnd",
       role: "scout",
@@ -844,6 +1046,7 @@ describe("decideTeamForSend", () => {
         isServerThread: true,
         held,
         draft: { team: "development", role: null },
+        draftIsExplicit: false,
         driver: "kimi",
       }),
     ).toEqual({ action: "bind", team: "rnd", role: "scout" });
@@ -861,14 +1064,20 @@ describe("decideTeamForSend", () => {
     ).toEqual({ action: "release" });
     // A draft store that merely has no entry is not a choice of "No team".
     expect(
-      decideTeamForSend({ ...base, held, draft: { team: null, role: null }, driver: "kimi" })
-        .action,
+      decideTeamForSend({
+        ...base,
+        held,
+        draft: { team: null, role: null },
+        draftIsExplicit: false,
+        driver: "kimi",
+      }).action,
     ).toBe("blocked");
     expect(
       decideTeamForSend({
         ...base,
         held: { team: "rnd", role: "scout" },
         draft: { team: null, role: null },
+        draftIsExplicit: false,
         driver: "kimi",
       }),
     ).toEqual({ action: "bind", team: "rnd", role: "scout" });

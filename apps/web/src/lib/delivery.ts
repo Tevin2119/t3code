@@ -5,6 +5,7 @@
  * newer or older than this client degrades to missing detail, not a crash.
  */
 import {
+  DELIVERY_DEFAULT_TEAM,
   DELIVERY_HARNESS_BY_DRIVER,
   type DeliveryThreadBinding,
   type ThreadId,
@@ -498,6 +499,70 @@ export function parseTeams(body: unknown): ReadonlyArray<DeliveryTeam> {
     .map(parseTeam);
 }
 
+/** The teams a thread or a workflow can be given: every team but triage, which sorts what comes in. */
+export function selectableTeams(body: unknown): ReadonlyArray<DeliveryTeam> {
+  return parseTeams(body).filter((team) => team.team !== "triage");
+}
+
+/**
+ * How far the reading of the teams has come. Only `loaded` says which teams
+ * there are: an empty list that was read is a list, one not read yet is not.
+ */
+export type TeamListStatus = "pending" | "failed" | "loaded";
+
+export function teamListStatus(read: {
+  readonly body: unknown;
+  readonly error: string | null;
+}): TeamListStatus {
+  return read.error ? "failed" : read.body == null ? "pending" : "loaded";
+}
+
+/**
+ * The team a new draft starts from, given the one remembered for its
+ * environment. An ordinary thread starts with no team; Orchestrator mode
+ * needs one, and falls back to the default team. A remembered team is given
+ * up only when the list was read and does not have it.
+ */
+export function resolveInheritedTeam(input: {
+  readonly remembered: string | null | undefined;
+  readonly teams: ReadonlyArray<DeliveryTeam>;
+  readonly status: TeamListStatus;
+  readonly mode: "plain" | "orchestrator";
+}): string | null {
+  const fallback = input.mode === "orchestrator" ? DELIVERY_DEFAULT_TEAM : null;
+  if (!input.remembered) return fallback;
+  const gone =
+    input.status === "loaded" && !input.teams.some((team) => team.team === input.remembered);
+  return gone ? fallback : input.remembered;
+}
+
+const NO_TEAM_CHOICE = { team: null, role: null } as const;
+
+/**
+ * The team choice of a draft thread, as the picker shows it, the footer names
+ * it and the send takes it. What the person chose for the thread stands as it
+ * is. A choice that only stands in from the environment's remembered team
+ * becomes "No team" once that team is known to be gone.
+ */
+export function resolveDraftTeam<
+  Choice extends { readonly team: string | null; readonly role: string | null },
+>(input: {
+  readonly draft: Choice;
+  /** Whether the person chose for this thread, as opposed to the remembered team standing in. */
+  readonly explicit: boolean;
+  readonly teams: ReadonlyArray<DeliveryTeam>;
+  readonly status: TeamListStatus;
+}): Choice | typeof NO_TEAM_CHOICE {
+  if (input.explicit || input.draft.team === null) return input.draft;
+  const team = resolveInheritedTeam({
+    remembered: input.draft.team,
+    teams: input.teams,
+    status: input.status,
+    mode: "plain",
+  });
+  return team === null ? NO_TEAM_CHOICE : input.draft;
+}
+
 export interface TeamDefaults {
   readonly team: DeliveryTeam;
   /** Every saving, newest first. */
@@ -581,7 +646,13 @@ export function resolveTeamChoice(input: {
 }): TeamChoice {
   if (!input.team) return { state: "manual" };
   const team = input.teams.find((candidate) => candidate.team === input.team);
-  if (!team) return { state: "blocked", team: input.team, why: "This team is not set up." };
+  if (!team) {
+    return {
+      state: "blocked",
+      team: input.team,
+      why: "This team is not set up. Choose another team, or No team.",
+    };
+  }
   const harness = input.driver ? DELIVERY_HARNESS_BY_DRIVER[input.driver] : undefined;
   if (!harness) {
     return {
@@ -1785,6 +1856,8 @@ export function decideTeamForSend(input: {
   readonly draftIsExplicit: boolean;
   readonly teams: ReadonlyArray<DeliveryTeam>;
   readonly teamsError: string | null;
+  /** Set while the teams are still being read, when no team can be set up yet. */
+  readonly teamsPending?: boolean;
   readonly driver: string | null;
 }): TeamSendDecision {
   if (!input.enabled) return { action: "none" };
@@ -1807,6 +1880,12 @@ export function decideTeamForSend(input: {
     return {
       action: "blocked",
       why: `Delivery engine not reachable, so team ${choice.team} cannot be loaded. Choose "No team" to start an ordinary thread.`,
+    };
+  }
+  if (input.teamsPending) {
+    return {
+      action: "blocked",
+      why: `Teams are still loading, so team ${choice.team} cannot be set up yet. Send again in a moment, or choose "No team" to start an ordinary thread.`,
     };
   }
   const resolved = resolveTeamChoice({
