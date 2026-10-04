@@ -995,6 +995,7 @@ describe("seats at work and seats held", () => {
     specialist: null,
     since: null,
     waiting,
+    waitingWhy: null,
   });
   it("says working while any seat works, and waiting, for what, while every seat is held", () => {
     expect(
@@ -1058,6 +1059,7 @@ describe("draftAgainstRead", () => {
       specialist: null,
       since: null,
       waiting: "memory headroom",
+      waitingWhy: null,
     };
     expect(nowLine({ workers: [worker], stage: null })).toBe("Waits for memory");
   });
@@ -1185,6 +1187,17 @@ describe("the run panel's readings", () => {
       ],
     });
     expect(parseSeatLive(null)).toBeNull();
+  });
+  it("keeps only the last few short lines of a large reading", () => {
+    const live = parseSeatLive({
+      items: Array.from({ length: 500 }, (_, index) => ({
+        kind: "log",
+        text: `${index} ${"x".repeat(1000)}`,
+      })),
+    });
+    expect(live?.items).toHaveLength(8);
+    expect(live?.items[0]?.text.startsWith("492 ")).toBe(true);
+    expect(live?.items.every((item) => item.text.length <= 300)).toBe(true);
   });
   it("says a wait for a slot plainly", () => {
     expect(waitingWords("global limit")).toBe("waits for a free slot");

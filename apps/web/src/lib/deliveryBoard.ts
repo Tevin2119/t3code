@@ -529,7 +529,11 @@ export function sectionOf(entry: {
   readonly kind: string | null;
   readonly text: string;
 }): "acceptance" | "plan" | null {
-  if (/\d+ item\(s\) on the acceptance checklist|wrote the acceptance checklist/i.test(entry.text))
+  if (
+    /[1-9]\d* item\(s\) on the acceptance checklist|(wrote|updated) the acceptance checklist/i.test(
+      entry.text,
+    )
+  )
     return "acceptance";
   if (
     entry.kind === "run.planned" ||

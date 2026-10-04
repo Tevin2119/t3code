@@ -1507,12 +1507,15 @@ export function parseSeatLive(value: unknown): SeatLive | null {
   return {
     started: textOrNull(value.started),
     updated: textOrNull(value.updated),
-    items: records(value.items).flatMap((item) => {
-      const kind = text(item.kind);
-      return kind === "tool" || kind === "said" || kind === "log"
-        ? [{ kind, text: text(item.text) }]
-        : [];
-    }),
+    // The engine sends a few short lines; a larger reading is cut to the same.
+    items: records(value.items)
+      .flatMap((item): Array<SeatLive["items"][number]> => {
+        const kind = text(item.kind);
+        return kind === "tool" || kind === "said" || kind === "log"
+          ? [{ kind, text: text(item.text).slice(0, 300) }]
+          : [];
+      })
+      .slice(-8),
   };
 }
 
@@ -1544,7 +1547,7 @@ const parseCouncil = (council: Json): TaskCouncil => {
       attempts: list(seat.attempts).length,
       live: parseSeatLive(seat.live),
     })),
-    documents: strings(council.documents),
+    documents: [...new Set(strings(council.documents))],
     steers: records(council.steers).map((steer) => ({
       at: text(steer.at),
       by: text(steer.by),

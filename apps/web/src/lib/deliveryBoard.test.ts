@@ -379,6 +379,7 @@ describe("moveIntent while every seat waits", () => {
             specialist: null,
             since: null,
             waiting: "memory headroom",
+            waitingWhy: null,
           },
         ],
       },
@@ -402,6 +403,16 @@ describe("sectionOf", () => {
         text: "Revision 2: Triage wrote the acceptance checklist.",
       }),
     ).toBe("acceptance");
+    expect(sectionOf({ kind: "note", text: "Triage updated the acceptance checklist." })).toBe(
+      "acceptance",
+    );
+    // An empty checklist has nothing to show.
+    expect(
+      sectionOf({
+        kind: "note",
+        text: "Triage: ready, with 0 item(s) on the acceptance checklist.",
+      }),
+    ).toBeNull();
     expect(sectionOf({ kind: "run.planned", text: "Planned." })).toBe("plan");
     expect(sectionOf({ kind: "note", text: "Run run-1 started." })).toBeNull();
   });

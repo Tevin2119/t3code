@@ -1755,7 +1755,12 @@ function Info(props: {
         </section>
       )}
 
-      <RunPanel environmentId={props.environmentId} task={task} onChanged={props.onChanged} />
+      <RunPanel
+        key={task.id}
+        environmentId={props.environmentId}
+        task={task}
+        onChanged={props.onChanged}
+      />
 
       <section className="flex flex-col gap-1.5" data-task-roster>
         <h3 className="text-xs font-medium text-muted-foreground">
