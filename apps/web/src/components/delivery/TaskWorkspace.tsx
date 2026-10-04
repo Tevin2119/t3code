@@ -1522,6 +1522,9 @@ function Info(props: {
         {card.findings.all > 0 ? (
           <Row label="Findings">
             {card.findings.open} open of {card.findings.all}
+            {card.findings.delegated
+              ? `; ${card.findings.delegated} delegated to follow-ups, not marked fixed`
+              : null}
           </Row>
         ) : null}
         {card.approvals.map((approval) => (

@@ -52,7 +52,12 @@ export function actionLabel(
 }
 
 /** What an action does, said for this task. */
-export function actionHelp(action: string, card: Pick<DeliveryCard, "partOf"> | null): string {
+export function actionHelp(
+  action: string,
+  card: Pick<DeliveryCard, "partOf" | "triageOnly"> | null,
+): string {
+  if (action === "deliver" && card?.triageOnly)
+    return "Starts delivery of this automatically triaged follow-up. The team plans, builds and tests it, then waits for your sign-off. Filing it did not fix the finding.";
   if (card?.partOf && action === "approve")
     return `Records that you reviewed this part as it stands. It does not approve the whole, #${card.partOf.number}, which is decided on its own.`;
   if (card?.partOf && action === "reject")

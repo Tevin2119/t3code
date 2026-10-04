@@ -279,7 +279,7 @@ describe("parseBoard", () => {
     });
     expect(board?.lanes[0]?.cards).toHaveLength(1);
     const read = board?.lanes[0]?.cards[0];
-    expect(read?.findings).toEqual({ open: 1, all: 3 });
+    expect(read?.findings).toEqual({ open: 1, all: 3, delegated: 0 });
     expect(read?.actions).toEqual(["stop"]);
     expect(read?.approvals[0]?.stands).toBe(false);
     expect(read?.run?.stage).toBe("qa");
@@ -1202,5 +1202,20 @@ describe("the run panel's readings", () => {
   it("says a wait for a slot plainly", () => {
     expect(waitingWords("global limit")).toBe("waits for a free slot");
     expect(waitingWords("memory headroom")).toBe("waits for memory");
+  });
+});
+
+describe("follow-up admission and finding disposition", () => {
+  it("retains triage-only admission and delegated counts", () => {
+    const parsed = parseCards([
+      card({ triageOnly: true, findings: { open: 0, all: 2, delegated: 2 } }),
+    ])[0];
+    expect(parsed?.triageOnly).toBe(true);
+    expect(parsed?.findings).toEqual({ open: 0, all: 2, delegated: 2 });
+  });
+  it("reads older engines without treating findings as fixed or granting triage-only admission", () => {
+    const parsed = parseCards([card()])[0];
+    expect(parsed?.triageOnly).toBe(false);
+    expect(parsed?.findings.delegated).toBe(0);
   });
 });

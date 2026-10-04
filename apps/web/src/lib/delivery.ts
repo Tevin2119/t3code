@@ -900,7 +900,8 @@ export interface DeliveryCard {
     }>;
     readonly needed: number | null;
   } | null;
-  readonly findings: { readonly open: number; readonly all: number };
+  readonly triageOnly?: boolean;
+  readonly findings: { readonly open: number; readonly all: number; readonly delegated?: number };
   readonly approvals: ReadonlyArray<{
     readonly actor: string;
     readonly decision: string;
@@ -1078,7 +1079,12 @@ export const parseCard = (value: Json): DeliveryCard => {
           needed: typeof qa.needed === "number" ? qa.needed : null,
         }
       : null,
-    findings: { open: count(findings.open), all: count(findings.all) },
+    triageOnly: value.triageOnly === true,
+    findings: {
+      open: count(findings.open),
+      all: count(findings.all),
+      delegated: count(findings.delegated),
+    },
     approvals: records(value.approvals).map((approval) => ({
       actor: text(approval.actor),
       decision: text(approval.decision),
