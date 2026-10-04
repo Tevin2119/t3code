@@ -10,6 +10,8 @@ type SharedBoardProps = {
   environmentId: EnvironmentId | null;
   taskId?: string;
   onOpen?: (id: string) => void;
+  boardId?: string;
+  onChooseBoard?: (id: string) => void;
 };
 
 export function SharedBoard(props: SharedBoardProps) {
@@ -22,7 +24,9 @@ function SharedBoardContent(props: SharedBoardProps) {
   const read = useDeliveryRead(props.environmentId, "/api/shared", { pollMs: 5000 });
   const view = useMemo(() => parseShared(read.body), [read.body]);
   const act = useDeliveryAct(props.environmentId, "shared allocation");
-  const [boardId, setBoardId] = useState("");
+  const [localBoardId, setLocalBoardId] = useState("");
+  const boardId = props.boardId ?? localBoardId;
+  const setBoardId = props.onChooseBoard ?? setLocalBoardId;
   const [query, setQuery] = useState("");
   const [selection, setTaskId] = useState<string | null>(null);
   const taskId = props.taskId ?? selection;
@@ -222,6 +226,7 @@ function SharedBoardContent(props: SharedBoardProps) {
         </p>
       ) : null}
       <p className="text-xs text-muted-foreground">
+        Shared tasks across machines. Local boards show only the selected environment's engine.{" "}
         {view.machines.length ? `${view.machines.map((m) => m.name || m.id).join(" · ")} · ` : ""}
         Connected through {view.machine}
       </p>

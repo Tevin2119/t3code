@@ -6,6 +6,30 @@
  */
 import type { DeliveryCard, DeliveryLane, TaskPriority } from "./delivery";
 
+export interface DeliveryBoardSearch {
+  readonly environment?: string;
+  readonly task?: string;
+  readonly new?: boolean;
+  readonly from?: string;
+}
+
+export function parseBoardSearch(raw: Record<string, unknown>): DeliveryBoardSearch {
+  const environment =
+    typeof raw.environment === "string" &&
+    raw.environment.trim().length > 0 &&
+    raw.environment.length <= 200
+      ? { environment: raw.environment }
+      : {};
+  if (isTaskId(raw.task)) return { ...environment, task: raw.task };
+  if (raw.new === true)
+    return {
+      ...environment,
+      new: true,
+      ...(isConversationRef(raw.from) ? { from: raw.from } : {}),
+    };
+  return environment;
+}
+
 export const PRIORITY_LABEL: Record<TaskPriority, string> = {
   urgent: "Urgent",
   high: "High",

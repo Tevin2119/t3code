@@ -11,6 +11,7 @@ import {
   type DragStartEvent,
 } from "@dnd-kit/core";
 import { useNavigate, useSearch } from "@tanstack/react-router";
+import type { EnvironmentId } from "@t3tools/contracts";
 import { ChevronsLeftRightIcon, EllipsisIcon, PlusIcon, SearchIcon, XIcon } from "lucide-react";
 import { memo, useEffect, useMemo, useState } from "react";
 
@@ -26,10 +27,14 @@ import {
   hasFilters,
   moveIntent,
   type BoardGrouping,
+  type DeliveryBoardSearch,
 } from "../../lib/deliveryBoard";
 import { cn } from "../../lib/utils";
+import { useEnvironments } from "../../state/environments";
 import {
   useBoardStore,
+  useBoardPreferences,
+  useBoardControls,
   useDeliveryAct,
   useDeliveryEnabled,
   useDeliveryEnvironmentId,
@@ -321,6 +326,7 @@ function Lane(props: {
 }
 
 function BoardColumns(props: {
+  readonly environmentId: EnvironmentId | null;
   readonly lanes: ReadonlyArray<DeliveryLane>;
   readonly all: ReadonlyArray<DeliveryLane>;
   readonly busy: boolean;
@@ -329,10 +335,8 @@ function BoardColumns(props: {
   readonly onMove: (card: DeliveryCard, lane: string, before: string | null) => void;
 }) {
   const now = useMinuteClock();
-  const grouping = useBoardStore((state) => state.grouping);
-  const folds = useBoardStore((state) => state.laneFolds);
-  const foldLane = useBoardStore((state) => state.foldLane);
-  const setFilters = useBoardStore((state) => state.setFilters);
+  const { grouping, laneFolds: folds } = useBoardPreferences(props.environmentId);
+  const { foldLane, setFilters } = useBoardControls(props.environmentId);
   const [dragged, setDragged] = useState<DeliveryCard | null>(null);
   // A press that does not move is a click, which opens the card.
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
@@ -399,24 +403,41 @@ function BoardColumns(props: {
  * lane a card reaches by passing a stage cannot be reached by dragging.
  */
 export function BoardPage() {
-  const search = useSearch({ strict: false }) as { task?: string; new?: boolean; from?: string };
+  const search = useSearch({ strict: false }) as DeliveryBoardSearch;
   // The engine of the environment the work lives in: a conversation's own, when a task is made from one.
-  const environmentId = useDeliveryEnvironmentId(search.new ? (search.from ?? null) : null);
+  const environmentId = useDeliveryEnvironmentId(
+    search.new ? (search.from ?? null) : null,
+    search.environment ?? null,
+  );
+  return (
+    <EnvironmentBoardPage key={environmentId ?? "unavailable"} environmentId={environmentId} />
+  );
+}
+
+function EnvironmentBoardPage({ environmentId }: { readonly environmentId: EnvironmentId | null }) {
+  const { isReady } = useEnvironments();
+  const search = useSearch({ strict: false }) as DeliveryBoardSearch;
   const enabled = useDeliveryEnabled(environmentId);
   const active = enabled ? environmentId : null;
   const setDeliveryEnvironment = useBoardStore((state) => state.setDeliveryEnvironment);
+  useEffect(() => {
+    if (environmentId) setDeliveryEnvironment(environmentId);
+  }, [environmentId, setDeliveryEnvironment]);
   const navigate = useNavigate();
-  const view = useBoardStore((state) => state.view);
-  const setView = useBoardStore((state) => state.setView);
-  const filters = useBoardStore((state) => state.filters);
-  const setFilters = useBoardStore((state) => state.setFilters);
-  const clearFilters = useBoardStore((state) => state.clearFilters);
-  const grouping = useBoardStore((state) => state.grouping);
-  const setGrouping = useBoardStore((state) => state.setGrouping);
+  const preferences = useBoardPreferences(environmentId);
+  const { view, filters, grouping, shared, sharedBoardSet } = preferences;
+  const {
+    setView,
+    setFilters,
+    clearFilters,
+    setGrouping,
+    setBoardSet,
+    setShared,
+    setSharedBoardSet,
+  } = useBoardControls(environmentId);
 
   const showingBoard = !search.task && !search.new;
-  const boardSet = useBoardStore((state) => boardSetOf(state.boardSet));
-  const setBoardSet = useBoardStore((state) => state.setBoardSet);
+  const boardSet = boardSetOf(preferences.boardSet);
   const person = usePersonName();
   const boardAct = useDeliveryAct(active, "board setup");
   // A board or view being made or edited, and what the engine said when it refused.
@@ -430,7 +451,6 @@ export function BoardPage() {
   );
   const [dialogProblem, setDialogProblem] = useState<string | null>(null);
   const [mobileSearchOpen, setMobileSearchOpen] = useState(false);
-  const [shared, setShared] = useState(false);
   const board = useDeliveryRead(active, `/api/lanes?view=${view}&set=${boardSet}`, {
     pollMs: shared && showingBoard ? 0 : showingBoard ? 4_000 : 15_000,
   });
@@ -457,7 +477,17 @@ export function BoardPage() {
   const laneTitle = (lane: string) => laneChoices.find((item) => item.lane === lane)?.title ?? lane;
   const stale = useStaleReading(board.readAt);
   const open = (task: string | null) =>
-    void navigate({ to: "/board", search: task ? { task } : {} });
+    void navigate({
+      to: "/board",
+      search: {
+        ...(environmentId ? { environment: environmentId } : {}),
+        ...(task ? { task } : {}),
+      },
+    });
+  const chooseEnvironment = (environment: string) => {
+    setDeliveryEnvironment(environment);
+    void navigate({ to: "/board", search: { environment } });
+  };
   const actions = useTaskActions(active, { onDone: board.refresh });
   const chosenBoard = parsed?.sets.find((item) => item.id === boardSet) ?? null;
   // A board or view that was removed, here or elsewhere, gives way to what is always there.
@@ -574,15 +604,23 @@ export function BoardPage() {
         <WorkspacePageHeader electron={isElectron} className="h-auto">
           <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2 py-2">
             <h1 className="text-sm font-medium">Board</h1>
+            <EnvironmentPicker value={environmentId} onChoose={chooseEnvironment} />
             <Button
               size="sm"
-              variant="ghost"
+              variant={!shared ? "secondary" : "ghost"}
+              aria-pressed={!shared}
+              onClick={() => setShared(false)}
+            >
+              Local boards
+            </Button>
+            <Button
+              size="sm"
+              variant={shared ? "secondary" : "ghost"}
               aria-pressed={shared}
-              onClick={() => setShared(!shared)}
+              onClick={() => setShared(true)}
             >
               Shared boards
             </Button>
-            <EnvironmentPicker value={environmentId} onChoose={setDeliveryEnvironment} />
             {!shared ? (
               <>
                 <BoardPicker
@@ -700,7 +738,12 @@ export function BoardPage() {
               <Button
                 size="xs"
                 disabled={!enabled}
-                onClick={() => void navigate({ to: "/board", search: { new: true } })}
+                onClick={() =>
+                  void navigate({
+                    to: "/board",
+                    search: { new: true, ...(environmentId ? { environment: environmentId } : {}) },
+                  })
+                }
                 data-board-new-task
               >
                 <PlusIcon />
@@ -731,13 +774,24 @@ export function BoardPage() {
           />
         ) : null}
 
-        {!enabled ? (
+        {!environmentId ? (
+          <p className="p-6 text-sm text-muted-foreground">
+            {isReady
+              ? "This environment is unavailable. Choose an added environment or open Connections settings."
+              : "Loading environments..."}
+          </p>
+        ) : !enabled ? (
           <p className="p-6 text-sm text-muted-foreground">
             Delivery is turned off for this environment. Turn it on in the server settings to see
             the board.
           </p>
         ) : shared ? (
-          <SharedBoard environmentId={active} onOpen={open} />
+          <SharedBoard
+            environmentId={active}
+            boardId={sharedBoardSet}
+            onChooseBoard={setSharedBoardSet}
+            onOpen={open}
+          />
         ) : board.error ? (
           <p className="p-6 text-sm text-warning">
             Delivery engine not reachable. {board.error} Nothing shown here is current.
@@ -823,6 +877,7 @@ export function BoardPage() {
               </p>
             ))}
             <BoardColumns
+              environmentId={environmentId}
               lanes={lanes}
               all={parsed?.lanes ?? []}
               busy={actions.busy}

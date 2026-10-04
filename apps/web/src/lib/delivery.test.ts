@@ -1108,11 +1108,18 @@ describe("repeatKeys", () => {
 });
 
 describe("deliveryEnvironmentChoice", () => {
+  it("waits for Connections before falling back from a remembered environment", () => {
+    const selection = {
+      fromConversation: null,
+      chosen: "windows",
+      primary: "mac",
+    };
+    expect(deliveryEnvironmentChoice({ ...selection, connected: [], isReady: false })).toBeNull();
+    expect(
+      deliveryEnvironmentChoice({ ...selection, connected: ["mac", "windows"], isReady: true }),
+    ).toBe("windows");
+  });
   const connected = ["mac", "windows"] as const;
-  const on =
-    (...ids: Array<string | null>) =>
-    (environment: string | null) =>
-      ids.includes(environment);
   it("takes the conversation's environment for a task made from it, even when the window's own is another", () => {
     expect(
       deliveryEnvironmentChoice({
@@ -1120,18 +1127,16 @@ describe("deliveryEnvironmentChoice", () => {
         chosen: null,
         connected,
         primary: "mac",
-        enabled: on("mac", "windows"),
       }),
     ).toBe("windows");
   });
-  it("keeps the person's choice, and gives way to the window's own when the choice is off or gone", () => {
+  it("keeps the person's choice and uses the window's environment when the choice was removed", () => {
     expect(
       deliveryEnvironmentChoice({
         fromConversation: null,
         chosen: "windows",
         connected,
         primary: "mac",
-        enabled: on("windows"),
       }),
     ).toBe("windows");
     expect(
@@ -1140,27 +1145,65 @@ describe("deliveryEnvironmentChoice", () => {
         chosen: "windows",
         connected,
         primary: "mac",
-        enabled: on("mac"),
       }),
-    ).toBe("mac");
+    ).toBe("windows");
     expect(
       deliveryEnvironmentChoice({
         fromConversation: null,
         chosen: "gone",
         connected,
         primary: "mac",
-        enabled: on("mac"),
       }),
     ).toBe("mac");
   });
-  it("stays on the chosen one when neither has delivery on, so the screen can say why", () => {
+  it("keeps a conversation pinned to its own environment", () => {
     expect(
       deliveryEnvironmentChoice({
         fromConversation: "windows/t",
         chosen: null,
         connected,
         primary: "mac",
-        enabled: on(),
+      }),
+    ).toBe("windows");
+  });
+  it("pins task URLs to their named environment instead of the remembered selection", () => {
+    expect(
+      deliveryEnvironmentChoice({
+        fromConversation: null,
+        requested: "windows",
+        chosen: "mac",
+        connected,
+        primary: "mac",
+      }),
+    ).toBe("windows");
+  });
+  it("does not open local tasks when the environment of a URL or conversation is missing", () => {
+    expect(
+      deliveryEnvironmentChoice({
+        fromConversation: null,
+        requested: "removed",
+        chosen: "mac",
+        connected,
+        primary: "mac",
+      }),
+    ).toBeNull();
+    expect(
+      deliveryEnvironmentChoice({
+        fromConversation: "removed/thread",
+        chosen: "mac",
+        connected,
+        primary: "mac",
+      }),
+    ).toBeNull();
+  });
+  it("uses the conversation's environment when creating its task", () => {
+    expect(
+      deliveryEnvironmentChoice({
+        fromConversation: "windows/thread",
+        requested: "mac",
+        chosen: "mac",
+        connected,
+        primary: "mac",
       }),
     ).toBe("windows");
   });

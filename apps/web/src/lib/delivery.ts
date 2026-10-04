@@ -2239,18 +2239,20 @@ export function parseSeatSetup(body: unknown): SeatSetup | null {
 /**
  * Which environment's engine the delivery screens talk to: the environment of the conversation a
  * task is made from, else the one the person chose, else the window's own; each only while still
- * connected. One with delivery off gives way to the window's own when that has it on.
+ * available. An explicit choice never silently opens another environment's tasks.
  */
 export function deliveryEnvironmentChoice<Id extends string>(input: {
   readonly fromConversation: string | null;
   readonly chosen: string | null;
+  readonly requested?: string | null;
+  readonly isReady?: boolean;
   readonly connected: ReadonlyArray<Id>;
   readonly primary: Id | null;
-  readonly enabled: (environment: Id | null) => boolean;
 }): Id | null {
+  if (input.isReady === false) return null;
   const known = (id: string | null | undefined): Id | null =>
     id ? (input.connected.find((environment) => environment === id) ?? null) : null;
-  const wanted =
-    known(input.fromConversation?.split("/")[0]) ?? known(input.chosen) ?? input.primary;
-  return input.enabled(wanted) || !input.enabled(input.primary) ? wanted : input.primary;
+  if (input.fromConversation) return known(input.fromConversation.split("/")[0]);
+  if (input.requested) return known(input.requested);
+  return known(input.chosen) ?? input.primary;
 }
