@@ -1,4 +1,5 @@
 import type { EnvironmentId } from "@t3tools/contracts";
+import { SharedTaskAllocation } from "./SharedBoard";
 import {
   ArrowLeftIcon,
   CheckIcon,
@@ -1994,6 +1995,9 @@ export function TaskWorkspace(props: {
               </>
             ) : null}
             <div className="ml-auto flex shrink-0 items-center gap-1">
+              {task ? (
+                <SharedTaskAllocation environmentId={props.environmentId} taskId={task.id} />
+              ) : null}
               {task && others.length > 0 ? (
                 <Menu>
                   <MenuTrigger

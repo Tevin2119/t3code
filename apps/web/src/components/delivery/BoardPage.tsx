@@ -63,6 +63,7 @@ import { BoardDialog, BoardPicker, type PickerItem } from "./BoardPicker";
 import { BoardSeatsDialog } from "./BoardSeatsDialog";
 import { EnvironmentPicker } from "./EnvironmentPicker";
 import { HowItFits } from "./HowItFits";
+import { SharedBoard } from "./SharedBoard";
 
 const CardFace = memo(function CardFace(props: {
   readonly card: DeliveryCard;
@@ -429,8 +430,9 @@ export function BoardPage() {
   );
   const [dialogProblem, setDialogProblem] = useState<string | null>(null);
   const [mobileSearchOpen, setMobileSearchOpen] = useState(false);
+  const [shared, setShared] = useState(false);
   const board = useDeliveryRead(active, `/api/lanes?view=${view}&set=${boardSet}`, {
-    pollMs: showingBoard ? 4_000 : 15_000,
+    pollMs: shared && showingBoard ? 0 : showingBoard ? 4_000 : 15_000,
   });
   const parsed = useMemo(() => parseBoard(board.body), [board.body]);
   // The boards last read stay listed while another board is being read, one just made with them.
@@ -572,113 +574,129 @@ export function BoardPage() {
         <WorkspacePageHeader electron={isElectron} className="h-auto">
           <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2 py-2">
             <h1 className="text-sm font-medium">Board</h1>
-            <EnvironmentPicker value={environmentId} onChoose={setDeliveryEnvironment} />
-            <BoardPicker
-              label="Board"
-              marker="board"
-              items={
-                parsed?.sets ??
-                (knownBoards.length > 0
-                  ? knownBoards
-                  : [{ id: boardSet, title: boardSet, description: "", kind: "built-in" }])
-              }
-              value={boardSet}
-              everything={{ id: "all", label: "Show every task" }}
-              newLabel="New board…"
-              noneYet="You have no boards yet. New board… makes one to group tasks, such as Pilot work; tasks are put on it from New task or a task's page."
-              onChoose={setBoardSet}
-              onCreate={() => setDialog({ kind: "board", editing: null })}
-              onEdit={(item) => setDialog({ kind: "board", editing: item })}
-            />
-            <BoardPicker
-              label="Board view"
-              marker="view"
-              items={
-                parsed?.views ?? [{ id: view, title: view, description: "", kind: "built-in" }]
-              }
-              value={view}
-              everything={{ id: "development", label: "Show every column" }}
-              newLabel="New view…"
-              onChoose={setView}
-              onCreate={() => setDialog({ kind: "view", editing: null })}
-              onEdit={(item) => setDialog({ kind: "view", editing: item })}
-            />
-            <span className="relative hidden items-center md:flex">
-              <SearchIcon className="pointer-events-none absolute left-2 z-10 size-3.5 text-muted-foreground" />
-              <Input
-                aria-label="Search tasks"
-                placeholder="Search by #number, title, tag, owner"
-                className="h-7 w-64 pl-7 text-xs"
-                value={filters.q}
-                onChange={(event) => setFilters({ q: event.target.value })}
-              />
-            </span>
             <Button
-              size="icon-xs"
-              variant={filters.q ? "secondary" : "ghost"}
-              aria-label={mobileSearchOpen ? "Close board search" : "Search the board"}
-              aria-expanded={mobileSearchOpen}
-              className="md:hidden"
-              onClick={() => setMobileSearchOpen((open) => !open)}
-              data-board-search-toggle
+              size="sm"
+              variant="ghost"
+              aria-pressed={shared}
+              onClick={() => setShared(!shared)}
             >
-              {mobileSearchOpen ? <XIcon /> : <SearchIcon />}
+              Shared boards
             </Button>
-            {mobileSearchOpen ? (
-              <span className="relative flex min-w-0 basis-full items-center md:hidden">
-                <SearchIcon className="pointer-events-none absolute left-2 z-10 size-3.5 text-muted-foreground" />
-                <Input
-                  aria-label="Search tasks"
-                  placeholder="Search by #number, title, tag, owner"
-                  className="h-7 w-full pl-7 text-xs"
-                  value={filters.q}
-                  onChange={(event) => setFilters({ q: event.target.value })}
-                  autoFocus
+            <EnvironmentPicker value={environmentId} onChoose={setDeliveryEnvironment} />
+            {!shared ? (
+              <>
+                <BoardPicker
+                  label="Board"
+                  marker="board"
+                  items={
+                    parsed?.sets ??
+                    (knownBoards.length > 0
+                      ? knownBoards
+                      : [{ id: boardSet, title: boardSet, description: "", kind: "built-in" }])
+                  }
+                  value={boardSet}
+                  everything={{ id: "all", label: "Show every task" }}
+                  newLabel="New board…"
+                  noneYet="You have no boards yet. New board… makes one to group tasks, such as Pilot work; tasks are put on it from New task or a task's page."
+                  onChoose={setBoardSet}
+                  onCreate={() => setDialog({ kind: "board", editing: null })}
+                  onEdit={(item) => setDialog({ kind: "board", editing: item })}
                 />
-              </span>
-            ) : null}
-            <Select
-              value={grouping}
-              onValueChange={(value) => setGrouping(String(value) as BoardGrouping)}
-            >
-              <SelectTrigger
-                aria-label="Group cards by"
-                size="compact"
-                variant="ghost"
-                className="w-auto min-w-0"
-              >
-                <SelectValue>
-                  {grouping === "none" ? "Group" : `By ${GROUPING_LABEL[grouping].toLowerCase()}`}
-                </SelectValue>
-              </SelectTrigger>
-              <SelectPopup alignItemWithTrigger={false}>
-                {BOARD_GROUPINGS.map((item) => (
-                  <SelectItem key={item} value={item}>
-                    {GROUPING_LABEL[item]}
-                  </SelectItem>
-                ))}
-              </SelectPopup>
-            </Select>
-            <LaneFilterMenu
-              lanes={laneChoices}
-              chosen={filters.lanes}
-              onChange={(chosen) => setFilters({ lanes: chosen })}
-            />
-            {parsed && parsed.waiting > 0 ? (
-              <Button
-                size="xs"
-                variant={filters.waiting ? "secondary" : "ghost"}
-                className="text-amber-700 dark:text-amber-300"
-                onClick={() => setFilters({ waiting: !filters.waiting })}
-                data-board-waiting
-              >
-                {parsed.waiting} waiting on you
-              </Button>
+                <BoardPicker
+                  label="Board view"
+                  marker="view"
+                  items={
+                    parsed?.views ?? [{ id: view, title: view, description: "", kind: "built-in" }]
+                  }
+                  value={view}
+                  everything={{ id: "development", label: "Show every column" }}
+                  newLabel="New view…"
+                  onChoose={setView}
+                  onCreate={() => setDialog({ kind: "view", editing: null })}
+                  onEdit={(item) => setDialog({ kind: "view", editing: item })}
+                />
+                <span className="relative hidden items-center md:flex">
+                  <SearchIcon className="pointer-events-none absolute left-2 z-10 size-3.5 text-muted-foreground" />
+                  <Input
+                    aria-label="Search tasks"
+                    placeholder="Search by #number, title, tag, owner"
+                    className="h-7 w-64 pl-7 text-xs"
+                    value={filters.q}
+                    onChange={(event) => setFilters({ q: event.target.value })}
+                  />
+                </span>
+                <Button
+                  size="icon-xs"
+                  variant={filters.q ? "secondary" : "ghost"}
+                  aria-label={mobileSearchOpen ? "Close board search" : "Search the board"}
+                  aria-expanded={mobileSearchOpen}
+                  className="md:hidden"
+                  onClick={() => setMobileSearchOpen((open) => !open)}
+                  data-board-search-toggle
+                >
+                  {mobileSearchOpen ? <XIcon /> : <SearchIcon />}
+                </Button>
+                {mobileSearchOpen ? (
+                  <span className="relative flex min-w-0 basis-full items-center md:hidden">
+                    <SearchIcon className="pointer-events-none absolute left-2 z-10 size-3.5 text-muted-foreground" />
+                    <Input
+                      aria-label="Search tasks"
+                      placeholder="Search by #number, title, tag, owner"
+                      className="h-7 w-full pl-7 text-xs"
+                      value={filters.q}
+                      onChange={(event) => setFilters({ q: event.target.value })}
+                      autoFocus
+                    />
+                  </span>
+                ) : null}
+                <Select
+                  value={grouping}
+                  onValueChange={(value) => setGrouping(String(value) as BoardGrouping)}
+                >
+                  <SelectTrigger
+                    aria-label="Group cards by"
+                    size="compact"
+                    variant="ghost"
+                    className="w-auto min-w-0"
+                  >
+                    <SelectValue>
+                      {grouping === "none"
+                        ? "Group"
+                        : `By ${GROUPING_LABEL[grouping].toLowerCase()}`}
+                    </SelectValue>
+                  </SelectTrigger>
+                  <SelectPopup alignItemWithTrigger={false}>
+                    {BOARD_GROUPINGS.map((item) => (
+                      <SelectItem key={item} value={item}>
+                        {GROUPING_LABEL[item]}
+                      </SelectItem>
+                    ))}
+                  </SelectPopup>
+                </Select>
+                <LaneFilterMenu
+                  lanes={laneChoices}
+                  chosen={filters.lanes}
+                  onChange={(chosen) => setFilters({ lanes: chosen })}
+                />
+                {parsed && parsed.waiting > 0 ? (
+                  <Button
+                    size="xs"
+                    variant={filters.waiting ? "secondary" : "ghost"}
+                    className="text-amber-700 dark:text-amber-300"
+                    onClick={() => setFilters({ waiting: !filters.waiting })}
+                    data-board-waiting
+                  >
+                    {parsed.waiting} waiting on you
+                  </Button>
+                ) : null}
+              </>
             ) : null}
             <div className="ml-auto flex items-center gap-1">
-              <span className="font-mono text-[10px] text-muted-foreground">
-                {board.readAt ? (stale ? "stale" : "live") : enabled ? "not read yet" : ""}
-              </span>
+              {!shared ? (
+                <span className="font-mono text-[10px] text-muted-foreground">
+                  {board.readAt ? (stale ? "stale" : "live") : enabled ? "not read yet" : ""}
+                </span>
+              ) : null}
               <Button
                 size="xs"
                 disabled={!enabled}
@@ -689,18 +707,20 @@ export function BoardPage() {
                 New task
               </Button>
               <HowItFits />
-              <Button
-                size="icon-sm"
-                variant="ghost"
-                aria-label="Refresh board"
-                onClick={board.refresh}
-              >
-                <RefreshIcon className="size-3.5" refreshing={board.isPending} />
-              </Button>
+              {!shared ? (
+                <Button
+                  size="icon-sm"
+                  variant="ghost"
+                  aria-label="Refresh board"
+                  onClick={board.refresh}
+                >
+                  <RefreshIcon className="size-3.5" refreshing={board.isPending} />
+                </Button>
+              ) : null}
             </div>
           </div>
         </WorkspacePageHeader>
-        {hasFilters(filters) ? (
+        {!shared && hasFilters(filters) ? (
           <ActiveFilterChips
             className="px-4 pt-2"
             filters={filters}
@@ -716,6 +736,8 @@ export function BoardPage() {
             Delivery is turned off for this environment. Turn it on in the server settings to see
             the board.
           </p>
+        ) : shared ? (
+          <SharedBoard environmentId={active} onOpen={open} />
         ) : board.error ? (
           <p className="p-6 text-sm text-warning">
             Delivery engine not reachable. {board.error} Nothing shown here is current.
