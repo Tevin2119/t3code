@@ -32,12 +32,12 @@ import {
   useBoardStore,
   useDeliveryAct,
   useDeliveryEnabled,
+  useDeliveryEnvironmentId,
   usePersonName,
   useDeliveryRead,
   useMinuteClock,
   useStaleReading,
 } from "../../state/delivery";
-import { usePrimaryEnvironmentId } from "../../state/environments";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
@@ -61,6 +61,7 @@ import { TaskWorkspace } from "./TaskWorkspace";
 import { ActiveFilterChips, LaneFilterMenu } from "./BoardFilterControls";
 import { BoardDialog, BoardPicker, type PickerItem } from "./BoardPicker";
 import { BoardSeatsDialog } from "./BoardSeatsDialog";
+import { EnvironmentPicker } from "./EnvironmentPicker";
 import { HowItFits } from "./HowItFits";
 
 const CardFace = memo(function CardFace(props: {
@@ -397,11 +398,13 @@ function BoardColumns(props: {
  * lane a card reaches by passing a stage cannot be reached by dragging.
  */
 export function BoardPage() {
-  const environmentId = usePrimaryEnvironmentId();
+  const search = useSearch({ strict: false }) as { task?: string; new?: boolean; from?: string };
+  // The engine of the environment the work lives in: a conversation's own, when a task is made from one.
+  const environmentId = useDeliveryEnvironmentId(search.new ? (search.from ?? null) : null);
   const enabled = useDeliveryEnabled(environmentId);
   const active = enabled ? environmentId : null;
+  const setDeliveryEnvironment = useBoardStore((state) => state.setDeliveryEnvironment);
   const navigate = useNavigate();
-  const search = useSearch({ strict: false }) as { task?: string; new?: boolean; from?: string };
   const view = useBoardStore((state) => state.view);
   const setView = useBoardStore((state) => state.setView);
   const filters = useBoardStore((state) => state.filters);
@@ -538,7 +541,11 @@ export function BoardPage() {
         environmentId={active}
         taskId={null}
         onClose={() => open(null)}
-        onSaved={(task) => open(task)}
+        onSaved={(task) => {
+          // The task was filed in that environment: the board goes on showing it there.
+          if (environmentId) setDeliveryEnvironment(environmentId);
+          open(task);
+        }}
         from="Board"
         fromConversation={search.from ?? null}
         board={
@@ -565,6 +572,7 @@ export function BoardPage() {
         <WorkspacePageHeader electron={isElectron} className="h-auto">
           <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2 py-2">
             <h1 className="text-sm font-medium">Board</h1>
+            <EnvironmentPicker value={environmentId} onChoose={setDeliveryEnvironment} />
             <BoardPicker
               label="Board"
               marker="board"

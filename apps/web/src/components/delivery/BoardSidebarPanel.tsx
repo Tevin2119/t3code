@@ -27,7 +27,7 @@ import {
   useDeliveryRead,
   useMinuteClock,
 } from "../../state/delivery";
-import { usePrimaryEnvironmentId } from "../../state/environments";
+import { useDeliveryEnvironmentId } from "../../state/delivery";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
@@ -166,7 +166,7 @@ function Section(props: {
  * a person is at the top.
  */
 export function BoardSidebarPanel() {
-  const environmentId = usePrimaryEnvironmentId();
+  const environmentId = useDeliveryEnvironmentId();
   const enabled = useDeliveryEnabled(environmentId);
   const navigate = useNavigate();
   const { isMobile, setOpenMobile } = useSidebar();

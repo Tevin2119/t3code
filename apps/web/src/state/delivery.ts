@@ -14,6 +14,8 @@ import {
   type SeatChoice,
 } from "../lib/delivery";
 import { NO_FILTERS, type BoardFilters, type BoardGrouping } from "../lib/deliveryBoard";
+import { deliveryEnvironmentChoice } from "../lib/delivery";
+import { useEnvironments, usePrimaryEnvironmentId } from "./environments";
 import { useEnvironmentQuery } from "./query";
 import { useAtomCommand } from "./use-atom-command";
 
@@ -411,6 +413,9 @@ interface BoardState {
   /** The board shown; see boardSetOf. */
   readonly boardSet: string;
   readonly setBoardSet: (set: string) => void;
+  /** The environment whose engine the board talks to, when a person chose one; see useDeliveryEnvironmentId. */
+  readonly deliveryEnvironment: string | null;
+  readonly setDeliveryEnvironment: (environment: string | null) => void;
   readonly setPerson: (person: string) => void;
   readonly setView: (view: string) => void;
   readonly setFilters: (patch: Partial<BoardFilters>) => void;
@@ -434,6 +439,8 @@ export const useBoardStore = create<BoardState>()(
       panelFolds: {},
       boardSet: "unsorted",
       setBoardSet: (boardSet) => set({ boardSet }),
+      deliveryEnvironment: null,
+      setDeliveryEnvironment: (deliveryEnvironment) => set({ deliveryEnvironment }),
       setPerson: (person) => set({ person: person.slice(0, 60) }),
       setView: (view) => set({ view }),
       setFilters: (patch) => set((state) => ({ filters: { ...state.filters, ...patch } })),
@@ -462,6 +469,7 @@ export const useBoardStore = create<BoardState>()(
         laneFolds: state.laneFolds,
         panelFolds: state.panelFolds,
         boardSet: state.boardSet,
+        deliveryEnvironment: state.deliveryEnvironment,
       }),
     },
   ),
@@ -470,4 +478,39 @@ export const useBoardStore = create<BoardState>()(
 /** The name to write on what is done. Empty, the engine writes "person". */
 export function usePersonName(): string {
   return useBoardStore((state) => state.person.trim());
+}
+
+/**
+ * The environment whose delivery engine the Board, its panel and Profiles talk to. A window can be
+ * connected to several environments, and the engine is the one of the environment the work lives
+ * in, not always the window's own: a task made from a conversation goes to the engine of that
+ * conversation's environment. Otherwise the one the person chose on the Board, if still connected;
+ * otherwise the window's own. Whichever is picked, one that has delivery switched off gives way to
+ * the window's own when that has it on.
+ */
+export function useDeliveryEnvironmentId(
+  fromConversation: string | null = null,
+): EnvironmentId | null {
+  const primary = usePrimaryEnvironmentId();
+  const chosen = useBoardStore((state) => state.deliveryEnvironment);
+  const { environments } = useEnvironments();
+  const connected = environments.map((environment) => environment.environmentId);
+  // Hooks read whether delivery is on for the two that can be picked; the choice itself is pure.
+  const wanted = deliveryEnvironmentChoice({
+    fromConversation,
+    chosen,
+    connected,
+    primary,
+    enabled: () => true,
+  });
+  const wantedOn = useDeliveryEnabled(wanted);
+  const primaryOn = useDeliveryEnabled(primary);
+  return deliveryEnvironmentChoice({
+    fromConversation,
+    chosen,
+    connected,
+    primary,
+    enabled: (environment) =>
+      environment === wanted ? wantedOn : environment === primary ? primaryOn : false,
+  });
 }

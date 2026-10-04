@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  deliveryEnvironmentChoice,
   decideTeamForSend,
   deliveryFailureText,
   describeBinding,
@@ -1097,5 +1098,64 @@ describe("repeatKeys", () => {
     const keys = repeatKeys(["x", "x", "x#2", "2:x", ""]);
     expect(new Set(keys).size).toBe(5);
     expect(keys).toEqual(["1:x", "2:x", "1:x#2", "1:2:x", "1:"]);
+  });
+});
+
+describe("deliveryEnvironmentChoice", () => {
+  const connected = ["mac", "windows"] as const;
+  const on =
+    (...ids: Array<string | null>) =>
+    (environment: string | null) =>
+      ids.includes(environment);
+  it("takes the conversation's environment for a task made from it, even when the window's own is another", () => {
+    expect(
+      deliveryEnvironmentChoice({
+        fromConversation: "windows/thread-1",
+        chosen: null,
+        connected,
+        primary: "mac",
+        enabled: on("mac", "windows"),
+      }),
+    ).toBe("windows");
+  });
+  it("keeps the person's choice, and gives way to the window's own when the choice is off or gone", () => {
+    expect(
+      deliveryEnvironmentChoice({
+        fromConversation: null,
+        chosen: "windows",
+        connected,
+        primary: "mac",
+        enabled: on("windows"),
+      }),
+    ).toBe("windows");
+    expect(
+      deliveryEnvironmentChoice({
+        fromConversation: null,
+        chosen: "windows",
+        connected,
+        primary: "mac",
+        enabled: on("mac"),
+      }),
+    ).toBe("mac");
+    expect(
+      deliveryEnvironmentChoice({
+        fromConversation: null,
+        chosen: "gone",
+        connected,
+        primary: "mac",
+        enabled: on("mac"),
+      }),
+    ).toBe("mac");
+  });
+  it("stays on the chosen one when neither has delivery on, so the screen can say why", () => {
+    expect(
+      deliveryEnvironmentChoice({
+        fromConversation: "windows/t",
+        chosen: null,
+        connected,
+        primary: "mac",
+        enabled: on(),
+      }),
+    ).toBe("windows");
   });
 });

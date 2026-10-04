@@ -32,7 +32,7 @@ import {
   useDeliveryRead,
   usePersonName,
 } from "../../state/delivery";
-import { usePrimaryEnvironmentId } from "../../state/environments";
+import { useDeliveryEnvironmentId } from "../../state/delivery";
 import { ProviderModelPicker } from "../chat/ProviderModelPicker";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
@@ -918,7 +918,7 @@ function ProfileEditor(props: {
  * seats and what they run on, its tools, and the flow it runs by default.
  */
 export function ProfilePage() {
-  const environmentId = usePrimaryEnvironmentId();
+  const environmentId = useDeliveryEnvironmentId();
   const enabled = useDeliveryEnabled(environmentId);
   const active = enabled ? environmentId : null;
   const navigate = useNavigate();
