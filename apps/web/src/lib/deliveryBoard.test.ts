@@ -479,6 +479,24 @@ describe("boardAttentionCount", () => {
       ),
     ).toBeNull();
     expect(boardAttentionCount(reading([...good, "oops"]))).toBeNull();
+    // A card that is not one, alone or among good ones, in a lane that counts or one that does not.
+    expect(
+      boardAttentionCount(
+        reading([{ lane: "needs-decision", cards: [null] }, lane("human-review")]),
+      ),
+    ).toBeNull();
+    expect(
+      boardAttentionCount(
+        reading([
+          lane("needs-decision"),
+          {
+            lane: "human-review",
+            cards: [task("a", "human-review"), "oops", task("b", "human-review")],
+          },
+        ]),
+      ),
+    ).toBeNull();
+    expect(boardAttentionCount(reading([...good, { lane: "draft", cards: [[]] }]))).toBeNull();
     // The engine lists every lane, so one that is missing was not read.
     expect(boardAttentionCount(reading([good[0]]))).toBeNull();
     expect(boardAttentionCount(reading([lane("human-review")]))).toBeNull();

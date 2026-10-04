@@ -7,7 +7,7 @@ import { useBoardAttention } from "../../hooks/useBoardAttention";
 import { useEnvironmentIdentificationMode } from "../../hooks/useSettings";
 import { cn } from "../../lib/utils";
 import { useDeliveryEnabled } from "../../state/delivery";
-import { useEnvironments, usePrimaryEnvironmentId } from "../../state/environments";
+import { useEnvironment, useEnvironments, usePrimaryEnvironmentId } from "../../state/environments";
 import { T3Wordmark } from "../T3Wordmark";
 import {
   resolveEnvironmentIdentificationPillLabel,
@@ -169,7 +169,9 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
   });
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const deliveryEnabled = useDeliveryEnabled(primaryEnvironmentId);
-  const boardAttention = useBoardAttention(primaryEnvironmentId, deliveryEnabled);
+  // Settings outlast a connection, so delivery being on does not say the count can be read.
+  const primaryConnected = useEnvironment(primaryEnvironmentId)?.connection.phase === "connected";
+  const boardAttention = useBoardAttention(primaryEnvironmentId, deliveryEnabled, primaryConnected);
   const { environments } = useEnvironments();
   // The page reads every connected server, so one of them offering pull requests is enough for
   // the link to lead somewhere.

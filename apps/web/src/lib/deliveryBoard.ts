@@ -451,11 +451,15 @@ export const ATTENTION_LANES: ReadonlyArray<string> = ["needs-decision", "human-
 /** The reading the attention count is taken from: every board, every lane, no filter. */
 export const ATTENTION_BOARD_PATH = "/api/lanes?view=development&set=all";
 
-const isLaneEntry = (lane: unknown): lane is { lane: string; cards: ReadonlyArray<unknown> } =>
-  typeof lane === "object" &&
-  lane !== null &&
-  typeof (lane as { lane?: unknown }).lane === "string" &&
-  Array.isArray((lane as { cards?: unknown }).cards);
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+// Every card has to be a record too: parseBoard drops one that is not, and a dropped card is a miscount.
+const isLaneEntry = (lane: unknown): boolean =>
+  isRecord(lane) &&
+  typeof lane.lane === "string" &&
+  Array.isArray(lane.cards) &&
+  lane.cards.every(isRecord);
 
 /**
  * How many tasks wait for the person, from a reading of ATTENTION_BOARD_PATH.
@@ -465,8 +469,8 @@ const isLaneEntry = (lane: unknown): lane is { lane: string; cards: ReadonlyArra
  */
 export function boardAttentionCount(body: unknown): number | null {
   // Checked on the body as it came: parseBoard reads a malformed lane as an empty one.
-  if (typeof body !== "object" || body === null) return null;
-  const raw = body as { view?: unknown; set?: unknown; lanes?: unknown };
+  if (!isRecord(body)) return null;
+  const raw = body;
   if (raw.view !== "development" || raw.set !== "all") return null;
   if (!Array.isArray(raw.lanes) || !raw.lanes.every(isLaneEntry)) return null;
   const board = parseBoard(body);

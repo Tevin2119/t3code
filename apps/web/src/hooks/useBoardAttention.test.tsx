@@ -33,7 +33,11 @@ vi.mock("@t3tools/client-runtime/state/delivery", () => ({
             previous: get.self<AsyncResult.AsyncResult<Reading, Error>>(),
           });
         }
-        return AsyncResult.success({ readAt: "2026-10-04T09:00:00Z", body: answer.body });
+        // As the real layer does: every reading is a body of its own.
+        return AsyncResult.success({
+          readAt: "2026-10-04T09:00:00Z",
+          body: structuredClone(answer.body),
+        });
       });
       engine.atoms.set(key, atom);
       return atom;
@@ -81,31 +85,31 @@ let registry: AtomRegistry.AtomRegistry;
 let renderer: ReactTestRenderer;
 let count: number | null = null;
 
+type Around = { readonly enabled?: boolean; readonly connected?: boolean };
+
 function Probe({
   environmentId,
-  enabled,
-}: {
-  environmentId: EnvironmentId | null;
-  enabled: boolean;
-}) {
-  const value = useBoardAttention(environmentId, enabled);
+  enabled = true,
+  connected = true,
+}: Around & { environmentId: EnvironmentId | null }) {
+  const value = useBoardAttention(environmentId, enabled, connected);
   useLayoutEffect(() => {
     count = value;
   });
   return null;
 }
 
-const tree = (environmentId: EnvironmentId | null, enabled = true) => (
+const tree = (environmentId: EnvironmentId | null, around: Around = {}) => (
   <RegistryContext.Provider value={registry}>
-    <Probe environmentId={environmentId} enabled={enabled} />
+    <Probe environmentId={environmentId} {...around} />
   </RegistryContext.Provider>
 );
-const mount = (environmentId: EnvironmentId | null, enabled = true) =>
+const mount = (environmentId: EnvironmentId | null, around?: Around) =>
   act(() => {
-    renderer = create(tree(environmentId, enabled));
+    renderer = create(tree(environmentId, around));
   });
-const show = (environmentId: EnvironmentId | null, enabled = true) =>
-  act(() => renderer.update(tree(environmentId, enabled)));
+const show = (environmentId: EnvironmentId | null, around?: Around) =>
+  act(() => renderer.update(tree(environmentId, around)));
 /** The next reading the sidebar takes by itself, with no Board page there to ask for one. */
 const poll = () => act(() => vi.advanceTimersByTime(15_000));
 
@@ -130,10 +134,13 @@ afterEach(() => {
 
 it("reads nothing and knows nothing while delivery is off or no environment is there", () => {
   answer(local, { body: board(3) });
-  mount(local, false);
+  mount(local, { enabled: false });
   poll();
   expect(count).toBeNull();
-  show(null, true);
+  show(null);
+  poll();
+  expect(count).toBeNull();
+  show(local, { connected: false });
   poll();
   expect(count).toBeNull();
   expect(engine.reads).toEqual([]);
@@ -214,15 +221,79 @@ it("starts over for another environment, and ignores what the first one says aft
   expect(count).toBe(1);
 });
 
-it("forgets the count when the environment disconnects or delivery is turned off", () => {
+it("does not bring a count back when the environment is left and returned to", () => {
+  answer(local, { body: board(5) });
+  mount(local);
+  expect(count).toBe(5);
+  // The other environment never answers, so nothing is known of it.
+  show(remote);
+  poll();
+  expect(count).toBeNull();
+  // Back on the first one, the reading at hand is the one from before leaving.
+  show(local);
+  expect(count).toBeNull();
+  answer(local, { failure: "engine unreachable" });
+  poll();
+  expect(count).toBeNull();
+  answer(local, { body: board(3) });
+  poll();
+  expect(count).toBe(3);
+});
+
+it("keeps the count through a card that is not one, among good ones", () => {
+  answer(local, { body: board(2, 1) });
+  mount(local);
+  expect(count).toBe(3);
+  const mixed = board(2, 1);
+  answer(local, {
+    body: { ...mixed, lanes: [...mixed.lanes, { lane: "ready", cards: [{ id: "a" }, null] }] },
+  });
+  poll();
+  expect(count).toBe(3);
+  answer(local, {
+    body: {
+      ...mixed,
+      lanes: [mixed.lanes[0], { lane: "needs-decision", cards: [null] }, mixed.lanes[2]],
+    },
+  });
+  poll();
+  expect(count).toBe(3);
+  answer(local, { body: board(0) });
+  poll();
+  expect(count).toBe(0);
+});
+
+it("forgets the count on a disconnect while delivery stays on, and reads again once connected", () => {
   answer(local, { body: board(2) });
   mount(local);
   expect(count).toBe(2);
-  // A disconnected environment reads its default settings, where delivery is off.
-  show(local, false);
+  // The settings kept from before the disconnect still say delivery is on.
+  show(local, { enabled: true, connected: false });
+  expect(count).toBeNull();
+  const reads = engine.reads.length;
+  answer(local, { body: board(7) });
+  poll();
+  expect(count).toBeNull();
+  expect(engine.reads).toHaveLength(reads);
+  // Connected again: the reading from before is not shown, the next one is.
+  show(local, { enabled: true, connected: true });
+  expect(count).toBeNull();
+  answer(local, { failure: "engine unreachable" });
+  poll();
+  expect(count).toBeNull();
+  answer(local, { body: board(1) });
+  poll();
+  expect(count).toBe(1);
+});
+
+it("forgets the count when delivery is turned off", () => {
+  answer(local, { body: board(2) });
+  mount(local);
+  expect(count).toBe(2);
+  show(local, { enabled: false });
   expect(count).toBeNull();
   answer(local, { body: MALFORMED });
-  show(local, true);
+  show(local);
   poll();
   expect(count).toBeNull();
   answer(local, { body: board(1) });
