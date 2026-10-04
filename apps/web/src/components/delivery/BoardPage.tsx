@@ -61,6 +61,7 @@ import { TaskWorkspace } from "./TaskWorkspace";
 import { ActiveFilterChips, LaneFilterMenu } from "./BoardFilterControls";
 import { BoardDialog, BoardPicker, type PickerItem } from "./BoardPicker";
 import { BoardSeatsDialog } from "./BoardSeatsDialog";
+import { TestingWorkspace } from "./TestingWorkspace";
 import { EnvironmentPicker } from "./EnvironmentPicker";
 import { HowItFits } from "./HowItFits";
 
@@ -429,6 +430,7 @@ export function BoardPage() {
   );
   const [dialogProblem, setDialogProblem] = useState<string | null>(null);
   const [mobileSearchOpen, setMobileSearchOpen] = useState(false);
+  const [testingOpen, setTestingOpen] = useState(false);
   const board = useDeliveryRead(active, `/api/lanes?view=${view}&set=${boardSet}`, {
     pollMs: showingBoard ? 4_000 : 15_000,
   });
@@ -690,6 +692,14 @@ export function BoardPage() {
               </Button>
               <HowItFits />
               <Button
+                size="xs"
+                variant="ghost"
+                disabled={!enabled}
+                onClick={() => setTestingOpen(true)}
+              >
+                Tests
+              </Button>
+              <Button
                 size="icon-sm"
                 variant="ghost"
                 aria-label="Refresh board"
@@ -783,6 +793,13 @@ export function BoardPage() {
                   setDialogProblem(null);
                   setSeatsFor({ id: editing.id, title: editing.title });
                 }}
+              />
+            ) : null}
+            {testingOpen ? (
+              <TestingWorkspace
+                key={active}
+                environmentId={active}
+                onClose={() => setTestingOpen(false)}
               />
             ) : null}
             {seatsFor ? (
