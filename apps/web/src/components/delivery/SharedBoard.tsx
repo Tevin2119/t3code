@@ -106,9 +106,11 @@ function SharedBoardContent(props: SharedBoardProps) {
         </p>
       ) : null}
       <Input
-        aria-label="Approval key for task move"
+        aria-label="Approval passphrase or terminal key for task move"
+        placeholder="Approval passphrase or terminal key"
+        name="delivery-move-approval"
         type="password"
-        autoComplete="off"
+        autoComplete="current-password"
         value={moveKey}
         onChange={(e) => setMoveKey(e.target.value)}
       />
@@ -243,11 +245,13 @@ function SharedBoardContent(props: SharedBoardProps) {
             {board.policy.startOnArrival ? "can resume ready work" : "stay paused"}.
           </p>
           <Input
-            aria-label="Approval key for board policy"
+            aria-label="Approval passphrase or terminal key for board policy"
+            placeholder="Approval passphrase or terminal key"
+            name="delivery-policy-approval"
             type="password"
             value={policyKey}
             onChange={(e) => setPolicyKey(e.target.value)}
-            autoComplete="off"
+            autoComplete="current-password"
           />
           <div className="mt-2 flex flex-wrap gap-2">
             <Button

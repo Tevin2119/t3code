@@ -307,16 +307,16 @@ function DecisionDialog(props: {
               {card.run?.candidate ? ` ${card.run.candidate.slice(0, 10)}` : ""} to its own branch
               and opens one pull request for it, or finds the one already open. It is checked again
               first: the approval must still stand for that commit and every check must have passed.
-              Nothing is merged; that is done on the repository host. The approval key is shown on
-              the terminal the engine was started from, and is not stored here.
+              Nothing is merged; that is done on the repository host. Use this environment's
+              approval passphrase, or its terminal key if no passphrase is set. T3 does not save it.
             </p>
           ) : (
             <p className="text-muted-foreground">
               A decision is recorded against the commit that was tested
               {card.run?.candidate ? ` (${card.run.candidate.slice(0, 10)})` : ""}. Approving is not
               merging. Where publishing is on, the approved commit is then pushed and one pull
-              request opened for review. The approval key is shown on the terminal the engine was
-              started from, and is not stored here.
+              request opened for review. Use this environment's approval passphrase, or its terminal
+              key if no passphrase is set. T3 does not save it.
             </p>
           )}
           <Input
@@ -326,10 +326,11 @@ function DecisionDialog(props: {
             onChange={(event) => setActor(event.target.value)}
           />
           <Input
-            aria-label="Approval key"
-            placeholder="Approval key"
+            aria-label="Approval passphrase or terminal key"
+            placeholder="Approval passphrase or terminal key"
+            name="delivery-approval"
             type="password"
-            autoComplete="off"
+            autoComplete="current-password"
             value={approvalKey}
             onChange={(event) => setApprovalKey(event.target.value)}
           />

@@ -247,7 +247,12 @@ export const make = Effect.gen(function* () {
 
   const delivery = settingsService.getSettings.pipe(
     Effect.map((settings) => settings.delivery),
-    Effect.orElseSucceed(() => ({ enabled: false, engineUrl: "", terminalEntryScript: "" })),
+    Effect.orElseSucceed(() => ({
+      enabled: false,
+      engineUrl: "",
+      terminalEntryScript: "",
+      engineCommand: "",
+    })),
   );
 
   const request = Effect.fn("DeliveryService.request")(function* (

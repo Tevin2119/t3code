@@ -45,6 +45,7 @@ import {
 } from "../../state/delivery";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
+import { EnginePanel } from "./EnginePanel";
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
 import { RefreshIcon } from "../ui/refresh-icon";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
@@ -605,6 +606,7 @@ function EnvironmentBoardPage({ environmentId }: { readonly environmentId: Envir
           <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2 py-2">
             <h1 className="text-sm font-medium">Board</h1>
             <EnvironmentPicker value={environmentId} onChoose={chooseEnvironment} />
+            {active ? <EnginePanel environmentId={active} /> : null}
             <Button
               size="sm"
               variant={!shared ? "secondary" : "ghost"}
