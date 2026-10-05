@@ -99,7 +99,7 @@ function Probe(props: ProbeProps) {
 
 let shown: ProbeProps;
 async function render(props: Partial<ProbeProps> = {}) {
-  shown = { environmentId: ENV_A, threadId: "t1", driver: "claudeAgent", ...shown, ...props };
+  shown = { ...shown, ...props };
   await act(() => {
     if (renderer) renderer.update(<Probe {...shown} />);
     else renderer = create(<Probe {...shown} />);
