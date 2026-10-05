@@ -34,6 +34,7 @@ export interface PickerItem {
   readonly description: string;
   /** "own" for one a person made, which can be renamed or removed. */
   readonly kind: string;
+  readonly scope?: "local" | "shared";
   readonly count?: number | null;
   /** For a board: the repository and base branch its tasks are done in. */
   readonly target?: DeliveryTarget | null;
@@ -191,8 +192,10 @@ export function BoardPicker(props: {
                   {item.count !== undefined && item.count !== null ? (
                     <span className="text-xs text-muted-foreground tabular-nums">{item.count}</span>
                   ) : null}
-                  {item.kind === "own" ? (
-                    <span className="ml-auto text-[10px] text-muted-foreground">yours</span>
+                  {item.scope || item.kind === "own" ? (
+                    <span className="ml-auto text-[10px] text-muted-foreground">
+                      {item.scope ?? "yours"}
+                    </span>
                   ) : null}
                 </span>
                 {item.description ? (

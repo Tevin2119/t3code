@@ -16,7 +16,10 @@ type SharedBoardProps = {
 
 export function SharedBoard(props: SharedBoardProps) {
   return (
-    <SharedBoardContent key={`${props.environmentId}:${props.taskId ?? "board"}`} {...props} />
+    <SharedBoardContent
+      key={`${props.environmentId}:${props.taskId ?? "board"}:${props.boardId ?? ""}`}
+      {...props}
+    />
   );
 }
 
@@ -183,22 +186,24 @@ function SharedBoardContent(props: SharedBoardProps) {
       aria-label="Shared boards"
     >
       <div className="flex flex-wrap items-center gap-2">
-        <select
-          aria-label="Shared board"
-          className="max-w-48 rounded border bg-background p-1 text-sm"
-          value={boardId}
-          onChange={(e) => {
-            setBoardId(e.target.value);
-            setPolicyKey("");
-          }}
-        >
-          <option value="">All shared boards</option>
-          {view.boards.map((b) => (
-            <option key={b.id} value={b.id}>
-              {b.title}
-            </option>
-          ))}
-        </select>
+        {props.onChooseBoard ? null : (
+          <select
+            aria-label="Shared board"
+            className="max-w-48 rounded border bg-background p-1 text-sm"
+            value={boardId}
+            onChange={(e) => {
+              setBoardId(e.target.value);
+              setPolicyKey("");
+            }}
+          >
+            <option value="">All shared boards</option>
+            {view.boards.map((b) => (
+              <option key={b.id} value={b.id}>
+                {b.title}
+              </option>
+            ))}
+          </select>
+        )}
         <Input
           aria-label="Search shared tasks"
           placeholder="Search shared tasks"

@@ -3,8 +3,10 @@ import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import { ThreadId, type EnvironmentId } from "@t3tools/contracts";
 import { useMemo, useRef, useState } from "react";
+import { PowerIcon } from "lucide-react";
 import { useEnvironmentSettings } from "../../hooks/useSettings";
-import { controlDeliveryEngine } from "../../lib/deliveryEngineControl";
+import { controlDeliveryEngine, parseDeliveryEngineHealth } from "../../lib/deliveryEngineControl";
+import { useEnvironment } from "../../state/environments";
 import { useDeliveryAct, useDeliveryRead } from "../../state/delivery";
 import { primaryServerKeybindingsAtom, serverEnvironment } from "../../state/server";
 import { terminalEnvironment } from "../../state/terminal";
@@ -34,12 +36,25 @@ export function EngineDownNotice(props: {
   );
 }
 
-export function EnginePanel({ environmentId }: { readonly environmentId: EnvironmentId }) {
+export function EnginePanel({
+  environmentId,
+  compact = false,
+}: {
+  readonly environmentId: EnvironmentId;
+  readonly compact?: boolean;
+}) {
   const [open, setOpen] = useState(false);
   return (
     <>
-      <Button size="sm" variant="ghost" onClick={() => setOpen(true)}>
-        Engine
+      <Button
+        size={compact ? "icon-sm" : "sm"}
+        variant="ghost"
+        aria-label="PaperClip engine controls"
+        title="PaperClip engine"
+        onClick={() => setOpen(true)}
+      >
+        <PowerIcon className="size-3.5" />
+        <span className={compact ? "sr-only" : undefined}>Engine</span>
       </Button>
       {open ? <EngineControl environmentId={environmentId} onClose={() => setOpen(false)} /> : null}
     </>
@@ -51,6 +66,7 @@ function EngineControl(props: {
   readonly onClose: () => void;
 }) {
   const { environmentId } = props;
+  const environment = useEnvironment(environmentId);
   const command = useEnvironmentSettings(
     environmentId,
     (settings) => settings.delivery.engineCommand,
@@ -69,6 +85,8 @@ function EngineControl(props: {
   const [notice, setNotice] = useState<string | null>(null);
   const [terminal, setTerminal] = useState(false);
   const reachable = !health.error && health.body !== null;
+  const summary = parseDeliveryEngineHealth(health.body);
+  const stopping = reachable && summary.stopping;
 
   const control = async (action: "start" | "stop" | "restart") => {
     if (inFlight.current) return;
@@ -132,61 +150,99 @@ function EngineControl(props: {
     >
       <DialogPopup className="max-w-3xl">
         <DialogHeader>
-          <DialogTitle>This environment's engine</DialogTitle>
+          <DialogTitle>PaperClip engine</DialogTitle>
         </DialogHeader>
         <DialogPanel className="flex flex-col gap-3 text-sm">
           <p className={reachable ? "text-muted-foreground" : "text-warning"}>
             {health.isPending
               ? "Checking engine health..."
               : reachable
-                ? "Engine answers in this environment."
-                : `Engine not reachable. ${health.error ?? "No health reading yet."}`}
+                ? `${stopping ? "Stopping" : "Running"} on ${environment?.label ?? "the selected environment"}.`
+                : `PaperClip is not reachable on ${environment?.label ?? "the selected environment"}. ${health.error ?? "No health reading yet."}`}
           </p>
           {reachable ? (
-            <pre className="max-h-40 overflow-auto rounded border p-2 text-xs">
-              {JSON.stringify(health.body, null, 2)}
-            </pre>
+            <>
+              <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-xs">
+                <dt className="text-muted-foreground">Account profile</dt>
+                <dd>{summary.profile ?? "Not reported"}</dd>
+                <dt className="text-muted-foreground">Process</dt>
+                <dd>{summary.pid ?? "Not reported"}</dd>
+                <dt className="text-muted-foreground">Code version</dt>
+                <dd>{summary.commit?.slice(0, 10) ?? "Not reported"}</dd>
+              </dl>
+              <details className="text-xs">
+                <summary className="cursor-pointer text-muted-foreground">
+                  Technical details
+                </summary>
+                <pre className="mt-2 max-h-40 overflow-auto rounded border p-2 text-xs">
+                  {JSON.stringify(health.body, null, 2)}
+                </pre>
+              </details>
+            </>
           ) : null}
           <p className="text-xs text-muted-foreground">
-            Stop drains running work and keeps it for the next start. Restart starts nothing unless
-            this engine confirms it stopped. A lost reply needs inspection, not an automatic retry.
-            Your approval passphrase survives restarts; without one, the new terminal shows a new
-            key.
+            This controls the task engine, not T3. Stop safely ends PaperClip and keeps its task
+            records. Restart starts it again only after a confirmed stop. A lost reply requires
+            checking its terminal before trying again.
           </p>
-          <Input
-            type="password"
-            name="delivery-engine-approval"
-            autoComplete="current-password"
-            aria-label="Approval passphrase or terminal key"
-            placeholder="Approval passphrase or terminal key"
-            value={approval}
-            onChange={(event) => setApproval(event.target.value)}
-            disabled={busy}
-          />
+          {reachable ? (
+            <>
+              <p className="text-xs text-muted-foreground">
+                {summary.approval === "passphrase"
+                  ? "Use the approval passphrase you set for this PaperClip engine. It survives restarts."
+                  : "Use the approval key printed in this engine's terminal."}{" "}
+                This is not a T3 pairing code.
+              </p>
+              <Input
+                type="password"
+                name="delivery-engine-approval"
+                autoComplete="current-password"
+                aria-label={
+                  summary.approval === "passphrase"
+                    ? "PaperClip approval passphrase"
+                    : "Engine terminal approval key"
+                }
+                placeholder={
+                  summary.approval === "passphrase"
+                    ? "Your PaperClip approval passphrase"
+                    : "Engine terminal approval key"
+                }
+                value={approval}
+                onChange={(event) => setApproval(event.target.value)}
+                disabled={busy || stopping}
+              />
+            </>
+          ) : null}
           <div className="flex flex-wrap gap-2">
-            <Button
-              size="sm"
-              disabled={busy || health.isPending || reachable || !command || !configuration}
-              onClick={() => void control("start")}
-            >
-              Start engine
-            </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={busy || !reachable || !approval}
-              onClick={() => void control("stop")}
-            >
-              Stop engine
-            </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={busy || !reachable || !approval || !command || !configuration}
-              onClick={() => void control("restart")}
-            >
-              Restart engine
-            </Button>
+            {!reachable ? (
+              <Button
+                size="sm"
+                disabled={busy || health.isPending || reachable || !command || !configuration}
+                onClick={() => void control("start")}
+              >
+                Start engine
+              </Button>
+            ) : null}
+            {reachable ? (
+              <>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={busy || stopping || !approval}
+                  onClick={() => void control("stop")}
+                >
+                  Stop engine
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={busy || stopping || !approval || !command || !configuration}
+                  onClick={() => void control("restart")}
+                >
+                  Restart engine
+                </Button>
+              </>
+            ) : null}
           </div>
           {!command ? (
             <p className="text-xs text-muted-foreground">

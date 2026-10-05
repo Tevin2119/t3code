@@ -265,7 +265,7 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
             </>
           ) : isOnBoard ? (
             <>
-              <SidebarChromeHeader isElectron={isElectron} />
+              <SidebarChromeHeader isElectron={isElectron} boardControls />
               <BoardSidebarPanel />
               <SidebarChromeFooter />
             </>

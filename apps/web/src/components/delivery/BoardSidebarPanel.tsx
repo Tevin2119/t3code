@@ -42,7 +42,7 @@ import { ActiveFilterChips, LaneFilterMenu } from "./BoardFilterControls";
 import { Age, CardSigns, laneTone, PriorityPill } from "./taskParts";
 import { BoardIcon } from "./BoardIcon";
 import { EnvironmentPicker } from "./EnvironmentPicker";
-import { EngineDownNotice, EnginePanel } from "./EnginePanel";
+import { EngineDownNotice } from "./EnginePanel";
 
 const ANY = "__any__";
 
@@ -208,7 +208,7 @@ function EnvironmentBoardSidebar({
   const selected = location.search.task ?? location.search.thread ?? null;
   const preferences = useBoardPreferences(environmentId);
   const { filters, view, shared } = preferences;
-  const { setFilters, clearFilters, setShared } = useBoardControls(environmentId);
+  const { setFilters, clearFilters } = useBoardControls(environmentId);
   const boardSet = boardSetOf(preferences.boardSet);
   const now = useMinuteClock();
 
@@ -288,14 +288,10 @@ function EnvironmentBoardSidebar({
     return (
       <SidebarContent className="overflow-x-hidden" data-board-panel>
         <SidebarGroup className="gap-2 p-[var(--sidebar-content-inset)]">
-          <EnvironmentPicker value={environmentId} onChoose={chooseEnvironment} />
           <p className="px-1 text-xs text-sidebar-muted-foreground">
-            Shared boards show tasks across machines. Choose Local boards for this environment's
-            task list.
+            A shared board is selected for this environment. Its tasks and allocation controls
+            appear in the board workspace. Choose another board from the Board selector.
           </p>
-          <Button size="sm" variant="outline" onClick={() => setShared(false)}>
-            Local boards
-          </Button>
         </SidebarGroup>
       </SidebarContent>
     );
@@ -304,7 +300,6 @@ function EnvironmentBoardSidebar({
     <SidebarContent className="overflow-x-hidden" data-board-panel>
       <SidebarGroup className="gap-2 p-[var(--sidebar-content-inset)]">
         <EnvironmentPicker value={environmentId} onChoose={chooseEnvironment} />
-        {environmentId ? <EnginePanel environmentId={environmentId} /> : null}
         <div className="flex items-center gap-1">
           <Button
             size="sm"

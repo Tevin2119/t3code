@@ -68,6 +68,8 @@ import { ActiveFilterChips, LaneFilterMenu } from "./BoardFilterControls";
 import { BoardDialog, BoardPicker, type PickerItem } from "./BoardPicker";
 import { BoardSeatsDialog } from "./BoardSeatsDialog";
 import { EnvironmentPicker } from "./EnvironmentPicker";
+import { parseShared } from "../../lib/deliveryShared";
+import { unifiedBoardChoices } from "../../lib/deliveryBoardSelection";
 import { HowItFits } from "./HowItFits";
 import { SharedBoard } from "./SharedBoard";
 
@@ -433,7 +435,7 @@ function EnvironmentBoardPage({ environmentId }: { readonly environmentId: Envir
     clearFilters,
     setGrouping,
     setBoardSet,
-    setShared,
+    setBoardSelection,
     setSharedBoardSet,
   } = useBoardControls(environmentId);
 
@@ -456,6 +458,10 @@ function EnvironmentBoardPage({ environmentId }: { readonly environmentId: Envir
     pollMs: shared && showingBoard ? 0 : showingBoard ? 4_000 : 15_000,
   });
   const parsed = useMemo(() => parseBoard(board.body), [board.body]);
+  const sharedRead = useDeliveryRead(enabled ? active : null, "/api/shared", {
+    pollMs: showingBoard && !shared ? 30_000 : 0,
+  });
+  const sharedView = useMemo(() => parseShared(sharedRead.body), [sharedRead.body]);
   // The boards last read stay listed while another board is being read, one just made with them.
   type KnownBoard = NonNullable<typeof parsed>["sets"][number];
   const [knownBoards, setKnownBoards] = useState<ReadonlyArray<KnownBoard>>([]);
@@ -607,41 +613,32 @@ function EnvironmentBoardPage({ environmentId }: { readonly environmentId: Envir
             <h1 className="text-sm font-medium">Board</h1>
             <EnvironmentPicker value={environmentId} onChoose={chooseEnvironment} />
             {active ? <EnginePanel environmentId={active} /> : null}
-            <Button
-              size="sm"
-              variant={!shared ? "secondary" : "ghost"}
-              aria-pressed={!shared}
-              onClick={() => setShared(false)}
-            >
-              Local boards
-            </Button>
-            <Button
-              size="sm"
-              variant={shared ? "secondary" : "ghost"}
-              aria-pressed={shared}
-              onClick={() => setShared(true)}
-            >
-              Shared boards
-            </Button>
+            <BoardPicker
+              label="Board"
+              marker="board"
+              items={unifiedBoardChoices(
+                parsed?.sets ??
+                  (knownBoards.length > 0
+                    ? knownBoards
+                    : [{ id: boardSet, title: boardSet, description: "", kind: "built-in" }]),
+                sharedView?.boards ?? [],
+                sharedView?.enabled === true,
+              )}
+              value={shared ? `shared:${sharedBoardSet}` : `local:${boardSet}`}
+              everything={{ id: "local:all", label: "Show every task in this environment" }}
+              newLabel="New board…"
+              noneYet="You have no boards yet. New board… makes one to group tasks, such as Pilot work; tasks are put on it from New task or a task's page."
+              onChoose={setBoardSelection}
+              onCreate={() => {
+                setBoardSelection(`local:${boardSet}`);
+                setDialog({ kind: "board", editing: null });
+              }}
+              onEdit={(item) =>
+                setDialog({ kind: "board", editing: { ...item, id: item.id.slice(6) } })
+              }
+            />
             {!shared ? (
               <>
-                <BoardPicker
-                  label="Board"
-                  marker="board"
-                  items={
-                    parsed?.sets ??
-                    (knownBoards.length > 0
-                      ? knownBoards
-                      : [{ id: boardSet, title: boardSet, description: "", kind: "built-in" }])
-                  }
-                  value={boardSet}
-                  everything={{ id: "all", label: "Show every task" }}
-                  newLabel="New board…"
-                  noneYet="You have no boards yet. New board… makes one to group tasks, such as Pilot work; tasks are put on it from New task or a task's page."
-                  onChoose={setBoardSet}
-                  onCreate={() => setDialog({ kind: "board", editing: null })}
-                  onEdit={(item) => setDialog({ kind: "board", editing: item })}
-                />
                 <BoardPicker
                   label="Board view"
                   marker="view"

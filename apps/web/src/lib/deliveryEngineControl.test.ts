@@ -1,5 +1,43 @@
 import { describe, expect, it } from "vite-plus/test";
-import { controlDeliveryEngine } from "./deliveryEngineControl";
+import { controlDeliveryEngine, parseDeliveryEngineHealth } from "./deliveryEngineControl";
+
+describe("engine health summary", () => {
+  it("summarizes known fields without carrying arbitrary fields into the summary", () => {
+    expect(
+      parseDeliveryEngineHealth({
+        stopping: false,
+        pid: 27290,
+        profile: "team",
+        approval: "passphrase",
+        code: { commit: "9c594ca" },
+        unrelated: "private",
+      }),
+    ).toEqual({
+      stopping: false,
+      pid: 27290,
+      profile: "team",
+      approval: "passphrase",
+      commit: "9c594ca",
+    });
+  });
+
+  it.each([null, [], "untyped response", { pid: -1, profile: 7, code: null }])(
+    "handles old or unreadable health replies: %j",
+    (body) => {
+      expect(parseDeliveryEngineHealth(body)).toEqual({
+        stopping: false,
+        pid: null,
+        profile: null,
+        approval: "terminal-key",
+        commit: null,
+      });
+    },
+  );
+
+  it("identifies a draining engine without implying it can be restarted yet", () => {
+    expect(parseDeliveryEngineHealth({ stopping: true }).stopping).toBe(true);
+  });
+});
 
 describe("engine restart safety", () => {
   it("does not start while stop is still draining", async () => {

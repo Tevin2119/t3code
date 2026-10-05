@@ -15,6 +15,7 @@ import {
 } from "../lib/delivery";
 import { NO_FILTERS, type BoardFilters, type BoardGrouping } from "../lib/deliveryBoard";
 import { deliveryEnvironmentChoice } from "../lib/delivery";
+import { boardSelectionPatch } from "../lib/deliveryBoardSelection";
 import { boardPreferencesOf, useBoardStore } from "./deliveryBoard";
 import { useEnvironments, usePrimaryEnvironmentId } from "./environments";
 import { useEnvironmentQuery } from "./query";
@@ -408,6 +409,10 @@ export function useBoardControls(environment: string | null) {
   return useMemo(
     () => ({
       setBoardSet: (boardSet: string) => update(environment, () => ({ boardSet })),
+      setBoardSelection: (value: string) => {
+        const patch = boardSelectionPatch(value);
+        if (patch) update(environment, () => patch);
+      },
       setView: (view: string) => update(environment, () => ({ view })),
       setFilters: (patch: Partial<BoardFilters>) =>
         update(environment, (current) => ({ filters: { ...current.filters, ...patch } })),
