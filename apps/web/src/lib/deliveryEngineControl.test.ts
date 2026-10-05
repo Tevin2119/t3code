@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vite-plus/test";
-import { controlDeliveryEngine, parseDeliveryEngineHealth } from "./deliveryEngineControl";
+import {
+  controlDeliveryEngine,
+  deliveryUpdatePending,
+  parseDeliveryEngineHealth,
+  requireDeliveryUpdateReceipt,
+} from "./deliveryEngineControl";
 
 describe("engine health summary", () => {
   it("summarizes known fields without carrying arbitrary fields into the summary", () => {
@@ -18,6 +23,7 @@ describe("engine health summary", () => {
       profile: "team",
       approval: "passphrase",
       commit: "9c594ca",
+      versions: null,
     });
   });
 
@@ -30,6 +36,7 @@ describe("engine health summary", () => {
         profile: null,
         approval: "terminal-key",
         commit: null,
+        versions: null,
       });
     },
   );
@@ -37,6 +44,81 @@ describe("engine health summary", () => {
   it("identifies a draining engine without implying it can be restarted yet", () => {
     expect(parseDeliveryEngineHealth({ stopping: true }).stopping).toBe(true);
   });
+});
+
+describe("release facts and update receipts", () => {
+  const versions = {
+    channel: "qa" as const,
+    running: { commit: "a".repeat(40), changed: false },
+    installed: { commit: "b".repeat(40), changed: false },
+    available: { commit: "c".repeat(40), at: "2026-10-05T12:00:00Z" },
+    updateAvailable: true,
+    restartRequired: true,
+    deferred: false,
+    managed: true,
+    pinned: true,
+    problem: null,
+    update: null,
+  };
+  it("keeps running, installed and available distinct", () => {
+    const parsed = parseDeliveryEngineHealth({ code: { commit: "b".repeat(40) }, versions });
+    expect(parsed.versions).toEqual(versions);
+    expect(parsed.commit).toBe(versions.installed.commit);
+    expect(parsed.versions?.running?.commit).not.toBe(parsed.commit);
+  });
+  it.each([
+    { ...versions, channel: "personal" },
+    { ...versions, updateAvailable: "true" },
+    { ...versions, available: { commit: "not-pinned", at: "now" } },
+  ])("does not invent safe controls for invalid release facts", (invalid) => {
+    expect(parseDeliveryEngineHealth({ versions: invalid }).versions).toBeNull();
+  });
+  it("acceptance is only a request receipt, not proof of installation", () => {
+    const receipt = { accepted: true, id: "update-1", commit: "a".repeat(40), channel: "main" };
+    expect(requireDeliveryUpdateReceipt(receipt)).toEqual(receipt);
+    expect("complete" in requireDeliveryUpdateReceipt(receipt)).toBe(false);
+  });
+  it("does not enable another start during a disconnect or on another update's receipt", () => {
+    expect(deliveryUpdatePending("requested", null)).toBe(true);
+    expect(deliveryUpdatePending("requested", versions)).toBe(true);
+    const update = {
+      id: "requested",
+      phase: "complete" as const,
+      channel: "qa" as const,
+      commit: "c".repeat(40),
+      at: "now",
+    };
+    expect(
+      deliveryUpdatePending("requested", {
+        ...versions,
+        channel: "qa",
+        update: { ...update, id: "older-update" },
+      }),
+    ).toBe(true);
+    expect(deliveryUpdatePending("requested", { ...versions, channel: "qa", update })).toBe(true);
+    expect(
+      deliveryUpdatePending("requested", {
+        ...versions,
+        channel: "qa",
+        running: { commit: update.commit, changed: false },
+        update,
+      }),
+    ).toBe(false);
+    expect(
+      deliveryUpdatePending("requested", {
+        ...versions,
+        channel: "qa",
+        update: { ...update, phase: "starting" },
+      }),
+    ).toBe(true);
+    expect(deliveryUpdatePending(null, null)).toBe(false);
+  });
+  it.each([null, { stopped: true }, { accepted: true }, { accepted: "true", id: "1" }])(
+    "rejects incomplete or lost update acknowledgements",
+    (receipt) => {
+      expect(() => requireDeliveryUpdateReceipt(receipt)).toThrow("did not confirm");
+    },
+  );
 });
 
 describe("engine restart safety", () => {
