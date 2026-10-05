@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  parseSeatLive,
+  waitingWords,
   deliveryEnvironmentChoice,
   decideTeamForSend,
   deliveryFailureText,
@@ -304,6 +306,7 @@ describe("parseBoard", () => {
         specialist: null,
         since: null,
         waiting: null,
+        waitingWhy: null,
       },
       // One the engine holds is read as waiting, with what for.
       {
@@ -314,6 +317,7 @@ describe("parseBoard", () => {
         specialist: null,
         since: null,
         waiting: "memory headroom",
+        waitingWhy: null,
       },
     ]);
     expect([read?.questions, read?.unread, read?.unanswered, read?.files]).toEqual([1, 2, 1, 3]);
@@ -991,6 +995,7 @@ describe("seats at work and seats held", () => {
     specialist: null,
     since: null,
     waiting,
+    waitingWhy: null,
   });
   it("says working while any seat works, and waiting, for what, while every seat is held", () => {
     expect(
@@ -1054,6 +1059,7 @@ describe("draftAgainstRead", () => {
       specialist: null,
       since: null,
       waiting: "memory headroom",
+      waitingWhy: null,
     };
     expect(nowLine({ workers: [worker], stage: null })).toBe("Waits for memory");
   });
@@ -1102,11 +1108,18 @@ describe("repeatKeys", () => {
 });
 
 describe("deliveryEnvironmentChoice", () => {
+  it("waits for Connections before falling back from a remembered environment", () => {
+    const selection = {
+      fromConversation: null,
+      chosen: "windows",
+      primary: "mac",
+    };
+    expect(deliveryEnvironmentChoice({ ...selection, connected: [], isReady: false })).toBeNull();
+    expect(
+      deliveryEnvironmentChoice({ ...selection, connected: ["mac", "windows"], isReady: true }),
+    ).toBe("windows");
+  });
   const connected = ["mac", "windows"] as const;
-  const on =
-    (...ids: Array<string | null>) =>
-    (environment: string | null) =>
-      ids.includes(environment);
   it("takes the conversation's environment for a task made from it, even when the window's own is another", () => {
     expect(
       deliveryEnvironmentChoice({
@@ -1114,18 +1127,16 @@ describe("deliveryEnvironmentChoice", () => {
         chosen: null,
         connected,
         primary: "mac",
-        enabled: on("mac", "windows"),
       }),
     ).toBe("windows");
   });
-  it("keeps the person's choice, and gives way to the window's own when the choice is off or gone", () => {
+  it("keeps the person's choice and uses the window's environment when the choice was removed", () => {
     expect(
       deliveryEnvironmentChoice({
         fromConversation: null,
         chosen: "windows",
         connected,
         primary: "mac",
-        enabled: on("windows"),
       }),
     ).toBe("windows");
     expect(
@@ -1134,28 +1145,105 @@ describe("deliveryEnvironmentChoice", () => {
         chosen: "windows",
         connected,
         primary: "mac",
-        enabled: on("mac"),
       }),
-    ).toBe("mac");
+    ).toBe("windows");
     expect(
       deliveryEnvironmentChoice({
         fromConversation: null,
         chosen: "gone",
         connected,
         primary: "mac",
-        enabled: on("mac"),
       }),
     ).toBe("mac");
   });
-  it("stays on the chosen one when neither has delivery on, so the screen can say why", () => {
+  it("keeps a conversation pinned to its own environment", () => {
     expect(
       deliveryEnvironmentChoice({
         fromConversation: "windows/t",
         chosen: null,
         connected,
         primary: "mac",
-        enabled: on(),
       }),
     ).toBe("windows");
+  });
+  it("pins task URLs to their named environment instead of the remembered selection", () => {
+    expect(
+      deliveryEnvironmentChoice({
+        fromConversation: null,
+        requested: "windows",
+        chosen: "mac",
+        connected,
+        primary: "mac",
+      }),
+    ).toBe("windows");
+  });
+  it("does not open local tasks when the environment of a URL or conversation is missing", () => {
+    expect(
+      deliveryEnvironmentChoice({
+        fromConversation: null,
+        requested: "removed",
+        chosen: "mac",
+        connected,
+        primary: "mac",
+      }),
+    ).toBeNull();
+    expect(
+      deliveryEnvironmentChoice({
+        fromConversation: "removed/thread",
+        chosen: "mac",
+        connected,
+        primary: "mac",
+      }),
+    ).toBeNull();
+  });
+  it("uses the conversation's environment when creating its task", () => {
+    expect(
+      deliveryEnvironmentChoice({
+        fromConversation: "windows/thread",
+        requested: "mac",
+        chosen: "mac",
+        connected,
+        primary: "mac",
+      }),
+    ).toBe("windows");
+  });
+});
+
+describe("the run panel's readings", () => {
+  it("reads what a seat at work last did, and nothing that is not tool, said or log", () => {
+    expect(
+      parseSeatLive({
+        started: "2026-10-04T09:00:00Z",
+        updated: "2026-10-04T09:01:00Z",
+        items: [
+          { kind: "tool", text: "Read: src/calc.mjs" },
+          { kind: "said", text: "Reading the calculator." },
+          { kind: "other", text: "x" },
+        ],
+      }),
+    ).toEqual({
+      started: "2026-10-04T09:00:00Z",
+      updated: "2026-10-04T09:01:00Z",
+      items: [
+        { kind: "tool", text: "Read: src/calc.mjs" },
+        { kind: "said", text: "Reading the calculator." },
+      ],
+    });
+    expect(parseSeatLive(null)).toBeNull();
+  });
+  it("keeps only the last few short lines of a large reading", () => {
+    const live = parseSeatLive({
+      items: Array.from({ length: 500 }, (_, index) => ({
+        kind: "log",
+        text: `${index} ${"x".repeat(1000)}`,
+      })),
+    });
+    expect(live?.items).toHaveLength(8);
+    expect(live?.items[0]?.text.startsWith("492 ")).toBe(true);
+    expect(live?.items.every((item) => item.text.length <= 300)).toBe(true);
+  });
+  it("says a wait for a slot plainly", () => {
+    expect(waitingWords("global limit")).toBe("waits for a free slot");
+    expect(waitingWords("memory headroom")).toBe("waits for memory");
   });
 });

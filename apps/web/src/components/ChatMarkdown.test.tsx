@@ -73,6 +73,31 @@ function codeButton(renderer: ReactTestRenderer, label: string) {
 }
 
 describe("ChatMarkdown context references", () => {
+  it("keeps evidence media as text while ordinary chat can render images", async () => {
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    let renderer: ReactTestRenderer | undefined;
+    const text = "![Run diagram](https://example.invalid/tracker.png)";
+    try {
+      await act(async () => {
+        renderer = create(
+          <ChatMarkdown cwd={undefined} text={text} parseRawHtml={false} allowMedia={false} />,
+        );
+      });
+      expect(renderer!.root.findAllByType("img")).toHaveLength(0);
+      expect(
+        renderer!.root.findAllByType("span").some((span) => span.children.includes("Run diagram")),
+      ).toBe(true);
+      await act(async () => {
+        renderer!.update(<ChatMarkdown cwd={undefined} text={text} />);
+      });
+      expect(renderer!.root.findAllByType("img")).toHaveLength(1);
+    } finally {
+      await act(async () => {
+        renderer?.unmount();
+      });
+      vi.unstubAllGlobals();
+    }
+  });
   it("renders text and image references through the chip renderer, with readable fallback", async () => {
     vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
     let renderer: ReactTestRenderer | undefined;

@@ -6,6 +6,30 @@
  */
 import type { DeliveryCard, DeliveryLane, TaskPriority } from "./delivery";
 
+export interface DeliveryBoardSearch {
+  readonly environment?: string;
+  readonly task?: string;
+  readonly new?: boolean;
+  readonly from?: string;
+}
+
+export function parseBoardSearch(raw: Record<string, unknown>): DeliveryBoardSearch {
+  const environment =
+    typeof raw.environment === "string" &&
+    raw.environment.trim().length > 0 &&
+    raw.environment.length <= 200
+      ? { environment: raw.environment }
+      : {};
+  if (isTaskId(raw.task)) return { ...environment, task: raw.task };
+  if (raw.new === true)
+    return {
+      ...environment,
+      new: true,
+      ...(isConversationRef(raw.from) ? { from: raw.from } : {}),
+    };
+  return environment;
+}
+
 export const PRIORITY_LABEL: Record<TaskPriority, string> = {
   urgent: "Urgent",
   high: "High",
@@ -521,6 +545,29 @@ export function taskFromConversation(input: {
   return { title: input.title.trim().slice(0, 120), text: sections.join("\n\n") };
 }
 
+/**
+ * The part of the task view a line of its history points at: the acceptance checklist triage
+ * wrote, or the plan. Null when it points at neither.
+ */
+export function sectionOf(entry: {
+  readonly kind: string | null;
+  readonly text: string;
+}): "acceptance" | "plan" | null {
+  if (
+    /[1-9]\d* item\(s\) on the acceptance checklist|(wrote|updated) the acceptance checklist/i.test(
+      entry.text,
+    )
+  )
+    return "acceptance";
+  if (
+    entry.kind === "run.planned" ||
+    entry.kind === "plan.settled" ||
+    /\bthe plan is (settled|ready|written)\b/i.test(entry.text)
+  )
+    return "plan";
+  return null;
+}
+
 /** What each step a person can take on a task is called. */
 export const ACTION_LABEL: Record<string, string> = {
   submit: "Submit",
@@ -536,6 +583,8 @@ export const ACTION_LABEL: Record<string, string> = {
   deliver: "Start delivery",
   close: "Close",
   publish: "Publish",
+  first: "Do next",
+  "not-first": "No longer next",
 };
 
 /**

@@ -782,6 +782,8 @@ export interface DeliveryWorker {
   readonly since: string | null;
   /** Why it has not started yet, when the engine holds it (for memory, or a free slot); null at work. */
   readonly waiting: string | null;
+  /** The same, in words a person can act on: who holds the slots, or the memory it waits for. */
+  readonly waitingWhy: string | null;
 }
 
 /** The seats at work on a card, as opposed to those the engine holds before they start. */
@@ -838,9 +840,11 @@ export function draftAgainstRead(input: {
 export const waitingWords = (reason: string | null): string =>
   reason === "memory headroom" || reason === "host under memory pressure"
     ? "waits for memory"
-    : reason
-      ? `waits for ${reason}`
-      : "is working";
+    : reason === "global limit"
+      ? "waits for a free slot"
+      : reason
+        ? `waits for ${reason}`
+        : "is working";
 
 export interface DeliveryCard {
   readonly id: string;
@@ -933,6 +937,8 @@ export interface DeliveryCard {
   /** What became of the approved change: pushed, a pull request, merged, or a failed attempt. */
   readonly publication: DeliveryPublication | null;
   readonly actions: ReadonlyArray<string>;
+  /** Put first by a person for the next free slots (Do next). */
+  readonly first: boolean;
 }
 
 /**
@@ -1052,6 +1058,7 @@ export const parseCard = (value: Json): DeliveryCard => {
       specialist: textOrNull(worker.specialist),
       since: textOrNull(worker.since),
       waiting: textOrNull(worker.waiting),
+      waitingWhy: textOrNull(worker.waitingWhy),
     })),
     paused: paused
       ? {
@@ -1107,6 +1114,7 @@ export const parseCard = (value: Json): DeliveryCard => {
     set: textOrNull(value.set),
     publication: parsePublication(value.publication),
     actions: strings(value.actions),
+    first: flag(value.first),
   };
 };
 
@@ -1166,9 +1174,28 @@ export interface CouncilSeat {
   readonly access: string | null;
   readonly activity: string;
   readonly blockedBy: string | null;
+  /** Why it waits, in words a person can act on. */
+  readonly waitingWhy: string | null;
   readonly stage: string | null;
   readonly verdict: string | null;
   readonly attempts: number;
+  /** What it is doing now, from its own output, while it works; null otherwise. */
+  readonly live: SeatLive | null;
+}
+
+/** What a seat at work last did: the tools it called and what it said, newest last. */
+export interface SeatLive {
+  readonly started: string | null;
+  readonly updated: string | null;
+  readonly items: ReadonlyArray<{ readonly kind: "tool" | "said" | "log"; readonly text: string }>;
+}
+
+/** An instruction a person gave a run while it was under way. */
+export interface RunSteer {
+  readonly at: string;
+  readonly by: string;
+  readonly seat: string | null;
+  readonly text: string;
 }
 
 export interface TaskCouncil {
@@ -1180,6 +1207,11 @@ export interface TaskCouncil {
   readonly evidence: string | null;
   readonly decision: string | null;
   readonly seats: ReadonlyArray<CouncilSeat>;
+  /** What the run wrote for a person to read: PLAN.md, REVIEW.md, PACK.md. */
+  readonly documents: ReadonlyArray<string>;
+  readonly steers: ReadonlyArray<RunSteer>;
+  /** Whether a person put the task first for the next free slots. */
+  readonly first: boolean;
   readonly votes: ReadonlyArray<{
     readonly seat: string;
     readonly provider: string;
@@ -1470,6 +1502,23 @@ export interface TaskView {
   } | null;
 }
 
+export function parseSeatLive(value: unknown): SeatLive | null {
+  if (!isRecord(value)) return null;
+  return {
+    started: textOrNull(value.started),
+    updated: textOrNull(value.updated),
+    // The engine sends a few short lines; a larger reading is cut to the same.
+    items: records(value.items)
+      .flatMap((item): Array<SeatLive["items"][number]> => {
+        const kind = text(item.kind);
+        return kind === "tool" || kind === "said" || kind === "log"
+          ? [{ kind, text: text(item.text).slice(0, 300) }]
+          : [];
+      })
+      .slice(-8),
+  };
+}
+
 const parseCouncil = (council: Json): TaskCouncil => {
   const concurrency = isRecord(council.concurrency) ? council.concurrency : {};
   return {
@@ -1492,10 +1541,20 @@ const parseCouncil = (council: Json): TaskCouncil => {
       access: textOrNull(seat.access),
       activity: text(seat.activity, "waiting"),
       blockedBy: textOrNull(seat.blockedBy),
+      waitingWhy: textOrNull(seat.waitingWhy),
       stage: textOrNull(seat.stage),
       verdict: textOrNull(seat.verdict),
       attempts: list(seat.attempts).length,
+      live: parseSeatLive(seat.live),
     })),
+    documents: [...new Set(strings(council.documents))],
+    steers: records(council.steers).map((steer) => ({
+      at: text(steer.at),
+      by: text(steer.by),
+      seat: textOrNull(steer.seat),
+      text: text(steer.text),
+    })),
+    first: flag(council.first),
     votes: records(council.votes).map((vote) => ({
       seat: text(vote.seat),
       provider: text(vote.provider),
@@ -2180,18 +2239,20 @@ export function parseSeatSetup(body: unknown): SeatSetup | null {
 /**
  * Which environment's engine the delivery screens talk to: the environment of the conversation a
  * task is made from, else the one the person chose, else the window's own; each only while still
- * connected. One with delivery off gives way to the window's own when that has it on.
+ * available. An explicit choice never silently opens another environment's tasks.
  */
 export function deliveryEnvironmentChoice<Id extends string>(input: {
   readonly fromConversation: string | null;
   readonly chosen: string | null;
+  readonly requested?: string | null;
+  readonly isReady?: boolean;
   readonly connected: ReadonlyArray<Id>;
   readonly primary: Id | null;
-  readonly enabled: (environment: Id | null) => boolean;
 }): Id | null {
+  if (input.isReady === false) return null;
   const known = (id: string | null | undefined): Id | null =>
     id ? (input.connected.find((environment) => environment === id) ?? null) : null;
-  const wanted =
-    known(input.fromConversation?.split("/")[0]) ?? known(input.chosen) ?? input.primary;
-  return input.enabled(wanted) || !input.enabled(input.primary) ? wanted : input.primary;
+  if (input.fromConversation) return known(input.fromConversation.split("/")[0]);
+  if (input.requested) return known(input.requested);
+  return known(input.chosen) ?? input.primary;
 }

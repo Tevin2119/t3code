@@ -15,11 +15,14 @@ import {
 } from "../lib/delivery";
 import { NO_FILTERS, type BoardFilters, type BoardGrouping } from "../lib/deliveryBoard";
 import { deliveryEnvironmentChoice } from "../lib/delivery";
+import { boardSelectionPatch } from "../lib/deliveryBoardSelection";
+import { boardPreferencesOf, useBoardStore } from "./deliveryBoard";
 import { useEnvironments, usePrimaryEnvironmentId } from "./environments";
 import { useEnvironmentQuery } from "./query";
 import { useAtomCommand } from "./use-atom-command";
 
 export type { SeatChoice };
+export { useBoardStore } from "./deliveryBoard";
 
 export const deliveryEnvironment = createDeliveryEnvironmentAtoms(connectionAtomRuntime);
 
@@ -397,83 +400,37 @@ export function useOrchestratorActivity(threadId: string | null): OrchestratorAc
   );
 }
 
-interface BoardState {
-  /** The name written on what this person does: a message, a move, a decision. */
-  readonly person: string;
-  readonly view: string;
-  readonly filters: BoardFilters;
-  readonly grouping: BoardGrouping;
-  /** Whether the history shows how the engine got somewhere, beside where it got. */
-  readonly showDetail: boolean;
-  /** Lanes a person folded or opened by hand. A lane not named here is folded while it is empty. */
-  readonly laneFolds: Readonly<Record<string, boolean>>;
-  /** Groups of the Board's sidebar a person folded (true) or opened (false) by hand. */
-  readonly panelFolds: Readonly<Record<string, boolean>>;
-  /** Which tasks the board shows: the pilot's work, the qualification's, or both. */
-  /** The board shown; see boardSetOf. */
-  readonly boardSet: string;
-  readonly setBoardSet: (set: string) => void;
-  /** The environment whose engine the board talks to, when a person chose one; see useDeliveryEnvironmentId. */
-  readonly deliveryEnvironment: string | null;
-  readonly setDeliveryEnvironment: (environment: string | null) => void;
-  readonly setPerson: (person: string) => void;
-  readonly setView: (view: string) => void;
-  readonly setFilters: (patch: Partial<BoardFilters>) => void;
-  readonly clearFilters: () => void;
-  readonly setGrouping: (grouping: BoardGrouping) => void;
-  readonly setShowDetail: (showDetail: boolean) => void;
-  readonly foldLane: (lane: string, folded: boolean) => void;
-  readonly foldPanel: (group: string, folded: boolean) => void;
+export function useBoardPreferences(environment: string | null) {
+  return useBoardStore((state) => boardPreferencesOf(state, environment));
 }
 
-/** How this person looks at the board. Kept across reloads, on this device. */
-export const useBoardStore = create<BoardState>()(
-  persist(
-    (set) => ({
-      person: "",
-      view: "development",
-      filters: NO_FILTERS,
-      grouping: "none",
-      showDetail: false,
-      laneFolds: {},
-      panelFolds: {},
-      boardSet: "unsorted",
-      setBoardSet: (boardSet) => set({ boardSet }),
-      deliveryEnvironment: null,
-      setDeliveryEnvironment: (deliveryEnvironment) => set({ deliveryEnvironment }),
-      setPerson: (person) => set({ person: person.slice(0, 60) }),
-      setView: (view) => set({ view }),
-      setFilters: (patch) => set((state) => ({ filters: { ...state.filters, ...patch } })),
-      clearFilters: () => set({ filters: NO_FILTERS }),
-      setGrouping: (grouping) => set({ grouping }),
-      setShowDetail: (showDetail) => set({ showDetail }),
-      foldLane: (lane, folded) =>
-        set((state) => ({ laneFolds: { ...state.laneFolds, [lane]: folded } })),
-      foldPanel: (group, folded) =>
-        set((state) => ({ panelFolds: { ...state.panelFolds, [group]: folded } })),
-    }),
-    {
-      name: "t3code:delivery-board:v1",
-      version: 1,
-      // Before lanes folded by themselves, the folded ones were kept as a list.
-      migrate: (kept) => {
-        const { collapsedLanes: _collapsed, ...rest } = (kept ?? {}) as Record<string, unknown>;
-        return { ...rest, laneFolds: {} };
+export function useBoardControls(environment: string | null) {
+  const update = useBoardStore((state) => state.updateBoard);
+  return useMemo(
+    () => ({
+      setBoardSet: (boardSet: string) => update(environment, () => ({ boardSet })),
+      setBoardSelection: (value: string) => {
+        const patch = boardSelectionPatch(value);
+        if (patch) update(environment, () => patch);
       },
-      // A search is for now. How the board is laid out is kept.
-      partialize: (state) => ({
-        person: state.person,
-        view: state.view,
-        grouping: state.grouping,
-        showDetail: state.showDetail,
-        laneFolds: state.laneFolds,
-        panelFolds: state.panelFolds,
-        boardSet: state.boardSet,
-        deliveryEnvironment: state.deliveryEnvironment,
-      }),
-    },
-  ),
-);
+      setView: (view: string) => update(environment, () => ({ view })),
+      setFilters: (patch: Partial<BoardFilters>) =>
+        update(environment, (current) => ({ filters: { ...current.filters, ...patch } })),
+      clearFilters: () => update(environment, () => ({ filters: NO_FILTERS })),
+      setGrouping: (grouping: BoardGrouping) => update(environment, () => ({ grouping })),
+      foldLane: (lane: string, folded: boolean) =>
+        update(environment, (current) => ({ laneFolds: { ...current.laneFolds, [lane]: folded } })),
+      foldPanel: (group: string, folded: boolean) =>
+        update(environment, (current) => ({
+          panelFolds: { ...current.panelFolds, [group]: folded },
+        })),
+      setShared: (shared: boolean) => update(environment, () => ({ shared })),
+      setSharedBoardSet: (sharedBoardSet: string) =>
+        update(environment, () => ({ sharedBoardSet })),
+    }),
+    [environment, update],
+  );
+}
 
 /** The name to write on what is done. Empty, the engine writes "person". */
 export function usePersonName(): string {
@@ -485,32 +442,23 @@ export function usePersonName(): string {
  * connected to several environments, and the engine is the one of the environment the work lives
  * in, not always the window's own: a task made from a conversation goes to the engine of that
  * conversation's environment. Otherwise the one the person chose on the Board, if still connected;
- * otherwise the window's own. Whichever is picked, one that has delivery switched off gives way to
- * the window's own when that has it on.
+ * otherwise the window's own. A URL can pin the environment. Turning delivery off does not change
+ * whose tasks the screen shows.
  */
 export function useDeliveryEnvironmentId(
   fromConversation: string | null = null,
+  requested: string | null = null,
 ): EnvironmentId | null {
   const primary = usePrimaryEnvironmentId();
   const chosen = useBoardStore((state) => state.deliveryEnvironment);
-  const { environments } = useEnvironments();
+  const { environments, isReady } = useEnvironments();
   const connected = environments.map((environment) => environment.environmentId);
-  // Hooks read whether delivery is on for the two that can be picked; the choice itself is pure.
-  const wanted = deliveryEnvironmentChoice({
-    fromConversation,
-    chosen,
-    connected,
-    primary,
-    enabled: () => true,
-  });
-  const wantedOn = useDeliveryEnabled(wanted);
-  const primaryOn = useDeliveryEnabled(primary);
   return deliveryEnvironmentChoice({
     fromConversation,
     chosen,
+    requested,
+    isReady,
     connected,
     primary,
-    enabled: (environment) =>
-      environment === wanted ? wantedOn : environment === primary ? primaryOn : false,
   });
 }

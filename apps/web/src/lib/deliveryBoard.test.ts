@@ -2,6 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import { parseCard } from "./delivery";
 import {
+  sectionOf,
   isConversationRef,
   taskFromConversation,
   activeFilters,
@@ -22,6 +23,7 @@ import {
   queryValue,
   tagsFromText,
   moveIntent,
+  parseBoardSearch,
 } from "./deliveryBoard";
 
 const card = (overrides: Record<string, unknown> = {}) =>
@@ -41,6 +43,33 @@ const card = (overrides: Record<string, unknown> = {}) =>
     waitingOn: "team",
     ...overrides,
   });
+
+describe("environment-scoped board links", () => {
+  it("keeps the environment when opening a task, the board, or a new draft", () => {
+    expect(parseBoardSearch({ environment: "windows", task: "task-0a1b2c3d4e" })).toEqual({
+      environment: "windows",
+      task: "task-0a1b2c3d4e",
+    });
+    expect(parseBoardSearch({ environment: "windows" })).toEqual({ environment: "windows" });
+    expect(parseBoardSearch({ environment: "mac", new: true, from: "mac/thread" })).toEqual({
+      environment: "mac",
+      new: true,
+      from: "mac/thread",
+    });
+  });
+  it("discards invalid task and conversation inputs without dropping a valid environment", () => {
+    expect(parseBoardSearch({ environment: "mac", task: "../outside" })).toEqual({
+      environment: "mac",
+    });
+    expect(parseBoardSearch({ environment: "mac", new: true, from: "invalid" })).toEqual({
+      environment: "mac",
+      new: true,
+    });
+    expect(parseBoardSearch({ environment: {}, task: "task-0a1b2c3d4e" })).toEqual({
+      task: "task-0a1b2c3d4e",
+    });
+  });
+});
 
 describe("matchesCard", () => {
   it("finds a task by its number, with or without the sign", () => {
@@ -378,11 +407,41 @@ describe("moveIntent while every seat waits", () => {
             specialist: null,
             since: null,
             waiting: "memory headroom",
+            waitingWhy: null,
           },
         ],
       },
       "triage",
     );
     expect(held.kind === "refused" && held.why).toMatch(/about to start on it, waiting for room/);
+  });
+});
+
+describe("sectionOf", () => {
+  it("points a history line at the checklist or the plan it speaks of", () => {
+    expect(
+      sectionOf({
+        kind: "note",
+        text: "Triage: ready, with 7 item(s) on the acceptance checklist.",
+      }),
+    ).toBe("acceptance");
+    expect(
+      sectionOf({
+        kind: "task.revised",
+        text: "Revision 2: Triage wrote the acceptance checklist.",
+      }),
+    ).toBe("acceptance");
+    expect(sectionOf({ kind: "note", text: "Triage updated the acceptance checklist." })).toBe(
+      "acceptance",
+    );
+    // An empty checklist has nothing to show.
+    expect(
+      sectionOf({
+        kind: "note",
+        text: "Triage: ready, with 0 item(s) on the acceptance checklist.",
+      }),
+    ).toBeNull();
+    expect(sectionOf({ kind: "run.planned", text: "Planned." })).toBe("plan");
+    expect(sectionOf({ kind: "note", text: "Run run-1 started." })).toBeNull();
   });
 });

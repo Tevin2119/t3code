@@ -353,7 +353,11 @@ import { resolveProviderSkillsForCwd } from "@t3tools/client-runtime/providerSki
 import { vcsEnvironment } from "../state/vcs";
 import { sourceControlEnvironment } from "../state/sourceControl";
 import { useProjectClone } from "../state/projectClones";
-import { projectCloneDisplayName, projectCloneProgressSummary } from "@t3tools/contracts";
+import {
+  projectCloneDisplayName,
+  projectCloneProgressSummary,
+  sameWorkspaceProfile,
+} from "@t3tools/contracts";
 import { useEnvironments, usePrimaryEnvironment } from "../state/environments";
 import {
   useProject,
@@ -3857,6 +3861,10 @@ export default function ChatView(props: ChatViewProps) {
               const environment = environmentById.get(candidate.environmentId);
               return (
                 environment?.connection.phase === "connected" &&
+                sameWorkspaceProfile(
+                  serverConfig?.environment.workspace,
+                  environment.serverConfig?.environment.workspace,
+                ) &&
                 (loadBalancingSettings.loadBalancingWeights[candidate.environmentId] ?? 50) > 0 &&
                 environment.serverConfig?.providers.some(
                   (provider) =>
@@ -3880,6 +3888,7 @@ export default function ChatView(props: ChatViewProps) {
       loadBalancingSettings.loadBalancingWeights,
       activeProviderInstanceId,
       selectedProvider,
+      serverConfig,
     ],
   );
   const loadBalancing = useLoadBalancedEnvironment(

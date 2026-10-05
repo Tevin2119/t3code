@@ -16,6 +16,48 @@ import { ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
 export const DELIVERY_DEFAULT_TEAM = "development";
 export const DELIVERY_DEFAULT_ENGINE_URL = "http://127.0.0.1:4320";
 
+export const DeliveryReleaseChannel = Schema.Literals(["dev", "qa", "main"]);
+export type DeliveryReleaseChannel = typeof DeliveryReleaseChannel.Type;
+
+const DeliveryCommit = Schema.String.check(Schema.isPattern(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/));
+const DeliveryCodeVersion = Schema.Struct({
+  branch: Schema.optional(Schema.NullOr(Schema.String)),
+  commit: Schema.NullOr(DeliveryCommit),
+  changed: Schema.Boolean,
+});
+
+export const DeliveryEngineVersions = Schema.Struct({
+  channel: DeliveryReleaseChannel,
+  running: Schema.NullOr(DeliveryCodeVersion),
+  installed: Schema.NullOr(DeliveryCodeVersion),
+  available: Schema.NullOr(Schema.Struct({ commit: DeliveryCommit, at: Schema.String })),
+  updateAvailable: Schema.Boolean,
+  restartRequired: Schema.Boolean,
+  deferred: Schema.Boolean,
+  managed: Schema.Boolean,
+  pinned: Schema.Boolean,
+  problem: Schema.NullOr(Schema.String),
+  update: Schema.NullOr(
+    Schema.Struct({
+      id: Schema.NullOr(Schema.String),
+      phase: Schema.Literals(["draining", "snapshotting", "starting", "complete", "failed"]),
+      channel: DeliveryReleaseChannel,
+      commit: Schema.NullOr(DeliveryCommit),
+      at: Schema.String,
+      snapshot: Schema.optional(Schema.NullOr(Schema.String)),
+      problem: Schema.optional(Schema.String),
+    }),
+  ),
+});
+export type DeliveryEngineVersions = typeof DeliveryEngineVersions.Type;
+
+export const DeliveryEngineUpdateReceipt = Schema.Struct({
+  accepted: Schema.Literal(true),
+  id: TrimmedNonEmptyString,
+  commit: DeliveryCommit,
+  channel: DeliveryReleaseChannel,
+});
+
 /** Only engine API paths are relayed; anything else is rejected before a request is made. */
 export const DeliveryPath = TrimmedNonEmptyString.check(
   Schema.isPattern(/^\/api\/[A-Za-z0-9_\-/]+(\?[A-Za-z0-9_\-=&%.:+~]*)?$/),
