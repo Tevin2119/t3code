@@ -17,6 +17,23 @@ import { Input } from "../ui/input";
 const ENGINE_THREAD = ThreadId.make("delivery-engine");
 const ENGINE_TERMINAL = "engine";
 
+export function EngineDownNotice(props: {
+  readonly environmentId: EnvironmentId | null;
+  readonly message: string;
+  readonly className?: string;
+}) {
+  return (
+    <div className={props.className} data-delivery-engine-down>
+      <p className="text-warning">{props.message}</p>
+      {props.environmentId ? (
+        <p className="mt-1 text-xs text-muted-foreground">
+          Open Engine beside the environment picker to inspect or start it.
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
 export function EnginePanel({ environmentId }: { readonly environmentId: EnvironmentId }) {
   const [open, setOpen] = useState(false);
   return (

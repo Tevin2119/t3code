@@ -45,7 +45,7 @@ import {
 } from "../../state/delivery";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
-import { EnginePanel } from "./EnginePanel";
+import { EngineDownNotice, EnginePanel } from "./EnginePanel";
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
 import { RefreshIcon } from "../ui/refresh-icon";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
@@ -795,9 +795,11 @@ function EnvironmentBoardPage({ environmentId }: { readonly environmentId: Envir
             onOpen={open}
           />
         ) : board.error ? (
-          <p className="p-6 text-sm text-warning">
-            Delivery engine not reachable. {board.error} Nothing shown here is current.
-          </p>
+          <EngineDownNotice
+            className="p-6 text-sm"
+            environmentId={environmentId}
+            message={`Delivery engine not reachable. ${board.error} Nothing shown here is current.`}
+          />
         ) : (
           <>
             {actions.problem ? (

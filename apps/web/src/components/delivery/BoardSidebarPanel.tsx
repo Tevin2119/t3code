@@ -42,6 +42,7 @@ import { ActiveFilterChips, LaneFilterMenu } from "./BoardFilterControls";
 import { Age, CardSigns, laneTone, PriorityPill } from "./taskParts";
 import { BoardIcon } from "./BoardIcon";
 import { EnvironmentPicker } from "./EnvironmentPicker";
+import { EngineDownNotice, EnginePanel } from "./EnginePanel";
 
 const ANY = "__any__";
 
@@ -303,6 +304,7 @@ function EnvironmentBoardSidebar({
     <SidebarContent className="overflow-x-hidden" data-board-panel>
       <SidebarGroup className="gap-2 p-[var(--sidebar-content-inset)]">
         <EnvironmentPicker value={environmentId} onChoose={chooseEnvironment} />
+        {environmentId ? <EnginePanel environmentId={environmentId} /> : null}
         <div className="flex items-center gap-1">
           <Button
             size="sm"
@@ -512,7 +514,11 @@ function EnvironmentBoardSidebar({
             Delivery is turned off for this environment.
           </p>
         ) : read.error ? (
-          <p className="px-2 text-xs text-warning">Delivery engine not reachable. {read.error}</p>
+          <EngineDownNotice
+            className="px-2 text-xs"
+            environmentId={environmentId}
+            message={`Delivery engine not reachable. ${read.error}`}
+          />
         ) : searching ? (
           <Section
             environmentId={environmentId}
