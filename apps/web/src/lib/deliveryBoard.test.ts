@@ -435,8 +435,11 @@ describe("boardAttentionCount", () => {
     expect(
       boardAttentionCount(
         reading([
-          lane("needs-decision", [task("a", "needs-decision", "person")]),
-          lane("human-review", [task("b", "human-review"), task("c", "human-review")]),
+          lane("needs-decision", [
+            task("a", "needs-decision", "person"),
+            task("b", "needs-decision", "person"),
+          ]),
+          lane("human-review", [task("c", "human-review")]),
         ]),
       ),
     ).toBe(3);
@@ -504,5 +507,48 @@ describe("boardAttentionCount", () => {
     expect(boardAttentionCount(reading(good, { set: "unsorted" }))).toBeNull();
     expect(boardAttentionCount(reading(good, { set: undefined }))).toBeNull();
     expect(boardAttentionCount(reading(good, { view: "testing" }))).toBeNull();
+  });
+
+  it("does not add up a lane that counts when it is listed twice", () => {
+    const waiting = lane("needs-decision", [
+      task("a", "needs-decision"),
+      task("b", "needs-decision"),
+    ]);
+    expect(boardAttentionCount(reading([waiting, waiting, lane("human-review")]))).toBeNull();
+    expect(
+      boardAttentionCount(
+        reading([
+          lane("needs-decision", [task("a", "needs-decision")]),
+          lane("human-review"),
+          lane("human-review"),
+        ]),
+      ),
+    ).toBeNull();
+    // Twice and empty both times is no more to be trusted.
+    expect(
+      boardAttentionCount(
+        reading([lane("needs-decision"), lane("needs-decision"), lane("human-review")]),
+      ),
+    ).toBeNull();
+    expect(
+      boardAttentionCount(
+        reading([lane("needs-decision"), lane("human-review"), lane("human-review")]),
+      ),
+    ).toBeNull();
+    // Twice with another lane between the two.
+    expect(boardAttentionCount(reading([waiting, lane("human-review"), waiting]))).toBeNull();
+  });
+
+  it("still counts when a lane that does not count is listed twice", () => {
+    expect(
+      boardAttentionCount(
+        reading([
+          lane("draft", [task("a", "draft")]),
+          lane("needs-decision", [task("b", "needs-decision"), task("c", "needs-decision")]),
+          lane("draft"),
+          lane("human-review", [task("d", "human-review")]),
+        ]),
+      ),
+    ).toBe(3);
   });
 });

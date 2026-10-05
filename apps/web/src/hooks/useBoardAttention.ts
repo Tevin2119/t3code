@@ -21,8 +21,9 @@ export function useBoardAttention(
   connected: boolean,
 ): number | null {
   const active = enabled && connected ? environmentId : null;
-  // A reading that failed keeps the body of the one before it, so only an answer
-  // that came back malformed needs the last good count kept here.
+  // A reading that failed keeps the body of the one before it, and so the count
+  // before it. An answer that came back malformed is a reading of its own: its
+  // count is not known, and no earlier count is shown in its place.
   const { body } = useDeliveryRead(active, active ? ATTENTION_BOARD_PATH : null, {
     pollMs: POLL_MS,
   });
@@ -41,7 +42,6 @@ export function useBoardAttention(
   }
   if (active === null || body === kept.old || body === kept.body) return kept.count;
   const count = boardAttentionCount(body);
-  if (count === null) return kept.count;
   setKept({ ...kept, body, count });
   return count;
 }
