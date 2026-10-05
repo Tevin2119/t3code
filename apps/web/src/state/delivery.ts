@@ -544,6 +544,19 @@ interface BoardState {
   readonly foldPanel: (group: string, folded: boolean) => void;
 }
 
+/**
+ * The tags that were chosen, from what was kept on this device. Before several could be chosen
+ * one was kept as `tag`; it is read only when no list was kept. Anything else is no tag.
+ */
+function keptTags(filters: unknown): ReadonlyArray<string> {
+  if (typeof filters !== "object" || filters === null) return [];
+  const { tags, tag } = filters as { readonly tags?: unknown; readonly tag?: unknown };
+  const list = tags === undefined ? [tag] : Array.isArray(tags) ? tags : [];
+  return [
+    ...new Set(list.filter((item): item is string => typeof item === "string" && item !== "")),
+  ];
+}
+
 /** How this person looks at the board. Kept across reloads, on this device. */
 export const useBoardStore = create<BoardState>()(
   persist(
@@ -578,8 +591,14 @@ export const useBoardStore = create<BoardState>()(
         const { collapsedLanes: _collapsed, ...rest } = (kept ?? {}) as Record<string, unknown>;
         return { ...rest, laneFolds: {} };
       },
-      // A search is for now. How the board is laid out is kept.
+      // Runs for what was kept at this version too, which migrate does not see.
+      merge: (kept, current) => {
+        const { filters, ...rest } = (kept ?? {}) as Record<string, unknown>;
+        return { ...current, ...rest, filters: { ...NO_FILTERS, tags: keptTags(filters) } };
+      },
+      // A search is for now, and so is every filter but the tags. How the board is laid out is kept.
       partialize: (state) => ({
+        filters: { tags: state.filters.tags },
         person: state.person,
         view: state.view,
         grouping: state.grouping,

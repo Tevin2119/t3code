@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 
 const DRAFT_TEAMS_KEY = "t3code:delivery-draft-teams:v1";
 const ORCHESTRATOR_KEY = "t3code:delivery-orchestrator-drafts:v1";
+const BOARD_KEY = "t3code:delivery-board:v1";
 
 function createLocalStorageStub(seed: Record<string, string> = {}): Storage {
   const store = new Map(Object.entries(seed));
@@ -489,5 +490,103 @@ describe("the team of an Orchestrator draft", () => {
     expect(after.useOrchestratorDraftStore.getState().drafts.t1?.team).toBe("rnd");
     expect(kept(ORCHESTRATOR_KEY).state.drafts.t1).toMatchObject({ team: "rnd" });
     expect(kept(ORCHESTRATOR_KEY).state.drafts.t1).not.toHaveProperty("awaitingTeams");
+  });
+});
+
+describe("how the board is looked at", () => {
+  const keep = (state: unknown, version = 1) =>
+    storage.setItem(BOARD_KEY, JSON.stringify({ state, version }));
+  const tagsAfterLoad = async (filters: unknown) => {
+    keep({ filters, view: "x" });
+    return (await load()).useBoardStore.getState().filters.tags;
+  };
+
+  it("lays the kept tags over filters that are otherwise off, and keeps the layout", async () => {
+    keep({ filters: { tags: ["a", "b"] }, view: "x", laneFolds: { intake: true } });
+    const { useBoardStore } = await load();
+    const { NO_FILTERS } = await import("../lib/deliveryBoard");
+    const state = useBoardStore.getState();
+    expect(state.filters).toEqual({ ...NO_FILTERS, tags: ["a", "b"] });
+    expect(state.filters.q).toBe("");
+    expect(state.filters.lanes).toEqual([]);
+    expect(state.view).toBe("x");
+    expect(state.laneFolds).toEqual({ intake: true });
+  });
+
+  it("reads the one tag kept before several could be chosen, at the same version", async () => {
+    expect(await tagsAfterLoad({ tag: "cli" })).toEqual(["cli"]);
+  });
+
+  it("carries the tag over from the older record with a list of folded lanes", async () => {
+    keep({ collapsedLanes: ["intake"], filters: { tag: "cli" }, view: "x", person: "Sam" }, 0);
+    const { useBoardStore } = await load();
+    const state = useBoardStore.getState();
+    expect(state.filters.tags).toEqual(["cli"]);
+    expect(state.laneFolds).toEqual({});
+    expect("collapsedLanes" in state).toBe(false);
+    expect(state.view).toBe("x");
+    expect(state.person).toBe("Sam");
+  });
+
+  it("puts a kept list before the one tag, an empty list too", async () => {
+    expect(await tagsAfterLoad({ tags: [], tag: "x" })).toEqual([]);
+    expect(await tagsAfterLoad({ tags: ["a"], tag: "x" })).toEqual(["a"]);
+  });
+
+  it("keeps only tags that are words, each once", async () => {
+    expect(await tagsAfterLoad({ tags: [1, "", "a", "a", null] })).toEqual(["a"]);
+    expect(await tagsAfterLoad({ tags: "a" })).toEqual([]);
+    expect(await tagsAfterLoad({ tags: null })).toEqual([]);
+    expect(await tagsAfterLoad({ tag: 7 })).toEqual([]);
+  });
+
+  it("has no tag chosen when no usable filters were kept", async () => {
+    expect(await tagsAfterLoad(null)).toEqual([]);
+    expect(await tagsAfterLoad("cli")).toEqual([]);
+    expect(await tagsAfterLoad(undefined)).toEqual([]);
+    // What is kept today: the layout, and no filters at all.
+    keep({ laneFolds: { intake: true } });
+    const { useBoardStore } = await load();
+    expect(useBoardStore.getState().filters.tags).toEqual([]);
+    expect(useBoardStore.getState().filters.q).toBe("");
+    expect(useBoardStore.getState().laneFolds).toEqual({ intake: true });
+  });
+
+  it("keeps the tags across a reload, and nothing else of the filters", async () => {
+    const first = await load();
+    first.useBoardStore.getState().setFilters({ tags: ["a", "b"], q: "zzz", priority: "high" });
+    expect(kept(BOARD_KEY).state.filters).toEqual({ tags: ["a", "b"] });
+    expect(kept(BOARD_KEY).version).toBe(1);
+
+    const second = await load();
+    expect(second.useBoardStore.getState().filters.tags).toEqual(["a", "b"]);
+    expect(second.useBoardStore.getState().filters.q).toBe("");
+    expect(second.useBoardStore.getState().filters.priority).toBeNull();
+  });
+
+  it("takes one tag away through its chip and leaves the rest of the filters", async () => {
+    const { useBoardStore } = await load();
+    const { activeFilters } = await import("../lib/deliveryBoard");
+    useBoardStore.getState().setFilters({ tags: ["a", "b"], q: "zzz", lanes: ["ready"] });
+    const chip = activeFilters(useBoardStore.getState().filters, (lane) => lane).find(
+      (item) => item.key === "tag:a",
+    );
+    useBoardStore.getState().setFilters(chip!.clear);
+    expect(useBoardStore.getState().filters).toMatchObject({
+      tags: ["b"],
+      q: "zzz",
+      lanes: ["ready"],
+    });
+  });
+
+  it("has no tag chosen after the filters are cleared, and after a reload", async () => {
+    const first = await load();
+    const { NO_FILTERS } = await import("../lib/deliveryBoard");
+    first.useBoardStore.getState().setFilters({ tags: ["a", "b"] });
+    first.useBoardStore.getState().clearFilters();
+    expect(first.useBoardStore.getState().filters.tags).toEqual([]);
+    const second = await load();
+    expect(second.useBoardStore.getState().filters.tags).toEqual([]);
+    expect(NO_FILTERS.tags).toEqual([]);
   });
 });
