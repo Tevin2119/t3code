@@ -35,7 +35,9 @@ vi.mock("./SeatSettingsPanel", () => ({ SeatSettingsPanel: "seat-settings" }));
 vi.mock("./SetupPanel", () => ({ SetupPanel: "setup-panel" }));
 vi.mock("./TeamDefaultsDialog", () => ({ TeamDefaultsDialog: "team-defaults" }));
 const store = () => useOrchestratorDraftStore.getState();
-const teams = ["rnd", "alpha"].map((team) => ({ team, available: true, seats: [], settings: [] }));
+const offered = (...names: ReadonlyArray<string>) =>
+  names.map((team) => ({ team, available: true, seats: [], settings: [] }));
+const teams = offered("rnd", "alpha");
 let renderer: ReactTestRenderer | undefined;
 const view = () => (
   <OrchestratorComposerControls
@@ -68,7 +70,9 @@ beforeEach(() => {
   mock.reading = { body: null, error: null };
   mock.navigate.mockReset();
   mock.action.mockReset().mockImplementation(async (path: string, body: { team?: string }) => {
-    if (path === "/api/tasks" && !teams.some((team) => team.team === body.team))
+    // The engine takes a task only for a team it offers at the time.
+    const listed = Array.isArray(mock.reading.body) ? (mock.reading.body as typeof teams) : [];
+    if (path === "/api/tasks" && !listed.some((team) => team.team === body.team))
       return { ok: false, problems: ["unknown team"] };
     return { ok: true, body: { id: "task-1", card: {} } };
   });
@@ -116,7 +120,7 @@ it.each([{ body: [] }, { body: [{ team: "triage", available: true }] }])(
     await render();
     mock.reading = { body, error: null };
     await render();
-    expect(store().drafts.t1).not.toHaveProperty("awaitingTeams");
+    expect(store().drafts.t1?.awaitingTeams).toBe(true);
     expect(alert()).toBe("No teams are available to choose from.");
     expect(store().activity.t1?.blocked).toBe(alert());
     await act(() => {
@@ -126,6 +130,64 @@ it.each([{ body: [] }, { body: [{ team: "triage", available: true }] }])(
     expect(mock.action).not.toHaveBeenCalled();
     expect(renderer!.root.findAllByType("p").flatMap((node) => node.children)).not.toContain(
       "Reading the team.",
+    );
+  },
+);
+
+it.each([
+  [["rnd", "alpha"], "rnd"],
+  [["rnd", "development"], "development"],
+] as const)(
+  "settles when an empty list becomes %j, without replaying a blocked press",
+  async (names, expected) => {
+    store().enter("t1", "env-a");
+    await render();
+    const reasons: Array<string | null | undefined> = [];
+    const unsubscribe = useOrchestratorDraftStore.subscribe((state) => {
+      reasons.push(state.activity.t1?.blocked, state.activity.t1?.teamAvailabilityReason);
+    });
+    mock.reading = { body: [], error: null };
+    await render();
+    await act(() => {
+      store().requestStart("t1");
+      store().requestSave("t1");
+    });
+    expect(alert()).toBe("No teams are available to choose from.");
+    expect(store().activity.t1).toMatchObject({
+      blocked: alert(),
+      teamAvailabilityReason: alert(),
+      awaitingTeams: true,
+    });
+    expect(store().drafts.t1?.awaitingTeams).toBe(true);
+    expect(mock.action).not.toHaveBeenCalled();
+
+    mock.reading = { body: offered(...names), error: null };
+    await render();
+    unsubscribe();
+    expect(mock.action).not.toHaveBeenCalled();
+    expect(store().drafts.t1?.team).toBe(expected);
+    expect(store().drafts.t1).not.toHaveProperty("awaitingTeams");
+    expect(
+      renderer!.root.findByProps({ "aria-label": "Team" }).findByType("output").children,
+    ).toEqual([expected]);
+    expect(alert()).toBe("");
+    expect(store().activity.t1?.blocked).toBeNull();
+    expect(reasons.filter((reason) => /is not offered here/.test(reason ?? ""))).toEqual([]);
+
+    const navigated = new Promise<void>((resolve) =>
+      mock.navigate.mockImplementation(() => resolve()),
+    );
+    await act(async () => {
+      store().requestStart("t1");
+    });
+    await navigated;
+    expect(mock.action.mock.calls.map(([path]) => path)).toEqual([
+      "/api/tasks",
+      "/api/tasks/task-1/submit",
+    ]);
+    expect(mock.action).toHaveBeenCalledWith(
+      "/api/tasks",
+      expect.objectContaining({ team: expected, draft: true }),
     );
   },
 );
