@@ -354,3 +354,19 @@ it("does not bring an earlier count back when a reading fails after a lane liste
   poll();
   expect(count).toBe(3);
 });
+
+it("clears the count on an answer of nothing at all, and through a failed reading after it", () => {
+  answer(local, { body: board(2, 1) });
+  mount(local);
+  expect(count).toBe(3);
+  // The engine answered, and what it answered was null: not the same as no reading.
+  answer(local, { body: null });
+  poll();
+  expect(count).toBeNull();
+  answer(local, { failure: "engine unreachable" });
+  poll();
+  expect(count).toBeNull();
+  answer(local, { body: board(1, 1) });
+  poll();
+  expect(count).toBe(2);
+});
