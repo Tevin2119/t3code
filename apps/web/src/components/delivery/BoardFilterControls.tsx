@@ -131,7 +131,9 @@ function TagFilterList(props: {
     else focusBox(all[at - 1]);
   };
   return (
-    <>
+    // The height is bounded here, not on the popover's viewport: the popover puts a plain block
+    // between the two, which would let the list grow past the viewport instead of scrolling.
+    <div className="flex max-h-[min(var(--available-height),23rem)] flex-col" data-board-tag-menu>
       {/* The search and Clear are beside the list, not in it, so they stay where they are. */}
       <div className="flex shrink-0 items-center gap-1 border-b border-border p-1.5">
         <Input
@@ -195,7 +197,7 @@ function TagFilterList(props: {
           ))
         )}
       </div>
-    </>
+    </div>
   );
 }
 
@@ -226,7 +228,7 @@ export function TagFilterMenu(props: {
         align="start"
         className="w-64"
         // The viewport scrolls by itself unless told otherwise; here only the list of tags does.
-        viewportClassName="flex max-h-[min(var(--available-height),23rem)] flex-col p-0 not-data-transitioning:overflow-hidden"
+        viewportClassName="p-0 [--viewport-inline-padding:0px] not-data-transitioning:overflow-hidden"
         initialFocus={searchRef}
       >
         <TagFilterList
