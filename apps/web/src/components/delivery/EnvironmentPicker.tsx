@@ -1,14 +1,20 @@
 import { resolveEnvironmentMachineKind, type EnvironmentId } from "@t3tools/contracts";
 import { connectionStatusTitle } from "@t3tools/client-runtime/connection";
 import { useNavigate } from "@tanstack/react-router";
-import { SettingsIcon } from "lucide-react";
+import { SettingsIcon, UserRoundIcon } from "lucide-react";
+import { useState } from "react";
 
 import { useDeliveryEnabled } from "../../state/delivery";
 import { useEnvironments, type EnvironmentPresentation } from "../../state/environments";
-import { matchesEnvironmentSearch } from "../../lib/deliveryEnvironments";
+import {
+  environmentWorkspaceLabel,
+  groupWorkspaceEnvironments,
+} from "../../lib/deliveryEnvironments";
 import {
   Combobox,
   ComboboxEmpty,
+  ComboboxGroup,
+  ComboboxGroupLabel,
   ComboboxItem,
   ComboboxList,
   ComboboxPopup,
@@ -28,22 +34,29 @@ export function EnvironmentPicker(props: {
 }) {
   const { environments, isReady } = useEnvironments();
   const navigate = useNavigate();
+  const [query, setQuery] = useState("");
+  const groups = groupWorkspaceEnvironments(environments, query);
   const current = environments.find((environment) => environment.environmentId === props.value);
+  const label = current ? environmentWorkspaceLabel(current) : "Choose environment";
   return (
     <div className="flex min-w-0 items-center gap-1">
       <Combobox
-        items={environments.map((environment) => environment.environmentId)}
+        items={groups.flatMap((group) =>
+          group.environments.map((environment) => environment.environmentId),
+        )}
+        inputValue={query}
+        onInputValueChange={setQuery}
+        onOpenChange={(open) => open && setQuery("")}
+        filter={null}
         disabled={!isReady || environments.length === 0}
         value={props.value}
         onValueChange={(value) => value && value !== props.value && props.onChoose(String(value))}
         itemToStringLabel={(environmentId) =>
+          environments.find((environment) => environment.environmentId === environmentId)
+            ?.serverConfig?.environment.workspace?.profileLabel ??
           environments.find((environment) => environment.environmentId === environmentId)?.label ??
           environmentId
         }
-        filter={(environmentId, query) => {
-          const environment = environments.find((item) => item.environmentId === environmentId);
-          return environment ? matchesEnvironmentSearch(environment, query) : false;
-        }}
       >
         <ComboboxTrigger
           render={
@@ -53,31 +66,45 @@ export function EnvironmentPicker(props: {
               className="min-w-0 max-w-full"
             />
           }
-          aria-label={`Board environment: ${current?.label ?? "Choose environment"}`}
-          title={current?.label ?? "Choose board environment"}
+          aria-label={`Board workspace: ${label}`}
+          title={label}
           data-board-environment
         >
-          <EnvironmentMachineIcon
-            kind={resolveEnvironmentMachineKind(current?.serverConfig ?? null)}
-            className="size-3.5 shrink-0"
-          />
+          {current?.serverConfig?.environment.workspace ? (
+            <UserRoundIcon className="size-3.5 shrink-0" />
+          ) : (
+            <EnvironmentMachineIcon
+              kind={resolveEnvironmentMachineKind(current?.serverConfig ?? null)}
+              className="size-3.5 shrink-0"
+            />
+          )}
           <span className={props.compact ? "sr-only" : "truncate"}>
-            {current?.label ?? (isReady ? "Choose environment" : "Loading environments")}
+            {current ? label : isReady ? "Choose environment" : "Loading environments"}
           </span>
         </ComboboxTrigger>
         <ComboboxPopup className="w-80 max-w-[calc(100vw-2rem)]">
           <ComboboxSearchInput
             aria-label="Search environments"
-            placeholder="Search name or address"
+            placeholder="Search machine, profile or address"
           />
           <ComboboxEmpty>No environment matches.</ComboboxEmpty>
           <ComboboxList className="max-h-64">
-            {(environmentId: EnvironmentId) => {
-              const environment = environments.find((item) => item.environmentId === environmentId);
-              return environment ? (
-                <EnvironmentOption key={environmentId} environment={environment} />
-              ) : null;
-            }}
+            {groups.map((group) => (
+              <ComboboxGroup key={group.id}>
+                <ComboboxGroupLabel className="flex items-center gap-2">
+                  <EnvironmentMachineIcon
+                    kind={resolveEnvironmentMachineKind(
+                      group.environments[0]?.serverConfig ?? null,
+                    )}
+                    className="size-3.5"
+                  />
+                  {group.label}
+                </ComboboxGroupLabel>
+                {group.environments.map((environment) => (
+                  <EnvironmentOption key={environment.environmentId} environment={environment} />
+                ))}
+              </ComboboxGroup>
+            ))}
           </ComboboxList>
           <div className="border-t border-border/50 p-1">
             <Button
@@ -101,12 +128,18 @@ function EnvironmentOption({ environment }: { readonly environment: EnvironmentP
   return (
     <ComboboxItem value={environment.environmentId}>
       <span className="flex min-w-0 items-center gap-2">
-        <EnvironmentMachineIcon
-          kind={resolveEnvironmentMachineKind(environment.serverConfig)}
-          className="size-4 shrink-0"
-        />
+        {environment.serverConfig?.environment.workspace ? (
+          <UserRoundIcon className="size-4 shrink-0" />
+        ) : (
+          <EnvironmentMachineIcon
+            kind={resolveEnvironmentMachineKind(environment.serverConfig)}
+            className="size-4 shrink-0"
+          />
+        )}
         <span className="flex min-w-0 flex-col">
-          <span className="truncate">{environment.label}</span>
+          <span className="truncate">
+            {environment.serverConfig?.environment.workspace?.profileLabel ?? environment.label}
+          </span>
           <span className="text-xs text-muted-foreground">
             {connectionStatusTitle(environment.connection)}
           </span>

@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vite-plus/test";
-import { matchesEnvironmentSearch } from "./deliveryEnvironments";
+import {
+  environmentWorkspaceLabel,
+  groupWorkspaceEnvironments,
+  matchesEnvironmentSearch,
+} from "./deliveryEnvironments";
 
 describe("board environment search", () => {
   const mac = { label: "Tevin's MacBook Pro", displayUrl: "http://100.124.197.108:16231" };
@@ -22,5 +26,33 @@ describe("board environment search", () => {
     expect(matchesEnvironmentSearch({ label: "Cloud machine", displayUrl: null }, "macbook")).toBe(
       false,
     );
+  });
+
+  it("groups paired profiles by explicit machine identity, not by matching labels", () => {
+    const profile = (
+      environmentId: string,
+      machineId: string,
+      profileId: string,
+      profileLabel: string,
+    ) => ({
+      environmentId,
+      label: "Saved name",
+      displayUrl: null,
+      serverConfig: {
+        environment: { workspace: { machineId, machineLabel: "Mac", profileId, profileLabel } },
+      },
+    });
+    const main = profile("main-server", "mac-1", "main", "Main");
+    const pm = profile("pm-server", "mac-1", "pm", "PolyMania");
+    const other = profile("other-server", "mac-2", "main", "Main");
+    const legacy = { environmentId: "legacy", label: "Mac", displayUrl: null };
+    expect(
+      groupWorkspaceEnvironments([main, pm, other, legacy], "").map((group) =>
+        group.environments.map((item) => item.environmentId),
+      ),
+    ).toEqual([["main-server", "pm-server"], ["other-server"], ["legacy"]]);
+    expect(groupWorkspaceEnvironments([main, pm], "mac polymania")[0]?.environments).toEqual([pm]);
+    expect(environmentWorkspaceLabel(main)).toBe("Mac / Main");
+    expect(environmentWorkspaceLabel(legacy)).toBe("Mac");
   });
 });

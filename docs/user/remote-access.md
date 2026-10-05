@@ -64,6 +64,20 @@ another link to share.
 
 ### Balance new threads across machines
 
+Named account workspaces appear as separate environments beneath their machine in the
+board picker. Each has its own T3 state, provider sign-ins and delivery engine home.
+Pair each exposed workspace through Connections; pairing one profile does not add
+the others. A private profile listens on loopback and is not reachable from another machine.
+Profiles are never exposed merely because their sign-in folders exist.
+
+Automatic thread balancing stays within the current named profile. It does not fall back
+to a different account profile or an older environment with no profile identity.
+Cross-machine balancing requires matching explicit allocation scopes as well; a shared
+profile name alone does not authorize using another machine's accounts.
+Existing threads remain on the environment where they started. These are separate account
+workspaces, not an operating-system sandbox: agents running as the same OS user can still
+access that user's files.
+
 Auto balance is off by default. On web and desktop, enable it in
 **Settings → Connections → Load balancing** to automatically choose a machine for
 new threads in projects grouped across connected environments. The section

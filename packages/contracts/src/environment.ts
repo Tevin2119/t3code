@@ -179,9 +179,35 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
 });
 export type ExecutionEnvironmentCapabilities = typeof ExecutionEnvironmentCapabilities.Type;
 
+export const EnvironmentWorkspace = Schema.Struct({
+  machineId: TrimmedNonEmptyString.check(Schema.isMaxLength(128)),
+  machineLabel: TrimmedNonEmptyString.check(Schema.isMaxLength(128)),
+  profileId: TrimmedNonEmptyString.check(
+    Schema.isMaxLength(64),
+    Schema.isPattern(/^[a-zA-Z][a-zA-Z0-9_-]*$/),
+  ),
+  profileLabel: TrimmedNonEmptyString.check(Schema.isMaxLength(128)),
+  allocationScope: Schema.optionalKey(TrimmedNonEmptyString.check(Schema.isMaxLength(128))),
+});
+export type EnvironmentWorkspace = typeof EnvironmentWorkspace.Type;
+
+export function sameWorkspaceProfile(
+  source: EnvironmentWorkspace | undefined,
+  target: EnvironmentWorkspace | undefined,
+): boolean {
+  return source === undefined
+    ? target === undefined
+    : target !== undefined &&
+        source.profileId === target.profileId &&
+        (source.machineId === target.machineId ||
+          (source.allocationScope !== undefined &&
+            source.allocationScope === target.allocationScope));
+}
+
 export const ExecutionEnvironmentDescriptor = Schema.Struct({
   environmentId: EnvironmentId,
   label: TrimmedNonEmptyString,
+  workspace: Schema.optionalKey(EnvironmentWorkspace),
   platform: ExecutionEnvironmentPlatform,
   serverVersion: TrimmedNonEmptyString,
   /** Missing metadata denotes protocol 1. Bump this for breaking wire changes. */

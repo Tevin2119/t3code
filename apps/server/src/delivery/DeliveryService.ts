@@ -26,7 +26,7 @@ import {
   type DeliveryThreadState,
   type ThreadId,
 } from "@t3tools/contracts";
-import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
+import { HostProcessEnvironment, HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -261,10 +261,22 @@ export const make = Effect.gen(function* () {
     body?: unknown,
   ) {
     const settings = yield* delivery;
+    const hostEnvironment = yield* HostProcessEnvironment;
     if (!settings.enabled) {
       return yield* new DeliveryError({
         reason: "disabled",
         detail: "Delivery is turned off in settings.",
+      });
+    }
+    if (
+      hostEnvironment.T3_WORKSPACE_PROFILE_ID &&
+      (!hostEnvironment.T3_WORKSPACE_ENGINE_URL ||
+        settings.engineUrl !== hostEnvironment.T3_WORKSPACE_ENGINE_URL)
+    ) {
+      return yield* new DeliveryError({
+        reason: "invalid",
+        detail:
+          "This account profile's Delivery settings do not match its bound engine endpoint. Correct them in native Settings; no other profile's engine was contacted.",
       });
     }
     const url = yield* Effect.try({
@@ -282,6 +294,51 @@ export const make = Effect.gen(function* () {
           detail: "The engine address must be a loopback URL, such as http://127.0.0.1:4320.",
         }),
     });
+    if (hostEnvironment.T3_WORKSPACE_PROFILE_ID) {
+      const healthResponse = yield* httpClient
+        .execute(HttpClientRequest.get(new URL("/api/health", settings.engineUrl).toString()))
+        .pipe(
+          Effect.timeout("30 seconds"),
+          Effect.mapError(
+            () =>
+              new DeliveryError({
+                reason: "unreachable",
+                detail: "The profile's bound engine did not answer its identity check.",
+              }),
+          ),
+        );
+      const health = yield* healthResponse.json.pipe(
+        Effect.flatMap(
+          Schema.decodeUnknownEffect(
+            Schema.Struct({
+              engine: Schema.Literal("delivery"),
+              ok: Schema.Literal(true),
+              profile: Schema.String,
+              home: Schema.String,
+            }),
+          ),
+        ),
+        Effect.mapError(
+          () =>
+            new DeliveryError({
+              reason: "invalid",
+              detail: "The bound endpoint did not provide a verifiable engine identity.",
+            }),
+        ),
+      );
+      if (
+        healthResponse.status !== 200 ||
+        !hostEnvironment.T3_WORKSPACE_ENGINE_HOME ||
+        health.profile !== hostEnvironment.POLYMANIA_ACCOUNTS ||
+        health.home !== hostEnvironment.T3_WORKSPACE_ENGINE_HOME
+      ) {
+        return yield* new DeliveryError({
+          reason: "invalid",
+          detail:
+            "The bound endpoint is running another account profile or engine home. No task data was requested or changed.",
+        });
+      }
+    }
     const base = method === "GET" ? HttpClientRequest.get(url) : HttpClientRequest.post(url);
     const prepared =
       method === "GET" ? base : base.pipe(HttpClientRequest.bodyJsonUnsafe(body ?? {}));
