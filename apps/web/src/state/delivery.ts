@@ -329,6 +329,8 @@ export interface OrchestratorActivity {
   readonly blocked: string | null;
   /** Whether the draft's team is still to be held against the list of teams. */
   readonly awaitingTeams: boolean;
+  /** Says the draft's team left the list of teams that was read, or null. Nothing is saved or started under it. */
+  readonly teamUnavailable: string | null;
   readonly team: string | null;
   /** `new` before the first save, then `saved` or `changed`. */
   readonly saved: "new" | "saved" | "changed";
@@ -340,6 +342,7 @@ export const IDLE_ORCHESTRATOR_ACTIVITY: OrchestratorActivity = {
   busy: null,
   blocked: null,
   awaitingTeams: false,
+  teamUnavailable: null,
   team: null,
   saved: "new",
   flow: null,
@@ -469,6 +472,7 @@ export const useOrchestratorDraftStore = create<OrchestratorDraftState>()(
             current.busy === activity.busy &&
             current.blocked === activity.blocked &&
             current.awaitingTeams === activity.awaitingTeams &&
+            current.teamUnavailable === activity.teamUnavailable &&
             current.team === activity.team &&
             current.flow === activity.flow &&
             current.saved === activity.saved

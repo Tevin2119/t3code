@@ -84,6 +84,12 @@ export function OrchestratorComposerControls(props: {
   const [editingDefaults, setEditingDefaults] = useState(false);
 
   const team = teams.find((candidate) => candidate.team === draft?.team) ?? null;
+  // A settled team stands when it leaves the list. Only a list that was read says it is
+  // gone, and nothing is saved or started under it until it is back or another is chosen.
+  const teamUnavailable =
+    draft && teamsLoaded && !awaitingTeams && !team
+      ? `Team ${draft.team} is not offered here. Choose another team.`
+      : null;
   const flow = flowFor(team, draft?.workflow ?? null);
   const text = props.prompt.trim();
   const seatsToSend = useMemo(
@@ -107,27 +113,40 @@ export function OrchestratorComposerControls(props: {
       ? `Delivery engine not reachable. ${teamsRead.error}`
       : awaitingTeams
         ? "Teams are still loading."
-        : team && teamTaskBlock(team, flow)
-          ? teamTaskBlock(team, flow)
-          : chosen && chosen.problems.length > 0
-            ? chosen.problems.join(" ")
-            : text.length === 0
-              ? "Write what the team is asked to do."
-              : null;
+        : teamUnavailable
+          ? teamUnavailable
+          : team && teamTaskBlock(team, flow)
+            ? teamTaskBlock(team, flow)
+            : chosen && chosen.problems.length > 0
+              ? chosen.problems.join(" ")
+              : text.length === 0
+                ? "Write what the team is asked to do."
+                : null;
 
   useEffect(() => {
     setActivity(props.threadId, {
       busy,
       blocked,
       awaitingTeams,
+      teamUnavailable,
       team: draft?.team ?? null,
       saved,
       flow,
     });
-  }, [awaitingTeams, blocked, busy, draft?.team, flow, props.threadId, saved, setActivity]);
+  }, [
+    awaitingTeams,
+    blocked,
+    busy,
+    draft?.team,
+    flow,
+    props.threadId,
+    saved,
+    setActivity,
+    teamUnavailable,
+  ]);
 
   const save = useCallback(async (): Promise<string | null> => {
-    if (!draft) return null;
+    if (!draft || teamUnavailable) return null;
     setProblems([]);
     const body = { team: draft.team, workflow: flow, text, seats: seatsToSend, by: person };
     const result = draft.engineThread
@@ -144,7 +163,7 @@ export function OrchestratorComposerControls(props: {
     }
     update(props.threadId, { engineThread: task.id, savedText: text });
     return task.id;
-  }, [act, draft, flow, person, props.threadId, seatsToSend, text, update]);
+  }, [act, draft, flow, person, props.threadId, seatsToSend, teamUnavailable, text, update]);
 
   const once = useCallback(async (kind: "save" | "start", work: () => Promise<void>) => {
     if (working.current) return;
@@ -165,13 +184,16 @@ export function OrchestratorComposerControls(props: {
       setProblems(["Teams are still loading."]);
       return;
     }
+    // Said beside the controls for as long as it holds, so it is not kept as a problem.
+    if (teamUnavailable) return;
     void once("save", async () => {
       await save();
     });
-  }, [awaitingTeams, once, save, text.length]);
+  }, [awaitingTeams, once, save, teamUnavailable, text.length]);
 
   const { onPromptCleared, threadId } = props;
   const onStart = useCallback(() => {
+    if (teamUnavailable) return;
     if (blocked) {
       setProblems([blocked]);
       return;
@@ -189,7 +211,18 @@ export function OrchestratorComposerControls(props: {
       // What is written next is written on the task, in its own composer.
       void navigate({ to: "/board", search: { task: id } });
     });
-  }, [act, blocked, leave, navigate, once, onPromptCleared, person, save, threadId]);
+  }, [
+    act,
+    blocked,
+    leave,
+    navigate,
+    once,
+    onPromptCleared,
+    person,
+    save,
+    teamUnavailable,
+    threadId,
+  ]);
 
   // The buttons stand in the composer's own place for Send, and ask from there.
   const handledSave = useRef(saveRequest);
@@ -206,6 +239,7 @@ export function OrchestratorComposerControls(props: {
   }, [onStart, startRequest]);
 
   if (!draft) return null;
+  const otherProblems = problems.filter((item) => item !== teamUnavailable);
 
   return (
     <div
@@ -307,7 +341,7 @@ export function OrchestratorComposerControls(props: {
             <p className="text-xs text-warning">
               {teamsRead.error
                 ? `Delivery engine not reachable. ${teamsRead.error}`
-                : "Reading the team."}
+                : (teamUnavailable ?? "Reading the team.")}
             </p>
           )}
         </PopoverPopup>
@@ -344,13 +378,15 @@ export function OrchestratorComposerControls(props: {
         {whatStartDoes(flow, "Start")}
       </InfoPopover>
 
-      {problems.length > 0 ? (
+      {teamUnavailable || otherProblems.length > 0 ? (
         <span
           className="ml-auto max-w-[32rem] text-xs text-warning"
           data-delivery-orchestrator-status
           role="alert"
         >
-          {problems.join(" ")}
+          {teamUnavailable ? <span data-delivery-team-unavailable>{teamUnavailable}</span> : null}
+          {teamUnavailable && otherProblems.length > 0 ? " " : null}
+          {otherProblems.join(" ")}
         </span>
       ) : null}
 
@@ -448,7 +484,12 @@ export function OrchestratorPrimaryActions(props: {
               variant="ghost"
               className="rounded-full"
               aria-label="Save draft"
-              disabled={busy || activity.awaitingTeams || !props.promptHasText}
+              disabled={
+                busy ||
+                activity.awaitingTeams ||
+                activity.teamUnavailable !== null ||
+                !props.promptHasText
+              }
               {...pointerFocusProps}
               onClick={() => requestSave(props.threadId)}
               data-delivery-save-draft
@@ -460,7 +501,8 @@ export function OrchestratorPrimaryActions(props: {
         <TooltipPopup side="top">
           {activity.awaitingTeams
             ? "Teams are still loading."
-            : "Save draft. It is kept on the engine and nothing is started."}
+            : (activity.teamUnavailable ??
+              "Save draft. It is kept on the engine and nothing is started.")}
         </TooltipPopup>
       </Tooltip>
       <Tooltip>
