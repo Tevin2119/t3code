@@ -1,6 +1,9 @@
+import { DeliveryActInput } from "@t3tools/contracts";
+import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  deliveryRequestBody,
   parseSeatLive,
   waitingWords,
   deliveryEnvironmentChoice,
@@ -1104,6 +1107,32 @@ describe("repeatKeys", () => {
     const keys = repeatKeys(["x", "x", "x#2", "2:x", ""]);
     expect(new Set(keys).size).toBe(5);
     expect(keys).toEqual(["1:x", "2:x", "1:x#2", "1:2:x", "1:"]);
+  });
+});
+
+describe("deliveryRequestBody", () => {
+  // What the request becomes on the wire, or the error that stops it being sent.
+  const send = Schema.encodeUnknownSync(Schema.toCodecJson(DeliveryActInput));
+
+  it("lets an engine request with an option nobody chose be sent", () => {
+    const body = { key: "secret phrase", commit: "e9408df", channel: undefined };
+    expect(() => send({ path: "/api/engine/update", body })).toThrow(/Expected JSON value/);
+    expect(send({ path: "/api/engine/update", body: deliveryRequestBody(body) })).toEqual({
+      path: "/api/engine/update",
+      body: { key: "secret phrase", commit: "e9408df" },
+    });
+  });
+
+  it("keeps every value that was given, nested ones and empty ones included", () => {
+    const body = { note: "", count: 0, held: false, by: null, parts: [{ id: 1, skip: undefined }] };
+    expect(deliveryRequestBody(body)).toEqual({
+      note: "",
+      count: 0,
+      held: false,
+      by: null,
+      parts: [{ id: 1 }],
+    });
+    expect(deliveryRequestBody(undefined)).toBeUndefined();
   });
 });
 

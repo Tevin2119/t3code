@@ -2256,3 +2256,13 @@ export function deliveryEnvironmentChoice<Id extends string>(input: {
   if (input.requested) return known(input.requested);
   return known(input.chosen) ?? input.primary;
 }
+
+/**
+ * The body of a request to the engine, as it travels: JSON. A field left `undefined`, such as an
+ * optional choice nobody made, is not JSON, and the whole request would be refused before it is
+ * sent ("Expected JSON value at body"). Such fields are dropped, as the engine would never see them.
+ */
+export function deliveryRequestBody(body: unknown): unknown {
+  const text = JSON.stringify(body);
+  return text === undefined ? undefined : (JSON.parse(text) as unknown);
+}
