@@ -28,6 +28,7 @@ import { useNavigate } from "@tanstack/react-router";
 import { isElectron } from "../../env";
 import { usePrimarySettings } from "../../hooks/useSettings";
 import {
+  parseTarget,
   parseTask,
   seatSettingsToSend,
   TASK_PRIORITIES,
@@ -56,6 +57,7 @@ import {
   tagsFromText,
   type ComposerKind,
 } from "../../lib/deliveryBoard";
+import { boardChoiceKind, type MoveBoard } from "../../lib/deliveryMove";
 import { seatsChangedForTask, harnessLabel } from "../../lib/deliverySeats";
 import { cn } from "../../lib/utils";
 import {
@@ -79,6 +81,7 @@ import { SidebarInset } from "../ui/sidebar";
 import { Textarea } from "../ui/textarea";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { WorkspacePageHeader } from "../WorkspacePageHeader";
+import { MoveTaskDialog } from "./MoveTaskDialog";
 import { SeatSettingsPanel } from "./SeatSettingsPanel";
 import { actionHelp, actionLabel, useTaskActions } from "./taskActions";
 import { TaskEditor } from "./TaskEditor";
@@ -1324,17 +1327,31 @@ function Info(props: {
   const closed = ["approved", "rejected", "closed"].includes(task.state);
   const flow = task.flows.find((item) => item.id === task.workflow) ?? null;
   const navigate = useNavigate();
-  // The boards of the person's own, to move the task between.
+  // The boards of the person's own, to move the task between, with where each one's work is done.
   const boardsRead = useDeliveryRead(props.environmentId, "/api/boards");
   const boards = useMemo(
-    () =>
+    (): ReadonlyArray<MoveBoard> =>
       (Array.isArray(boardsRead.body) ? boardsRead.body : []).flatMap((item: unknown) =>
         item && typeof item === "object" && "id" in item && "title" in item
-          ? [{ id: String(item.id), title: String(item.title) }]
+          ? [
+              {
+                id: String(item.id),
+                title: String(item.title),
+                target: "target" in item ? parseTarget(item.target) : null,
+              },
+            ]
           : [],
       ),
     [boardsRead.body],
   );
+  // The board triage thinks the task belongs on, and the move a person is about to confirm.
+  const suggested = task.suggestedBoard ?? card.suggestedBoard ?? null;
+  const [moving, setMoving] = useState<{
+    readonly board: string;
+    readonly base: string | null;
+  } | null>(null);
+  const startMove = (board: string) =>
+    setMoving({ board, base: suggested?.id === board ? suggested.base : null });
   // What is set for the task, which the switches change.
   const set = Object.fromEntries(task.settings.map((item) => [item.seat, item.set]));
   // The seat choices last sent. Until a read of the task shows it changed since (its last
@@ -1371,6 +1388,31 @@ function Info(props: {
       data-task-info
       aria-label="About this task"
     >
+      {suggested && suggested.id !== card.set ? (
+        <div
+          className="flex items-start justify-between gap-2 rounded border border-amber-500/60 bg-amber-500/5 px-2 py-1.5 text-xs"
+          data-task-suggested-board={suggested.id}
+        >
+          <span>
+            Triage suggests board <span className="font-medium">{suggested.title}</span>
+            {suggested.repository ? ` (${suggested.repository})` : ""}
+          </span>
+          <Button size="xs" variant="outline" onClick={() => startMove(suggested.id)}>
+            Move...
+          </Button>
+        </div>
+      ) : null}
+      {moving ? (
+        <MoveTaskDialog
+          environmentId={props.environmentId}
+          task={task}
+          boards={boards}
+          board={moving.board}
+          base={moving.base}
+          onClose={() => setMoving(null)}
+          onMoved={props.onChanged}
+        />
+      ) : null}
       <section className="flex flex-col gap-1.5">
         <Row label="Stands in">
           {task.isDraft || !task.lane ? (
@@ -1452,21 +1494,35 @@ function Info(props: {
           <Row label="Board">
             <Select
               value={card.set ?? NO_BOARD}
-              onValueChange={(value) =>
+              onValueChange={(value) => {
+                const chosen =
+                  value === NO_BOARD ? null : (boards.find((item) => item.id === value) ?? null);
+                if (value === (card.set ?? NO_BOARD)) return;
+                // A board done in another repository moves the task's work there, which is confirmed first.
+                if (
+                  value !== NO_BOARD &&
+                  boardChoiceKind(task.target?.repository ?? null, chosen) === "move"
+                ) {
+                  startMove(String(value));
+                  return;
+                }
                 void act(`/api/tasks/${task.id}/board`, {
                   board: value === NO_BOARD ? null : String(value),
                   by: person,
                 }).then((result) => {
                   if (!result.ok) setProblem(result.why);
                   props.onChanged();
-                })
-              }
+                });
+              }}
             >
               <SelectTrigger
                 aria-label="Board"
                 size="compact"
                 variant="ghost"
-                className="w-auto min-w-0"
+                className={cn(
+                  "w-auto min-w-0",
+                  suggested && suggested.id !== card.set && "ring-1 ring-amber-500/60",
+                )}
                 data-task-board={card.set ?? ""}
               >
                 <SelectValue>
