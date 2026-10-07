@@ -6,6 +6,30 @@
  */
 import { parseBoard, type DeliveryCard, type DeliveryLane, type TaskPriority } from "./delivery";
 
+export interface DeliveryBoardSearch {
+  readonly environment?: string;
+  readonly task?: string;
+  readonly new?: boolean;
+  readonly from?: string;
+}
+
+export function parseBoardSearch(raw: Record<string, unknown>): DeliveryBoardSearch {
+  const environment =
+    typeof raw.environment === "string" &&
+    raw.environment.trim().length > 0 &&
+    raw.environment.length <= 200
+      ? { environment: raw.environment }
+      : {};
+  if (isTaskId(raw.task)) return { ...environment, task: raw.task };
+  if (raw.new === true)
+    return {
+      ...environment,
+      new: true,
+      ...(isConversationRef(raw.from) ? { from: raw.from } : {}),
+    };
+  return environment;
+}
+
 export const PRIORITY_LABEL: Record<TaskPriority, string> = {
   urgent: "Urgent",
   high: "High",
@@ -517,8 +541,8 @@ const isLaneEntry = (lane: unknown): boolean =>
 /**
  * How many tasks wait for the person, from a reading of ATTENTION_BOARD_PATH.
  * Null when the reading cannot be trusted, which is not the same as none: the
- * engine lists every lane even when it is empty, so a lane that is missing or
- * malformed says nothing about how many tasks are in it.
+ * engine lists every lane once, even when it is empty, so a lane that is
+ * missing, malformed or listed twice says nothing about how many tasks are in it.
  */
 export function boardAttentionCount(body: unknown): number | null {
   // Checked on the body as it came: parseBoard reads a malformed lane as an empty one.
@@ -527,7 +551,10 @@ export function boardAttentionCount(body: unknown): number | null {
   if (raw.view !== "development" || raw.set !== "all") return null;
   if (!Array.isArray(raw.lanes) || !raw.lanes.every(isLaneEntry)) return null;
   const board = parseBoard(body);
-  if (!board || !ATTENTION_LANES.every((id) => board.lanes.some((lane) => lane.lane === id))) {
+  if (
+    !board ||
+    !ATTENTION_LANES.every((id) => board.lanes.filter((lane) => lane.lane === id).length === 1)
+  ) {
     return null;
   }
   return board.lanes
@@ -611,6 +638,29 @@ export function taskFromConversation(input: {
   return { title: input.title.trim().slice(0, 120), text: sections.join("\n\n") };
 }
 
+/**
+ * The part of the task view a line of its history points at: the acceptance checklist triage
+ * wrote, or the plan. Null when it points at neither.
+ */
+export function sectionOf(entry: {
+  readonly kind: string | null;
+  readonly text: string;
+}): "acceptance" | "plan" | null {
+  if (
+    /[1-9]\d* item\(s\) on the acceptance checklist|(wrote|updated) the acceptance checklist/i.test(
+      entry.text,
+    )
+  )
+    return "acceptance";
+  if (
+    entry.kind === "run.planned" ||
+    entry.kind === "plan.settled" ||
+    /\bthe plan is (settled|ready|written)\b/i.test(entry.text)
+  )
+    return "plan";
+  return null;
+}
+
 /** What each step a person can take on a task is called. */
 export const ACTION_LABEL: Record<string, string> = {
   submit: "Submit",
@@ -626,6 +676,8 @@ export const ACTION_LABEL: Record<string, string> = {
   deliver: "Start delivery",
   close: "Close",
   publish: "Publish",
+  first: "Do next",
+  "not-first": "No longer next",
 };
 
 /**

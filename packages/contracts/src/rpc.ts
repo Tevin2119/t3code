@@ -225,6 +225,8 @@ import {
   PreviewAutomationStreamEvent,
 } from "./previewAutomation.ts";
 import {
+  CheckoutUpdateError,
+  CheckoutUpdateState,
   ServerConfigStreamEvent,
   DesktopUpdateCommitInput,
   ServerConfig,
@@ -374,6 +376,9 @@ export const WS_METHODS = {
   serverUpdateServer: "server.updateServer",
   serverUpdateServerWithProgress: "server.updateServerWithProgress",
   serverCommitDesktopUpdate: "server.commitDesktopUpdate",
+  serverSubscribeCheckoutUpdate: "server.subscribeCheckoutUpdate",
+  serverCheckCheckoutUpdate: "server.checkCheckoutUpdate",
+  serverStartCheckoutUpdate: "server.startCheckoutUpdate",
   serverUpsertKeybinding: "server.upsertKeybinding",
   serverRemoveKeybinding: "server.removeKeybinding",
   serverGetSettings: "server.getSettings",
@@ -579,6 +584,25 @@ const WsServerUpdateServerWithProgressRpc = Rpc.make(WS_METHODS.serverUpdateServ
   success: ServerSelfUpdateProgressEvent,
   error: Schema.Union([ServerSelfUpdateError, EnvironmentAuthorizationError]),
   stream: true,
+});
+
+const WsServerSubscribeCheckoutUpdateRpc = Rpc.make(WS_METHODS.serverSubscribeCheckoutUpdate, {
+  payload: Schema.Struct({}),
+  success: CheckoutUpdateState,
+  error: Schema.Union([CheckoutUpdateError, EnvironmentAuthorizationError]),
+  stream: true,
+});
+
+const WsServerCheckCheckoutUpdateRpc = Rpc.make(WS_METHODS.serverCheckCheckoutUpdate, {
+  payload: Schema.Struct({}),
+  success: Schema.Struct({}),
+  error: Schema.Union([CheckoutUpdateError, EnvironmentAuthorizationError]),
+});
+
+const WsServerStartCheckoutUpdateRpc = Rpc.make(WS_METHODS.serverStartCheckoutUpdate, {
+  payload: Schema.Struct({}),
+  success: Schema.Struct({}),
+  error: Schema.Union([CheckoutUpdateError, EnvironmentAuthorizationError]),
 });
 
 const WsServerCommitDesktopUpdateRpc = Rpc.make(WS_METHODS.serverCommitDesktopUpdate, {
@@ -1448,6 +1472,9 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerUpdateServerRpc,
   WsServerUpdateServerWithProgressRpc,
   WsServerCommitDesktopUpdateRpc,
+  WsServerSubscribeCheckoutUpdateRpc,
+  WsServerCheckCheckoutUpdateRpc,
+  WsServerStartCheckoutUpdateRpc,
   WsServerUpsertKeybindingRpc,
   WsServerRemoveKeybindingRpc,
   WsServerGetSettingsRpc,

@@ -391,4 +391,42 @@ describe("mergeUsage", () => {
     expect(merged.daily).toHaveLength(1);
     expect(merged.daily[0]?.costUsd).toBe(10);
   });
+
+  it("says which part of a harness's cost came through a coding plan", () => {
+    const merged = mergeUsage(
+      [
+        environment(
+          "env-a",
+          summary(
+            [
+              bucket({
+                provider: "opencode",
+                model: "glm-5.3",
+                modelProvider: "zai-coding-plan",
+                modelProviderSource: "recorded",
+                costUsd: 6,
+              }),
+              bucket({
+                provider: "opencode",
+                model: "gemini-3-pro-preview",
+                modelProvider: "google",
+                modelProviderSource: "recorded",
+                costUsd: 4,
+              }),
+            ],
+            [{ provider: "opencode", hostId: "mac", homePath: "/a/opencode" }],
+          ),
+        ),
+      ],
+      USAGE_CONTRACT_VERSION,
+    );
+
+    const opencode = merged.providers.find((provider) => provider.provider === "opencode");
+    expect(opencode?.costUsd).toBe(10);
+    expect(opencode?.planCostUsd).toBe(6);
+    expect(Object.fromEntries(merged.models.map((model) => [model.model, model.onPlan]))).toEqual({
+      "glm-5.3": true,
+      "gemini-3-pro-preview": false,
+    });
+  });
 });

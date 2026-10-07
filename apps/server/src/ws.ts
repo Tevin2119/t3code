@@ -115,6 +115,7 @@ import { ProviderAuthService } from "./provider/Services/ProviderAuthService.ts"
 import { ProviderInstanceRegistry } from "./provider/Services/ProviderInstanceRegistry.ts";
 import { makeProviderInstallation } from "./provider/providerInstallation.ts";
 import * as ServerSelfUpdate from "./cloud/selfUpdate.ts";
+import * as CheckoutUpdate from "./checkoutUpdate/CheckoutUpdate.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
 import * as ServerRuntimeStartup from "./serverRuntimeStartup.ts";
 import * as ServerSettings from "./serverSettings.ts";
@@ -568,6 +569,7 @@ const makeWsRpcLayer = (
       const providerInstances = yield* ProviderInstanceRegistry;
       const providerInstallation = yield* makeProviderInstallation();
       const serverUpdate = yield* ServerSelfUpdate.ServerSelfUpdate;
+      const checkoutUpdate = yield* CheckoutUpdate.CheckoutUpdate;
       const config = yield* ServerConfig.ServerConfig;
       const lifecycleEvents = yield* ServerLifecycleEvents.ServerLifecycleEvents;
       const serverSettings = yield* ServerSettings.ServerSettingsService;
@@ -2500,6 +2502,22 @@ const makeWsRpcLayer = (
             ),
             { "rpc.aggregate": "server" },
           ),
+        [WS_METHODS.serverSubscribeCheckoutUpdate]: (_input) =>
+          observeRpcStream(WS_METHODS.serverSubscribeCheckoutUpdate, checkoutUpdate.states, {
+            "rpc.aggregate": "server",
+          }),
+        [WS_METHODS.serverCheckCheckoutUpdate]: (_input) =>
+          observeRpcEffect(
+            WS_METHODS.serverCheckCheckoutUpdate,
+            checkoutUpdate.check.pipe(Effect.as({})),
+            { "rpc.aggregate": "server" },
+          ),
+        [WS_METHODS.serverStartCheckoutUpdate]: (_input) =>
+          observeRpcEffect(
+            WS_METHODS.serverStartCheckoutUpdate,
+            checkoutUpdate.start.pipe(Effect.as({})),
+            { "rpc.aggregate": "server" },
+          ),
         [WS_METHODS.serverCommitDesktopUpdate]: (input) =>
           observeRpcEffect(
             WS_METHODS.serverCommitDesktopUpdate,
@@ -3716,6 +3734,7 @@ export const websocketRpcRouteLayer = Layer.unwrap(
   Effect.gen(function* () {
     const previewAutomationBroker = yield* PreviewAutomationBroker.PreviewAutomationBroker;
     const baseServerSelfUpdate = yield* ServerSelfUpdate.ServerSelfUpdate;
+    const checkoutUpdate = yield* CheckoutUpdate.CheckoutUpdate;
     const config = yield* ServerConfig.ServerConfig;
     const startup = yield* ServerRuntimeStartup.ServerRuntimeStartup;
     const serverSelfUpdate = yield* ServerSelfUpdate.withRunningThreadContinuation({
@@ -3742,6 +3761,9 @@ export const websocketRpcRouteLayer = Layer.unwrap(
         ),
     });
     const pullRequests = yield* PullRequestService.PullRequestService;
+    // One runner for the server's lifetime: its update lock is shared by every
+    // client, and an update it starts outlives the connection that asked for it.
+    const providerMaintenanceRunner = yield* ProviderMaintenanceRunner.make();
     const sql = yield* SqlClient.SqlClient;
     return HttpRouter.add(
       "GET",
@@ -3785,8 +3807,14 @@ export const websocketRpcRouteLayer = Layer.unwrap(
               Layer.provideMerge(RpcSerialization.layerJson),
               Layer.provide(Layer.succeed(SqlClient.SqlClient, sql)),
               Layer.provide(AgentSessionScanner.layer),
-              Layer.provide(ProviderMaintenanceRunner.layer),
+              Layer.provide(
+                Layer.succeed(
+                  ProviderMaintenanceRunner.ProviderMaintenanceRunner,
+                  providerMaintenanceRunner,
+                ),
+              ),
               Layer.provide(Layer.succeed(ServerSelfUpdate.ServerSelfUpdate, serverSelfUpdate)),
+              Layer.provide(Layer.succeed(CheckoutUpdate.CheckoutUpdate, checkoutUpdate)),
               // One server-lifetime service means clients share the same PR caches, and a WS
               // mutation invalidates the HTTP diff cache that every client reads from.
               Layer.provide(Layer.succeed(PullRequestService.PullRequestService, pullRequests)),

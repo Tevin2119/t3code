@@ -3,6 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 import { parseCard } from "./delivery";
 import type { BoardFilters } from "./deliveryBoard";
 import {
+  sectionOf,
   isConversationRef,
   taskFromConversation,
   activeFilters,
@@ -28,6 +29,7 @@ import {
   queryValue,
   tagsFromText,
   moveIntent,
+  parseBoardSearch,
 } from "./deliveryBoard";
 
 const card = (overrides: Record<string, unknown> = {}) =>
@@ -47,6 +49,33 @@ const card = (overrides: Record<string, unknown> = {}) =>
     waitingOn: "team",
     ...overrides,
   });
+
+describe("environment-scoped board links", () => {
+  it("keeps the environment when opening a task, the board, or a new draft", () => {
+    expect(parseBoardSearch({ environment: "windows", task: "task-0a1b2c3d4e" })).toEqual({
+      environment: "windows",
+      task: "task-0a1b2c3d4e",
+    });
+    expect(parseBoardSearch({ environment: "windows" })).toEqual({ environment: "windows" });
+    expect(parseBoardSearch({ environment: "mac", new: true, from: "mac/thread" })).toEqual({
+      environment: "mac",
+      new: true,
+      from: "mac/thread",
+    });
+  });
+  it("discards invalid task and conversation inputs without dropping a valid environment", () => {
+    expect(parseBoardSearch({ environment: "mac", task: "../outside" })).toEqual({
+      environment: "mac",
+    });
+    expect(parseBoardSearch({ environment: "mac", new: true, from: "invalid" })).toEqual({
+      environment: "mac",
+      new: true,
+    });
+    expect(parseBoardSearch({ environment: {}, task: "task-0a1b2c3d4e" })).toEqual({
+      task: "task-0a1b2c3d4e",
+    });
+  });
+});
 
 describe("matchesCard", () => {
   it("finds a task by its number, with or without the sign", () => {
@@ -483,12 +512,42 @@ describe("moveIntent while every seat waits", () => {
             specialist: null,
             since: null,
             waiting: "memory headroom",
+            waitingWhy: null,
           },
         ],
       },
       "triage",
     );
     expect(held.kind === "refused" && held.why).toMatch(/about to start on it, waiting for room/);
+  });
+});
+
+describe("sectionOf", () => {
+  it("points a history line at the checklist or the plan it speaks of", () => {
+    expect(
+      sectionOf({
+        kind: "note",
+        text: "Triage: ready, with 7 item(s) on the acceptance checklist.",
+      }),
+    ).toBe("acceptance");
+    expect(
+      sectionOf({
+        kind: "task.revised",
+        text: "Revision 2: Triage wrote the acceptance checklist.",
+      }),
+    ).toBe("acceptance");
+    expect(sectionOf({ kind: "note", text: "Triage updated the acceptance checklist." })).toBe(
+      "acceptance",
+    );
+    // An empty checklist has nothing to show.
+    expect(
+      sectionOf({
+        kind: "note",
+        text: "Triage: ready, with 0 item(s) on the acceptance checklist.",
+      }),
+    ).toBeNull();
+    expect(sectionOf({ kind: "run.planned", text: "Planned." })).toBe("plan");
+    expect(sectionOf({ kind: "note", text: "Run run-1 started." })).toBeNull();
   });
 });
 
@@ -539,8 +598,11 @@ describe("boardAttentionCount", () => {
     expect(
       boardAttentionCount(
         reading([
-          lane("needs-decision", [task("a", "needs-decision", "person")]),
-          lane("human-review", [task("b", "human-review"), task("c", "human-review")]),
+          lane("needs-decision", [
+            task("a", "needs-decision", "person"),
+            task("b", "needs-decision", "person"),
+          ]),
+          lane("human-review", [task("c", "human-review")]),
         ]),
       ),
     ).toBe(3);
@@ -608,5 +670,48 @@ describe("boardAttentionCount", () => {
     expect(boardAttentionCount(reading(good, { set: "unsorted" }))).toBeNull();
     expect(boardAttentionCount(reading(good, { set: undefined }))).toBeNull();
     expect(boardAttentionCount(reading(good, { view: "testing" }))).toBeNull();
+  });
+
+  it("does not add up a lane that counts when it is listed twice", () => {
+    const waiting = lane("needs-decision", [
+      task("a", "needs-decision"),
+      task("b", "needs-decision"),
+    ]);
+    expect(boardAttentionCount(reading([waiting, waiting, lane("human-review")]))).toBeNull();
+    expect(
+      boardAttentionCount(
+        reading([
+          lane("needs-decision", [task("a", "needs-decision")]),
+          lane("human-review"),
+          lane("human-review"),
+        ]),
+      ),
+    ).toBeNull();
+    // Twice and empty both times is no more to be trusted.
+    expect(
+      boardAttentionCount(
+        reading([lane("needs-decision"), lane("needs-decision"), lane("human-review")]),
+      ),
+    ).toBeNull();
+    expect(
+      boardAttentionCount(
+        reading([lane("needs-decision"), lane("human-review"), lane("human-review")]),
+      ),
+    ).toBeNull();
+    // Twice with another lane between the two.
+    expect(boardAttentionCount(reading([waiting, lane("human-review"), waiting]))).toBeNull();
+  });
+
+  it("still counts when a lane that does not count is listed twice", () => {
+    expect(
+      boardAttentionCount(
+        reading([
+          lane("draft", [task("a", "draft")]),
+          lane("needs-decision", [task("b", "needs-decision"), task("c", "needs-decision")]),
+          lane("draft"),
+          lane("human-review", [task("d", "human-review")]),
+        ]),
+      ),
+    ).toBe(3);
   });
 });

@@ -27,13 +27,14 @@ import { NonNegativeInt, TrimmedNonEmptyString } from "./baseSchemas.ts";
  * client renders partial coverage when an environment reports an older version
  * rather than failing the whole page.
  */
-export const USAGE_CONTRACT_VERSION = 7 as const;
+export const USAGE_CONTRACT_VERSION = 8 as const;
 
 /**
  * Oldest {@link UsageSummary} version a current client will still merge.
  *
- * v5 only adds `grok` to {@link UsageProviderKind}, v6 only adds `deepseek`, and v7 adds `pi`,
- * `opencode`, `kimi` and `hermes` and the optional model provider; v4 Claude/Codex buckets
+ * v5 only adds `grok` to {@link UsageProviderKind}, v6 only adds `deepseek`, v7 adds `pi`,
+ * `opencode`, `kimi` and `hermes` and the optional model provider, and v8 only adds
+ * `antigravity`; v4 Claude/Codex buckets
  * remain valid, so mixed-version environments keep those totals instead of
  * treating every older server as stale.
  */
@@ -49,6 +50,7 @@ export const UsageProviderKind = Schema.Literals([
   "opencode",
   "kimi",
   "hermes",
+  "antigravity",
 ]);
 export type UsageProviderKind = typeof UsageProviderKind.Type;
 

@@ -32,11 +32,14 @@ import { SidebarProviderUpdatePill } from "./SidebarProviderUpdatePill";
 import { SidebarUpdateArchitectureWarning, SidebarUpdatePill } from "./SidebarUpdatePill";
 import { PullRequestGlyph } from "~/components/pullRequest/pullRequestIcons";
 import { BoardIcon } from "../delivery/BoardIcon";
+import { BoardEnvironmentControls } from "../delivery/BoardEnvironmentControls";
 
 export const SidebarChromeHeader = memo(function SidebarChromeHeader({
   isElectron,
+  boardControls = false,
 }: {
   isElectron: boolean;
+  boardControls?: boolean;
 }) {
   const stageLabel = useEnvironmentStageLabel();
   const environmentIdentificationMode = useEnvironmentIdentificationMode();
@@ -66,6 +69,7 @@ export const SidebarChromeHeader = memo(function SidebarChromeHeader({
         )}
       />
       <SidebarBrand onBackdrop={backdropVariant !== null} />
+      {boardControls ? <BoardEnvironmentControls /> : null}
       {pillLabel ? (
         <Badge
           className="relative z-10 ml-1 hidden rounded-full px-1.5 text-muted-foreground @[15rem]/sidebar-header:inline-flex"

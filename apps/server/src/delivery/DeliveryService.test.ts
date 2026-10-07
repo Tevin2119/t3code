@@ -1,5 +1,6 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { ThreadId } from "@t3tools/contracts";
+import { HostProcessEnvironment } from "@t3tools/shared/hostProcess";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -50,6 +51,7 @@ interface Engine {
   down: boolean;
   /** Changes what the engine says a session is, as a team edited behind a thread's back would. */
   tamper: ((identity: Identity) => Identity) | null;
+  health?: { profile: string; home: string };
 }
 
 const engine = (): Engine => ({ requests: [], sessions: new Map(), down: false, tamper: null });
@@ -63,10 +65,12 @@ const layer = (
     prefix: string;
     /** The state folder of an earlier service, to start a second one on the same files. */
     config?: ServerConfig.ServerConfig["Service"];
+    environment?: NodeJS.ProcessEnv;
   },
 ) =>
   // Fresh, so that a second service in one test is a second start and not the first again.
   Layer.fresh(DeliveryService.layer).pipe(
+    Layer.provideMerge(Layer.succeed(HostProcessEnvironment, options.environment ?? {})),
     Layer.provideMerge(
       options.config
         ? Layer.succeed(ServerConfig.ServerConfig, options.config)
@@ -96,6 +100,8 @@ const layer = (
             fake.requests.push({ method: request.method, path: url.pathname, body });
             const json = (value: unknown, status = 200) =>
               Effect.succeed(HttpClientResponse.fromWeb(request, Response.json(value, { status })));
+            if (url.pathname === "/api/health" && fake.health)
+              return json({ engine: "delivery", ok: true, ...fake.health });
             if (request.method === "POST" && url.pathname === "/api/sessions") {
               if (body?.team === "sales") return json({ error: 'no team "sales"' }, 404);
               const harness = body?.harness ?? "claude";
@@ -166,6 +172,86 @@ const bind = (
 const CLAUDE_HERE = { driver: "claudeAgent", cwd: REPO };
 
 describe("DeliveryService", () => {
+  it.effect("refuses reads and writes into another account profile's engine", () => {
+    const fake = engine();
+    return Effect.gen(function* () {
+      const delivery = yield* DeliveryService.DeliveryService;
+      const reading = yield* delivery.read({ path: "/api/lanes" as never }).pipe(Effect.flip);
+      const write = yield* bind(delivery, threadId("wrong-profile")).pipe(Effect.flip);
+      expect(reading.reason).toBe("invalid");
+      expect(write.reason).toBe("invalid");
+      expect(fake.requests).toEqual([]);
+    }).pipe(
+      Effect.provide(
+        layer(fake, {
+          prefix: "profile-engine-mismatch-",
+          environment: {
+            T3_WORKSPACE_PROFILE_ID: "main",
+            T3_WORKSPACE_ENGINE_URL: "http://127.0.0.1:4322",
+          },
+        }),
+      ),
+    );
+  });
+
+  it.effect("uses the matching profile endpoint without changing existing thread bindings", () => {
+    const fake = engine();
+    fake.health = { profile: "main", home: "/test/main-engine" };
+    return Effect.gen(function* () {
+      const delivery = yield* DeliveryService.DeliveryService;
+      const binding = yield* bind(delivery, threadId("main-profile"));
+      expect(binding.team).toBe("development");
+      expect(fake.requests.some((request) => request.path === "/api/sessions")).toBe(true);
+    }).pipe(
+      Effect.provide(
+        layer(fake, {
+          prefix: "profile-engine-match-",
+          engineUrl: "http://127.0.0.1:4322",
+          environment: {
+            T3_WORKSPACE_PROFILE_ID: "main",
+            T3_WORKSPACE_ENGINE_URL: "http://127.0.0.1:4322",
+            T3_WORKSPACE_ENGINE_HOME: "/test/main-engine",
+            POLYMANIA_ACCOUNTS: "main",
+          },
+        }),
+      ),
+    );
+  });
+
+  it.effect.each([
+    { name: "account profile", profile: "team", home: "/test/main-engine" },
+    { name: "engine home", profile: "main", home: "/test/pm-engine" },
+  ])("refuses the wrong $name even when it occupies the expected port", ({ profile, home }) => {
+    const fake = engine();
+    fake.health = { profile, home };
+    return Effect.gen(function* () {
+      const delivery = yield* DeliveryService.DeliveryService;
+      const reading = yield* delivery.read({ path: "/api/lanes" as never }).pipe(Effect.flip);
+      const write = yield* bind(delivery, threadId("wrong-engine-home")).pipe(Effect.flip);
+      expect(reading.reason).toBe("invalid");
+      expect(write.reason).toBe("invalid");
+      expect(fake.requests).toHaveLength(2);
+      expect(
+        fake.requests.every(
+          (request) => request.path === "/api/health" && request.method === "GET",
+        ),
+      ).toBe(true);
+      expect(fake.sessions.size).toBe(0);
+    }).pipe(
+      Effect.provide(
+        layer(fake, {
+          prefix: "profile-engine-identity-",
+          engineUrl: "http://127.0.0.1:4322",
+          environment: {
+            T3_WORKSPACE_PROFILE_ID: "main",
+            T3_WORKSPACE_ENGINE_URL: "http://127.0.0.1:4322",
+            T3_WORKSPACE_ENGINE_HOME: "/test/main-engine",
+            POLYMANIA_ACCOUNTS: "main",
+          },
+        }),
+      ),
+    );
+  });
   it.effect("relays nothing while delivery is turned off", () => {
     const fake = engine();
     return Effect.gen(function* () {

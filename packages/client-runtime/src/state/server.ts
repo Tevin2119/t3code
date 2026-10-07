@@ -1011,6 +1011,21 @@ export function createServerEnvironmentAtoms<R, E>(
       label: "environment-data:provider:install-remove",
       tag: WS_METHODS.providerInstallRemove,
     }),
+    checkoutUpdateState: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
+      label: "environment-data:server:checkout-update-state",
+      tag: WS_METHODS.serverSubscribeCheckoutUpdate,
+      idleTtlMs: 0,
+    }),
+    checkCheckoutUpdate: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:checkout-update-check",
+      tag: WS_METHODS.serverCheckCheckoutUpdate,
+      concurrency: { mode: "singleFlight", key: ({ environmentId }) => environmentId },
+    }),
+    startCheckoutUpdate: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:checkout-update-start",
+      tag: WS_METHODS.serverStartCheckoutUpdate,
+      concurrency: { mode: "singleFlight", key: ({ environmentId }) => environmentId },
+    }),
     traceDiagnostics: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:server:trace-diagnostics",
       tag: WS_METHODS.serverGetTraceDiagnostics,

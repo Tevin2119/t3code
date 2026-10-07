@@ -156,6 +156,9 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   /** Server can durably mark running provider turns before a self-update and
       continue them after the replacement process starts. */
   serverUpdateThreadContinuation: Schema.optionalKey(Schema.Boolean),
+  /** Server runs from a git checkout under a supervisor that can replace it
+      with a newer commit of the branch it follows (server.checkoutUpdate*). */
+  checkoutUpdate: Schema.optionalKey(Schema.Boolean),
   /** Agent-activity publishes (push notifications and Live Activities)
       currently leave this environment: the publish opt-in is enabled and the
       relay link credentials exist. Clients skip seeding a Live Activity when
@@ -179,9 +182,35 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
 });
 export type ExecutionEnvironmentCapabilities = typeof ExecutionEnvironmentCapabilities.Type;
 
+export const EnvironmentWorkspace = Schema.Struct({
+  machineId: TrimmedNonEmptyString.check(Schema.isMaxLength(128)),
+  machineLabel: TrimmedNonEmptyString.check(Schema.isMaxLength(128)),
+  profileId: TrimmedNonEmptyString.check(
+    Schema.isMaxLength(64),
+    Schema.isPattern(/^[a-zA-Z][a-zA-Z0-9_-]*$/),
+  ),
+  profileLabel: TrimmedNonEmptyString.check(Schema.isMaxLength(128)),
+  allocationScope: Schema.optionalKey(TrimmedNonEmptyString.check(Schema.isMaxLength(128))),
+});
+export type EnvironmentWorkspace = typeof EnvironmentWorkspace.Type;
+
+export function sameWorkspaceProfile(
+  source: EnvironmentWorkspace | undefined,
+  target: EnvironmentWorkspace | undefined,
+): boolean {
+  return source === undefined
+    ? target === undefined
+    : target !== undefined &&
+        source.profileId === target.profileId &&
+        (source.machineId === target.machineId ||
+          (source.allocationScope !== undefined &&
+            source.allocationScope === target.allocationScope));
+}
+
 export const ExecutionEnvironmentDescriptor = Schema.Struct({
   environmentId: EnvironmentId,
   label: TrimmedNonEmptyString,
+  workspace: Schema.optionalKey(EnvironmentWorkspace),
   platform: ExecutionEnvironmentPlatform,
   serverVersion: TrimmedNonEmptyString,
   /** Missing metadata denotes protocol 1. Bump this for breaking wire changes. */
