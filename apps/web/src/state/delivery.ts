@@ -10,6 +10,7 @@ import { useEnvironmentSettings } from "../hooks/useSettings";
 import {
   deliveryFailureProblems,
   deliveryFailureText,
+  deliveryRequestBody,
   isStaleReading,
   type SeatChoice,
 } from "../lib/delivery";
@@ -110,7 +111,10 @@ export function useDeliveryAct(environmentId: EnvironmentId | null, label: strin
       if (!environmentId) {
         return { ok: false, why: "No environment is connected.", problems: [] };
       }
-      const result = await act({ environmentId, input: { path: path as never, body } });
+      const result = await act({
+        environmentId,
+        input: { path: path as never, body: deliveryRequestBody(body) },
+      });
       if (result._tag === "Failure") {
         const failure = squashAtomCommandFailure(result);
         return {
