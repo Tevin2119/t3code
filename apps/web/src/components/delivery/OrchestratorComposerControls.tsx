@@ -225,18 +225,22 @@ export function OrchestratorComposerControls(props: {
   ]);
 
   // The buttons stand in the composer's own place for Send, and ask from there.
-  const handledSave = useRef(saveRequest);
+  // The composer keeps this component across threads while the counters are per
+  // thread, so a thread change only takes the new thread's counter as handled.
+  const handledSave = useRef({ threadId, request: saveRequest });
   useEffect(() => {
-    if (saveRequest === handledSave.current) return;
-    handledSave.current = saveRequest;
+    const handled = handledSave.current;
+    handledSave.current = { threadId, request: saveRequest };
+    if (handled.threadId !== threadId || handled.request === saveRequest) return;
     onSave();
-  }, [onSave, saveRequest]);
-  const handledStart = useRef(startRequest);
+  }, [onSave, saveRequest, threadId]);
+  const handledStart = useRef({ threadId, request: startRequest });
   useEffect(() => {
-    if (startRequest === handledStart.current) return;
-    handledStart.current = startRequest;
+    const handled = handledStart.current;
+    handledStart.current = { threadId, request: startRequest };
+    if (handled.threadId !== threadId || handled.request === startRequest) return;
     onStart();
-  }, [onStart, startRequest]);
+  }, [onStart, startRequest, threadId]);
 
   if (!draft) return null;
 
