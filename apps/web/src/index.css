@@ -2222,3 +2222,20 @@ code {
 .composer-tiptap li[data-checked] > div > p {
   margin: 0;
 }
+
+/* A task triage thinks is on the wrong board draws the eye a few times, then holds still. */
+@keyframes task-suggested-board-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 transparent;
+  }
+  50% {
+    box-shadow: 0 0 0 2px color-mix(in oklab, var(--color-amber-500) 55%, transparent);
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  [data-task-suggested-board] {
+    animation: task-suggested-board-pulse 900ms ease-in-out 3;
+  }
+}

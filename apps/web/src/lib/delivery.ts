@@ -9,6 +9,7 @@ import {
   type DeliveryThreadBinding,
   type ThreadId,
 } from "@t3tools/contracts";
+import { parseSuggestedBoard, type SuggestedBoard } from "./deliveryMove";
 
 type Json = Record<string, unknown>;
 const isRecord = (value: unknown): value is Json =>
@@ -939,6 +940,8 @@ export interface DeliveryCard {
   readonly actions: ReadonlyArray<string>;
   /** Put first by a person for the next free slots (Do next). */
   readonly first: boolean;
+  /** The board triage thinks it belongs on; it waits on a person to move it. Older engines omit it. */
+  readonly suggestedBoard?: SuggestedBoard | null;
 }
 
 /**
@@ -1115,6 +1118,7 @@ export const parseCard = (value: Json): DeliveryCard => {
     publication: parsePublication(value.publication),
     actions: strings(value.actions),
     first: flag(value.first),
+    suggestedBoard: parseSuggestedBoard(value.suggestedBoard),
   };
 };
 
@@ -1494,6 +1498,8 @@ export interface TaskView {
   };
   /** Where its work is done. */
   readonly target: DeliveryTarget | null;
+  /** The board triage thinks it belongs on, as on its card. Older engines omit it. */
+  readonly suggestedBoard?: SuggestedBoard | null;
   /** The conversation this task was made from: `<environment>/<thread>`. */
   readonly source: {
     readonly kind: "thread";
@@ -1712,6 +1718,7 @@ export function parseTask(body: unknown): TaskView | null {
       };
     })(),
     target: parseTarget(body.target),
+    suggestedBoard: parseSuggestedBoard(body.suggestedBoard),
     source: (() => {
       const source = isRecord(body.source) ? body.source : null;
       const ref = source ? text(source.ref) : "";
