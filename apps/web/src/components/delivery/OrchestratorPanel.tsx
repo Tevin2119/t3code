@@ -6,7 +6,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   flowFor,
   parseSeatSetup,
-  parseTeams,
+  selectableTeams,
   seatSettingsToSend,
   teamTaskBlock,
   type DeliveryFlow,
@@ -124,12 +124,10 @@ export function OrchestratorPanel(props: {
   const navigate = useNavigate();
   const draft = useOrchestratorDraft(props.threadId);
   const update = useOrchestratorDraftStore((state) => state.update);
+  const chooseTeam = useOrchestratorDraftStore((state) => state.chooseTeam);
   const setSeat = useOrchestratorDraftStore((state) => state.setSeat);
   const teamsRead = useDeliveryRead(props.environmentId, "/api/teams");
-  const teams = useMemo(
-    () => parseTeams(teamsRead.body).filter((team) => team.team !== "triage"),
-    [teamsRead.body],
-  );
+  const teams = useMemo(() => selectableTeams(teamsRead.body), [teamsRead.body]);
   const [showing, setShowing] = useState<"seats" | "setup">("seats");
   const [editingDefaults, setEditingDefaults] = useState(false);
 
@@ -165,7 +163,9 @@ export function OrchestratorPanel(props: {
         <div className="flex flex-wrap items-center gap-1">
           <Select
             value={draft.team}
-            onValueChange={(value) => update(props.threadId, { team: String(value) })}
+            onValueChange={(value) =>
+              chooseTeam(props.threadId, props.environmentId, String(value))
+            }
           >
             <SelectTrigger aria-label="Profile" size="compact" className="w-auto min-w-44">
               <SelectValue>{draft.team}</SelectValue>
