@@ -85,18 +85,21 @@ describe("the board triage suggests", () => {
         id: "t3",
         title: "T3 Code",
         repository: "t3-code-fork",
+        repositoryTitle: "T3 Code fork",
         base: "fix/mobile-board-exit",
       }),
     ).toEqual({
       id: "t3",
       title: "T3 Code",
       repository: "t3-code-fork",
+      repositoryTitle: "T3 Code fork",
       base: "fix/mobile-board-exit",
     });
     expect(parseSuggestedBoard({ id: "t3" })).toEqual({
       id: "t3",
       title: "t3",
       repository: "",
+      repositoryTitle: "",
       base: null,
     });
     expect(parseSuggestedBoard(null)).toBeNull();

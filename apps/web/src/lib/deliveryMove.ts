@@ -5,6 +5,8 @@ export interface SuggestedBoard {
   readonly id: string;
   readonly title: string;
   readonly repository: string;
+  /** The repository's name, to show; the engine's id when it gives none. */
+  readonly repositoryTitle: string;
   readonly base: string | null;
 }
 
@@ -17,6 +19,10 @@ export function parseSuggestedBoard(value: unknown): SuggestedBoard | null {
     id: item.id,
     title: typeof item.title === "string" && item.title ? item.title : item.id,
     repository,
+    repositoryTitle:
+      typeof item.repositoryTitle === "string" && item.repositoryTitle
+        ? item.repositoryTitle
+        : repository,
     base: typeof item.base === "string" && item.base ? item.base : null,
   };
 }

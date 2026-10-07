@@ -1395,7 +1395,7 @@ function Info(props: {
         >
           <span>
             Triage suggests board <span className="font-medium">{suggested.title}</span>
-            {suggested.repository ? ` (${suggested.repository})` : ""}
+            {suggested.repositoryTitle ? ` (${suggested.repositoryTitle})` : ""}
           </span>
           <Button size="xs" variant="outline" onClick={() => startMove(suggested.id)}>
             Move...
