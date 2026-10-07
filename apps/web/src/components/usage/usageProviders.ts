@@ -1,6 +1,7 @@
 import type { UsageModelProviderSource, UsageProviderKind } from "@t3tools/contracts";
 
 import {
+  AntigravityIcon,
   ClaudeAI,
   DeepSeekIcon,
   GrokIcon,
@@ -65,6 +66,11 @@ export const PROVIDER_PRESENTATION = {
     label: "Hermes",
     color: "#a26bd6",
     mark: HermesIcon,
+  },
+  antigravity: {
+    label: "Antigravity",
+    color: "#e0457b",
+    mark: AntigravityIcon,
   },
 } satisfies Record<UsageProviderKind, UsageProviderPresentation>;
 

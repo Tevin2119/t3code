@@ -14,6 +14,8 @@ const PLAN_MAKERS: Readonly<Record<string, string>> = {
   "zai-coding-plan": "zai",
   "kimi-code": "moonshot",
   "kimi-for-coding": "moonshot",
+  // A Google account's Antigravity plan. Other makers' models it serves price by their bare names.
+  antigravity: "gemini",
 };
 
 /** The maker whose rates price a model reached through this coding plan, or `null`. */
