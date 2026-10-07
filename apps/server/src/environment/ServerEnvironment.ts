@@ -19,6 +19,7 @@ import { readAgentActivityPublishingActive } from "../cloud/config.ts";
 import { resolveServerSelfUpdateCapability } from "../cloud/selfUpdate.ts";
 import { resolveServiceLauncherMode } from "../cloud/serviceLauncherClient.ts";
 import * as ServerConfig from "../config.ts";
+import { isCheckoutSupervised } from "../checkoutUpdate/CheckoutUpdate.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import { resolveServerEnvironmentLabel } from "./ServerEnvironmentLabel.ts";
 import { detectServerEnvironmentMachineKind } from "./ServerEnvironmentMachine.ts";
@@ -195,6 +196,7 @@ export const make = Effect.gen(function* () {
   const workspace = yield* resolveServerEnvironmentWorkspace();
   const machine = yield* detectServerEnvironmentMachineKind();
   const launcher = yield* resolveServiceLauncherMode();
+  const checkoutSupervised = yield* isCheckoutSupervised;
   const serverSelfUpdate = resolveServerSelfUpdateCapability({
     desktopManaged: serverConfig.mode === "desktop",
     launcherManaged: launcher.managed,
@@ -254,6 +256,7 @@ export const make = Effect.gen(function* () {
           }
         : {}),
       ...(desktopAppUpdate ? { desktopAppUpdate: true } : {}),
+      ...(checkoutSupervised ? { checkoutUpdate: true } : {}),
     },
   };
 

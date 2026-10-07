@@ -156,6 +156,9 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   /** Server can durably mark running provider turns before a self-update and
       continue them after the replacement process starts. */
   serverUpdateThreadContinuation: Schema.optionalKey(Schema.Boolean),
+  /** Server runs from a git checkout under a supervisor that can replace it
+      with a newer commit of the branch it follows (server.checkoutUpdate*). */
+  checkoutUpdate: Schema.optionalKey(Schema.Boolean),
   /** Agent-activity publishes (push notifications and Live Activities)
       currently leave this environment: the publish opt-in is enabled and the
       relay link credentials exist. Clients skip seeding a Live Activity when
