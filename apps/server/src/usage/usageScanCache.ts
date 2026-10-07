@@ -34,6 +34,7 @@ const CACHED_PROVIDERS: ReadonlySet<string> = new Set([
   "deepseek",
   "pi",
   "kimi",
+  "antigravity",
 ]);
 
 /** How the model provider is known, stored as a small number. */
