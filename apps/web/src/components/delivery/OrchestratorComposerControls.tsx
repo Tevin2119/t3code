@@ -84,11 +84,14 @@ export function OrchestratorComposerControls(props: {
   // Held from the press to the answer, so a second press cannot start a second workflow.
   const working = useRef(false);
   const [problems, setProblems] = useState<ReadonlyArray<string>>([]);
-  // The thread whose save or start was last refused only because teams were still loading.
-  const [loadingNoticeFor, setLoadingNoticeFor] = useState<string | null>(null);
+  // The last action refused while teams were loading; settlement never replays it.
+  const [pendingAttempt, setPendingAttempt] = useState<{
+    threadId: string;
+    action: "save" | "start";
+  } | null>(null);
   // What the engine or a refused press said stays until the next attempt; the loading notice gives way to it.
   const report = useCallback((said: ReadonlyArray<string>) => {
-    setLoadingNoticeFor(null);
+    setPendingAttempt(null);
     setProblems(said);
   }, []);
   const [editingDefaults, setEditingDefaults] = useState(false);
@@ -104,7 +107,7 @@ export function OrchestratorComposerControls(props: {
   const loadingBlock =
     awaitingTeams && props.environmentId !== null && !teamsRead.error && !teamAvailabilityReason;
   // Read while rendering, so the notice leaves as soon as loading is no longer what blocks.
-  const loadingNotice = loadingBlock && loadingNoticeFor === props.threadId;
+  const loadingNotice = loadingBlock && pendingAttempt?.threadId === props.threadId;
   const flow = flowFor(team, draft?.workflow ?? null);
   const text = props.prompt.trim();
   const seatsToSend = useMemo(
@@ -137,6 +140,17 @@ export function OrchestratorComposerControls(props: {
               : text.length === 0
                 ? "Write what the team is asked to do."
                 : null;
+  const settledStartReason =
+    pendingAttempt?.threadId === props.threadId &&
+    pendingAttempt.action === "start" &&
+    teamsLoaded &&
+    !awaitingTeams &&
+    props.environmentId !== null &&
+    !teamsRead.error &&
+    teamAvailabilityReason === null &&
+    !loadingBlock
+      ? blocked
+      : null;
 
   useEffect(() => {
     setActivity(props.threadId, {
@@ -199,7 +213,7 @@ export function OrchestratorComposerControls(props: {
     // The team may still give way to another: nothing is saved under it until it is settled.
     if (awaitingTeams) {
       setProblems([]);
-      setLoadingNoticeFor(threadId);
+      setPendingAttempt({ threadId, action: "save" });
       return;
     }
     void once("save", async () => {
@@ -211,7 +225,7 @@ export function OrchestratorComposerControls(props: {
     if (blocked) {
       if (loadingBlock) {
         setProblems([]);
-        setLoadingNoticeFor(threadId);
+        setPendingAttempt({ threadId, action: "start" });
       } else if (!teamAvailabilityReason) report([blocked]);
       return;
     }
@@ -397,13 +411,14 @@ export function OrchestratorComposerControls(props: {
         {whatStartDoes(flow, "Start")}
       </InfoPopover>
 
-      {teamAvailabilityReason || loadingNotice || problems.length > 0 ? (
+      {teamAvailabilityReason || loadingNotice || settledStartReason || problems.length > 0 ? (
         <span
           className="ml-auto max-w-[32rem] text-xs text-warning"
           data-delivery-orchestrator-status
           role="alert"
         >
-          {teamAvailabilityReason ?? (loadingNotice ? TEAMS_LOADING : problems.join(" "))}
+          {teamAvailabilityReason ??
+            (loadingNotice ? TEAMS_LOADING : (settledStartReason ?? problems.join(" ")))}
         </span>
       ) : null}
 
