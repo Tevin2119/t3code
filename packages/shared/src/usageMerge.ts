@@ -17,6 +17,8 @@ import {
   type UsageAccount,
 } from "@t3tools/contracts";
 
+import { isPlanModelProvider } from "./usagePlans.ts";
+
 export interface EnvironmentUsage {
   readonly environmentId: EnvironmentId;
   readonly label: string;
@@ -75,6 +77,11 @@ export interface AccountTotals {
 export interface ProviderTotals {
   readonly provider: UsageProviderKind;
   readonly costUsd: number;
+  /**
+   * The part of `costUsd` from models reached through a coding plan (see
+   * `usagePlans`): API-equivalent, while the plan bills a flat fee.
+   */
+  readonly planCostUsd: number;
   readonly totalTokens: number;
   readonly records: number;
   readonly sessions: number;
@@ -98,6 +105,8 @@ export interface ModelTotals {
    */
   readonly unpricedRecords: number;
   readonly costShare: number;
+  /** Reached through a coding plan: its cost is API-equivalent, not billed per token. */
+  readonly onPlan: boolean;
 }
 
 /**
@@ -394,7 +403,7 @@ export function mergeUsage(
 
   const providerAccumulator = new Map<
     UsageProviderKind,
-    { costUsd: number; totalTokens: number; records: number; sessions: number }
+    { costUsd: number; planCostUsd: number; totalTokens: number; records: number; sessions: number }
   >();
   const modelProviderAccumulator = new Map<
     string,
@@ -458,6 +467,7 @@ export function mergeUsage(
       if (providerSessions === 0) continue;
       const provider = providerAccumulator.get(providerKind) ?? {
         costUsd: 0,
+        planCostUsd: 0,
         totalTokens: 0,
         records: 0,
         sessions: 0,
@@ -482,11 +492,13 @@ export function mergeUsage(
 
       const provider = providerAccumulator.get(bucket.provider) ?? {
         costUsd: 0,
+        planCostUsd: 0,
         totalTokens: 0,
         records: 0,
         sessions: 0,
       };
       provider.costUsd += bucket.costUsd;
+      if (isPlanModelProvider(bucket.modelProvider)) provider.planCostUsd += bucket.costUsd;
       provider.totalTokens += tokens;
       provider.records += bucket.records;
       providerAccumulator.set(bucket.provider, provider);
@@ -605,6 +617,7 @@ export function mergeUsage(
     .map(([provider, totals]) => ({
       provider,
       costUsd: totals.costUsd,
+      planCostUsd: totals.planCostUsd,
       totalTokens: totals.totalTokens,
       records: totals.records,
       sessions: totals.sessions,
@@ -624,6 +637,7 @@ export function mergeUsage(
       records: totals.records,
       unpricedRecords: totals.unpricedRecords,
       costShare: costUsd === 0 ? 0 : totals.costUsd / costUsd,
+      onPlan: isPlanModelProvider(totals.modelProvider),
     }))
     .sort((a, b) => b.costUsd - a.costUsd || b.totalTokens - a.totalTokens);
 

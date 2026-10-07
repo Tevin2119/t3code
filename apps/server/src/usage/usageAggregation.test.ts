@@ -14,6 +14,15 @@ const rates: RateTable = new Map([
       cacheCreationCostPerToken: 1.25e-5,
     },
   ],
+  [
+    "zai/glm-5.3",
+    {
+      inputCostPerToken: 1e-6,
+      outputCostPerToken: 4e-6,
+      cacheReadCostPerToken: 2e-7,
+      cacheCreationCostPerToken: 1e-6,
+    },
+  ],
 ]);
 
 function record(overrides: Partial<UsageRecord> = {}): UsageRecord {
@@ -165,6 +174,22 @@ describe("UsageAggregator", () => {
     expect(result.buckets[0]?.costSource).toBe("unpriced");
     expect(result.buckets[0]?.unpricedRecords).toBe(1);
     expect(result.buckets[0]?.totals.outputTokens).toBe(50);
+  });
+
+  it("prices a model reached through a coding plan at its maker's rate", () => {
+    const result = aggregate([
+      record({
+        provider: "opencode",
+        model: "glm-5.3",
+        modelProvider: "zai-coding-plan",
+        modelProviderSource: "recorded",
+      }),
+    ]);
+
+    // 100*1e-6 + 1000*2e-7 + 10*1e-6 + 50*4e-6
+    expect(result.buckets[0]?.costUsd).toBeCloseTo(0.00051, 9);
+    expect(result.buckets[0]?.costSource).toBe("modelPriced");
+    expect(result.buckets[0]?.cacheSavingsUsd).toBeCloseTo(1000 * (1e-6 - 2e-7), 9);
   });
 
   it("prefers a reported cost over the rate table", () => {

@@ -175,6 +175,7 @@ export class UsageAggregator {
       record.totals,
       record.reportedCostUsd,
       this.#options.priceOverrides,
+      record.modelProvider,
     );
 
     bucket.totals = addTotals(bucket.totals, record.totals);
@@ -184,6 +185,7 @@ export class UsageAggregator {
       record.model,
       record.totals,
       this.#options.priceOverrides,
+      record.modelProvider,
     );
     bucket.records += 1;
     if (priced.costSource === "unpriced") bucket.unpricedRecords += 1;
