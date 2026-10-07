@@ -213,6 +213,8 @@ interface ChatMarkdownProps {
   lineBreaks?: boolean;
   /** Parse sanitized raw HTML instead of displaying its source text. */
   parseRawHtml?: boolean;
+  /** Evidence documents can show media labels without fetching authored media URLs. */
+  allowMedia?: boolean;
   /** Append a prompt that invokes a newly created artifact-template skill. */
   onUseArtifactTemplate?: ((template: CodexArtifactTemplate) => void) | undefined;
   /** Directory that anchors relative links and images; defaults to `cwd`. Set
@@ -3295,11 +3297,19 @@ const CHAT_MARKDOWN_COMPONENTS = {
   },
 } satisfies Components;
 
+const EVIDENCE_MARKDOWN_COMPONENTS: NonNullable<ReactMarkdownOptions["components"]> = {
+  ...CHAT_MARKDOWN_COMPONENTS,
+  img: ({ alt }) => <span>{alt || "Image"}</span>,
+  video: () => <span>Video</span>,
+  audio: () => <span>Audio</span>,
+};
+
 function ChatMarkdown({
   text,
   className,
   lineBreaks = false,
   parseRawHtml = true,
+  allowMedia = true,
   extraRemarkPlugins = EMPTY_REMARK_PLUGINS,
   ...props
 }: ChatMarkdownProps) {
@@ -3343,7 +3353,7 @@ function ChatMarkdown({
           remarkPlugins={remarkPlugins}
           rehypePlugins={parseRawHtml ? CHAT_MARKDOWN_REHYPE_PLUGINS : undefined}
           skipHtml={false}
-          components={CHAT_MARKDOWN_COMPONENTS}
+          components={allowMedia ? CHAT_MARKDOWN_COMPONENTS : EVIDENCE_MARKDOWN_COMPONENTS}
           urlTransform={markdownUrlTransform}
         >
           {text}

@@ -12,6 +12,7 @@ import type {
   UsageModelPriceOverride,
   UsageTokenTotals,
 } from "@t3tools/contracts";
+import { planMakerOf } from "@t3tools/shared/usagePlans";
 
 /**
  * The subset of a LiteLLM entry we price against. All values are USD per token.
@@ -158,11 +159,28 @@ const UNPRICEABLE_MODELS = new Set([
   "fable",
 ]);
 
-export function lookupRate(table: RateTable, model: string): ModelRate | null {
+/**
+ * The rate for a model, as named, then as the provider the harness recorded
+ * sells it. A bare name several resellers price differently has no rate of its
+ * own, so `glm-5.3` reached through OpenCode's `zai-coding-plan` is priced as
+ * `zai/glm-5.3`, the maker's own rate (see `usagePlans`), and a model a harness
+ * recorded calling `zai` directly as `zai/<model>`. Only the provider that
+ * answered is asked: never another reseller.
+ */
+export function lookupRate(
+  table: RateTable,
+  model: string,
+  modelProvider?: string | null,
+): ModelRate | null {
   const key = stripVariantSuffix(normalizeRateKey(model));
   const bareName = bareModelName(key);
   if (bareName.length === 0 || UNPRICEABLE_MODELS.has(bareName)) return null;
-  return table.get(key) ?? null;
+  const named = table.get(key);
+  if (named !== undefined) return named;
+  const provider = modelProvider ? normalizeRateKey(modelProvider) : "";
+  if (provider.length === 0) return null;
+  const seller = planMakerOf(provider) ?? provider;
+  return table.get(`${seller}/${key}`) ?? null;
 }
 
 export interface PricedUsage {
@@ -182,13 +200,14 @@ export function priceUsage(
   totals: UsageTokenTotals,
   reportedCostUsd: number | null,
   overrides?: RateTable,
+  modelProvider?: string | null,
 ): PricedUsage {
   const override = overrides?.get(model.trim());
   if (override === undefined && reportedCostUsd !== null && Number.isFinite(reportedCostUsd)) {
     return { costUsd: reportedCostUsd, costSource: "providerReported" };
   }
 
-  const rate = override ?? lookupRate(table, model);
+  const rate = override ?? lookupRate(table, model, modelProvider);
   if (rate === null) return { costUsd: 0, costSource: "unpriced" };
 
   const costUsd =
@@ -209,8 +228,9 @@ export function cacheSavingsUsd(
   model: string,
   totals: UsageTokenTotals,
   overrides?: RateTable,
+  modelProvider?: string | null,
 ): number {
-  const rate = overrides?.get(model.trim()) ?? lookupRate(table, model);
+  const rate = overrides?.get(model.trim()) ?? lookupRate(table, model, modelProvider);
   if (rate === null) return 0;
   return totals.cachedInputTokens * (rate.inputCostPerToken - rate.cacheReadCostPerToken);
 }

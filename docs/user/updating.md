@@ -56,6 +56,33 @@ update can roll back to the previous version. If the update still fails:
 2. Check that you updated the server's machine, not only the device you are using.
 3. For a command-line server, stop it and relaunch the exact version shown in the notice.
 
+## PaperClip engine updates
+
+PaperClip is a separate task engine. Updating T3 Code does not update or restart it.
+Open **Engine** beside the board's environment picker for the selected machine and account profile.
+Its version summary distinguishes the code running in the process, the installed checkout, and
+the candidate available on its selected update channel. The Engine button shows a notice when
+a new candidate or a restart is needed.
+
+Engine channels are **Dev** for development candidates, **QA** for candidates whose engine checks
+passed, and **Main** for explicitly promoted QA candidates. They are not account profiles.
+Changing the channel only changes which update is offered. A merge alone does not publish a release;
+the machine's maintainer must publish a candidate to its local catalogue first.
+
+For engines started through the named workspace launcher, **Update now** uses that engine's
+approval passphrase or terminal key. It stops new work, safely interrupts active seats, snapshots
+the database and configuration after a confirmed stop, then starts and verifies the pinned release.
+It preserves the account environment, data home and approval passphrase. It does not wait for every
+task to finish. **Later, keep working** leaves the engine running and keeps the update available
+in its controls.
+
+A temporary engine disconnect during an update is expected. An accepted request is not proof of
+completion: wait for the matching completion receipt and running version. If the engine does not
+return, inspect its original terminal; do not automatically issue another start or update.
+The snapshot is retained after failure. Database rollback is a separate recovery decision, not
+an automatic update step. An engine started without the workspace launcher still supports its
+existing stop/restart controls, but not managed updates.
+
 ## Mobile updates
 
 Install App Store or Google Play releases as usual. The mobile app can also

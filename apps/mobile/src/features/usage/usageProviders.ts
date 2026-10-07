@@ -14,6 +14,7 @@ export const PROVIDER_ORDER: readonly UsageProviderKind[] = [
   "opencode",
   "kimi",
   "hermes",
+  "antigravity",
 ];
 
 export const PROVIDER_LABEL: Record<UsageProviderKind, string> = {
@@ -25,6 +26,7 @@ export const PROVIDER_LABEL: Record<UsageProviderKind, string> = {
   opencode: "OpenCode",
   kimi: "Kimi Code",
   hermes: "Hermes",
+  antigravity: "Antigravity",
 };
 
 /**
@@ -42,5 +44,6 @@ export function useProviderColors(): Record<UsageProviderKind, string> {
     opencode: "#d9a53f",
     kimi: "#2f9fd8",
     hermes: "#a26bd6",
+    antigravity: "#e0457b",
   };
 }

@@ -318,7 +318,7 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
           // held when it opened.
           teamShown &&
             props.orchestrator &&
-            "h-[min(36rem,calc(100vh-8rem))]! w-[min(46rem,calc(100vw-1rem))]!",
+            "h-[min(36rem,calc(100vh-8rem),var(--available-height,100vh))]! w-[min(46rem,calc(100vw-1rem))]!",
         )}
         viewportClassName="overflow-hidden! rounded-[calc(var(--radius-lg)-1px)] p-0 [clip-path:inset(0_round_calc(var(--radius-lg)-1px))]"
       >

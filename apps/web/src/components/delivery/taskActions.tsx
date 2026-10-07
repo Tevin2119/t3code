@@ -35,6 +35,9 @@ export const ACTION_HELP: Record<string, string> = {
   close: "Nothing more is done for it. What was said and found is kept.",
   publish:
     "Pushes the approved commit to its own branch and opens one pull request for it, or finds the one already open. Nothing is merged.",
+  first:
+    "Its seats take the next free slots, before other tasks. Nothing is skipped: it waits its turn for memory and limits like any task, but goes first in the queue.",
+  "not-first": "It goes back to waiting its turn with the rest.",
 };
 
 /** What an action is called on this task. On a part of a split task, approving is a review. */
@@ -125,6 +128,8 @@ export function useTaskActions(
         void send(`/api/tasks/${card.id}/discard`, {}).then(
           (done) => done && onDiscarded?.(card.id),
         );
+      } else if (action === "first" || action === "not-first") {
+        void send(`/api/tasks/${card.id}/first`, { on: action === "first", by: person });
       } else if (action === "stop") {
         if (card.run) void send(`/api/runs/${card.run.id}/stop`, {});
       } else void send(`/api/tasks/${card.id}/control`, { action, by: person });
@@ -302,16 +307,16 @@ function DecisionDialog(props: {
               {card.run?.candidate ? ` ${card.run.candidate.slice(0, 10)}` : ""} to its own branch
               and opens one pull request for it, or finds the one already open. It is checked again
               first: the approval must still stand for that commit and every check must have passed.
-              Nothing is merged; that is done on the repository host. The approval key is shown on
-              the terminal the engine was started from, and is not stored here.
+              Nothing is merged; that is done on the repository host. Use this environment's
+              approval passphrase, or its terminal key if no passphrase is set. T3 does not save it.
             </p>
           ) : (
             <p className="text-muted-foreground">
               A decision is recorded against the commit that was tested
               {card.run?.candidate ? ` (${card.run.candidate.slice(0, 10)})` : ""}. Approving is not
               merging. Where publishing is on, the approved commit is then pushed and one pull
-              request opened for review. The approval key is shown on the terminal the engine was
-              started from, and is not stored here.
+              request opened for review. Use this environment's approval passphrase, or its terminal
+              key if no passphrase is set. T3 does not save it.
             </p>
           )}
           <Input
@@ -321,10 +326,11 @@ function DecisionDialog(props: {
             onChange={(event) => setActor(event.target.value)}
           />
           <Input
-            aria-label="Approval key"
-            placeholder="Approval key"
+            aria-label="Approval passphrase or terminal key"
+            placeholder="Approval passphrase or terminal key"
+            name="delivery-approval"
             type="password"
-            autoComplete="off"
+            autoComplete="current-password"
             value={approvalKey}
             onChange={(event) => setApprovalKey(event.target.value)}
           />

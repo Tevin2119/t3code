@@ -19,9 +19,11 @@ import { readAgentActivityPublishingActive } from "../cloud/config.ts";
 import { resolveServerSelfUpdateCapability } from "../cloud/selfUpdate.ts";
 import { resolveServiceLauncherMode } from "../cloud/serviceLauncherClient.ts";
 import * as ServerConfig from "../config.ts";
+import { isCheckoutSupervised } from "../checkoutUpdate/CheckoutUpdate.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import { resolveServerEnvironmentLabel } from "./ServerEnvironmentLabel.ts";
 import { detectServerEnvironmentMachineKind } from "./ServerEnvironmentMachine.ts";
+import { resolveServerEnvironmentWorkspace } from "./ServerEnvironmentWorkspace.ts";
 
 export class ServerEnvironmentIdPersistenceError extends Schema.TaggedError<ServerEnvironmentIdPersistenceError>()(
   "ServerEnvironmentIdPersistenceError",
@@ -191,8 +193,10 @@ export const make = Effect.gen(function* () {
   const environmentId = yield* identity.getEnvironmentId;
   const cwdBaseName = path.basename(serverConfig.cwd).trim();
   const label = yield* resolveServerEnvironmentLabel({ cwdBaseName });
+  const workspace = yield* resolveServerEnvironmentWorkspace();
   const machine = yield* detectServerEnvironmentMachineKind();
   const launcher = yield* resolveServiceLauncherMode();
+  const checkoutSupervised = yield* isCheckoutSupervised;
   const serverSelfUpdate = resolveServerSelfUpdateCapability({
     desktopManaged: serverConfig.mode === "desktop",
     launcherManaged: launcher.managed,
@@ -206,7 +210,8 @@ export const make = Effect.gen(function* () {
 
   const descriptor: ExecutionEnvironmentDescriptor = {
     environmentId,
-    label,
+    label: workspace ? `${workspace.machineLabel} · ${workspace.profileLabel}` : label,
+    ...(workspace ? { workspace } : {}),
     platform: {
       os: platformOs(hostPlatform),
       arch: platformArch(hostArchitecture),
@@ -251,6 +256,7 @@ export const make = Effect.gen(function* () {
           }
         : {}),
       ...(desktopAppUpdate ? { desktopAppUpdate: true } : {}),
+      ...(checkoutSupervised ? { checkoutUpdate: true } : {}),
     },
   };
 

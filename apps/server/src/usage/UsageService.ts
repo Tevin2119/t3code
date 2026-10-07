@@ -2,7 +2,7 @@
  * UsageService - scans provider transcripts and returns priced usage buckets.
  *
  * The scan reads the harnesses' own session records (Claude Code, Codex, Grok
- * Build, DeepSeek, pi, Kimi Code, OpenCode and Hermes) rather than T3 Code's
+ * Build, DeepSeek, pi, Kimi Code, OpenCode, Hermes and Antigravity) rather than T3 Code's
  * orchestration projections, so usage covers turns driven outside T3 Code too.
  * This is the approach `ccusage` takes. T3 threads and delivery engine runs
  * write into those same records, so each call is counted once, from there;
@@ -20,10 +20,12 @@
 import * as NodeOS from "node:os";
 
 import {
+  AntigravitySettings,
   ClaudeSettings,
   CodexSettings,
   HermesSettings,
   type ProviderInstanceConfig,
+  ProviderInstanceId,
   USAGE_CONTRACT_VERSION,
   type ServerSettings as ServerSettingsValue,
   type UsageProviderKind,
@@ -51,6 +53,7 @@ import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 import { ServerConfig } from "../config.ts";
 import { expandHomePath } from "../pathExpansion.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import { resolveAntigravityProfileDirectory } from "../provider/antigravityAuthSupport.ts";
 import { resolveCodexHomeLayout } from "../provider/Drivers/CodexHomeLayout.ts";
 import { mergeProviderInstanceEnvironment } from "../provider/ProviderInstanceEnvironment.ts";
 import { UsageAggregator } from "./usageAggregation.ts";
@@ -69,6 +72,7 @@ import {
 } from "./usageScanCache.ts";
 import type { UsageRecord } from "./usageTranscripts.ts";
 import { readHermesRecords, readOpenCodeRecords } from "./usageDatabases.ts";
+import { type AntigravityBilling, readAntigravityRecords } from "./antigravityUsage.ts";
 
 const LITELLM_RATES_URL =
   "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json";
@@ -92,6 +96,7 @@ const CACHE_RETENTION_DAYS = 90;
 const decodeCodexSettings = Schema.decodeOption(CodexSettings);
 const decodeClaudeSettings = Schema.decodeOption(ClaudeSettings);
 const decodeHermesSettings = Schema.decodeOption(HermesSettings);
+const decodeAntigravitySettings = Schema.decodeOption(AntigravitySettings);
 const EngineUsageSources = Schema.Struct({
   sources: Schema.Array(
     Schema.Struct({ harness: Schema.String, dir: Schema.String, parentName: Schema.String }),
@@ -109,6 +114,8 @@ interface TranscriptSource {
   readonly parentName?: string;
   /** A SQLite store in `dir`, read whole rather than file by file. */
   readonly database?: string;
+  /** Antigravity's: a database per conversation, and whose account its tokens cost. */
+  readonly antigravityBilling?: AntigravityBilling;
   /** Said of the source when it cannot be read. */
   readonly missingMessage?: string;
 }
@@ -276,6 +283,83 @@ export const make = Effect.gen(function* () {
     ),
   );
 
+  /**
+   * A source's directory and volume as the scan reports them. Kept stable after
+   * root cleanup, including aliases and clients merging pre-cleanup environment
+   * summaries.
+   */
+  const stableSource = Effect.fn("UsageService.stableSource")(function* (
+    provider: UsageProviderKind,
+    directory: string,
+    retentionCutoffMs: number,
+  ) {
+    const sourceKey = provider + "\0" + directory;
+    const previous = sourceCache.get(sourceKey);
+    const dir = yield* fileSystem
+      .realPath(directory)
+      .pipe(Effect.orElseSucceed(() => previous?.dir ?? directory));
+    const currentVolumeId = yield* Effect.promise(() => readDirectoryVolumeId(dir));
+    const hasRetainedHistory = fileCache
+      .entries()
+      .some(
+        ([filePath, entry]) =>
+          entry.provider === provider &&
+          entry.mtimeMs >= retentionCutoffMs &&
+          entry.records.length + entry.tailRecords.length > 0 &&
+          isWithinDirectory(filePath, dir),
+      );
+    // A recreated directory still reports the retained history under its old identity.
+    const volumeId =
+      previous?.dir === dir && (hasRetainedHistory || !currentVolumeId)
+        ? previous.volumeId || currentVolumeId
+        : currentVolumeId;
+    if (previous?.dir !== dir || previous.volumeId !== volumeId) {
+      sourceCache.set(sourceKey, { dir, volumeId });
+      cacheDirty = true;
+    }
+    return { dir, volumeId };
+  });
+
+  /**
+   * Antigravity's stores of conversations: its CLI's (`agy`, which the delivery
+   * engine runs too), and the profile T3 gives each of its Antigravity instances.
+   * A Google account spends the plan; a key or Agent Platform bills the tokens.
+   */
+  const antigravitySources = (settings: ServerSettingsValue) => {
+    const geminiHome =
+      hostEnvironment.GEMINI_HOME?.trim() || path.join(NodeOS.homedir(), ".gemini");
+    const sources: { directory: string; billing: AntigravityBilling }[] = [
+      {
+        directory: path.join(expandHomePath(geminiHome), "antigravity-cli", "conversations"),
+        billing: "antigravity",
+      },
+    ];
+    const instances = Object.entries(settings.providerInstances)
+      .filter(([, instance]) => instance.driver === "antigravity")
+      .map(([id, instance]) => ({ id, config: instance.config }));
+    if (!Object.hasOwn(settings.providerInstances, "antigravity")) {
+      instances.push({ id: "antigravity", config: settings.providers.antigravity });
+    }
+    for (const { id, config: instanceConfig } of instances) {
+      const decoded = decodeAntigravitySettings(instanceConfig ?? {});
+      const authMethod = Option.isSome(decoded) ? decoded.value.authMethod : "oauth-personal";
+      sources.push({
+        directory: path.join(
+          resolveAntigravityProfileDirectory(config.stateDir, ProviderInstanceId.make(id)),
+          "antigravity-acp",
+          "conversations",
+        ),
+        billing:
+          authMethod === "gemini-api-key"
+            ? "gemini"
+            : authMethod === "agent-platform"
+              ? "vertex_ai"
+              : "antigravity",
+      });
+    }
+    return sources;
+  };
+
   /** Resolves the transcript directory for each provider. */
   const resolveTranscriptDirs = Effect.fn("UsageService.resolveTranscriptDirs")(function* (
     settings: ServerSettingsValue,
@@ -360,32 +444,7 @@ export const make = Effect.gen(function* () {
             : provider === "opencode" || provider === "hermes"
               ? path.resolve(home)
               : path.resolve(home, provider === "claude" ? "projects" : "sessions");
-        const sourceKey = provider + "\0" + directory;
-        const previous = sourceCache.get(sourceKey);
-        // Keep canonical paths and source fingerprints stable after root cleanup,
-        // including aliases and clients merging pre-cleanup environment summaries.
-        const dir = yield* fileSystem
-          .realPath(directory)
-          .pipe(Effect.orElseSucceed(() => previous?.dir ?? directory));
-        const currentVolumeId = yield* Effect.promise(() => readDirectoryVolumeId(dir));
-        const hasRetainedHistory = fileCache
-          .entries()
-          .some(
-            ([filePath, entry]) =>
-              entry.provider === provider &&
-              entry.mtimeMs >= retentionCutoffMs &&
-              entry.records.length + entry.tailRecords.length > 0 &&
-              isWithinDirectory(filePath, dir),
-          );
-        // A recreated directory still reports the retained history under its old identity.
-        const volumeId =
-          previous?.dir === dir && (hasRetainedHistory || !currentVolumeId)
-            ? previous.volumeId || currentVolumeId
-            : currentVolumeId;
-        if (previous?.dir !== dir || previous.volumeId !== volumeId) {
-          sourceCache.set(sourceKey, { dir, volumeId });
-          cacheDirty = true;
-        }
+        const { dir, volumeId } = yield* stableSource(provider, directory, retentionCutoffMs);
         const key = `${provider}\0${dir}`;
         if (seen.has(key)) continue;
         seen.add(key);
@@ -400,6 +459,23 @@ export const make = Effect.gen(function* () {
           ...(provider === "hermes" ? { database: path.join(dir, "state.db") } : {}),
         });
       }
+    }
+    for (const source of antigravitySources(settings)) {
+      const { dir, volumeId } = yield* stableSource(
+        "antigravity",
+        source.directory,
+        retentionCutoffMs,
+      );
+      const key = `antigravity\0${dir}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      dirs.push({
+        provider: "antigravity",
+        dir,
+        volumeId,
+        extension: ".db",
+        antigravityBilling: source.billing,
+      });
     }
     for (const source of yield* engineSources(settings)) {
       const key = `${source.provider}\0${source.dir}`;
@@ -565,6 +641,46 @@ export const make = Effect.gen(function* () {
       return tailRecords.length === 0 ? records : [...records, ...tailRecords];
     });
 
+  /**
+   * One Antigravity conversation, reusing the cached records while it is
+   * unchanged. A live conversation writes its write-ahead log first, so the
+   * log's size and time count in the conversation's.
+   */
+  const readAntigravityFile = Effect.fn("UsageService.readAntigravityFile")(function* (
+    filePath: string,
+    size: number,
+    mtimeMs: number,
+    billing: AntigravityBilling,
+  ) {
+    const log = Option.getOrNull(yield* fileSystem.stat(`${filePath}-wal`).pipe(Effect.option));
+    const identity = {
+      size: size + Number(log?.size ?? 0),
+      mtimeMs: Math.max(
+        mtimeMs,
+        log ? Option.match(log.mtime, { onNone: () => 0, onSome: (time) => time.getTime() }) : 0,
+      ),
+    };
+    const cached = fileCache.get(filePath);
+    const own = cached?.provider === "antigravity" ? cached : undefined;
+    if (own && own.size === identity.size && own.mtimeMs === identity.mtimeMs) return own.records;
+    const conversationId = path.basename(filePath, ".db");
+    const records = yield* Effect.sync(() =>
+      readAntigravityRecords(filePath, conversationId, billing),
+    );
+    // A database that cannot be read now is not one without usage.
+    if (records === null) return own?.records ?? [];
+    const deduped = dedupeWithinFile(records, new Set());
+    fileCache.set(filePath, {
+      ...identity,
+      provider: "antigravity",
+      records: deduped,
+      tailRecords: [],
+      position: { resumeOffset: identity.size, guardLength: 0, guardHash: 0, codexState: null },
+    });
+    cacheDirty = true;
+    return deduped;
+  });
+
   /** One provider directory's walk and parse, before rates are involved. */
   interface ScannedDir {
     readonly provider: UsageProviderKind;
@@ -597,6 +713,7 @@ export const make = Effect.gen(function* () {
       extension,
       parentName,
       database,
+      antigravityBilling,
       missingMessage,
     } of dirs) {
       if (missingMessage !== undefined) {
@@ -635,7 +752,10 @@ export const make = Effect.gen(function* () {
       );
       const parsedFiles: { path: string; records: readonly UsageRecord[] }[] = [];
       for (const file of files) {
-        const records = yield* readFileRecords(file.path, file.size, file.mtimeMs, provider);
+        const records =
+          antigravityBilling === undefined
+            ? yield* readFileRecords(file.path, file.size, file.mtimeMs, provider)
+            : yield* readAntigravityFile(file.path, file.size, file.mtimeMs, antigravityBilling);
         parsedFiles.push({ path: file.path, records });
       }
       scanned.push({ provider, dir, volumeId, files: parsedFiles });

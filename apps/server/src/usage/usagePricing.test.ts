@@ -130,4 +130,33 @@ describe("usage pricing", () => {
     expect(lookupRate(table, "provider-b/example-model")?.inputCostPerToken).toBe(3);
     expect(lookupRate(table, "example-model")).toBeNull();
   });
+
+  it("prices a model reached through a coding plan at the maker's own rate", () => {
+    // Resellers price the bare name differently, so it has no rate of its own.
+    const table = parseRateTable({
+      "zai/glm-5.3": rate(1.4e-6),
+      "nebius/zai-org/glm-5.3": rate(9e-7),
+      "sail/zai-org/glm-5.3": rate(2e-6),
+      "moonshot/kimi-k3": rate(3e-6),
+    });
+
+    expect(lookupRate(table, "glm-5.3")).toBeNull();
+    expect(lookupRate(table, "glm-5.3", "zai-coding-plan")?.inputCostPerToken).toBe(1.4e-6);
+    expect(lookupRate(table, "glm-5.3", "zai")?.inputCostPerToken).toBe(1.4e-6);
+    expect(lookupRate(table, "kimi-k3", "kimi-code")?.inputCostPerToken).toBe(3e-6);
+    // A plan alias the maker publishes no rate for stays unpriced.
+    expect(lookupRate(table, "kimi-for-coding", "kimi-code")).toBeNull();
+    // Only the provider that answered is asked, never another reseller.
+    expect(lookupRate(table, "glm-5.3", "openrouter")).toBeNull();
+    expect(priceUsage(table, "glm-5.3", totals, null, undefined, "zai-coding-plan")).toEqual({
+      costUsd: expect.closeTo(1.4e-6 * 3_000_000 + 7e-6 * 1_000_000, 9),
+      costSource: "modelPriced",
+    });
+  });
+
+  it("keeps a model's own rate ahead of its provider's", () => {
+    const table = parseRateTable({ "glm-5.3": rate(1), "zai/glm-5.3": rate(2) });
+
+    expect(lookupRate(table, "glm-5.3", "zai-coding-plan")?.inputCostPerToken).toBe(1);
+  });
 });

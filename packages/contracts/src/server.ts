@@ -881,6 +881,44 @@ export const ServerSelfUpdateProgressEvent = Schema.Union([
 ]);
 export type ServerSelfUpdateProgressEvent = typeof ServerSelfUpdateProgressEvent.Type;
 
+const CheckoutCommit = Schema.Struct({
+  commit: TrimmedNonEmptyString,
+  /** The commit's first line. */
+  subject: Schema.String,
+});
+
+/**
+ * Where a server run from a git checkout stands against the branch its
+ * supervisor follows. `available` is a newer commit of that branch, never an
+ * older one.
+ */
+export const CheckoutUpdateState = Schema.Struct({
+  running: CheckoutCommit,
+  available: Schema.NullOr(Schema.Struct({ ...CheckoutCommit.fields, behind: NonNegativeInt })),
+  phase: Schema.Literals(["idle", "checking", "installing", "building", "restarting", "failed"]),
+  message: Schema.NullOr(Schema.String),
+  checkedAt: Schema.NullOr(IsoDateTime),
+  /** The last update the supervisor made: done, or undone because the new commit did not start. */
+  lastOutcome: Schema.NullOr(
+    Schema.Struct({
+      from: TrimmedNonEmptyString,
+      to: TrimmedNonEmptyString,
+      status: Schema.Literals(["updated", "rolled-back"]),
+      reason: Schema.NullOr(Schema.String),
+    }),
+  ),
+});
+export type CheckoutUpdateState = typeof CheckoutUpdateState.Type;
+
+export class CheckoutUpdateError extends Schema.TaggedError<CheckoutUpdateError>()(
+  "CheckoutUpdateError",
+  { reason: TrimmedNonEmptyString },
+) {
+  override get message(): string {
+    return this.reason;
+  }
+}
+
 export class ServerSelfUpdateError extends Schema.TaggedError<ServerSelfUpdateError>()(
   "ServerSelfUpdateError",
   {

@@ -9,6 +9,10 @@ cost. These estimates are not your subscription bill.
 Totals depend on the history available on each server. Grok turns without a saved completed-turn
 record are missing from the totals.
 
+Antigravity usage comes from the Antigravity CLI (`agy`) history in `~/.gemini`, or `GEMINI_HOME`,
+and from each Antigravity account in T3 Code. With a Google account, its cost is what the same
+tokens would cost through the API, not money spent.
+
 Usage includes each configured account's history, including disabled accounts. Custom homes follow
 the account's home setting or its `CODEX_HOME`, `CLAUDE_CONFIG_DIR`, or `GROK_HOME` environment
 variable. Use absolute paths or `~/` paths in the account's environment settings; relative

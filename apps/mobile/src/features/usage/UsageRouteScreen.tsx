@@ -7,6 +7,7 @@ import {
   type DailyTotals,
   type MergedUsage,
 } from "@t3tools/shared/usageMerge";
+import { PLAN_COST_LABEL, planCostNote } from "@t3tools/shared/usagePlans";
 import {
   enumerateDays,
   enumerateHourStarts,
@@ -415,6 +416,7 @@ function ProviderSection(props: {
     <SettingsSection title="Providers" card>
       {ordered.map((provider, index) => {
         const share = metric === "cost" ? provider.costShare : provider.tokenShare;
+        const planNote = planCostNote(provider.costUsd, provider.planCostUsd, formatUsd);
         return (
           <View
             key={provider.provider}
@@ -445,6 +447,7 @@ function ProviderSection(props: {
               {metric === "cost"
                 ? `${formatPercent(share)} of cost · ${formatTokens(provider.totalTokens)} tokens`
                 : `${formatPercent(share)} of tokens · ${formatUsd(provider.costUsd)}`}
+              {planNote === null ? "" : ` · ${planNote}`}
             </Text>
           </View>
         );
@@ -545,7 +548,9 @@ function ModelsSection(props: { readonly merged: MergedUsage }) {
             <Text className="text-sm text-foreground-muted">
               {isModelCostUnknown(model)
                 ? `no known rates · ${formatTokens(model.totalTokens)} tokens`
-                : `${formatPercent(model.costShare)} of cost · ${formatTokens(model.totalTokens)} tokens`}
+                : `${formatPercent(model.costShare)} of cost · ${formatTokens(model.totalTokens)} tokens${
+                    model.onPlan ? ` · ${PLAN_COST_LABEL}` : ""
+                  }`}
             </Text>
           </View>
           <Text className="text-base tabular-nums text-foreground">

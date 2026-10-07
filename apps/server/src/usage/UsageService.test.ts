@@ -3,6 +3,7 @@
 import * as NodeFSP from "node:fs/promises";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
+import * as NodeSqlite from "node:sqlite";
 
 import { assert, describe, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -107,6 +108,7 @@ const serviceLayers = (input: {
         KIMI_CODE_HOME: NodePath.join(input.home, "kimi"),
         XDG_DATA_HOME: NodePath.join(input.home, "data"),
         HERMES_HOME: NodePath.join(input.home, "hermes"),
+        GEMINI_HOME: NodePath.join(input.home, "gemini"),
         ...input.environment,
       }),
     ),
@@ -230,6 +232,46 @@ describe("UsageService", () => {
       assert.strictEqual(
         sources.filter((source) => source.fingerprint.provider === "codex").length,
         1,
+      );
+    }).pipe(Effect.scoped),
+  );
+
+  it.live("counts Antigravity's conversations, from agy's store, as usage on a plan", () =>
+    Effect.gen(function* () {
+      const { settings, home } = yield* setup;
+      const conversations = NodePath.join(home, "gemini", "antigravity-cli", "conversations");
+      yield* Effect.promise(() => NodeFSP.mkdir(conversations, { recursive: true }));
+      // A step finished at 2026-08-01T10:00:00Z with 10 tokens in and 7 out, of a conversation
+      // started on gemini-3.8-flash-low, encoded as agy 1.2.16 keeps them.
+      const store = new NodeSqlite.DatabaseSync(NodePath.join(conversations, "conv-1.db"));
+      store.exec(
+        "create table steps (idx integer primary key, metadata blob);" +
+          "create table executor_metadata (idx integer primary key, data blob);" +
+          "create table gen_metadata (idx integer primary key, data blob);",
+      );
+      store
+        .prepare("insert into steps values (1, ?)")
+        .run(Buffer.from("420608a087b7d3064a04100a1807", "hex"));
+      store
+        .prepare("insert into executor_metadata values (0, ?)")
+        .run(Buffer.from("52190a17e2011467656d696e692d332e382d666c6173682d6c6f77", "hex"));
+      store.close();
+      const service = yield* UsageService.make.pipe(
+        Effect.provide(serviceLayers({ prefix: "usage-service-antigravity-test", home, settings })),
+      );
+      const summary = yield* service.readSummary(WINDOW);
+      const bucket = summary.buckets.find((entry) => entry.provider === "antigravity");
+      assert.deepInclude(bucket, {
+        model: "gemini-3.8-flash",
+        modelProvider: "antigravity",
+        modelProviderSource: "harness",
+      });
+      assert.deepInclude(bucket?.totals, { uncachedInputTokens: 10, outputTokens: 7 });
+      assert.strictEqual(
+        summary.sources.find(
+          (source) => source.fingerprint.provider === "antigravity" && source.status === "ok",
+        )?.fingerprint.resolvedHomePath,
+        yield* Effect.promise(() => NodeFSP.realpath(conversations)),
       );
     }).pipe(Effect.scoped),
   );

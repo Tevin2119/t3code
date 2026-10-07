@@ -1093,6 +1093,7 @@ export const DeliverySettings = Schema.Struct({
   ),
   /** Dot-sourced by PowerShell terminals T3 Code opens, so harnesses start with a team loaded. */
   terminalEntryScript: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
+  engineCommand: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
 });
 export type DeliverySettings = typeof DeliverySettings.Type;
 
@@ -1730,6 +1731,7 @@ export const ServerSettingsPatch = Schema.Struct({
       enabled: Schema.optionalKey(Schema.Boolean),
       engineUrl: Schema.optionalKey(TrimmedString),
       terminalEntryScript: Schema.optionalKey(TrimmedString),
+      engineCommand: Schema.optionalKey(TrimmedString),
     }),
   ),
   providers: Schema.optionalKey(

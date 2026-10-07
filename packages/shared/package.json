@@ -303,6 +303,10 @@
       "types": "./src/usageMerge.ts",
       "import": "./src/usageMerge.ts"
     },
+    "./usagePlans": {
+      "types": "./src/usagePlans.ts",
+      "import": "./src/usagePlans.ts"
+    },
     "./usageFormat": {
       "types": "./src/usageFormat.ts",
       "import": "./src/usageFormat.ts"

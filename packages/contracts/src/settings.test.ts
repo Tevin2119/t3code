@@ -20,6 +20,22 @@ const decodeServerSettingsPatch = Schema.decodeUnknownSync(ServerSettingsPatch);
 const encodeServerSettings = Schema.encodeSync(ServerSettings);
 const decodeClaudeSettings = Schema.decodeUnknownSync(ClaudeSettings);
 
+describe("delivery engine start settings", () => {
+  it("does not configure a start command for existing installations", () => {
+    expect(decodeServerSettings({}).delivery.engineCommand).toBe("");
+  });
+
+  it("preserves an environment's command across storage and supports clearing it", () => {
+    const input = {
+      delivery: { enabled: true, engineUrl: "http://127.0.0.1:4321", engineCommand: "pm" },
+    };
+    expect(encodeServerSettings(decodeServerSettings(input))).toMatchObject(input);
+    expect(decodeServerSettingsPatch({ delivery: { engineCommand: "" } })).toEqual({
+      delivery: { engineCommand: "" },
+    });
+  });
+});
+
 describe("storage cleanup settings", () => {
   it("keeps cleanup disabled for existing installations", () => {
     expect(decodeServerSettings({}).worktreeCleanup).toBeNull();
