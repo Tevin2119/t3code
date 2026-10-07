@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  chosenTeamUnavailable,
   deliveryEnvironmentChoice,
   decideTeamForSend,
   deliveryFailureText,
@@ -193,6 +194,34 @@ describe("resolveTeamChoice", () => {
       state: "blocked",
       why: "This team is not set up. Choose another team, or No team.",
     });
+  });
+});
+
+describe("settled team availability", () => {
+  it.each([
+    { name: "retained offered team", body: [{ team: "rnd" }], unavailable: false },
+    { name: "retained missing team", body: [{ team: "alpha" }], unavailable: true },
+    { name: "retained empty list", body: [], unavailable: true },
+    { name: "retained malformed body", body: {}, unavailable: true },
+    { name: "no body", body: null, unavailable: false },
+    { name: "undefined body", body: undefined, unavailable: false },
+  ])("uses $name after a failed reading", ({ body, unavailable }) => {
+    expect(chosenTeamUnavailable({ body, error: "offline" }, { team: "rnd" })).toBe(unavailable);
+  });
+
+  it("does not rule out a choice still awaiting teams", () => {
+    expect(
+      chosenTeamUnavailable(
+        { body: [{ team: "alpha" }], error: "offline" },
+        { team: "rnd", awaitingTeams: true },
+      ),
+    ).toBe(false);
+  });
+
+  it("clears unavailability when a successful reading offers the choice again", () => {
+    const draft = { team: "rnd" };
+    expect(chosenTeamUnavailable({ body: [], error: "offline" }, draft)).toBe(true);
+    expect(chosenTeamUnavailable({ body: [{ team: "rnd" }], error: null }, draft)).toBe(false);
   });
 });
 

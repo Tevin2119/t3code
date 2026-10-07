@@ -215,6 +215,112 @@ it.each([null, "saved-task"])(
   },
 );
 
+it.each([
+  { engineThread: null, removeFirst: false },
+  { engineThread: null, removeFirst: true },
+  { engineThread: "saved-task", removeFirst: false },
+  { engineThread: "saved-task", removeFirst: true },
+])(
+  "keeps a missing choice blocked after failure ($engineThread, removed first: $removeFirst)",
+  async ({ engineThread, removeFirst }) => {
+    store().enter("t1", "env-a");
+    mock.reading = { body: teams, error: null };
+    await render();
+    await act(() => {
+      store().chooseTeam("t1", "env-a", "rnd");
+      if (engineThread) store().update("t1", { engineThread, savedText: "Earlier prompt" });
+    });
+    const reason = "Team rnd is not offered here. Choose another team.";
+    if (removeFirst) {
+      mock.reading = { body: offered("alpha"), error: null };
+      await render();
+      expect(alert()).toBe(reason);
+    }
+    mock.reading = { body: offered("alpha"), error: "offline" };
+    await render();
+    expect(alert()).toBe(reason);
+    expect(store().activity.t1).toMatchObject({
+      teamAvailabilityReason: reason,
+      blocked: "Delivery engine not reachable. offline",
+    });
+    await act(() => {
+      store().requestSave("t1");
+      store().requestStart("t1");
+    });
+    expect(mock.action).not.toHaveBeenCalled();
+    expect(alert()).toBe(reason);
+
+    mock.reading = { body: teams, error: null };
+    await render();
+    expect(alert()).toBe("");
+    expect(store().activity.t1?.teamAvailabilityReason).toBeNull();
+    expect(mock.action).not.toHaveBeenCalled();
+    await act(async () => store().requestSave("t1"));
+    expect(mock.action).toHaveBeenCalledTimes(1);
+    expect(mock.action).toHaveBeenCalledWith(
+      engineThread ? `/api/tasks/${engineThread}/edit` : "/api/tasks",
+      expect.objectContaining({ team: "rnd" }),
+    );
+  },
+);
+
+it.each([null, "saved-task"])(
+  "distinguishes successful empty from failed retained empty for a settled draft (%s)",
+  async (engineThread) => {
+    store().enter("t1", "env-a");
+    store().chooseTeam("t1", "env-a", "rnd");
+    if (engineThread) store().update("t1", { engineThread });
+    mock.reading = { body: [], error: null };
+    await render();
+    expect(alert()).toBe("No teams are available to choose from.");
+    expect(store().activity.t1?.teamAvailabilityReason).toBe(alert());
+    mock.reading = { body: [], error: "offline" };
+    await render();
+    expect(alert()).toBe("Team rnd is not offered here. Choose another team.");
+    expect(store().activity.t1?.teamAvailabilityReason).toBe(alert());
+    expect(store().activity.t1?.blocked).toBe("Delivery engine not reachable. offline");
+    await act(() => {
+      store().requestSave("t1");
+      store().requestStart("t1");
+    });
+    expect(mock.action).not.toHaveBeenCalled();
+  },
+);
+
+it.each([
+  { name: "settled offered choice", body: offered("rnd"), awaitingTeams: false },
+  { name: "settled choice without a body", body: null, awaitingTeams: false },
+  { name: "awaiting choice without a body", body: null, awaitingTeams: true },
+  {
+    name: "awaiting choice missing from retained list",
+    body: offered("alpha"),
+    awaitingTeams: true,
+  },
+])("preserves Save behavior on failure for $name", async ({ body, awaitingTeams }) => {
+  store().enter("t1", "env-a");
+  if (!awaitingTeams) store().chooseTeam("t1", "env-a", "rnd");
+  const originalTeam = store().drafts.t1?.team;
+  mock.reading = { body, error: "offline" };
+  await render();
+  expect(alert()).toBe("");
+  expect(store().activity.t1?.teamAvailabilityReason).toBeNull();
+  expect(store().activity.t1?.blocked).toBe("Delivery engine not reachable. offline");
+  expect(store().drafts.t1?.team).toBe(originalTeam);
+  expect(store().drafts.t1?.awaitingTeams === true).toBe(awaitingTeams);
+  await act(() => store().requestStart("t1"));
+  expect(mock.action).not.toHaveBeenCalled();
+  await act(async () => store().requestSave("t1"));
+  if (awaitingTeams) {
+    expect(mock.action).not.toHaveBeenCalled();
+  } else {
+    expect(mock.action).toHaveBeenCalledTimes(1);
+    expect(mock.action).toHaveBeenCalledWith(
+      "/api/tasks",
+      expect.objectContaining({ team: "rnd", draft: true }),
+    );
+  }
+});
+
 it("keeps read errors distinct from empty lists", async () => {
   store().enter("t1", "env-a");
   mock.reading = { body: null, error: "offline" };

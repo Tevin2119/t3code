@@ -7,6 +7,7 @@ import { PlayIcon, SaveIcon, SlidersHorizontalIcon, UsersIcon, WorkflowIcon } fr
 import { useCallback, useEffect, useMemo, useRef, useState, type PointerEventHandler } from "react";
 
 import {
+  chosenTeamUnavailable,
   flowFor,
   flowStartLabel,
   parseTask,
@@ -85,11 +86,10 @@ export function OrchestratorComposerControls(props: {
 
   const team = teams.find((candidate) => candidate.team === draft?.team) ?? null;
   // A draft still waiting may yet give its team up, so only a settled one is called unavailable.
-  const teamAvailabilityReason = !teamsLoaded
-    ? null
-    : teams.length === 0
+  const teamAvailabilityReason =
+    teamsLoaded && teams.length === 0
       ? "No teams are available to choose from."
-      : !awaitingTeams && !team
+      : chosenTeamUnavailable(teamsRead, draft)
         ? `Team ${draft?.team} is not offered here. Choose another team.`
         : null;
   const flow = flowFor(team, draft?.workflow ?? null);
