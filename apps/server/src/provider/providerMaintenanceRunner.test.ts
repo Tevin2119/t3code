@@ -7,6 +7,7 @@ import {
 } from "@t3tools/contracts";
 import { ServerProviderUpdateError } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
@@ -208,19 +209,13 @@ function makeRegistry(
   });
 }
 
+// Built in the test's scope, as the server builds it in its own: an update runs in
+// the runner's scope, so the runner must outlive the calls a test makes.
 const makeTestRunner = (registry: ProviderRegistryShape) =>
-  Effect.service(ProviderMaintenanceRunner.ProviderMaintenanceRunner).pipe(
-    Effect.provide(
-      ProviderMaintenanceRunner.layer.pipe(
-        Layer.provide(
-          Layer.mergeAll(
-            Layer.succeed(ProviderRegistry, registry),
-            // Fresh per runner so a version cached by one test cannot leak into another.
-            Layer.sync(ProviderVersionCache, () => new Map()),
-          ),
-        ),
-      ),
-    ),
+  ProviderMaintenanceRunner.make().pipe(
+    Effect.provideService(ProviderRegistry, registry),
+    // Fresh per runner so a version cached by one test cannot leak into another.
+    Effect.provideService(ProviderVersionCache, new Map()),
   );
 
 describe("providerMaintenanceRunner", () => {
@@ -676,6 +671,82 @@ describe("providerMaintenanceRunner", () => {
               ),
             };
           }),
+        ),
+      ),
+    );
+  });
+
+  it.effect("finishes an update whose caller went away, and records the outcome", () => {
+    const startedLatch: { resolve: () => void } = { resolve: () => {} };
+    const releaseLatch: { resolve: () => void } = { resolve: () => {} };
+    const started = new Promise<void>((resolve) => {
+      startedLatch.resolve = resolve;
+    });
+    const release = new Promise<void>((resolve) => {
+      releaseLatch.resolve = resolve;
+    });
+    let released = false;
+    let killedWhileRunning = false;
+    return Effect.gen(function* () {
+      const { registry } = yield* makeRegistry();
+      const finished = yield* Deferred.make<ServerProviderUpdateState>();
+      const watched: ProviderRegistryShape = {
+        ...registry,
+        setProviderMaintenanceActionState: (input) =>
+          registry
+            .setProviderMaintenanceActionState(input)
+            .pipe(
+              Effect.tap(() =>
+                input.state && input.state.finishedAt !== null
+                  ? Deferred.succeed(finished, input.state)
+                  : Effect.void,
+              ),
+            ),
+      };
+      const updater = yield* makeTestRunner(watched);
+
+      // The caller (a WebSocket request) is interrupted mid-update, as when the
+      // page reloads or the socket reconnects.
+      const caller = yield* updater.updateProvider(CODEX_DRIVER).pipe(Effect.forkScoped);
+      yield* Effect.promise(() => started);
+      yield* Fiber.interrupt(caller);
+
+      released = true;
+      releaseLatch.resolve();
+      const outcome = yield* Deferred.await(finished);
+      assert.strictEqual(outcome.status, "succeeded");
+      assert.strictEqual(killedWhileRunning, false);
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          NonWindowsPlatform,
+          latestVersionHttpClient("0.0.0"),
+          Layer.succeed(
+            ChildProcessSpawner.ChildProcessSpawner,
+            ChildProcessSpawner.make(() => {
+              startedLatch.resolve();
+              return Effect.succeed(
+                ChildProcessSpawner.makeHandle({
+                  pid: ChildProcessSpawner.ProcessId(1),
+                  exitCode: Effect.promise(() => release).pipe(
+                    Effect.as(ChildProcessSpawner.ExitCode(0)),
+                  ),
+                  isRunning: Effect.succeed(false),
+                  kill: () =>
+                    Effect.sync(() => {
+                      if (!released) killedWhileRunning = true;
+                    }),
+                  unref: Effect.succeed(Effect.void),
+                  stdin: Sink.drain,
+                  stdout: Stream.make(encoder.encode("updated")),
+                  stderr: Stream.empty,
+                  all: Stream.empty,
+                  getInputFd: () => Sink.drain,
+                  getOutputFd: () => Stream.empty,
+                }),
+              );
+            }),
+          ),
         ),
       ),
     );
