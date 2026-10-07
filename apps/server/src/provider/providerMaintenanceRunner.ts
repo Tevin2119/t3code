@@ -14,6 +14,7 @@ import * as Data from "effect/Data";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
@@ -213,6 +214,11 @@ function makeUpdateState(input: {
 
 /** @public Service construction is part of the canonical Effect module API. */
 export const make = Effect.fn("ProviderMaintenanceRunner.make")(function* () {
+  // Updates run in the runner's own scope, not the caller's: a request that goes
+  // away mid-update (page reload, socket reconnect, navigation) must not kill an
+  // installer halfway through. The caller only waits for the outcome, which is
+  // also published on the provider snapshot for any client that reconnects.
+  const updateScope = yield* Effect.scope;
   const providerRegistry = yield* ProviderRegistry;
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const httpClient = yield* HttpClient.HttpClient;
@@ -447,7 +453,7 @@ export const make = Effect.fn("ProviderMaintenanceRunner.make")(function* () {
       },
     );
 
-    return yield* commandCoordinator
+    const run = yield* commandCoordinator
       .withCommandLock({
         targetKey,
         lockKey: update.lockKey,
@@ -463,7 +469,9 @@ export const make = Effect.fn("ProviderMaintenanceRunner.make")(function* () {
               })
             : error,
         ),
+        Effect.forkIn(updateScope),
       );
+    return yield* Fiber.join(run);
   });
 
   return ProviderMaintenanceRunner.of({
