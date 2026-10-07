@@ -3,10 +3,11 @@ import type { ReactNode } from "react";
 import { memo, useCallback } from "react";
 import { Link, useCanGoBack, useLocation, useNavigate } from "@tanstack/react-router";
 
+import { useBoardAttention } from "../../hooks/useBoardAttention";
 import { useEnvironmentIdentificationMode } from "../../hooks/useSettings";
 import { cn } from "../../lib/utils";
 import { useDeliveryEnabled } from "../../state/delivery";
-import { useEnvironments, usePrimaryEnvironmentId } from "../../state/environments";
+import { useEnvironment, useEnvironments, usePrimaryEnvironmentId } from "../../state/environments";
 import { T3Wordmark } from "../T3Wordmark";
 import {
   resolveEnvironmentIdentificationPillLabel,
@@ -114,10 +115,13 @@ function SidebarBrand({ onBackdrop }: { onBackdrop: boolean }) {
 }
 
 function SidebarUtilityItem({
+  badge,
   icon,
   label,
   onClick,
 }: {
+  /** A count shown on the icon's corner. Nothing is shown for zero or when it is not known. */
+  badge?: number | null;
   icon: ReactNode;
   label: string;
   onClick: () => void;
@@ -134,6 +138,15 @@ function SidebarUtilityItem({
         />
         <TooltipPopup side="top">{label}</TooltipPopup>
       </Tooltip>
+      {/* Beside the button, not in it: the button clips what it holds. The label carries the count. */}
+      {badge ? (
+        <span
+          aria-hidden
+          className="pointer-events-none absolute top-0 right-0 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-primary px-1 text-[10px] leading-none font-medium text-primary-foreground tabular-nums"
+        >
+          {badge}
+        </span>
+      ) : null}
     </SidebarMenuItem>
   );
 }
@@ -160,6 +173,9 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
   });
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const deliveryEnabled = useDeliveryEnabled(primaryEnvironmentId);
+  // Settings outlast a connection, so delivery being on does not say the count can be read.
+  const primaryConnected = useEnvironment(primaryEnvironmentId)?.connection.phase === "connected";
+  const boardAttention = useBoardAttention(primaryEnvironmentId, deliveryEnabled, primaryConnected);
   const { environments } = useEnvironments();
   // The page reads every connected server, so one of them offering pull requests is enough for
   // the link to lead somewhere.
@@ -246,7 +262,16 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
             onClick={handleUsageClick}
           />
           {deliveryEnabled ? (
-            <SidebarUtilityItem icon={<BoardIcon />} label="Board" onClick={handleBoardClick} />
+            <SidebarUtilityItem
+              badge={boardAttention}
+              icon={<BoardIcon />}
+              label={
+                boardAttention
+                  ? `Board, ${boardAttention} ${boardAttention === 1 ? "task needs" : "tasks need"} you`
+                  : "Board"
+              }
+              onClick={handleBoardClick}
+            />
           ) : null}
         </>
       )}

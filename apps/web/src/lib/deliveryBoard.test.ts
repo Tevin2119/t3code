@@ -6,6 +6,7 @@ import {
   isConversationRef,
   taskFromConversation,
   activeFilters,
+  boardAttentionCount,
   ageLabel,
   fileKindOf,
   filterLanes,
@@ -443,5 +444,170 @@ describe("sectionOf", () => {
     ).toBeNull();
     expect(sectionOf({ kind: "run.planned", text: "Planned." })).toBe("plan");
     expect(sectionOf({ kind: "note", text: "Run run-1 started." })).toBeNull();
+  });
+});
+
+describe("boardAttentionCount", () => {
+  // The shape of a reading of /api/lanes?view=development&set=all, as the engine answers it.
+  const lane = (id: string, cards: ReadonlyArray<Record<string, unknown>> = []) => ({
+    lane: id,
+    title: id,
+    cards,
+  });
+  const task = (id: string, laneId: string, waitingOn: string | null = null) => ({
+    id,
+    number: 1,
+    title: id,
+    lane: laneId,
+    waitingOn,
+    set: "unsorted",
+  });
+  const reading = (lanes: ReadonlyArray<unknown>, overrides: Record<string, unknown> = {}) => ({
+    view: "development",
+    set: "all",
+    lanes,
+    closed: [],
+    waiting: 0,
+    ...overrides,
+  });
+
+  it("counts the tasks waiting on you", () => {
+    expect(
+      boardAttentionCount(
+        reading([
+          lane("needs-decision", [task("a", "needs-decision"), task("b", "needs-decision")]),
+          lane("human-review"),
+        ]),
+      ),
+    ).toBe(2);
+  });
+
+  it("counts the tasks waiting for your sign-off", () => {
+    expect(
+      boardAttentionCount(
+        reading([lane("needs-decision"), lane("human-review", [task("a", "human-review")])]),
+      ),
+    ).toBe(1);
+  });
+
+  it("adds the two lanes together", () => {
+    expect(
+      boardAttentionCount(
+        reading([
+          lane("needs-decision", [
+            task("a", "needs-decision", "person"),
+            task("b", "needs-decision", "person"),
+          ]),
+          lane("human-review", [task("c", "human-review")]),
+        ]),
+      ),
+    ).toBe(3);
+  });
+
+  it("is zero when both lanes are there and empty", () => {
+    expect(boardAttentionCount(reading([lane("needs-decision"), lane("human-review")]))).toBe(0);
+  });
+
+  it("leaves out a draft and every other lane, even where a card waits on a person", () => {
+    expect(
+      boardAttentionCount(
+        reading(
+          [
+            lane("draft", [task("a", "draft", "person"), task("b", "draft", "person")]),
+            lane("needs-decision", [task("c", "needs-decision", "person")]),
+            lane("ready", [task("d", "ready", "person")]),
+            lane("implementation", [task("e", "implementation", "team")]),
+            lane("human-review"),
+            lane("completed", [task("f", "completed")]),
+          ],
+          { waiting: 4 },
+        ),
+      ),
+    ).toBe(1);
+  });
+
+  it("does not take a reading it cannot trust for none", () => {
+    const good = [lane("needs-decision", [task("a", "needs-decision")]), lane("human-review")];
+    expect(boardAttentionCount(null)).toBeNull();
+    expect(boardAttentionCount({ view: "development", set: "all" })).toBeNull();
+    expect(boardAttentionCount(reading("oops" as never))).toBeNull();
+    // A lane without its cards, or with cards that are not a list.
+    expect(
+      boardAttentionCount(reading([{ lane: "needs-decision" }, lane("human-review")])),
+    ).toBeNull();
+    expect(
+      boardAttentionCount(
+        reading([{ lane: "needs-decision", cards: "oops" }, lane("human-review")]),
+      ),
+    ).toBeNull();
+    expect(boardAttentionCount(reading([...good, "oops"]))).toBeNull();
+    // A card that is not one, alone or among good ones, in a lane that counts or one that does not.
+    expect(
+      boardAttentionCount(
+        reading([{ lane: "needs-decision", cards: [null] }, lane("human-review")]),
+      ),
+    ).toBeNull();
+    expect(
+      boardAttentionCount(
+        reading([
+          lane("needs-decision"),
+          {
+            lane: "human-review",
+            cards: [task("a", "human-review"), "oops", task("b", "human-review")],
+          },
+        ]),
+      ),
+    ).toBeNull();
+    expect(boardAttentionCount(reading([...good, { lane: "draft", cards: [[]] }]))).toBeNull();
+    // The engine lists every lane, so one that is missing was not read.
+    expect(boardAttentionCount(reading([good[0]]))).toBeNull();
+    expect(boardAttentionCount(reading([lane("human-review")]))).toBeNull();
+    // Another board or view holds fewer tasks than there are.
+    expect(boardAttentionCount(reading(good, { set: "unsorted" }))).toBeNull();
+    expect(boardAttentionCount(reading(good, { set: undefined }))).toBeNull();
+    expect(boardAttentionCount(reading(good, { view: "testing" }))).toBeNull();
+  });
+
+  it("does not add up a lane that counts when it is listed twice", () => {
+    const waiting = lane("needs-decision", [
+      task("a", "needs-decision"),
+      task("b", "needs-decision"),
+    ]);
+    expect(boardAttentionCount(reading([waiting, waiting, lane("human-review")]))).toBeNull();
+    expect(
+      boardAttentionCount(
+        reading([
+          lane("needs-decision", [task("a", "needs-decision")]),
+          lane("human-review"),
+          lane("human-review"),
+        ]),
+      ),
+    ).toBeNull();
+    // Twice and empty both times is no more to be trusted.
+    expect(
+      boardAttentionCount(
+        reading([lane("needs-decision"), lane("needs-decision"), lane("human-review")]),
+      ),
+    ).toBeNull();
+    expect(
+      boardAttentionCount(
+        reading([lane("needs-decision"), lane("human-review"), lane("human-review")]),
+      ),
+    ).toBeNull();
+    // Twice with another lane between the two.
+    expect(boardAttentionCount(reading([waiting, lane("human-review"), waiting]))).toBeNull();
+  });
+
+  it("still counts when a lane that does not count is listed twice", () => {
+    expect(
+      boardAttentionCount(
+        reading([
+          lane("draft", [task("a", "draft")]),
+          lane("needs-decision", [task("b", "needs-decision"), task("c", "needs-decision")]),
+          lane("draft"),
+          lane("human-review", [task("d", "human-review")]),
+        ]),
+      ),
+    ).toBe(3);
   });
 });

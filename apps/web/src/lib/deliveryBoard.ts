@@ -4,7 +4,7 @@
  * sent. Where a card may go is the engine's to decide; `moveIntent` says
  * what a move would come to, for the drag, the column choice and the step.
  */
-import type { DeliveryCard, DeliveryLane, TaskPriority } from "./delivery";
+import { parseBoard, type DeliveryCard, type DeliveryLane, type TaskPriority } from "./delivery";
 
 export interface DeliveryBoardSearch {
   readonly environment?: string;
@@ -468,6 +468,46 @@ export const LANE_TITLE: Readonly<Record<string, string>> = {
   "pull-request": "Pull request open",
   completed: "Done",
 };
+
+/** The lanes where a task waits for the person: for an answer, or for a sign-off. */
+export const ATTENTION_LANES: ReadonlyArray<string> = ["needs-decision", "human-review"];
+
+/** The reading the attention count is taken from: every board, every lane, no filter. */
+export const ATTENTION_BOARD_PATH = "/api/lanes?view=development&set=all";
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+// Every card has to be a record too: parseBoard drops one that is not, and a dropped card is a miscount.
+const isLaneEntry = (lane: unknown): boolean =>
+  isRecord(lane) &&
+  typeof lane.lane === "string" &&
+  Array.isArray(lane.cards) &&
+  lane.cards.every(isRecord);
+
+/**
+ * How many tasks wait for the person, from a reading of ATTENTION_BOARD_PATH.
+ * Null when the reading cannot be trusted, which is not the same as none: the
+ * engine lists every lane once, even when it is empty, so a lane that is
+ * missing, malformed or listed twice says nothing about how many tasks are in it.
+ */
+export function boardAttentionCount(body: unknown): number | null {
+  // Checked on the body as it came: parseBoard reads a malformed lane as an empty one.
+  if (!isRecord(body)) return null;
+  const raw = body;
+  if (raw.view !== "development" || raw.set !== "all") return null;
+  if (!Array.isArray(raw.lanes) || !raw.lanes.every(isLaneEntry)) return null;
+  const board = parseBoard(body);
+  if (
+    !board ||
+    !ATTENTION_LANES.every((id) => board.lanes.filter((lane) => lane.lane === id).length === 1)
+  ) {
+    return null;
+  }
+  return board.lanes
+    .filter((lane) => ATTENTION_LANES.includes(lane.lane))
+    .reduce((total, lane) => total + lane.cards.length, 0);
+}
 
 /** What became of a message a person sent, in words a person would use. */
 export function messageStateLabel(state: string | null, revision: number | null): string | null {

@@ -369,7 +369,12 @@ import {
 import { environmentShell } from "../state/shell";
 import { ChatComposer, type ChatComposerHandle } from "./chat/ChatComposer";
 import { SessionStatusFooter } from "./chat/SessionStatusFooter";
-import { decideTeamForSend, parseTeams } from "../lib/delivery";
+import {
+  decideTeamForSend,
+  resolveDraftTeam,
+  selectableTeams,
+  teamListStatus,
+} from "../lib/delivery";
 import {
   deliveryEnvironment,
   hasDraftTeamChoice,
@@ -380,6 +385,7 @@ import {
   useDeliveryEnabled,
   useDeliveryRead,
   useDraftTeamChoice,
+  useHasDraftTeamChoice,
 } from "../state/delivery";
 import { createPageScrollController, type PageScrollKey } from "./chat/pageScrollController";
 import { DraftHeroHeadline } from "./chat/DraftHeroHeadline";
@@ -2927,16 +2933,16 @@ export default function ChatView(props: ChatViewProps) {
   const deliveryEnabled = useDeliveryEnabled(environmentId);
   const deliveryTeams = useDeliveryRead(deliveryEnabled ? environmentId : null, "/api/teams");
   // Read through a ref at send time, so the send path needs no new dependencies.
-  const deliverySendRef = useRef({
+  // The same teams the picker offers, so that the picker, the footer and the send agree.
+  const deliveryTeamList = useMemo(() => selectableTeams(deliveryTeams.body), [deliveryTeams.body]);
+  const deliverySendInput = {
     enabled: deliveryEnabled,
-    teams: parseTeams(deliveryTeams.body),
-    error: deliveryTeams.error,
-  });
-  deliverySendRef.current = {
-    enabled: deliveryEnabled,
-    teams: parseTeams(deliveryTeams.body),
+    teams: deliveryTeamList,
+    status: teamListStatus(deliveryTeams),
     error: deliveryTeams.error,
   };
+  const deliverySendRef = useRef(deliverySendInput);
+  deliverySendRef.current = deliverySendInput;
   // Asked for drafts too: a draft whose first send failed is held on the server.
   const deliveryThreadState = useEnvironmentQuery(
     deliveryEnabled && activeThread
@@ -2952,7 +2958,26 @@ export default function ChatView(props: ChatViewProps) {
     label: "start without a team",
     reportFailure: false,
   });
-  const draftTeamChoice = useDraftTeamChoice(activeThread?.id ?? null);
+  const activeDraftTeamThreadId = activeThread?.id ?? null;
+  const storedDraftTeamChoice = useDraftTeamChoice(activeDraftTeamThreadId, environmentId);
+  const draftTeamIsExplicit = useHasDraftTeamChoice(activeDraftTeamThreadId);
+  const draftTeamChoice = resolveDraftTeam({
+    draft: storedDraftTeamChoice,
+    explicit: draftTeamIsExplicit,
+    teams: deliveryTeamList,
+    status: deliverySendInput.status,
+  });
+  // "Start without a team" on a thread whose team setup failed: "No team" for
+  // this thread alone, or the next send would ask for the same team again. It
+  // is a way out of a failure, so what is remembered for the environment stands.
+  const startHeldThreadWithoutTeam = useCallback(() => {
+    if (activeDraftTeamThreadId === null) return;
+    useDeliveryDraftStore.getState().setChoice(activeDraftTeamThreadId, { team: null, role: null });
+    void releaseDeliveryThread({
+      environmentId,
+      input: { threadId: activeDraftTeamThreadId },
+    }).then(() => deliveryStateRef.current.refresh());
+  }, [activeDraftTeamThreadId, environmentId, releaseDeliveryThread]);
   const threadActivities = activeThread?.activities ?? EMPTY_ACTIVITIES;
   const latestCheckpointCompletedAt = activeThread?.checkpoints.at(-1)?.completedAt ?? null;
   const workspaceMutationId = useMemo(() => {
@@ -7777,10 +7802,16 @@ export default function ChatView(props: ChatViewProps) {
       bound: boundForSend !== null,
       held: heldTeamForSend,
       stateError: deliveryStateForSend.error,
-      draft: readDraftTeamChoice(threadIdForSend),
+      draft: resolveDraftTeam({
+        draft: readDraftTeamChoice(threadIdForSend, environmentId),
+        explicit: hasDraftTeamChoice(threadIdForSend),
+        teams: deliveryForSend.teams,
+        status: deliveryForSend.status,
+      }),
       draftIsExplicit: hasDraftTeamChoice(threadIdForSend),
       teams: deliveryForSend.teams,
       teamsError: deliveryForSend.error,
+      teamsPending: deliveryForSend.status === "pending",
       driver: ctxSelectedProvider,
     });
     if (teamForSend.action === "blocked") {
@@ -10383,19 +10414,7 @@ export default function ChatView(props: ChatViewProps) {
                               held: deliveryThreadState.data?.pending ?? null,
                               unreadable: deliveryThreadState.error,
                               pending: isServerThread ? null : (draftTeamChoice.team ?? "none"),
-                              onRelease: activeThread
-                                ? () => {
-                                    // The way out is "No team" for this thread, or the next
-                                    // send would ask for the same team again.
-                                    useDeliveryDraftStore
-                                      .getState()
-                                      .setChoice(activeThread.id, { team: null, role: null });
-                                    void releaseDeliveryThread({
-                                      environmentId,
-                                      input: { threadId: activeThread.id },
-                                    }).then(() => deliveryThreadState.refresh());
-                                  }
-                                : undefined,
+                              onRelease: activeThread ? startHeldThreadWithoutTeam : undefined,
                               harness:
                                 conversationProviderStatus?.driver ?? selectedProvider ?? null,
                             }

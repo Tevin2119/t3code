@@ -7,12 +7,14 @@ import { PlayIcon, SaveIcon, SlidersHorizontalIcon, UsersIcon, WorkflowIcon } fr
 import { useCallback, useEffect, useMemo, useRef, useState, type PointerEventHandler } from "react";
 
 import {
+  chosenTeamUnavailable,
   flowFor,
   flowStartLabel,
   parseTask,
-  parseTeams,
   seatIsOn,
   seatSettingsToSend,
+  selectableTeams,
+  teamListStatus,
   teamTaskBlock,
 } from "../../lib/delivery";
 import { cn } from "../../lib/utils";
@@ -34,6 +36,8 @@ import { SeatSettingsPanel } from "./SeatSettingsPanel";
 import { SetupPanel } from "./SetupPanel";
 import { TeamDefaultsDialog } from "./TeamDefaultsDialog";
 
+const TEAMS_LOADING = "Teams are still loading.";
+
 /**
  * The composer's controls while it prepares work for a team. They take the
  * place of the model, reasoning and access controls of a single harness: a
@@ -53,6 +57,8 @@ export function OrchestratorComposerControls(props: {
   const person = usePersonName();
   const draft = useOrchestratorDraft(props.threadId);
   const update = useOrchestratorDraftStore((state) => state.update);
+  const chooseTeam = useOrchestratorDraftStore((state) => state.chooseTeam);
+  const reconcileTeam = useOrchestratorDraftStore((state) => state.reconcileTeam);
   const setSeat = useOrchestratorDraftStore((state) => state.setSeat);
   const leave = useOrchestratorDraftStore((state) => state.leave);
   const setActivity = useOrchestratorDraftStore((state) => state.setActivity);
@@ -61,18 +67,44 @@ export function OrchestratorComposerControls(props: {
     (state) => state.startRequests[props.threadId] ?? 0,
   );
   const teamsRead = useDeliveryRead(props.environmentId, "/api/teams");
-  const teams = useMemo(
-    () => parseTeams(teamsRead.body).filter((team) => team.team !== "triage"),
-    [teamsRead.body],
-  );
+  const teams = useMemo(() => selectableTeams(teamsRead.body), [teamsRead.body]);
+  const teamsLoaded = teamListStatus(teamsRead) === "loaded";
+  const awaitingTeams = draft?.awaitingTeams === true;
+  // A new draft starts from the remembered team before the teams are read. Once
+  // a reading offers any, prefer development if offered, else the first offered team, one time.
+  useEffect(() => {
+    if (!awaitingTeams || !teamsLoaded) return;
+    reconcileTeam(
+      props.threadId,
+      teams.map((item) => item.team),
+    );
+  }, [awaitingTeams, props.threadId, reconcileTeam, teams, teamsLoaded]);
   const act = useDeliveryAct(props.environmentId, "orchestrator draft");
   const [busy, setBusy] = useState<"save" | "start" | null>(null);
   // Held from the press to the answer, so a second press cannot start a second workflow.
   const working = useRef(false);
   const [problems, setProblems] = useState<ReadonlyArray<string>>([]);
+  // The thread whose save or start was last refused only because teams were still loading.
+  const [loadingNoticeFor, setLoadingNoticeFor] = useState<string | null>(null);
+  // What the engine or a refused press said stays until the next attempt; the loading notice gives way to it.
+  const report = useCallback((said: ReadonlyArray<string>) => {
+    setLoadingNoticeFor(null);
+    setProblems(said);
+  }, []);
   const [editingDefaults, setEditingDefaults] = useState(false);
 
   const team = teams.find((candidate) => candidate.team === draft?.team) ?? null;
+  // A draft still waiting may yet give its team up, so only a settled one is called unavailable.
+  const teamAvailabilityReason =
+    teamsLoaded && teams.length === 0
+      ? "No teams are available to choose from."
+      : chosenTeamUnavailable(teamsRead, draft)
+        ? `Team ${draft?.team} is not offered here. Choose another team.`
+        : null;
+  const loadingBlock =
+    awaitingTeams && props.environmentId !== null && !teamsRead.error && !teamAvailabilityReason;
+  // Read while rendering, so the notice leaves as soon as loading is no longer what blocks.
+  const loadingNotice = loadingBlock && loadingNoticeFor === props.threadId;
   const flow = flowFor(team, draft?.workflow ?? null);
   const text = props.prompt.trim();
   const seatsToSend = useMemo(
@@ -94,37 +126,59 @@ export function OrchestratorComposerControls(props: {
     ? "No environment is connected."
     : teamsRead.error
       ? `Delivery engine not reachable. ${teamsRead.error}`
-      : team && teamTaskBlock(team, flow)
-        ? teamTaskBlock(team, flow)
-        : chosen && chosen.problems.length > 0
-          ? chosen.problems.join(" ")
-          : text.length === 0
-            ? "Write what the team is asked to do."
-            : null;
+      : teamAvailabilityReason
+        ? teamAvailabilityReason
+        : loadingBlock
+          ? TEAMS_LOADING
+          : team && teamTaskBlock(team, flow)
+            ? teamTaskBlock(team, flow)
+            : chosen && chosen.problems.length > 0
+              ? chosen.problems.join(" ")
+              : text.length === 0
+                ? "Write what the team is asked to do."
+                : null;
 
   useEffect(() => {
-    setActivity(props.threadId, { busy, blocked, team: draft?.team ?? null, saved, flow });
-  }, [blocked, busy, draft?.team, flow, props.threadId, saved, setActivity]);
+    setActivity(props.threadId, {
+      busy,
+      blocked,
+      awaitingTeams,
+      teamAvailabilityReason,
+      team: draft?.team ?? null,
+      saved,
+      flow,
+    });
+  }, [
+    awaitingTeams,
+    blocked,
+    busy,
+    draft?.team,
+    flow,
+    props.threadId,
+    saved,
+    setActivity,
+    teamAvailabilityReason,
+  ]);
 
   const save = useCallback(async (): Promise<string | null> => {
     if (!draft) return null;
-    setProblems([]);
+    report([]);
     const body = { team: draft.team, workflow: flow, text, seats: seatsToSend, by: person };
     const result = draft.engineThread
       ? await act(`/api/tasks/${draft.engineThread}/edit`, body)
       : await act("/api/tasks", { ...body, draft: true });
     if (!result.ok) {
-      setProblems(result.problems.length > 0 ? result.problems : [result.why]);
+      report(result.problems.length > 0 ? result.problems : [result.why]);
       return null;
     }
     const task = parseTask(result.body);
     if (!task) {
-      setProblems(["The delivery engine answered with something that is not a task."]);
+      report(["The delivery engine answered with something that is not a task."]);
       return null;
     }
     update(props.threadId, { engineThread: task.id, savedText: text });
     return task.id;
-  }, [act, draft, flow, person, props.threadId, seatsToSend, text, update]);
+  }, [act, draft, flow, person, props.threadId, report, seatsToSend, text, update]);
 
   const once = useCallback(async (kind: "save" | "start", work: () => Promise<void>) => {
     if (working.current) return;
@@ -138,17 +192,27 @@ export function OrchestratorComposerControls(props: {
     }
   }, []);
 
+  const { onPromptCleared, threadId } = props;
   const onSave = useCallback(() => {
     if (text.length === 0) return;
+    if (teamAvailabilityReason) return;
+    // The team may still give way to another: nothing is saved under it until it is settled.
+    if (awaitingTeams) {
+      setProblems([]);
+      setLoadingNoticeFor(threadId);
+      return;
+    }
     void once("save", async () => {
       await save();
     });
-  }, [once, save, text.length]);
+  }, [awaitingTeams, once, save, text.length, teamAvailabilityReason, threadId]);
 
-  const { onPromptCleared, threadId } = props;
   const onStart = useCallback(() => {
     if (blocked) {
-      setProblems([blocked]);
+      if (loadingBlock) {
+        setProblems([]);
+        setLoadingNoticeFor(threadId);
+      } else if (!teamAvailabilityReason) report([blocked]);
       return;
     }
     void once("start", async () => {
@@ -156,7 +220,7 @@ export function OrchestratorComposerControls(props: {
       if (!id) return;
       const result = await act(`/api/tasks/${id}/submit`, { by: person });
       if (!result.ok) {
-        setProblems(result.problems.length > 0 ? result.problems : [result.why]);
+        report(result.problems.length > 0 ? result.problems : [result.why]);
         return;
       }
       onPromptCleared();
@@ -164,7 +228,20 @@ export function OrchestratorComposerControls(props: {
       // What is written next is written on the task, in its own composer.
       void navigate({ to: "/board", search: { task: id } });
     });
-  }, [act, blocked, leave, navigate, once, onPromptCleared, person, save, threadId]);
+  }, [
+    act,
+    blocked,
+    leave,
+    loadingBlock,
+    navigate,
+    once,
+    onPromptCleared,
+    person,
+    report,
+    save,
+    threadId,
+    teamAvailabilityReason,
+  ]);
 
   // The buttons stand in the composer's own place for Send, and ask from there.
   const handledSave = useRef(saveRequest);
@@ -189,11 +266,12 @@ export function OrchestratorComposerControls(props: {
     >
       <Select
         value={draft.team}
-        onValueChange={(value) => update(props.threadId, { team: String(value) })}
+        disabled={teamsLoaded && teams.length === 0}
+        onValueChange={(value) => chooseTeam(props.threadId, props.environmentId, String(value))}
       >
         <SelectTrigger aria-label="Team" size="compact" variant="ghost" className="w-auto min-w-0">
           <UsersIcon className="size-3.5" />
-          <SelectValue>{draft.team}</SelectValue>
+          <SelectValue>{teamsLoaded && teams.length === 0 ? "No teams" : draft.team}</SelectValue>
         </SelectTrigger>
         <SelectPopup alignItemWithTrigger={false}>
           {teams.map((item) => (
@@ -282,7 +360,7 @@ export function OrchestratorComposerControls(props: {
             <p className="text-xs text-warning">
               {teamsRead.error
                 ? `Delivery engine not reachable. ${teamsRead.error}`
-                : "Reading the team."}
+                : (teamAvailabilityReason ?? "Reading the team.")}
             </p>
           )}
         </PopoverPopup>
@@ -319,13 +397,13 @@ export function OrchestratorComposerControls(props: {
         {whatStartDoes(flow, "Start")}
       </InfoPopover>
 
-      {problems.length > 0 ? (
+      {teamAvailabilityReason || loadingNotice || problems.length > 0 ? (
         <span
           className="ml-auto max-w-[32rem] text-xs text-warning"
           data-delivery-orchestrator-status
           role="alert"
         >
-          {problems.join(" ")}
+          {teamAvailabilityReason ?? (loadingNotice ? TEAMS_LOADING : problems.join(" "))}
         </span>
       ) : null}
 
@@ -423,7 +501,12 @@ export function OrchestratorPrimaryActions(props: {
               variant="ghost"
               className="rounded-full"
               aria-label="Save draft"
-              disabled={busy || !props.promptHasText}
+              disabled={
+                busy ||
+                activity.awaitingTeams ||
+                activity.teamAvailabilityReason !== null ||
+                !props.promptHasText
+              }
               {...pointerFocusProps}
               onClick={() => requestSave(props.threadId)}
               data-delivery-save-draft
@@ -433,7 +516,10 @@ export function OrchestratorPrimaryActions(props: {
           {activity.busy === "save" ? <Spinner className="size-3.5" /> : <SaveIcon />}
         </TooltipTrigger>
         <TooltipPopup side="top">
-          Save draft. It is kept on the engine and nothing is started.
+          {activity.teamAvailabilityReason ??
+            (activity.awaitingTeams
+              ? TEAMS_LOADING
+              : "Save draft. It is kept on the engine and nothing is started.")}
         </TooltipPopup>
       </Tooltip>
       <Tooltip>
