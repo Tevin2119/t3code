@@ -9,6 +9,7 @@ const mock = vi.hoisted(() => ({
   reading: { body: null as unknown, error: null as string | null },
   action: vi.fn(),
   navigate: vi.fn(),
+  promptCleared: vi.fn(),
 }));
 vi.mock("@tanstack/react-router", () => ({ useNavigate: () => mock.navigate }));
 vi.mock("../../state/delivery", async (original) => ({
@@ -40,18 +41,18 @@ const offered = (...names: ReadonlyArray<string>) =>
 const teams = offered("rnd", "alpha");
 let renderer: ReactTestRenderer | undefined;
 let environment: string | null = "env-a";
-const view = () => (
+const view = (threadId = "t1", prompt = "Build this") => (
   <OrchestratorComposerControls
     environmentId={environment === null ? null : EnvironmentId.make(environment)}
-    threadId="t1"
-    prompt="Build this"
-    onPromptCleared={() => {}}
+    threadId={threadId}
+    prompt={prompt}
+    onPromptCleared={mock.promptCleared}
   />
 );
-async function render() {
+async function render(threadId = "t1", prompt = "Build this") {
   await act(() => {
-    if (renderer) renderer.update(view());
-    else renderer = create(view());
+    if (renderer) renderer.update(view(threadId, prompt));
+    else renderer = create(view(threadId, prompt));
   });
 }
 const alert = () =>
@@ -117,6 +118,7 @@ beforeEach(() => {
   });
   mock.reading = { body: null, error: null };
   mock.navigate.mockReset();
+  mock.promptCleared.mockReset();
   mock.action.mockReset().mockImplementation(async (path: string, body: { team?: string }) => {
     // The engine takes a task only for a team it offers at the time.
     const listed = Array.isArray(mock.reading.body) ? (mock.reading.body as typeof teams) : [];
@@ -286,6 +288,90 @@ it("does not skip an ineligible first offered team", async () => {
   expect(mock.action).not.toHaveBeenCalled();
 });
 
+const ineligibleFirst = [
+  { team: "rnd", available: false, why: "Needs setup" },
+  { team: "alpha", available: true },
+];
+const expectNoWork = () => {
+  expect(mock.action).not.toHaveBeenCalled();
+  expect(mock.navigate).not.toHaveBeenCalled();
+  expect(mock.promptCleared).not.toHaveBeenCalled();
+};
+
+it("attack: pending press, then teams load with an ineligible first team", async () => {
+  await askWhilePending("requestStart");
+  mock.reading = { body: ineligibleFirst, error: null };
+  await render();
+  expect(chosenTeam()).toEqual(["rnd"]);
+  expect(alert()).toBe("Needs setup");
+  expect(renderer!.root.findAllByProps({ role: "alert" })).toHaveLength(1);
+  expect(store().activity.t1?.blocked).toBe("Needs setup");
+  expectNoWork();
+
+  await act(() => store().chooseTeam("t1", "env-a", "alpha"));
+  expect(alert()).toBe("");
+  // A pending press follows the live block; report() on a settled press instead
+  // preserves that press's message until the next attempt.
+  await render("t1", "");
+  expect(alert()).toBe("Write what the team is asked to do.");
+  await render();
+  expect(alert()).toBe("");
+  await act(() => store().chooseTeam("t1", "env-a", "rnd"));
+  expect(alert()).toBe("Needs setup");
+  expectNoWork();
+
+  await act(() => store().requestStart("t1"));
+  expect(alert()).toBe("Needs setup");
+  expect(store().activity.t1?.blocked).toBe("Needs setup");
+  expectNoWork();
+});
+
+it.each([false, true])(
+  "does not show a settled Start reason after pending Save (Start first: %s)",
+  async (startFirst) => {
+    await askWhilePending(startFirst ? "requestStart" : "requestSave");
+    if (startFirst) await act(() => store().requestSave("t1"));
+    expect(alert()).toBe(LOADING);
+    mock.reading = { body: ineligibleFirst, error: null };
+    await render();
+    expect(chosenTeam()).toEqual(["rnd"]);
+    expect(store().activity.t1?.blocked).toBe("Needs setup");
+    expect(alert()).toBe("");
+    expectNoWork();
+  },
+);
+
+it.each(["before", "after"])(
+  "keeps a pending Start's feedback on its own thread when switching %s settlement",
+  async (when) => {
+    await askWhilePending("requestStart");
+    if (when === "after") {
+      mock.reading = { body: ineligibleFirst, error: null };
+      await render();
+      expect(alert()).toBe("Needs setup");
+    }
+    await act(() => {
+      store().enter("t2", "env-a");
+      // Equal counters prevent the request effects from treating the switch as a press.
+      useOrchestratorDraftStore.setState({
+        startRequests: { t1: 1, t2: 1 },
+        saveRequests: { t1: 0, t2: 0 },
+      });
+    });
+    await render("t2");
+    expect(alert()).toBe("");
+    mock.reading = { body: ineligibleFirst, error: null };
+    await render("t2");
+    expect(store().activity.t2?.blocked).toBe("Needs setup");
+    expect(alert()).toBe("");
+    expectNoWork();
+    // Returning to the requesting thread restores its still-current pending feedback.
+    await render("t1");
+    expect(alert()).toBe("Needs setup");
+    expectNoWork();
+  },
+);
+
 const requests = ["requestStart", "requestSave"] as const;
 
 it.each(requests)("drops the loading notice of a pending %s once teams load", async (request) => {
@@ -300,7 +386,7 @@ it.each(requests)("drops the loading notice of a pending %s once teams load", as
   mock.reading = { body: offered("rnd", "alpha"), error: null };
   await render();
   expect(alert()).toBe("");
-  expect(mock.action).not.toHaveBeenCalled();
+  expectNoWork();
   await startsForRnd();
 });
 
