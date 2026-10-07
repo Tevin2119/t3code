@@ -74,7 +74,8 @@ export interface BoardFilters {
   readonly q: string;
   readonly priority: TaskPriority | null;
   readonly team: string | null;
-  readonly tag: string | null;
+  /** A card is kept when it carries any one of these. None: every card. */
+  readonly tags: ReadonlyArray<string>;
   readonly owner: string | null;
   /** Only what waits for a person. */
   readonly waiting: boolean;
@@ -86,7 +87,7 @@ export const NO_FILTERS: BoardFilters = {
   q: "",
   priority: null,
   team: null,
-  tag: null,
+  tags: [],
   owner: null,
   waiting: false,
   lanes: [],
@@ -96,7 +97,7 @@ export const hasFilters = (filters: BoardFilters): boolean =>
   filters.q.trim() !== "" ||
   filters.priority !== null ||
   filters.team !== null ||
-  filters.tag !== null ||
+  filters.tags.length > 0 ||
   filters.owner !== null ||
   filters.waiting ||
   filters.lanes.length > 0;
@@ -109,7 +110,7 @@ export const hasFilters = (filters: BoardFilters): boolean =>
 export function matchesCard(card: DeliveryCard, filters: BoardFilters): boolean {
   if (filters.priority && card.priority !== filters.priority) return false;
   if (filters.team && card.team !== filters.team) return false;
-  if (filters.tag && !card.tags.includes(filters.tag)) return false;
+  if (filters.tags.length > 0 && !filters.tags.some((tag) => card.tags.includes(tag))) return false;
   if (filters.owner && card.owner.toLowerCase() !== filters.owner.toLowerCase()) return false;
   if (filters.waiting && card.waitingOn !== "person") return false;
   if (filters.lanes.length > 0 && !filters.lanes.includes(card.lane)) return false;
@@ -184,10 +185,62 @@ export function activeFilters(
     });
   if (filters.team)
     found.push({ key: "team", label: `Team ${filters.team}`, clear: { team: null } });
-  if (filters.tag) found.push({ key: "tag", label: `#${filters.tag}`, clear: { tag: null } });
+  for (const tag of filters.tags) {
+    found.push({
+      key: `tag:${tag}`,
+      label: `#${tag}`,
+      clear: { tags: filters.tags.filter((item) => item !== tag) },
+    });
+  }
   if (filters.owner)
     found.push({ key: "owner", label: `Owner ${filters.owner}`, clear: { owner: null } });
   return found;
+}
+
+/**
+ * Every tag that can be chosen: those of the cards of each reading, and those chosen already,
+ * so that a chosen tag can be unticked while the board is still being read. Each once, in order.
+ */
+export function tagChoices(
+  readings: ReadonlyArray<ReadonlyArray<DeliveryCard>>,
+  chosen: ReadonlyArray<string>,
+): ReadonlyArray<string> {
+  return [
+    ...new Set([...readings.flatMap((cards) => cards.flatMap((card) => card.tags)), ...chosen]),
+  ].sort();
+}
+
+/** The tags a search in the tag filter keeps: those that contain what was typed, in any case. */
+export function tagsMatching(tags: ReadonlyArray<string>, search: string): ReadonlyArray<string> {
+  // A tag is shown with `#` before it, so one typed that way is found too.
+  const wanted = search.trim().replace(/^#/, "").toLowerCase();
+  return wanted ? tags.filter((tag) => tag.toLowerCase().includes(wanted)) : tags;
+}
+
+/** What the closed tag filter reads: the tag for one, how many for several. */
+export function tagFilterLabel(chosen: ReadonlyArray<string>): string {
+  if (chosen.length === 0) return "Tag";
+  return chosen.length === 1 ? `#${chosen[0]}` : `${chosen.length} tags`;
+}
+
+/**
+ * The cards the sidebar filters. The list of tasks stops at a number of them, so without a
+ * search the cards of the board that it left out are added after it, and a card on both is
+ * taken from the board. With a search the engine's answer stands alone: it looks in what is
+ * asked, which a card does not carry.
+ */
+export function sidebarCandidates(
+  taskCards: ReadonlyArray<DeliveryCard>,
+  boardCards: ReadonlyArray<DeliveryCard>,
+  q: string,
+): ReadonlyArray<DeliveryCard> {
+  if (q.trim() || boardCards.length === 0) return taskCards;
+  const onBoard = new Map(boardCards.map((card) => [card.id, card]));
+  const listed = new Set(taskCards.map((card) => card.id));
+  return [
+    ...taskCards.map((card) => onBoard.get(card.id) ?? card),
+    ...[...onBoard.values()].filter((card) => !listed.has(card.id)),
+  ];
 }
 
 /**

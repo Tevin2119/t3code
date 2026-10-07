@@ -20,6 +20,8 @@ import {
   PRIORITY_LABEL,
   queryValue,
   boardSetOf,
+  sidebarCandidates,
+  tagChoices,
   type DeliveryBoardSearch,
 } from "../../lib/deliveryBoard";
 import { cn } from "../../lib/utils";
@@ -38,7 +40,7 @@ import { Input } from "../ui/input";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { SidebarContent, SidebarGroup, useSidebar } from "../ui/sidebar";
 import { APP_BUILD } from "../../branding";
-import { ActiveFilterChips, LaneFilterMenu } from "./BoardFilterControls";
+import { ActiveFilterChips, LaneFilterMenu, TagFilterMenu } from "./BoardFilterControls";
 import { Age, CardSigns, laneTone, PriorityPill } from "./taskParts";
 import { BoardIcon } from "./BoardIcon";
 import { EnvironmentPicker } from "./EnvironmentPicker";
@@ -241,15 +243,22 @@ function EnvironmentBoardSidebar({
   );
   const laneTitle = (lane: string) =>
     laneChoices.find((item) => item.lane === lane)?.title ?? LANE_TITLE[lane] ?? lane;
-  const cards = useMemo(() => parseCards(read.body), [read.body]);
+  const taskCards = useMemo(() => parseCards(read.body), [read.body]);
+  const boardCards = useMemo(() => (board?.lanes ?? []).flatMap((lane) => lane.cards), [board]);
+  // The list of tasks stops at 200, so the cards of the board fill in what it left out.
+  const cards = useMemo(
+    () => sidebarCandidates(taskCards, boardCards, q),
+    [taskCards, boardCards, q],
+  );
   const kept = useMemo(
     () => cards.filter((card) => matchesCard(card, { ...filters, q: "" })),
     [cards, filters],
   );
   const teams = useMemo(() => [...new Set(cards.map((card) => card.team))].sort(), [cards]);
+  // From every card that was read, never from the ones a filter kept.
   const tags = useMemo(
-    () => [...new Set(cards.flatMap((card) => card.tags))].sort().slice(0, 40),
-    [cards],
+    () => tagChoices([boardCards, taskCards], filters.tags),
+    [boardCards, taskCards, filters.tags],
   );
 
   const close = () => {
@@ -268,7 +277,7 @@ function EnvironmentBoardSidebar({
   };
   // Until the tasks are read, an empty list says nothing about the board.
   const unread =
-    read.readAt === null
+    read.readAt === null && cards.length === 0
       ? read.error
         ? "The engine did not answer."
         : "Reading the board..."
@@ -465,27 +474,11 @@ function EnvironmentBoardSidebar({
               </Select>
             ) : null}
             {tags.length > 0 ? (
-              <Select
-                value={filters.tag ?? ANY}
-                onValueChange={(value) => setFilters({ tag: value === ANY ? null : String(value) })}
-              >
-                <SelectTrigger
-                  aria-label="Tag"
-                  size="compact"
-                  variant="ghost"
-                  className="w-auto min-w-0"
-                >
-                  <SelectValue>{filters.tag ? `#${filters.tag}` : "Tag"}</SelectValue>
-                </SelectTrigger>
-                <SelectPopup alignItemWithTrigger={false}>
-                  <SelectItem value={ANY}>Any tag</SelectItem>
-                  {tags.map((tag) => (
-                    <SelectItem key={tag} value={tag}>
-                      #{tag}
-                    </SelectItem>
-                  ))}
-                </SelectPopup>
-              </Select>
+              <TagFilterMenu
+                tags={tags}
+                chosen={filters.tags}
+                onChange={(chosen) => setFilters({ tags: chosen })}
+              />
             ) : null}
           </div>
         </Group>
@@ -508,7 +501,7 @@ function EnvironmentBoardSidebar({
           <p className="px-2 text-xs text-sidebar-muted-foreground">
             Delivery is turned off for this environment.
           </p>
-        ) : read.error ? (
+        ) : read.error && cards.length === 0 ? (
           <EngineDownNotice
             className="px-2 text-xs"
             environmentId={environmentId}

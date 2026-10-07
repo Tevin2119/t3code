@@ -385,7 +385,7 @@ function BoardColumns(props: {
             onToggle={() => foldLane(lane.lane, !isFolded(lane))}
             onOpen={props.onOpen}
             onAction={props.onAction}
-            onPickTag={(tag) => setFilters({ tag })}
+            onPickTag={(tag) => setFilters({ tags: [tag] })}
           />
         ))}
       </div>

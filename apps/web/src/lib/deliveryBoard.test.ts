@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import { parseCard } from "./delivery";
+import type { BoardFilters } from "./deliveryBoard";
 import {
   sectionOf,
   isConversationRef,
@@ -19,6 +20,10 @@ import {
   matchesCard,
   messageStateLabel,
   NO_FILTERS,
+  sidebarCandidates,
+  tagChoices,
+  tagFilterLabel,
+  tagsMatching,
   pastedFileName,
   piecesOf,
   queryValue,
@@ -92,8 +97,8 @@ describe("matchesCard", () => {
   it("keeps to the filters set beside the search", () => {
     expect(matchesCard(card(), { ...NO_FILTERS, priority: "high" })).toBe(true);
     expect(matchesCard(card(), { ...NO_FILTERS, priority: "low" })).toBe(false);
-    expect(matchesCard(card(), { ...NO_FILTERS, tag: "cli", team: "development" })).toBe(true);
-    expect(matchesCard(card(), { ...NO_FILTERS, tag: "cli", team: "rnd" })).toBe(false);
+    expect(matchesCard(card(), { ...NO_FILTERS, tags: ["cli"], team: "development" })).toBe(true);
+    expect(matchesCard(card(), { ...NO_FILTERS, tags: ["cli"], team: "rnd" })).toBe(false);
     expect(matchesCard(card(), { ...NO_FILTERS, owner: "sam field" })).toBe(true);
     expect(matchesCard(card(), { ...NO_FILTERS, waiting: true })).toBe(false);
     expect(matchesCard(card({ waitingOn: "person" }), { ...NO_FILTERS, waiting: true })).toBe(true);
@@ -280,6 +285,105 @@ describe("filtering by column", () => {
     ]);
     expect(on.find((item) => item.label === "Your sign-off")?.clear).toEqual({ lanes: ["intake"] });
     expect(activeFilters(NO_FILTERS, (lane) => lane)).toEqual([]);
+  });
+});
+
+describe("filtering by tag", () => {
+  const chosen = { ...NO_FILTERS, tags: ["cli", "docs"] };
+
+  it("keeps a card that carries any one of the chosen tags", () => {
+    expect(matchesCard(card({ tags: ["cli"] }), chosen)).toBe(true);
+    expect(matchesCard(card({ tags: ["docs"] }), chosen)).toBe(true);
+    expect(matchesCard(card({ tags: ["cli", "docs"] }), chosen)).toBe(true);
+    expect(matchesCard(card({ tags: ["windows"] }), chosen)).toBe(false);
+    expect(matchesCard(card({ tags: [] }), chosen)).toBe(false);
+  });
+
+  it("keeps every card when no tag is chosen, and still keeps to the other filters", () => {
+    expect(matchesCard(card({ tags: ["cli"] }), NO_FILTERS)).toBe(true);
+    expect(matchesCard(card({ tags: [] }), NO_FILTERS)).toBe(true);
+    expect(matchesCard(card({ tags: ["cli"] }), { ...chosen, team: "rnd" })).toBe(false);
+    expect(matchesCard(card({ tags: ["cli"] }), { ...chosen, team: "development" })).toBe(true);
+  });
+
+  it("gives each chosen tag a chip of its own, which takes only that tag away", () => {
+    let filters: BoardFilters = { ...NO_FILTERS, q: "flag", tags: ["cli", "docs", "windows"] };
+    const chips = () => activeFilters(filters, (lane) => lane).filter((item) => item.key !== "q");
+    expect(chips().map((item) => item.key)).toEqual(["tag:cli", "tag:docs", "tag:windows"]);
+    expect(chips().map((item) => item.label)).toEqual(["#cli", "#docs", "#windows"]);
+    // As the store does it: the patch is laid over the filters as they are.
+    const remove = (tag: string) => {
+      filters = { ...filters, ...chips().find((item) => item.key === `tag:${tag}`)!.clear };
+    };
+    remove("docs");
+    expect(filters.tags).toEqual(["cli", "windows"]);
+    remove("cli");
+    expect(filters.tags).toEqual(["windows"]);
+    expect(filters.q).toBe("flag");
+    remove("windows");
+    expect(chips()).toEqual([]);
+  });
+
+  it("offers every tag of every reading and every chosen one, each once, in order", () => {
+    const names = Array.from(
+      { length: 45 },
+      (_, index) => `tag-${String(index + 1).padStart(2, "0")}`,
+    );
+    const onBoard = names.map((tag, index) => card({ id: `b${index}`, tags: [tag, "shared"] }));
+    const listed = [card({ id: "t1", tags: ["only-listed", "shared"] })];
+    const choices = tagChoices([onBoard, listed], ["gone", "shared"]);
+    expect(choices).toHaveLength(48);
+    expect(choices).toContain("tag-45");
+    expect(choices).toContain("only-listed");
+    expect(choices).toContain("gone");
+    expect(choices.filter((tag) => tag === "shared")).toHaveLength(1);
+    expect(choices).toEqual([...choices].sort());
+    expect(tagChoices([[], []], [])).toEqual([]);
+  });
+
+  it("narrows the tags to those that contain what was typed", () => {
+    const tags = ["cli", "docs", "found-in-1038", "windows"];
+    expect(tagsMatching(tags, "O")).toEqual(["docs", "found-in-1038", "windows"]);
+    expect(tagsMatching(tags, "  1038 ")).toEqual(["found-in-1038"]);
+    expect(tagsMatching(tags, "#cli")).toEqual(["cli"]);
+    expect(tagsMatching(tags, "")).toEqual(tags);
+    expect(tagsMatching(tags, "   ")).toEqual(tags);
+    expect(tagsMatching(tags, "zzz")).toEqual([]);
+  });
+
+  it("reads Tag when closed with none chosen, the tag for one, and how many for several", () => {
+    expect(tagFilterLabel([])).toBe("Tag");
+    expect(tagFilterLabel(["cli"])).toBe("#cli");
+    expect(tagFilterLabel(["cli", "docs", "windows"])).toBe("3 tags");
+  });
+});
+
+describe("the cards the sidebar filters", () => {
+  const listed = Array.from({ length: 200 }, (_, index) =>
+    card({ id: `task-${index}`, number: index, tags: ["cli"], lane: "ready" }),
+  );
+
+  it("adds a card of the board that the list of tasks left out", () => {
+    const beyond = card({ id: "task-beyond", number: 999, tags: ["docs"] });
+    const all = sidebarCandidates(listed, [beyond], "");
+    expect(all).toHaveLength(201);
+    expect(all.filter((item) => matchesCard(item, { ...NO_FILTERS, tags: ["docs"] }))).toEqual([
+      beyond,
+    ]);
+  });
+
+  it("takes a card on both from the board, in the order of the list", () => {
+    const moved = card({ id: "task-1", number: 1, tags: ["cli"], lane: "validation" });
+    const extra = card({ id: "task-extra", number: 998 });
+    const all = sidebarCandidates(listed, [extra, moved], "");
+    expect(all.map((item) => item.id)).toEqual([...listed.map((item) => item.id), "task-extra"]);
+    expect(all[1]?.lane).toBe("validation");
+  });
+
+  it("leaves the engine's answer alone when something is searched for", () => {
+    const beyond = card({ id: "task-beyond", number: 999 });
+    expect(sidebarCandidates(listed, [beyond], "flag")).toBe(listed);
+    expect(sidebarCandidates(listed, [], "")).toBe(listed);
   });
 });
 
