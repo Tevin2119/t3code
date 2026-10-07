@@ -20,6 +20,7 @@ import {
   type DailyTotals,
   type HourlyTotals,
 } from "@t3tools/shared/usageMerge";
+import { PLAN_COST_LABEL, planCostNote } from "@t3tools/shared/usagePlans";
 
 import { isElectron } from "../../env";
 import { cn } from "../../lib/utils";
@@ -446,6 +447,11 @@ export function UsagePage() {
                       const sessionLabel = `${formatCount(providerSessions)} ${
                         providerSessions === 1 ? "session" : "sessions"
                       }`;
+                      const planNote = planCostNote(
+                        totals?.costUsd ?? 0,
+                        totals?.planCostUsd ?? 0,
+                        formatUsd,
+                      );
                       return (
                         <div key={provider} className="flex flex-col gap-1">
                           <div className="flex items-baseline justify-between gap-4">
@@ -477,6 +483,9 @@ export function UsagePage() {
                             {metric === "cost"
                               ? `${formatPercent(share)} of cost · ${formatTokens(totals?.totalTokens ?? 0)} tokens`
                               : `${formatPercent(share)} of tokens · ${formatUsd(totals?.costUsd ?? 0)}`}
+                            {planNote === null ? null : (
+                              <span data-usage-plan-cost> · {planNote}</span>
+                            )}
                           </span>
                         </div>
                       );
@@ -624,6 +633,13 @@ export function UsagePage() {
                               <td className="py-2 text-right text-foreground tabular-nums">
                                 {isModelCostUnknown(model) ? (
                                   <span className="text-muted-foreground">Unpriced</span>
+                                ) : model.onPlan ? (
+                                  <span className="flex flex-col items-end" data-usage-plan-cost>
+                                    {formatUsd(model.costUsd)}
+                                    <span className="text-[11px] text-muted-foreground">
+                                      {PLAN_COST_LABEL}
+                                    </span>
+                                  </span>
                                 ) : (
                                   formatUsd(model.costUsd)
                                 )}
