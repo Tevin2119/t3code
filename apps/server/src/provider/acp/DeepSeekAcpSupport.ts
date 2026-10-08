@@ -19,9 +19,9 @@ import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Scope from "effect/Scope";
-import * as ChildProcessSpawner from "effect/unstable/process/ChildProcessSpawner";
+import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import type * as EffectAcpErrors from "effect-acp/errors";
-import type * as EffectAcpSchema from "effect-acp/schema";
+import type * as EffectAcpSchema from "effect-acp/compat";
 
 import { expandHomePath } from "../../pathExpansion.ts";
 import * as AcpSessionRuntime from "./AcpSessionRuntime.ts";
@@ -159,6 +159,7 @@ export function deepseekModelSlugFromConfigValue(value: string): string | undefi
 
 export function currentDeepSeekModelIdFromSessionSetup(
   sessionSetupResult:
+    | EffectAcpSchema.ForkSessionResponse
     | EffectAcpSchema.LoadSessionResponse
     | EffectAcpSchema.NewSessionResponse
     | EffectAcpSchema.ResumeSessionResponse,

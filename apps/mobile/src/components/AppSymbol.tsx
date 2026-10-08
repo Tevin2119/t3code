@@ -13,13 +13,15 @@ import IconArrowBackUp from "@tabler/icons-react-native/IconArrowBackUp";
 import IconArrowDown from "@tabler/icons-react-native/IconArrowDown";
 import IconArrowForwardUp from "@tabler/icons-react-native/IconArrowForwardUp";
 import IconArrowLeft from "@tabler/icons-react-native/IconArrowLeft";
+import IconArrowRight from "@tabler/icons-react-native/IconArrowRight";
 import IconArrowDownCircle from "@tabler/icons-react-native/IconArrowDownCircle";
 import IconArrowRightCircle from "@tabler/icons-react-native/IconArrowRightCircle";
 import IconArrowUp from "@tabler/icons-react-native/IconArrowUp";
 import IconArrowUpCircle from "@tabler/icons-react-native/IconArrowUpCircle";
 import IconArrowUpRight from "@tabler/icons-react-native/IconArrowUpRight";
 import IconArrowUpRightCircle from "@tabler/icons-react-native/IconArrowUpRightCircle";
-import IconArrowsMaximize from "@tabler/icons-react-native/IconArrowsMaximize";
+import IconArrowsLeftRight from "@tabler/icons-react-native/IconArrowsLeftRight";
+import IconArrowsDiagonal2 from "@tabler/icons-react-native/IconArrowsDiagonal2";
 import IconArrowsMinimize from "@tabler/icons-react-native/IconArrowsMinimize";
 import IconBellRinging from "@tabler/icons-react-native/IconBellRinging";
 import IconBolt from "@tabler/icons-react-native/IconBolt";
@@ -60,15 +62,18 @@ import IconGitBranch from "@tabler/icons-react-native/IconGitBranch";
 import IconGitMerge from "@tabler/icons-react-native/IconGitMerge";
 import IconGitPullRequest from "@tabler/icons-react-native/IconGitPullRequest";
 import IconHammer from "@tabler/icons-react-native/IconHammer";
+import IconHome from "@tabler/icons-react-native/IconHome";
 import IconInfoCircle from "@tabler/icons-react-native/IconInfoCircle";
 import IconKeyboard from "@tabler/icons-react-native/IconKeyboard";
 import IconKeyboardHide from "@tabler/icons-react-native/IconKeyboardHide";
+import IconLock from "@tabler/icons-react-native/IconLock";
 import IconLayoutColumns from "@tabler/icons-react-native/IconLayoutColumns";
 import IconLayoutSidebar from "@tabler/icons-react-native/IconLayoutSidebar";
 import IconLayoutSidebarRight from "@tabler/icons-react-native/IconLayoutSidebarRight";
 import IconLetterSpacing from "@tabler/icons-react-native/IconLetterSpacing";
 import IconMicrophone from "@tabler/icons-react-native/IconMicrophone";
 import IconLink from "@tabler/icons-react-native/IconLink";
+import IconListNumbers from "@tabler/icons-react-native/IconListNumbers";
 import IconMenu2 from "@tabler/icons-react-native/IconMenu2";
 import IconMessage from "@tabler/icons-react-native/IconMessage";
 import IconMinus from "@tabler/icons-react-native/IconMinus";
@@ -93,6 +98,7 @@ import IconStar from "@tabler/icons-react-native/IconStar";
 import IconStarFilled from "@tabler/icons-react-native/IconStarFilled";
 import IconStethoscope from "@tabler/icons-react-native/IconStethoscope";
 import IconSun from "@tabler/icons-react-native/IconSun";
+import IconTarget from "@tabler/icons-react-native/IconTarget";
 import IconTerminal2 from "@tabler/icons-react-native/IconTerminal2";
 import IconTextDecrease from "@tabler/icons-react-native/IconTextDecrease";
 import IconTextIncrease from "@tabler/icons-react-native/IconTextIncrease";
@@ -101,6 +107,8 @@ import IconTrash from "@tabler/icons-react-native/IconTrash";
 import IconTypography from "@tabler/icons-react-native/IconTypography";
 import IconUpload from "@tabler/icons-react-native/IconUpload";
 import IconUserCircle from "@tabler/icons-react-native/IconUserCircle";
+import IconUsers from "@tabler/icons-react-native/IconUsers";
+import IconWifi from "@tabler/icons-react-native/IconWifi";
 import IconWifiOff from "@tabler/icons-react-native/IconWifiOff";
 import IconWorld from "@tabler/icons-react-native/IconWorld";
 import IconX from "@tabler/icons-react-native/IconX";
@@ -110,17 +118,20 @@ import { withUniwind } from "uniwind";
 const ANDROID_ICON_BY_SF_SYMBOL = {
   "arrow.branch": IconGitBranch,
   "arrow.left": IconArrowLeft,
+  "arrow.right": IconArrowRight,
+  "arrow.left.arrow.right": IconArrowsLeftRight,
   "arrow.clockwise": IconRefresh,
   "arrow.down": IconArrowDown,
   "arrow.down.circle": IconArrowDownCircle,
   "arrow.right.circle": IconArrowRightCircle,
   "arrow.triangle.branch": IconGitBranch,
+  "arrow.triangle.merge": IconGitMerge,
   "arrow.triangle.pull": IconGitPullRequest,
   "square.3.layers.3d": IconStack2,
   "arrow.turn.left.up": IconArrowBackUp,
   "arrow.up": IconArrowUp,
   "arrow.up.circle": IconArrowUpCircle,
-  "arrow.up.left.and.arrow.down.right": IconArrowsMaximize,
+  "arrow.up.left.and.arrow.down.right": IconArrowsDiagonal2,
   "arrow.down.right.and.arrow.up.left": IconArrowsMinimize,
   "arrow.up.right": IconArrowUpRight,
   "arrow.up.right.circle": IconArrowUpRightCircle,
@@ -138,6 +149,7 @@ const ANDROID_ICON_BY_SF_SYMBOL = {
   "checkmark.circle": IconCircleCheck,
   circle: IconCircle,
   clock: IconClock,
+  timer: IconClock,
   ticket: IconTicket,
   cloud: IconCloud,
   cube: IconBox,
@@ -147,6 +159,7 @@ const ANDROID_ICON_BY_SF_SYMBOL = {
   "chevron.right": IconChevronRight,
   "chevron.up": IconChevronUp,
   desktopcomputer: IconDeviceDesktop,
+  doc: IconFileText,
   "doc.on.doc": IconCopy,
   "doc.text": IconFileText,
   ellipsis: IconDots,
@@ -161,11 +174,13 @@ const ANDROID_ICON_BY_SF_SYMBOL = {
   gearshape: IconSettings,
   globe: IconWorld,
   hammer: IconHammer,
+  house: IconHome,
   "info.circle": IconInfoCircle,
   internaldrive: IconDatabase,
   keyboard: IconKeyboard,
   laptopcomputer: IconDeviceLaptop,
   link: IconLink,
+  "list.number": IconListNumbers,
   "line.3.horizontal": IconMenu2,
   "line.3.horizontal.decrease": IconFilter,
   "line.3.horizontal.decrease.circle": IconFilter,
@@ -178,6 +193,7 @@ const ANDROID_ICON_BY_SF_SYMBOL = {
   paintbrush: IconPalette,
   pencil: IconPencil,
   "person.crop.circle": IconUserCircle,
+  "person.2": IconUsers,
   photo: IconPhoto,
   pin: IconPin,
   "pin.slash": IconPinnedOff,
@@ -194,12 +210,14 @@ const ANDROID_ICON_BY_SF_SYMBOL = {
   "sidebar.right": IconLayoutSidebarRight,
   "slider.horizontal.3": IconAdjustmentsHorizontal,
   "square.and.pencil": IconEdit,
+  "square.on.square": IconCopy,
   "square.grid.2x2": IconApps,
   "square.split.2x1": IconLayoutColumns,
   star: IconStar,
   "star.fill": IconStarFilled,
   "sun.max": IconSun,
   "stop.fill": IconPlayerStopFilled,
+  target: IconTarget,
   terminal: IconTerminal2,
   "text.alignleft": IconAlignLeft,
   "text.bubble": IconMessage,
@@ -209,6 +227,7 @@ const ANDROID_ICON_BY_SF_SYMBOL = {
   "textformat.size.smaller": IconTextDecrease,
   "tray.and.arrow.up": IconUpload,
   trash: IconTrash,
+  wifi: IconWifi,
   "wifi.slash": IconWifiOff,
   xmark: IconX,
   "xmark.circle.fill": IconCircleXFilled,
@@ -223,6 +242,7 @@ const ANDROID_ICON_BY_MATERIAL_NAME = {
   auto_awesome: IconSparkles,
   bolt: IconBolt,
   build: IconTool,
+  chat: IconMessage,
   chat_bubble: IconMessage,
   check: IconCheck,
   close: IconX,
@@ -237,8 +257,10 @@ const ANDROID_ICON_BY_MATERIAL_NAME = {
   keyboard_arrow_down: IconChevronDown,
   keyboard_arrow_up: IconChevronUp,
   keyboard_hide: IconKeyboardHide,
+  lock: IconLock,
   more_vert: IconDotsVertical,
   merge: IconGitMerge,
+  psychology: IconBrain,
   public: IconWorld,
   remove: IconMinus,
   smartphone: IconDeviceMobile,

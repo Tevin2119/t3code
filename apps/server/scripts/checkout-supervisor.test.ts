@@ -17,15 +17,24 @@ class FakeServer extends NodeEvents.EventEmitter implements ServerProcess {
   readonly sent: SupervisorMessage[] = [];
   readonly signals: string[] = [];
   readonly releaseDir: string;
-  constructor(releaseDir: string) {
+  readonly prepareReply: "ready" | "fail" | "none";
+  constructor(releaseDir: string, prepareReply: "ready" | "fail" | "none" = "ready") {
     super();
     this.releaseDir = releaseDir;
+    this.prepareReply = prepareReply;
   }
   send(message: SupervisorMessage) {
     this.sent.push(message);
     // A server prepares as soon as it is asked.
-    if (message.type === "t3-checkout.prepare") {
-      queueMicrotask(() => this.emit("message", { type: "t3-checkout.prepared", threads: 1 }));
+    if (message.type === "t3-checkout.prepare" && this.prepareReply !== "none") {
+      queueMicrotask(() =>
+        this.emit(
+          "message",
+          this.prepareReply === "ready"
+            ? { type: "t3-checkout.prepared", threads: 1 }
+            : { type: "t3-checkout.preparation-failed" },
+        ),
+      );
     }
   }
   kill(signal: NodeJS.Signals = "SIGTERM") {
@@ -40,13 +49,19 @@ class FakeServer extends NodeEvents.EventEmitter implements ServerProcess {
 
 const directories: string[] = [];
 afterEach(() => {
-  for (const directory of directories.splice(0))
+  for (const directory of directories.splice(0)) {
+    const absolute = NodePath.resolve(directory);
+    expect(absolute.startsWith(`${NodePath.resolve(NodeOS.tmpdir())}${NodePath.sep}`)).toBe(true);
+    expect(NodePath.basename(absolute).startsWith("checkout-supervisor-")).toBe(true);
     NodeFS.rmSync(directory, { recursive: true, force: true });
+  }
 });
 
 function setup(input: {
   readonly ahead?: boolean;
   readonly buildFails?: boolean;
+  readonly prepareReply?: "ready" | "fail" | "none";
+  readonly prepareMs?: number;
   /** Whether a server started from this release reports ready. */
   readonly startsFrom?: (releaseDir: string) => boolean;
 }) {
@@ -83,9 +98,9 @@ function setup(input: {
     baseDir,
     exec,
     log: () => {},
-    timeouts: { prepareMs: 1_000, stopMs: 1_000, readyMs: 200 },
+    timeouts: { prepareMs: input.prepareMs ?? 1_000, stopMs: 1_000, readyMs: 200 },
     startServer: (releaseDir) => {
-      const server = new FakeServer(releaseDir);
+      const server = new FakeServer(releaseDir, input.prepareReply);
       servers.push(server);
       if (input.startsFrom?.(releaseDir) ?? true) queueMicrotask(() => server.ready());
       return server;
@@ -105,6 +120,20 @@ async function started(context: ReturnType<typeof setup>) {
 }
 
 describe("CheckoutSupervisor", () => {
+  for (const prepareReply of ["fail", "none"] as const) {
+    it(`keeps the current server when restart preparation is ${prepareReply === "fail" ? "refused" : "not acknowledged"}`, async () => {
+      const context = setup({ prepareReply, prepareMs: 0 });
+      await started(context);
+      await context.supervisor.update();
+      expect(context.servers).toHaveLength(1);
+      expect(context.servers[0]?.signals).toEqual([]);
+      expect(context.pointer()).toBe(A);
+      expect(context.supervisor.snapshot()).toMatchObject({
+        phase: "failed",
+        running: { commit: A },
+      });
+    });
+  }
   it("builds the newer commit beside the running one, then swaps the server for it", async () => {
     const context = setup({});
     await started(context);

@@ -12,18 +12,18 @@ import {
 import { ComposerControl, ComposerControlIcon } from "./ComposerControl";
 import { useComposerMenuProps } from "./composerEventScope";
 import { useComposerMenuState } from "./useComposerMenuState";
-import {
-  runtimeModeConfig,
-  runtimeModeOptions,
-  runtimeModeUnavailableReason,
-  type RuntimeModeSupport,
-} from "./runtimeModeConfig";
+import { runtimeModeUnavailableReason, type RuntimeModeSupport } from "./runtimeModeConfig";
 
 export const CompactComposerControlsMenu = memo(function CompactComposerControlsMenu(props: {
   interactionMode: ProviderInteractionMode;
   runtimeMode: RuntimeMode;
   /** What the chosen provider can honour. A mode it cannot is shown and cannot be picked. */
   runtimeModeSupport: RuntimeModeSupport;
+  runtimeModeOptions: ReadonlyArray<{
+    readonly mode: RuntimeMode;
+    readonly label: string;
+  }>;
+
   showInteractionModeToggle: boolean;
   traitsMenuContent?: ReactNode;
   size?: "sm" | "xs";
@@ -46,8 +46,7 @@ export const CompactComposerControlsMenu = memo(function CompactComposerControls
         render={
           <ComposerControl
             size={size}
-            variant="ghost"
-            className={size === "xs" ? "shrink-0" : "shrink-0 px-2"}
+            className="shrink-0"
             aria-label="More composer controls"
             data-composer-shortcut={
               props.traitsMenuContent ? "composer.mode composer.effort" : "composer.mode"
@@ -88,21 +87,17 @@ export const CompactComposerControlsMenu = memo(function CompactComposerControls
             props.onRuntimeModeChange(value as RuntimeMode);
           }}
         >
-          {runtimeModeOptions.map((mode) => {
-            const unavailable = runtimeModeUnavailableReason(props.runtimeModeSupport, mode);
-            return (
-              <MenuRadioItem
-                key={mode}
-                value={mode}
-                disabled={unavailable !== undefined}
-                data-runtime-mode-option={mode}
-                title={unavailable}
-              >
-                {runtimeModeConfig[mode].label}
-                {unavailable ? " (unavailable)" : null}
-              </MenuRadioItem>
-            );
-          })}
+          {props.runtimeModeOptions.map((option) => (
+            <MenuRadioItem
+              key={option.mode}
+              value={option.mode}
+              disabled={
+                runtimeModeUnavailableReason(props.runtimeModeSupport, option.mode) !== undefined
+              }
+            >
+              {option.label}
+            </MenuRadioItem>
+          ))}
         </MenuRadioGroup>
       </MenuPopup>
     </Menu>

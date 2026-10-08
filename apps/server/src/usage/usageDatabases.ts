@@ -85,6 +85,7 @@ export function openCodeRecordFrom(row: Row): UsageRecord | null {
   const id = text(row["id"]);
   return {
     provider: "opencode",
+    speed: "standard",
     timestampMs,
     model,
     modelProvider,
@@ -134,6 +135,7 @@ export function hermesRecordFrom(row: Row): UsageRecord | null {
   const costKnown = text(row["cost_source"]) !== null && text(row["cost_source"]) !== "none";
   return {
     provider: "hermes",
+    speed: "standard",
     timestampMs: Math.round(lastSeen * 1000),
     model,
     modelProvider,

@@ -82,6 +82,15 @@ export const ServerProviderUsageLimits = Schema.Struct({
   resetCredits: Schema.optional(ServerProviderResetCredits),
   /** A prepaid balance, for an account billed by use rather than by plan windows. */
   balance: Schema.optional(ServerProviderBalance),
+  /** Opaque credential identity when the provider does not report an account. */
+  credentialFingerprint: Schema.optional(TrimmedNonEmptyString),
+  /** Provider-owned usage settings when quota windows are not available to the client. */
+  externalUsage: Schema.optional(
+    Schema.Struct({
+      label: TrimmedNonEmptyString,
+      url: TrimmedNonEmptyString,
+    }),
+  ),
   unavailable: Schema.optional(
     Schema.Struct({
       reason: Schema.Literals(["unsupported", "probeFailed"]),

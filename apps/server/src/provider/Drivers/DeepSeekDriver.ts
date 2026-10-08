@@ -18,23 +18,31 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
-import { HttpClient } from "effect/unstable/http";
-import { ChildProcessSpawner } from "effect/unstable/process";
+import { HttpClient } from "effect/http";
+import { ChildProcessSpawner } from "effect/process";
 
+import * as ServerConfig from "../../config.ts";
+import * as IdAllocator from "../../orchestration-v2/IdAllocator.ts";
+import { resolveSelfInvocation } from "@t3tools/shared/nodeRuntime";
+import { makeAcpNativeLoggerFactory } from "../acp/AcpNativeLogging.ts";
 import * as BackgroundPolicy from "../../background/BackgroundPolicy.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { makeDeepSeekTextGeneration } from "../../textGeneration/DeepSeekTextGeneration.ts";
-import { makeDeepSeekAcpRuntime, makeDeepSeekEnvironment } from "../acp/DeepSeekAcpSupport.ts";
+import {
+  makeDeepSeekAcpRuntime,
+  makeDeepSeekEnvironment,
+  deepseekPermissionModeFor,
+} from "../acp/DeepSeekAcpSupport.ts";
 import { makeCliAuth } from "../CliAuth.ts";
 import { ProviderDriverError } from "../Errors.ts";
-import { makeDeepSeekAdapter, type DeepSeekAdapterOptions } from "../Layers/DeepSeekAdapter.ts";
-import { readDeepSeekBalance } from "../Layers/deepseekBalance.ts";
+import { makeDeepSeekAdapter, type DeepSeekAdapterOptions } from "../DeepSeekAdapter.ts";
+import { readDeepSeekBalance } from "../deepseekBalance.ts";
 import {
   buildInitialDeepSeekProviderSnapshot,
   checkDeepSeekProviderStatus,
   probeDeepSeekAuthenticated,
-} from "../Layers/DeepSeekProvider.ts";
-import { ProviderEventLoggers } from "../Layers/ProviderEventLoggers.ts";
+} from "../DeepSeekProvider.ts";
+import { ProviderEventLoggers } from "../ProviderEventLoggers.ts";
 import { makeManagedServerProvider } from "../makeManagedServerProvider.ts";
 import {
   defaultProviderContinuationIdentity,
@@ -59,6 +67,8 @@ const MAINTENANCE_CAPABILITIES = makeManualOnlyProviderMaintenanceCapabilities({
 });
 
 export type DeepSeekDriverEnv =
+  | ServerConfig.ServerConfig
+  | IdAllocator.IdAllocatorV2
   | BackgroundPolicy.BackgroundPolicy
   | ChildProcessSpawner.ChildProcessSpawner
   | Crypto.Crypto
@@ -85,6 +95,20 @@ export const DeepSeekDriver: ProviderDriver<DeepSeekSettings, DeepSeekDriverEnv>
       const path = yield* Path.Path;
       const serverSettings = yield* ServerSettingsService;
       const eventLoggers = yield* ProviderEventLoggers;
+      const serverConfig = yield* ServerConfig.ServerConfig;
+      const idAllocator = yield* IdAllocator.IdAllocatorV2;
+      const selfInvocation = yield* resolveSelfInvocation().pipe(
+        Effect.mapError(
+          (cause) =>
+            new ProviderDriverError({
+              driver: DRIVER_KIND,
+              instanceId,
+              detail: "Could not locate the provider bridge runtime.",
+              cause,
+            }),
+        ),
+      );
+      const makeNativeLogger = yield* makeAcpNativeLoggerFactory();
       // One environment for the ACP agent, the status probes and the credential
       // check, so a scoped `homePath` governs everything the card reports.
       const processEnv = makeDeepSeekEnvironment(
@@ -108,14 +132,25 @@ export const DeepSeekDriver: ProviderDriver<DeepSeekSettings, DeepSeekDriverEnv>
         makeDeepSeekAcpRuntime({
           ...input,
           deepseekSettings: effectiveConfig,
-          environment: processEnv,
+          permissionMode: deepseekPermissionModeFor(input.runtimePolicy.runtimeMode) ?? "read-only",
+          environment: { ...processEnv, ...input.processEnvironment },
           childProcessSpawner: spawner,
         }).pipe(Effect.provideService(Crypto.Crypto, crypto));
 
-      const adapter = yield* makeDeepSeekAdapter(effectiveConfig, {
+      const orchestrationAdapter = makeDeepSeekAdapter(effectiveConfig, {
         instanceId,
         makeRuntime,
-        ...(eventLoggers.native ? { nativeEventLogger: eventLoggers.native } : {}),
+        crypto,
+        fileSystem,
+        serverConfig,
+        idAllocator,
+        selfInvocation,
+        nativeLogging: (threadId) =>
+          makeNativeLogger({
+            nativeEventLogger: eventLoggers.native,
+            provider: DRIVER_KIND,
+            threadId,
+          }),
       });
       const textGeneration = yield* makeDeepSeekTextGeneration(effectiveConfig, processEnv);
 
@@ -180,7 +215,7 @@ export const DeepSeekDriver: ProviderDriver<DeepSeekSettings, DeepSeekDriverEnv>
         accentColor,
         enabled,
         snapshot,
-        adapter,
+        orchestrationAdapter,
         textGeneration,
         auth,
       } satisfies ProviderInstance;

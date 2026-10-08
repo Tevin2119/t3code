@@ -1,75 +1,93 @@
 /**
- * pi driver.
+ * PiDriver — v1 `ProviderDriver` for the Pi coding agent, composing the
+ * orchestrator-v2 adapter (`PiAdapterV2`), the snapshot/probe layer
+ * (`PiProvider`), and Pi-backed text generation.
  *
- * pi is a CLI harness with no ACP server, so sessions run over its own JSONL
- * RPC mode (see `PiAdapter` and `PiRpcSession`). Credentials are held by the pi
- * CLI per backend provider and refreshed by it.
- *
- * pi has no headless sign-in. `pi auth` exposes only `print-api-key`,
- * `print-bearer-token` and `check` (verified against pi 0.85.1); `/login` is a
- * built-in TUI command, and pi's own RPC docs state that built-in TUI commands
- * do not execute over `--mode rpc`. So the auth controller here verifies rather
- * than signs in: `start` re-runs `pi auth check`, which also refreshes an
- * expired OAuth token, and reports the verdict. Signing in and out stay with
- * the pi TUI, which is what the failure text says.
- *
- * @module provider/Drivers/PiDriver
+ * Pi state (sessions, settings, extensions, auth) lives in the user's own
+ * `~/.pi/agent`, so continuation identity uses the default instance grouping.
  */
-import { PiSettings, ProviderDriverKind } from "@t3tools/contracts";
-import * as Crypto from "effect/Crypto";
+import { PiSettings, ProviderDriverKind, type ServerProvider } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
-import { HttpClient } from "effect/unstable/http";
-import { ChildProcessSpawner } from "effect/unstable/process";
+import { HttpClient } from "effect/http";
+import { ChildProcessSpawner } from "effect/process";
 
 import * as BackgroundPolicy from "../../background/BackgroundPolicy.ts";
-import { ServerSettingsService } from "../../serverSettings.ts";
+import * as ServerConfig from "../../config.ts";
+import * as ServerSettings from "../../serverSettings.ts";
 import { makePiTextGeneration } from "../../textGeneration/PiTextGeneration.ts";
-import { makeCliAuth } from "../CliAuth.ts";
+import {
+  PiAdapterV2Driver,
+  type PiAdapterV2DriverEnv,
+} from "../../orchestration-v2/Adapters/PiAdapterV2.ts";
 import { ProviderDriverError } from "../Errors.ts";
-import { makePiAdapter } from "../Layers/PiAdapter.ts";
 import {
   buildInitialPiProviderSnapshot,
   checkPiProviderStatus,
-  probePiAuthenticated,
-} from "../Layers/PiProvider.ts";
-import { readPiUsageLimits } from "../Layers/piUsageLimits.ts";
+  enrichPiSnapshot,
+} from "../PiProvider.ts";
 import { makeManagedServerProvider } from "../makeManagedServerProvider.ts";
+import { readPiUsageLimits } from "../piUsageLimits.ts";
 import {
   defaultProviderContinuationIdentity,
   type ProviderDriver,
   type ProviderInstance,
 } from "../ProviderDriver.ts";
+import type { ServerProviderDraft } from "../providerSnapshot.ts";
 import { mergeProviderInstanceEnvironment } from "../ProviderInstanceEnvironment.ts";
-import { makeManualOnlyProviderMaintenanceCapabilities } from "../providerMaintenance.ts";
+import {
+  makeCachedProviderMaintenanceResolution,
+  makePackageManagedProviderMaintenanceResolver,
+  resolveProviderMaintenanceCapabilitiesEffect,
+} from "../providerMaintenance.ts";
 import {
   haveProviderSnapshotSettingsChanged,
   makeProviderSnapshotSettingsSource,
   type ProviderSnapshotSettings,
 } from "../providerUpdateSettings.ts";
-import { withInstanceIdentity } from "./instanceIdentity.ts";
 
 const decodePiSettings = Schema.decodeSync(PiSettings);
 
 const DRIVER_KIND = ProviderDriverKind.make("pi");
-const MAINTENANCE_CAPABILITIES = makeManualOnlyProviderMaintenanceCapabilities({
+const UPDATE = makePackageManagedProviderMaintenanceResolver({
   provider: DRIVER_KIND,
-  packageName: "@earendil-works/pi-coding-agent",
+  npmPackageName: "@earendil-works/pi-coding-agent",
+  // Pi's updater covers its own installer and npm, pnpm, yarn, and bun globals.
+  nativeUpdate: { args: ["update", "--self"] },
 });
 
 export type PiDriverEnv =
+  | PiAdapterV2DriverEnv
   | BackgroundPolicy.BackgroundPolicy
   | ChildProcessSpawner.ChildProcessSpawner
-  | Crypto.Crypto
   | FileSystem.FileSystem
   | HttpClient.HttpClient
-  | ServerSettingsService;
+  | Path.Path
+  | ServerConfig.ServerConfig
+  | ServerSettings.ServerSettingsService;
+
+const withInstanceIdentity =
+  (input: {
+    readonly instanceId: ProviderInstance["instanceId"];
+    readonly displayName: string | undefined;
+    readonly accentColor: string | undefined;
+    readonly continuationGroupKey: string;
+  }) =>
+  (snapshot: ServerProviderDraft): ServerProvider => ({
+    ...snapshot,
+    instanceId: input.instanceId,
+    driver: DRIVER_KIND,
+    ...(input.displayName ? { displayName: input.displayName } : {}),
+    ...(input.accentColor ? { accentColor: input.accentColor } : {}),
+    continuation: { groupKey: input.continuationGroupKey },
+  });
 
 export const PiDriver: ProviderDriver<PiSettings, PiDriverEnv> = {
   driverKind: DRIVER_KIND,
   metadata: {
-    displayName: "pi",
+    displayName: "Pi",
     supportsMultipleInstances: true,
   },
   configSchema: PiSettings,
@@ -77,8 +95,11 @@ export const PiDriver: ProviderDriver<PiSettings, PiDriverEnv> = {
   create: ({ instanceId, displayName, accentColor, environment, enabled, config }) =>
     Effect.gen(function* () {
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const fileSystem = yield* FileSystem.FileSystem;
+      const pathService = yield* Path.Path;
       const httpClient = yield* HttpClient.HttpClient;
-      const serverSettings = yield* ServerSettingsService;
+      const { cwd } = yield* ServerConfig.ServerConfig;
+      const serverSettings = yield* ServerSettings.ServerSettingsService;
       const processEnv = mergeProviderInstanceEnvironment(environment);
       const continuationIdentity = defaultProviderContinuationIdentity({
         driverKind: DRIVER_KIND,
@@ -86,26 +107,56 @@ export const PiDriver: ProviderDriver<PiSettings, PiDriverEnv> = {
       });
       const stampIdentity = withInstanceIdentity({
         instanceId,
-        driverKind: DRIVER_KIND,
         displayName,
         accentColor,
         continuationGroupKey: continuationIdentity.continuationKey,
       });
       const effectiveConfig = { ...config, enabled } satisfies PiSettings;
+      const resolveMaintenance = yield* makeCachedProviderMaintenanceResolution(
+        resolveProviderMaintenanceCapabilitiesEffect(UPDATE, {
+          binaryPath: effectiveConfig.binaryPath,
+          env: processEnv,
+        }).pipe(
+          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+          Effect.provideService(FileSystem.FileSystem, fileSystem),
+          Effect.provideService(Path.Path, pathService),
+        ),
+      );
 
-      const adapter = yield* makePiAdapter(effectiveConfig, {
+      const orchestrationAdapter = yield* PiAdapterV2Driver.create({
         instanceId,
-        environment: processEnv,
-      });
+        displayName,
+        accentColor,
+        environment,
+        enabled,
+        config,
+      }).pipe(
+        Effect.mapError(
+          (cause) =>
+            new ProviderDriverError({
+              driver: DRIVER_KIND,
+              instanceId,
+              detail: "Failed to build Pi orchestration adapter.",
+              cause,
+            }),
+        ),
+      );
       const textGeneration = yield* makePiTextGeneration(effectiveConfig, processEnv);
 
-      const checkProvider = checkPiProviderStatus(effectiveConfig, processEnv).pipe(
-        Effect.flatMap((snapshot) =>
-          effectiveConfig.enabled && snapshot.installed && snapshot.auth.status === "authenticated"
-            ? readPiUsageLimits(effectiveConfig, processEnv).pipe(
-                Effect.map((usageLimits) => ({ ...snapshot, usageLimits })),
-              )
-            : Effect.succeed(snapshot),
+      const checkProvider = checkPiProviderStatus(effectiveConfig, processEnv, cwd).pipe(
+        Effect.flatMap((draft) =>
+          effectiveConfig.enabled && draft.installed && draft.auth.status === "authenticated"
+            ? readPiUsageLimits(
+                {
+                  ...effectiveConfig,
+                  provider:
+                    effectiveConfig.provider ??
+                    draft.models.find((model) => model.isDefault)?.subProvider ??
+                    "",
+                },
+                processEnv,
+              ).pipe(Effect.map((usageLimits) => ({ ...draft, usageLimits })))
+            : Effect.succeed(draft),
         ),
         Effect.map(stampIdentity),
         Effect.provideService(HttpClient.HttpClient, httpClient),
@@ -114,36 +165,36 @@ export const PiDriver: ProviderDriver<PiSettings, PiDriverEnv> = {
 
       const snapshotSettings = makeProviderSnapshotSettingsSource(effectiveConfig, serverSettings);
       const snapshot = yield* makeManagedServerProvider<ProviderSnapshotSettings<PiSettings>>({
-        resolveMaintenance: () => Effect.succeed(MAINTENANCE_CAPABILITIES),
+        resolveMaintenance,
         getSettings: snapshotSettings.getSettings,
         streamSettings: snapshotSettings.streamSettings,
         haveSettingsChanged: haveProviderSnapshotSettingsChanged,
         initialSnapshot: (settings) =>
           buildInitialPiProviderSnapshot(settings.provider).pipe(Effect.map(stampIdentity)),
         checkProvider,
+        enrichSnapshot: ({ settings, snapshot: currentSnapshot, publishSnapshot }) =>
+          resolveMaintenance().pipe(
+            Effect.flatMap((maintenanceCapabilities) =>
+              enrichPiSnapshot({
+                snapshot: currentSnapshot,
+                maintenanceCapabilities,
+                enableProviderUpdateChecks: settings.enableProviderUpdateChecks,
+                publishSnapshot,
+                httpClient,
+              }),
+            ),
+          ),
       }).pipe(
         Effect.mapError(
           (cause) =>
             new ProviderDriverError({
               driver: DRIVER_KIND,
               instanceId,
-              detail: `Failed to build pi snapshot: ${cause.message ?? String(cause)}`,
+              detail: "Failed to build Pi snapshot.",
               cause,
             }),
         ),
       );
-
-      const piProvider = effectiveConfig.provider.trim() || "kimi-coding";
-      const auth = yield* makeCliAuth({
-        instanceId,
-        providerName: "pi",
-        verify: probePiAuthenticated(effectiveConfig, processEnv).pipe(
-          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
-        ),
-        signInHint: `pi has no credentials for provider '${piProvider}'. Run \`pi\` in a terminal on this environment and sign in with \`/login ${piProvider}\`, then check again.`,
-        signOutHint: `pi can only sign out from its own TUI. Run \`pi\` and use \`/logout\`.`,
-        onSettled: snapshot.refresh.pipe(Effect.asVoid),
-      });
 
       return {
         instanceId,
@@ -153,9 +204,8 @@ export const PiDriver: ProviderDriver<PiSettings, PiDriverEnv> = {
         accentColor,
         enabled,
         snapshot,
-        adapter,
+        orchestrationAdapter,
         textGeneration,
-        auth,
       } satisfies ProviderInstance;
     }),
 };

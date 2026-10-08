@@ -257,6 +257,8 @@ export class CheckoutSupervisor {
       this.#broadcast();
     } else if (message.type === "t3-checkout.prepared") {
       this.#prepared.settle(true);
+    } else if (message.type === "t3-checkout.preparation-failed") {
+      this.#prepared.settle(false);
     } else if (message.type === "t3-checkout.check") {
       await this.check();
     } else if (message.type === "t3-checkout.update") {
@@ -368,7 +370,13 @@ export class CheckoutSupervisor {
       this.#set("restarting", `Restarting into ${short(target.commit)}.`);
       const prepared = this.#prepared.wait(this.#options.timeouts?.prepareMs ?? 15_000, false);
       this.#server?.send({ type: "t3-checkout.prepare" });
-      await prepared;
+      if (!(await prepared)) {
+        this.#set(
+          "failed",
+          "The running server did not confirm restart preparation. Retry the update after checking it; no server was replaced.",
+        );
+        return;
+      }
       await this.#stopServer();
       if (this.#stopping) return this.#finish(130);
       if (await this.#startAndWait(target.commit)) {

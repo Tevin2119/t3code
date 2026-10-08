@@ -19,9 +19,13 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
-import { HttpClient } from "effect/unstable/http";
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
+import { HttpClient } from "effect/http";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
+import * as ServerConfig from "../../config.ts";
+import * as IdAllocator from "../../orchestration-v2/IdAllocator.ts";
+import { resolveSelfInvocation } from "@t3tools/shared/nodeRuntime";
+import { makeAcpNativeLoggerFactory } from "../acp/AcpNativeLogging.ts";
 import * as BackgroundPolicy from "../../background/BackgroundPolicy.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { makeKimiTextGeneration } from "../../textGeneration/KimiTextGeneration.ts";
@@ -34,14 +38,14 @@ import { makeCliAuth } from "../CliAuth.ts";
 import { ProviderDriverError } from "../Errors.ts";
 import { countKimiTurnEnds, readKimiTurnEnd } from "../acp/KimiTurnEnd.ts";
 import { expandHomePath } from "../../pathExpansion.ts";
-import { makeKimiAdapter, type KimiAdapterOptions } from "../Layers/KimiAdapter.ts";
+import { makeKimiAdapter, type KimiAdapterOptions } from "../KimiAdapter.ts";
 import {
   buildInitialKimiProviderSnapshot,
   checkKimiProviderStatus,
   probeKimiAuthenticated,
-} from "../Layers/KimiProvider.ts";
-import { readKimiUsageLimits } from "../Layers/kimiUsageLimits.ts";
-import { ProviderEventLoggers } from "../Layers/ProviderEventLoggers.ts";
+} from "../KimiProvider.ts";
+import { readKimiUsageLimits } from "../kimiUsageLimits.ts";
+import { ProviderEventLoggers } from "../ProviderEventLoggers.ts";
 import { makeManagedServerProvider } from "../makeManagedServerProvider.ts";
 import {
   defaultProviderContinuationIdentity,
@@ -67,6 +71,8 @@ const MAINTENANCE_CAPABILITIES = makeManualOnlyProviderMaintenanceCapabilities({
 });
 
 export type KimiDriverEnv =
+  | ServerConfig.ServerConfig
+  | IdAllocator.IdAllocatorV2
   | BackgroundPolicy.BackgroundPolicy
   | ChildProcessSpawner.ChildProcessSpawner
   | Crypto.Crypto
@@ -93,6 +99,20 @@ export const KimiDriver: ProviderDriver<KimiSettings, KimiDriverEnv> = {
       const path = yield* Path.Path;
       const serverSettings = yield* ServerSettingsService;
       const eventLoggers = yield* ProviderEventLoggers;
+      const serverConfig = yield* ServerConfig.ServerConfig;
+      const idAllocator = yield* IdAllocator.IdAllocatorV2;
+      const selfInvocation = yield* resolveSelfInvocation().pipe(
+        Effect.mapError(
+          (cause) =>
+            new ProviderDriverError({
+              driver: DRIVER_KIND,
+              instanceId,
+              detail: "Could not locate the provider bridge runtime.",
+              cause,
+            }),
+        ),
+      );
+      const makeNativeLogger = yield* makeAcpNativeLoggerFactory();
       const processEnv = mergeProviderInstanceEnvironment(environment);
       const continuationIdentity = defaultProviderContinuationIdentity({
         driverKind: DRIVER_KIND,
@@ -111,7 +131,7 @@ export const KimiDriver: ProviderDriver<KimiSettings, KimiDriverEnv> = {
         makeKimiAcpRuntime({
           ...input,
           kimiSettings: effectiveConfig,
-          environment: processEnv,
+          environment: { ...processEnv, ...input.processEnvironment },
           childProcessSpawner: spawner,
         }).pipe(Effect.provideService(Crypto.Crypto, crypto));
 
@@ -122,15 +142,23 @@ export const KimiDriver: ProviderDriver<KimiSettings, KimiDriverEnv> = {
           Effect.provideService(FileSystem.FileSystem, fileSystem),
           Effect.provideService(Path.Path, path),
         );
-      const adapter = yield* makeKimiAdapter(effectiveConfig, {
+      const orchestrationAdapter = makeKimiAdapter(effectiveConfig, {
         instanceId,
         makeRuntime,
-        turnEnd: {
-          count: (sessionId) => withFiles(countKimiTurnEnds({ sessionId, home: kimiHome })),
-          read: (sessionId, endsBefore) =>
-            withFiles(readKimiTurnEnd({ sessionId, home: kimiHome, endsBefore })),
-        },
-        ...(eventLoggers.native ? { nativeEventLogger: eventLoggers.native } : {}),
+        countTurnEnds: (sessionId) => withFiles(countKimiTurnEnds({ sessionId, home: kimiHome })),
+        turnEnd: (sessionId, endsBefore) =>
+          withFiles(readKimiTurnEnd({ sessionId, home: kimiHome, endsBefore })),
+        crypto,
+        fileSystem,
+        serverConfig,
+        idAllocator,
+        selfInvocation,
+        nativeLogging: (threadId) =>
+          makeNativeLogger({
+            nativeEventLogger: eventLoggers.native,
+            provider: DRIVER_KIND,
+            threadId,
+          }),
       });
       const textGeneration = yield* makeKimiTextGeneration(effectiveConfig, processEnv);
 
@@ -243,7 +271,7 @@ export const KimiDriver: ProviderDriver<KimiSettings, KimiDriverEnv> = {
         accentColor,
         enabled,
         snapshot,
-        adapter,
+        orchestrationAdapter,
         textGeneration,
         auth,
       } satisfies ProviderInstance;

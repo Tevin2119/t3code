@@ -76,7 +76,7 @@ function Field(props: {
     <label className="flex flex-col gap-1">
       <span className="text-xs font-medium">{props.label}</span>
       {props.children}
-      {props.hint ? <span className="text-[11px] text-muted-foreground">{props.hint}</span> : null}
+      {props.hint ? <span className="text-2xs text-muted-foreground">{props.hint}</span> : null}
     </label>
   );
 }
@@ -131,7 +131,7 @@ function SeatEditor(props: {
         <Input
           aria-label="Name of the seat"
           placeholder="Name of the seat"
-          className="h-7 w-48 text-xs"
+          className="h-7 w-48 "
           value={seat.title}
           disabled={locked}
           onChange={(event) => set({ title: event.target.value })}
@@ -148,7 +148,6 @@ function SeatEditor(props: {
             instanceEntries={catalog.entries}
             modelOptionsByInstance={catalog.options}
             size="xs"
-            triggerVariant="outline"
             triggerAriaLabel={`Harness and model for ${name}`}
             {...(takes.model
               ? {}
@@ -278,7 +277,7 @@ function SeatEditor(props: {
       <Textarea
         aria-label={`Instructions for ${name}`}
         placeholder="What this seat is there for, in the words it is to be given"
-        className="min-h-20 text-xs"
+        className="min-h-20 "
         value={seat.instructions}
         disabled={locked}
         onChange={(event) => set({ instructions: event.target.value })}
@@ -382,7 +381,7 @@ function ProfileList(props: {
             <span className="text-muted-foreground">
               {item.purpose || "No purpose written yet."}
             </span>
-            <span className="text-[11px] text-muted-foreground">
+            <span className="text-2xs text-muted-foreground">
               {item.seatsOn} of {item.seats} seats on. Flows:{" "}
               {item.flows.map((flow) => FLOW_TITLE[flow] ?? flow).join(", ") || "none"}. Revision{" "}
               {item.revision}.
@@ -524,7 +523,7 @@ function ProfileEditor(props: {
         <Badge size="sm" variant={locked ? "outline" : "secondary"}>
           {locked ? "comes with the engine" : "yours"}
         </Badge>
-        <span className="font-mono text-[10px] text-muted-foreground">{view.configuration}</span>
+        <span className="font-mono text-3xs text-muted-foreground">{view.configuration}</span>
         <div className="ml-auto flex items-center gap-1">
           <Button
             size="xs"
@@ -603,7 +602,7 @@ function ProfileEditor(props: {
               >
                 <Textarea
                   aria-label="Core prompt"
-                  className="min-h-48 font-mono text-xs"
+                  className="min-h-48  "
                   value={form.corePrompt}
                   disabled={locked}
                   onChange={(event) => set({ corePrompt: event.target.value })}
@@ -657,7 +656,7 @@ function ProfileEditor(props: {
                 >
                   <Textarea
                     aria-label="Notes of the profile"
-                    className="min-h-24 text-xs"
+                    className="min-h-24 "
                     value={form.memory.notes}
                     disabled={locked}
                     onChange={(event) =>
@@ -683,14 +682,14 @@ function ProfileEditor(props: {
                     />
                     <span>
                       {tool.server}
-                      <span className="block text-[11px] text-muted-foreground">
+                      <span className="block text-2xs text-muted-foreground">
                         {tool.offers.join(", ")}
                         {tool.onlyFor ? `. Only for ${tool.onlyFor}` : ""}
                       </span>
                     </span>
                   </label>
                 ))}
-                <p className="text-[11px] text-muted-foreground">
+                <p className="text-2xs text-muted-foreground">
                   Whether a tool works for a seat is shown under "What each seat is given", after it
                   was checked.
                 </p>
@@ -701,7 +700,7 @@ function ProfileEditor(props: {
           <section className="flex flex-col gap-2" data-profile-seats>
             <div className="flex items-center gap-2">
               <h3 className="text-sm font-medium">Seats</h3>
-              <span className="text-[11px] text-muted-foreground">
+              <span className="text-2xs text-muted-foreground">
                 {form.seats.filter((seat) => seat.active).length} of {form.seats.length} switched on
               </span>
               {locked ? null : (
@@ -735,7 +734,7 @@ function ProfileEditor(props: {
                 }
               />
             ))}
-            <p className="text-[11px] text-muted-foreground">
+            <p className="text-2xs text-muted-foreground">
               A delivery needs a seat that leads, one that builds, one that reviews, and seats that
               test on {form.qaMinimum} providers that did not build. A chat, a plan and a review
               need less. The engine says what is missing when a flow cannot run.
@@ -770,7 +769,7 @@ function ProfileEditor(props: {
                   <Input
                     aria-label="Name of the specialist"
                     placeholder="Name"
-                    className="h-7 w-56 text-xs"
+                    className="h-7 w-56 "
                     value={item.name}
                     disabled={locked}
                     onChange={(event) =>
@@ -797,7 +796,7 @@ function ProfileEditor(props: {
                 </div>
                 <Textarea
                   aria-label={`Instructions for the specialist ${item.name}`}
-                  className="min-h-20 font-mono text-xs"
+                  className="min-h-20  "
                   value={item.text}
                   disabled={locked}
                   onChange={(event) =>
@@ -817,7 +816,7 @@ function ProfileEditor(props: {
             <ul className="flex flex-col gap-0.5 text-xs">
               {form.references.map((file) => (
                 <li key={file} className="flex items-center gap-1">
-                  <span className="min-w-0 flex-1 truncate font-mono text-[11px]">{file}</span>
+                  <span className="min-w-0 flex-1 truncate font-mono text-2xs">{file}</span>
                   {locked ? null : (
                     <button
                       type="button"
@@ -837,7 +836,7 @@ function ProfileEditor(props: {
               <Input
                 aria-label="Add a reference file"
                 placeholder="Full path of a file on the engine's host, then Enter"
-                className="h-7 font-mono text-xs"
+                className="h-7  "
                 value={reference}
                 onChange={(event) => setReference(event.target.value)}
                 onKeyDown={(event) => {
@@ -852,7 +851,7 @@ function ProfileEditor(props: {
                 }}
               />
             )}
-            <p className="text-[11px] text-muted-foreground">
+            <p className="text-2xs text-muted-foreground">
               Every seat is told where these files are, and is given the short ones in full.
             </p>
           </section>
@@ -875,7 +874,7 @@ function ProfileEditor(props: {
               <Input
                 aria-label="Why the profile is changed"
                 placeholder="Why it is changed (kept with the revision)"
-                className="h-8 max-w-md text-xs"
+                className="h-8 max-w-md "
                 value={note}
                 onChange={(event) => setNote(event.target.value)}
               />
@@ -887,10 +886,10 @@ function ProfileEditor(props: {
 
           <section className="flex flex-col gap-1 text-xs">
             <h3 className="font-medium text-muted-foreground">Files and revisions</h3>
-            <p className="font-mono text-[11px] break-all" data-profile-folder>
+            <p className="font-mono text-2xs break-all" data-profile-folder>
               {view.folder}
             </p>
-            <p className="text-[11px] text-muted-foreground">
+            <p className="text-2xs text-muted-foreground">
               These are the files the form writes: team.json, TEAM.md for the core prompt, a file
               for each role under roles, and the tools under tools.{" "}
               {locked
@@ -899,7 +898,7 @@ function ProfileEditor(props: {
             </p>
             <ul className="flex flex-col gap-0.5">
               {view.history.map((entry) => (
-                <li key={entry.revision} className="font-mono text-[10px] text-muted-foreground">
+                <li key={entry.revision} className="font-mono text-3xs text-muted-foreground">
                   r{entry.revision}, {entry.by}, {entry.at}
                   {entry.note ? `: ${entry.note}` : ""}
                 </li>
@@ -958,7 +957,7 @@ export function ProfilePage() {
   };
 
   return (
-    <SidebarInset className="isolate h-dvh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground">
+    <SidebarInset className="isolate h-dvh min-h-0 overflow-hidden overscroll-y-none  ">
       <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-profile-page>
         <WorkspacePageHeader electron={isElectron} className="h-auto">
           <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2 py-2">

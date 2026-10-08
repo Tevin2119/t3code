@@ -160,6 +160,7 @@ export function antigravityRecordsFrom(
     return [
       {
         provider: "antigravity",
+        speed: "standard",
         timestampMs,
         model,
         // Antigravity calls only its own service, whichever maker's model answers.

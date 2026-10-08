@@ -41,6 +41,7 @@ describe("pi", () => {
     const record = parsePiLine(PI_LINE, "01a0e7fd");
     expect(record).toMatchObject({
       provider: "pi",
+      speed: "standard",
       model: "gpt-6-luna",
       modelProvider: "openai-codex",
       modelProviderSource: "recorded",
@@ -177,6 +178,7 @@ describe("Hermes", () => {
 describe("attribution", () => {
   const base: UsageRecord = {
     provider: "pi",
+    speed: "standard",
     timestampMs: Date.parse("2026-09-28T12:00:00Z"),
     model: "glm-5.3",
     modelProvider: "zai",

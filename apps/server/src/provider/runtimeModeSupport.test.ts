@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import { buildDeepSeekAcpSpawnInput, deepseekPermissionModeFor } from "./acp/DeepSeekAcpSupport.ts";
-import { codexSandboxProblemFrom } from "./Layers/codexSandboxCheck.ts";
+import { codexSandboxProblemFrom } from "./codexSandboxCheck.ts";
 import {
   CLAUDE_RUNTIME_MODES,
   codexRuntimeModes,

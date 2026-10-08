@@ -42,6 +42,7 @@ describe("parseDeepSeekSession", () => {
     );
     expect(record).toEqual({
       provider: "deepseek",
+      speed: "standard",
       timestampMs: 1_790_000_500_000,
       model: DEEPSEEK_MODEL_NOT_RECORDED,
       modelProvider: null,
