@@ -1,9 +1,23 @@
 import { ChevronDownIcon, LayersIcon, PencilIcon, PlusIcon, SearchIcon, XIcon } from "lucide-react";
 import type { EnvironmentId } from "@t3tools/contracts";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
-import { parseRepositories, targetLine, type DeliveryTarget } from "../../lib/delivery";
+import {
+  parseRepositories,
+  targetLine,
+  type DeliveryRepository,
+  type DeliveryTarget,
+} from "../../lib/delivery";
 import { useDeliveryAct, useDeliveryRead } from "../../state/delivery";
+import { useProjects } from "../../state/entities";
+import {
+  PROJECT_CHOICE_PREFIX,
+  addedRepository,
+  knownRepositories,
+  repositoryChoices,
+  repositoryInFolder,
+  type RepositoryChoice,
+} from "./BoardPicker.repositories";
 
 import { Button } from "../ui/button";
 import { Checkbox } from "../ui/checkbox";
@@ -20,6 +34,8 @@ import { Input } from "../ui/input";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import {
   Select,
+  SelectGroup,
+  SelectGroupLabel,
   SelectItem,
   SelectPopup,
   SelectTrigger,
@@ -284,14 +300,52 @@ export function BoardDialog(props: {
     isBoard ? (props.environmentId ?? null) : null,
     "/api/repositories",
   );
-  const repositories = useMemo(
-    () => parseRepositories(reposRead.body).filter((item) => item.kind !== "qualification"),
-    [reposRead.body],
+  // Repositories the engine has added here and not yet listed, so they can be chosen at once.
+  const [added, setAdded] = useState<ReadonlyArray<DeliveryRepository>>([]);
+  const known = useMemo(
+    () => knownRepositories(parseRepositories(reposRead.body), added),
+    [reposRead.body, added],
   );
+  const repositories = useMemo(
+    () => known.filter((item) => item.kind !== "qualification"),
+    [known],
+  );
+  // T3's own projects in this environment are offered too, and added to the engine when chosen.
+  const projects = useProjects();
+  const choices = useMemo(
+    () =>
+      isBoard
+        ? repositoryChoices({ repositories: known, projects, environmentId: props.environmentId })
+        : [],
+    [isBoard, known, projects, props.environmentId],
+  );
+  const projectChoices = choices.filter((choice) => choice.kind === "project");
+  // A project is added only once the engine's list is read, so one it has is never added again.
+  const projectBlocked = reposRead.error
+    ? "The engine's repositories could not be read, so this cannot be added."
+    : reposRead.body === null && reposRead.isPending
+      ? "Reading the engine's repositories…"
+      : null;
   const addAct = useDeliveryAct(props.environmentId ?? null, "add repository");
   const [repository, setRepository] = useState(props.editing?.target?.repository ?? "");
   const [base, setBase] = useState(props.editing?.target?.base ?? "");
   const [adding, setAdding] = useState(false);
+  // The name of the repository being added; nothing else is chosen meanwhile.
+  const [registering, setRegistering] = useState<string | null>(null);
+  const registeringRef = useRef(false);
+  const [chooseProblem, setChooseProblem] = useState<string | null>(null);
+  // An add that ends after the dialog closed or its environment changed is let go.
+  const generation = useRef(0);
+  useEffect(
+    () => () => {
+      generation.current += 1;
+      registeringRef.current = false;
+      setRegistering(null);
+      setAdded([]);
+    },
+    // oxlint-disable-next-line react/exhaustive-effect-dependencies -- Resets when the environment changes.
+    [props.environmentId],
+  );
   const [folder, setFolder] = useState("");
   const [repoName, setRepoName] = useState("");
   const folderName =
@@ -309,26 +363,99 @@ export function BoardDialog(props: {
     base !== (props.editing?.target?.base ?? "");
   const needsBinding = isBoard && (!props.editing || wasBound || bindingChanged);
   const bindingReady = !needsBinding || (Boolean(repository) && Boolean(base));
+  const select = (item: DeliveryRepository) => {
+    setRepository(item.id);
+    setBase(item.defaultBase ?? "");
+  };
+  /** Adds a folder to the engine; null when the answer came too late to be used. */
+  const register = async (
+    path: string,
+    repositoryTitle: string,
+  ): Promise<
+    | { readonly ok: true; readonly repository: DeliveryRepository }
+    | { readonly ok: false; readonly why: string }
+    | null
+  > => {
+    const at = generation.current;
+    registeringRef.current = true;
+    setRegistering(repositoryTitle);
+    try {
+      const result = await addAct("/api/repositories", {
+        path,
+        title: repositoryTitle,
+        by: props.by,
+      });
+      if (at !== generation.current) return null;
+      if (!result.ok) return { ok: false, why: result.why };
+      reposRead.refresh();
+      const made = addedRepository(result.body, { path, title: repositoryTitle });
+      if (!made) {
+        return {
+          ok: false,
+          why: `${repositoryTitle} was added, but the engine did not say which repository it is. Choose it once the list is read again.`,
+        };
+      }
+      setAdded((current) => [...current.filter((item) => item.id !== made.id), made]);
+      return { ok: true, repository: made };
+    } finally {
+      if (at === generation.current) {
+        registeringRef.current = false;
+        setRegistering(null);
+      }
+    }
+  };
   const addRepository = async () => {
+    if (registeringRef.current) return;
     setAddProblem(null);
-    const result = await addAct("/api/repositories", {
-      path: folder.trim(),
-      title: repoName.trim() || folderName,
-      by: props.by,
-    });
-    if (!result.ok) {
-      setAddProblem(result.why);
+    setChooseProblem(null);
+    const outcome = await register(folder.trim(), repoName.trim() || folderName);
+    if (!outcome) return;
+    if (!outcome.ok) {
+      setAddProblem(outcome.why);
       return;
     }
-    const made = result.body as { readonly id?: string; readonly defaultBase?: string } | null;
-    reposRead.refresh();
-    if (made?.id) {
-      setRepository(made.id);
-      setBase(made.defaultBase ?? "");
-    }
+    select(outcome.repository);
     setAdding(false);
     setFolder("");
     setRepoName("");
+  };
+  const choiceFor = (value: string): RepositoryChoice | null => {
+    const listed = choices.find((choice) => choice.value === value);
+    if (listed) return listed;
+    // A project row chosen again after its add: the engine has its folder now.
+    const project = value.startsWith(PROJECT_CHOICE_PREFIX)
+      ? projects.find((item) => `${PROJECT_CHOICE_PREFIX}${item.id}` === value)
+      : undefined;
+    const same = project ? repositoryInFolder(known, project.workspaceRoot) : null;
+    return same ? { kind: "engine", value: same.id, repository: same } : null;
+  };
+  const chooseRepository = async (value: string) => {
+    if (registeringRef.current) return;
+    setChooseProblem(null);
+    if (value === ADD_REPOSITORY) {
+      setAdding(true);
+      return;
+    }
+    const choice = choiceFor(value);
+    if (!choice) return;
+    if (choice.kind === "engine") {
+      select(choice.repository);
+      return;
+    }
+    if (projectBlocked) {
+      setChooseProblem(projectBlocked);
+      return;
+    }
+    setRepository("");
+    setBase("");
+    setAddProblem(null);
+    const outcome = await register(choice.folder, choice.name);
+    if (!outcome) return;
+    if (!outcome.ok) {
+      setChooseProblem(outcome.why);
+      return;
+    }
+    select(outcome.repository);
   };
   return (
     <Dialog open onOpenChange={(open) => (!open && !props.busy ? props.onClose() : undefined)}>
@@ -354,15 +481,8 @@ export function BoardDialog(props: {
                 <span className="text-xs font-medium">Repository</span>
                 <Select
                   value={repository || null}
-                  onValueChange={(value) => {
-                    if (value === ADD_REPOSITORY) {
-                      setAdding(true);
-                      return;
-                    }
-                    const next = repositories.find((item) => item.id === value);
-                    setRepository(String(value ?? ""));
-                    setBase(next?.defaultBase ?? "");
-                  }}
+                  onValueChange={(value) => void chooseRepository(String(value ?? ""))}
+                  disabled={registering !== null}
                 >
                   <SelectTrigger
                     aria-label="Repository"
@@ -370,7 +490,7 @@ export function BoardDialog(props: {
                     data-board-dialog-repository
                   >
                     <SelectValue placeholder="Choose the repository its tasks are done in">
-                      {chosen ? chosen.title : undefined}
+                      {chosen ? chosen.title : (registering ?? undefined)}
                     </SelectValue>
                   </SelectTrigger>
                   <SelectPopup alignItemWithTrigger={false}>
@@ -379,18 +499,66 @@ export function BoardDialog(props: {
                       Add a repository by its folder…
                     </SelectItem>
                     {repositories.map((item) => (
-                      <SelectItem key={item.id} value={item.id} disabled={!item.ok}>
+                      <SelectItem
+                        key={item.id}
+                        value={item.id}
+                        label={item.title}
+                        disabled={!item.ok}
+                      >
                         <span className="flex min-w-0 flex-col">
                           <span className="truncate">{item.title}</span>
                           <span className="truncate text-[11px] text-muted-foreground">
-                            {item.ok ? item.path : item.problem}
+                            {item.path}
                           </span>
+                          {item.ok ? null : (
+                            <span className="truncate text-[11px] text-warning">
+                              {item.problem ?? "It cannot be read."}
+                            </span>
+                          )}
                         </span>
                       </SelectItem>
                     ))}
+                    {projectChoices.length > 0 ? (
+                      <SelectGroup>
+                        <SelectGroupLabel>
+                          T3 projects, added to the engine when chosen
+                        </SelectGroupLabel>
+                        {projectChoices.map((choice) =>
+                          choice.kind === "project" ? (
+                            <SelectItem
+                              key={choice.value}
+                              value={choice.value}
+                              label={choice.name}
+                              disabled={projectBlocked !== null}
+                              data-board-dialog-project={choice.folder}
+                            >
+                              <span className="flex min-w-0 flex-col">
+                                <span className="truncate">{choice.name}</span>
+                                <span className="truncate text-[11px] text-muted-foreground">
+                                  {choice.folder}
+                                </span>
+                                {projectBlocked ? (
+                                  <span className="truncate text-[11px] text-muted-foreground">
+                                    {projectBlocked}
+                                  </span>
+                                ) : null}
+                              </span>
+                            </SelectItem>
+                          ) : null,
+                        )}
+                      </SelectGroup>
+                    ) : null}
                   </SelectPopup>
                 </Select>
               </label>
+              <p
+                role="alert"
+                aria-live="polite"
+                className="text-xs text-warning empty:hidden"
+                data-board-dialog-repository-problem
+              >
+                {chooseProblem}
+              </p>
               {adding ? (
                 <div className="flex flex-col gap-1 rounded-md border border-border p-2">
                   <Input
@@ -417,7 +585,7 @@ export function BoardDialog(props: {
                     </Button>
                     <Button
                       size="xs"
-                      disabled={!folder.trim()}
+                      disabled={!folder.trim() || registering !== null}
                       onClick={() => void addRepository()}
                       data-board-dialog-add-repository
                     >
@@ -431,7 +599,7 @@ export function BoardDialog(props: {
                 <Select
                   value={base || null}
                   onValueChange={(value) => setBase(String(value ?? ""))}
-                  disabled={!chosen}
+                  disabled={!chosen || registering !== null}
                 >
                   <SelectTrigger aria-label="Base branch" size="compact" data-board-dialog-base>
                     <SelectValue placeholder="Choose a repository first">
@@ -487,15 +655,17 @@ export function BoardDialog(props: {
               ))}
             </div>
           ) : null}
-          {isBoard && !bindingReady ? (
+          {isBoard && (registering !== null || !bindingReady) ? (
             <p className="text-xs text-muted-foreground" data-board-dialog-why>
-              {!repository
-                ? "Choose the repository its tasks are done in."
-                : chosen && !chosen.ok
-                  ? `${chosen.title}: ${chosen.problem ?? "it cannot be read"}.`
-                  : chosen && chosen.branches.length === 0
-                    ? `${chosen.title} has no branch to start work from.`
-                    : "Choose the branch work starts from."}
+              {registering !== null
+                ? `Adding ${registering}…`
+                : !repository
+                  ? "Choose the repository its tasks are done in."
+                  : chosen && !chosen.ok
+                    ? `${chosen.title}: ${chosen.problem ?? "it cannot be read"}.`
+                    : chosen && chosen.branches.length === 0
+                      ? `${chosen.title} has no branch to start work from.`
+                      : "Choose the branch work starts from."}
             </p>
           ) : null}
           {isBoard && bindingReady && chosen && !chosen.ok ? (
@@ -572,6 +742,7 @@ export function BoardDialog(props: {
             <Button
               disabled={
                 props.busy ||
+                registering !== null ||
                 !name ||
                 (props.kind === "view" && lanes.length === 0) ||
                 !bindingReady
