@@ -62,6 +62,8 @@ export function resolveBrowseFolder(input: {
   readonly query: string;
   readonly platform: string;
   readonly connected: boolean;
+  /** A picked folder or Up is still loading, so the typed path is about to change. */
+  readonly moving: boolean;
   readonly data: FilesystemBrowseResult | null;
   readonly error: string | null;
   readonly isPending: boolean;
@@ -73,6 +75,7 @@ export function resolveBrowseFolder(input: {
     return { path: null, why: "Use an absolute or ~/ path." };
   }
   if (!input.connected) return { path: null, why: "Not connected." };
+  if (input.moving) return { path: null, why: "Opening folder…" };
   if (input.error) return { path: null, why: input.error };
   if (input.isPending || !input.data) return { path: null, why: "Reading…" };
   if (hasTrailingPathSeparator(input.query)) return { path: input.data.parentPath, why: null };
@@ -121,6 +124,12 @@ export function RepositoryBrowse(props: {
   const [edit, setEdit] = useState<{ readonly path: string; readonly name: string } | null>(null);
   const [navigation] = useState(createBrowseNavigationCoordinator);
   useEffect(() => () => navigation.invalidate(), [navigation]);
+  // Only the move that lands clears `moving`; typing abandons every move still loading.
+  const [moving, setMoving] = useState(false);
+  const stopMoving = () => {
+    navigation.invalidate();
+    setMoving(false);
+  };
 
   const browsePath = getFilesystemBrowsePath(query, platform);
   // A relative path needs a project to be relative to, and the board has none.
@@ -145,6 +154,7 @@ export function RepositoryBrowse(props: {
     query,
     platform,
     connected,
+    moving,
     data: browseQuery.data,
     error: browseQuery.error,
     isPending: browseQuery.isPending,
@@ -152,11 +162,14 @@ export function RepositoryBrowse(props: {
   const suggestion = resolution.path
     ? suggestedRepositoryName(resolution.path, props.projects, props.environmentId)
     : "";
+  // Another folder drops the edit, so coming back to the edited one shows its suggestion again.
+  if (edit && resolution.path && edit.path !== resolution.path) setEdit(null);
   const name = edit && edit.path === resolution.path ? edit.name : suggestion;
 
   /** Moves to a folder once its listing is loaded; a later move or typing wins over it. */
-  const navigate = (nextQuery: string) =>
-    navigation.run(
+  const navigate = async (nextQuery: string) => {
+    setMoving(true);
+    await navigation.run(
       async () => {
         if (!connected) return;
         await loadBrowsePath({
@@ -168,8 +181,11 @@ export function RepositoryBrowse(props: {
         setHighlighted(null);
         setQuery(nextQuery);
         setGeneration((current) => current + 1);
+        setMoving(false);
       },
     );
+  };
+  // buildBrowseGroups always returns its group, so an empty one is dropped here.
   const groups = relative
     ? []
     : buildBrowseGroups({
@@ -184,24 +200,26 @@ export function RepositoryBrowse(props: {
         browseTo: async (entryName) => {
           await navigate(appendBrowsePathSegment(query, entryName));
         },
-      });
-  const emptyState = relative
-    ? "Use an absolute or ~/ path."
-    : !connected
-      ? "Not connected."
+      }).filter((group) => group.items.length > 0);
+  // Shown under the rows, so it still shows when only Up is left.
+  const listStatus =
+    relative || !browsePath.isBrowsing
+      ? "Use an absolute or ~/ path."
       : browseQuery.error
         ? browseQuery.error
-        : browseQuery.isPending
-          ? "Reading folders…"
-          : browsePath.isBrowsing
-            ? "No folders here."
-            : "Use an absolute or ~/ path.";
+        : !connected
+          ? "Not connected."
+          : visibleEntries.length > 0
+            ? null
+            : browseQuery.isPending
+              ? "Reading folders…"
+              : "No folders here.";
   const blocked = props.registering
     ? "Adding…"
     : (resolution.why ?? (name.trim() ? null : "Name is empty."));
 
   const add = () => {
-    if (props.registering || !resolution.path || !name.trim()) return;
+    if (props.registering || moving || !resolution.path || !name.trim()) return;
     props.onAdd(resolution.path, name.trim());
   };
   const onKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
@@ -209,7 +227,7 @@ export function RepositoryBrowse(props: {
       // Cancels the add only: the board dialog around it stays open.
       event.preventDefault();
       event.stopPropagation();
-      navigation.invalidate();
+      stopMoving();
       props.onCancel();
       return;
     }
@@ -234,23 +252,32 @@ export function RepositoryBrowse(props: {
         mode="none"
         onItemHighlighted={(value) => setHighlighted(typeof value === "string" ? value : null)}
         onValueChange={(next) => {
-          navigation.invalidate();
+          stopMoving();
           setHighlighted(null);
           setQuery(next);
         }}
         panelClassName="max-h-60"
         value={query}
       >
-        <CommandPaletteResults
-          emptyStateMessage={emptyState}
-          groups={groups}
-          highlightedItemValue={highlighted}
-          isActionsOnly={false}
-          keybindings={NO_KEYBINDINGS}
-          onExecuteItem={(item) => {
-            if (item.kind === "action") void item.run();
-          }}
-        />
+        {groups.length > 0 ? (
+          <CommandPaletteResults
+            groups={groups}
+            highlightedItemValue={highlighted}
+            isActionsOnly={false}
+            keybindings={NO_KEYBINDINGS}
+            onExecuteItem={(item) => {
+              if (item.kind === "action") void item.run();
+            }}
+          />
+        ) : null}
+        {listStatus ? (
+          <p
+            className="py-6 text-center text-sm text-muted-foreground"
+            data-board-dialog-browse-status
+          >
+            {listStatus}
+          </p>
+        ) : null}
       </CommandPaletteContent>
       <Tooltip>
         <TooltipTrigger
@@ -290,7 +317,7 @@ export function RepositoryBrowse(props: {
           size="xs"
           variant="ghost"
           onClick={() => {
-            navigation.invalidate();
+            stopMoving();
             props.onCancel();
           }}
           data-board-dialog-add-cancel

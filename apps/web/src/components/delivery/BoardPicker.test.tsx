@@ -485,6 +485,7 @@ describe("resolveBrowseFolder", () => {
       query,
       platform: "MacIntel",
       connected: true,
+      moving: false,
       data,
       error: null,
       isPending: false,
@@ -520,6 +521,7 @@ describe("resolveBrowseFolder", () => {
     expect(resolve("~/work/", null, { isPending: true }).why).toBe("Reading…");
     expect(resolve("~/work/", null, { error: "No such folder" }).why).toBe("No such folder");
     expect(resolve("~/work/", home, { connected: false }).why).toBe("Not connected.");
+    expect(resolve("~/", home, { moving: true }).why).toBe("Opening folder…");
   });
 });
 
@@ -606,6 +608,11 @@ describe("BoardDialog adds a repository by browsing", () => {
   const nameInput = () => find("data-board-dialog-repository-name");
   const addButton = () => find("data-board-dialog-add-repository");
   const why = () => renderer!.root.findAllByProps({ "data-board-dialog-add-why": true })[0];
+  const status = () =>
+    renderer!.root
+      .findAllByProps({ "data-board-dialog-browse-status": true })
+      .map((node) => node.children.join(""))[0];
+  const resultsShown = () => renderer!.root.findAllByType("palette-results" as never).length > 0;
   const paths = () => mock.queried.map((item) => `${item.environmentId}:${item.input.partialPath}`);
 
   beforeEach(() => {
@@ -684,6 +691,97 @@ describe("BoardDialog adds a repository by browsing", () => {
     expect(palette().props.value).toBe("~/work/");
     expect(rows().map((row) => row.title)).toEqual(["..", "typed", "other"]);
     expect(folderShown()).toBe("Folder: /home/u/work");
+  });
+
+  it("adds nothing while a picked folder is still opening", async () => {
+    mock.action.mockResolvedValueOnce({ ok: true, body: { id: "r8", defaultBase: "main" } });
+    await render();
+    await openAdd();
+    const slow = deferred<unknown>();
+    mock.load.mockReturnValueOnce(slow.promise);
+    let move: Promise<void> = Promise.resolve();
+    await act(async () => {
+      move = rows()[0]!.run();
+    });
+    expect(palette().props.value).toBe("~/");
+    expect(addButton().props.disabled).toBe(true);
+    expect(why()!.children.join("")).toBe("Opening folder…");
+    await act(async () => addButton().props.onClick());
+    expect(mock.action).not.toHaveBeenCalled();
+    await act(async () => {
+      slow.resolve({});
+      await move;
+    });
+    expect(palette().props.value).toBe("~/work/");
+    await act(async () => addButton().props.onClick());
+    expect(mock.action).toHaveBeenCalledWith("/api/repositories", {
+      path: "/home/u/work",
+      title: "work",
+      by: "person",
+    });
+  });
+
+  it("stays opening until the latest of two moves lands, and typing ends it", async () => {
+    await render();
+    await openAdd();
+    const first = deferred<unknown>();
+    const second = deferred<unknown>();
+    mock.load.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
+    let moves: Array<Promise<void>> = [];
+    await act(async () => {
+      moves = [rows()[0]!.run(), rows()[1]!.run()];
+    });
+    await act(async () => {
+      first.resolve({});
+      await moves[0];
+    });
+    expect(why()!.children.join("")).toBe("Opening folder…");
+    await act(async () => {
+      second.resolve({});
+      await moves[1];
+    });
+    expect(palette().props.value).toBe("~/proj/");
+    expect(addButton().props.disabled).toBe(false);
+
+    const late = deferred<unknown>();
+    mock.load.mockReturnValueOnce(late.promise);
+    let move: Promise<void> = Promise.resolve();
+    await act(async () => {
+      move = rows()[0]!.run();
+    });
+    expect(addButton().props.disabled).toBe(true);
+    await type("~/work/");
+    expect(addButton().props.disabled).toBe(false);
+    await act(async () => {
+      late.resolve({});
+      await move;
+    });
+    expect(palette().props.value).toBe("~/work/");
+    expect(addButton().props.disabled).toBe(false);
+  });
+
+  it("says why the list is empty, also when only Up is left", async () => {
+    mock.listings[`${ENV}:~/broken/`] = { error: "No such folder" };
+    await render();
+    await openAdd();
+    expect(status()).toBeUndefined();
+    await type("~/work/typed/");
+    expect(rowValues()).toEqual(["browse:up"]);
+    expect(status()).toBe("No folders here.");
+    await type("~/work/zz");
+    expect(rowValues()).toEqual(["browse:up"]);
+    expect(status()).toBe("No folders here.");
+    await type("~/unread/");
+    expect(status()).toBe("Reading folders…");
+    await type("~/broken/");
+    expect(status()).toBe("No such folder");
+    await type("./x/");
+    expect(resultsShown()).toBe(false);
+    expect(status()).toBe("Use an absolute or ~/ path.");
+    mock.listings[`${ENV}:/`] = { data: listing("/", []) };
+    await type("/");
+    expect(resultsShown()).toBe(false);
+    expect(status()).toBe("No folders here.");
   });
 
   it("keeps only the latest move, and typing beats a move still loading", async () => {
@@ -767,6 +865,19 @@ describe("BoardDialog adds a repository by browsing", () => {
       title: "Other one",
       by: "person",
     });
+  });
+
+  it("drops an edited name once another folder is chosen, so coming back suggests again", async () => {
+    await render();
+    await openAdd();
+    await type("~/work/typed/");
+    await act(() => nameInput().props.onChange({ target: { value: "My repo" } }));
+    await type("~/work/typed");
+    expect(nameInput().props.value).toBe("My repo");
+    await type("~/work/other/");
+    expect(nameInput().props.value).toBe("other");
+    await type("~/work/typed/");
+    expect(nameInput().props.value).toBe("typed");
   });
 
   it.each([
