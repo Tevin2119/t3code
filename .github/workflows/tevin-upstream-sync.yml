@@ -1,0 +1,60 @@
+name: Upstream Sync
+
+# Fork-only: merges pingdotgg/t3code main into automation/tevin-upstream-sync
+# and keeps one sync PR against master open. See docs/operations/development.md.
+on:
+  schedule:
+    # Avoid minute zero, when GitHub scheduled jobs are busiest.
+    - cron: "23 5 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: tevin-upstream-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    name: Sync upstream
+    if: github.repository == 'Tevin2119/t3code' && github.ref == 'refs/heads/master'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout master
+        # Plain git rather than actions/checkout: its cleanup walks every gitlink, and the vendored
+        # reference repos under .repos/ hold gitlinks with no .gitmodules entry, which it fails on.
+        # Full history, as the helper's merges need it; nothing is recursed into.
+        env:
+          READ_TOKEN: ${{ github.token }}
+        run: |
+          git init -q .
+          git config --local gc.auto 0
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$READ_TOKEN" | base64 -w0)"
+          git -c http.https://github.com/.extraheader="$auth" fetch --no-tags origin 'refs/heads/master:refs/remotes/origin/master'
+          git checkout -q -B master origin/master
+
+      - name: Test trusted helper
+        run: node --test .github/scripts/tevin-upstream-sync.test.cjs
+
+      # Every later step runs this copy from master, never code from the sync branch.
+      - name: Keep trusted helper
+        run: cp .github/scripts/tevin-upstream-sync.cjs "$RUNNER_TEMP/tevin-upstream-sync.cjs"
+
+      - id: prepare
+        name: Prepare sync branch
+        run: node "$RUNNER_TEMP/tevin-upstream-sync.cjs" prepare
+
+      - name: Push sync branch
+        env:
+          UPSTREAM_SYNC_TOKEN: ${{ secrets.UPSTREAM_SYNC_TOKEN }}
+        run: node "$RUNNER_TEMP/tevin-upstream-sync.cjs" push
+
+      - name: Create or update sync PR
+        if: steps.prepare.outputs.status != 'noop'
+        env:
+          UPSTREAM_SYNC_TOKEN: ${{ secrets.UPSTREAM_SYNC_TOKEN }}
+        run: node "$RUNNER_TEMP/tevin-upstream-sync.cjs" pr
