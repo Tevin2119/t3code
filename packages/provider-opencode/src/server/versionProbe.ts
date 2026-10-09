@@ -17,7 +17,10 @@ export interface ProbedOpenCode {
   readonly version: string;
 }
 
-const OPENCODE_VERSION_PROBE_TIMEOUT = "4 seconds";
+// `opencode --version` goes through a shim and a fresh runtime. On a loaded host, with every
+// provider checked at once, it can take several seconds, and a miss marks the provider
+// unavailable until the next check. FORK: upstream allows 4 seconds.
+const OPENCODE_VERSION_PROBE_TIMEOUT = "10 seconds";
 const OPENCODE_SERVER_PROBE_TIMEOUT = "5 seconds";
 // 2.x's own CLI decodes `{version, pid}` from `/api/info`; requiring both keeps unrelated JSON out.
 const decodeApiInfo = Schema.decodeUnknownOption(
