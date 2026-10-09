@@ -1,0 +1,117 @@
+<!-- tevin-upstream-sync-conflicts -->
+
+# Upstream sync conflicts
+
+Written by the upstream sync workflow. Resolve the conflicts on this branch, delete this file, and push.
+
+- Failed while merging `pingdotgg/t3code` main into `automation/tevin-upstream-sync`.
+- Upstream range: `1455cb5c35e50211145073be6ca155d56684f0f4`..`31b04e2ee929660d80d5931ed53fd17bf1d33ce6`
+
+## Conflicting files (106)
+
+- `apps/mobile/src/features/usage/UsageRouteScreen.tsx`
+- `apps/mobile/src/features/usage/usageProviders.ts`
+- `apps/server/scripts/acp-mock-agent.ts`
+- `apps/server/src/auth/RpcAuthorization.ts`
+- `apps/server/src/environment/ServerEnvironment.ts`
+- `apps/server/src/provider/ClaudeProvider.ts`
+- `apps/server/src/provider/CodexDeveloperInstructions.ts`
+- `apps/server/src/provider/DeepSeekAdapter.ts`
+- `apps/server/src/provider/DeepSeekProvider.ts`
+- `apps/server/src/provider/Drivers/CodexDriver.ts`
+- `apps/server/src/provider/Drivers/OpenCodeDriver.ts`
+- `apps/server/src/provider/HermesAdapter.ts`
+- `apps/server/src/provider/HermesProvider.test.ts`
+- `apps/server/src/provider/HermesProvider.ts`
+- `apps/server/src/provider/KimiAdapter.ts`
+- `apps/server/src/provider/KimiProvider.test.ts`
+- `apps/server/src/provider/KimiProvider.ts`
+- `apps/server/src/provider/Layers/ClaudeAdapter.test.ts`
+- `apps/server/src/provider/Layers/ClaudeAdapter.ts`
+- `apps/server/src/provider/Layers/ClaudeCapabilitiesProbe.test.ts`
+- `apps/server/src/provider/Layers/CodexAdapter.ts`
+- `apps/server/src/provider/Layers/CodexSessionRuntime.test.ts`
+- `apps/server/src/provider/Layers/CodexSessionRuntime.ts`
+- `apps/server/src/provider/Layers/OpenCodeAdapter.ts`
+- `apps/server/src/provider/Layers/ProviderRegistry.test.ts`
+- `apps/server/src/provider/Layers/ProviderService.ts`
+- `apps/server/src/provider/PiAdapter.test.ts`
+- `apps/server/src/provider/PiAdapter.ts`
+- `apps/server/src/provider/PiProvider.test.ts`
+- `apps/server/src/provider/PiProvider.ts`
+- `apps/server/src/provider/acp/AcpAdapterSupport.test.ts`
+- `apps/server/src/provider/acp/AcpAdapterSupport.ts`
+- `apps/server/src/provider/acp/AcpRuntimeModel.ts`
+- `apps/server/src/provider/acp/AcpSessionRuntime.ts`
+- `apps/server/src/provider/builtInDrivers.ts`
+- `apps/server/src/provider/codexSandboxCheck.ts`
+- `apps/server/src/provider/deepseekBalance.test.ts`
+- `apps/server/src/provider/deepseekBalance.ts`
+- `apps/server/src/provider/hermesUsageLimits.ts`
+- `apps/server/src/provider/kimiUsageLimits.ts`
+- `apps/server/src/provider/kimiUsageRefresh.test.ts`
+- `apps/server/src/provider/piUsageLimits.ts`
+- `apps/server/src/provider/planUsageLimits.test.ts`
+- `apps/server/src/provider/providerMaintenanceRunner.test.ts`
+- `apps/server/src/provider/providerMaintenanceRunner.ts`
+- `apps/server/src/provider/zaiUsageLimits.ts`
+- `apps/server/src/server.test.ts`
+- `apps/server/src/server.ts`
+- `apps/server/src/terminal/Manager.ts`
+- `apps/server/src/usage/UsageService.test.ts`
+- `apps/server/src/usage/UsageService.ts`
+- `apps/server/src/usage/usageAggregation.ts`
+- `apps/server/src/usage/usagePricing.ts`
+- `apps/server/src/usage/usageScanCache.test.ts`
+- `apps/server/src/usage/usageScanCache.ts`
+- `apps/server/src/usage/usageTranscriptReader.ts`
+- `apps/server/src/usage/usageTranscripts.ts`
+- `apps/server/src/ws.ts`
+- `apps/web/src/components/AppSidebarLayout.tsx`
+- `apps/web/src/components/ChatView.tsx`
+- `apps/web/src/components/CommandPalette.tsx`
+- `apps/web/src/components/Sidebar.tsx`
+- `apps/web/src/components/chat/ChatComposer.tsx`
+- `apps/web/src/components/chat/CompactComposerControlsMenu.tsx`
+- `apps/web/src/components/chat/ModelPickerContent.tsx`
+- `apps/web/src/components/chat/ProviderModelPicker.tsx`
+- `apps/web/src/components/chat/providerIconUtils.ts`
+- `apps/web/src/components/settings/AddProviderInstanceDialog.tsx`
+- `apps/web/src/components/settings/ProviderSetupSection.tsx`
+- `apps/web/src/components/settings/SettingsPanels.tsx`
+- `apps/web/src/components/settings/providerDriverMeta.ts`
+- `apps/web/src/components/sidebar/SidebarChrome.tsx`
+- `apps/web/src/components/threadActionMenu.logic.ts`
+- `apps/web/src/components/usage/UsageLimitsPooled.tsx`
+- `apps/web/src/components/usage/UsagePage.test.tsx`
+- `apps/web/src/components/usage/UsagePage.tsx`
+- `apps/web/src/components/usage/UsageProviderChart.test.ts`
+- `apps/web/src/components/usage/usageProviders.ts`
+- `apps/web/src/index.css`
+- `apps/web/src/routeTree.gen.ts`
+- `apps/web/src/routes/__root.tsx`
+- `apps/web/src/state/usage.test.tsx`
+- `apps/web/src/state/usage.ts`
+- `docs/README.md`
+- `docs/user/install.md`
+- `docs/user/providers-pi.md`
+- `docs/user/updating.md`
+- `docs/user/usage.md`
+- `packages/client-runtime/src/rpc/client.ts`
+- `packages/contracts/src/environment.test.ts`
+- `packages/contracts/src/environment.ts`
+- `packages/contracts/src/index.ts`
+- `packages/contracts/src/model.ts`
+- `packages/contracts/src/providerUsageLimits.ts`
+- `packages/contracts/src/rpc.ts`
+- `packages/contracts/src/server.ts`
+- `packages/contracts/src/settings.test.ts`
+- `packages/contracts/src/settings.ts`
+- `packages/contracts/src/usage.ts`
+- `packages/provider-core/src/server/snapshotProbe.ts`
+- `packages/provider-opencode/src/server/status.ts`
+- `packages/provider-opencode/src/server/usageLimits.ts`
+- `packages/shared/src/serverSettings.ts`
+- `packages/shared/src/usageLimits.ts`
+- `packages/shared/src/usageMerge.ts`
+- `pnpm-lock.yaml`
