@@ -24,17 +24,18 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Checkout master
-        uses: actions/checkout@v6
-        with:
-          ref: master
-          fetch-depth: 0
-          persist-credentials: false
-          # As upstream's ci.yml: the vendored reference repos under .repos/ hold gitlinks with no
-          # .gitmodules entry, which a full checkout fails on.
-          sparse-checkout: |
-            /*
-            !/.repos/
-          sparse-checkout-cone-mode: false
+        # Plain git rather than actions/checkout: its cleanup walks every gitlink, and the vendored
+        # reference repos under .repos/ hold gitlinks with no .gitmodules entry, which it fails on.
+        # Full history, as the helper's merges need it; nothing is recursed into.
+        env:
+          READ_TOKEN: ${{ github.token }}
+        run: |
+          git init -q .
+          git config --local gc.auto 0
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$READ_TOKEN" | base64 -w0)"
+          git -c http.https://github.com/.extraheader="$auth" fetch --no-tags origin '+refs/heads/master:refs/remotes/origin/master'
+          git checkout -q -B master origin/master
 
       - name: Test trusted helper
         run: node --test .github/scripts/tevin-upstream-sync.test.cjs
