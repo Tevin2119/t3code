@@ -29,6 +29,12 @@ jobs:
           ref: master
           fetch-depth: 0
           persist-credentials: false
+          # As upstream's ci.yml: the vendored reference repos under .repos/ hold gitlinks with no
+          # .gitmodules entry, which a full checkout fails on.
+          sparse-checkout: |
+            /*
+            !/.repos/
+          sparse-checkout-cone-mode: false
 
       - name: Test trusted helper
         run: node --test .github/scripts/tevin-upstream-sync.test.cjs
