@@ -7,6 +7,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 import { parseRepositories } from "../../lib/delivery";
 import { BoardDialog, type PickerItem } from "./BoardPicker";
 import {
+  environmentBrowsePlatform,
+  initialBrowseQuery,
+  resolveBrowseFolder,
+  suggestedRepositoryName,
+} from "./BoardPicker.browse";
+import {
   PROJECT_CHOICE_PREFIX,
   addedRepository,
   projectRepositoryName,
@@ -22,7 +28,35 @@ const mock = vi.hoisted(() => ({
   },
   action: vi.fn(),
   projects: [] as Array<unknown>,
+  // The board environment's presentation, by environment id.
+  environments: {} as Record<string, unknown>,
+  // Browse replies by environment id and partial path; a missing one is still being read.
+  listings: {} as Record<string, { data?: unknown; error?: string }>,
+  queried: [] as Array<{ environmentId: string; input: { partialPath: string; cwd?: string } }>,
+  load: vi.fn(),
 }));
+vi.mock("../../state/environments", () => ({
+  useEnvironment: (id: string | null) => (id ? (mock.environments[id] ?? null) : null),
+}));
+vi.mock("../../state/filesystem", () => ({
+  filesystemEnvironment: { browse: (target: unknown) => ({ browse: target }) },
+}));
+vi.mock("../../state/query", () => ({
+  useEnvironmentQuery: (atom: { browse: (typeof mock.queried)[number] } | null) => {
+    if (!atom) return { data: null, error: null, isPending: false, isSuccess: false };
+    mock.queried.push(atom.browse);
+    const reply = mock.listings[`${atom.browse.environmentId}:${atom.browse.input.partialPath}`];
+    return {
+      data: reply?.data ?? null,
+      error: reply?.error ?? null,
+      isPending: !reply,
+      isSuccess: Boolean(reply?.data),
+    };
+  },
+}));
+vi.mock("../../state/use-atom-query-runner", () => ({ useAtomQueryRunner: () => mock.load }));
+vi.mock("../CommandPaletteContent", () => ({ CommandPaletteContent: "palette-content" }));
+vi.mock("../CommandPaletteResults", () => ({ CommandPaletteResults: "palette-results" }));
 vi.mock("../../state/delivery", async (original) => ({
   ...(await original<typeof import("../../state/delivery")>()),
   useDeliveryRead: () => mock.reading,
@@ -57,6 +91,11 @@ vi.mock("../ui/button", () => ({ Button: "button" }));
 vi.mock("../ui/input", () => ({ Input: "input" }));
 vi.mock("../ui/textarea", () => ({ Textarea: "textarea" }));
 vi.mock("../ui/checkbox", () => ({ Checkbox: "checkbox" }));
+vi.mock("../ui/tooltip", () => ({
+  Tooltip: "tooltip-root",
+  TooltipTrigger: "tooltip-trigger",
+  TooltipPopup: "tooltip-popup",
+}));
 
 const ENV = EnvironmentId.make("env-a");
 const OTHER = EnvironmentId.make("env-b");
@@ -260,6 +299,8 @@ describe("BoardDialog repository list", () => {
     mock.reading = { body: [], error: null, isPending: false, refresh: vi.fn() };
     mock.action = vi.fn();
     mock.projects = [];
+    mock.environments = {};
+    mock.listings = {};
     saved.mockReset();
   });
   afterEach(async () => {
@@ -401,24 +442,6 @@ describe("BoardDialog repository list", () => {
     expect(mock.reading.refresh).not.toHaveBeenCalled();
   });
 
-  it("still adds a repository by its folder", async () => {
-    mock.action.mockResolvedValueOnce({ ok: true, body: { id: "r5", defaultBase: "main" } });
-    await render();
-    await choose("__add_repository__");
-    const folder = renderer!.root.findByProps({ "data-board-dialog-folder": true });
-    await act(() => folder.props.onChange({ target: { value: "/work/typed/" } }));
-    await act(async () =>
-      renderer!.root.findByProps({ "data-board-dialog-add-repository": true }).props.onClick(),
-    );
-    expect(mock.action).toHaveBeenCalledWith("/api/repositories", {
-      path: "/work/typed/",
-      title: "typed",
-      by: "person",
-    });
-    expect(repositorySelect().props.value).toBe("r5");
-    expect(baseSelect().props.value).toBe("main");
-  });
-
   it("leaves an unchanged binding out of what an edited board saves", async () => {
     mock.reading.body = [engineRepo("r1", "/work/a")];
     await render({
@@ -437,5 +460,400 @@ describe("BoardDialog repository list", () => {
     });
     await act(() => saveButton().props.onClick());
     expect(saved).toHaveBeenCalledWith({ title: "Board", description: "" });
+  });
+});
+
+const entriesOf = (parentPath: string, names: ReadonlyArray<string>) => {
+  const separator = parentPath.includes("\\") ? "\\" : "/";
+  return names.map((name) => ({
+    name,
+    fullPath: `${parentPath.replace(/[\\/]$/, "")}${separator}${name}`,
+  }));
+};
+const listing = (parentPath: string, names: ReadonlyArray<string>) => ({
+  parentPath,
+  entries: entriesOf(parentPath, names),
+});
+
+describe("resolveBrowseFolder", () => {
+  const resolve = (
+    query: string,
+    data: ReturnType<typeof listing> | null,
+    extra: Partial<Parameters<typeof resolveBrowseFolder>[0]> = {},
+  ) =>
+    resolveBrowseFolder({
+      query,
+      platform: "MacIntel",
+      connected: true,
+      data,
+      error: null,
+      isPending: false,
+      ...extra,
+    });
+
+  it("takes a folder query's server-resolved path, after home is expanded", () => {
+    expect(resolve("~/work/", listing("/home/u/work", ["a"])).path).toBe("/home/u/work");
+    expect(resolve("~/", listing("/home/u", ["work"])).path).toBe("/home/u");
+    expect(resolve("/", listing("/", ["home"])).path).toBe("/");
+  });
+
+  it("takes the exact entry's full path for a leaf, with spaces or a leading dot", () => {
+    const home = listing("/home/u", ["my repo", ".config", "work", "workshop"]);
+    expect(resolve("~/my repo", home).path).toBe("/home/u/my repo");
+    expect(resolve("~/.config", home).path).toBe("/home/u/.config");
+    expect(resolve("~/work", home).path).toBe("/home/u/work");
+  });
+
+  it("resolves Windows roots and folders only on a Windows environment", () => {
+    const drive = listing("C:\\", ["Users"]);
+    expect(resolve("C:\\", drive, { platform: "Win32" }).path).toBe("C:\\");
+    expect(resolve("C:\\Users", drive, { platform: "Win32" }).path).toBe("C:\\Users");
+    expect(resolve("C:\\Users", drive).why).toBe("Use an absolute or ~/ path.");
+  });
+
+  it("never falls back to the typed text", () => {
+    const home = listing("/home/u", ["work"]);
+    expect(resolve("", home)).toEqual({ path: null, why: "Choose a folder." });
+    expect(resolve("~/wo", home)).toEqual({ path: null, why: "Choose a folder." });
+    expect(resolve("./x/", home).why).toBe("Use an absolute or ~/ path.");
+    expect(resolve("work/x", home).why).toBe("Use an absolute or ~/ path.");
+    expect(resolve("~/work/", null, { isPending: true }).why).toBe("Reading…");
+    expect(resolve("~/work/", null, { error: "No such folder" }).why).toBe("No such folder");
+    expect(resolve("~/work/", home, { connected: false }).why).toBe("Not connected.");
+  });
+});
+
+describe("suggestedRepositoryName", () => {
+  it("names a known T3 project by its repository, and any other folder by its own name", () => {
+    const projects = [
+      project("p1", "/home/u/proj", { repositoryIdentity: { displayName: "Proj" } }),
+      project("p2", "/home/u/elsewhere", { environmentId: OTHER, title: "Other" }),
+    ];
+    expect(suggestedRepositoryName("/home/u/proj/", projects, ENV)).toBe("Proj");
+    expect(suggestedRepositoryName("/home/u/elsewhere", projects, ENV)).toBe("elsewhere");
+    expect(suggestedRepositoryName("/home/u/plain", projects, ENV)).toBe("plain");
+  });
+  it("matches a Windows project whatever its case", () => {
+    const projects = [project("p1", "C:\\Work\\Repo", { repositoryIdentity: { name: "repo-x" } })];
+    expect(suggestedRepositoryName("c:\\work\\repo", projects, ENV)).toBe("repo-x");
+  });
+});
+
+describe("browse settings", () => {
+  it("starts at home, or at the environment's add-project folder", () => {
+    expect(initialBrowseQuery(undefined)).toBe("~/");
+    expect(initialBrowseQuery("  ")).toBe("~/");
+    expect(initialBrowseQuery("/srv/code")).toBe("/srv/code/");
+    expect(initialBrowseQuery("C:\\code")).toBe("C:\\code\\");
+  });
+  it("maps the environment's os to a browse platform", () => {
+    expect(environmentBrowsePlatform("windows")).toBe("Win32");
+    expect(environmentBrowsePlatform("darwin")).toBe("MacIntel");
+  });
+});
+
+describe("BoardDialog adds a repository by browsing", () => {
+  let renderer: ReactTestRenderer | undefined;
+  const environment = (
+    extra: Partial<{ os: string; base: string; phase: string }> = {},
+  ): unknown => ({
+    serverConfig: {
+      settings: { addProjectBaseDirectory: extra.base ?? "" },
+      environment: { platform: { os: extra.os ?? "darwin" } },
+    },
+    connection: { phase: extra.phase ?? "connected" },
+  });
+  const view = (environmentId: EnvironmentId) => (
+    <BoardDialog
+      kind="board"
+      editing={null}
+      environmentId={environmentId}
+      by="person"
+      busy={false}
+      problem={null}
+      onClose={() => undefined}
+      onSave={() => undefined}
+    />
+  );
+  async function render(environmentId: EnvironmentId = ENV) {
+    await act(() => {
+      if (renderer) renderer.update(view(environmentId));
+      else renderer = create(view(environmentId));
+    });
+  }
+  const find = (prop: string) => renderer!.root.findByProps({ [prop]: true });
+  const repositorySelect = () => renderer!.root.findAllByType("select-root" as never)[0]!;
+  const baseSelect = () => renderer!.root.findAllByType("select-root" as never)[1]!;
+  async function openAdd() {
+    await act(async () => repositorySelect().props.onValueChange("__add_repository__"));
+  }
+  const palette = () => renderer!.root.findByType("palette-content" as never);
+  const results = () => renderer!.root.findByType("palette-results" as never);
+  const rows = (): Array<{ value: string; title: string; run: () => Promise<void> }> =>
+    results().props.groups.flatMap((group: { items: Array<unknown> }) => group.items);
+  const rowValues = () => rows().map((row) => row.value);
+  async function type(value: string) {
+    await act(async () => palette().props.onValueChange(value));
+  }
+  async function run(value: string) {
+    await act(async () => {
+      await rows()
+        .find((row) => row.value === value)!
+        .run();
+    });
+  }
+  const folderShown = () => renderer!.root.findByType("tooltip-trigger" as never).children.join("");
+  const nameInput = () => find("data-board-dialog-repository-name");
+  const addButton = () => find("data-board-dialog-add-repository");
+  const why = () => renderer!.root.findAllByProps({ "data-board-dialog-add-why": true })[0];
+  const paths = () => mock.queried.map((item) => `${item.environmentId}:${item.input.partialPath}`);
+
+  beforeEach(() => {
+    mock.reading = { body: [], error: null, isPending: false, refresh: vi.fn() };
+    mock.action = vi.fn();
+    mock.projects = [];
+    mock.environments = { [ENV]: environment() };
+    mock.listings = {
+      [`${ENV}:~/`]: { data: listing("/home/u", ["work", "proj", ".hidden"]) },
+      [`${ENV}:~/work/`]: { data: listing("/home/u/work", ["typed", "other"]) },
+      [`${ENV}:~/work/typed/`]: { data: listing("/home/u/work/typed", []) },
+      [`${ENV}:~/work/other/`]: { data: listing("/home/u/work/other", []) },
+      [`${ENV}:~/proj/`]: { data: listing("/home/u/proj", []) },
+      [`${ENV}:/Users/x/`]: { data: listing("/Users/x", ["code"]) },
+      [`${ENV}:/`]: { data: listing("/", ["Users"]) },
+    };
+    mock.queried = [];
+    mock.load = vi.fn().mockResolvedValue({ _tag: "Success" });
+  });
+  afterEach(async () => {
+    await act(() => renderer?.unmount());
+    renderer = undefined;
+  });
+
+  it("starts at home, lists its folders without hidden ones, and offers no Up there", async () => {
+    await render();
+    await openAdd();
+    expect(palette().props.value).toBe("~/");
+    expect(mock.queried.at(-1)).toEqual({ environmentId: ENV, input: { partialPath: "~/" } });
+    expect(rows().map((row) => row.title)).toEqual(["work", "proj"]);
+  });
+
+  it("starts at the environment's add-project folder when it has one", async () => {
+    mock.environments = { [ENV]: environment({ base: "/Users/x" }) };
+    await render();
+    await openAdd();
+    expect(palette().props.value).toBe("/Users/x/");
+    expect(rowValues()).toEqual(["browse:up", "browse:/Users/x/code"]);
+  });
+
+  it("filters as a path is typed, and resolves only an exact folder", async () => {
+    await render();
+    await openAdd();
+    await type("~/wo");
+    expect(rows().map((row) => row.title)).toEqual(["work"]);
+    expect(addButton().props.disabled).toBe(true);
+    expect(why()!.children.join("")).toBe("Choose a folder.");
+    await type("~/work");
+    expect(folderShown()).toBe("Folder: /home/u/work");
+    expect(nameInput().props.value).toBe("work");
+    expect(addButton().props.disabled).toBe(false);
+  });
+
+  it("goes up to the parent, and offers no Up at the root", async () => {
+    mock.environments = { [ENV]: environment({ base: "/Users/x" }) };
+    await render();
+    await openAdd();
+    await run("browse:up");
+    expect(mock.load).toHaveBeenLastCalledWith({
+      environmentId: ENV,
+      input: { partialPath: "/Users/" },
+    });
+    expect(palette().props.value).toBe("/Users/");
+    await type("/");
+    expect(rowValues()).toEqual(["browse:/Users"]);
+  });
+
+  it("moves into a picked folder after its listing loads", async () => {
+    await render();
+    await openAdd();
+    await run("browse:/home/u/work");
+    expect(mock.load).toHaveBeenLastCalledWith({
+      environmentId: ENV,
+      input: { partialPath: "~/work/" },
+    });
+    expect(palette().props.value).toBe("~/work/");
+    expect(rows().map((row) => row.title)).toEqual(["..", "typed", "other"]);
+    expect(folderShown()).toBe("Folder: /home/u/work");
+  });
+
+  it("keeps only the latest move, and typing beats a move still loading", async () => {
+    await render();
+    await openAdd();
+    const first = deferred<unknown>();
+    const second = deferred<unknown>();
+    mock.load.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
+    let moves: Array<Promise<void>> = [];
+    await act(async () => {
+      moves = [rows()[0]!.run(), rows()[1]!.run()];
+    });
+    await act(async () => {
+      second.resolve({});
+      first.resolve({});
+      await Promise.all(moves);
+    });
+    expect(palette().props.value).toBe("~/proj/");
+
+    const late = deferred<unknown>();
+    mock.load.mockReturnValueOnce(late.promise);
+    await type("~/");
+    let move: Promise<void> = Promise.resolve();
+    await act(async () => {
+      move = rows()[0]!.run();
+    });
+    await type("~/wo");
+    await act(async () => {
+      late.resolve({});
+      await move;
+    });
+    expect(palette().props.value).toBe("~/wo");
+  });
+
+  it("posts the server-resolved path and suggested name, and selects the repository", async () => {
+    mock.action.mockResolvedValueOnce({ ok: true, body: { id: "r5", defaultBase: "main" } });
+    await render();
+    await openAdd();
+    await type("~/work/typed/");
+    expect(nameInput().props.value).toBe("typed");
+    await act(async () => addButton().props.onClick());
+    expect(mock.action).toHaveBeenCalledWith("/api/repositories", {
+      path: "/home/u/work/typed",
+      title: "typed",
+      by: "person",
+    });
+    expect(repositorySelect().props.value).toBe("r5");
+    expect(baseSelect().props.value).toBe("main");
+    expect(renderer!.root.findAllByType("palette-content" as never)).toHaveLength(0);
+  });
+
+  it("names a known T3 project by its repository, matched after home is expanded", async () => {
+    mock.projects = [
+      project("p1", "/home/u/proj", { title: "proj", repositoryIdentity: { displayName: "Proj" } }),
+    ];
+    await render();
+    await openAdd();
+    await type("~/proj/");
+    expect(nameInput().props.value).toBe("Proj");
+  });
+
+  it("keeps an edited name for its folder, replaces it for another, and blocks a blank one", async () => {
+    mock.action.mockResolvedValueOnce({ ok: true, body: { id: "r6", defaultBase: "main" } });
+    await render();
+    await openAdd();
+    await type("~/work/typed/");
+    await act(() => nameInput().props.onChange({ target: { value: "My repo" } }));
+    await render();
+    expect(nameInput().props.value).toBe("My repo");
+    await type("~/work/other/");
+    expect(nameInput().props.value).toBe("other");
+    await act(() => nameInput().props.onChange({ target: { value: "  " } }));
+    expect(addButton().props.disabled).toBe(true);
+    expect(why()!.children.join("")).toBe("Name is empty.");
+    await act(async () => addButton().props.onClick());
+    expect(mock.action).not.toHaveBeenCalled();
+    await act(() => nameInput().props.onChange({ target: { value: " Other one " } }));
+    await act(async () => addButton().props.onClick());
+    expect(mock.action).toHaveBeenCalledWith("/api/repositories", {
+      path: "/home/u/work/other",
+      title: "Other one",
+      by: "person",
+    });
+  });
+
+  it.each([
+    ["a relative path", "./x/", "Use an absolute or ~/ path."],
+    ["an empty path", "", "Choose a folder."],
+    ["a folder still being read", "~/unread/", "Reading…"],
+    ["a folder that cannot be read", "~/broken/", "No such folder"],
+  ])("adds nothing for %s", async (_, query, reason) => {
+    mock.listings[`${ENV}:~/broken/`] = { error: "No such folder" };
+    await render();
+    await openAdd();
+    await type(query);
+    expect(addButton().props.disabled).toBe(true);
+    expect(why()!.children.join("")).toBe(reason);
+    await act(async () => addButton().props.onClick());
+    expect(mock.action).not.toHaveBeenCalled();
+    expect(paths()).not.toContain(`${ENV}:./x/`);
+  });
+
+  it("adds nothing while the environment is not connected", async () => {
+    mock.environments = { [ENV]: environment({ phase: "disconnected" }) };
+    await render();
+    await openAdd();
+    await type("~/work/");
+    expect(why()!.children.join("")).toBe("Not connected.");
+    await act(async () => addButton().props.onClick());
+    expect(mock.action).not.toHaveBeenCalled();
+  });
+
+  it("browses Windows paths only on a Windows environment", async () => {
+    mock.environments = { [ENV]: environment({ os: "windows" }) };
+    await render();
+    await openAdd();
+    await type("C:/Users/");
+    expect(paths().at(-1)).toBe(`${ENV}:C:/Users/`);
+    await act(() => renderer!.unmount());
+    renderer = undefined;
+    mock.queried = [];
+    mock.environments = { [ENV]: environment({ os: "darwin" }) };
+    await render();
+    await openAdd();
+    await type("C:/Users/");
+    expect(paths()).not.toContain(`${ENV}:C:/Users/`);
+  });
+
+  it("never adds the previous environment's folder after the environment changes", async () => {
+    mock.environments = { [ENV]: environment(), [OTHER]: environment() };
+    await render();
+    await openAdd();
+    await type("~/work/typed/");
+    expect(addButton().props.disabled).toBe(false);
+    await render(OTHER);
+    if (renderer!.root.findAllByType("palette-content" as never).length === 0) await openAdd();
+    expect(palette().props.value).toBe("~/");
+    expect(paths().at(-1)).toBe(`${OTHER}:~/`);
+    expect(addButton().props.disabled).toBe(true);
+    await act(async () => addButton().props.onClick());
+    expect(mock.action).not.toHaveBeenCalled();
+  });
+
+  it("lets go of an add cancelled while it runs, and leaves the reopened form alone", async () => {
+    const reply = deferred<unknown>();
+    mock.action.mockReturnValue(reply.promise);
+    await render();
+    await openAdd();
+    await type("~/work/typed/");
+    await act(async () => addButton().props.onClick());
+    expect(repositorySelect().props.disabled).toBe(true);
+    await act(async () => find("data-board-dialog-add-cancel").props.onClick());
+    expect(repositorySelect().props.disabled).toBe(false);
+    await openAdd();
+    expect(palette().props.value).toBe("~/");
+    await act(async () => reply.resolve({ ok: true, body: { id: "r7", defaultBase: "main" } }));
+    expect(mock.reading.refresh).not.toHaveBeenCalled();
+    expect(repositorySelect().props.value).toBeNull();
+    expect(repositorySelect().props.disabled).toBe(false);
+    expect(palette().props.value).toBe("~/");
+    expect(addButton().props.disabled).toBe(false);
+    expect(folderShown()).toBe("Folder: /home/u");
+  });
+
+  it("cancels the add on Escape without the key reaching the board dialog", async () => {
+    await render();
+    await openAdd();
+    const event = { key: "Escape", preventDefault: vi.fn(), stopPropagation: vi.fn() };
+    await act(async () => palette().props.inputProps.onKeyDown(event));
+    expect(event.stopPropagation).toHaveBeenCalled();
+    expect(renderer!.root.findAllByType("palette-content" as never)).toHaveLength(0);
   });
 });

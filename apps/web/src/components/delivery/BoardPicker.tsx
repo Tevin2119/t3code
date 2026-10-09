@@ -18,6 +18,7 @@ import {
   repositoryInFolder,
   type RepositoryChoice,
 } from "./BoardPicker.repositories";
+import { RepositoryBrowse } from "./BoardPicker.browse";
 
 import { Button } from "../ui/button";
 import { Checkbox } from "../ui/checkbox";
@@ -346,14 +347,6 @@ export function BoardDialog(props: {
     // oxlint-disable-next-line react/exhaustive-effect-dependencies -- Resets when the environment changes.
     [props.environmentId],
   );
-  const [folder, setFolder] = useState("");
-  const [repoName, setRepoName] = useState("");
-  const folderName =
-    folder
-      .trim()
-      .replace(/[\\/]+$/, "")
-      .split(/[\\/]/)
-      .pop() ?? "";
   const [addProblem, setAddProblem] = useState<string | null>(null);
   const chosen = repositories.find((item) => item.id === repository) ?? null;
   const name = title.trim() || (isBoard && !props.editing ? (chosen?.title ?? "") : "");
@@ -404,20 +397,37 @@ export function BoardDialog(props: {
       }
     }
   };
-  const addRepository = async () => {
-    if (registeringRef.current) return;
+  const repositoryTrigger = useRef<HTMLButtonElement>(null);
+  const baseTrigger = useRef<HTMLButtonElement>(null);
+  // Where focus goes once the add form closes: back to the list, or on to the added one's branch.
+  const focusAfterAdd = useRef<"repository" | "base" | null>(null);
+  useEffect(() => {
+    if (adding || !focusAfterAdd.current) return;
+    (focusAfterAdd.current === "base" ? baseTrigger : repositoryTrigger).current?.focus();
+    focusAfterAdd.current = null;
+  }, [adding]);
+  const addRepository = async (path: string, repositoryTitle: string) => {
+    if (registeringRef.current || !path || !repositoryTitle.trim()) return;
     setAddProblem(null);
     setChooseProblem(null);
-    const outcome = await register(folder.trim(), repoName.trim() || folderName);
+    const outcome = await register(path, repositoryTitle.trim());
     if (!outcome) return;
     if (!outcome.ok) {
       setAddProblem(outcome.why);
       return;
     }
     select(outcome.repository);
+    focusAfterAdd.current = "base";
     setAdding(false);
-    setFolder("");
-    setRepoName("");
+  };
+  /** Closes the add form. An add still going is let go here, though the engine may finish it. */
+  const cancelAdd = () => {
+    generation.current += 1;
+    registeringRef.current = false;
+    setRegistering(null);
+    setAddProblem(null);
+    focusAfterAdd.current = "repository";
+    setAdding(false);
   };
   const choiceFor = (value: string): RepositoryChoice | null => {
     const listed = choices.find((choice) => choice.value === value);
@@ -433,6 +443,7 @@ export function BoardDialog(props: {
     if (registeringRef.current) return;
     setChooseProblem(null);
     if (value === ADD_REPOSITORY) {
+      setAddProblem(null);
       setAdding(true);
       return;
     }
@@ -485,6 +496,7 @@ export function BoardDialog(props: {
                   disabled={registering !== null}
                 >
                   <SelectTrigger
+                    ref={repositoryTrigger}
                     aria-label="Repository"
                     size="compact"
                     data-board-dialog-repository
@@ -559,40 +571,16 @@ export function BoardDialog(props: {
               >
                 {chooseProblem}
               </p>
-              {adding ? (
-                <div className="flex flex-col gap-1 rounded-md border border-border p-2">
-                  <Input
-                    aria-label="Folder of the repository"
-                    placeholder="C:/path/to/the/repository"
-                    value={folder}
-                    onChange={(event) => setFolder(event.target.value)}
-                    data-board-dialog-folder
-                  />
-                  <Input
-                    aria-label="Name of the repository"
-                    placeholder={folderName ? `Name (${folderName})` : "Name of the repository"}
-                    value={repoName}
-                    onChange={(event) => setRepoName(event.target.value)}
-                    data-board-dialog-repository-name
-                  />
-                  <span className="text-[11px] text-muted-foreground">
-                    The folder is read, not changed. Work is done in worktrees made beside it.
-                  </span>
-                  {addProblem ? <span className="text-xs text-warning">{addProblem}</span> : null}
-                  <span className="flex justify-end gap-2">
-                    <Button size="xs" variant="ghost" onClick={() => setAdding(false)}>
-                      Cancel
-                    </Button>
-                    <Button
-                      size="xs"
-                      disabled={!folder.trim() || registering !== null}
-                      onClick={() => void addRepository()}
-                      data-board-dialog-add-repository
-                    >
-                      Add repository
-                    </Button>
-                  </span>
-                </div>
+              {adding && props.environmentId ? (
+                <RepositoryBrowse
+                  key={props.environmentId}
+                  environmentId={props.environmentId}
+                  projects={projects}
+                  registering={registering !== null}
+                  problem={addProblem}
+                  onCancel={cancelAdd}
+                  onAdd={(path, repositoryTitle) => void addRepository(path, repositoryTitle)}
+                />
               ) : null}
               <label className="flex flex-col gap-1">
                 <span className="text-xs font-medium">Base branch</span>
@@ -601,7 +589,12 @@ export function BoardDialog(props: {
                   onValueChange={(value) => setBase(String(value ?? ""))}
                   disabled={!chosen || registering !== null}
                 >
-                  <SelectTrigger aria-label="Base branch" size="compact" data-board-dialog-base>
+                  <SelectTrigger
+                    ref={baseTrigger}
+                    aria-label="Base branch"
+                    size="compact"
+                    data-board-dialog-base
+                  >
                     <SelectValue placeholder="Choose a repository first">
                       {base || undefined}
                     </SelectValue>
