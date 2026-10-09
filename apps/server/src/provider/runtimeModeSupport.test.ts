@@ -12,7 +12,7 @@ import {
   PI_RUNTIME_MODES,
   runtimeModeProblem,
   runtimeModeSupport,
-} from "./runtimeModeSupport.ts";
+} from "@t3tools/provider-core/server/runtimeModeSupport";
 
 const available = (support: ReturnType<typeof runtimeModeSupport>) =>
   support.filter((item) => item.available).map((item) => item.mode);

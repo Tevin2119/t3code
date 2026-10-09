@@ -1,6 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off - joins paths inside a scoped temp directory.
 import * as NodePath from "node:path";
-import { ProviderDriverKind } from "@t3tools/contracts";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
@@ -14,9 +13,10 @@ import {
   kimiUsageResponseToLimits,
   readKimiUsageLimits,
 } from "./kimiUsageLimits.ts";
-import { mergeOpenCodeUsageLimits, readOpenCodeZaiUsageLimits } from "./openCodeUsageLimits.ts";
-import { chatGptQuotaGroup, chatGptUsageResponseToLimits } from "./piUsageLimits.ts";
-import { zaiOriginForBaseUrl, zaiQuotaResponseToLimits } from "./zaiUsageLimits.ts";
+import {
+  zaiOriginForBaseUrl,
+  zaiQuotaResponseToLimits,
+} from "@t3tools/provider-core/server/zaiUsageLimits";
 
 const checkedAt = "2026-09-27T09:00:00.000Z";
 
@@ -261,112 +261,4 @@ it.layer(NodeServices.layer)("readKimiUsageLimits", (it) => {
       expect(limits.unavailable?.reason).toBe("unsupported");
     }).pipe(Effect.scoped),
   );
-});
-
-describe("chatGptUsageResponseToLimits", () => {
-  it("identifies a shared ChatGPT account without retaining the bearer token", () => {
-    const payload = Buffer.from(
-      '{"https://api.openai.com/profile":{"email":"Same@Example.com"}}',
-    ).toString("base64url");
-    expect(chatGptQuotaGroup(`header.${payload}.signature`)).toEqual({
-      driver: "codex",
-      accountKey: "codex:same@example.com",
-      label: "ChatGPT",
-    });
-    expect(chatGptQuotaGroup("invalid")).toBeUndefined();
-  });
-  it("names a lone weekly window by its duration, not its position", () => {
-    const limits = chatGptUsageResponseToLimits(
-      {
-        plan_type: "prolite",
-        rate_limit: {
-          primary_window: { used_percent: 9, limit_window_seconds: 604800, reset_at: 1791102562 },
-          secondary_window: null,
-        },
-      },
-      checkedAt,
-    );
-    expect(limits.windows).toEqual([
-      {
-        id: "primary",
-        kind: "weekly",
-        label: "Weekly",
-        usedPercent: 9,
-        windowDurationMins: 10080,
-        resetsAt: "2026-10-04T08:29:22.000Z",
-      },
-    ]);
-    expect(chatGptUsageResponseToLimits({}, checkedAt).unavailable?.reason).toBe("unsupported");
-  });
-});
-
-it.layer(NodeServices.layer)("readOpenCodeZaiUsageLimits", (it) => {
-  it.effect("reads the coding plan key OpenCode stores and prefixes the plan name", () =>
-    Effect.gen(function* () {
-      const limits = yield* readOpenCodeZaiUsageLimits({
-        enabled: true,
-        serverUrl: "",
-        environment: {
-          OPENCODE_AUTH_CONTENT: '{"zai-coding-plan":{"type":"api","key":"glm.key"}}',
-        },
-      }).pipe(
-        Effect.provideService(
-          HttpClient.HttpClient,
-          jsonClient(ZAI_RESPONSE, (request) => {
-            expect(request.url).toBe("https://api.z.ai/api/monitor/usage/quota/limit");
-            expect(request.authorization).toBe("Bearer glm.key");
-          }),
-        ),
-      );
-      expect(limits.windows.map((window) => window.label)).toEqual([
-        "GLM · Session",
-        "GLM · Weekly",
-      ]);
-    }),
-  );
-
-  it.effect("leaves external servers and installs without the plan alone", () =>
-    Effect.gen(function* () {
-      const noRequest = HttpClient.make(() => Effect.die("must not call Z.AI"));
-      for (const input of [
-        { enabled: true, serverUrl: "http://remote:4096", environment: {} },
-        { enabled: true, serverUrl: "", environment: { OPENCODE_AUTH_CONTENT: "{}" } },
-      ]) {
-        const limits = yield* readOpenCodeZaiUsageLimits(input).pipe(
-          Effect.provideService(HttpClient.HttpClient, noRequest),
-        );
-        expect(limits.unavailable?.reason).toBe("unsupported");
-      }
-    }),
-  );
-});
-
-describe("mergeOpenCodeUsageLimits", () => {
-  const unsupported = { checkedAt, windows: [], unavailable: { reason: "unsupported" as const } };
-  const failed = { checkedAt, windows: [], unavailable: { reason: "probeFailed" as const } };
-  const glm = zaiQuotaResponseToLimits(ZAI_RESPONSE, checkedAt, "GLM · ");
-
-  it("shows the plans that reported and hides a failure beside them", () => {
-    expect(mergeOpenCodeUsageLimits(checkedAt, [failed, glm]).windows).toHaveLength(2);
-    expect(mergeOpenCodeUsageLimits(checkedAt, [failed, glm]).unavailable).toBeUndefined();
-  });
-
-  it("reports a failure only when no plan reported", () => {
-    expect(mergeOpenCodeUsageLimits(checkedAt, [unsupported, failed]).unavailable?.reason).toBe(
-      "probeFailed",
-    );
-    expect(
-      mergeOpenCodeUsageLimits(checkedAt, [unsupported, unsupported]).unavailable?.reason,
-    ).toBe("unsupported");
-  });
-  it("preserves a single plan's account group but never merges mixed subscriptions", () => {
-    const group = {
-      driver: ProviderDriverKind.make("hermes"),
-      accountKey: "zai:one",
-      label: "GLM Coding Plan",
-    };
-    const grouped = { ...glm, quotaGroup: group };
-    expect(mergeOpenCodeUsageLimits(checkedAt, [unsupported, grouped]).quotaGroup).toEqual(group);
-    expect(mergeOpenCodeUsageLimits(checkedAt, [glm, grouped]).quotaGroup).toBeUndefined();
-  });
 });

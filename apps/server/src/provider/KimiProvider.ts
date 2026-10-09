@@ -34,8 +34,8 @@ import {
   providerModelsFromSettings,
   spawnAndCollect,
   type ServerProviderDraft,
-} from "./providerSnapshot.ts";
-import { KIMI_RUNTIME_MODES } from "./runtimeModeSupport.ts";
+} from "@t3tools/provider-core/server/snapshotProbe";
+import { KIMI_RUNTIME_MODES } from "@t3tools/provider-core/server/runtimeModeSupport";
 import { ACP_OPTION_HARNESS_DEFAULT } from "./acp/AcpSessionOption.ts";
 
 const KIMI_PRESENTATION = {

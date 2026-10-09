@@ -12,8 +12,11 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 
-import { makeUnavailableUsageLimits } from "./providerUsageLimits.ts";
-import { fetchZaiUsageLimits, zaiOriginForBaseUrl } from "./zaiUsageLimits.ts";
+import { makeUnavailableUsageLimits } from "@t3tools/provider-core/server/usageLimits";
+import {
+  fetchZaiUsageLimits,
+  zaiOriginForBaseUrl,
+} from "@t3tools/provider-core/server/zaiUsageLimits";
 
 const ZAI_KEY_NAMES = ["GLM_API_KEY", "ZAI_API_KEY", "Z_AI_API_KEY"] as const;
 

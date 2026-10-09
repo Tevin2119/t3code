@@ -21,12 +21,11 @@ import * as Schema from "effect/Schema";
 import { HttpClient } from "effect/http";
 import { ChildProcessSpawner } from "effect/process";
 
-import * as ServerConfig from "../../config.ts";
-import * as IdAllocator from "../../orchestration-v2/IdAllocator.ts";
+import type { AcpAdapterV2Env } from "@t3tools/provider-acp/server/adapter";
+import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
+import * as ProviderHost from "@t3tools/provider-core/server/ProviderHost";
 import { resolveSelfInvocation } from "@t3tools/shared/nodeRuntime";
-import { makeAcpNativeLoggerFactory } from "../acp/AcpNativeLogging.ts";
-import * as BackgroundPolicy from "../../background/BackgroundPolicy.ts";
-import { ServerSettingsService } from "../../serverSettings.ts";
+import { makeAcpNativeLoggerFactory } from "@t3tools/provider-acp/server/nativeLogging";
 import { makeDeepSeekTextGeneration } from "../../textGeneration/DeepSeekTextGeneration.ts";
 import {
   makeDeepSeekAcpRuntime,
@@ -42,21 +41,21 @@ import {
   checkDeepSeekProviderStatus,
   probeDeepSeekAuthenticated,
 } from "../DeepSeekProvider.ts";
-import { ProviderEventLoggers } from "../ProviderEventLoggers.ts";
-import { makeManagedServerProvider } from "../makeManagedServerProvider.ts";
+import { ProviderEventLoggers } from "@t3tools/provider-core/server/ProviderEventLoggers";
+import { makeManagedServerProvider } from "@t3tools/provider-core/server/managedProvider";
 import {
   defaultProviderContinuationIdentity,
   type ProviderDriver,
   type ProviderInstance,
-} from "../ProviderDriver.ts";
-import { mergeProviderInstanceEnvironment } from "../ProviderInstanceEnvironment.ts";
-import { makeManualOnlyProviderMaintenanceCapabilities } from "../providerMaintenance.ts";
+} from "@t3tools/provider-core/server/driver";
+import { mergeProviderInstanceEnvironment } from "@t3tools/provider-core/server/instanceEnvironment";
+import { makeManualOnlyProviderMaintenanceCapabilities } from "@t3tools/provider-core/server/maintenanceResolver";
 import {
   haveProviderSnapshotSettingsChanged,
   makeProviderSnapshotSettingsSource,
   type ProviderSnapshotSettings,
-} from "../providerUpdateSettings.ts";
-import { withInstanceIdentity } from "./instanceIdentity.ts";
+} from "@t3tools/provider-core/server/snapshotSettings";
+import { withInstanceIdentity } from "@t3tools/provider-core/server/instanceIdentity";
 
 const decodeDeepSeekSettings = Schema.decodeSync(DeepSeekSettings);
 
@@ -67,16 +66,15 @@ const MAINTENANCE_CAPABILITIES = makeManualOnlyProviderMaintenanceCapabilities({
 });
 
 export type DeepSeekDriverEnv =
-  | ServerConfig.ServerConfig
+  | AcpAdapterV2Env
   | IdAllocator.IdAllocatorV2
-  | BackgroundPolicy.BackgroundPolicy
+  | ProviderHost.ProviderHost
   | ChildProcessSpawner.ChildProcessSpawner
   | Crypto.Crypto
   | FileSystem.FileSystem
   | HttpClient.HttpClient
   | Path.Path
-  | ProviderEventLoggers
-  | ServerSettingsService;
+  | ProviderEventLoggers;
 
 export const DeepSeekDriver: ProviderDriver<DeepSeekSettings, DeepSeekDriverEnv> = {
   driverKind: DRIVER_KIND,
@@ -93,10 +91,7 @@ export const DeepSeekDriver: ProviderDriver<DeepSeekSettings, DeepSeekDriverEnv>
       const fileSystem = yield* FileSystem.FileSystem;
       const httpClient = yield* HttpClient.HttpClient;
       const path = yield* Path.Path;
-      const serverSettings = yield* ServerSettingsService;
       const eventLoggers = yield* ProviderEventLoggers;
-      const serverConfig = yield* ServerConfig.ServerConfig;
-      const idAllocator = yield* IdAllocator.IdAllocatorV2;
       const selfInvocation = yield* resolveSelfInvocation().pipe(
         Effect.mapError(
           (cause) =>
@@ -137,13 +132,9 @@ export const DeepSeekDriver: ProviderDriver<DeepSeekSettings, DeepSeekDriverEnv>
           childProcessSpawner: spawner,
         }).pipe(Effect.provideService(Crypto.Crypto, crypto));
 
-      const orchestrationAdapter = makeDeepSeekAdapter(effectiveConfig, {
+      const orchestrationAdapter = yield* makeDeepSeekAdapter(effectiveConfig, {
         instanceId,
         makeRuntime,
-        crypto,
-        fileSystem,
-        serverConfig,
-        idAllocator,
         selfInvocation,
         nativeLogging: (threadId) =>
           makeNativeLogger({
@@ -170,7 +161,7 @@ export const DeepSeekDriver: ProviderDriver<DeepSeekSettings, DeepSeekDriverEnv>
         Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
       );
 
-      const snapshotSettings = makeProviderSnapshotSettingsSource(effectiveConfig, serverSettings);
+      const snapshotSettings = yield* makeProviderSnapshotSettingsSource(effectiveConfig);
       const snapshot = yield* makeManagedServerProvider<ProviderSnapshotSettings<DeepSeekSettings>>(
         {
           resolveMaintenance: () => Effect.succeed(MAINTENANCE_CAPABILITIES),

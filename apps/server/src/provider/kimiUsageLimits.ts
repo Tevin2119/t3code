@@ -22,7 +22,7 @@ import {
   clampPercent,
   makeUnavailableUsageLimits,
   makeUsageLimits,
-} from "./providerUsageLimits.ts";
+} from "@t3tools/provider-core/server/usageLimits";
 
 const DEFAULT_BASE_URL = "https://api.kimi.com/coding/v1";
 const SESSION_MINS = 5 * 60;

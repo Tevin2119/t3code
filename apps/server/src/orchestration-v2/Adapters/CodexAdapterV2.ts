@@ -1,6 +1,6 @@
 import * as DeliveryThreadSession from "../../delivery/DeliveryThreadSession.ts";
 import { revertCodexThread } from "../../provider/CodexThreadRevert.ts";
-import { historyResponseItems } from "../ContextHandoffBudget.ts";
+import { historyResponseItems } from "@t3tools/provider-core/server/handoffBudget";
 import { makeProviderTextDeltaCoalescer } from "./ProviderTextDeltaCoalescer.ts";
 import {
   mcpToolPresentation,
@@ -13,7 +13,7 @@ import {
   completeCodexTurnTokenUsage,
   type CodexTurnTokenUsageState,
 } from "../../provider/CodexTurnTokenUsage.ts";
-import type { ServerProviderShape } from "../../provider/ServerProvider.ts";
+import type { ManagedServerProvider } from "@t3tools/provider-core/server/snapshot";
 import type { CodexEffectiveRuntime } from "../../provider/CodexManagedRuntime.ts";
 import { buildCodexInitializeParams } from "../../provider/CodexProvider.ts";
 import {
@@ -88,7 +88,7 @@ import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { resolveAttachmentPath, resolveAttachmentPathById } from "../../attachmentStore.ts";
 import { getCodexServiceTierOptionValue } from "../../codexModelOptions.ts";
 import { ServerConfig } from "../../config.ts";
-import { expandHomePath } from "../../pathExpansion.ts";
+import { expandHomePath } from "@t3tools/provider-core/server/pathExpansion";
 import {
   buildCodexAdditionalContext,
   buildCodexDeveloperInstructions,
@@ -103,13 +103,13 @@ import {
 } from "../../provider/Drivers/CodexHomeLayout.ts";
 import {
   boundProviderEventForLogging,
-  type EventNdjsonLogger,
   shouldPersistProviderEvent,
 } from "../../provider/EventNdjsonLogger.ts";
-import { ProviderEventLoggers } from "../../provider/ProviderEventLoggers.ts";
+import * as ProviderEventLoggers from "@t3tools/provider-core/server/ProviderEventLoggers";
 import { codexAppServerArgs, resolveCodexLaunchArgs } from "../../provider/codexLaunchArgs.ts";
-import { mergeProviderInstanceEnvironment } from "../../provider/ProviderInstanceEnvironment.ts";
-import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
+import { mergeProviderInstanceEnvironment } from "@t3tools/provider-core/server/instanceEnvironment";
+import * as McpProviderSession from "@t3tools/provider-core/server/mcpSession";
+import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 import {
   MCP_APP_EXTENSION_ID,
   MCP_APP_MIME_TYPE,
@@ -121,52 +121,26 @@ import {
   ProviderAdapterDriverCreateError,
   type ProviderAdapterDriver,
   type ProviderAdapterDriverCreateInput,
-} from "../ProviderAdapterDriver.ts";
-import { IdAllocatorV2, type IdAllocatorV2Shape } from "../IdAllocator.ts";
-import {
-  type ProviderContinuationRequest,
-  ProviderContinuationRequests,
-} from "../ProviderContinuationRequests.ts";
-import { backgroundWorkNotification } from "../Notification.ts";
+} from "@t3tools/provider-core/server/adapterDriver";
+import * as ProviderContinuationRequests from "@t3tools/provider-core/server/ProviderContinuationRequests";
+import { backgroundWorkNotification } from "@t3tools/provider-core/server/notification";
 import {
   makeProviderFailure,
   makeProviderFailureTurnItem,
   makeProviderRetryTurnItem,
-} from "../ProviderFailure.ts";
-import { turnScopedSelectionTransition } from "../ProviderSelectionTransition.ts";
+} from "@t3tools/provider-core/server/failure";
+import { turnScopedSelectionTransition } from "@t3tools/provider-core/server/selectionTransition";
 import {
   isProviderNativeImageAttachment,
   providerMessageTextWithAttachmentPaths,
-} from "../AttachmentPrompt.ts";
-import {
-  ProviderAdapterEnsureThreadError,
-  ProviderAdapterForkThreadError,
-  ProviderAdapterInterruptError,
-  ProviderAdapterOpenSessionError,
-  ProviderAdapterProtocolError,
-  ProviderAdapterReadThreadSnapshotError,
-  ProviderAdapterResumeThreadError,
-  ProviderAdapterRollbackThreadError,
-  ProviderAdapterRuntimeRequestResponseError,
-  ProviderAdapterSteerRunError,
-  ProviderAdapterTurnStartError,
-  ProviderAdapterV2,
-  type ProviderAdapterV2Shape,
-  type ProviderAdapterV2Event,
-  type ProviderAdapterV2ForkThreadInput,
-  type ProviderAdapterV2RollbackThreadInput,
-  type ProviderAdapterV2RuntimePolicy,
-  type ProviderAdapterV2McpApps,
-  type ProviderAdapterV2SessionRuntime,
-  type ProviderAdapterV2InterruptInput,
-  type ProviderAdapterV2SteerInput,
-  type ProviderAdapterV2TurnInput,
-} from "../ProviderAdapter.ts";
+} from "@t3tools/provider-core/server/attachmentPrompt";
 import {
   makeSubagentChildThread,
   makeSubagentConversationArtifacts,
   subagentThreadTitle,
-} from "../SubagentProjection.ts";
+} from "@t3tools/provider-core/server/subagentProjection";
+import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
+import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
 
 const CODEX_PROVIDER = ProviderDriverKind.make("codex");
 export const CODEX_DRIVER_KIND = CODEX_PROVIDER;
@@ -342,8 +316,11 @@ export const CodexProviderCapabilitiesV2 = {
   },
 } satisfies OrchestrationV2ProviderCapabilities;
 
-function toProtocolError(detail: string, payload?: unknown): ProviderAdapterProtocolError {
-  return new ProviderAdapterProtocolError({
+function toProtocolError(
+  detail: string,
+  payload?: unknown,
+): ProviderAdapter.ProviderAdapterProtocolError {
+  return new ProviderAdapter.ProviderAdapterProtocolError({
     driver: CODEX_PROVIDER,
     detail,
     ...(payload === undefined ? {} : { payload }),
@@ -386,7 +363,7 @@ function mapCodexTurnStatus(
 
 function providerTurnStatusToTerminal(
   status: OrchestrationV2ProviderTurn["status"],
-): Extract<ProviderAdapterV2Event, { type: "turn.terminal" }>["status"] {
+): Extract<ProviderAdapter.ProviderAdapterV2Event, { type: "turn.terminal" }>["status"] {
   switch (status) {
     case "completed":
       return "completed";
@@ -678,7 +655,7 @@ const decodeCodexTurnStartParamsWithCollaborationMode = Schema.decodeUnknownEffe
   CodexTurnStartParamsWithCollaborationMode,
 );
 const isProviderAdapterRuntimeRequestResponseError = Schema.is(
-  ProviderAdapterRuntimeRequestResponseError,
+  ProviderAdapter.ProviderAdapterRuntimeRequestResponseError,
 );
 
 function codexRuntimeModeTurnDefaults(runtimeMode: RuntimeMode): {
@@ -726,7 +703,7 @@ export function buildCodexTurnStartParams(input: {
   readonly appThreadId?: ThreadId;
   readonly nativeThreadId: string;
   readonly codexInput: ReadonlyArray<CodexSchema.V2TurnStartParams__UserInput>;
-  readonly runtimePolicy: ProviderAdapterV2RuntimePolicy;
+  readonly runtimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy;
   readonly modelSelection: ModelSelection;
   readonly hasT3Mcp?: boolean;
   readonly browserToolsAvailable?: boolean;
@@ -734,7 +711,7 @@ export function buildCodexTurnStartParams(input: {
   /** ChatGPT token sharing does not accept service tiers. */
   readonly omitServiceTier?: boolean;
   /** What the thread's MCP Apps want the agent to know (`ui/update-model-context`). */
-  readonly appContext?: ProviderAdapterV2TurnInput["appContext"];
+  readonly appContext?: ProviderAdapter.ProviderAdapterV2TurnInput["appContext"];
 }) {
   return Effect.gen(function* () {
     const runtimeModeDefaults = codexRuntimeModeTurnDefaults(input.runtimePolicy.runtimeMode);
@@ -866,7 +843,7 @@ function getNativeThreadId(providerThread: OrchestrationV2ProviderThread) {
 
 function providerThreadFromCodexThread(input: {
   readonly appThreadId: ThreadId | null;
-  readonly idAllocator: IdAllocatorV2Shape;
+  readonly idAllocator: IdAllocator.IdAllocatorV2["Service"];
   readonly ownerNodeId: OrchestrationV2ProviderThread["ownerNodeId"];
   readonly providerSessionId: OrchestrationV2ProviderThread["providerSessionId"];
   readonly providerInstanceId: ProviderInstanceId;
@@ -998,7 +975,7 @@ const countTerminalTurnsAfterBoundary = (
 };
 
 const resolveCodexForkRollbackTurnCount = Effect.fn("CodexAdapterV2.resolveForkRollbackTurnCount")(
-  function* (input: ProviderAdapterV2ForkThreadInput) {
+  function* (input: ProviderAdapter.ProviderAdapterV2ForkThreadInput) {
     if (input.providerTurnId === undefined || input.sourceProviderTurns === undefined) {
       return 0;
     }
@@ -1008,7 +985,7 @@ const resolveCodexForkRollbackTurnCount = Effect.fn("CodexAdapterV2.resolveForkR
       input.providerTurnId,
     );
     if (rollbackTurnCount === null) {
-      return yield* new ProviderAdapterForkThreadError({
+      return yield* new ProviderAdapter.ProviderAdapterForkThreadError({
         driver: CODEX_PROVIDER,
         providerThreadId: input.sourceProviderThread.id,
         cause: `Cannot fork Codex thread from provider turn ${input.providerTurnId}: source turn was not found in provider thread ${input.sourceProviderThread.id}.`,
@@ -1027,7 +1004,7 @@ const resolveCodexForkRollbackTurnCount = Effect.fn("CodexAdapterV2.resolveForkR
  * only for source turns that predate native turn references.
  */
 export const resolveCodexForkBoundary = Effect.fn("CodexAdapterV2.resolveForkBoundary")(function* (
-  input: ProviderAdapterV2ForkThreadInput,
+  input: ProviderAdapter.ProviderAdapterV2ForkThreadInput,
 ) {
   const rollbackTurnCount = yield* resolveCodexForkRollbackTurnCount(input);
   if (input.providerTurnId === undefined || input.sourceProviderTurns === undefined) {
@@ -1081,14 +1058,14 @@ const readCodexThreadHistoryMetadata = Effect.fn("CodexAdapterV2.readThreadHisto
 );
 
 export const resolveCodexRollbackTurnCount = Effect.fn("CodexAdapterV2.resolveRollbackTurnCount")(
-  function* (input: ProviderAdapterV2RollbackThreadInput) {
+  function* (input: ProviderAdapter.ProviderAdapterV2RollbackThreadInput) {
     const providerTurns = input.providerThreadTurns;
     switch (input.target.type) {
       case "thread_start":
         return providerTurns.filter(isTerminalProviderTurn).length;
       case "provider_turn": {
         if (input.target.providerTurn.providerThreadId !== input.providerThread.id) {
-          return yield* new ProviderAdapterRollbackThreadError({
+          return yield* new ProviderAdapter.ProviderAdapterRollbackThreadError({
             driver: CODEX_PROVIDER,
             providerThreadId: input.providerThread.id,
             cause: `Cannot roll back Codex thread ${input.providerThread.id} to provider turn ${input.target.providerTurn.id}: target turn belongs to provider thread ${input.target.providerTurn.providerThreadId}.`,
@@ -1100,7 +1077,7 @@ export const resolveCodexRollbackTurnCount = Effect.fn("CodexAdapterV2.resolveRo
           input.target.providerTurn.id,
         );
         if (rollbackTurnCount === null) {
-          return yield* new ProviderAdapterRollbackThreadError({
+          return yield* new ProviderAdapter.ProviderAdapterRollbackThreadError({
             driver: CODEX_PROVIDER,
             providerThreadId: input.providerThread.id,
             cause: `Cannot roll back Codex thread ${input.providerThread.id} to provider turn ${input.target.providerTurn.id}: target turn was not found in durable provider turn history.`,
@@ -1144,10 +1121,10 @@ interface ActiveCodexTurnContext {
     readonly failure: OrchestrationV2ProviderFailure;
   };
   readonly nativeStartReady?: Deferred.Deferred<void>;
-  readonly input: ProviderAdapterV2TurnInput;
+  readonly input: ProviderAdapter.ProviderAdapterV2TurnInput;
   readonly projectionAppThread: OrchestrationV2AppThread;
   readonly projectionThreadId: ThreadId;
-  readonly projectionRunId: ProviderAdapterV2TurnInput["runId"] | null;
+  readonly projectionRunId: ProviderAdapter.ProviderAdapterV2TurnInput["runId"] | null;
   readonly nativeTurnId: string;
   readonly providerThread: OrchestrationV2ProviderThread;
   readonly providerTurnId: ProviderTurnId;
@@ -1192,7 +1169,10 @@ function isPersistentCodexDynamicTool(item: CodexDynamicToolItem): boolean {
   return Reflect.get(input, "persistent") === true;
 }
 
-type CodexRootTerminalEvent = Extract<ProviderAdapterV2Event, { readonly type: "turn.terminal" }>;
+type CodexRootTerminalEvent = Extract<
+  ProviderAdapter.ProviderAdapterV2Event,
+  { readonly type: "turn.terminal" }
+>;
 
 /** A completed root turn whose run stays open for the goal turn Codex starts next. */
 interface CodexGoalHold {
@@ -1309,12 +1289,12 @@ export interface CodexAppServerClientFactoryShape {
     readonly instanceId: ProviderInstanceId;
     readonly threadId: ThreadId;
     readonly providerSessionId: OrchestrationV2ProviderSession["id"];
-    readonly runtimePolicy: ProviderAdapterV2RuntimePolicy;
+    readonly runtimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy;
     readonly settings: CodexSettings;
     readonly environment: NodeJS.ProcessEnv;
   }) => Effect.Effect<
     CodexClient.CodexAppServerClient["Service"],
-    ProviderAdapterOpenSessionError,
+    ProviderAdapter.ProviderAdapterOpenSessionError,
     Scope.Scope
   >;
 }
@@ -1332,22 +1312,23 @@ export class CodexAppServerClientFactory extends Context.Service<
 export const CODEX_THREAD_CONFIG = { "tools.update_plan.enabled": true } as const;
 
 export function codexThreadRuntimeParams(input: {
-  readonly threadId: ThreadId | null;
+  readonly mcpSession: McpProviderSession.McpProviderSessionConfig | undefined;
+  /** A team-bound thread's delivery servers are added beside T3's own. */
+  readonly threadId?: ThreadId | null;
   readonly modelSelection?: { readonly model: string };
-  readonly runtimePolicy?: ProviderAdapterV2RuntimePolicy;
+  readonly runtimePolicy?: ProviderAdapter.ProviderAdapterV2RuntimePolicy;
 }): {
   readonly cwd?: string;
   readonly model?: string;
   readonly config: Readonly<Record<string, Schema.Json>>;
 } {
-  const mcpSession =
-    input.threadId === null ? undefined : McpProviderSession.readMcpProviderSession(input.threadId);
+  const { mcpSession } = input;
   return {
     ...(input.runtimePolicy?.cwd == null ? {} : { cwd: input.runtimePolicy.cwd }),
     ...(input.modelSelection === undefined ? {} : { model: input.modelSelection.model }),
     config: {
       ...CODEX_THREAD_CONFIG,
-      ...(input.threadId === null ||
+      ...(input.threadId == null ||
       Object.keys(DeliveryThreadSession.deliveryStdioServers(input.threadId)).length === 0
         ? {}
         : { mcp_servers: DeliveryThreadSession.deliveryStdioServers(input.threadId) }),
@@ -1355,7 +1336,7 @@ export function codexThreadRuntimeParams(input: {
         ? {}
         : {
             mcp_servers: {
-              ...(input.threadId === null
+              ...(input.threadId == null
                 ? {}
                 : DeliveryThreadSession.deliveryStdioServers(input.threadId)),
               "t3-code": {
@@ -1439,7 +1420,7 @@ const layerCodexAppServerClientFactoryCommand = (
               Effect.provideService(Scope.Scope, scope),
               Effect.mapError(
                 (cause) =>
-                  new ProviderAdapterOpenSessionError({
+                  new ProviderAdapter.ProviderAdapterOpenSessionError({
                     driver: CODEX_PROVIDER,
                     providerSessionId: input.providerSessionId,
                     cause,
@@ -1456,7 +1437,7 @@ const layerCodexAppServerClientFactoryCommand = (
   );
 
 export function makeCodexAppServerProtocolLogger(input: {
-  readonly nativeEventLogger: EventNdjsonLogger | undefined;
+  readonly nativeEventLogger: ProviderEventLoggers.EventNdjsonLogger | undefined;
   readonly threadId: ThreadId;
   readonly providerSessionId: OrchestrationV2ProviderSession["id"];
 }): CodexClient.CodexAppServerClientOptions["logger"] | undefined {
@@ -1532,12 +1513,12 @@ function isSensitiveCodexProtocolKey(key: string): boolean {
 export const layerAppServerClientFactory: Layer.Layer<
   CodexAppServerClientFactory,
   never,
-  ChildProcessSpawner.ChildProcessSpawner | ProviderEventLoggers
+  ChildProcessSpawner.ChildProcessSpawner | ProviderEventLoggers.ProviderEventLoggers
 > = Layer.effect(
   CodexAppServerClientFactory,
   Effect.gen(function* () {
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-    const { native: nativeEventLogger } = yield* ProviderEventLoggers;
+    const { native: nativeEventLogger } = yield* ProviderEventLoggers.ProviderEventLoggers;
 
     return CodexAppServerClientFactory.of({
       open: (input) =>
@@ -1558,7 +1539,7 @@ export const layerAppServerClientFactory: Layer.Layer<
             Effect.provideService(Scope.Scope, scope),
             Effect.mapError(
               (cause) =>
-                new ProviderAdapterOpenSessionError({
+                new ProviderAdapter.ProviderAdapterOpenSessionError({
                   driver: CODEX_PROVIDER,
                   providerSessionId: input.providerSessionId,
                   cause,
@@ -1591,7 +1572,8 @@ export type CodexAdapterV2DriverEnv =
   | CodexAppServerClientFactory
   | Crypto.Crypto
   | FileSystem.FileSystem
-  | IdAllocatorV2
+  | IdAllocator.IdAllocatorV2
+  | McpProviderSessions.McpProviderSessions
   | Path.Path
   | ServerConfig;
 
@@ -1601,11 +1583,11 @@ export const createCodexAdapterV2 = (
 ) =>
   Effect.gen(function* () {
     const clientFactory = yield* CodexAppServerClientFactory;
-    const continuationRequests = yield* ProviderContinuationRequests;
+    const continuationRequests = yield* ProviderContinuationRequests.ProviderContinuationRequests;
     const crypto = yield* Crypto.Crypto;
     const fileSystem = yield* FileSystem.FileSystem;
     const hostEnvironment = yield* HostProcessEnvironment;
-    const idAllocator = yield* IdAllocatorV2;
+    const idAllocator = yield* IdAllocator.IdAllocatorV2;
     const serverConfig = yield* ServerConfig;
     const homeLayout = yield* resolveCodexHomeLayout(config);
 
@@ -1628,7 +1610,7 @@ export const createCodexAdapterV2 = (
       homePath: homeLayout.effectiveHomePath ?? "",
     } satisfies CodexSettings;
 
-    return makeCodexAdapterV2({
+    return yield* makeCodexAdapterV2({
       instanceId,
       settings,
       environment: mergeProviderInstanceEnvironment(environment, hostEnvironment),
@@ -1650,21 +1632,26 @@ export const CodexAdapterV2Driver: ProviderAdapterDriver<CodexSettings, CodexAda
 };
 
 const layer: Layer.Layer<
-  ProviderAdapterV2,
+  ProviderAdapter.ProviderAdapterV2,
   never,
-  CodexAppServerClientFactory | Crypto.Crypto | FileSystem.FileSystem | IdAllocatorV2 | ServerConfig
+  | CodexAppServerClientFactory
+  | Crypto.Crypto
+  | FileSystem.FileSystem
+  | IdAllocator.IdAllocatorV2
+  | McpProviderSessions.McpProviderSessions
+  | ServerConfig
 > = Layer.effect(
-  ProviderAdapterV2,
+  ProviderAdapter.ProviderAdapterV2,
   Effect.gen(function* () {
     const clientFactory = yield* CodexAppServerClientFactory;
-    const continuationRequests = yield* ProviderContinuationRequests;
+    const continuationRequests = yield* ProviderContinuationRequests.ProviderContinuationRequests;
     const crypto = yield* Crypto.Crypto;
     const fileSystem = yield* FileSystem.FileSystem;
     const hostEnvironment = yield* HostProcessEnvironment;
-    const idAllocator = yield* IdAllocatorV2;
+    const idAllocator = yield* IdAllocator.IdAllocatorV2;
     const serverConfig = yield* ServerConfig;
 
-    return makeCodexAdapterV2({
+    return yield* makeCodexAdapterV2({
       instanceId: CODEX_DEFAULT_INSTANCE_ID,
       settings: DEFAULT_CODEX_SETTINGS,
       environment: hostEnvironment,
@@ -1683,7 +1670,7 @@ export interface CodexAdapterV2Options {
   readonly settings: CodexSettings;
   readonly environment: NodeJS.ProcessEnv;
   readonly clientFactory: CodexAppServerClientFactoryShape;
-  readonly onUsageLimits?: ServerProviderShape["applyUsageLimits"];
+  readonly onUsageLimits?: ManagedServerProvider["applyUsageLimits"];
   /**
    * Resolves launch settings when each session opens, replacing `settings` and
    * `environment`. Managed ChatGPT sign-in uses it to launch the T3-installed
@@ -1692,7 +1679,7 @@ export interface CodexAdapterV2Options {
   readonly resolveRuntime?: Effect.Effect<CodexEffectiveRuntime, ProviderSetupError, Scope.Scope>;
   readonly crypto: Crypto.Crypto;
   readonly fileSystem: FileSystem.FileSystem;
-  readonly idAllocator: IdAllocatorV2Shape;
+  readonly idAllocator: IdAllocator.IdAllocatorV2["Service"];
   readonly serverConfig: ServerConfig["Service"];
   /**
    * Sink for post-settle background command completions so the orchestrator
@@ -1700,15 +1687,22 @@ export interface CodexAdapterV2Options {
    * projection-only handling for late item completions.
    */
   readonly continuationRequests?: {
-    readonly offer: (request: ProviderContinuationRequest) => Effect.Effect<void>;
+    readonly offer: (
+      request: ProviderContinuationRequests.ProviderContinuationRequest,
+    ) => Effect.Effect<void>;
   };
 }
 
-export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): ProviderAdapterV2Shape {
+export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
+  adapterOptions: CodexAdapterV2Options,
+) {
+  const mcpSessions = yield* McpProviderSessions.McpProviderSessions;
+  const readMcpSession = (threadId: ThreadId | null) =>
+    threadId === null ? Effect.succeed(undefined) : mcpSessions.read(threadId);
   const { clientFactory, crypto, fileSystem, idAllocator, serverConfig } = adapterOptions;
   const continuationRequests = adapterOptions.continuationRequests;
 
-  return ProviderAdapterV2.of({
+  return ProviderAdapter.ProviderAdapterV2.of({
     instanceId: adapterOptions.instanceId,
     driver: CODEX_PROVIDER,
     getCapabilities: () => Effect.succeed(CodexProviderCapabilitiesV2),
@@ -1722,7 +1716,7 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
             : yield* adapterOptions.resolveRuntime.pipe(
                 Effect.mapError(
                   (cause) =>
-                    new ProviderAdapterOpenSessionError({
+                    new ProviderAdapter.ProviderAdapterOpenSessionError({
                       driver: CODEX_PROVIDER,
                       providerSessionId: input.providerSessionId,
                       cause,
@@ -1822,7 +1816,7 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
           model: input.modelSelection.model,
           now,
         });
-        const events = yield* Queue.unbounded<ProviderAdapterV2Event>();
+        const events = yield* Queue.unbounded<ProviderAdapter.ProviderAdapterV2Event>();
         const rateLimitSnapshot = yield* Ref.make<CodexRateLimitSnapshot | undefined>(undefined);
         const limitedTurnItems = yield* Ref.make(
           new Map<ProviderThreadId, Extract<OrchestrationV2TurnItem, { type: "error" }>>(),
@@ -1855,7 +1849,9 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
             context.nativeTurnId,
           ).hasSubagents = true;
         };
-        const pendingRootTurns = yield* Ref.make(new Map<string, ProviderAdapterV2TurnInput>());
+        const pendingRootTurns = yield* Ref.make(
+          new Map<string, ProviderAdapter.ProviderAdapterV2TurnInput>(),
+        );
         const turnWaiters = yield* Ref.make(new Map<string, Deferred.Deferred<void, never>>());
         const subagentThreads = yield* Ref.make(new Map<string, CodexSubagentThreadContext>());
         const subagentSelections = new Map<string, Omit<ModelSelection, "instanceId">>();
@@ -1915,7 +1911,7 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
         const latestGoalTurnId = (providerTurnId: ProviderTurnId) =>
           goalRuns.get(providerTurnId)?.at(-1)?.providerTurnId ?? providerTurnId;
 
-        const emitProviderEvent = (event: ProviderAdapterV2Event) =>
+        const emitProviderEvent = (event: ProviderAdapter.ProviderAdapterV2Event) =>
           Queue.offer(events, event).pipe(Effect.asVoid);
 
         /** Writes the thread's current native goal onto its root provider thread. */
@@ -1964,7 +1960,6 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
             type: "turn_item.updated",
             driver: CODEX_PROVIDER,
             turnItem: makeProviderRetryTurnItem({
-              idAllocator,
               driver: CODEX_PROVIDER,
               threadId: context.projectionThreadId,
               runId: context.projectionRunId,
@@ -1982,7 +1977,7 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
         });
 
         const registerRootTurn = (input: {
-          readonly turnInput: ProviderAdapterV2TurnInput;
+          readonly turnInput: ProviderAdapter.ProviderAdapterV2TurnInput;
           readonly nativeTurnId: string;
           readonly startedAt: DateTime.Utc;
           readonly waitForNativeStart?: boolean;
@@ -3165,14 +3160,19 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
           });
 
         const toCodexInput = (
-          turnInput: Pick<ProviderAdapterV2TurnInput | ProviderAdapterV2SteerInput, "message">,
+          turnInput: Pick<
+            | ProviderAdapter.ProviderAdapterV2TurnInput
+            | ProviderAdapter.ProviderAdapterV2SteerInput,
+            "message"
+          >,
         ) =>
           Effect.gen(function* () {
             const inputItems: Array<CodexSchema.V2TurnStartParams__UserInput> = [];
             const text = providerMessageTextWithAttachmentPaths({
               text: codexSkillMentionText(turnInput.message.text),
               attachments: turnInput.message.attachments,
-              attachmentsDir: serverConfig.attachmentsDir,
+              resolveAttachmentPath: (attachment) =>
+                resolveAttachmentPath({ attachmentsDir: serverConfig.attachmentsDir, attachment }),
             });
             if (text.length > 0) {
               inputItems.push({
@@ -4560,7 +4560,6 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
               type: "turn_item.updated",
               driver: CODEX_PROVIDER,
               turnItem: makeProviderRetryTurnItem({
-                idAllocator,
                 driver: CODEX_PROVIDER,
                 threadId: context.projectionThreadId,
                 runId: context.projectionRunId,
@@ -5605,7 +5604,6 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
           }
           if (current.status === "failed" && current.failure.class === "usage_limit") {
             const item = makeProviderFailureTurnItem({
-              idAllocator,
               driver: CODEX_PROVIDER,
               threadId: context.input.threadId,
               runId: context.input.runId,
@@ -5756,7 +5754,6 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
                   type: "turn_item.updated",
                   driver: CODEX_PROVIDER,
                   turnItem: makeProviderRetryTurnItem({
-                    idAllocator,
                     driver: CODEX_PROVIDER,
                     threadId: input.context.projectionThreadId,
                     runId: input.context.projectionRunId,
@@ -6021,7 +6018,7 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
          * assistant text, as Claude's own `/goal` output is.
          */
         const completeGoalCommandTurn = Effect.fnUntraced(function* (
-          turnInput: ProviderAdapterV2TurnInput,
+          turnInput: ProviderAdapter.ProviderAdapterV2TurnInput,
           reply: string,
         ) {
           const now = yield* DateTime.now;
@@ -6125,7 +6122,7 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
          * Stop also reaches.
          */
         const resolveGoalStopTarget = Effect.fnUntraced(function* (
-          turnInput: ProviderAdapterV2InterruptInput,
+          turnInput: ProviderAdapter.ProviderAdapterV2InterruptInput,
         ) {
           const goalThreadId = turnInput.providerThread.nativeThreadRef?.nativeId;
           if (goalThreadId == null) {
@@ -6193,12 +6190,12 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
 
         /** Starts a native turn with this run's full turn configuration. */
         const startNativeTurn = (
-          turnInput: ProviderAdapterV2TurnInput,
+          turnInput: ProviderAdapter.ProviderAdapterV2TurnInput,
           codexInput: ReadonlyArray<CodexSchema.V2TurnStartParams__UserInput>,
         ) =>
           Effect.gen(function* () {
             const threadId = yield* getNativeThreadId(turnInput.providerThread);
-            const mcpSession = McpProviderSession.readMcpProviderSession(turnInput.threadId);
+            const mcpSession = yield* mcpSessions.read(turnInput.threadId);
             const turnStartParams = yield* buildCodexTurnStartParams({
               appThreadId: turnInput.threadId,
               nativeThreadId: threadId,
@@ -6249,7 +6246,10 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
          * turn Codex starts on its own reuses the last turn's settings. Codex
          * continues later goal turns itself. Other commands settle with a reply.
          */
-        const runGoalCommand = (turnInput: ProviderAdapterV2TurnInput, command: CodexGoalCommand) =>
+        const runGoalCommand = (
+          turnInput: ProviderAdapter.ProviderAdapterV2TurnInput,
+          command: CodexGoalCommand,
+        ) =>
           Effect.gen(function* () {
             const threadId = yield* getNativeThreadId(turnInput.providerThread);
             // Goal notifications during the command belong to this run's snapshot.
@@ -6348,7 +6348,7 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
           }).pipe(
             Effect.mapError(
               (cause) =>
-                new ProviderAdapterTurnStartError({
+                new ProviderAdapter.ProviderAdapterTurnStartError({
                   driver: CODEX_PROVIDER,
                   threadId: turnInput.threadId,
                   providerThreadId: turnInput.providerThread.id,
@@ -6361,8 +6361,12 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
         // MCP Apps reach their server through Codex's own MCP client, so any
         // server the user configured for Codex works without T3 connecting to it.
         const mcpAppsError = (detail: string) => (cause: unknown) =>
-          new ProviderAdapterProtocolError({ driver: CODEX_PROVIDER, detail, payload: cause });
-        const mcpApps: ProviderAdapterV2McpApps = {
+          new ProviderAdapter.ProviderAdapterProtocolError({
+            driver: CODEX_PROVIDER,
+            detail,
+            payload: cause,
+          });
+        const mcpApps: ProviderAdapter.ProviderAdapterV2McpApps = {
           listTools: (toolsInput) =>
             Effect.gen(function* () {
               const threadId = yield* getNativeThreadId(toolsInput.providerThread);
@@ -6416,7 +6420,7 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
             }).pipe(Effect.mapError(mcpAppsError("Codex MCP resource read failed."))),
         };
 
-        const runtime: ProviderAdapterV2SessionRuntime = {
+        const runtime: ProviderAdapter.ProviderAdapterV2SessionRuntime = {
           instanceId: adapterOptions.instanceId,
           driver: CODEX_PROVIDER,
           providerSessionId: input.providerSessionId,
@@ -6471,10 +6475,12 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
             }),
           ensureThread: (threadInput) =>
             ensureInitialized.pipe(
-              Effect.andThen(
+              Effect.andThen(mcpSessions.read(threadInput.threadId)),
+              Effect.flatMap((mcpSession) =>
                 client.request(
                   "thread/start",
                   codexThreadRuntimeParams({
+                    mcpSession,
                     threadId: threadInput.threadId,
                     modelSelection: threadInput.modelSelection,
                     runtimePolicy: threadInput.runtimePolicy,
@@ -6493,7 +6499,7 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
               ),
               Effect.mapError(
                 (cause) =>
-                  new ProviderAdapterEnsureThreadError({
+                  new ProviderAdapter.ProviderAdapterEnsureThreadError({
                     driver: CODEX_PROVIDER,
                     threadId: threadInput.threadId,
                     cause: normalizeCodexCause(cause),
@@ -6508,6 +6514,9 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
                 threadId: nativeThreadId,
                 excludeTurns: true,
                 ...codexThreadRuntimeParams({
+                  mcpSession: yield* readMcpSession(
+                    threadInput.threadId ?? threadInput.providerThread.appThreadId,
+                  ),
                   threadId: threadInput.threadId ?? threadInput.providerThread.appThreadId,
                   ...(threadInput.modelSelection === undefined
                     ? {}
@@ -6557,7 +6566,7 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
             }).pipe(
               Effect.mapError(
                 (cause) =>
-                  new ProviderAdapterResumeThreadError({
+                  new ProviderAdapter.ProviderAdapterResumeThreadError({
                     driver: CODEX_PROVIDER,
                     providerSessionId: input.providerSessionId,
                     providerThreadId: threadInput.providerThread.id,
@@ -6585,7 +6594,7 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
             }).pipe(
               Effect.mapError(
                 (cause) =>
-                  new ProviderAdapterTurnStartError({
+                  new ProviderAdapter.ProviderAdapterTurnStartError({
                     driver: CODEX_PROVIDER,
                     threadId: turnInput.threadId,
                     providerThreadId: turnInput.providerThread.id,
@@ -6615,7 +6624,7 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
             }).pipe(
               Effect.mapError(
                 (cause) =>
-                  new ProviderAdapterProtocolError({
+                  new ProviderAdapter.ProviderAdapterProtocolError({
                     driver: CODEX_PROVIDER,
                     detail: "Failed to inject historical context",
                     cause,
@@ -6639,7 +6648,7 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
             }).pipe(
               Effect.mapError(
                 (cause) =>
-                  new ProviderAdapterTurnStartError({
+                  new ProviderAdapter.ProviderAdapterTurnStartError({
                     driver: CODEX_PROVIDER,
                     threadId: turnInput.threadId,
                     providerThreadId: turnInput.providerThread.id,
@@ -6677,7 +6686,7 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
             }).pipe(
               Effect.mapError(
                 (cause) =>
-                  new ProviderAdapterSteerRunError({
+                  new ProviderAdapter.ProviderAdapterSteerRunError({
                     driver: CODEX_PROVIDER,
                     providerThreadId: turnInput.providerThread.id,
                     providerTurnId: turnInput.providerTurnId,
@@ -6696,7 +6705,7 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
               Effect.mapError((cause) =>
                 cause._tag === "ProviderAdapterProtocolError"
                   ? cause
-                  : new ProviderAdapterProtocolError({
+                  : new ProviderAdapter.ProviderAdapterProtocolError({
                       driver: CODEX_PROVIDER,
                       detail: `Failed to unload Codex thread for provider thread ${unloadInput.providerThread.id}`,
                       cause: normalizeCodexCause(cause),
@@ -7083,7 +7092,7 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
             }).pipe(
               Effect.mapError(
                 (cause) =>
-                  new ProviderAdapterInterruptError({
+                  new ProviderAdapter.ProviderAdapterInterruptError({
                     driver: CODEX_PROVIDER,
                     providerThreadId: requestedInput.providerThread.id,
                     providerTurnId: requestedInput.providerTurnId,
@@ -7097,7 +7106,7 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
                 String(requestInput.requestId),
               );
               if (pending === undefined) {
-                return yield* new ProviderAdapterRuntimeRequestResponseError({
+                return yield* new ProviderAdapter.ProviderAdapterRuntimeRequestResponseError({
                   driver: CODEX_PROVIDER,
                   requestId: requestInput.requestId,
                   cause: toProtocolError(
@@ -7107,7 +7116,7 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
               }
               if (pending.type === "user_input") {
                 if (requestInput.answers === undefined) {
-                  return yield* new ProviderAdapterRuntimeRequestResponseError({
+                  return yield* new ProviderAdapter.ProviderAdapterRuntimeRequestResponseError({
                     driver: CODEX_PROVIDER,
                     requestId: requestInput.requestId,
                     cause: toProtocolError(
@@ -7119,7 +7128,7 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
                 return;
               }
               if (requestInput.decision === undefined) {
-                return yield* new ProviderAdapterRuntimeRequestResponseError({
+                return yield* new ProviderAdapter.ProviderAdapterRuntimeRequestResponseError({
                   driver: CODEX_PROVIDER,
                   requestId: requestInput.requestId,
                   cause: toProtocolError(
@@ -7132,7 +7141,7 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
               Effect.mapError((cause) =>
                 isProviderAdapterRuntimeRequestResponseError(cause)
                   ? cause
-                  : new ProviderAdapterRuntimeRequestResponseError({
+                  : new ProviderAdapter.ProviderAdapterRuntimeRequestResponseError({
                       driver: CODEX_PROVIDER,
                       requestId: requestInput.requestId,
                       cause,
@@ -7156,7 +7165,7 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
             }).pipe(
               Effect.mapError(
                 (cause) =>
-                  new ProviderAdapterProtocolError({
+                  new ProviderAdapter.ProviderAdapterProtocolError({
                     driver: CODEX_PROVIDER,
                     detail: "Failed to upload Codex thread feedback.",
                     payload: cause,
@@ -7189,7 +7198,7 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
             }).pipe(
               Effect.mapError(
                 (cause) =>
-                  new ProviderAdapterReadThreadSnapshotError({
+                  new ProviderAdapter.ProviderAdapterReadThreadSnapshotError({
                     driver: CODEX_PROVIDER,
                     providerThreadId: threadInput.providerThread.id,
                     cause,
@@ -7222,7 +7231,7 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
                 Effect.andThen(readCodexThreadHistoryMetadata(client.raw, threadId)),
               );
               if (historyMode !== "paginated") {
-                return yield* new ProviderAdapterRollbackThreadError({
+                return yield* new ProviderAdapter.ProviderAdapterRollbackThreadError({
                   driver: CODEX_PROVIDER,
                   providerThreadId: threadInput.providerThread.id,
                   cause: `Cannot roll back Codex thread ${threadId}: the thread uses legacy history, which Codex 0.156 cannot revert.`,
@@ -7236,6 +7245,7 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
                   threadId,
                   excludeTurns: true,
                   ...codexThreadRuntimeParams({
+                    mcpSession: yield* readMcpSession(threadInput.providerThread.appThreadId),
                     threadId: threadInput.providerThread.appThreadId,
                     modelSelection: input.modelSelection,
                     runtimePolicy: input.runtimePolicy,
@@ -7266,7 +7276,7 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
             }).pipe(
               Effect.mapError(
                 (cause) =>
-                  new ProviderAdapterRollbackThreadError({
+                  new ProviderAdapter.ProviderAdapterRollbackThreadError({
                     driver: CODEX_PROVIDER,
                     providerThreadId: threadInput.providerThread.id,
                     cause: normalizeCodexCause(cause),
@@ -7285,6 +7295,7 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
                       ? {}
                       : { lastTurnId: boundary.lastTurnId }),
                     ...codexThreadRuntimeParams({
+                      mcpSession: yield* mcpSessions.read(threadInput.targetThreadId),
                       threadId: threadInput.targetThreadId,
                       ...(threadInput.modelSelection === undefined
                         ? {}
@@ -7297,7 +7308,7 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
                 ),
                 Effect.mapError(
                   (cause) =>
-                    new ProviderAdapterForkThreadError({
+                    new ProviderAdapter.ProviderAdapterForkThreadError({
                       driver: CODEX_PROVIDER,
                       providerThreadId: threadInput.sourceProviderThread.id,
                       cause: normalizeCodexCause(cause),
@@ -7313,7 +7324,7 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
                   Effect.andThen(readCodexThreadHistoryMetadata(client.raw, response.thread.id)),
                 );
                 if (historyMode !== "paginated") {
-                  return yield* new ProviderAdapterForkThreadError({
+                  return yield* new ProviderAdapter.ProviderAdapterForkThreadError({
                     driver: CODEX_PROVIDER,
                     providerThreadId: threadInput.sourceProviderThread.id,
                     cause: `Cannot fork Codex thread ${threadId} at provider turn ${threadInput.providerTurnId}: the source turn has no native Codex turn reference, and the forked thread uses legacy history which Codex 0.156 cannot revert.`,
@@ -7325,7 +7336,7 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
                   ),
                   Effect.mapError(
                     (cause) =>
-                      new ProviderAdapterForkThreadError({
+                      new ProviderAdapter.ProviderAdapterForkThreadError({
                         driver: CODEX_PROVIDER,
                         providerThreadId: threadInput.sourceProviderThread.id,
                         cause: normalizeCodexCause(cause),
@@ -7350,7 +7361,7 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
             }).pipe(
               Effect.mapError(
                 (cause) =>
-                  new ProviderAdapterForkThreadError({
+                  new ProviderAdapter.ProviderAdapterForkThreadError({
                     driver: CODEX_PROVIDER,
                     providerThreadId: threadInput.sourceProviderThread.id,
                     cause: normalizeCodexCause(cause),
@@ -7362,7 +7373,7 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
       }).pipe(
         Effect.mapError(
           (cause) =>
-            new ProviderAdapterOpenSessionError({
+            new ProviderAdapter.ProviderAdapterOpenSessionError({
               driver: CODEX_PROVIDER,
               providerSessionId: input.providerSessionId,
               cause,
@@ -7370,4 +7381,4 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
         ),
       ),
   });
-}
+});

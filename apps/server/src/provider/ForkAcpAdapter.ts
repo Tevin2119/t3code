@@ -15,8 +15,8 @@ import {
   makeAcpAdapterV2,
   type AcpAdapterV2Options,
   type AcpAdapterV2RuntimeInput,
-} from "../orchestration-v2/Adapters/AcpAdapterV2.ts";
-import type * as AcpSessionRuntime from "./acp/AcpSessionRuntime.ts";
+} from "@t3tools/provider-acp/server/adapter";
+import type * as AcpSessionRuntime from "@t3tools/provider-acp/server/AcpSessionRuntime";
 import { applyAcpSessionOption } from "./acp/AcpSessionOption.ts";
 import { resolveHermesAcpModelId } from "./acp/HermesAcpSupport.ts";
 import { resolveKimiAcpModelId } from "./acp/KimiAcpSupport.ts";
@@ -26,7 +26,7 @@ import {
   KIMI_RUNTIME_MODES,
   DEEPSEEK_RUNTIME_MODES,
   runtimeModeProblem,
-} from "./runtimeModeSupport.ts";
+} from "@t3tools/provider-core/server/runtimeModeSupport";
 
 export interface ForkAcpAdapterOptions extends Omit<AcpAdapterV2Options, "flavor"> {
   readonly instanceId: ProviderInstanceId;

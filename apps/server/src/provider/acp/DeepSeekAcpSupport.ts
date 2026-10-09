@@ -23,8 +23,8 @@ import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import type * as EffectAcpErrors from "effect-acp/errors";
 import type * as EffectAcpSchema from "effect-acp/compat";
 
-import { expandHomePath } from "../../pathExpansion.ts";
-import * as AcpSessionRuntime from "./AcpSessionRuntime.ts";
+import { expandHomePath } from "@t3tools/provider-core/server/pathExpansion";
+import * as AcpSessionRuntime from "@t3tools/provider-acp/server/AcpSessionRuntime";
 
 /** dsh advertises no auth method and accepts any id; this one names what it checks. */
 export const DEEPSEEK_AUTH_METHOD_ID = "deepseek-api-key";

@@ -29,8 +29,8 @@ import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import type * as EffectAcpErrors from "effect-acp/errors";
 import type * as EffectAcpSchema from "effect-acp/compat";
 
-import { expandHomePath } from "../../pathExpansion.ts";
-import * as AcpSessionRuntime from "./AcpSessionRuntime.ts";
+import { expandHomePath } from "@t3tools/provider-core/server/pathExpansion";
+import * as AcpSessionRuntime from "@t3tools/provider-acp/server/AcpSessionRuntime";
 
 const HERMES_DRIVER_KIND = ProviderDriverKind.make("hermes");
 

@@ -26,7 +26,7 @@ import { usePrimarySettings } from "../../hooks/useSettings";
 import { cn } from "../../lib/utils";
 import { formatUpcomingTimestamp } from "../../timestampFormat";
 import { ProviderInstanceIcon } from "../chat/ProviderInstanceIcon";
-import { getDriverOption } from "../settings/providerDriverMeta";
+import { providerClients } from "../settings/providerDriverMeta";
 import { RedactedSensitiveText } from "../settings/RedactedSensitiveText";
 import { Button } from "../ui/button";
 import { OpenAI } from "../Icons";
@@ -91,7 +91,9 @@ function AccountAvatar({
       <ProviderInstanceIcon
         driverKind={account.driver}
         displayName={
-          account.displayName ?? getDriverOption(account.driver)?.label ?? String(account.driver)
+          account.displayName ??
+          providerClients.get(account.driver)?.label ??
+          String(account.driver)
         }
         accentColor={account.accentColor}
         showBadge={Boolean(account.displayName)}
@@ -126,7 +128,7 @@ function AccountName({
   }
   return (
     <span className={className}>
-      {getDriverOption(account.driver)?.label ?? String(account.driver)}
+      {providerClients.get(account.driver)?.label ?? String(account.driver)}
     </span>
   );
 }
@@ -176,7 +178,7 @@ function SegmentPopover({
         <span className="flex items-center gap-2 text-sm font-medium text-foreground">
           <AccountAvatar account={account} />
           <span className="truncate">
-            {account.displayName ?? getDriverOption(account.driver)?.label ?? account.driver}
+            {account.displayName ?? providerClients.get(account.driver)?.label ?? account.driver}
           </span>
         </span>
         {account.email ? (
@@ -194,7 +196,7 @@ function SegmentPopover({
         {account.harnesses && account.harnesses.length > 1 ? (
           <Row label="Shared by">
             {account.harnesses
-              .map((driver) => getDriverOption(driver)?.label ?? String(driver))
+              .map((driver) => providerClients.get(driver)?.label ?? String(driver))
               .join(", ")}
           </Row>
         ) : null}
@@ -550,7 +552,7 @@ function PoolSection({ pool, now }: { readonly pool: LimitPool; readonly now: nu
   const color = barColor(pool.driver);
   const label =
     pool.accounts.find((account) => account.limits.quotaGroup)?.limits.quotaGroup?.label ??
-    getDriverOption(pool.driver)?.label ??
+    providerClients.get(pool.driver)?.label ??
     String(pool.driver);
   const harnesses = [
     ...new Set(pool.accounts.flatMap((account) => account.harnesses ?? [account.driver])),
@@ -576,8 +578,10 @@ function PoolSection({ pool, now }: { readonly pool: LimitPool; readonly now: nu
       {pool.accounts.some((account) => (account.harnesses?.length ?? 0) > 1) ? (
         <p className="text-xs text-muted-foreground">
           Shared allowance:{" "}
-          {harnesses.map((driver) => getDriverOption(driver)?.label ?? String(driver)).join(" + ")}.
-          Counted once per account.
+          {harnesses
+            .map((driver) => providerClients.get(driver)?.label ?? String(driver))
+            .join(" + ")}
+          . Counted once per account.
         </p>
       ) : null}
       {windows.map((window) => {

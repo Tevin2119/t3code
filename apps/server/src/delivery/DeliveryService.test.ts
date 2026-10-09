@@ -11,7 +11,7 @@ import { HttpClient, HttpClientResponse } from "effect/http";
 
 import * as ServerConfig from "../config.ts";
 import * as ServerSettings from "../serverSettings.ts";
-import { buildRuntimeInstructions } from "../provider/RuntimeInstructions.ts";
+import { buildRuntimeInstructions } from "@t3tools/provider-core/server/runtimeInstructions";
 import * as DeliveryService from "./DeliveryService.ts";
 import * as DeliveryThreadSession from "./DeliveryThreadSession.ts";
 

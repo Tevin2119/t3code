@@ -1,7 +1,7 @@
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as AcpSessionRuntime from "./acp/AcpSessionRuntime.ts";
+import * as AcpSessionRuntime from "@t3tools/provider-acp/server/AcpSessionRuntime";
 import { withNativeTurnReceipt } from "./ForkAcpAdapter.ts";
 
 const start = () =>

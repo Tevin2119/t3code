@@ -14,15 +14,15 @@ import * as DeliveryThreadSession from "../delivery/DeliveryThreadSession.ts";
 import * as ProviderAdapterRegistry from "../orchestration-v2/ProviderAdapterRegistry.ts";
 import {
   ProviderAdapterOpenSessionError,
-  type ProviderAdapterV2Shape,
-} from "../orchestration-v2/ProviderAdapter.ts";
+  type ProviderAdapterV2,
+} from "@t3tools/provider-core/server/ProviderAdapter";
 import {
   makeClaudeQueryOptions,
   claudeMcpQueryOverrides,
 } from "../orchestration-v2/Adapters/ClaudeAdapterV2.ts";
 import { codexThreadRuntimeParams } from "../orchestration-v2/Adapters/CodexAdapterV2.ts";
 import * as ProviderInstanceRegistry from "./ProviderInstanceRegistry.ts";
-import type { ProviderInstance } from "./ProviderDriver.ts";
+import type { ProviderInstance } from "@t3tools/provider-core/server/driver";
 
 const driver = ProviderDriverKind.make("codex");
 const instanceId = ProviderInstanceId.make("team-provider");
@@ -37,7 +37,7 @@ const input = {
     cwd: "/workspace",
   },
 };
-const testLayer = (openSession: ProviderAdapterV2Shape["openSession"]) => {
+const testLayer = (openSession: ProviderAdapterV2["Service"]["openSession"]) => {
   const instance: ProviderInstance = {
     instanceId,
     driverKind: driver,
@@ -143,10 +143,14 @@ it.effect("prepared team instructions and stdio tools reach the V2 native provid
             "Review the requested acceptance checks.",
           );
           assert.property(
-            claudeMcpQueryOverrides({ threadId, readOnlySandbox: false }).mcpServers,
+            claudeMcpQueryOverrides({ mcpSession: undefined, threadId, readOnlySandbox: false })
+              .mcpServers,
             "qualified",
           );
-          assert.property(codexThreadRuntimeParams({ threadId }).config.mcp_servers, "qualified");
+          assert.property(
+            codexThreadRuntimeParams({ mcpSession: undefined, threadId }).config.mcp_servers,
+            "qualified",
+          );
           return yield* new ProviderAdapterOpenSessionError({
             driver,
             providerSessionId: actual.providerSessionId,

@@ -3,7 +3,7 @@ import * as Effect from "effect/Effect";
 import * as Ref from "effect/Ref";
 import type * as EffectAcpSchema from "effect-acp/compat";
 
-import { parseSessionUpdateEvent } from "./AcpRuntimeModel.ts";
+import { parseSessionUpdateEvent } from "@t3tools/provider-acp/server/runtimeModel";
 import { ACP_OPTION_HARNESS_DEFAULT, applyAcpSessionOption } from "./AcpSessionOption.ts";
 
 const option = (

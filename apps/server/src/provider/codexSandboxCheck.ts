@@ -13,7 +13,7 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
-import { spawnAndCollect } from "./providerSnapshot.ts";
+import { spawnAndCollect } from "@t3tools/provider-core/server/snapshotProbe";
 
 const SANDBOX_CHECK_TIMEOUT = "45 seconds" as const;
 const SANDBOX_CHECK_WORD = "sandbox-ok";
