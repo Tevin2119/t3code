@@ -1,0 +1,53 @@
+name: Upstream Sync
+
+# Fork-only: merges pingdotgg/t3code main into automation/tevin-upstream-sync
+# and keeps one sync PR against master open. See docs/operations/development.md.
+on:
+  schedule:
+    # Avoid minute zero, when GitHub scheduled jobs are busiest.
+    - cron: "23 5 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: tevin-upstream-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    name: Sync upstream
+    if: github.repository == 'Tevin2119/t3code' && github.ref == 'refs/heads/master'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout master
+        uses: actions/checkout@v6
+        with:
+          ref: master
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Test trusted helper
+        run: node --test .github/scripts/tevin-upstream-sync.test.cjs
+
+      # Every later step runs this copy from master, never code from the sync branch.
+      - name: Keep trusted helper
+        run: cp .github/scripts/tevin-upstream-sync.cjs "$RUNNER_TEMP/tevin-upstream-sync.cjs"
+
+      - id: prepare
+        name: Prepare sync branch
+        run: node "$RUNNER_TEMP/tevin-upstream-sync.cjs" prepare
+
+      - name: Push sync branch
+        env:
+          UPSTREAM_SYNC_TOKEN: ${{ secrets.UPSTREAM_SYNC_TOKEN }}
+        run: node "$RUNNER_TEMP/tevin-upstream-sync.cjs" push
+
+      - name: Create or update sync PR
+        if: steps.prepare.outputs.status != 'noop'
+        env:
+          UPSTREAM_SYNC_TOKEN: ${{ secrets.UPSTREAM_SYNC_TOKEN }}
+        run: node "$RUNNER_TEMP/tevin-upstream-sync.cjs" pr
