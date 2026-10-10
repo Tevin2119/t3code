@@ -20,7 +20,7 @@ interface ProjectFilePickerProps {
   readonly setOpen: (open: boolean) => void;
 }
 
-function HighlightedFuzzyText(props: {
+export function HighlightedFuzzyText(props: {
   readonly active: boolean;
   readonly indices: ReadonlyArray<number>;
   readonly value: string;
