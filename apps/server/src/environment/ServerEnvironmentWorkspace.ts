@@ -1,5 +1,5 @@
 import { EnvironmentWorkspace } from "@t3tools/contracts";
-import { HostProcessEnvironment } from "@t3tools/shared/hostProcess";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
@@ -25,7 +25,7 @@ const isWorkspaceBindingError = Schema.is(WorkspaceBindingError);
 
 export const resolveServerEnvironmentWorkspace = Effect.fn("resolveServerEnvironmentWorkspace")(
   function* () {
-    const environment = yield* HostProcessEnvironment;
+    const environment = yield* HostProcess.Environment;
     const fileSystem = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
     const config = yield* ServerConfig.ServerConfig;

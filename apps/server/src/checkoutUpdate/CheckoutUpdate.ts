@@ -13,7 +13,7 @@
  * @module CheckoutUpdate
  */
 import { CheckoutUpdateError, CheckoutUpdateState } from "@t3tools/contracts";
-import { HostProcessEnvironment } from "@t3tools/shared/hostProcess";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -74,7 +74,7 @@ const notSupervised = new CheckoutUpdateError({
 
 /** True when this process was started by the checkout supervisor with its channel open. */
 export const isCheckoutSupervised = Effect.gen(function* () {
-  const environment = yield* HostProcessEnvironment;
+  const environment = yield* HostProcess.Environment;
   const channel = yield* CheckoutUpdateHostChannel;
   return environment[CHECKOUT_SUPERVISOR_ENV] === "1" && channel.connected();
 });

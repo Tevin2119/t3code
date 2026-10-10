@@ -34,6 +34,7 @@ import {
 } from "../acp/DeepSeekAcpSupport.ts";
 import { makeCliAuth } from "../CliAuth.ts";
 import { ProviderDriverError } from "../Errors.ts";
+import { deepseekUsageReader, type DeepSeekUsageReaderEnv } from "./deepseekUsage.ts";
 import { makeDeepSeekAdapter, type DeepSeekAdapterOptions } from "../DeepSeekAdapter.ts";
 import { readDeepSeekBalance } from "../deepseekBalance.ts";
 import {
@@ -76,8 +77,13 @@ export type DeepSeekDriverEnv =
   | Path.Path
   | ProviderEventLoggers;
 
-export const DeepSeekDriver: ProviderDriver<DeepSeekSettings, DeepSeekDriverEnv> = {
+export const DeepSeekDriver: ProviderDriver<
+  DeepSeekSettings,
+  DeepSeekDriverEnv,
+  DeepSeekUsageReaderEnv
+> = {
   driverKind: DRIVER_KIND,
+  usage: deepseekUsageReader,
   metadata: {
     displayName: "DeepSeek",
     supportsMultipleInstances: true,
@@ -108,7 +114,7 @@ export const DeepSeekDriver: ProviderDriver<DeepSeekSettings, DeepSeekDriverEnv>
       // check, so a scoped `homePath` governs everything the card reports.
       const processEnv = makeDeepSeekEnvironment(
         config,
-        mergeProviderInstanceEnvironment(environment),
+        yield* mergeProviderInstanceEnvironment(environment),
       );
       const continuationIdentity = defaultProviderContinuationIdentity({
         driverKind: DRIVER_KIND,

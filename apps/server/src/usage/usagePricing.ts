@@ -15,7 +15,7 @@ import type {
 } from "@t3tools/contracts";
 import { planMakerOf } from "@t3tools/shared/usagePlans";
 
-import type { UsageRecord, UsageSpeed } from "./usageTranscripts.ts";
+import type { UsageRecord, UsageSpeed } from "@t3tools/provider-core/server/usage";
 
 /** Token rates for one billing speed. All values are USD per token. */
 export interface TokenRates {

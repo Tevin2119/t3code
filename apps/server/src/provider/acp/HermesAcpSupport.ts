@@ -19,6 +19,8 @@
  *
  * @module provider/acp/HermesAcpSupport
  */
+import * as NodeOS from "node:os";
+
 import { HERMES_DEFAULT_MODEL, type HermesSettings, ProviderDriverKind } from "@t3tools/contracts";
 import { normalizeModelSlug } from "@t3tools/shared/model";
 import * as Crypto from "effect/Crypto";
@@ -80,7 +82,7 @@ export function makeHermesEnvironment(
 ): NodeJS.ProcessEnv {
   const homePath = hermesSettings?.homePath.trim() ?? "";
   if (homePath.length === 0) return baseEnv;
-  return { ...baseEnv, HERMES_HOME: expandHomePath(homePath) };
+  return { ...baseEnv, HERMES_HOME: expandHomePath(homePath, NodeOS.homedir()) };
 }
 
 export function buildHermesAcpSpawnInput(

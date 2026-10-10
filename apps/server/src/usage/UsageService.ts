@@ -1,33 +1,27 @@
 /**
- * UsageService - scans provider transcripts and returns priced usage buckets.
+ * UsageService - reads every driver's usage history and returns priced usage
+ * buckets.
  *
- * The scan reads native session files and databases, including work driven
- * outside T3 Code. Cursor's local records provide only partial coverage.
+ * Each built-in driver with a `usage` reader contributes its sources, including
+ * work driven outside T3 Code. A `transcripts` reader names JSONL directories
+ * that this service streams itself; a `scan` reader reads its own sources.
  *
  * JSONL transcripts are append-only, so parsed records are memoised per file by
  * `(size, mtime)`. A cold 30-day scan of ~1.4 GB lands around 2-3 seconds; warm
  * scans only reparse files that changed, and a file that merely grew resumes
  * from its cached parse position so only the appended bytes are read.
- * OpenCode's SQLite reader queries the live database each scan so WAL writes
- * remain visible. Antigravity databases are memoised in memory while the
- * database and its WAL keep the same `(size, mtime, ctime)`.
  *
- * Cursor's account API is slow, so its source answers from a cache and marks
- * itself `refreshing` while a background refresh runs; `awaitRefresh` waits
- * for that refresh instead. See `cursorAccountCache`.
+ * A scan reader with a slow source (an account API) may answer from its own
+ * cache and mark itself `refreshing` while a background refresh runs;
+ * `awaitRefresh` waits for that refresh instead.
  *
  * @module UsageService
  */
 import * as NodeOS from "node:os";
 
 import {
-  AntigravitySettings,
-  ClaudeSettings,
-  CodexSettings,
-  HermesSettings,
   type ProviderInstanceConfig,
   ProviderInstanceId,
-  ProviderDriverKind,
   USAGE_CONTRACT_VERSION,
   type ServerSettings as ServerSettingsValue,
   type UsageProviderKind,
@@ -37,11 +31,10 @@ import {
   type UsageSummaryInput,
   UsageReadError,
 } from "@t3tools/contracts";
-import { HostProcessEnvironment, HostProcessPlatform } from "@t3tools/shared/hostProcess";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -57,25 +50,15 @@ import { HttpClient, HttpClientResponse } from "effect/http";
 
 import { writeFileStringAtomically } from "@t3tools/shared/atomicWrite";
 import * as ServerConfig from "../config.ts";
-import { expandHomePath } from "@t3tools/provider-core/server/pathExpansion";
 import * as ServerSettings from "../serverSettings.ts";
-import { resolveCodexHomeLayout } from "../provider/Drivers/CodexHomeLayout.ts";
-import { resolveAntigravityInstanceDirectories } from "../provider/antigravityAuthSupport.ts";
+import { BUILT_IN_USAGE_DRIVERS, type BuiltInUsageReadersEnv } from "../provider/builtInDrivers.ts";
+import type { ProviderDriver } from "@t3tools/provider-core/server/driver";
 import { mergeProviderInstanceEnvironment } from "@t3tools/provider-core/server/instanceEnvironment";
-import { readOpenCodeUsage } from "./opencodeUsageReader.ts";
-import { makeAntigravityUsageCache, readAntigravityUsage } from "./antigravityUsageReader.ts";
-import {
-  CURSOR_ACCOUNT_CACHE_FILE_NAME,
-  CURSOR_ACCOUNT_TTL_MS,
-  cursorFetchRange,
-  decodeCursorAccountCaches,
-  encodeCursorAccountCaches,
-  isCursorCacheFresh,
-  mergeCursorFetch,
-  type CursorAccountCache,
-  type CursorCredentialSource,
-} from "./cursorAccountCache.ts";
-import * as CursorUsageReader from "./cursorUsageReader.ts";
+import type {
+  ProviderUsageInstance,
+  TranscriptUsageFormat,
+  UsageRecord,
+} from "@t3tools/provider-core/server/usage";
 import { resolveModelAliases, UsageAggregator } from "./usageAggregation.ts";
 import { createOverrideRateTable, parseRateTable, type RateTable } from "./usagePricing.ts";
 import {
@@ -87,36 +70,13 @@ import {
   decodeScanCache,
   dedupeWithinFile,
   LEGACY_SCAN_CACHE_FILE_NAME,
-  PREVIOUS_SCAN_CACHE_FILE_NAME,
   makeScanCacheWriter,
+  PREVIOUS_SCAN_CACHE_FILE_NAME,
   pruneScanCache,
   SCAN_CACHE_FILE_NAME,
   type CachedFile,
   type ScanCache,
 } from "./usageScanCache.ts";
-import type { UsageRecord } from "./usageTranscripts.ts";
-import { readHermesRecords } from "./usageDatabases.ts";
-
-const EngineUsageSources = Schema.Struct({
-  sources: Schema.Array(
-    Schema.Struct({ harness: Schema.String, dir: Schema.String, parentName: Schema.String }),
-  ),
-});
-const decodeEngineUsageSources = Schema.decodeUnknownOption(EngineUsageSources);
-
-/** Where a harness keeps its usage, and how it is read. */
-interface TranscriptSource {
-  readonly provider: UsageProviderKind;
-  readonly dir: string;
-  readonly volumeId: string;
-  readonly fileName?: string;
-  readonly extension?: string;
-  readonly parentName?: string;
-  /** A SQLite store in `dir`, read whole rather than file by file. */
-  readonly database?: string;
-  /** Said of the source when it cannot be read. */
-  readonly missingMessage?: string;
-}
 
 const LITELLM_RATES_URL =
   "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json";
@@ -140,15 +100,32 @@ const MAX_HOURLY_WINDOW_MS = 24 * 60 * 60 * 1000;
  */
 const CACHE_RETENTION_DAYS = 92;
 
-const CURSOR_ACCOUNT_READ_ERROR = "Cursor account usage could not be read.";
-
 /** Transcripts parsed at once. More gains little once the disk stays busy. */
 const TRANSCRIPT_READ_CONCURRENCY = 4;
 
-const decodeCodexSettings = Schema.decodeOption(CodexSettings);
-const decodeClaudeSettings = Schema.decodeOption(ClaudeSettings);
-const decodeHermesSettings = Schema.decodeOption(HermesSettings);
-const decodeAntigravitySettings = Schema.decodeOption(AntigravitySettings);
+/** The transcript readers, in driver order. */
+const transcriptReaders = BUILT_IN_USAGE_DRIVERS.flatMap((driver) =>
+  driver.usage?.kind === "transcripts" ? [{ driver, reader: driver.usage }] : [],
+);
+
+/** The scan readers, in driver order. */
+const scanReaders = BUILT_IN_USAGE_DRIVERS.flatMap((driver) =>
+  driver.usage?.kind === "scan" ? [{ driver, reader: driver.usage }] : [],
+);
+
+/** Transcript formats by provider, for decoding the persisted scan cache. */
+const transcriptFormats = new Map(
+  transcriptReaders.map(({ reader }) => [reader.provider, reader.format] as const),
+);
+
+/** One transcript directory to scan. */
+interface TranscriptSource {
+  readonly provider: UsageProviderKind;
+  readonly format: TranscriptUsageFormat<unknown>;
+  readonly dir: string;
+  readonly volumeId: string;
+  readonly fileName?: string;
+}
 
 /** On-disk shape of the rate snapshot. */
 const RatesCacheFile = Schema.Struct({
@@ -173,13 +150,21 @@ function isLaterRead(a: CachedFile, b: CachedFile): boolean {
   return a.mtimeMs > b.mtimeMs || (a.mtimeMs === b.mtimeMs && a.size > b.size);
 }
 
+/** Providers whose format lets one session's records appear in several files. */
+const sharedSessionProviders: ReadonlySet<UsageProviderKind> = new Set(
+  transcriptReaders.flatMap(({ reader }) =>
+    reader.format.sharedSessionsAcrossFiles ? [reader.provider] : [],
+  ),
+);
+
 /**
- * Codex sessions with records in more than one file, such as a rollout that
- * moved after it was read. Only these need cross-file dedupe keys: within one
- * file the occurrence count already keeps every key unique, so keying the rest
- * would only build and hash a string for each of their records.
+ * Sessions of `sharedSessionProviders` with records in more than one file,
+ * such as a rollout that moved after it was read. Only these need cross-file
+ * dedupe keys: within one file the occurrence count already keeps every key
+ * unique, so keying the rest would only build and hash a string for each of
+ * their records.
  */
-function sharedCodexSessions(
+function sharedSessions(
   files: readonly { readonly records: readonly UsageRecord[] }[],
 ): ReadonlySet<string> {
   const firstFile = new Map<string, number>();
@@ -187,7 +172,8 @@ function sharedCodexSessions(
   for (const [index, file] of files.entries()) {
     let previous = "";
     for (const { provider, sessionId } of file.records) {
-      if (provider !== "codex" || sessionId === previous || sessionId.length === 0) continue;
+      if (!sharedSessionProviders.has(provider) || sessionId === previous || sessionId.length === 0)
+        continue;
       previous = sessionId;
       const first = firstFile.get(sessionId);
       if (first === undefined) firstFile.set(sessionId, index);
@@ -209,35 +195,46 @@ export class UsageService extends Context.Service<
   }
 >()("t3/usage/UsageService") {}
 
+const EMPTY_PRICING: UsagePricing = {
+  status: "unavailable",
+  source: LITELLM_RATES_URL,
+  fetchedAt: null,
+  knownModels: 0,
+};
+
+/** Empty summary, for suites that only need the RPC surface to resolve. */
+const layerTest = Layer.succeed(
+  UsageService,
+  UsageService.of({
+    readSummary: (input) =>
+      Effect.succeed({
+        contractVersion: USAGE_CONTRACT_VERSION,
+        readAt: "1970-01-01T00:00:00.000Z",
+        timeZone: input.timeZone,
+        sinceDay: input.sinceDay,
+        untilDay: input.untilDay,
+        buckets: [],
+        sources: [],
+        pricing: EMPTY_PRICING,
+        scanDurationMs: 0,
+      }),
+    refreshRates: Effect.succeed(EMPTY_PRICING),
+  }),
+);
+
 export const make = Effect.gen(function* () {
-  const crypto = yield* Crypto.Crypto;
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const config = yield* ServerConfig.ServerConfig;
   const settingsService = yield* ServerSettings.ServerSettingsService;
   const httpClient = yield* HttpClient.HttpClient;
-  const hostEnvironment = yield* HostProcessEnvironment;
-  const platform = yield* HostProcessPlatform;
-  const cursorAccountReader = yield* CursorUsageReader.CursorAccountReader;
+  const hostEnvironment = yield* HostProcess.Environment;
+  // The readers yield their own services; scans run them against this context.
+  const readerContext = yield* Effect.context<BuiltInUsageReadersEnv>();
 
   const fileCache: ScanCache = new Map();
-  const antigravityCache = makeAntigravityUsageCache();
   const sourceCache = new Map<string, typeof CachedSource.Type>();
   let cacheDirty = false;
-  /** Cursor account caches by credential source. */
-  const cursorCaches = new Map<string, CursorAccountCache>();
-  let cursorCacheDirty = false;
-  /**
-   * The last failed refresh per credential source, standing for a TTL so a
-   * client refetching a broken login does not refetch Cursor each time. A
-   * `null` error means there is no login: no source to report.
-   */
-  const cursorFailures = new Map<
-    string,
-    { readonly atMs: number; readonly error: string | null }
-  >();
-  /** The refresh in flight per credential source, which every read joins. */
-  const cursorRefreshes = new Map<string, Deferred.Deferred<void>>();
   const isWithinDirectory = (filePath: string, dir: string) => {
     const relative = path.relative(dir, filePath);
     return relative !== ".." && !relative.startsWith(".." + path.sep) && !path.isAbsolute(relative);
@@ -246,7 +243,6 @@ export const make = Effect.gen(function* () {
   const ratesCachePath = path.join(config.stateDir, "usage-model-rates.json");
   const scanCachePath = path.join(config.stateDir, SCAN_CACHE_FILE_NAME);
   const legacyScanCachePath = path.join(config.stateDir, LEGACY_SCAN_CACHE_FILE_NAME);
-  const cursorCachePath = path.join(config.stateDir, CURSOR_ACCOUNT_CACHE_FILE_NAME);
   const writeCacheFile = (filePath: string, contents: string) =>
     writeFileStringAtomically({ filePath, contents }).pipe(
       Effect.provideService(FileSystem.FileSystem, fileSystem),
@@ -340,200 +336,97 @@ export const make = Effect.gen(function* () {
   );
 
   /**
-   * A source's directory and volume as the scan reports them. Kept stable after
-   * root cleanup, including aliases and clients merging pre-cleanup environment
-   * summaries.
+   * Every instance of `driver` with its decoded config, or none when it does
+   * not decode. Disabled accounts still have history. An unconfigured default
+   * slot runs with default config, just as it does in the provider registry.
    */
-  const stableSource = Effect.fn("UsageService.stableSource")(function* (
-    provider: UsageProviderKind,
-    directory: string,
-    retentionCutoffMs: number,
+  const usageInstances = Effect.fn("UsageService.usageInstances")(function* <Config>(
+    driver: ProviderDriver<Config, unknown, unknown>,
+    settings: ServerSettingsValue,
   ) {
-    const sourceKey = provider + "\0" + directory;
-    const previous = sourceCache.get(sourceKey);
-    const dir = yield* fileSystem
-      .realPath(directory)
-      .pipe(Effect.orElseSucceed(() => previous?.dir ?? directory));
-    const currentVolumeId = yield* Effect.promise(() => readDirectoryVolumeId(dir));
-    const hasRetainedHistory = fileCache
-      .entries()
-      .some(
-        ([filePath, entry]) =>
-          entry.provider === provider &&
-          entry.mtimeMs >= retentionCutoffMs &&
-          entry.records.length + entry.tailRecords.length > 0 &&
-          isWithinDirectory(filePath, dir),
-      );
-    // A recreated directory still reports the retained history under its old identity.
-    const volumeId =
-      previous?.dir === dir && (hasRetainedHistory || !currentVolumeId)
-        ? previous.volumeId || currentVolumeId
-        : currentVolumeId;
-    if (previous?.dir !== dir || previous.volumeId !== volumeId) {
-      sourceCache.set(sourceKey, { dir, volumeId });
-      cacheDirty = true;
+    const entries: Array<
+      readonly [ProviderInstanceId, Pick<ProviderInstanceConfig, "config" | "environment">, boolean]
+    > = Object.entries(settings.providerInstances)
+      .filter(([, instance]) => instance.driver === driver.driverKind)
+      .map(([id, instance]) => [ProviderInstanceId.make(id), instance, true] as const);
+    if (!Object.hasOwn(settings.providerInstances, driver.driverKind)) {
+      entries.push([ProviderInstanceId.make(driver.driverKind), {}, false]);
     }
-    return { dir, volumeId };
+    const decodeConfig = Schema.decodeUnknownOption(driver.configSchema);
+    return yield* Effect.forEach(
+      entries,
+      Effect.fnUntraced(function* ([instanceId, instance, configured]) {
+        const instanceConfig: ProviderUsageInstance<Config> = {
+          instanceId,
+          config: Option.getOrUndefined(decodeConfig(instance.config ?? {})),
+          environment: yield* mergeProviderInstanceEnvironment(
+            instance.environment,
+            hostEnvironment,
+          ),
+          configured,
+        };
+        return instanceConfig;
+      }),
+    );
   });
 
-  /** Resolves the transcript directory for each provider. */
+  /** Resolves every transcript directory the usage readers point at. */
   const resolveTranscriptDirs = Effect.fn("UsageService.resolveTranscriptDirs")(function* (
     settings: ServerSettingsValue,
     retentionCutoffMs: number,
   ) {
-    const dirs: TranscriptSource[] = [];
+    const dirs: Array<TranscriptSource> = [];
     const seen = new Set<string>();
-    for (const driver of [
-      "claudeAgent",
-      "codex",
-      "grok",
-      "deepseek",
-      "pi",
-      "kimi",
-      "hermes",
-    ] as const) {
-      // Disabled accounts still have history. An unconfigured default slot
-      // runs with default config, just as it does in the provider registry.
-      const instances: Array<Pick<ProviderInstanceConfig, "config" | "environment">> =
-        Object.values(settings.providerInstances).filter((instance) => instance.driver === driver);
-      if (!Object.hasOwn(settings.providerInstances, driver)) {
-        instances.push({});
-      }
-      for (const instance of instances) {
-        const environment = mergeProviderInstanceEnvironment(instance.environment, hostEnvironment);
-        const provider = driver === "claudeAgent" ? "claude" : driver;
-        let home: string;
-        if (driver === "codex") {
-          const decoded = decodeCodexSettings(instance.config ?? {});
-          if (Option.isNone(decoded)) continue;
-          const config = decoded.value;
-          const environmentHome = environment.CODEX_HOME?.trim();
-          const layout = yield* resolveCodexHomeLayout(
-            config.setupMode !== "managed" &&
-              !config.homePath.trim() &&
-              !config.shadowHomePath.trim() &&
-              environmentHome
-              ? { ...config, homePath: environmentHome }
-              : config,
+    for (const { driver, reader } of transcriptReaders) {
+      const { provider, format } = reader;
+      const directories = yield* Effect.forEach(
+        yield* usageInstances(driver, settings),
+        (instance) => reader.directories(instance),
+      );
+      for (const { dir: directory, fileName } of directories.flat()) {
+        const sourceKey = provider + "\0" + directory;
+        const previous = sourceCache.get(sourceKey);
+        // Keep canonical paths and source fingerprints stable after root cleanup,
+        // including aliases and clients merging pre-cleanup environment summaries.
+        const dir = yield* fileSystem
+          .realPath(directory)
+          .pipe(Effect.orElseSucceed(() => previous?.dir ?? directory));
+        const currentVolumeId = yield* Effect.promise(() => readDirectoryVolumeId(dir));
+        const hasRetainedHistory = fileCache
+          .entries()
+          .some(
+            ([filePath, entry]) =>
+              entry.provider === provider &&
+              entry.mtimeMs >= retentionCutoffMs &&
+              entry.records.length + entry.tailRecords.length > 0 &&
+              isWithinDirectory(filePath, dir),
           );
-          home = layout.sharedHomePath;
-        } else if (driver === "claudeAgent") {
-          const decoded = decodeClaudeSettings(instance.config ?? {});
-          if (Option.isNone(decoded)) continue;
-          const configured = decoded.value.homePath.trim();
-          home = configured
-            ? expandHomePath(configured)
-            : environment.CLAUDE_CONFIG_DIR?.trim() || path.join(NodeOS.homedir(), ".claude");
-        } else if (driver === "deepseek") {
-          home = expandHomePath(
-            environment.DSH_HOME?.trim() || path.join(NodeOS.homedir(), ".dsh"),
-          );
-        } else if (driver === "pi") {
-          home = expandHomePath(
-            environment.PI_CODING_AGENT_DIR?.trim() || path.join(NodeOS.homedir(), ".pi", "agent"),
-          );
-        } else if (driver === "kimi") {
-          home = expandHomePath(
-            environment.KIMI_CODE_HOME?.trim() || path.join(NodeOS.homedir(), ".kimi-code"),
-          );
-        } else if (driver === "hermes") {
-          const decoded = decodeHermesSettings(instance.config ?? {});
-          const configured = Option.isSome(decoded) ? decoded.value.homePath.trim() : "";
-          home = configured
-            ? expandHomePath(configured)
-            : environment.HERMES_HOME?.trim() ||
-              (environment.LOCALAPPDATA?.trim()
-                ? path.join(environment.LOCALAPPDATA.trim(), "hermes")
-                : path.join(NodeOS.homedir(), ".hermes"));
-        } else {
-          home = expandHomePath(
-            environment.GROK_HOME?.trim() || path.join(NodeOS.homedir(), ".grok"),
-          );
+        // A recreated directory still reports the retained history under its old identity.
+        const volumeId =
+          previous?.dir === dir && (hasRetainedHistory || !currentVolumeId)
+            ? previous.volumeId || currentVolumeId
+            : currentVolumeId;
+        if (previous?.dir !== dir || previous.volumeId !== volumeId) {
+          sourceCache.set(sourceKey, { dir, volumeId });
+          cacheDirty = true;
         }
-        // The DeepSeek harness keeps the running totals of each session in its store.
-        // OpenCode and Hermes keep theirs in a database in their home.
-        const directory =
-          provider === "deepseek"
-            ? path.resolve(home, "storages", "session_projcache", "sessions")
-            : provider === "hermes"
-              ? path.resolve(home)
-              : path.resolve(home, provider === "claude" ? "projects" : "sessions");
-        const { dir, volumeId } = yield* stableSource(provider, directory, retentionCutoffMs);
         const key = `${provider}\0${dir}`;
         if (seen.has(key)) continue;
         seen.add(key);
         dirs.push({
           provider,
+          format,
           dir,
           volumeId,
-          ...(provider === "grok" ? { fileName: "updates.jsonl" } : {}),
-          ...(provider === "kimi" ? { fileName: "wire.jsonl" } : {}),
-          ...(provider === "deepseek" ? { extension: ".json" } : {}),
-          ...(provider === "hermes" ? { database: path.join(dir, "state.db") } : {}),
+          ...(fileName === undefined ? {} : { fileName }),
         });
       }
-    }
-    for (const source of yield* engineSources(settings)) {
-      const key = `${source.provider}\0${source.dir}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      dirs.push({
-        ...source,
-        volumeId: yield* Effect.promise(() => readDirectoryVolumeId(source.dir)),
-      });
     }
     return dirs;
   });
 
   /**
-   * Stores of usage the delivery engine keeps outside the harnesses' own: pi's
-   * sessions of the engine's attempts, in the engine's folder of runs. The
-   * engine names them; it is asked only on this host, and only when delivery
-   * is on. An engine that does not answer is reported, not guessed at.
-   */
-  const engineSources = Effect.fn("UsageService.engineSources")(function* (
-    settings: ServerSettingsValue,
-  ) {
-    const engineUrl = settings.delivery.enabled ? settings.delivery.engineUrl.trim() : "";
-    if (!engineUrl) return [] as TranscriptSource[];
-    let url: string;
-    try {
-      const base = new URL(engineUrl);
-      if (!["127.0.0.1", "localhost", "[::1]"].includes(base.hostname)) return [];
-      url = new URL("/api/usage/sources", base).toString();
-    } catch {
-      return [];
-    }
-    const body = yield* httpClient.get(url).pipe(
-      Effect.flatMap(HttpClientResponse.filterStatusOk),
-      Effect.flatMap((response) => response.json),
-      Effect.timeout(3_000),
-      Effect.catchCause(() => Effect.succeed(null)),
-    );
-    const decoded = body === null ? Option.none() : decodeEngineUsageSources(body);
-    if (Option.isNone(decoded)) {
-      return [
-        {
-          provider: "pi",
-          dir: engineUrl,
-          volumeId: "",
-          missingMessage:
-            "The delivery engine did not name its pi sessions, so pi runs of the engine are not counted.",
-        },
-      ] satisfies TranscriptSource[];
-    }
-    return decoded.value.sources
-      .filter((source) => source.harness === "pi" && source.dir.trim().length > 0)
-      .map((source): TranscriptSource => ({
-        provider: "pi",
-        dir: path.resolve(source.dir),
-        volumeId: "",
-        parentName: source.parentName,
-      }));
-  });
-
-  /**
-   * Loads the persisted scan and Cursor account caches exactly once per process.
+   * Loads the persisted scan cache exactly once per process.
    *
    * `Effect.cached` makes concurrent first readers await the same load rather
    * than each seeing a "loaded" flag set before the read finished and cold
@@ -546,13 +439,12 @@ export const make = Effect.gen(function* () {
           Effect.flatMap((raw) => decodeScanCacheFile(raw)),
           Effect.catchCause(() => Effect.succeed(null)),
         );
-      for (const [key, cache] of decodeCursorAccountCaches(yield* readDocument(cursorCachePath))) {
-        cursorCaches.set(key, cache);
-      }
       const currentDocument = yield* readDocument(scanCachePath);
       const documents: unknown[] = currentDocument === null ? [] : [currentDocument];
       if (currentDocument === null) {
-        // Both branches used v5 for different tuples. Retain both histories when present.
+        // The fork's v6 file is new. Upstream's v5 file and the fork's own
+        // earlier v5 file share a name; read it, then the legacy file, and
+        // keep the later read of each transcript.
         for (const file of [
           path.join(config.stateDir, PREVIOUS_SCAN_CACHE_FILE_NAME),
           legacyScanCachePath,
@@ -560,10 +452,11 @@ export const make = Effect.gen(function* () {
           const document = yield* readDocument(file);
           if (document !== null) documents.push(document);
         }
+        // Write the migrated cache to its own file on the next scan.
         cacheDirty = documents.length > 0;
       }
       for (const document of documents) {
-        for (const [file, entry] of decodeScanCache(document)) {
+        for (const [file, entry] of decodeScanCache(document, transcriptFormats)) {
           const previous = fileCache.get(file);
           if (previous === undefined || isLaterRead(entry, previous)) fileCache.set(file, entry);
         }
@@ -581,7 +474,7 @@ export const make = Effect.gen(function* () {
   // keeps an older snapshot from landing after a newer one.
   const persistLock = yield* Semaphore.make(1);
 
-  // Each dirty flag is cleared before encoding, so a change while the write is
+  // The dirty flag is cleared before encoding, so a change while the write is
   // in flight marks it dirty again. A failed write restores the flag, so the
   // next persist retries instead of leaving disk stale. A cache we cannot
   // write is a slower next start, not a failed read.
@@ -595,17 +488,6 @@ export const make = Effect.gen(function* () {
         Effect.catchCause(() =>
           Effect.sync(() => {
             cacheDirty = true;
-          }),
-        ),
-      );
-    }
-    if (cursorCacheDirty) {
-      cursorCacheDirty = false;
-      yield* Effect.sync(() => encodeCursorAccountCaches(cursorCaches)).pipe(
-        Effect.flatMap((contents) => writeCacheFile(cursorCachePath, contents)),
-        Effect.catchCause(() =>
-          Effect.sync(() => {
-            cursorCacheDirty = true;
           }),
         ),
       );
@@ -647,8 +529,10 @@ export const make = Effect.gen(function* () {
     size: number,
     mtimeMs: number,
     provider: UsageProviderKind,
+    format: TranscriptUsageFormat<unknown>,
   ): Effect.Effect<{
     readonly records: readonly UsageRecord[];
+    readonly failed?: true;
     readonly update?: { readonly entry: CachedFile; readonly replaces: CachedFile | undefined };
   }> =>
     Effect.gen(function* () {
@@ -677,13 +561,14 @@ export const make = Effect.gen(function* () {
           : undefined;
 
       const parsed = yield* Effect.promise(() =>
-        readTranscriptRecords(filePath, provider, resumeFrom),
+        readTranscriptRecords(filePath, format, resumeFrom),
       );
       // A read failure is not an empty transcript: caching it under this
       // (size, mtime) would silently drop the file's usage until it changes.
       if (parsed === null)
         return {
           records: cached?.provider === provider ? [...cached.records, ...cached.tailRecords] : [],
+          failed: true,
         };
 
       // Stored already de-duplicated within the file, which is 99% of all
@@ -725,47 +610,20 @@ export const make = Effect.gen(function* () {
     source: TranscriptSource,
     windowStartMs: number,
   ) {
-    const { provider, dir, volumeId, fileName, extension, parentName, database, missingMessage } =
-      source;
-    if (missingMessage !== undefined)
-      return {
-        provider,
-        dir,
-        volumeId,
-        files: null,
-        status: "failed",
-        message: missingMessage,
-      } satisfies ScannedDir;
+    const { provider, format, dir, volumeId, fileName } = source;
     const exists = yield* fileSystem
       .exists(dir)
       .pipe(Effect.catchCause(() => Effect.succeed(false)));
     if (!exists) return { provider, dir, volumeId, files: null } satisfies ScannedDir;
-    if (database !== undefined) {
-      const records = yield* Effect.sync(() => readHermesRecords(database, windowStartMs));
-      return records === null
-        ? ({
-            provider,
-            dir,
-            volumeId,
-            files: null,
-            status: "failed",
-            message: "The harness usage store could not be read.",
-          } satisfies ScannedDir)
-        : ({ provider, dir, volumeId, files: [{ path: database, records }] } satisfies ScannedDir);
-    }
-    const files = yield* Effect.promise(() =>
-      listTranscriptFiles(dir, windowStartMs, {
-        ...(fileName === undefined ? {} : { fileName }),
-        ...(extension === undefined ? {} : { extension }),
-        ...(parentName === undefined ? {} : { parentName }),
-      }),
+    const { files, failedPaths } = yield* Effect.promise(() =>
+      listTranscriptFiles(dir, windowStartMs, fileName === undefined ? undefined : { fileName }),
     );
     // A cold parse waits on disk reads, so a few files in flight read
     // close to twice as fast. Results keep walk order.
     const read = yield* Effect.forEach(
       files,
       (file) =>
-        readFileRecords(file.path, file.size, file.mtimeMs, provider).pipe(
+        readFileRecords(file.path, file.size, file.mtimeMs, provider, format).pipe(
           Effect.map((result) => ({ path: file.path, ...result })),
         ),
       { concurrency: TRANSCRIPT_READ_CONCURRENCY },
@@ -786,162 +644,19 @@ export const make = Effect.gen(function* () {
       }
       return { path, records };
     });
-    return { provider, dir, volumeId, files: parsedFiles } satisfies ScannedDir;
-  });
-
-  /** Fetches what one account cache is missing, then persists it if anything changed. */
-  const refreshCursorAccount = Effect.fn("UsageService.refreshCursorAccount")(function* (
-    credential: CursorCredentialSource,
-    credentialKey: string,
-    retentionStartMs: number,
-  ) {
-    const nowMs = yield* Clock.currentTimeMillis;
-    const fetchMissing = (cache: CursorAccountCache | undefined) => {
-      const range = cursorFetchRange(cache, retentionStartMs, nowMs);
-      return cursorAccountReader
-        .read(credential, range.sinceMs, range.untilMs)
-        .pipe(Effect.map((result) => ({ range, result })));
-    };
-    let base = cursorCaches.get(credentialKey);
-    let fetched = yield* fetchMissing(base);
-    // Another login's history replaces the cached account's, even if reading it fails.
-    if (
-      base !== undefined &&
-      fetched.result.accountKey !== null &&
-      fetched.result.accountKey !== base.accountKey
-    ) {
-      cursorCaches.delete(credentialKey);
-      cursorCacheDirty = true;
-      base = undefined;
-      fetched = yield* fetchMissing(base);
-    }
-    const { range, result } = fetched;
-    if (result.missing || result.error !== null || result.accountKey === null) {
-      cursorFailures.set(credentialKey, {
-        atMs: nowMs,
-        error: result.missing || result.error !== null ? result.error : CURSOR_ACCOUNT_READ_ERROR,
-      });
-      yield* schedulePersist;
-      return;
-    }
-    const merged = mergeCursorFetch(
-      base,
-      result.accountKey,
-      range,
-      result.records,
-      nowMs,
-      retentionStartMs,
-    );
-    cursorCaches.set(credentialKey, merged.cache);
-    cursorFailures.delete(credentialKey);
-    // An unchanged edge is not worth rewriting the file for: after a restart
-    // the cache just refetches a slightly wider edge.
-    if (merged.changed) {
-      cursorCacheDirty = true;
-      yield* schedulePersist;
-    }
-  });
-
-  /** Joins the refresh in flight, or starts one. */
-  const startCursorRefresh = (
-    credential: CursorCredentialSource,
-    credentialKey: string,
-    retentionStartMs: number,
-  ) =>
-    // Enrollment and fork are atomic, so an interrupted caller cannot leave a
-    // registered refresh that nothing will finish.
-    Effect.uninterruptible(
-      Effect.gen(function* () {
-        const current = cursorRefreshes.get(credentialKey);
-        if (current !== undefined) return current;
-        const done = Deferred.makeUnsafe<void>();
-        cursorRefreshes.set(credentialKey, done);
-        // Detached: a departing client must not cancel a fetch later reads reuse.
-        yield* refreshCursorAccount(credential, credentialKey, retentionStartMs).pipe(
-          Effect.catchCause(() =>
-            Clock.currentTimeMillis.pipe(
-              Effect.map((atMs) =>
-                cursorFailures.set(credentialKey, { atMs, error: CURSOR_ACCOUNT_READ_ERROR }),
-              ),
-            ),
-          ),
-          Effect.ensuring(
-            Effect.suspend(() => {
-              cursorRefreshes.delete(credentialKey);
-              return Deferred.succeed(done, undefined);
-            }),
-          ),
-          Effect.forkDetach,
-        );
-        return done;
-      }),
-    );
-
-  /**
-   * The Cursor account source. A cache inside its TTL, or a refresh that failed
-   * inside it, answers directly. Otherwise a refresh starts: `awaitRefresh`
-   * waits for it, and anything else answers from the cache marked `refreshing`.
-   */
-  const cursorAccountSource = Effect.fn("UsageService.cursorAccountSource")(function* (
-    credential: CursorCredentialSource,
-    authPath: string,
-    windowStartMs: number,
-    retentionStartMs: number,
-    awaitRefresh: boolean,
-  ) {
-    // No saved login means there is no account source to report, not a setup error.
-    if (
-      typeof credential === "string" &&
-      !(yield* fileSystem.exists(credential).pipe(Effect.orElseSucceed(() => true)))
-    ) {
-      return null;
-    }
-    const credentialKey = typeof credential === "string" ? credential : "keychain";
-    const nowMs = yield* Clock.currentTimeMillis;
-    const recentFailure = cursorFailures.get(credentialKey);
-    let refreshing = false;
-    if (
-      (recentFailure === undefined || nowMs - recentFailure.atMs >= CURSOR_ACCOUNT_TTL_MS) &&
-      !isCursorCacheFresh(cursorCaches.get(credentialKey), nowMs)
-    ) {
-      const refresh = yield* startCursorRefresh(credential, credentialKey, retentionStartMs);
-      if (awaitRefresh) yield* Deferred.await(refresh);
-      else refreshing = true;
-    }
-
-    const cache = cursorCaches.get(credentialKey);
-    const failure = refreshing ? undefined : cursorFailures.get(credentialKey);
-    const failureMessage = failure === undefined ? undefined : failure.error;
-    if (failureMessage === null) return null;
-    if (cache === undefined) {
-      return {
-        provider: "cursor",
-        dir: authPath,
-        volumeId: yield* Effect.promise(() => readDirectoryVolumeId(authPath)),
-        // Never combine a local fallback with another server's account-wide history.
-        ...(refreshing
-          ? { files: [], refreshing: true }
-          : { files: null, message: failureMessage ?? CURSOR_ACCOUNT_READ_ERROR }),
-      } satisfies ScannedDir;
-    }
-    // The same account includes CLI and desktop history from every machine.
-    // A stable remote fingerprint prevents connected environments counting it twice.
-    const source = `cursor-account:${cache.accountKey}`;
+    // Unread files keep their cached usage, but the total may be short.
+    const unread = failedPaths + read.filter((file) => file.failed).length;
     return {
-      provider: "cursor",
-      dir: source,
-      hostId: "cursor.com",
-      volumeId: cache.accountKey,
-      files: [
-        {
-          path: source,
-          records: cache.records.filter((record) => record.timestampMs >= windowStartMs),
-        },
-      ],
-      ...(failureMessage === undefined
-        ? { status: "ok" }
-        : { status: "partial", message: failureMessage }),
-      ...(refreshing ? { refreshing: true } : {}),
+      provider,
+      dir,
+      volumeId,
+      files: parsedFiles,
+      ...(unread > 0
+        ? {
+            status: "partial",
+            message: `${unread} transcript path(s) could not be read; usage may be incomplete.`,
+          }
+        : {}),
     } satisfies ScannedDir;
   });
 
@@ -951,254 +666,47 @@ export const make = Effect.gen(function* () {
     retentionCutoffMs: number,
     awaitRefresh: boolean,
   ) {
-    // The home resolvers ask for `Path` themselves; satisfy them from the
-    // instance we already hold so the scan stays context-free.
     const dirs = yield* resolveTranscriptDirs(settings, retentionCutoffMs).pipe(
-      Effect.provideService(Path.Path, path),
+      Effect.provideContext(readerContext),
     );
 
-    const home = NodeOS.homedir();
-    const envRoots = Effect.fnUntraced(function* (key: string, defaults: readonly string[]) {
-      const roots = hostEnvironment[key]
-        ?.split(",")
-        .map((value) => value.trim())
-        .filter(Boolean);
-      const canonical = new Set<string>();
-      for (const root of roots?.length ? roots : defaults) {
-        const resolved = path.resolve(expandHomePath(root));
-        canonical.add(
-          yield* fileSystem.realPath(resolved).pipe(Effect.orElseSucceed(() => resolved)),
-        );
-      }
-      return [...canonical];
-    });
-    const dataHome = hostEnvironment["XDG_DATA_HOME"]?.trim();
-
-    const openCode = Effect.gen(function* () {
-      const roots = yield* envRoots("OPENCODE_DATA_DIR", [
-        path.join(
-          dataHome && path.isAbsolute(dataHome) ? dataHome : path.join(home, ".local", "share"),
-          "opencode",
-        ),
-      ]);
-      for (const instance of Object.values(settings.providerInstances)) {
-        if (instance.driver !== "opencode") continue;
-        const environment = mergeProviderInstanceEnvironment(instance.environment, hostEnvironment);
-        const configured = environment.OPENCODE_DATA_DIR?.trim();
-        for (const root of configured
-          ? configured.split(",")
-          : [
-              path.join(
-                expandHomePath(
-                  environment.XDG_DATA_HOME?.trim() || path.join(home, ".local", "share"),
-                ),
-                "opencode",
-              ),
-            ]) {
-          const resolved = path.resolve(expandHomePath(root.trim()));
-          roots.push(
-            yield* fileSystem.realPath(resolved).pipe(Effect.orElseSucceed(() => resolved)),
-          );
-        }
-      }
-      return yield* Effect.forEach(
-        [...new Set(roots)],
-        (dir) =>
-          Effect.gen(function* () {
-            const result = yield* Effect.promise(() => readOpenCodeUsage(dir, windowStartMs));
-            return {
-              provider: "opencode",
-              dir,
-              volumeId: yield* Effect.promise(() => readDirectoryVolumeId(dir)),
-              files: result.missing && !result.error ? null : result.files,
-              status: result.error ? "partial" : "ok",
-              ...(result.error ? { message: "Some OpenCode history could not be read." } : {}),
-            } satisfies ScannedDir;
-          }),
-        { concurrency: "unbounded" },
-      );
-    });
-
-    const antigravity = Effect.gen(function* () {
-      const billingByRoot = new Map<string, string>();
-      const geminiHome = expandHomePath(
-        hostEnvironment.GEMINI_HOME?.trim() || path.join(home, ".gemini"),
-      );
-      const antigravityRoots = yield* envRoots("ANTIGRAVITY_DATA_DIR", [
-        ...["antigravity", "antigravity-cli", "antigravity-ide", "antigravity-backup"].map((name) =>
-          path.join(geminiHome, name),
-        ),
-        path.join(home, ".config", "antigravity"),
-      ]);
-      const antigravityInstances = Object.entries(settings.providerInstances);
-      if (!Object.hasOwn(settings.providerInstances, "antigravity"))
-        antigravityInstances.push([
-          "antigravity",
-          {
-            driver: ProviderDriverKind.make("antigravity"),
-            enabled: true,
-          },
-        ]);
-      for (const [instanceId, instance] of antigravityInstances) {
-        if (instance.driver === "antigravity") {
-          const directories = yield* resolveAntigravityInstanceDirectories(
-            config.stateDir,
-            ProviderInstanceId.make(instanceId),
-          ).pipe(
-            Effect.provideService(Crypto.Crypto, crypto),
-            Effect.provideService(Path.Path, path),
-            Effect.mapError(
-              (cause) =>
-                new UsageReadError({
-                  reason: "scanFailed",
-                  detail: "Antigravity profile directory could not be resolved.",
-                  cause,
-                }),
+    const scans = Effect.forEach(
+      scanReaders,
+      ({ driver, reader }) =>
+        usageInstances(driver, settings)
+          .pipe(
+            Effect.flatMap((instances) =>
+              reader.scan({ instances, settings, windowStartMs, retentionCutoffMs, awaitRefresh }),
             ),
-          );
-          const root = path.join(directories.profile, "antigravity-acp");
-          if (
-            instanceId === "antigravity" &&
-            !Object.hasOwn(settings.providerInstances, "antigravity") &&
-            !(yield* fileSystem.exists(root).pipe(Effect.orElseSucceed(() => false)))
           )
-            continue;
-          antigravityRoots.push(root);
-          const decoded = decodeAntigravitySettings(instance.config ?? {});
-          const authMethod = Option.isSome(decoded) ? decoded.value.authMethod : "oauth-personal";
-          billingByRoot.set(
-            root,
-            authMethod === "gemini-api-key"
-              ? "gemini"
-              : authMethod === "agent-platform"
-                ? "vertex_ai"
-                : "antigravity",
-          );
-        }
-      }
-      const antigravityDirs = new Set<string>();
-      for (const root of antigravityRoots) {
-        const resolvedRoot = yield* fileSystem
-          .realPath(root)
-          .pipe(Effect.orElseSucceed(() => root));
-        const nested = path.join(resolvedRoot, "conversations");
-        const dir = (yield* fileSystem
-          .exists(nested)
-          .pipe(Effect.catchCause(() => Effect.succeed(false))))
-          ? nested
-          : resolvedRoot;
-        const canonical = yield* fileSystem.realPath(dir).pipe(Effect.orElseSucceed(() => dir));
-        antigravityDirs.add(canonical);
-        if (billingByRoot.has(root)) billingByRoot.set(canonical, billingByRoot.get(root)!);
-      }
-      const result = yield* Effect.promise(() =>
-        readAntigravityUsage([...antigravityDirs], windowStartMs, antigravityCache),
-      );
-      const scanned: ScannedDir[] = [];
-      for (const dir of antigravityDirs) {
-        const exists = yield* fileSystem
-          .exists(dir)
-          .pipe(Effect.catchCause(() => Effect.succeed(false)));
-        const failed = result.errors.some(
-          (error) => error === dir || error.startsWith(`${dir}${path.sep}`),
-        );
-        scanned.push({
-          provider: "antigravity",
-          dir,
-          volumeId: yield* Effect.promise(() => readDirectoryVolumeId(dir)),
-          files:
-            !exists && !failed
-              ? null
-              : result.files
-                  .filter((file) => file.root === dir)
-                  .map((file) => ({
-                    ...file,
-                    records: file.records.map((record) => ({
-                      ...record,
-                      modelProvider: billingByRoot.get(dir) ?? "antigravity",
-                      modelProviderSource: "harness" as const,
-                    })),
-                  })),
-          status: failed ? "partial" : "ok",
-          ...(failed ? { message: "Some Antigravity history could not be read." } : {}),
-        });
-      }
-      return scanned;
-    });
-
-    const cursor = Effect.gen(function* () {
-      const cursorUserHome =
-        (platform === "win32" ? hostEnvironment["USERPROFILE"] : hostEnvironment["HOME"]) || home;
-      const configHome = hostEnvironment["XDG_CONFIG_HOME"]?.trim();
-      const cursorHome =
-        platform === "darwin"
-          ? path.join(cursorUserHome, "Library", "Application Support")
-          : platform === "win32"
-            ? hostEnvironment["APPDATA"] || path.join(cursorUserHome, "AppData", "Roaming")
-            : configHome && path.isAbsolute(configHome)
-              ? configHome
-              : path.join(cursorUserHome, ".config");
-      const cursorAuthPath =
-        platform === "darwin"
-          ? path.join(cursorUserHome, ".cursor", "auth.json")
-          : path.join(cursorHome, platform === "win32" ? "Cursor" : "cursor", "auth.json");
-      const credentialStore = hostEnvironment["AGENT_CLI_CREDENTIAL_STORE"];
-      const loginUnavailable =
-        Boolean(hostEnvironment["CURSOR_AUTH_TOKEN"]?.trim()) ||
-        Boolean(hostEnvironment["CURSOR_API_KEY"]?.trim()) ||
-        credentialStore === "memory";
-      const useKeychain = platform === "darwin" && credentialStore !== "file";
-      if (useKeychain && !loginUnavailable && !settings.cursorKeychainUsageEnabled) {
-        return [
-          {
-            provider: "cursor",
-            dir: cursorAuthPath,
-            volumeId: "",
-            files: null,
-            message: "Cursor account usage is off on this environment.",
-            action: "enableCursorKeychain",
-          } satisfies ScannedDir,
-        ];
-      }
-      if (loginUnavailable) {
-        return [
-          {
-            provider: "cursor",
-            dir: cursorAuthPath,
-            volumeId: yield* Effect.promise(() => readDirectoryVolumeId(cursorAuthPath)),
-            files: null,
-            message: "Cursor account history needs a Cursor CLI login on this server.",
-          } satisfies ScannedDir,
-        ];
-      }
-      const source = yield* cursorAccountSource(
-        useKeychain ? { kind: "keychain" } : cursorAuthPath,
-        cursorAuthPath,
-        windowStartMs,
-        retentionCutoffMs,
-        awaitRefresh,
-      );
-      return source === null ? [] : [source];
-    });
+          .pipe(
+            Effect.flatMap((sources) =>
+              Effect.forEach(sources, ({ volumeId, ...source }) =>
+                Effect.map(
+                  volumeId === undefined
+                    ? Effect.promise(() => readDirectoryVolumeId(source.dir))
+                    : Effect.succeed(volumeId),
+                  (resolved): ScannedDir => ({
+                    ...source,
+                    provider: reader.provider,
+                    volumeId: resolved,
+                  }),
+                ),
+              ),
+            ),
+            Effect.provideContext(readerContext),
+          ),
+      { concurrency: "unbounded" },
+    );
 
     // Independent sources scan together. Transcript directories go one at a
     // time, so open files stay at `TRANSCRIPT_READ_CONCURRENCY`. The result
     // keeps this order, since aggregation keeps the first copy of a duplicate.
-    const [transcripts, openCodeDirs, antigravityDirs, cursorDirs] = yield* Effect.all(
-      [
-        Effect.forEach(dirs, (dir) => scanTranscriptDir(dir, windowStartMs)),
-        openCode,
-        antigravity,
-        cursor,
-      ],
+    const [transcripts, scanDirs] = yield* Effect.all(
+      [Effect.forEach(dirs, (dir) => scanTranscriptDir(dir, windowStartMs)), scans],
       { concurrency: "unbounded" },
     );
-    const scanned: readonly ScannedDir[] = [
-      ...transcripts,
-      ...openCodeDirs,
-      ...antigravityDirs,
-      ...cursorDirs,
-    ];
+    const scanned: readonly ScannedDir[] = [...transcripts, ...scanDirs.flat()];
     return scanned;
   });
 
@@ -1297,7 +805,7 @@ export const make = Effect.gen(function* () {
       }
       return retainedFiles;
     });
-    const sharedSessions = sharedCodexSessions(filesByDir.flat());
+    const crossFileSessions = sharedSessions(filesByDir.flat());
 
     for (const [
       index,
@@ -1315,12 +823,15 @@ export const make = Effect.gen(function* () {
           continue;
         }
         scannedFiles += 1;
-        const codexEventOccurrences = new Map<string, number>();
+        const eventOccurrences = new Map<string, number>();
         for (const record of file.records) {
           let usageRecord = record;
-          if (record.provider === "codex" && sharedSessions.has(record.sessionId)) {
-            // Match moved rollout copies without collapsing repeated equal events
-            // within one rollout (timestamps can have only second precision).
+          if (
+            sharedSessionProviders.has(record.provider) &&
+            crossFileSessions.has(record.sessionId)
+          ) {
+            // Match moved copies without collapsing repeated equal events
+            // within one file (timestamps can have only second precision).
             // Only sessions seen in several files can have a copy to match.
             const key = encodeUsageRecordKey([
               record.provider,
@@ -1329,8 +840,8 @@ export const make = Effect.gen(function* () {
               record.model,
               record.totals,
             ]);
-            const occurrence = (codexEventOccurrences.get(key) ?? 0) + 1;
-            codexEventOccurrences.set(key, occurrence);
+            const occurrence = (eventOccurrences.get(key) ?? 0) + 1;
+            eventOccurrences.set(key, occurrence);
             usageRecord = { ...record, dedupeKey: key + ":" + occurrence };
           }
           // Only sessions contributing in-window count; the mtime slack can
@@ -1377,9 +888,10 @@ export const make = Effect.gen(function* () {
   });
 
   /**
-   * In-flight scans by window and usage settings, so concurrent identical requests (the usage
+   * In-flight scans by window and settings, so concurrent identical requests (the usage
    * page open on two clients at once) share one scan instead of racing over
-   * the same corpus twice.
+   * the same corpus twice. Readers read settings of their own, so a scan is
+   * shared only under the same settings snapshot.
    */
   const inflightScans = new Map<string, Deferred.Deferred<UsageSummary, UsageReadError>>();
 
@@ -1391,9 +903,7 @@ export const make = Effect.gen(function* () {
       input.resolution ?? "day",
       input.sinceTime ?? null,
       input.untilTime ?? null,
-      settings.usagePriceOverrides,
-      settings.usageModelAliases,
-      settings.cursorKeychainUsageEnabled,
+      settings,
       // A waiting read must never share a scan that answers with `refreshing`.
       input.awaitRefresh === true,
     ]);
