@@ -26,7 +26,7 @@ import {
   type DeliveryThreadState,
   type ThreadId,
 } from "@t3tools/contracts";
-import { HostProcessEnvironment, HostProcessPlatform } from "@t3tools/shared/hostProcess";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -261,7 +261,7 @@ export const make = Effect.gen(function* () {
     body?: unknown,
   ) {
     const settings = yield* delivery;
-    const hostEnvironment = yield* HostProcessEnvironment;
+    const hostEnvironment = yield* HostProcess.Environment;
     if (!settings.enabled) {
       return yield* new DeliveryError({
         reason: "disabled",
@@ -533,7 +533,7 @@ export const make = Effect.gen(function* () {
     return stateOf(threadId);
   });
 
-  const hostPlatform = yield* HostProcessPlatform;
+  const hostPlatform = yield* HostProcess.Platform;
 
   const prepareThread = Effect.fn("DeliveryService.prepareThread")(function* (
     threadId: ThreadId,
