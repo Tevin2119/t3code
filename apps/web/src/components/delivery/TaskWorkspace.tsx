@@ -1501,6 +1501,7 @@ function Info(props: {
                 // A board done in another repository moves the task's work there, which is confirmed first.
                 if (
                   value !== NO_BOARD &&
+                  !["chat", "non-code"].includes(task.workflow) &&
                   boardChoiceKind(task.target?.repository ?? null, chosen) === "move"
                 ) {
                   startMove(String(value));

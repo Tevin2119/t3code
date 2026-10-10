@@ -50,7 +50,7 @@ export function useDraftTeamPicker(input: {
   const offered = team && harness ? rolesForHarness(team, harness) : null;
   const resolved = resolveTeamChoice({ teams, team: choice.team, role: choice.role, driver });
   // Until the teams are read, nothing is known to be wrong with a team.
-  const loading = choice.team !== null && status === "pending";
+  const loading = enabled && status === "pending";
 
   const role = resolved.state === "ready" ? resolved.role : null;
   const threadSeat = team && harness && role ? seatForThread(team.settings, harness, role) : null;

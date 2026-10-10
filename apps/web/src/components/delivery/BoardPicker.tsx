@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 
 import { parseRepositories, targetLine, type DeliveryTarget } from "../../lib/delivery";
 import { useDeliveryAct, useDeliveryRead } from "../../state/delivery";
+import { useProjects } from "../../state/entities";
 
 import { Button } from "../ui/button";
 import { Checkbox } from "../ui/checkbox";
@@ -258,6 +259,7 @@ export function BoardDialog(props: {
   /** For a board: where the repositories are read and added. */
   readonly environmentId?: EnvironmentId | null;
   readonly by?: string;
+  readonly workspace?: string | null;
   /** For a view: every column, and the ones already chosen. */
   readonly columns?: ReadonlyArray<{ readonly lane: string; readonly title: string }>;
   readonly chosenColumns?: ReadonlyArray<string>;
@@ -270,6 +272,7 @@ export function BoardDialog(props: {
     readonly lanes?: ReadonlyArray<string>;
     readonly repository?: string;
     readonly base?: string;
+    readonly workspace?: string;
   }) => void;
   readonly onRemove?: () => void;
   /** For a board being edited: opens what its seats run on. */
@@ -282,6 +285,22 @@ export function BoardDialog(props: {
   const noun = props.kind === "board" ? "board" : "view";
   // A board is bound to a repository and a base branch. Its name, left empty, is the repository's.
   const isBoard = props.kind === "board";
+  const projects = useProjects().filter((project) => project.environmentId === props.environmentId);
+  const initialWorkspace = props.editing
+    ? props.editing.target?.repository
+      ? ""
+      : (props.editing.target?.path ?? "")
+    : (props.workspace ?? "");
+  const [binding, setBinding] = useState(initialWorkspace ? "workspace" : "repository");
+  const [workspace, setWorkspace] = useState(initialWorkspace);
+  const projectFolders = [
+    ...new Map([
+      ...projects.map((project) => [project.workspaceRoot, project.title] as const),
+      ...(initialWorkspace
+        ? [[initialWorkspace, initialWorkspace.split(/[\\/]/).pop() ?? initialWorkspace] as const]
+        : []),
+    ]).entries(),
+  ];
   const reposRead = useDeliveryRead(
     isBoard ? (props.environmentId ?? null) : null,
     "/api/repositories",
@@ -304,13 +323,27 @@ export function BoardDialog(props: {
       .pop() ?? "";
   const [addProblem, setAddProblem] = useState<string | null>(null);
   const chosen = repositories.find((item) => item.id === repository) ?? null;
-  const name = title.trim() || (isBoard && !props.editing ? (chosen?.title ?? "") : "");
+  const name =
+    title.trim() ||
+    (isBoard && !props.editing
+      ? binding === "workspace"
+        ? (projectFolders.find(([folder]) => folder === workspace)?.[1] ?? "")
+        : (chosen?.title ?? "")
+      : "");
   const wasBound = Boolean(props.editing?.target?.repository);
   const bindingChanged =
+    binding !==
+      (props.editing?.target?.path && !props.editing.target.repository
+        ? "workspace"
+        : "repository") ||
+    workspace !== (props.editing?.target?.repository ? "" : (props.editing?.target?.path ?? "")) ||
     repository !== (props.editing?.target?.repository ?? "") ||
     base !== (props.editing?.target?.base ?? "");
   const needsBinding = isBoard && (!props.editing || wasBound || bindingChanged);
-  const bindingReady = !needsBinding || (Boolean(repository) && Boolean(base));
+  const bindingReady =
+    binding === "workspace"
+      ? Boolean(workspace)
+      : !needsBinding || (Boolean(repository) && Boolean(base));
   const addRepository = async () => {
     setAddProblem(null);
     const result = await addAct("/api/repositories", {
@@ -346,116 +379,160 @@ export function BoardDialog(props: {
         <DialogPanel className="flex flex-col ">
           {isBoard ? (
             <div className="flex flex-col gap-2" data-board-dialog-binding>
-              {props.editing && !wasBound ? (
-                <p className="text-xs text-warning" data-board-dialog-unbound>
-                  Repository not configured. Choose one: tasks filed on this board from now on are
-                  done there. Tasks already on it keep what they have.
-                </p>
-              ) : null}
-              <label className="flex flex-col gap-1">
-                <span className="text-xs font-medium">Repository</span>
-                <Select
-                  value={repository || null}
-                  onValueChange={(value) => {
-                    if (value === ADD_REPOSITORY) {
-                      setAdding(true);
-                      return;
-                    }
-                    const next = repositories.find((item) => item.id === value);
-                    setRepository(String(value ?? ""));
-                    setBase(next?.defaultBase ?? "");
-                  }}
-                >
-                  <SelectTrigger
-                    aria-label="Repository"
-                    size="compact"
-                    data-board-dialog-repository
+              <Select value={binding} onValueChange={(value) => setBinding(String(value))}>
+                <SelectTrigger aria-label="Board workspace type" size="compact">
+                  <SelectValue>
+                    {binding === "workspace"
+                      ? "Project folder: chat and non-code work"
+                      : "Repository: code delivery"}
+                  </SelectValue>
+                </SelectTrigger>
+                <SelectPopup alignItemWithTrigger={false}>
+                  <SelectItem value="repository">Repository: code delivery</SelectItem>
+                  <SelectItem value="workspace">Project folder: chat and non-code work</SelectItem>
+                </SelectPopup>
+              </Select>
+              {binding === "workspace" ? (
+                <label className="flex flex-col gap-1">
+                  <span className="text-xs font-medium">Project folder</span>
+                  <Select
+                    value={workspace || null}
+                    onValueChange={(value) => setWorkspace(String(value ?? ""))}
                   >
-                    <SelectValue placeholder="Choose the repository its tasks are done in">
-                      {chosen ? chosen.title : undefined}
-                    </SelectValue>
-                  </SelectTrigger>
-                  <SelectPopup alignItemWithTrigger={false}>
-                    <SelectItem value={ADD_REPOSITORY}>
-                      <PlusIcon className="size-3.5" />
-                      Add a repository by its folder…
-                    </SelectItem>
-                    {repositories.map((item) => (
-                      <SelectItem key={item.id} value={item.id} disabled={!item.ok}>
-                        <span className="flex min-w-0 flex-col">
-                          <span className="truncate">{item.title}</span>
-                          <span className="truncate text-2xs text-muted-foreground">
-                            {item.ok ? item.path : item.problem}
-                          </span>
-                        </span>
-                      </SelectItem>
-                    ))}
-                  </SelectPopup>
-                </Select>
-              </label>
-              {adding ? (
-                <div className="flex flex-col gap-1 rounded-md border border-border p-2">
-                  <Input
-                    aria-label="Folder of the repository"
-                    placeholder="C:/path/to/the/repository"
-                    value={folder}
-                    onChange={(event) => setFolder(event.target.value)}
-                    data-board-dialog-folder
-                  />
-                  <Input
-                    aria-label="Name of the repository"
-                    placeholder={folderName ? `Name (${folderName})` : "Name of the repository"}
-                    value={repoName}
-                    onChange={(event) => setRepoName(event.target.value)}
-                    data-board-dialog-repository-name
-                  />
+                    <SelectTrigger aria-label="Board project folder" size="compact">
+                      <SelectValue placeholder="Choose a T3 project">
+                        {projectFolders.find(([folder]) => folder === workspace)?.[1]}
+                      </SelectValue>
+                    </SelectTrigger>
+                    <SelectPopup alignItemWithTrigger={false}>
+                      {projectFolders.map(([folder, name]) => (
+                        <SelectItem key={folder} value={folder}>
+                          {name}
+                        </SelectItem>
+                      ))}
+                    </SelectPopup>
+                  </Select>
                   <span className="text-2xs text-muted-foreground">
-                    The folder is read, not changed. Work is done in worktrees made beside it.
+                    {workspace || "Add a project using T3's project picker first."} No Git
+                    repository is created. Submitted tasks keep their existing work folder.
                   </span>
-                  {addProblem ? <span className="text-xs text-warning">{addProblem}</span> : null}
-                  <span className="flex justify-end gap-2">
-                    <Button size="xs" variant="ghost" onClick={() => setAdding(false)}>
-                      Cancel
-                    </Button>
-                    <Button
-                      size="xs"
-                      disabled={!folder.trim()}
-                      onClick={() => void addRepository()}
-                      data-board-dialog-add-repository
+                </label>
+              ) : (
+                <>
+                  {props.editing && !wasBound ? (
+                    <p className="text-xs text-warning" data-board-dialog-unbound>
+                      Repository not configured. Choose one: tasks filed on this board from now on
+                      are done there. Tasks already on it keep what they have.
+                    </p>
+                  ) : null}
+                  <label className="flex flex-col gap-1">
+                    <span className="text-xs font-medium">Repository</span>
+                    <Select
+                      value={repository || null}
+                      onValueChange={(value) => {
+                        if (value === ADD_REPOSITORY) {
+                          setAdding(true);
+                          return;
+                        }
+                        const next = repositories.find((item) => item.id === value);
+                        setRepository(String(value ?? ""));
+                        setBase(next?.defaultBase ?? "");
+                      }}
                     >
-                      Add repository
-                    </Button>
-                  </span>
-                </div>
-              ) : null}
-              <label className="flex flex-col gap-1">
-                <span className="text-xs font-medium">Base branch</span>
-                <Select
-                  value={base || null}
-                  onValueChange={(value) => setBase(String(value ?? ""))}
-                  disabled={!chosen}
-                >
-                  <SelectTrigger aria-label="Base branch" size="compact" data-board-dialog-base>
-                    <SelectValue placeholder="Choose a repository first">
-                      {base || undefined}
-                    </SelectValue>
-                  </SelectTrigger>
-                  <SelectPopup alignItemWithTrigger={false}>
-                    {(chosen?.branches ?? []).map((branch) => (
-                      <SelectItem key={branch} value={branch}>
-                        {branch}
-                        {branch === chosen?.defaultBase ? (
-                          <span className="text-2xs text-muted-foreground"> (default)</span>
-                        ) : null}
-                      </SelectItem>
-                    ))}
-                  </SelectPopup>
-                </Select>
-                <span className="text-2xs text-muted-foreground">
-                  Work on a task starts from this branch. The team works in a worktree of its own;
-                  the branch itself is not changed.
-                </span>
-              </label>
+                      <SelectTrigger
+                        aria-label="Repository"
+                        size="compact"
+                        data-board-dialog-repository
+                      >
+                        <SelectValue placeholder="Choose the repository its tasks are done in">
+                          {chosen ? chosen.title : undefined}
+                        </SelectValue>
+                      </SelectTrigger>
+                      <SelectPopup alignItemWithTrigger={false}>
+                        <SelectItem value={ADD_REPOSITORY}>
+                          <PlusIcon className="size-3.5" />
+                          Add a repository by its folder…
+                        </SelectItem>
+                        {repositories.map((item) => (
+                          <SelectItem key={item.id} value={item.id} disabled={!item.ok}>
+                            <span className="flex min-w-0 flex-col">
+                              <span className="truncate">{item.title}</span>
+                              <span className="truncate text-2xs text-muted-foreground">
+                                {item.ok ? item.path : item.problem}
+                              </span>
+                            </span>
+                          </SelectItem>
+                        ))}
+                      </SelectPopup>
+                    </Select>
+                  </label>
+                  {adding ? (
+                    <div className="flex flex-col gap-1 rounded-md border border-border p-2">
+                      <Input
+                        aria-label="Folder of the repository"
+                        placeholder="C:/path/to/the/repository"
+                        value={folder}
+                        onChange={(event) => setFolder(event.target.value)}
+                        data-board-dialog-folder
+                      />
+                      <Input
+                        aria-label="Name of the repository"
+                        placeholder={folderName ? `Name (${folderName})` : "Name of the repository"}
+                        value={repoName}
+                        onChange={(event) => setRepoName(event.target.value)}
+                        data-board-dialog-repository-name
+                      />
+                      <span className="text-2xs text-muted-foreground">
+                        The folder is read, not changed. Work is done in worktrees made beside it.
+                      </span>
+                      {addProblem ? (
+                        <span className="text-xs text-warning">{addProblem}</span>
+                      ) : null}
+                      <span className="flex justify-end gap-2">
+                        <Button size="xs" variant="ghost" onClick={() => setAdding(false)}>
+                          Cancel
+                        </Button>
+                        <Button
+                          size="xs"
+                          disabled={!folder.trim()}
+                          onClick={() => void addRepository()}
+                          data-board-dialog-add-repository
+                        >
+                          Add repository
+                        </Button>
+                      </span>
+                    </div>
+                  ) : null}
+                  <label className="flex flex-col gap-1">
+                    <span className="text-xs font-medium">Base branch</span>
+                    <Select
+                      value={base || null}
+                      onValueChange={(value) => setBase(String(value ?? ""))}
+                      disabled={!chosen}
+                    >
+                      <SelectTrigger aria-label="Base branch" size="compact" data-board-dialog-base>
+                        <SelectValue placeholder="Choose a repository first">
+                          {base || undefined}
+                        </SelectValue>
+                      </SelectTrigger>
+                      <SelectPopup alignItemWithTrigger={false}>
+                        {(chosen?.branches ?? []).map((branch) => (
+                          <SelectItem key={branch} value={branch}>
+                            {branch}
+                            {branch === chosen?.defaultBase ? (
+                              <span className="text-2xs text-muted-foreground"> (default)</span>
+                            ) : null}
+                          </SelectItem>
+                        ))}
+                      </SelectPopup>
+                    </Select>
+                    <span className="text-2xs text-muted-foreground">
+                      Work on a task starts from this branch. The team works in a worktree of its
+                      own; the branch itself is not changed.
+                    </span>
+                  </label>
+                </>
+              )}
             </div>
           ) : null}
           <Input
@@ -489,7 +566,7 @@ export function BoardDialog(props: {
               ))}
             </div>
           ) : null}
-          {isBoard && !bindingReady ? (
+          {isBoard && binding === "repository" && !bindingReady ? (
             <p className="text-xs text-muted-foreground" data-board-dialog-why>
               {!repository
                 ? "Choose the repository its tasks are done in."
@@ -500,7 +577,7 @@ export function BoardDialog(props: {
                     : "Choose the branch work starts from."}
             </p>
           ) : null}
-          {isBoard && bindingReady && chosen && !chosen.ok ? (
+          {isBoard && binding === "repository" && bindingReady && chosen && !chosen.ok ? (
             <p className="text-xs text-warning" data-board-dialog-why>
               {chosen.title}: {chosen.problem ?? "it cannot be read"}. Tasks filed on this board
               cannot be submitted until it can.
@@ -580,7 +657,12 @@ export function BoardDialog(props: {
                   title: name,
                   description: description.trim(),
                   ...(props.kind === "view" ? { lanes } : {}),
-                  ...(isBoard && repository && base && (!props.editing || bindingChanged)
+                  ...(isBoard && binding === "workspace" ? { workspace } : {}),
+                  ...(isBoard &&
+                  binding === "repository" &&
+                  repository &&
+                  base &&
+                  (!props.editing || bindingChanged)
                     ? { repository, base }
                     : {}),
                 })

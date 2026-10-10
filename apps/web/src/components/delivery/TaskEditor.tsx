@@ -247,6 +247,7 @@ export function TaskEditor(props: {
     readonly description: string;
     readonly repository?: string;
     readonly base?: string;
+    readonly workspace?: string;
   }) => {
     setBoardBusy(true);
     setBoardProblem(null);
@@ -329,6 +330,12 @@ export function TaskEditor(props: {
     // Where it came from goes with it, so the task and the conversation lead to each other.
     ...(conversationRef && !props.taskId ? { origin: `thread:${props.fromConversation}` } : {}),
     ...(!props.taskId && boardNow ? { board: boardNow } : {}),
+    ...(!props.taskId &&
+    ["chat", "non-code"].includes(flow) &&
+    chosenBoardTarget?.path &&
+    !chosenBoardTarget.repository
+      ? { workspace: chosenBoardTarget.path }
+      : {}),
   });
 
   /** Saves the draft and answers with its id, or null when the engine refused. */
@@ -697,7 +704,7 @@ export function TaskEditor(props: {
                     className="flex flex-col gap-1 rounded-md border border-border px-2 py-1.5"
                     data-task-editor-target={taskTarget?.ok ? "ok" : "none"}
                   >
-                    <span className="text-xs font-medium">Repository · base branch</span>
+                    <span className="text-xs font-medium">Work folder or repository</span>
                     <span
                       className={`text-xs ${taskTarget?.ok ? "" : "text-warning"}`}
                       data-task-editor-target-line
@@ -712,9 +719,11 @@ export function TaskEditor(props: {
                     <span className="text-2xs text-muted-foreground">
                       {saved
                         ? "Kept by the task. Moving it to another board does not change it."
-                        : taskTarget?.repository
-                          ? "Taken from the board. The team works in a worktree of its own from this branch."
-                          : "Choose a board bound to a repository. A task is not submitted without one."}
+                        : taskTarget?.path && !taskTarget.repository
+                          ? "Taken from the project board. Available for team chat and non-code work."
+                          : taskTarget?.repository
+                            ? "Taken from the board. The team works in a worktree of its own from this branch."
+                            : "Choose a board bound to a repository. A task is not submitted without one."}
                     </span>
                     {retargetTo ? (
                       <Button
