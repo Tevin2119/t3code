@@ -5757,6 +5757,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         <OrchestratorComposerControls
           environmentId={environmentId}
           threadId={activeThreadId}
+          workspace={gitCwd}
           prompt={prompt}
           onPromptCleared={() => setComposerDraftPrompt(composerDraftTarget, "")}
         />

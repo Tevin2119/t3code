@@ -1976,6 +1976,9 @@ export function TaskWorkspace(props: {
     onDiscarded: () => props.onClose(),
   });
   const [tab, setTab] = useState<Tab>("history");
+  const [taskBrief, setTaskBrief] = useState<string | null>(null);
+  const [creatingTask, setCreatingTask] = useState(false);
+  const [createProblem, setCreateProblem] = useState<string | null>(null);
 
   // Opened and looked at, what the team said is read.
   const unread = task?.card.unread ?? 0;
@@ -2002,7 +2005,7 @@ export function TaskWorkspace(props: {
   }
 
   const primary = task?.actions.filter((action) =>
-    ["approve", "reject", "publish", "submit", "deliver"].includes(action),
+    ["approve", "reject", "publish", "submit", "deliver", "accept-artifacts"].includes(action),
   );
   const others = task?.actions.filter((action) => !primary?.includes(action)) ?? [];
 
@@ -2051,6 +2054,18 @@ export function TaskWorkspace(props: {
               </>
             ) : null}
             <div className="ml-auto flex shrink-0 items-center gap-1">
+              {task?.workflow === "chat" && task.state === "chat" ? (
+                <Button
+                  size="xs"
+                  variant="outline"
+                  onClick={() => {
+                    setCreateProblem(null);
+                    setTaskBrief("");
+                  }}
+                >
+                  Create task from chat
+                </Button>
+              ) : null}
               {task ? (
                 <SharedTaskAllocation environmentId={props.environmentId} taskId={task.id} />
               ) : null}
@@ -2175,6 +2190,59 @@ export function TaskWorkspace(props: {
         )}
       </div>
       {actions.dialog}
+      <Dialog
+        open={taskBrief !== null}
+        onOpenChange={(open) => {
+          if (!open && !creatingTask) setTaskBrief(null);
+        }}
+      >
+        <DialogPopup>
+          <DialogHeader>
+            <DialogTitle>Create a non-code task</DialogTitle>
+          </DialogHeader>
+          <DialogPanel>
+            <div className="flex flex-col gap-3">
+              <p className="text-sm text-muted-foreground">
+                Write the agreed brief. The draft keeps this conversation, project folder and
+                attachments. Creating it does not start work.
+              </p>
+              <Textarea
+                aria-label="Agreed task brief"
+                value={taskBrief ?? ""}
+                disabled={creatingTask}
+                onChange={(event) => setTaskBrief(event.target.value)}
+              />
+              {createProblem ? <p role="alert">{createProblem}</p> : null}
+              <Button
+                disabled={creatingTask || !taskBrief?.trim() || !task}
+                onClick={() => {
+                  if (!task || !taskBrief?.trim() || creatingTask) return;
+                  setCreatingTask(true);
+                  void act(`/api/tasks/${task.id}/from-chat`, { text: taskBrief, by: person }).then(
+                    (result) => {
+                      setCreatingTask(false);
+                      if (!result.ok) {
+                        setCreateProblem(result.why);
+                        return;
+                      }
+                      const created = parseTask(result.body);
+                      if (!created) {
+                        setCreateProblem("The engine did not return a task draft.");
+                        return;
+                      }
+                      setTaskBrief(null);
+                      read.refresh();
+                      props.onOpenTask(created.id);
+                    },
+                  );
+                }}
+              >
+                {creatingTask ? "Creating draft..." : "Create draft"}
+              </Button>
+            </div>
+          </DialogPanel>
+        </DialogPopup>
+      </Dialog>
     </SidebarInset>
   );
 }

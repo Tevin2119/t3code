@@ -37,7 +37,9 @@ export function useDraftTeamPicker(input: {
   const chooseTeam = useDeliveryDraftStore((state) => state.chooseTeam);
   const markInherited = useDeliveryDraftStore((state) => state.markInherited);
   const inheritedFor = useDeliveryDraftStore((state) => state.inherited[threadId] ?? null);
-  const teamsRead = useDeliveryRead(enabled ? environmentId : null, "/api/teams");
+  const teamsRead = useDeliveryRead(enabled ? environmentId : null, "/api/teams", {
+    pollMs: 10_000,
+  });
   const teams = useMemo(() => selectableTeams(teamsRead.body), [teamsRead.body]);
   const status = teamListStatus(teamsRead);
   // A remembered team that is gone is "No team" here, as it is in the footer and at the send.

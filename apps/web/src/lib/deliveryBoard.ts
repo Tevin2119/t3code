@@ -424,6 +424,7 @@ export function linesFromText(value: string): ReadonlyArray<string> {
 }
 
 export const FLOW_LABEL: Readonly<Record<string, string>> = {
+  "non-code": "Non-code delivery",
   chat: "Chat",
   plan: "Plan",
   review: "Review",
@@ -663,6 +664,7 @@ export function sectionOf(entry: {
 
 /** What each step a person can take on a task is called. */
 export const ACTION_LABEL: Record<string, string> = {
+  "accept-artifacts": "Accept deliverables",
   submit: "Submit",
   discard: "Discard draft",
   pause: "Pause",

@@ -61,6 +61,7 @@ import { TrackRecord } from "./TrackRecord";
 
 const NONE = "__none__";
 const FLOW_TITLE: Readonly<Record<string, string>> = {
+  "non-code": "Non-code delivery",
   chat: "Team chat",
   plan: "Plan",
   review: "Review",
@@ -486,9 +487,11 @@ function ProfileEditor(props: {
   const flows = useMemo(
     () =>
       parseFlows(
-        ["chat", "plan", "review", "standard"].map((id) => ({ id, title: FLOW_TITLE[id] })),
+        ["chat", "plan", "review", "standard", ...(form.nonCode?.enabled ? ["non-code"] : [])].map(
+          (id) => ({ id, title: FLOW_TITLE[id] }),
+        ),
       ),
-    [],
+    [form.nonCode?.enabled],
   );
 
   const save = async () => {
@@ -610,6 +613,157 @@ function ProfileEditor(props: {
               </Field>
             </div>
             <aside className="flex min-w-0 flex-col gap-4">
+              <Field
+                label="Non-code delivery"
+                hint="Stories, reports and assignments. Sources stay read-only; returned artifacts are validated and reviewed before acceptance. Review-duty seats provide the final review."
+              >
+                <Checkbox
+                  checked={form.nonCode?.enabled ?? false}
+                  disabled={locked}
+                  onCheckedChange={(enabled) => {
+                    const producer =
+                      form.nonCode?.producer ||
+                      form.seats.find((seat) => seat.id === "writing-coach")?.id ||
+                      form.seats.find((seat) => seat.duties.includes("build"))?.id ||
+                      form.seats[0]?.id ||
+                      "";
+                    set({
+                      nonCode: {
+                        enabled: enabled === true,
+                        producer,
+                        researcher: form.nonCode?.researcher || form.lead,
+                        referenceVerifier: form.nonCode?.referenceVerifier || form.lead,
+                        validators:
+                          form.nonCode?.validators ??
+                          form.seats
+                            .filter((seat) => seat.id !== producer && seat.duties.includes("plan"))
+                            .map((seat) => seat.id),
+                        citations: form.nonCode?.citations ?? "when-cited",
+                        minimumIndependentProviders: form.nonCode?.minimumIndependentProviders ?? 2,
+                        distinctVariations: form.nonCode?.distinctVariations ?? false,
+                      },
+                    });
+                  }}
+                  aria-label="Enable non-code delivery"
+                />
+                {form.nonCode?.enabled ? (
+                  <>
+                    <Select
+                      value={form.nonCode.producer}
+                      items={form.seats.map((seat) => ({ value: seat.id, label: seat.title }))}
+                      disabled={locked}
+                      onValueChange={(producer) => {
+                        if (!producer || !form.nonCode) return;
+                        set({
+                          nonCode: {
+                            ...form.nonCode,
+                            producer: String(producer),
+                            validators: form.nonCode.validators.filter((id) => id !== producer),
+                          },
+                        });
+                      }}
+                    >
+                      <SelectTrigger aria-label="Deliverable producer">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectPopup>
+                        {form.seats.map((seat) => (
+                          <SelectItem key={seat.id} value={seat.id}>
+                            {seat.title}
+                          </SelectItem>
+                        ))}
+                      </SelectPopup>
+                    </Select>
+                    {(["researcher", "referenceVerifier"] as const).map((role) => (
+                      <Select
+                        key={role}
+                        value={form.nonCode?.[role]}
+                        items={form.seats.map((seat) => ({ value: seat.id, label: seat.title }))}
+                        disabled={locked}
+                        onValueChange={(seat) => {
+                          if (seat && form.nonCode)
+                            set({ nonCode: { ...form.nonCode, [role]: String(seat) } });
+                        }}
+                      >
+                        <SelectTrigger
+                          aria-label={
+                            role === "researcher" ? "Evidence researcher" : "Reference verifier"
+                          }
+                        >
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectPopup>
+                          {form.seats.map((seat) => (
+                            <SelectItem key={seat.id} value={seat.id}>
+                              {seat.title}
+                            </SelectItem>
+                          ))}
+                        </SelectPopup>
+                      </Select>
+                    ))}
+                    <div className="flex flex-col gap-2">
+                      <span className="text-sm">Validation seats</span>
+                      {form.seats
+                        .filter((seat) => seat.id !== form.nonCode?.producer)
+                        .map((seat) => (
+                          <label key={seat.id} className="flex items-center gap-2 text-sm">
+                            <Checkbox
+                              disabled={locked}
+                              checked={form.nonCode?.validators.includes(seat.id) ?? false}
+                              onCheckedChange={(checked) => {
+                                if (!form.nonCode) return;
+                                set({
+                                  nonCode: {
+                                    ...form.nonCode,
+                                    validators: checked
+                                      ? [...form.nonCode.validators, seat.id]
+                                      : form.nonCode.validators.filter((id) => id !== seat.id),
+                                  },
+                                });
+                              }}
+                            />
+                            {seat.title}
+                          </label>
+                        ))}
+                    </div>
+                    <label className="flex items-center gap-2 text-sm">
+                      <Checkbox
+                        disabled={locked}
+                        checked={form.nonCode.distinctVariations}
+                        onCheckedChange={(checked) => {
+                          if (form.nonCode)
+                            set({
+                              nonCode: { ...form.nonCode, distinctVariations: checked === true },
+                            });
+                        }}
+                      />
+                      Require distinct, complete variations
+                    </label>
+                    <Select
+                      value={form.nonCode.citations}
+                      disabled={locked}
+                      items={[
+                        { value: "when-cited", label: "Check references when cited" },
+                        { value: "required", label: "Evidence and references required" },
+                        { value: "none", label: "Creative work without references" },
+                      ]}
+                      onValueChange={(citations) => {
+                        if (citations && form.nonCode)
+                          set({ nonCode: { ...form.nonCode, citations: String(citations) } });
+                      }}
+                    >
+                      <SelectTrigger aria-label="Reference verification policy">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectPopup>
+                        <SelectItem value="when-cited">Check references when cited</SelectItem>
+                        <SelectItem value="required">Evidence and references required</SelectItem>
+                        <SelectItem value="none">Creative work without references</SelectItem>
+                      </SelectPopup>
+                    </Select>
+                  </>
+                ) : null}
+              </Field>
               <Field label="Default flow" hint="What this team does when no flow is chosen.">
                 <Select
                   value={form.defaultFlow}

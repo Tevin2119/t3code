@@ -22,6 +22,7 @@ const entries = [
   { instanceId: "claude-work", driverKind: "claudeAgent", isDefault: false },
   { instanceId: "deepseek", driverKind: "deepseek", isDefault: true },
   { instanceId: "cursor", driverKind: "cursor", isDefault: true },
+  { instanceId: "antigravity", driverKind: "antigravity", isDefault: true },
 ];
 
 const lead = parseSeatSettings({
@@ -41,6 +42,8 @@ describe("harnesses and the catalog", () => {
     expect(harnessOfDriver("deepseek")).toBe("dsh");
     expect(harnessOfDriver("cursor")).toBeNull();
     expect(driverOfHarness("dsh")).toBe("deepseek");
+    expect(harnessOfDriver("antigravity")).toBe("agy");
+    expect(driverOfHarness("agy")).toBe("antigravity");
     expect(driverOfHarness("abacus")).toBeNull();
   });
 
@@ -60,6 +63,12 @@ describe("harnesses and the catalog", () => {
     expect(entryForHarness(entries, "claude")?.instanceId).toBe("claudeAgent");
     expect(entryForHarness(entries, "kimi")).toBeNull();
     expect(entryForHarness(entries, null)).toBeNull();
+    expect(entryForHarness(entries, "agy")?.instanceId).toBe("antigravity");
+  });
+
+  it("offers Antigravity when a seat allows the engine agy harness", () => {
+    const seat = { ...lead, may: { ...lead.may, harness: ["agy"] } };
+    expect(entriesForSeat(entries, seat).map((entry) => entry.instanceId)).toEqual(["antigravity"]);
   });
 
   it("puts the models the team names first, and keeps one the catalog does not list", () => {
