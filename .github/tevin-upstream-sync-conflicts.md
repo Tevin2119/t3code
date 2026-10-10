@@ -5,7 +5,7 @@
 Written by the upstream sync workflow. Resolve the conflicts on this branch, delete this file, and push.
 
 - Failed while merging `pingdotgg/t3code` main into `automation/tevin-upstream-sync`.
-- Upstream range: `1455cb5c35e50211145073be6ca155d56684f0f4`..`31b04e2ee929660d80d5931ed53fd17bf1d33ce6`
+- Upstream range: `1455cb5c35e50211145073be6ca155d56684f0f4`..`4606f9d6f213952124d93792854b0c4e48658e60`
 
 ## Conflicting files (106)
 
