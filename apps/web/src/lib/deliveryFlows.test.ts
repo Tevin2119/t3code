@@ -59,6 +59,40 @@ const [development, research, old] = parseTeams([
 ]);
 
 describe("flows", () => {
+  it("offers non-code delivery independently of software build seats", () => {
+    const [team] = parseTeams([
+      {
+        team: "writing",
+        defaultFlow: "non-code",
+        available: true,
+        flows: [
+          flow("non-code", {
+            title: "Non-code delivery",
+            builds: false,
+            stages: ["plan", "produce", "validate", "final-review"],
+          }),
+        ],
+      },
+    ]);
+    expect(flowFor(team!, null)).toBe("non-code");
+    expect(teamTaskBlock(team!, "non-code")).toBeNull();
+    expect(flowStartLabel("non-code")).toBe("Start non-code delivery");
+  });
+
+  it("preserves the non-code team policy when editing a profile", () => {
+    const nonCode = {
+      enabled: true,
+      producer: "writer",
+      researcher: "researcher",
+      referenceVerifier: "verifier",
+      validators: ["validator"],
+      citations: "required",
+      minimumIndependentProviders: 2,
+      distinctVariations: true,
+    };
+    const view = parseProfile({ profile: "writing", name: "writing", seats: [], nonCode });
+    expect(view?.form.nonCode).toEqual(nonCode);
+  });
   it("reads the flows of a team, and whether each can run", () => {
     const flows = parseFlows([
       flow("chat"),

@@ -2423,7 +2423,11 @@ const layerWsRpc = (
         [WS_METHODS.serverRetryResourceTelemetry]: (_input) => resourceTelemetry.retry,
         [WS_METHODS.serverSignalProcess]: (input) => processDiagnostics.signal(input),
         [WS_METHODS.deliveryRead]: (input) => delivery.read(input),
-        [WS_METHODS.deliveryAct]: (input) => delivery.act(input),
+        [WS_METHODS.deliveryAct]: (input) =>
+          input.path.endsWith("/from-chat") ||
+          (typeof input.body === "object" && input.body !== null && "workspace" in input.body)
+            ? authorizeEffect("filesystem:read", delivery.act(input))
+            : delivery.act(input),
         [WS_METHODS.deliveryBindThread]: (input) => delivery.bindThread(input),
         [WS_METHODS.deliveryThreadBinding]: (input) => delivery.threadState(input.threadId),
         [WS_METHODS.deliveryReleaseThread]: (input) => delivery.releaseThread(input.threadId),

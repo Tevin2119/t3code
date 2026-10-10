@@ -50,6 +50,7 @@ const TEAMS_LOADING = "Teams are still loading.";
 export function OrchestratorComposerControls(props: {
   readonly environmentId: EnvironmentId | null;
   readonly threadId: string;
+  readonly workspace?: string | null;
   readonly prompt: string;
   readonly onPromptCleared: () => void;
 }) {
@@ -66,7 +67,7 @@ export function OrchestratorComposerControls(props: {
   const startRequest = useOrchestratorDraftStore(
     (state) => state.startRequests[props.threadId] ?? 0,
   );
-  const teamsRead = useDeliveryRead(props.environmentId, "/api/teams");
+  const teamsRead = useDeliveryRead(props.environmentId, "/api/teams", { pollMs: 10_000 });
   const teams = useMemo(() => selectableTeams(teamsRead.body), [teamsRead.body]);
   const teamsLoaded = teamListStatus(teamsRead) === "loaded";
   const awaitingTeams = draft?.awaitingTeams === true;
@@ -177,7 +178,16 @@ export function OrchestratorComposerControls(props: {
   const save = useCallback(async (): Promise<string | null> => {
     if (!draft) return null;
     report([]);
-    const body = { team: draft.team, workflow: flow, text, seats: seatsToSend, by: person };
+    const body = {
+      team: draft.team,
+      workflow: flow,
+      text,
+      seats: seatsToSend,
+      by: person,
+      ...(["chat", "non-code"].includes(flow) && props.workspace
+        ? { workspace: props.workspace }
+        : {}),
+    };
     const result = draft.engineThread
       ? await act(`/api/tasks/${draft.engineThread}/edit`, body)
       : await act("/api/tasks", { ...body, draft: true });
@@ -192,7 +202,18 @@ export function OrchestratorComposerControls(props: {
     }
     update(props.threadId, { engineThread: task.id, savedText: text });
     return task.id;
-  }, [act, draft, flow, person, props.threadId, report, seatsToSend, text, update]);
+  }, [
+    act,
+    draft,
+    flow,
+    person,
+    props.threadId,
+    props.workspace,
+    report,
+    seatsToSend,
+    text,
+    update,
+  ]);
 
   const once = useCallback(async (kind: "save" | "start", work: () => Promise<void>) => {
     if (working.current) return;
@@ -238,12 +259,18 @@ export function OrchestratorComposerControls(props: {
         return;
       }
       onPromptCleared();
+      if (["chat", "non-code"].includes(flow)) {
+        update(threadId, { started: true, workflow: flow });
+        return;
+      }
       leave(threadId);
       // What is written next is written on the task, in its own composer.
       void navigate({ to: "/board", search: { task: id } });
     });
   }, [
     act,
+    flow,
+    update,
     blocked,
     leave,
     loadingBlock,

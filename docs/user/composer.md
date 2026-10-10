@@ -12,6 +12,33 @@ becomes an attachment when inserting it would exceed the message limit. On a
 hardware keyboard, use `Cmd+Shift+V` on Apple devices or `Ctrl+Shift+V` elsewhere
 to keep a large paste editable in the composer instead.
 
+## Team conversations and non-code delivery
+
+On web and desktop, select Orchestrator and a team to discuss work in the current
+project. Team chat can use a project folder without initializing a Git repository.
+The team works from a read-only copy; your original documents stay unchanged.
+
+Enable **Non-code delivery** in the team's profile to produce stories, reports,
+presentations or assignments. Choose its producer and validation seats, and set
+whether evidence and references are required. Review-duty seats provide the final
+review. Every active seat must use read-only access.
+
+You can start non-code delivery directly, or discuss the brief first and use
+**Create task from chat** to make a linked draft. Check that draft and submit it
+when you want work to begin. Creation alone never starts the assignment.
+
+The team plans, checks sources when needed, produces editable files, validates
+them against the brief and reviews them independently. One revision round is
+allowed before unresolved issues stop the task. Download the attached files and
+validation record, then accept the deliverables using the normal sign-off dialog.
+Acceptance records the reviewed file versions; it does not publish a code PR,
+submit coursework or certify an official grade. Reflections requiring actual
+feedback cannot be completed before you supply it.
+
+The engine keeps the task and conversation history. The inline thread association
+currently stays in this browser's saved state; another client can open the task
+from the board. Native mobile does not yet provide this delivery view.
+
 ## Formatting
 
 The composer writes Markdown and shows it styled as you type. Markers such as

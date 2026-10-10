@@ -1,4 +1,5 @@
 import { ThreadFind, ThreadFindCanvas, type ThreadFindControls } from "./chat/ThreadFindProvider";
+import { TaskWorkspace } from "./delivery/TaskWorkspace";
 import { THREAD_FIND_BAR_RESERVED_HEIGHT } from "./chat/ThreadFindBar";
 import { usageLimitRecoveryBannerItem } from "./chat/UsageLimitRecoveryBanner";
 import {
@@ -4201,6 +4202,12 @@ export default function ChatView(props: ChatViewProps) {
         worktreePath: activeThread?.worktreePath ?? null,
       })
     : null;
+  const teamConversationId = useOrchestratorDraftStore((state) => {
+    const draft = activeThread ? state.drafts[activeThread.id] : undefined;
+    return draft?.started && ["chat", "non-code"].includes(draft.workflow)
+      ? (draft.viewTask ?? draft.engineThread)
+      : null;
+  });
   const gitStatusCwd = activeThread?.worktreePath ?? gitCwd;
   const gitStatusQuery = useEnvironmentQuery(
     gitStatusCwd === null
@@ -11436,6 +11443,25 @@ export default function ChatView(props: ChatViewProps) {
     addFiles: (files) => composerRef.current?.addDroppedFiles(files),
     addFolders: (folders) => composerRef.current?.addDroppedFolders(folders),
   });
+
+  if (teamConversationId) {
+    return (
+      <TaskWorkspace
+        environmentId={activeThread.environmentId}
+        taskId={teamConversationId}
+        from="Orchestrator"
+        onClose={() => {
+          const draft = useOrchestratorDraftStore.getState().drafts[activeThread.id];
+          if (draft?.viewTask)
+            useOrchestratorDraftStore.getState().update(activeThread.id, { viewTask: null });
+          else handleNewThreadInActiveProject();
+        }}
+        onOpenTask={(taskId) => {
+          useOrchestratorDraftStore.getState().update(activeThread.id, { viewTask: taskId });
+        }}
+      />
+    );
+  }
 
   return (
     <div

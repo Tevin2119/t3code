@@ -267,7 +267,9 @@ function providerConstraints(
   }
   if (provider === undefined) return constraints;
   if (!provider.enabled) constraints.push("Provider instance is disabled.");
-  if (!provider.installed) constraints.push("Provider executable is not installed.");
+  if (provider.enabled && !provider.installed) {
+    constraints.push("Provider executable is not installed.");
+  }
   if (!isProviderAvailable(provider)) {
     constraints.push(provider.unavailableReason ?? "Provider driver is unavailable.");
   }
@@ -1170,7 +1172,7 @@ const make = Effect.gen(function* () {
       if (
         requestedModel !== undefined &&
         provider !== undefined &&
-        provider.models.length > 0 &&
+        (provider.models.length > 0 || instanceId !== inheritedSelection.instanceId) &&
         !provider.models.some((candidate) => candidate.slug === requestedModel)
       ) {
         return yield* failure(

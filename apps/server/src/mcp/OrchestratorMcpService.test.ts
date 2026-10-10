@@ -905,12 +905,15 @@ describe("OrchestratorMcpService provider resolution", () => {
           }),
           // A second Antigravity instance whose adapter resolves but whose
           // provider state still blocks delegation.
-          providerSnapshot({
-            instanceId: disabledAntigravityInstanceId,
-            driver: ProviderDriverKind.make("antigravity"),
-            model: "ant-model",
-            enabled: false,
-          }),
+          {
+            ...providerSnapshot({
+              instanceId: disabledAntigravityInstanceId,
+              driver: ProviderDriverKind.make("antigravity"),
+              model: "ant-model",
+              enabled: false,
+            }),
+            installed: false,
+          },
           forkShadow,
         ];
         const layerDependencies = Layer.mergeAll(
@@ -1194,6 +1197,44 @@ describe("OrchestratorMcpService provider resolution", () => {
         };
         assert.equal(request.modelSelection.instanceId, antigravityInstanceId);
         assert.equal(request.modelSelection.model, "ant-model");
+      }).pipe(Effect.provide(OrchestratorMcpService.layer.pipe(Layer.provide(layerDependencies))));
+    }),
+  );
+
+  it.effect("rejects a cross-provider model when the target catalog is empty", () =>
+    Effect.gen(function* () {
+      const piInstanceId = ProviderInstanceId.make("pi");
+      const layerDependencies = Layer.mergeAll(
+        NodeServices.layer,
+        Layer.mock(ThreadManagementService.ThreadManagementService)({
+          getThreadRecords: () => Effect.succeed(parentProjection([])),
+        }),
+        providerRegistryLayer([
+          providerSnapshot({
+            instanceId: codexInstanceId,
+            driver: ProviderDriverKind.make("codex"),
+            model: "gpt-5.4",
+          }),
+          providerSnapshot({ instanceId: piInstanceId, driver: ProviderDriverKind.make("pi") }),
+        ]),
+        adapterRegistryLayer([codexInstanceId, piInstanceId]),
+        Layer.mock(ProjectService.ProjectService)({}),
+        Layer.mock(SecretRequests.SecretRequests)({}),
+        Layer.mock(ScheduledTaskService.ScheduledTaskService)({}),
+      );
+
+      yield* Effect.gen(function* () {
+        const service = yield* OrchestratorMcpService.OrchestratorMcpService;
+        const result = yield* service
+          .delegateTask(scope, {
+            task: "Plan the evidence review.",
+            target: { providerInstanceId: piInstanceId, model: "kimi-coding/kimi-for-coding" },
+            mode: "async",
+            clientRequestId: "delegate-invalid-pi-kimi",
+          })
+          .pipe(Effect.flip);
+        assert.equal(result.code, "model_unavailable");
+        assert.isTrue(result.message.includes("not advertised by provider pi"));
       }).pipe(Effect.provide(OrchestratorMcpService.layer.pipe(Layer.provide(layerDependencies))));
     }),
   );

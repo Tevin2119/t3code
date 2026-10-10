@@ -41,11 +41,13 @@ const offered = (...names: ReadonlyArray<string>) =>
 const teams = offered("rnd", "alpha");
 let renderer: ReactTestRenderer | undefined;
 let environment: string | null = "env-a";
+let workspace: string | null = null;
 const prompts: Record<string, string> = { t1: "Build this", t2: "Fix that" };
 let cleared: Array<string> = [];
 // The composer keeps one instance across threads and passes a fresh callback on each render.
 const view = (threadId = "t1", prompt = prompts[threadId] ?? "Build this") => (
   <OrchestratorComposerControls
+    workspace={workspace}
     environmentId={environment === null ? null : EnvironmentId.make(environment)}
     threadId={threadId}
     prompt={prompt}
@@ -115,6 +117,7 @@ async function startsForRnd() {
 beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   environment = "env-a";
+  workspace = null;
   useDeliveryDraftStore.setState({ choices: {}, inherited: {}, remembered: {} });
   useOrchestratorDraftStore.setState({
     drafts: {},
@@ -142,6 +145,75 @@ afterEach(async () => {
   renderer = undefined;
   vi.unstubAllGlobals();
 });
+
+it.each(["chat", "non-code"])(
+  "saves the selected non-git project folder with %s",
+  async (workflow) => {
+    workspace = "/projects/ILM";
+    mock.reading = {
+      body: [
+        {
+          ...teams[0],
+          defaultFlow: workflow,
+          flows: [
+            {
+              id: workflow,
+              title: "Team chat",
+              offered: true,
+              ready: true,
+              stages: ["chat"],
+              builds: false,
+            },
+          ],
+        },
+      ],
+      error: null,
+    };
+    store().enter("t1", "env-a");
+    await render();
+    await ask("requestSave");
+    expect(mock.action).toHaveBeenCalledWith(
+      "/api/tasks",
+      expect.objectContaining({ workspace: "/projects/ILM", workflow, draft: true }),
+    );
+  },
+);
+
+it.each(["chat", "non-code"])(
+  "keeps started %s linked to its thread instead of navigating to the board",
+  async (workflow) => {
+    workspace = "/projects/ILM";
+    mock.reading = {
+      body: [
+        {
+          ...teams[0],
+          defaultFlow: workflow,
+          flows: [
+            {
+              id: workflow,
+              title: "Team chat",
+              offered: true,
+              ready: true,
+              stages: ["chat"],
+              builds: false,
+            },
+          ],
+        },
+      ],
+      error: null,
+    };
+    store().enter("t1", "env-a");
+    await render();
+    await ask("requestStart");
+    expect(mock.navigate).not.toHaveBeenCalled();
+    expect(store().drafts.t1).toMatchObject({
+      started: true,
+      workflow,
+      engineThread: "task-1",
+    });
+    expect(mock.promptCleared).toHaveBeenCalled();
+  },
+);
 
 it.each([null, "gone"])(
   "starts with the first offered team (remembered %s)",

@@ -451,7 +451,8 @@ export function TaskEditor(props: {
   // Nothing is submitted without a repository it can be done in: there is no fallback.
   // Both the flag and the repository: a target is usable only when it names one and it works.
   const targetBlock =
-    taskTarget?.ok && taskTarget.repository
+    taskTarget?.ok &&
+    (taskTarget.repository || (["chat", "non-code"].includes(flow) && taskTarget.path))
       ? null
       : saved && taskTarget?.repository
         ? `${targetLine(taskTarget)}. The task keeps this target: put it on a board whose repository works and press Use, or fix the repository.`

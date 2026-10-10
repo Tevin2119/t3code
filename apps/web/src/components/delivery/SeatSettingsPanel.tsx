@@ -69,6 +69,13 @@ function Choice(props: {
   }
   return (
     <Select
+      items={[
+        {
+          value: TEAM_DEFAULT,
+          label: `${props.baseLabel}${props.baseValue ? `: ${props.baseValue}` : ""}`,
+        },
+        ...props.options.map((option) => ({ value: option, label: option })),
+      ]}
       value={props.value ?? TEAM_DEFAULT}
       onValueChange={(value) => props.onChange(value === TEAM_DEFAULT ? "" : String(value))}
     >
