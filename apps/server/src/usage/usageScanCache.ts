@@ -17,17 +17,19 @@
 import type { UsageProviderKind } from "@t3tools/contracts";
 
 import { GUARD_LENGTH, type TranscriptParsePosition } from "./usageTranscriptReader.ts";
-import type { CodexScanState, UsageRecord } from "./usageTranscripts.ts";
+import type { CodexScanState, UsageRecord, UsageSpeed } from "./usageTranscripts.ts";
 
 // v2: Codex fork-copy suppression changed what a file parses to, so v1
 // entries would keep serving double-counted records forever.
 // v3: entries carry the parse position and reducer state so a grown file
 // re-parses only its appended bytes instead of starting over.
-// v4: records carry the model provider, and pi and Kimi files are cached too.
-// v5: a Kimi record's session is its `session_` folder, not its agent's.
-const USAGE_SCAN_CACHE_VERSION = 5 as const;
-
-const CACHED_PROVIDERS: ReadonlySet<string> = new Set([
+// v4: records carry Claude fast mode, which v3 rows never captured.
+// v5: Codex records carry their service tier. v4 rows store speed the same
+// way, so v4 entries still load; see `decodeScanCache` for v4 Codex entries.
+// v6 combines billing speed with fork model-provider attribution; their v5 tuples differ.
+const USAGE_SCAN_CACHE_VERSION = 6 as const;
+const PROVIDER_SOURCE_CODES = [null, "recorded", "harness"] as const;
+const CACHED_PROVIDERS = new Set([
   "claude",
   "codex",
   "grok",
@@ -36,9 +38,24 @@ const CACHED_PROVIDERS: ReadonlySet<string> = new Set([
   "kimi",
   "antigravity",
 ]);
+const SPEED_COMPATIBLE_SINCE_VERSION = 4;
 
-/** How the model provider is known, stored as a small number. */
-const PROVIDER_SOURCE_CODES = [null, "recorded", "harness"] as const;
+/**
+ * Each cache version writes its own file in the state directory. An older
+ * server sharing that directory cannot read a newer cache and would replace
+ * it, dropping saved usage for deleted transcripts. Separate files keep both.
+ * A v5 server reads the legacy (v4) file once, when its own file is missing.
+ */
+export const SCAN_CACHE_FILE_NAME = "usage-scan-cache-v6.json";
+export const PREVIOUS_SCAN_CACHE_FILE_NAME = "usage-scan-cache-v5.json";
+export const LEGACY_SCAN_CACHE_FILE_NAME = "usage-scan-cache.json";
+
+/** Serialised as the index into this list. */
+const SPEEDS: readonly UsageSpeed[] = ["standard", "fast", "ultrafast"];
+
+function isSpeed(value: unknown): value is UsageSpeed {
+  return SPEEDS.some((speed) => speed === value);
+}
 
 export interface CachedFile {
   readonly size: number;
@@ -73,7 +90,7 @@ type SerializedRecord = readonly [
   reasoningTokens: number,
   dedupeKey: string | null,
   reportedCostUsd: number | null,
-  /** Index into the model table, or -1 when no provider was recorded. */
+  speed: number,
   modelProviderIndex: number,
   modelProviderSource: number,
 ];
@@ -100,26 +117,32 @@ interface SerializedCache {
   readonly files: Readonly<Record<string, SerializedFile>>;
 }
 
-/** Serialises the cache, interning the repeated model and session strings. */
-export function encodeScanCache(cache: ScanCache): SerializedCache {
-  const models: string[] = [];
-  const sessions: string[] = [];
-  const modelIndex = new Map<string, number>();
-  const sessionIndex = new Map<string, number>();
+/** Model and session strings, each stored once and referenced by index. */
+interface InternTables {
+  readonly models: string[];
+  readonly sessions: string[];
+  readonly modelIndex: Map<string, number>;
+  readonly sessionIndex: Map<string, number>;
+}
 
-  const intern = (table: string[], index: Map<string, number>, value: string): number => {
-    const existing = index.get(value);
-    if (existing !== undefined) return existing;
-    const next = table.length;
-    table.push(value);
-    index.set(value, next);
-    return next;
-  };
+function makeInternTables(): InternTables {
+  return { models: [], sessions: [], modelIndex: new Map(), sessionIndex: new Map() };
+}
 
+function intern(table: string[], index: Map<string, number>, value: string): number {
+  const existing = index.get(value);
+  if (existing !== undefined) return existing;
+  const next = table.length;
+  table.push(value);
+  index.set(value, next);
+  return next;
+}
+
+function serializeFile(entry: CachedFile, tables: InternTables): SerializedFile {
   const serializeRecord = (record: UsageRecord): SerializedRecord => [
     record.timestampMs,
-    intern(models, modelIndex, record.model),
-    intern(sessions, sessionIndex, record.sessionId),
+    intern(tables.models, tables.modelIndex, record.model),
+    intern(tables.sessions, tables.sessionIndex, record.sessionId),
     record.totals.uncachedInputTokens,
     record.totals.cachedInputTokens,
     record.totals.cacheCreationTokens,
@@ -127,26 +150,78 @@ export function encodeScanCache(cache: ScanCache): SerializedCache {
     record.totals.reasoningTokens,
     record.dedupeKey,
     record.reportedCostUsd,
-    record.modelProvider === null ? -1 : intern(models, modelIndex, record.modelProvider),
-    PROVIDER_SOURCE_CODES.indexOf(record.modelProviderSource),
+    SPEEDS.indexOf(record.speed),
+    record.modelProvider === undefined
+      ? -2
+      : record.modelProvider === null
+        ? -1
+        : intern(tables.models, tables.modelIndex, record.modelProvider),
+    record.modelProviderSource === undefined
+      ? -1
+      : PROVIDER_SOURCE_CODES.indexOf(record.modelProviderSource),
   ];
+  return {
+    s: entry.size,
+    m: entry.mtimeMs,
+    p: entry.provider,
+    r: entry.records.map(serializeRecord),
+    t: entry.tailRecords.map(serializeRecord),
+    o: entry.position.resumeOffset,
+    gl: entry.position.guardLength,
+    gh: entry.position.guardHash,
+    cs: entry.position.codexState,
+  };
+}
 
+/** Serialises the cache, interning the repeated model and session strings. */
+export function encodeScanCache(cache: ScanCache): SerializedCache {
+  const tables = makeInternTables();
   const files: Record<string, SerializedFile> = {};
-  for (const [path, entry] of cache) {
-    files[path] = {
-      s: entry.size,
-      m: entry.mtimeMs,
-      p: entry.provider,
-      r: entry.records.map(serializeRecord),
-      t: entry.tailRecords.map(serializeRecord),
-      o: entry.position.resumeOffset,
-      gl: entry.position.guardLength,
-      gh: entry.position.guardHash,
-      cs: entry.position.codexState,
-    };
-  }
+  for (const [path, entry] of cache) files[path] = serializeFile(entry, tables);
+  return {
+    version: USAGE_SCAN_CACHE_VERSION,
+    models: tables.models,
+    sessions: tables.sessions,
+    files,
+  };
+}
 
-  return { version: USAGE_SCAN_CACHE_VERSION, models, sessions, files };
+/**
+ * Returns a function that serialises the cache to JSON text, re-encoding only
+ * the entries that changed since its last call. Call it once per persist.
+ *
+ * Writes the same document as `encodeScanCache`. Most entries never change
+ * between scans, and encoding all of them made each persist cost close to a
+ * second on a large cache. Entries are replaced, never mutated, when their file
+ * changes, so an entry's JSON is memoised by identity. The intern tables only
+ * grow, so a memoised entry's indexes stay valid; a pruned entry can leave an
+ * unused string behind until the next process start.
+ */
+export function makeScanCacheWriter(): (
+  cache: ScanCache,
+  extra: Readonly<Record<string, unknown>>,
+) => string {
+  const tables = makeInternTables();
+  const fragments = new WeakMap<CachedFile, string>();
+  return (cache, extra) => {
+    const files: string[] = [];
+    for (const [path, entry] of cache) {
+      let fragment = fragments.get(entry);
+      if (fragment === undefined) {
+        fragment = JSON.stringify(serializeFile(entry, tables));
+        fragments.set(entry, fragment);
+      }
+      files.push(`${JSON.stringify(path)}:${fragment}`);
+    }
+    // Encoded after the files, which may have added to the intern tables.
+    const head = JSON.stringify({
+      ...extra,
+      version: USAGE_SCAN_CACHE_VERSION,
+      models: tables.models,
+      sessions: tables.sessions,
+    });
+    return `${head.slice(0, -1)},"files":{${files.join(",")}}}`;
+  };
 }
 
 function isRecordArray(value: unknown): value is readonly unknown[] {
@@ -164,7 +239,14 @@ export function decodeScanCache(document: unknown): ScanCache {
   if (typeof document !== "object" || document === null) return cache;
 
   const root = document as Partial<SerializedCache>;
-  if (root.version !== USAGE_SCAN_CACHE_VERSION) return cache;
+  const version = root.version;
+  if (
+    typeof version !== "number" ||
+    version < SPEED_COMPATIBLE_SINCE_VERSION ||
+    version > USAGE_SCAN_CACHE_VERSION
+  ) {
+    return cache;
+  }
   if (!isRecordArray(root.models) || !isRecordArray(root.sessions)) return cache;
   if (typeof root.files !== "object" || root.files === null) return cache;
 
@@ -185,7 +267,7 @@ export function decodeScanCache(document: unknown): ScanCache {
   ): UsageRecord[] | null => {
     const records: UsageRecord[] = [];
     for (const row of rows) {
-      if (!isRecordArray(row) || row.length < 12) return null;
+      if (!isRecordArray(row) || row.length < (version === 6 ? 13 : 11)) return null;
       const [
         timestampMs,
         modelIndex,
@@ -197,30 +279,47 @@ export function decodeScanCache(document: unknown): ScanCache {
         reasoning,
         dedupeKey,
         reportedCostUsd,
-        modelProviderIndex,
-        modelProviderSource,
+        speedIndex,
       ] = row as SerializedRecord;
-      const modelProvider =
-        typeof modelProviderIndex === "number" && modelProviderIndex >= 0
-          ? models[modelProviderIndex]
-          : null;
-      const providerSource =
-        typeof modelProviderSource === "number"
-          ? PROVIDER_SOURCE_CODES[modelProviderSource]
+      const forkLegacy = version < 6 && row.length === 12;
+      const speed = forkLegacy
+        ? "standard"
+        : typeof speedIndex === "number"
+          ? SPEEDS[speedIndex]
           : undefined;
+      const modelProviderIndex = version === 6 ? row[11] : forkLegacy ? row[10] : -2;
+      const sourceIndex = version === 6 ? row[12] : forkLegacy ? row[11] : -1;
+      const modelProvider =
+        modelProviderIndex === -2
+          ? undefined
+          : modelProviderIndex === -1
+            ? null
+            : typeof modelProviderIndex === "number"
+              ? models[modelProviderIndex]
+              : undefined;
+      const modelProviderSource =
+        sourceIndex === -1
+          ? undefined
+          : typeof sourceIndex === "number"
+            ? PROVIDER_SOURCE_CODES[sourceIndex]
+            : undefined;
+      if (
+        (modelProviderIndex !== -2 && modelProvider === undefined) ||
+        (sourceIndex !== -1 && modelProviderSource === undefined)
+      )
+        return null;
 
       const model = typeof modelIndex === "number" ? models[modelIndex] : undefined;
       if (
         typeof timestampMs !== "number" ||
         !Number.isFinite(timestampMs) ||
         model === undefined ||
-        modelProvider === undefined ||
-        providerSource === undefined ||
         !Number.isFinite(uncached) ||
         !Number.isFinite(cached) ||
         !Number.isFinite(cacheCreation) ||
         !Number.isFinite(output) ||
-        !Number.isFinite(reasoning)
+        !Number.isFinite(reasoning) ||
+        speed === undefined
       ) {
         return null;
       }
@@ -229,8 +328,8 @@ export function decodeScanCache(document: unknown): ScanCache {
         provider,
         timestampMs,
         model,
-        modelProvider,
-        modelProviderSource: providerSource,
+        ...(modelProvider === undefined ? {} : { modelProvider }),
+        ...(modelProviderSource === undefined ? {} : { modelProviderSource }),
         sessionId: (typeof sessionIndex === "number" ? sessions[sessionIndex] : undefined) ?? "",
         totals: {
           uncachedInputTokens: uncached,
@@ -240,6 +339,7 @@ export function decodeScanCache(document: unknown): ScanCache {
           reasoningTokens: reasoning,
         },
         reportedCostUsd: typeof reportedCostUsd === "number" ? reportedCostUsd : null,
+        speed,
         dedupeKey: typeof dedupeKey === "string" ? dedupeKey : null,
       });
     }
@@ -270,7 +370,15 @@ export function decodeScanCache(document: unknown): ScanCache {
     ) {
       continue;
     }
-    const codexState = decodeCodexState(entry.cs);
+    // v4 Codex records predate service tiers, so they all priced as standard.
+    // Keep them, because the rollout may be gone, but make a live rollout
+    // re-parse whole: no file has size -1, and a zero position cannot resume.
+    const legacyCodex =
+      entry.p === "codex" &&
+      (version < 5 ||
+        (version < 6 &&
+          (entry.r as readonly (readonly unknown[])[]).some((row) => row.length === 12)));
+    const codexState = legacyCodex ? null : decodeCodexState(entry.cs);
     if (codexState === undefined) continue;
 
     const provider: UsageProviderKind = entry.p;
@@ -279,17 +387,14 @@ export function decodeScanCache(document: unknown): ScanCache {
     if (records === null || tailRecords === null) continue;
 
     cache.set(path, {
-      size: entry.s,
+      size: legacyCodex ? -1 : entry.s,
       mtimeMs: entry.m,
       provider,
       records,
       tailRecords,
-      position: {
-        resumeOffset: entry.o,
-        guardLength: entry.gl,
-        guardHash: entry.gh,
-        codexState,
-      },
+      position: legacyCodex
+        ? { resumeOffset: 0, guardLength: 0, guardHash: 0, codexState: null }
+        : { resumeOffset: entry.o, guardLength: entry.gl, guardHash: entry.gh, codexState },
     });
   }
 
@@ -307,7 +412,7 @@ function decodeCodexState(value: unknown): CodexScanState | null | undefined {
   const state = value as Partial<CodexScanState>;
   if (
     typeof state.model !== "string" ||
-    typeof state.modelProvider !== "string" ||
+    !isSpeed(state.speed) ||
     typeof state.sessionId !== "string" ||
     (state.lastUsageSignature !== null && typeof state.lastUsageSignature !== "string") ||
     typeof state.sawSessionMeta !== "boolean" ||
@@ -319,7 +424,8 @@ function decodeCodexState(value: unknown): CodexScanState | null | undefined {
   }
   return {
     model: state.model,
-    modelProvider: state.modelProvider,
+    speed: state.speed,
+    modelProvider: typeof state.modelProvider === "string" ? state.modelProvider : "",
     sessionId: state.sessionId,
     lastUsageSignature: state.lastUsageSignature ?? null,
     sawSessionMeta: state.sawSessionMeta,

@@ -1,5 +1,4 @@
 import { assert, describe, it } from "@effect/vitest";
-import { ThreadId } from "@t3tools/contracts";
 import { HostProcessEnvironment } from "@t3tools/shared/hostProcess";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -25,9 +24,11 @@ function fakeChannel(connected = true) {
   const sent: ServerMessage[] = [];
   const listeners = new Set<(message: unknown) => void>();
   const prepared = Deferred.makeUnsafe<number>();
+  const preparationFailed = Deferred.makeUnsafe<void>();
   return {
     sent,
     prepared,
+    preparationFailed,
     deliver: (message: unknown) => listeners.forEach((listener) => listener(message)),
     channel: {
       connected: () => connected,
@@ -35,6 +36,8 @@ function fakeChannel(connected = true) {
         sent.push(message);
         if (message.type === "t3-checkout.prepared")
           Deferred.doneUnsafe(prepared, Exit.succeed(message.threads));
+        if (message.type === "t3-checkout.preparation-failed")
+          Deferred.doneUnsafe(preparationFailed, Exit.succeed(undefined));
       },
       listen: (listener: (message: unknown) => void) => {
         listeners.add(listener);
@@ -47,17 +50,16 @@ function fakeChannel(connected = true) {
 const startup = ServerRuntimeStartup.ServerRuntimeStartup.of({
   awaitCommandReady: Effect.void,
   markHttpListening: Effect.void,
-  markRunningProviderSessionsForContinuation: Effect.succeed([ThreadId.make("thread-1")]),
-  clearProviderSessionContinuationMarkers: () => Effect.void,
+  prepareForRestart: Effect.void,
   enqueueCommand: (effect) => effect,
 });
 
 const provide =
-  (channel: CheckoutUpdate.CheckoutUpdateChannel, supervised = true) =>
+  (channel: CheckoutUpdate.CheckoutUpdateChannel, supervised = true, startupService = startup) =>
   <A, E, R>(effect: Effect.Effect<A, E, R>) =>
     effect.pipe(
       Effect.provideService(CheckoutUpdate.CheckoutUpdateHostChannel, channel),
-      Effect.provideService(ServerRuntimeStartup.ServerRuntimeStartup, startup),
+      Effect.provideService(ServerRuntimeStartup.ServerRuntimeStartup, startupService),
       Effect.provideService(
         HostProcessEnvironment,
         supervised ? { T3CODE_CHECKOUT_SUPERVISOR: "1" } : {},
@@ -80,14 +82,45 @@ describe("CheckoutUpdate", () => {
     }).pipe(provide(fake.channel), Effect.scoped);
   });
 
-  it.effect("marks running turns to continue before the supervisor stops the server", () => {
+  it.effect("prepares V2 runtime recovery before acknowledging the supervisor", () => {
     const fake = fakeChannel();
+    const started = Deferred.makeUnsafe<void>();
+    const released = Deferred.makeUnsafe<void>();
+    const blockedStartup = {
+      ...startup,
+      prepareForRestart: Deferred.succeed(started, undefined).pipe(
+        Effect.andThen(Deferred.await(released)),
+      ),
+    };
     return Effect.gen(function* () {
       yield* CheckoutUpdate.make;
       fake.deliver({ type: "t3-checkout.prepare" });
-      assert.strictEqual(yield* Deferred.await(fake.prepared), 1);
-    }).pipe(provide(fake.channel), Effect.scoped);
+      yield* Deferred.await(started);
+      assert.isFalse(yield* Deferred.isDone(fake.prepared));
+      yield* Deferred.succeed(released, undefined);
+      assert.strictEqual(yield* Deferred.await(fake.prepared), 0);
+    }).pipe(provide(fake.channel, true, blockedStartup), Effect.scoped);
   });
+
+  it.effect(
+    "failed restart preparation reports failure without authorizing replacement or exposing diagnostics",
+    () => {
+      const fake = fakeChannel();
+      return Effect.gen(function* () {
+        yield* CheckoutUpdate.make;
+        fake.deliver({ type: "t3-checkout.prepare" });
+        yield* Deferred.await(fake.preparationFailed);
+        assert.isFalse(yield* Deferred.isDone(fake.prepared));
+        assert.isFalse(JSON.stringify(fake.sent).includes("private-native-diagnostics"));
+      }).pipe(
+        provide(fake.channel, true, {
+          ...startup,
+          prepareForRestart: Effect.die("private-native-diagnostics"),
+        }),
+        Effect.scoped,
+      );
+    },
+  );
 
   it.effect("refuses requests on a server the supervisor does not run", () => {
     const fake = fakeChannel();

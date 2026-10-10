@@ -10,7 +10,7 @@ import {
   credentialFileHoldsApiKey,
   dotenvHoldsApiKey,
   probeDeepSeekAuthenticated,
-} from "../Layers/DeepSeekProvider.ts";
+} from "../DeepSeekProvider.ts";
 import {
   buildDeepSeekAcpSpawnInput,
   currentDeepSeekModelIdFromSessionSetup,

@@ -6,7 +6,8 @@ import { deriveProjectGroupLabel } from "@t3tools/client-runtime/state/project-g
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { hasCloudPublicConfig } from "../cloud/publicConfig";
-import { WorkspaceSidebarToolbar } from "../layout/workspace-sidebar-toolbar";
+import { useAdaptiveWorkspaceLayout } from "../layout/AdaptiveWorkspaceLayout";
+import { NativeHeaderToolbar, NativeStackScreenOptions } from "../../native/StackHeader";
 import { useSavedRemoteConnections } from "../../state/use-remote-environment-registry";
 import { SettingsRow } from "./components/SettingsRow";
 import { SettingsSection } from "./components/SettingsSection";
@@ -18,6 +19,8 @@ import {
 import { useSettingsEnvironmentFilter } from "./settings-environment-filter";
 
 export function SettingsRouteScreen() {
+  const navigation = useNavigation();
+  const { layout } = useAdaptiveWorkspaceLayout();
   const content = hasCloudPublicConfig() ? (
     <ConfiguredSettingsRouteScreen />
   ) : (
@@ -26,7 +29,20 @@ export function SettingsRouteScreen() {
 
   return (
     <>
-      <WorkspaceSidebarToolbar />
+      {Platform.OS === "ios" ? (
+        <NativeStackScreenOptions options={{ headerBackVisible: !layout.usesSplitView }} />
+      ) : null}
+      {Platform.OS === "ios" && layout.usesSplitView ? (
+        <>
+          <NativeHeaderToolbar placement="left">
+            <NativeHeaderToolbar.Button
+              accessibilityLabel="Go back"
+              icon="chevron.left"
+              onPress={() => navigation.goBack()}
+            />
+          </NativeHeaderToolbar>
+        </>
+      ) : null}
       <SettingsEnvironmentFilterHeader closeSettings />
       {Platform.OS === "android" ? (
         <SettingsScreen title="Settings" trailing={<AndroidSettingsEnvironmentFilter />}>
@@ -142,6 +158,10 @@ function SettingsIndexSections() {
         ) : null}
       </SettingsSection>
 
+      <SettingsSection title="Automations">
+        <SettingsRow icon="clock" label="Scheduled tasks" target="SettingsScheduledTasks" />
+      </SettingsSection>
+
       <SettingsSection title="Projects & threads">
         {selectedProjectKey !== null ? (
           <SettingsRow
@@ -153,10 +173,17 @@ function SettingsIndexSections() {
         ) : null}
         <SettingsRow icon="folder" label="Organization" target="SettingsOrganization" />
         <SettingsRow icon="text.bubble" label="Thread behavior" target="SettingsThreads" />
+        <SettingsRow icon="arrow.turn.left.up" label="Follow-ups" target="SettingsFollowUp" />
         <SettingsRow icon="archivebox" label="Archived Threads" target="SettingsArchive" />
       </SettingsSection>
 
       <SettingsSection title="Server settings">
+        <SettingsRow
+          icon="person.crop.circle"
+          label="Provider accounts"
+          target="SettingsProviderAccounts"
+          disabled={noServerTargets}
+        />
         <SettingsRow
           icon="text.bubble"
           label="New threads"

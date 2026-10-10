@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import { buildDeepSeekAcpSpawnInput, deepseekPermissionModeFor } from "./acp/DeepSeekAcpSupport.ts";
-import { codexSandboxProblemFrom } from "./Layers/codexSandboxCheck.ts";
+import { codexSandboxProblemFrom } from "./codexSandboxCheck.ts";
 import {
   CLAUDE_RUNTIME_MODES,
   codexRuntimeModes,
@@ -12,7 +12,7 @@ import {
   PI_RUNTIME_MODES,
   runtimeModeProblem,
   runtimeModeSupport,
-} from "./runtimeModeSupport.ts";
+} from "@t3tools/provider-core/server/runtimeModeSupport";
 
 const available = (support: ReturnType<typeof runtimeModeSupport>) =>
   support.filter((item) => item.available).map((item) => item.mode);

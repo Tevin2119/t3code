@@ -147,7 +147,7 @@ export function SeatSettingsPanel(props: {
 
   return (
     <div className="flex flex-col gap-1" data-delivery-seat-settings>
-      <p className="text-[11px] text-muted-foreground" data-delivery-seats-on>
+      <p className="text-2xs text-muted-foreground" data-delivery-seats-on>
         {on} of {props.settings.length} seats switched on
       </p>
       <div className="flex flex-col divide-y divide-border">
@@ -251,14 +251,14 @@ export function SeatSettingsPanel(props: {
                     <TooltipPopup side="top">Back to {baseLabel.toLowerCase()}</TooltipPopup>
                   </Tooltip>
                 ) : (
-                  <Badge size="sm" variant="outline" className="shrink-0 text-muted-foreground">
+                  <Badge size="sm" variant="outline" className="shrink-0 ">
                     {baseLabel}
                   </Badge>
                 )}
               </div>
 
               {props.switchesOnly ? (
-                <p className="pl-10 text-[11px] text-muted-foreground" data-seat-runs-on>
+                <p className="pl-10 text-2xs text-muted-foreground" data-seat-runs-on>
                   {harnessLabel(values.harness)}, {values.model ?? "its own model"}
                   {values.reasoning ? `, ${values.reasoning}` : ""}
                   {values.access && values.access !== "full" ? `, ${values.access}` : ""}
@@ -277,7 +277,6 @@ export function SeatSettingsPanel(props: {
                       instanceEntries={entries}
                       modelOptionsByInstance={options}
                       size="xs"
-                      triggerVariant="outline"
                       triggerAriaLabel={`Harness and model for ${item.title}`}
                       {...(offer.model
                         ? {}
@@ -341,7 +340,7 @@ export function SeatSettingsPanel(props: {
                 </div>
               )}
               {over === "task" && !locked && seatSources(item).length > 0 ? (
-                <p className="pl-10 text-[11px] text-muted-foreground" data-seat-source>
+                <p className="pl-10 text-2xs text-muted-foreground" data-seat-source>
                   {baseLabel} set by {seatSources(item).join(" and ")}
                 </p>
               ) : null}
