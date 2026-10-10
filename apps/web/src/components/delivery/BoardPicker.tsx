@@ -19,6 +19,7 @@ import {
   type RepositoryChoice,
 } from "./BoardPicker.repositories";
 import { RepositoryBrowse } from "./BoardPicker.browse";
+import { BaseBranchPicker } from "./BoardPicker.branches";
 
 import { Button } from "../ui/button";
 import { Checkbox } from "../ui/checkbox";
@@ -584,32 +585,16 @@ export function BoardDialog(props: {
               ) : null}
               <label className="flex flex-col gap-1">
                 <span className="text-xs font-medium">Base branch</span>
-                <Select
-                  value={base || null}
-                  onValueChange={(value) => setBase(String(value ?? ""))}
+                <BaseBranchPicker
+                  key={`${props.environmentId ?? ""}:${chosen?.id ?? ""}`}
+                  environmentId={props.environmentId ?? null}
+                  cwd={chosen?.path ?? null}
+                  defaultBase={chosen?.defaultBase ?? null}
+                  value={base}
+                  onChange={setBase}
                   disabled={!chosen || registering !== null}
-                >
-                  <SelectTrigger
-                    ref={baseTrigger}
-                    aria-label="Base branch"
-                    size="compact"
-                    data-board-dialog-base
-                  >
-                    <SelectValue placeholder="Choose a repository first">
-                      {base || undefined}
-                    </SelectValue>
-                  </SelectTrigger>
-                  <SelectPopup alignItemWithTrigger={false}>
-                    {(chosen?.branches ?? []).map((branch) => (
-                      <SelectItem key={branch} value={branch}>
-                        {branch}
-                        {branch === chosen?.defaultBase ? (
-                          <span className="text-[11px] text-muted-foreground"> (default)</span>
-                        ) : null}
-                      </SelectItem>
-                    ))}
-                  </SelectPopup>
-                </Select>
+                  ref={baseTrigger}
+                />
                 <span className="text-[11px] text-muted-foreground">
                   Work on a task starts from this branch. The team works in a worktree of its own;
                   the branch itself is not changed.
@@ -656,9 +641,7 @@ export function BoardDialog(props: {
                   ? "Choose the repository its tasks are done in."
                   : chosen && !chosen.ok
                     ? `${chosen.title}: ${chosen.problem ?? "it cannot be read"}.`
-                    : chosen && chosen.branches.length === 0
-                      ? `${chosen.title} has no branch to start work from.`
-                      : "Choose the branch work starts from."}
+                    : "Choose the branch work starts from."}
             </p>
           ) : null}
           {isBoard && bindingReady && chosen && !chosen.ok ? (

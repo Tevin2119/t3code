@@ -34,6 +34,55 @@ const mock = vi.hoisted(() => ({
   listings: {} as Record<string, { data?: unknown; error?: string }>,
   queried: [] as Array<{ environmentId: string; input: { partialPath: string; cwd?: string } }>,
   load: vi.fn(),
+  // T3's branch list by JSON [environmentId, cwd, query]; a missing one is still being read.
+  branches: {} as Record<string, unknown>,
+  branchTargets: [] as Array<{ environmentId: string | null; cwd: string | null; query: string }>,
+  list: null as null | {
+    data: ReadonlyArray<string>;
+    onLayout: () => void;
+    onScroll: () => void;
+  },
+  scroll: { scrollTop: 0, scrollHeight: 1000, clientHeight: 100 },
+  focused: vi.fn(),
+}));
+vi.mock("../../state/queries", () => ({
+  usePaginatedBranches: (target: {
+    environmentId: string | null;
+    cwd: string | null;
+    query: string;
+  }) => {
+    mock.branchTargets.push(target);
+    if (target.environmentId === null || target.cwd === null) return branchState(null);
+    const key = JSON.stringify([target.environmentId, target.cwd, target.query.trim()]);
+    return mock.branches[key] ?? branchState(null, { isPending: true });
+  },
+}));
+vi.mock("@legendapp/list/react", () => ({
+  LegendList: (props: {
+    data: ReadonlyArray<string>;
+    renderItem: (row: { item: string; index: number }) => unknown;
+    ref: { current: unknown };
+    onLayout: () => void;
+    onScroll: () => void;
+  }) => {
+    mock.list = props;
+    props.ref.current = {
+      getScrollableNode: () => mock.scroll,
+      scrollToOffset: () => undefined,
+      scrollIndexIntoView: () => undefined,
+    };
+    return props.data.map((item, index) => props.renderItem({ item, index }));
+  },
+}));
+vi.mock("../ui/combobox", () => ({
+  Combobox: "combobox-root",
+  ComboboxTrigger: "combobox-trigger",
+  ComboboxPopup: "combobox-popup",
+  ComboboxInput: "combobox-input",
+  ComboboxItem: "combobox-item",
+  ComboboxEmpty: "combobox-empty",
+  ComboboxListVirtualized: "combobox-list",
+  ComboboxStatus: "combobox-status",
 }));
 vi.mock("../../state/environments", () => ({
   useEnvironment: (id: string | null) => (id ? (mock.environments[id] ?? null) : null),
@@ -96,6 +145,49 @@ vi.mock("../ui/tooltip", () => ({
   TooltipTrigger: "tooltip-trigger",
   TooltipPopup: "tooltip-popup",
 }));
+
+type BranchRef = { name: string; isRemote?: boolean; current?: boolean; isDefault?: boolean };
+const branchRefs = (names: ReadonlyArray<string | BranchRef>) =>
+  names.map((ref) => ({
+    current: false,
+    isDefault: false,
+    worktreePath: null,
+    ...(typeof ref === "string" ? { name: ref } : ref),
+  }));
+const branchActions = { refresh: vi.fn(), loadNext: vi.fn() };
+/** The shape usePaginatedBranches answers with; `names` null while nothing is read. */
+function branchState(
+  names: ReadonlyArray<string | BranchRef> | null,
+  extra: Partial<{
+    nextCursor: number | null;
+    totalCount: number;
+    isRepo: boolean;
+    error: string | null;
+    isPending: boolean;
+    isFetchingNextPage: boolean;
+  }> = {},
+) {
+  const refs = names ? branchRefs(names) : [];
+  return {
+    data: names
+      ? {
+          refs,
+          nextCursor: extra.nextCursor ?? null,
+          isRepo: extra.isRepo ?? true,
+          hasPrimaryRemote: true,
+          totalCount: extra.totalCount ?? refs.length,
+        }
+      : null,
+    refs,
+    error: extra.error ?? null,
+    isPending: extra.isPending ?? false,
+    isFetchingNextPage: extra.isFetchingNextPage ?? false,
+    refresh: branchActions.refresh,
+    loadNext: branchActions.loadNext,
+  };
+}
+const branchKey = (environmentId: string, cwd: string, query = "") =>
+  JSON.stringify([environmentId, cwd, query]);
 
 const ENV = EnvironmentId.make("env-a");
 const OTHER = EnvironmentId.make("env-b");
@@ -275,7 +367,8 @@ describe("BoardDialog repository list", () => {
   }
   const selects = () => renderer!.root.findAllByType("select-root" as never);
   const repositorySelect = () => selects()[0]!;
-  const baseSelect = () => selects()[1]!;
+  const basePicker = () => renderer!.root.findByType("combobox-root" as never);
+  const baseTrigger = () => renderer!.root.findByProps({ "data-board-dialog-base": true });
   const shown = (node: ReactTestInstance) => {
     const value = node.findByType("output" as never);
     return value.children.join("");
@@ -338,6 +431,7 @@ describe("BoardDialog repository list", () => {
     });
     // While pending nothing else can be chosen, and the choice is said.
     expect(repositorySelect().props.disabled).toBe(true);
+    expect(baseTrigger().props.disabled).toBe(true);
     expect(saveButton().props.disabled).toBe(true);
     expect(shown(repositorySelect())).toBe("Proj");
     await choose(`${PROJECT_CHOICE_PREFIX}p1`);
@@ -347,8 +441,8 @@ describe("BoardDialog repository list", () => {
     expect(mock.reading.refresh).toHaveBeenCalled();
     expect(repositorySelect().props.value).toBe("r9");
     expect(shown(repositorySelect())).toBe("Proj");
-    expect(baseSelect().props.value).toBe("trunk");
-    expect(baseSelect().props.disabled).toBe(false);
+    expect(basePicker().props.value).toBe("trunk");
+    expect(baseTrigger().props.disabled).toBe(false);
     expect(saveButton().props.disabled).toBe(false);
     await act(() => saveButton().props.onClick());
     expect(saved).toHaveBeenCalledWith({
@@ -372,7 +466,7 @@ describe("BoardDialog repository list", () => {
     await choose("r1");
     expect(mock.action).not.toHaveBeenCalled();
     expect(repositorySelect().props.value).toBe("r1");
-    expect(baseSelect().props.value).toBe("develop");
+    expect(basePicker().props.value).toBe("develop");
   });
 
   it("shows the engine's reason when the add fails, selects nothing, and lets it be tried again", async () => {
@@ -384,7 +478,7 @@ describe("BoardDialog repository list", () => {
     await choose(`${PROJECT_CHOICE_PREFIX}p1`);
     expect(problem()).toBe("Not a git repository");
     expect(repositorySelect().props.value).toBeNull();
-    expect(baseSelect().props.value).toBeNull();
+    expect(basePicker().props.value).toBeNull();
     expect(saveButton().props.disabled).toBe(true);
 
     mock.action.mockResolvedValueOnce({ ok: true, body: { id: "r2", defaultBase: "main" } });
@@ -413,7 +507,7 @@ describe("BoardDialog repository list", () => {
     await render();
     await choose(`${PROJECT_CHOICE_PREFIX}p1`);
     expect(repositorySelect().props.value).toBe("r2");
-    expect(baseSelect().props.value).toBeNull();
+    expect(basePicker().props.value).toBeNull();
     expect(saveButton().props.disabled).toBe(true);
   });
 
@@ -460,6 +554,332 @@ describe("BoardDialog repository list", () => {
     });
     await act(() => saveButton().props.onClick());
     expect(saved).toHaveBeenCalledWith({ title: "Board", description: "" });
+  });
+});
+
+describe("BoardDialog base branch from T3's branch list", () => {
+  let renderer: ReactTestRenderer | undefined;
+  const saved = vi.fn();
+  const view = (editing: PickerItem | null, environmentId: EnvironmentId) => (
+    <BoardDialog
+      kind="board"
+      editing={editing}
+      environmentId={environmentId}
+      by="person"
+      busy={false}
+      problem={null}
+      onClose={() => undefined}
+      onSave={saved}
+    />
+  );
+  async function render(editing: PickerItem | null = null, environmentId: EnvironmentId = ENV) {
+    await act(() => {
+      if (renderer) renderer.update(view(editing, environmentId));
+      else renderer = create(view(editing, environmentId));
+    });
+  }
+  async function chooseRepository(value: string) {
+    await act(async () => {
+      renderer!.root.findAllByType("select-root" as never)[0]!.props.onValueChange(value);
+    });
+  }
+  const picker = () => renderer!.root.findByType("combobox-root" as never);
+  const trigger = () => renderer!.root.findByProps({ "data-board-dialog-base": true });
+  const text = (node: ReactTestInstance): string =>
+    node.children.map((child) => (typeof child === "string" ? child : text(child))).join("");
+  const options = () => renderer!.root.findAllByType("combobox-item" as never);
+  const names = () => options().map((option) => option.props.value);
+  const option = (name: string) => options().find((item) => item.props.value === name)!;
+  const badge = (name: string) => {
+    const spans = option(name).findAllByType("span");
+    return spans.length > 1 ? text(spans[1]!) : null;
+  };
+  const status = () => renderer!.root.findAllByType("combobox-status" as never).map(text)[0];
+  const lastTarget = () => mock.branchTargets.at(-1);
+  async function open() {
+    await act(async () => picker().props.onOpenChange(true));
+  }
+  async function search(value: string) {
+    await act(async () =>
+      renderer!.root.findByType("combobox-input" as never).props.onChange({ target: { value } }),
+    );
+  }
+  async function pick(name: string) {
+    await act(async () => option(name).props.onClick());
+  }
+  async function save() {
+    await act(async () =>
+      renderer!.root.findByProps({ "data-board-dialog-save": true }).props.onClick(),
+    );
+  }
+  async function scrollTo(scrollTop: number) {
+    mock.scroll = { ...mock.scroll, scrollTop };
+    await act(async () => mock.list!.onScroll());
+  }
+
+  beforeEach(() => {
+    mock.reading = {
+      body: [
+        // The engine's own branches are never the list.
+        engineRepo("r1", "/work/a", { branches: ["main", "engine-only"] }),
+        engineRepo("r2", "/work/b", { defaultBase: "trunk", branches: ["trunk"] }),
+        engineRepo("r3", "/work/c", { defaultBase: null, branches: [] }),
+      ],
+      error: null,
+      isPending: false,
+      refresh: vi.fn(),
+    };
+    mock.action = vi.fn();
+    mock.projects = [];
+    mock.branches = {};
+    mock.branchTargets = [];
+    mock.list = null;
+    mock.scroll = { scrollTop: 0, scrollHeight: 1000, clientHeight: 100 };
+    branchActions.refresh.mockReset();
+    branchActions.loadNext.mockReset();
+    saved.mockReset();
+  });
+  afterEach(async () => {
+    await act(() => renderer?.unmount());
+    renderer = undefined;
+  });
+
+  it("reads nothing until a repository is chosen", async () => {
+    await render();
+    expect(lastTarget()).toEqual({ environmentId: ENV, cwd: null, query: "" });
+    expect(trigger().props.disabled).toBe(true);
+    expect(text(trigger())).toBe("Choose a repository first");
+  });
+
+  it("lists the chosen repository's folder from T3, the engine's default once, first and marked", async () => {
+    mock.branches[branchKey(ENV, "/work/a")] = branchState([
+      { name: "feature", isDefault: true },
+      { name: "origin/feature", isRemote: true },
+      "main",
+      "hook-only",
+    ]);
+    await render();
+    await chooseRepository("r1");
+    expect(lastTarget()).toEqual({ environmentId: ENV, cwd: "/work/a", query: "" });
+    expect(picker().props.value).toBe("main");
+    expect(text(trigger())).toBe("main");
+    expect(names()).toEqual(["main", "feature", "origin/feature", "hook-only"]);
+    expect(names()).not.toContain("engine-only");
+    expect(badge("main")).toBe("(default)");
+    // T3's own default is not the engine's, and is not marked.
+    expect(badge("feature")).toBeNull();
+    expect(badge("origin/feature")).toBe("remote");
+  });
+
+  it("lists the default before it is read, and once when a later page has it", async () => {
+    mock.branches[branchKey(ENV, "/work/a")] = branchState(["dev", "fix"], {
+      nextCursor: 2,
+      totalCount: 4,
+    });
+    await render();
+    await chooseRepository("r1");
+    expect(names()).toEqual(["main", "dev", "fix"]);
+    expect(status()).toBe("Showing 2 of 4 branches");
+    mock.branches[branchKey(ENV, "/work/a")] = branchState(["dev", "fix", "main", "x"], {
+      totalCount: 4,
+    });
+    await render();
+    expect(names()).toEqual(["main", "dev", "fix", "x"]);
+    expect(names().filter((name) => name === "main")).toHaveLength(1);
+    expect(picker().props.value).toBe("main");
+  });
+
+  it("chooses nothing for a repository with no default base", async () => {
+    mock.branches[branchKey(ENV, "/work/c")] = branchState(["one", "two"]);
+    await render();
+    await chooseRepository("r3");
+    expect(picker().props.value).toBeNull();
+    expect(names()).toEqual(["one", "two"]);
+    expect(renderer!.root.findByProps({ "data-board-dialog-save": true }).props.disabled).toBe(
+      true,
+    );
+    await pick("two");
+    expect(picker().props.value).toBe("two");
+  });
+
+  it("searches T3 with the trimmed text, filters the default too, and shows no older reply", async () => {
+    mock.branches[branchKey(ENV, "/work/a")] = branchState(["main", "dev", "feat-a"]);
+    await render();
+    await chooseRepository("r1");
+    await open();
+    await search("  feat ");
+    expect(lastTarget()).toEqual({ environmentId: ENV, cwd: "/work/a", query: "feat" });
+    // Its reply is not in yet: nothing from the unfiltered list is shown under it.
+    expect(names()).toEqual([]);
+    mock.branches[branchKey(ENV, "/work/a", "feat")] = branchState(["feat-a", "feat-b"]);
+    await render();
+    expect(names()).toEqual(["feat-a", "feat-b"]);
+    await search("mai");
+    expect(names()).toEqual(["main"]);
+    expect(picker().props.value).toBe("main");
+  });
+
+  it("clears the search when the list closes", async () => {
+    mock.branches[branchKey(ENV, "/work/a")] = branchState(["main", "dev"]);
+    await render();
+    await chooseRepository("r1");
+    await open();
+    await search("dev");
+    await act(async () => picker().props.onOpenChange(false));
+    expect(renderer!.root.findByType("combobox-input" as never).props.value).toBe("");
+    expect(lastTarget()?.query).toBe("");
+  });
+
+  it("loads the next page only on a downward scroll near the end of the open list", async () => {
+    mock.branches[branchKey(ENV, "/work/a")] = branchState(["main", "dev"], { nextCursor: 2 });
+    await render();
+    await chooseRepository("r1");
+    // Closed: no page is loaded.
+    await act(async () => mock.list!.onLayout());
+    await scrollTo(900);
+    expect(branchActions.loadNext).not.toHaveBeenCalled();
+
+    await open();
+    // The first scroll after opening has nothing to compare with.
+    await scrollTo(900);
+    expect(branchActions.loadNext).not.toHaveBeenCalled();
+    await scrollTo(800);
+    expect(branchActions.loadNext).not.toHaveBeenCalled();
+    await scrollTo(400);
+    await scrollTo(500);
+    expect(branchActions.loadNext).not.toHaveBeenCalled();
+    await scrollTo(900);
+    expect(branchActions.loadNext).toHaveBeenCalledTimes(1);
+
+    mock.branches[branchKey(ENV, "/work/a")] = branchState(["main", "dev"], {
+      nextCursor: 2,
+      isPending: true,
+      isFetchingNextPage: true,
+    });
+    await render();
+    expect(status()).toBe("Loading more branches…");
+    await scrollTo(0);
+    await scrollTo(900);
+    expect(branchActions.loadNext).toHaveBeenCalledTimes(1);
+
+    mock.branches[branchKey(ENV, "/work/a")] = branchState(["main", "dev"], { nextCursor: null });
+    await render();
+    await scrollTo(0);
+    await scrollTo(900);
+    expect(branchActions.loadNext).toHaveBeenCalledTimes(1);
+  });
+
+  it("says when the first page is loading, and that nothing matches only once read", async () => {
+    await render();
+    await chooseRepository("r1");
+    expect(status()).toBe("Loading branches…");
+    expect(renderer!.root.findAllByType("combobox-empty" as never)).toHaveLength(0);
+    expect(names()).toEqual(["main"]);
+    expect(trigger().props.disabled).toBe(false);
+    mock.branches[branchKey(ENV, "/work/a")] = branchState([]);
+    await render();
+    expect(status()).toBeUndefined();
+    expect(renderer!.root.findAllByType("combobox-empty" as never)).toHaveLength(1);
+  });
+
+  it.each([
+    ["an error", branchState(null, { error: "git failed" }), "git failed"],
+    ["a folder that is not a repository", branchState([], { isRepo: false }), "not a git"],
+  ])("keeps the default choosable and offers a retry on %s", async (_, state, said) => {
+    mock.branches[branchKey(ENV, "/work/a")] = state;
+    await render();
+    await chooseRepository("r1");
+    const problem = renderer!.root.findByProps({ "data-board-dialog-base-problem": true });
+    expect(text(problem)).toContain(said);
+    expect(names()).toEqual(["main"]);
+    await act(async () => problem.findByType("button" as never).props.onClick());
+    expect(branchActions.refresh).toHaveBeenCalledTimes(1);
+    await pick("main");
+    await save();
+    expect(saved).toHaveBeenCalledWith(expect.objectContaining({ repository: "r1", base: "main" }));
+  });
+
+  it.each([["origin/feature"], ["hook-only"]])("saves %s exactly as T3 lists it", async (name) => {
+    mock.branches[branchKey(ENV, "/work/a")] = branchState([
+      "main",
+      "feature",
+      { name: "origin/feature", isRemote: true },
+      "hook-only",
+    ]);
+    await render();
+    await chooseRepository("r1");
+    await open();
+    await pick(name);
+    expect(text(trigger())).toBe(name);
+    await save();
+    expect(saved).toHaveBeenCalledWith({
+      title: "r1",
+      description: "",
+      repository: "r1",
+      base: name,
+    });
+  });
+
+  it("keeps an edited board's base when it is in no page, and when pages arrive", async () => {
+    await render({
+      id: "b1",
+      title: "Board",
+      description: "",
+      kind: "own",
+      target: {
+        ok: true,
+        repository: "r1",
+        base: "release/x",
+        title: "r1",
+        path: "/work/a",
+        problem: null,
+      },
+    });
+    expect(text(trigger())).toBe("release/x");
+    mock.branches[branchKey(ENV, "/work/a")] = branchState(["main", "dev"]);
+    await render();
+    expect(picker().props.value).toBe("release/x");
+    expect(text(trigger())).toBe("release/x");
+  });
+
+  it("shows only the current repository's branches when an older one's reply lands late", async () => {
+    mock.branches[branchKey(ENV, "/work/a")] = branchState(["main"], {
+      nextCursor: 1,
+      isPending: true,
+      isFetchingNextPage: true,
+    });
+    await render();
+    await chooseRepository("r1");
+    await open();
+    await search("x");
+    await chooseRepository("r2");
+    expect(lastTarget()).toEqual({ environmentId: ENV, cwd: "/work/b", query: "" });
+    expect(picker().props.value).toBe("trunk");
+    // The first repository's search and its outstanding page end after the switch.
+    mock.branches[branchKey(ENV, "/work/a")] = branchState(["main", "old-a"]);
+    mock.branches[branchKey(ENV, "/work/a", "x")] = branchState(["x-old"]);
+    await render();
+    expect(names()).toEqual(["trunk"]);
+    mock.branches[branchKey(ENV, "/work/b")] = branchState(["trunk", "b-only"]);
+    await render();
+    expect(names()).toEqual(["trunk", "b-only"]);
+    expect(picker().props.value).toBe("trunk");
+  });
+
+  it("reads the new environment's branches when the environment changes", async () => {
+    mock.branches[branchKey(ENV, "/work/a")] = branchState(["main", "env-a-only"]);
+    await render();
+    await chooseRepository("r1");
+    await render(null, OTHER);
+    expect(lastTarget()).toEqual({ environmentId: OTHER, cwd: "/work/a", query: "" });
+    expect(names()).toEqual(["main"]);
+    mock.branches[branchKey(ENV, "/work/a")] = branchState(["main", "late-a"]);
+    await render(null, OTHER);
+    expect(names()).toEqual(["main"]);
+    mock.branches[branchKey(OTHER, "/work/a")] = branchState(["main", "env-b-only"]);
+    await render(null, OTHER);
+    expect(names()).toEqual(["main", "env-b-only"]);
+    expect(picker().props.value).toBe("main");
   });
 });
 
@@ -580,12 +1000,16 @@ describe("BoardDialog adds a repository by browsing", () => {
   async function render(environmentId: EnvironmentId = ENV) {
     await act(() => {
       if (renderer) renderer.update(view(environmentId));
-      else renderer = create(view(environmentId));
+      else
+        renderer = create(view(environmentId), {
+          createNodeMock: (element) =>
+            element.type === "combobox-trigger" ? { focus: mock.focused } : null,
+        });
     });
   }
   const find = (prop: string) => renderer!.root.findByProps({ [prop]: true });
   const repositorySelect = () => renderer!.root.findAllByType("select-root" as never)[0]!;
-  const baseSelect = () => renderer!.root.findAllByType("select-root" as never)[1]!;
+  const basePicker = () => renderer!.root.findByType("combobox-root" as never);
   async function openAdd() {
     await act(async () => repositorySelect().props.onValueChange("__add_repository__"));
   }
@@ -631,6 +1055,7 @@ describe("BoardDialog adds a repository by browsing", () => {
     };
     mock.queried = [];
     mock.load = vi.fn().mockResolvedValue({ _tag: "Success" });
+    mock.focused = vi.fn();
   });
   afterEach(async () => {
     await act(() => renderer?.unmount());
@@ -829,8 +1254,10 @@ describe("BoardDialog adds a repository by browsing", () => {
       by: "person",
     });
     expect(repositorySelect().props.value).toBe("r5");
-    expect(baseSelect().props.value).toBe("main");
+    expect(basePicker().props.value).toBe("main");
     expect(renderer!.root.findAllByType("palette-content" as never)).toHaveLength(0);
+    // Focus goes on to the added repository's base branch.
+    expect(mock.focused).toHaveBeenCalled();
   });
 
   it("names a known T3 project by its repository, matched after home is expanded", async () => {
