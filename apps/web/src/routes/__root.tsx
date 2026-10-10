@@ -27,7 +27,7 @@ import { RelayClientInstallDialog } from "../components/cloud/RelayClientInstall
 import { SshPasswordPromptDialog } from "../components/desktop/SshPasswordPromptDialog";
 import { SnapShotCoordinator } from "../components/desktop/SnapShotCoordinator";
 import { DesktopAppActivationCoordinator } from "../components/desktop/DesktopAppActivationCoordinator";
-import { CheckoutUpdateNotification } from "../components/CheckoutUpdateNotification";
+import { CheckoutUpdateProvider } from "../components/CheckoutUpdateNotification";
 import { RunningThreadKeepAlive } from "../components/desktop/RunningThreadKeepAlive";
 
 import { ProviderUpdateLaunchNotification } from "../components/ProviderUpdateLaunchNotification";
@@ -248,11 +248,13 @@ function RootRouteView() {
             <EventRouter skipInitialBootstrapNavigation={returningFromWelcomeRef.current} />
           ) : null}
           {primaryEnvironmentAuthenticated ? <ProviderUpdateLaunchNotification /> : null}
-          {primaryEnvironmentAuthenticated ? <CheckoutUpdateNotification /> : null}
           {/* Hosted Nightly is "hosted-static", not authenticated, and needs it too. */}
           <NightlyMobileBetaNotice />
 
-          {appShell}
+          {/* Around the shell: the v2 sidebar's footer shows the update as a pill. */}
+          <CheckoutUpdateProvider enabled={primaryEnvironmentAuthenticated}>
+            {appShell}
+          </CheckoutUpdateProvider>
           {/* Above the router: a theme draft is judged by walking the app, so the
               editor has to survive navigation away from settings. */}
           <ThemeEditorHost />
