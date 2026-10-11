@@ -166,86 +166,88 @@ export function BoardSeatsDialog(props: {
             team's defaults; a task can still set its own.
           </DialogDescription>
         </DialogHeader>
-        <DialogPanel className="flex flex-col gap-3 text-sm">
-          {read.error ? (
-            <p className="text-warning">Delivery engine not reachable. {read.error}</p>
-          ) : null}
-          {teams.length > 1 ? (
-            <div className="flex flex-wrap items-center gap-1" role="tablist" aria-label="Team">
-              {teams.map((row) => (
-                <Button
-                  key={row.team}
-                  size="xs"
-                  role="tab"
-                  aria-selected={row.team === shown?.team}
-                  variant={row.team === shown?.team ? "secondary" : "ghost"}
-                  onClick={() => setTeam(row.team)}
-                >
-                  {row.team}
-                </Button>
-              ))}
-            </div>
-          ) : null}
-          {shown ? (
-            <>
-              <SeatSettingsPanel
-                environmentId={props.environmentId}
-                settings={shown.settings}
-                chosen={current[shown.team] ?? {}}
-                over="task"
-                onChange={(seat, choice) => {
-                  pin();
-                  setChosen({
-                    ...current,
-                    [shown.team]: withSeatChoice(current[shown.team] ?? {}, seat, choice),
-                  });
-                }}
-                renderExtra={(item) => (
-                  <FallbacksEditor
-                    environmentId={props.environmentId}
-                    item={item}
-                    value={currentFallbacks[shown.team]?.[item.seat] ?? null}
-                    inherited={item.fallbackChain}
-                    inheritedLabel="Team default"
-                    onChange={(next) => {
-                      pin();
-                      setFallbacks({
-                        ...currentFallbacks,
-                        [shown.team]: { ...currentFallbacks[shown.team], [item.seat]: next },
-                      });
-                    }}
-                  />
-                )}
-              />
-              <section className="flex flex-col gap-1">
-                <Button
-                  size="xs"
-                  variant="ghost"
-                  className="self-start"
-                  onClick={() => setShowRecord((open) => !open)}
-                  data-board-seats-record
-                >
-                  {showRecord ? "Hide the track record" : `Track record of ${shown.team}`}
-                </Button>
-                {showRecord ? (
-                  <TrackRecord environmentId={props.environmentId} team={shown.team} />
-                ) : null}
-              </section>
-            </>
-          ) : read.error ? null : (
-            <p className="text-xs text-muted-foreground">Reading the board.</p>
-          )}
-          {problems.length > 0 ? (
-            <ul className="list-disc pl-5 text-xs text-warning" data-delivery-problem>
-              {problems.map((problem) => (
-                <li key={problem}>{problem}</li>
-              ))}
-            </ul>
-          ) : null}
-          {said ? <p className="text-xs text-muted-foreground">{said}</p> : null}
-          {standing === "behind" ? (
-            <Behind revision={readRevision} base={base ?? 0} onShowRead={showRead} />
-          ) : null}
+        <DialogPanel>
+          <div className="flex flex-col gap-3 text-sm">
+            {read.error ? (
+              <p className="text-warning">Delivery engine not reachable. {read.error}</p>
+            ) : null}
+            {teams.length > 1 ? (
+              <div className="flex flex-wrap items-center gap-1" role="tablist" aria-label="Team">
+                {teams.map((row) => (
+                  <Button
+                    key={row.team}
+                    size="xs"
+                    role="tab"
+                    aria-selected={row.team === shown?.team}
+                    variant={row.team === shown?.team ? "secondary" : "ghost"}
+                    onClick={() => setTeam(row.team)}
+                  >
+                    {row.team}
+                  </Button>
+                ))}
+              </div>
+            ) : null}
+            {shown ? (
+              <>
+                <SeatSettingsPanel
+                  environmentId={props.environmentId}
+                  settings={shown.settings}
+                  chosen={current[shown.team] ?? {}}
+                  over="task"
+                  onChange={(seat, choice) => {
+                    pin();
+                    setChosen({
+                      ...current,
+                      [shown.team]: withSeatChoice(current[shown.team] ?? {}, seat, choice),
+                    });
+                  }}
+                  renderExtra={(item) => (
+                    <FallbacksEditor
+                      environmentId={props.environmentId}
+                      item={item}
+                      value={currentFallbacks[shown.team]?.[item.seat] ?? null}
+                      inherited={item.fallbackChain}
+                      inheritedLabel="Team default"
+                      onChange={(next) => {
+                        pin();
+                        setFallbacks({
+                          ...currentFallbacks,
+                          [shown.team]: { ...currentFallbacks[shown.team], [item.seat]: next },
+                        });
+                      }}
+                    />
+                  )}
+                />
+                <section className="flex flex-col gap-1">
+                  <Button
+                    size="xs"
+                    variant="ghost"
+                    className="self-start"
+                    onClick={() => setShowRecord((open) => !open)}
+                    data-board-seats-record
+                  >
+                    {showRecord ? "Hide the track record" : `Track record of ${shown.team}`}
+                  </Button>
+                  {showRecord ? (
+                    <TrackRecord environmentId={props.environmentId} team={shown.team} />
+                  ) : null}
+                </section>
+              </>
+            ) : read.error ? null : (
+              <p className="text-xs text-muted-foreground">Reading the board.</p>
+            )}
+            {problems.length > 0 ? (
+              <ul className="list-disc pl-5 text-xs text-warning" data-delivery-problem>
+                {problems.map((problem) => (
+                  <li key={problem}>{problem}</li>
+                ))}
+              </ul>
+            ) : null}
+            {said ? <p className="text-xs text-muted-foreground">{said}</p> : null}
+            {standing === "behind" ? (
+              <Behind revision={readRevision} base={base ?? 0} onShowRead={showRead} />
+            ) : null}
+          </div>
         </DialogPanel>
         <DialogFooter>
           <Button variant="outline" disabled={busy} onClick={props.onClose}>
