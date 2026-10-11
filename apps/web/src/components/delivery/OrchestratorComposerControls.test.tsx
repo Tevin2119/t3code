@@ -267,7 +267,11 @@ async function settleT2ThenRefuseStartOnT1() {
 
 // Switches to a thread and renders it again a few times without a new request.
 async function switchTo(threadId: Thread) {
-  const before = { calls: paths(), navigations: mock.navigate.mock.calls.length, cleared };
+  const before = {
+    calls: paths(),
+    navigations: mock.navigate.mock.calls.length,
+    cleared: [...cleared],
+  };
   for (let i = 0; i < 3; i++) await render(threadId);
   expect(paths()).toEqual(before.calls);
   expect(mock.navigate).toHaveBeenCalledTimes(before.navigations);
