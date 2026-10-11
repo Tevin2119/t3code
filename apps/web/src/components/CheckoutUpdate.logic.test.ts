@@ -24,7 +24,7 @@ const onA: { loadedCommit: string | null; dismissedCommit: string | null } = {
   loadedCommit: A,
   dismissedCommit: null,
 };
-const pillOptions = { starting: false, startFailed: false, closedKey: null as string | null };
+const pillOptions = { starting: false, startFailedFor: null, closedKey: null as string | null };
 const pill = (state: CheckoutUpdateState | null, options: Partial<typeof onA> = {}) =>
   checkoutUpdatePillView(checkoutUpdateView(state, { ...onA, ...options }), pillOptions);
 
@@ -133,11 +133,26 @@ describe("checkoutUpdatePillView", () => {
     expect(checkoutUpdatePillView(view, { ...pillOptions, starting: true })).toMatchObject({
       action: "starting",
       close: null,
+      notice: null,
     });
-    expect(checkoutUpdatePillView(view, { ...pillOptions, startFailed: true })).toMatchObject({
+    expect(checkoutUpdatePillView(view, { ...pillOptions, startFailedFor: B })).toMatchObject({
       action: "update",
       notice: CHECKOUT_UPDATE_NOT_STARTED,
     });
+  });
+
+  it("clears a failed start notice for a newer offered commit", () => {
+    const newer = { ...idle, available: { commit: C, subject: "Newest", behind: 4 } };
+    expect(
+      checkoutUpdatePillView(checkoutUpdateView(newer, onA), { ...pillOptions, startFailedFor: B }),
+    ).toMatchObject({ notice: null, action: "update", description: "Newest · 4 new commits" });
+  });
+
+  it("shows a fresh failed start notice for the newer offered commit", () => {
+    const newer = { ...idle, available: { commit: C, subject: "Newest", behind: 4 } };
+    expect(
+      checkoutUpdatePillView(checkoutUpdateView(newer, onA), { ...pillOptions, startFailedFor: C }),
+    ).toMatchObject({ notice: CHECKOUT_UPDATE_NOT_STARTED, action: "update" });
   });
 
   it.each(["installing", "building", "restarting"] as const)(

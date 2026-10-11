@@ -186,9 +186,48 @@ describe("CheckoutUpdateProvider", () => {
       action: "update",
       notice: "The update did not start. Try again.",
     });
+    await serverSays({ checkout: { ...offered, checkedAt: "2026-10-08T00:00:00.000Z" } });
+    expect(pill?.view).toMatchObject({
+      description: "Newer work · 2 new commits",
+      action: "update",
+      notice: "The update did not start. Try again.",
+    });
     testState.start.mockResolvedValueOnce(success);
     await act(async () => pill!.start());
     expect(testState.start).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps a late failed start tied to its commit and starts the newer offer without a stale notice", async () => {
+    await mount();
+    const finish = deferred();
+    await act(async () => pill!.start());
+    const newer = { ...offered, available: { commit: C, subject: "Newest", behind: 4 } };
+    await serverSays({ checkout: newer });
+    await finish(AsyncResult.failure(Cause.fail(new Error("offline"))));
+    expect(pill?.view).toMatchObject({
+      title: "T3 update available",
+      description: "Newest · 4 new commits",
+      notice: null,
+      action: "update",
+    });
+
+    testState.start.mockResolvedValueOnce(AsyncResult.failure(Cause.fail(new Error("offline"))));
+    await act(async () => pill!.start());
+    expect(pill?.view).toMatchObject({
+      description: "Newest · 4 new commits",
+      notice: "The update did not start. Try again.",
+      action: "update",
+    });
+
+    testState.start.mockResolvedValueOnce(success);
+    await act(async () => pill!.start());
+    expect(pill?.view).toMatchObject({ action: "starting", notice: null });
+    await serverSays({ checkout: { ...newer, phase: "installing" } });
+    expect(pill?.view).toMatchObject({
+      title: "Installing the T3 update",
+      action: null,
+      notice: null,
+    });
   });
 
   it("releases the button when the supervisor passes on the request", async () => {
