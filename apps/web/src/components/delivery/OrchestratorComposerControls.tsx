@@ -89,7 +89,7 @@ export function OrchestratorComposerControls(props: {
   const teamAvailabilityReason =
     teamsLoaded && teams.length === 0
       ? "No teams are available to choose from."
-      : chosenTeamUnavailable(teamsRead, draft)
+      : chosenTeamUnavailable(teamsRead.body, teams, draft)
         ? `Team ${draft?.team} is not offered here. Choose another team.`
         : null;
   const flow = flowFor(team, draft?.workflow ?? null);
