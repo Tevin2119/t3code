@@ -72,6 +72,7 @@ import {
   WorkspaceBreadcrumb,
   WorkspaceBreadcrumbItem,
   WorkspaceBreadcrumbSeparator,
+  WorkspaceBreadcrumbText,
 } from "../WorkspaceBreadcrumb";
 import { WorkspacePageContainer } from "../WorkspacePageContainer";
 import { WorkspacePageHeader } from "../WorkspacePageHeader";
@@ -1349,7 +1350,7 @@ function UsageEnvironmentFilter({
   return (
     <Menu>
       <MenuTrigger render={<InlineButton />} className="group/usage-environment min-w-0 max-w-full">
-        <span className="min-w-0 truncate">{label}</span>
+        <WorkspaceBreadcrumbText>{label}</WorkspaceBreadcrumbText>
         <span className="flex size-3.5 shrink-0 items-center justify-center text-muted-foreground">
           {showUsageStatus && hasIssue ? (
             <CircleAlertIcon

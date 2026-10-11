@@ -33,8 +33,10 @@ import { makeHermesTextGeneration } from "../../textGeneration/HermesTextGenerat
 import { makeHermesAcpRuntime, makeHermesEnvironment } from "../acp/HermesAcpSupport.ts";
 import { makeCliAuth } from "../CliAuth.ts";
 import { ProviderDriverError } from "../Errors.ts";
+import { hermesUsageReader, type HermesUsageReaderEnv } from "./hermesUsage.ts";
 import { readHermesTurnEnd } from "../acp/HermesTurnEnd.ts";
 import { expandHomePath } from "@t3tools/provider-core/server/pathExpansion";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import { makeHermesAdapter, type HermesAdapterOptions } from "../HermesAdapter.ts";
 import {
   buildInitialHermesProviderSnapshot,
@@ -78,8 +80,9 @@ export type HermesDriverEnv =
   | Path.Path
   | ProviderEventLoggers;
 
-export const HermesDriver: ProviderDriver<HermesSettings, HermesDriverEnv> = {
+export const HermesDriver: ProviderDriver<HermesSettings, HermesDriverEnv, HermesUsageReaderEnv> = {
   driverKind: DRIVER_KIND,
+  usage: hermesUsageReader,
   metadata: {
     displayName: "Hermes",
     supportsMultipleInstances: true,
@@ -108,9 +111,10 @@ export const HermesDriver: ProviderDriver<HermesSettings, HermesDriverEnv> = {
       const makeNativeLogger = yield* makeAcpNativeLoggerFactory();
       // One environment for the ACP agent, the status probes and the credential
       // check, so a scoped `homePath` governs everything the card reports.
+      const homeDirectory = yield* HostProcess.HomeDirectory;
       const processEnv = makeHermesEnvironment(
         config,
-        mergeProviderInstanceEnvironment(environment),
+        yield* mergeProviderInstanceEnvironment(environment),
       );
       const continuationIdentity = defaultProviderContinuationIdentity({
         driverKind: DRIVER_KIND,
@@ -136,11 +140,11 @@ export const HermesDriver: ProviderDriver<HermesSettings, HermesDriverEnv> = {
       // Where Hermes keeps its sessions: the home it was given, or its own.
       const hermesHome =
         effectiveConfig.homePath.trim().length > 0
-          ? expandHomePath(effectiveConfig.homePath)
+          ? expandHomePath(effectiveConfig.homePath, homeDirectory)
           : processEnv["HERMES_HOME"]?.trim() ||
             (processEnv["LOCALAPPDATA"]
               ? `${processEnv["LOCALAPPDATA"]}/hermes`
-              : expandHomePath("~/.hermes"));
+              : expandHomePath("~/.hermes", homeDirectory));
       const orchestrationAdapter = yield* makeHermesAdapter(effectiveConfig, {
         instanceId,
         makeRuntime,

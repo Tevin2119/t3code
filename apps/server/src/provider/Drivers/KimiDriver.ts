@@ -35,8 +35,10 @@ import {
 } from "../acp/KimiAcpSupport.ts";
 import { makeCliAuth } from "../CliAuth.ts";
 import { ProviderDriverError } from "../Errors.ts";
+import { kimiUsageReader, type KimiUsageReaderEnv } from "./kimiUsage.ts";
 import { countKimiTurnEnds, readKimiTurnEnd } from "../acp/KimiTurnEnd.ts";
 import { expandHomePath } from "@t3tools/provider-core/server/pathExpansion";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import { makeKimiAdapter, type KimiAdapterOptions } from "../KimiAdapter.ts";
 import {
   buildInitialKimiProviderSnapshot,
@@ -80,8 +82,9 @@ export type KimiDriverEnv =
   | Path.Path
   | ProviderEventLoggers;
 
-export const KimiDriver: ProviderDriver<KimiSettings, KimiDriverEnv> = {
+export const KimiDriver: ProviderDriver<KimiSettings, KimiDriverEnv, KimiUsageReaderEnv> = {
   driverKind: DRIVER_KIND,
+  usage: kimiUsageReader,
   metadata: {
     displayName: "Kimi",
     supportsMultipleInstances: true,
@@ -108,7 +111,7 @@ export const KimiDriver: ProviderDriver<KimiSettings, KimiDriverEnv> = {
         ),
       );
       const makeNativeLogger = yield* makeAcpNativeLoggerFactory();
-      const processEnv = mergeProviderInstanceEnvironment(environment);
+      const processEnv = yield* mergeProviderInstanceEnvironment(environment);
       const continuationIdentity = defaultProviderContinuationIdentity({
         driverKind: DRIVER_KIND,
         instanceId,
@@ -131,7 +134,9 @@ export const KimiDriver: ProviderDriver<KimiSettings, KimiDriverEnv> = {
         }).pipe(Effect.provideService(Crypto.Crypto, crypto));
 
       // Where Kimi keeps its sessions: the home it was given, or its own.
-      const kimiHome = processEnv["KIMI_CODE_HOME"]?.trim() || expandHomePath("~/.kimi-code");
+      const kimiHome =
+        processEnv["KIMI_CODE_HOME"]?.trim() ||
+        expandHomePath("~/.kimi-code", yield* HostProcess.HomeDirectory);
       const withFiles = <A>(effect: Effect.Effect<A, never, FileSystem.FileSystem | Path.Path>) =>
         effect.pipe(
           Effect.provideService(FileSystem.FileSystem, fileSystem),
