@@ -508,7 +508,7 @@ function ProfileEditor(props: {
       setProblems(result.problems.length > 0 ? result.problems : [result.why]);
       return;
     }
-    setSaid(parseProfile(result.body)?.note ?? "Saved.");
+    setSaid(parseProfile(result.body)?.note || "Saved.");
     setNote("");
     props.onSaved();
   };

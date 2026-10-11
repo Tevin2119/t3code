@@ -123,7 +123,7 @@ export function BoardSeatsDialog(props: {
       return;
     }
     const body = result.body as { readonly note?: unknown } | null;
-    setSaid(typeof body?.note === "string" ? body.note : "Saved.");
+    setSaid(typeof body?.note === "string" && body.note ? body.note : "Saved.");
     // The form shows what was saved, from the answer, until the next read: never the read from before.
     const saved = parseBoardSeats(result.body);
     // An answer that cannot be read leaves the form to the next read, never empty; a change made

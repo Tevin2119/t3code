@@ -133,7 +133,7 @@ export function TeamDefaultsDialog(props: {
       return;
     }
     const saved = parseTeamDefaults(result.body);
-    setSaid(saved?.note ?? "Saved.");
+    setSaid(saved?.note || "Saved.");
     clearNote();
     // The form shows what was saved, from the answer, until the next read: never the read from
     // before. An answer that cannot be read leaves the form to the next read, never empty; a
