@@ -23,6 +23,7 @@ import {
   makeUnavailableUsageLimits,
   makeUsageLimits,
 } from "@t3tools/provider-core/server/usageLimits";
+import type { ServerProviderDraft } from "@t3tools/provider-core/server/snapshotProbe";
 
 const DEFAULT_BASE_URL = "https://api.kimi.com/coding/v1";
 const SESSION_MINS = 5 * 60;
@@ -273,4 +274,13 @@ export const readKimiUsageLimits = Effect.fn("readKimiUsageLimits")(function* (
     Effect.timeout("20 seconds"),
     Effect.orElseSucceed(() => failed("Kimi could not read usage limits.")),
   );
+});
+
+export const withKimiUsageLimits = Effect.fn("withKimiUsageLimits")(function* (
+  snapshot: ServerProviderDraft,
+  environment: NodeJS.ProcessEnv = process.env,
+) {
+  if (!snapshot.enabled) return snapshot;
+  const usageLimits = yield* readKimiUsageLimits(environment);
+  return { ...snapshot, usageLimits };
 });
