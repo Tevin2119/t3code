@@ -93,6 +93,8 @@ import {
   useTaskUploads,
 } from "./taskFiles";
 import { Age, Avatar, laneTone, PriorityPill, QaVotes, TagList, WaitingOn } from "./taskParts";
+import { TaskDisclosure } from "./TaskDisclosure";
+import { relatedTaskGroups } from "./relatedTaskGroups";
 
 const EVENT_ICON: Record<string, typeof CircleDotIcon> = {
   pass: CircleCheckIcon,
@@ -1138,12 +1140,12 @@ function Briefs(props: {
             <button
               type="button"
               onClick={() => props.onOpen(item.id)}
-              className="flex w-full cursor-pointer items-center gap-2 rounded px-1 text-left hover:bg-accent"
+              className="flex w-full cursor-pointer items-start gap-2 rounded px-1 py-1.5 text-left hover:bg-accent"
             >
               <span className={cn("size-2 shrink-0 rounded-full", laneTone(item.lane).bar)} />
-              <span className="font-mono text-[10px] text-muted-foreground">#{item.number}</span>
-              <span className="min-w-0 flex-1 truncate">{item.title}</span>
-              <span className="shrink-0 text-[10px] text-muted-foreground">
+              <span className="font-mono text-xs text-muted-foreground">#{item.number}</span>
+              <span className="min-w-0 flex-1 break-words">{item.title}</span>
+              <span className="max-w-28 shrink-0 text-right text-xs text-muted-foreground">
                 {item.kind === "depends-on"
                   ? item.direction === "out"
                     ? "this waits for it"
@@ -1163,126 +1165,186 @@ function Details(props: {
   readonly environmentId: EnvironmentId | null;
   readonly task: TaskView;
   readonly onOpenTask: (id: string) => void;
+  readonly open: boolean;
+  readonly onOpenChange: (open: boolean) => void;
 }) {
   const { task } = props;
   const [showRevisions, setShowRevisions] = useState(false);
+  const parts = relatedTaskGroups(task.card.parts);
+  const followUps = relatedTaskGroups(task.followUps);
+  const hasRelated =
+    task.parent || task.card.parts.length || task.links.length || task.followUps.length;
   return (
     <section className="flex min-h-0 min-w-0 flex-col gap-4 overflow-y-auto p-4" data-task-details>
-      <section>
-        <h3 className="pb-1 text-xs font-medium text-muted-foreground">
-          What is asked, revision {task.revision}
-        </h3>
-        <p className="text-sm break-words whitespace-pre-wrap">{task.body}</p>
-      </section>
-      {task.plan ? (
-        <section
-          className="flex flex-col gap-2 rounded-md border border-border p-2"
-          data-task-plan
-          data-task-section="plan"
-        >
-          <h3 className="text-xs font-medium">
-            The plan{task.plan.agreed ? ", agreed and being delivered" : ", for you to read"}
-          </h3>
-          <p className="text-sm break-words whitespace-pre-wrap">{task.plan.approach}</p>
-          <Listed title="Steps" items={task.plan.steps} />
-          <Listed title="Checks" items={task.plan.checks} />
-          <Listed title="What it does not cover" items={task.plan.limits} />
-          {task.plan.comments.map((comment) => (
-            <p key={comment.seat} className="text-xs text-muted-foreground">
-              {comment.seat}: {comment.stance}
-              {comment.points.length > 0 ? `. ${comment.points.join(" ")}` : ""}
-            </p>
-          ))}
-          <p className="font-mono text-[10px] break-all text-muted-foreground">{task.plan.file}</p>
+      {hasRelated ? (
+        <section className="rounded-lg border border-border p-3" data-task-related-work>
+          <TaskDisclosure
+            title={`Related work (${parts.current.length} current parts, ${followUps.current.length} QA follow-ups)`}
+          >
+            {task.card.blocker ? (
+              <p className="text-sm text-muted-foreground">{task.card.blocker}</p>
+            ) : null}
+            {task.parent ? (
+              <Briefs title="Parent task" tasks={[task.parent]} onOpen={props.onOpenTask} />
+            ) : null}
+            <Briefs
+              title={`Current parts (${parts.current.length})`}
+              tasks={parts.current}
+              onOpen={props.onOpenTask}
+            />
+            <Briefs
+              title={`QA follow-ups (${followUps.current.length})`}
+              tasks={followUps.current}
+              onOpen={props.onOpenTask}
+            />
+            <Briefs
+              title="Dependencies and related tasks"
+              tasks={task.links}
+              onOpen={props.onOpenTask}
+            />
+            {parts.completed.length + followUps.completed.length > 0 ? (
+              <TaskDisclosure
+                title={`Completed related work (${parts.completed.length + followUps.completed.length})`}
+                defaultOpen={false}
+              >
+                <Briefs title="Completed parts" tasks={parts.completed} onOpen={props.onOpenTask} />
+                <Briefs
+                  title="Completed QA follow-ups"
+                  tasks={followUps.completed}
+                  onOpen={props.onOpenTask}
+                />
+              </TaskDisclosure>
+            ) : null}
+            {parts.historical.length + followUps.historical.length > 0 ? (
+              <TaskDisclosure
+                title={`Previous or closed work (${parts.historical.length + followUps.historical.length})`}
+                defaultOpen={false}
+              >
+                <p className="text-xs text-muted-foreground">
+                  Kept for history. Rejected or closed parts are not proof of delivery.
+                </p>
+                <Briefs title="Previous parts" tasks={parts.historical} onOpen={props.onOpenTask} />
+                <Briefs
+                  title="Closed QA follow-ups"
+                  tasks={followUps.historical}
+                  onOpen={props.onOpenTask}
+                />
+              </TaskDisclosure>
+            ) : null}
+          </TaskDisclosure>
         </section>
       ) : null}
-      {task.review ? (
-        <section
-          className="flex flex-col gap-2 rounded-md border border-border p-2"
-          data-task-review
-        >
-          <h3 className="text-xs font-medium">What the review found</h3>
-          {task.review.seats.map((seat) => (
-            <div
-              key={seat.seat}
-              className="flex flex-col gap-1 text-sm"
-              data-review-seat={seat.seat}
-            >
-              <p className="text-xs font-medium">
-                {seat.seat} on {harnessLabel(seat.harness)}
-              </p>
-              <p className="break-words whitespace-pre-wrap">{seat.summary}</p>
-              {seat.findings.length === 0 ? (
-                <p className="text-xs text-muted-foreground">No findings.</p>
-              ) : (
-                <ul className="flex list-disc flex-col gap-0.5 pl-5 text-xs">
-                  {seat.findings.map((finding) => (
-                    <li key={`${finding.title}:${finding.where}`}>
-                      {finding.blocking ? <span className="text-warning">Blocking. </span> : null}
-                      {finding.title}{" "}
-                      <span className="font-mono text-[10px] text-muted-foreground">
-                        {finding.where}
-                      </span>
-                      <span className="block text-muted-foreground">{finding.detail}</span>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
-          ))}
-          {task.review.missing.length > 0 ? (
-            <p className="text-xs text-warning">No answer from {task.review.missing.join(", ")}.</p>
-          ) : null}
-          <p className="font-mono text-[10px] break-all text-muted-foreground">
-            {task.review.file}
-          </p>
-        </section>
-      ) : null}
-      <Listed title="Requirements" items={task.requirements} />
-      <Listed title="Acceptance criteria" items={task.acceptance} section="acceptance" />
-      {task.files.length > 0 ? (
+      <TaskDisclosure title="Task details" open={props.open} onOpenChange={props.onOpenChange}>
         <section>
           <h3 className="pb-1 text-xs font-medium text-muted-foreground">
-            Files ({task.files.length})
+            What is asked, revision {task.revision}
           </h3>
-          <TaskFileList environmentId={props.environmentId} files={task.files} />
+          <p className="text-sm break-words whitespace-pre-wrap">{task.body}</p>
         </section>
-      ) : null}
-      {task.parent ? (
-        <Briefs title="Part of" tasks={[task.parent]} onOpen={props.onOpenTask} />
-      ) : null}
-      <Briefs
-        title={`Parts (${task.card.partsDelivered} of ${task.card.parts.length} delivered)`}
-        tasks={task.card.parts}
-        onOpen={props.onOpenTask}
-      />
-      <Briefs title="Related" tasks={task.links} onOpen={props.onOpenTask} />
-      <Briefs title="Filed from QA findings" tasks={task.followUps} onOpen={props.onOpenTask} />
-      {task.revisions.length > 1 ? (
-        <section>
-          <button
-            type="button"
-            className="cursor-pointer pb-1 text-xs font-medium text-muted-foreground underline"
-            aria-expanded={showRevisions}
-            onClick={() => setShowRevisions((current) => !current)}
+        {task.plan ? (
+          <section
+            className="flex flex-col gap-2 rounded-md border border-border p-2"
+            data-task-plan
+            data-task-section="plan"
           >
-            {showRevisions ? "Hide" : "Show"} the {task.revisions.length} revisions
-          </button>
-          {showRevisions ? (
-            <ul className="flex flex-col gap-2">
-              {task.revisions.toReversed().map((revision) => (
-                <li key={revision.revision} className="rounded border border-border p-2 text-xs">
-                  <p className="font-mono text-[10px] text-muted-foreground">
-                    r{revision.revision}, {time(revision.created)}
-                    {revision.notes ? `, ${revision.notes}` : ""}
-                  </p>
-                  <p className="break-words whitespace-pre-wrap">{revision.body}</p>
-                </li>
-              ))}
-            </ul>
-          ) : null}
-        </section>
-      ) : null}
+            <h3 className="text-xs font-medium">
+              The plan{task.plan.agreed ? ", agreed and being delivered" : ", for you to read"}
+            </h3>
+            <p className="text-sm break-words whitespace-pre-wrap">{task.plan.approach}</p>
+            <Listed title="Steps" items={task.plan.steps} />
+            <Listed title="Checks" items={task.plan.checks} />
+            <Listed title="What it does not cover" items={task.plan.limits} />
+            {task.plan.comments.map((comment) => (
+              <p key={comment.seat} className="text-xs text-muted-foreground">
+                {comment.seat}: {comment.stance}
+                {comment.points.length > 0 ? `. ${comment.points.join(" ")}` : ""}
+              </p>
+            ))}
+            <p className="font-mono text-[10px] break-all text-muted-foreground">
+              {task.plan.file}
+            </p>
+          </section>
+        ) : null}
+        {task.review ? (
+          <section
+            className="flex flex-col gap-2 rounded-md border border-border p-2"
+            data-task-review
+          >
+            <h3 className="text-xs font-medium">What the review found</h3>
+            {task.review.seats.map((seat) => (
+              <div
+                key={seat.seat}
+                className="flex flex-col gap-1 text-sm"
+                data-review-seat={seat.seat}
+              >
+                <p className="text-xs font-medium">
+                  {seat.seat} on {harnessLabel(seat.harness)}
+                </p>
+                <p className="break-words whitespace-pre-wrap">{seat.summary}</p>
+                {seat.findings.length === 0 ? (
+                  <p className="text-xs text-muted-foreground">No findings.</p>
+                ) : (
+                  <ul className="flex list-disc flex-col gap-0.5 pl-5 text-xs">
+                    {seat.findings.map((finding) => (
+                      <li key={`${finding.title}:${finding.where}`}>
+                        {finding.blocking ? <span className="text-warning">Blocking. </span> : null}
+                        {finding.title}{" "}
+                        <span className="font-mono text-[10px] text-muted-foreground">
+                          {finding.where}
+                        </span>
+                        <span className="block text-muted-foreground">{finding.detail}</span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            ))}
+            {task.review.missing.length > 0 ? (
+              <p className="text-xs text-warning">
+                No answer from {task.review.missing.join(", ")}.
+              </p>
+            ) : null}
+            <p className="font-mono text-[10px] break-all text-muted-foreground">
+              {task.review.file}
+            </p>
+          </section>
+        ) : null}
+        <Listed title="Requirements" items={task.requirements} />
+        <Listed title="Acceptance criteria" items={task.acceptance} section="acceptance" />
+        {task.files.length > 0 ? (
+          <section>
+            <h3 className="pb-1 text-xs font-medium text-muted-foreground">
+              Files ({task.files.length})
+            </h3>
+            <TaskFileList environmentId={props.environmentId} files={task.files} />
+          </section>
+        ) : null}
+        {task.revisions.length > 1 ? (
+          <section>
+            <button
+              type="button"
+              className="cursor-pointer pb-1 text-xs font-medium text-muted-foreground underline"
+              aria-expanded={showRevisions}
+              onClick={() => setShowRevisions((current) => !current)}
+            >
+              {showRevisions ? "Hide" : "Show"} the {task.revisions.length} revisions
+            </button>
+            {showRevisions ? (
+              <ul className="flex flex-col gap-2">
+                {task.revisions.toReversed().map((revision) => (
+                  <li key={revision.revision} className="rounded border border-border p-2 text-xs">
+                    <p className="font-mono text-[10px] text-muted-foreground">
+                      r{revision.revision}, {time(revision.created)}
+                      {revision.notes ? `, ${revision.notes}` : ""}
+                    </p>
+                    <p className="break-words whitespace-pre-wrap">{revision.body}</p>
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+          </section>
+        ) : null}
+      </TaskDisclosure>
     </section>
   );
 }
@@ -1414,456 +1476,475 @@ function Info(props: {
         />
       ) : null}
       <section className="flex flex-col gap-1.5">
-        <Row label="Stands in">
-          {task.isDraft || !task.lane ? (
-            <span className="inline-flex items-center gap-1.5" data-task-lane={task.lane ?? ""}>
-              <span className={cn("size-2 rounded-full", laneTone(task.lane).bar)} />
-              {LANE_TITLE[task.lane ?? ""] ?? task.state}
-            </span>
-          ) : (
-            <Select
-              value={task.lane}
-              onValueChange={(value) =>
-                value && value !== task.lane && props.onMoveTo(String(value))
-              }
-            >
-              <SelectTrigger
-                aria-label="Column"
-                size="compact"
-                variant="ghost"
-                className="w-auto min-w-0"
-                disabled={props.busy}
-                data-task-lane={task.lane}
-              >
-                <SelectValue>
-                  <span className="inline-flex items-center gap-1.5">
-                    <span className={cn("size-2 rounded-full", laneTone(task.lane).bar)} />
-                    {LANE_TITLE[task.lane] ?? task.state}
-                  </span>
-                </SelectValue>
-              </SelectTrigger>
-              <SelectPopup alignItemWithTrigger={false}>
-                {Object.entries(LANE_TITLE)
-                  .filter(([lane]) => lane !== "draft")
-                  .map(([lane, title]) => {
-                    const intent = moveIntent(card, lane);
-                    // What choosing it does, or why it cannot be chosen, is said to every reader.
-                    const said =
-                      intent.kind === "refused"
-                        ? intent.why
-                        : intent.kind === "action"
-                          ? actionLabel(intent.action, card)
-                          : lane === task.lane
-                            ? "Here now"
-                            : intent.label;
-                    return (
-                      <SelectItem
-                        key={lane}
-                        value={lane}
-                        aria-label={`${title}: ${said}`}
-                        data-move={intent.kind}
-                      >
-                        <span
-                          className={cn(
-                            "inline-flex items-center gap-1.5",
-                            intent.kind === "refused" && "text-muted-foreground",
-                          )}
-                        >
-                          <span className={cn("size-2 rounded-full", laneTone(lane).bar)} />
-                          {title}
-                          {lane !== task.lane ? (
-                            <span className="text-[10px] text-muted-foreground">
-                              {intent.kind === "refused"
-                                ? "not from here, choose to see why"
-                                : said}
-                            </span>
-                          ) : null}
-                        </span>
-                      </SelectItem>
-                    );
-                  })}
-              </SelectPopup>
-            </Select>
-          )}
-        </Row>
-        {card.set === "qualification" ? (
-          <Row label="Kept as">
-            <span data-task-set="qualification">the qualification's evidence, not pilot work</span>
-          </Row>
-        ) : (
-          <Row label="Board">
-            <Select
-              value={card.set ?? NO_BOARD}
-              onValueChange={(value) => {
-                const chosen =
-                  value === NO_BOARD ? null : (boards.find((item) => item.id === value) ?? null);
-                if (value === (card.set ?? NO_BOARD)) return;
-                // A board done in another repository moves the task's work there, which is confirmed first.
-                if (
-                  value !== NO_BOARD &&
-                  !["chat", "non-code"].includes(task.workflow) &&
-                  boardChoiceKind(task.target?.repository ?? null, chosen) === "move"
-                ) {
-                  startMove(String(value));
-                  return;
-                }
-                void act(`/api/tasks/${task.id}/board`, {
-                  board: value === NO_BOARD ? null : String(value),
-                  by: person,
-                }).then((result) => {
-                  if (!result.ok) setProblem(result.why);
-                  props.onChanged();
-                });
-              }}
-            >
-              <SelectTrigger
-                aria-label="Board"
-                size="compact"
-                variant="ghost"
-                className={cn(
-                  "w-auto min-w-0",
-                  suggested && suggested.id !== card.set && "ring-1 ring-amber-500/60",
-                )}
-                data-task-board={card.set ?? ""}
-              >
-                <SelectValue>
-                  {boards.find((item) => item.id === card.set)?.title ??
-                    (card.set ? card.set : "Not on a board")}
-                </SelectValue>
-              </SelectTrigger>
-              <SelectPopup alignItemWithTrigger={false}>
-                <SelectItem value={NO_BOARD}>Not on a board</SelectItem>
-                {boards.map((item) => (
-                  <SelectItem key={item.id} value={item.id}>
-                    {item.title}
-                  </SelectItem>
-                ))}
-              </SelectPopup>
-            </Select>
-          </Row>
-        )}
-        <Row label="Now">
-          <WaitingOn card={card} />
-        </Row>
-        {card.blocker ? (
-          <p
-            className={cn(
-              "rounded border px-2 py-1 text-xs",
-              card.waitingOn === "person"
-                ? "border-amber-500/60 bg-amber-500/5"
-                : "border-border text-muted-foreground",
-            )}
-            data-task-blocker
-          >
-            {card.blocker}
-          </p>
-        ) : null}
-        {card.workers.map((worker) => (
-          <Row
-            key={`${worker.seat}:${worker.stage}`}
-            label={worker.waiting ? "Waiting" : "Working"}
-          >
-            {worker.seat} on {harnessLabel(worker.harness)}, {worker.stage}
-            {worker.waiting ? `, ${waitingWords(worker.waiting)}` : ""}
-            {worker.waitingWhy ? (
-              <span className="block text-[11px] text-muted-foreground">{worker.waitingWhy}</span>
-            ) : null}
-            {worker.specialist ? ` as ${worker.specialist}` : ""}{" "}
-            <Age at={worker.since} now={now} label="Since" />
-          </Row>
-        ))}
-        {card.qa && card.qa.votes.length > 0 ? (
-          <Row label="QA">
-            <QaVotes qa={card.qa} />
-          </Row>
-        ) : null}
-        {card.findings.all > 0 ? (
-          <Row label="Findings">
-            {card.findings.open} open of {card.findings.all}
-          </Row>
-        ) : null}
-        {card.approvals.map((approval) => (
-          <Row key={`${approval.actor}:${approval.decision}:${approval.stands}`} label="Decision">
-            <span
-              className="flex flex-col items-end"
-              data-task-approval-verified={approval.verifiedAt ?? ""}
-            >
-              <span>
-                {approval.decision} by {approval.actor},{" "}
-                {approval.stands ? "stands" : "no longer stands"}
+        <TaskDisclosure title="Status and decisions">
+          <Row label="Stands in">
+            {task.isDraft || !task.lane ? (
+              <span className="inline-flex items-center gap-1.5" data-task-lane={task.lane ?? ""}>
+                <span className={cn("size-2 rounded-full", laneTone(task.lane).bar)} />
+                {LANE_TITLE[task.lane ?? ""] ?? task.state}
               </span>
-              {approval.verifiedAt ? (
-                <span className="text-[10px] text-muted-foreground">
-                  checked{" "}
-                  {ageLabel(approval.verifiedAt, now) === "now" ||
-                  !ageLabel(approval.verifiedAt, now)
-                    ? "just now"
-                    : `${ageLabel(approval.verifiedAt, now)} ago`}
-                  ; proved again before anything is published
+            ) : (
+              <Select
+                value={task.lane}
+                onValueChange={(value) =>
+                  value && value !== task.lane && props.onMoveTo(String(value))
+                }
+              >
+                <SelectTrigger
+                  aria-label="Column"
+                  size="compact"
+                  variant="ghost"
+                  className="w-auto min-w-0"
+                  disabled={props.busy}
+                  data-task-lane={task.lane}
+                >
+                  <SelectValue>
+                    <span className="inline-flex items-center gap-1.5">
+                      <span className={cn("size-2 rounded-full", laneTone(task.lane).bar)} />
+                      {LANE_TITLE[task.lane] ?? task.state}
+                    </span>
+                  </SelectValue>
+                </SelectTrigger>
+                <SelectPopup alignItemWithTrigger={false}>
+                  {Object.entries(LANE_TITLE)
+                    .filter(([lane]) => lane !== "draft")
+                    .map(([lane, title]) => {
+                      const intent = moveIntent(card, lane);
+                      // What choosing it does, or why it cannot be chosen, is said to every reader.
+                      const said =
+                        intent.kind === "refused"
+                          ? intent.why
+                          : intent.kind === "action"
+                            ? actionLabel(intent.action, card)
+                            : lane === task.lane
+                              ? "Here now"
+                              : intent.label;
+                      return (
+                        <SelectItem
+                          key={lane}
+                          value={lane}
+                          aria-label={`${title}: ${said}`}
+                          data-move={intent.kind}
+                        >
+                          <span
+                            className={cn(
+                              "inline-flex items-center gap-1.5",
+                              intent.kind === "refused" && "text-muted-foreground",
+                            )}
+                          >
+                            <span className={cn("size-2 rounded-full", laneTone(lane).bar)} />
+                            {title}
+                            {lane !== task.lane ? (
+                              <span className="text-[10px] text-muted-foreground">
+                                {intent.kind === "refused"
+                                  ? "not from here, choose to see why"
+                                  : said}
+                              </span>
+                            ) : null}
+                          </span>
+                        </SelectItem>
+                      );
+                    })}
+                </SelectPopup>
+              </Select>
+            )}
+          </Row>
+          {card.set === "qualification" ? (
+            <Row label="Kept as">
+              <span data-task-set="qualification">
+                the qualification's evidence, not pilot work
+              </span>
+            </Row>
+          ) : (
+            <Row label="Board">
+              <Select
+                value={card.set ?? NO_BOARD}
+                onValueChange={(value) => {
+                  const chosen =
+                    value === NO_BOARD ? null : (boards.find((item) => item.id === value) ?? null);
+                  if (value === (card.set ?? NO_BOARD)) return;
+                  // A board done in another repository moves the task's work there, which is confirmed first.
+                  if (
+                    value !== NO_BOARD &&
+                    !["chat", "non-code"].includes(task.workflow) &&
+                    boardChoiceKind(task.target?.repository ?? null, chosen) === "move"
+                  ) {
+                    startMove(String(value));
+                    return;
+                  }
+                  void act(`/api/tasks/${task.id}/board`, {
+                    board: value === NO_BOARD ? null : String(value),
+                    by: person,
+                  }).then((result) => {
+                    if (!result.ok) setProblem(result.why);
+                    props.onChanged();
+                  });
+                }}
+              >
+                <SelectTrigger
+                  aria-label="Board"
+                  size="compact"
+                  variant="ghost"
+                  className={cn(
+                    "w-auto min-w-0",
+                    suggested && suggested.id !== card.set && "ring-1 ring-amber-500/60",
+                  )}
+                  data-task-board={card.set ?? ""}
+                >
+                  <SelectValue>
+                    {boards.find((item) => item.id === card.set)?.title ??
+                      (card.set ? card.set : "Not on a board")}
+                  </SelectValue>
+                </SelectTrigger>
+                <SelectPopup alignItemWithTrigger={false}>
+                  <SelectItem value={NO_BOARD}>Not on a board</SelectItem>
+                  {boards.map((item) => (
+                    <SelectItem key={item.id} value={item.id}>
+                      {item.title}
+                    </SelectItem>
+                  ))}
+                </SelectPopup>
+              </Select>
+            </Row>
+          )}
+          <Row label="Now">
+            <WaitingOn card={card} />
+          </Row>
+          {card.blocker ? (
+            <p
+              className={cn(
+                "rounded border px-2 py-1 text-xs",
+                card.waitingOn === "person"
+                  ? "border-amber-500/60 bg-amber-500/5"
+                  : "border-border text-muted-foreground",
+              )}
+              data-task-blocker
+            >
+              {card.blocker}
+            </p>
+          ) : null}
+          {card.workers.map((worker) => (
+            <Row
+              key={`${worker.seat}:${worker.stage}`}
+              label={worker.waiting ? "Waiting" : "Working"}
+            >
+              {worker.seat} on {harnessLabel(worker.harness)}, {worker.stage}
+              {worker.waiting ? `, ${waitingWords(worker.waiting)}` : ""}
+              {worker.waitingWhy ? (
+                <span className="block text-[11px] text-muted-foreground">{worker.waitingWhy}</span>
+              ) : null}
+              {worker.specialist ? ` as ${worker.specialist}` : ""}{" "}
+              <Age at={worker.since} now={now} label="Since" />
+            </Row>
+          ))}
+          {card.qa && card.qa.votes.length > 0 ? (
+            <Row label="QA">
+              <QaVotes qa={card.qa} />
+            </Row>
+          ) : null}
+          {card.findings.all > 0 ? (
+            <Row label="Findings">
+              {card.findings.open} open of {card.findings.all}
+            </Row>
+          ) : null}
+          {card.approvals.map((approval) => (
+            <Row key={`${approval.actor}:${approval.decision}:${approval.stands}`} label="Decision">
+              <span
+                className="flex flex-col items-end"
+                data-task-approval-verified={approval.verifiedAt ?? ""}
+              >
+                <span>
+                  {approval.decision} by {approval.actor},{" "}
+                  {approval.stands ? "stands" : "no longer stands"}
+                </span>
+                {approval.verifiedAt ? (
+                  <span className="text-[10px] text-muted-foreground">
+                    checked{" "}
+                    {ageLabel(approval.verifiedAt, now) === "now" ||
+                    !ageLabel(approval.verifiedAt, now)
+                      ? "just now"
+                      : `${ageLabel(approval.verifiedAt, now)} ago`}
+                    ; proved again before anything is published
+                  </span>
+                ) : null}
+              </span>
+            </Row>
+          ))}
+        </TaskDisclosure>
+      </section>
+
+      <section className="flex flex-col gap-1.5">
+        <TaskDisclosure title="Ownership and repository">
+          <Row label="Priority">
+            {closed ? (
+              <PriorityPill priority={task.priority} by={task.priorityBy} />
+            ) : (
+              <Select
+                value={task.priority}
+                onValueChange={(value) => void edit({ priority: value as TaskPriority })}
+              >
+                <SelectTrigger
+                  aria-label="Priority"
+                  size="compact"
+                  variant="ghost"
+                  className="ml-auto w-auto min-w-0"
+                >
+                  <SelectValue>
+                    <PriorityPill priority={task.priority} />
+                  </SelectValue>
+                </SelectTrigger>
+                <SelectPopup alignItemWithTrigger={false}>
+                  {TASK_PRIORITIES.map((priority) => (
+                    <SelectItem key={priority} value={priority}>
+                      {PRIORITY_LABEL[priority]}
+                    </SelectItem>
+                  ))}
+                </SelectPopup>
+              </Select>
+            )}
+          </Row>
+          {/* Where its work is done. A task keeps it; moving it to another board does not change it. */}
+          <Row label="Repository">
+            <span
+              className="flex min-w-0 flex-col"
+              data-task-target={task.target?.ok ? "ok" : "none"}
+            >
+              <span className={task.target?.ok ? "" : "text-warning"}>
+                {targetLine(task.target)}
+              </span>
+              {task.target?.ok && task.target.path ? (
+                <span className="truncate font-mono text-[11px] text-muted-foreground">
+                  {task.target.path}
                 </span>
               ) : null}
             </span>
           </Row>
-        ))}
-      </section>
-
-      <section className="flex flex-col gap-1.5">
-        <Row label="Priority">
-          {closed ? (
-            <PriorityPill priority={task.priority} by={task.priorityBy} />
-          ) : (
-            <Select
-              value={task.priority}
-              onValueChange={(value) => void edit({ priority: value as TaskPriority })}
-            >
-              <SelectTrigger
-                aria-label="Priority"
-                size="compact"
-                variant="ghost"
-                className="ml-auto w-auto min-w-0"
-              >
-                <SelectValue>
-                  <PriorityPill priority={task.priority} />
-                </SelectValue>
-              </SelectTrigger>
-              <SelectPopup alignItemWithTrigger={false}>
-                {TASK_PRIORITIES.map((priority) => (
-                  <SelectItem key={priority} value={priority}>
-                    {PRIORITY_LABEL[priority]}
-                  </SelectItem>
-                ))}
-              </SelectPopup>
-            </Select>
-          )}
-        </Row>
-        {/* Where its work is done. A task keeps it; moving it to another board does not change it. */}
-        <Row label="Repository">
-          <span
-            className="flex min-w-0 flex-col"
-            data-task-target={task.target?.ok ? "ok" : "none"}
-          >
-            <span className={task.target?.ok ? "" : "text-warning"}>{targetLine(task.target)}</span>
-            {task.target?.ok && task.target.path ? (
-              <span className="truncate font-mono text-[11px] text-muted-foreground">
-                {task.target.path}
+          <Row label="Team">{task.team}</Row>
+          <Row label="Flow">
+            <span data-task-flow={task.workflow}>{flow?.title ?? task.workflow}</span>
+          </Row>
+          <Row label="Owner">{task.owner || "nobody"}</Row>
+          <Row label="Tags">
+            {tags === null ? (
+              <span className="inline-flex flex-wrap items-center justify-end gap-1">
+                <TagList tags={task.tags} />
+                {closed ? null : (
+                  <button
+                    type="button"
+                    aria-label="Change the tags"
+                    className="cursor-pointer text-muted-foreground hover:text-foreground"
+                    onClick={() => setTags(task.tags.join(", "))}
+                  >
+                    <PencilIcon className="size-3" />
+                  </button>
+                )}
               </span>
-            ) : null}
-          </span>
-        </Row>
-        <Row label="Team">{task.team}</Row>
-        <Row label="Flow">
-          <span data-task-flow={task.workflow}>{flow?.title ?? task.workflow}</span>
-        </Row>
-        <Row label="Owner">{task.owner || "nobody"}</Row>
-        <Row label="Tags">
-          {tags === null ? (
-            <span className="inline-flex flex-wrap items-center justify-end gap-1">
-              <TagList tags={task.tags} />
-              {closed ? null : (
-                <button
-                  type="button"
-                  aria-label="Change the tags"
-                  className="cursor-pointer text-muted-foreground hover:text-foreground"
-                  onClick={() => setTags(task.tags.join(", "))}
-                >
-                  <PencilIcon className="size-3" />
-                </button>
-              )}
-            </span>
-          ) : (
-            <Input
-              aria-label="Tags"
-              className="h-7 w-44 text-xs"
-              autoFocus
-              value={tags}
-              onChange={(event) => setTags(event.target.value)}
-              onBlur={() => {
-                void edit({ tags: tagsFromText(tags) });
-                setTags(null);
-              }}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") event.currentTarget.blur();
-                if (event.key === "Escape") setTags(null);
-              }}
-            />
-          )}
-        </Row>
-        {task.deadline ? <Row label="Wanted by">{task.deadline.slice(0, 10)}</Row> : null}
-        <Row label="Created">{time(task.created)}</Row>
-        {task.submitted ? <Row label="Submitted">{time(task.submitted)}</Row> : null}
-        <Row label="Last changed">{time(task.updated)}</Row>
-        <Row label="Id">
-          <span className="font-mono text-[10px]">{task.id}</span>
-        </Row>
-        {problem ? <p className="text-xs text-warning">{problem}</p> : null}
+            ) : (
+              <Input
+                aria-label="Tags"
+                className="h-7 w-44 text-xs"
+                autoFocus
+                value={tags}
+                onChange={(event) => setTags(event.target.value)}
+                onBlur={() => {
+                  void edit({ tags: tagsFromText(tags) });
+                  setTags(null);
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") event.currentTarget.blur();
+                  if (event.key === "Escape") setTags(null);
+                }}
+              />
+            )}
+          </Row>
+          {task.deadline ? <Row label="Wanted by">{task.deadline.slice(0, 10)}</Row> : null}
+          <Row label="Created">{time(task.created)}</Row>
+          {task.submitted ? <Row label="Submitted">{time(task.submitted)}</Row> : null}
+          <Row label="Last changed">{time(task.updated)}</Row>
+          <Row label="Id">
+            <span className="font-mono text-[10px]">{task.id}</span>
+          </Row>
+          {problem ? <p className="text-xs text-warning">{problem}</p> : null}
+        </TaskDisclosure>
       </section>
 
       {card.run ? (
         <section className="flex flex-col gap-1.5">
-          <h3 className="text-xs font-medium text-muted-foreground">Run</h3>
-          <Row label="Run">
-            <span className="font-mono text-[10px]">{card.run.id}</span>
-          </Row>
-          <Row label="State">
-            {card.run.state} at {card.run.stage}
-          </Row>
-          {card.run.candidate ? (
-            <Row label="Candidate">
-              <span className="font-mono text-[10px]">{card.run.candidate.slice(0, 12)}</span>
+          <TaskDisclosure title="Run and evidence" defaultOpen={false}>
+            <Row label="Run">
+              <span className="font-mono text-[10px]">{card.run.id}</span>
             </Row>
-          ) : null}
-          <Row label="Setup">
-            <span className="font-mono text-[10px]">{card.run.configuration}</span>
-          </Row>
-          {task.council?.evidence ? (
-            <Row label="Evidence">
-              <span className="font-mono text-[10px] break-all">{task.council.evidence}</span>
+            <Row label="State">
+              {card.run.state} at {card.run.stage}
             </Row>
-          ) : null}
-          {task.children.length > 1 ? (
-            <Row label="Runs">{task.children.length} for this task</Row>
-          ) : null}
+            {card.run.candidate ? (
+              <Row label="Candidate">
+                <span className="font-mono text-[10px]">{card.run.candidate.slice(0, 12)}</span>
+              </Row>
+            ) : null}
+            <Row label="Setup">
+              <span className="font-mono text-[10px]">{card.run.configuration}</span>
+            </Row>
+            {task.council?.evidence ? (
+              <Row label="Evidence">
+                <span className="font-mono text-[10px] break-all">{task.council.evidence}</span>
+              </Row>
+            ) : null}
+            {task.children.length > 1 ? (
+              <Row label="Runs">{task.children.length} for this task</Row>
+            ) : null}
+          </TaskDisclosure>
         </section>
       ) : null}
 
       <section className="flex flex-col gap-1.5" data-task-related>
-        <h3 className="text-xs font-medium text-muted-foreground">Where else it shows</h3>
-        <p className="text-[11px] text-muted-foreground">
-          What is said on this task is its conversation with the team. A thread in the chat list is
-          a conversation of its own; it becomes a task only when you create one from it.
-        </p>
-        {task.source ? (
-          <Row label="Made from">
-            <button
-              type="button"
-              className="text-primary underline-offset-2 hover:underline"
-              data-task-related-source
-              onClick={() =>
-                void navigate({
-                  to: "/$environmentId/$threadId",
-                  params: {
-                    environmentId: task.source!.environmentId,
-                    threadId: task.source!.threadId,
-                  },
-                })
-              }
-            >
-              the conversation it came from
-            </button>
-          </Row>
-        ) : null}
-        {card.run ? (
-          <Row label="Run">
-            <span className="font-mono text-[10px]" data-task-related-run>
-              {card.run.id}
-              {card.run.candidate ? ` · commit ${card.run.candidate.slice(0, 10)}` : ""}
-            </span>
-          </Row>
-        ) : null}
-        {card.waitingOn ? (
-          <Row label="Waiting on you">
-            <span data-task-related-waiting>yes: {card.waitingOn}</span>
-          </Row>
-        ) : null}
-        <PublicationRows task={task} />
+        <TaskDisclosure title="Linked conversations" defaultOpen={false}>
+          <p className="text-[11px] text-muted-foreground">
+            What is said on this task is its conversation with the team. A thread in the chat list
+            is a conversation of its own; it becomes a task only when you create one from it.
+          </p>
+          {task.source ? (
+            <Row label="Made from">
+              <button
+                type="button"
+                className="text-primary underline-offset-2 hover:underline"
+                data-task-related-source
+                onClick={() =>
+                  void navigate({
+                    to: "/$environmentId/$threadId",
+                    params: {
+                      environmentId: task.source!.environmentId,
+                      threadId: task.source!.threadId,
+                    },
+                  })
+                }
+              >
+                the conversation it came from
+              </button>
+            </Row>
+          ) : null}
+          {card.run ? (
+            <Row label="Run">
+              <span className="font-mono text-[10px]" data-task-related-run>
+                {card.run.id}
+                {card.run.candidate ? ` · commit ${card.run.candidate.slice(0, 10)}` : ""}
+              </span>
+            </Row>
+          ) : null}
+          {card.waitingOn ? (
+            <Row label="Waiting on you">
+              <span data-task-related-waiting>yes: {card.waitingOn}</span>
+            </Row>
+          ) : null}
+          <PublicationRows task={task} />
+        </TaskDisclosure>
       </section>
 
       {closed ? null : (
         <section className="flex flex-col gap-1.5" data-task-seats>
-          <h3 className="text-xs font-medium text-muted-foreground">Seats that take part</h3>
-          <SeatSettingsPanel
-            environmentId={props.environmentId}
-            settings={task.settings.map((item) => ({ ...item, now: item.effective }))}
-            chosen={{}}
-            taking={flow?.seats}
-            switchesOnly
-            onChange={(seat, choice) =>
-              void switchSeat(seat, {
-                ...set[seat],
-                active: choice.active === "" || choice.active === undefined ? "" : choice.active,
-              })
-            }
-          />
-          {seatsChangedForTask(task.settings).length > 0 ? (
-            <div
-              className="rounded border border-border bg-muted/40 px-2 py-1.5 text-[11px]"
-              data-task-seats-changed
-            >
-              <p className="font-medium">
-                Changed for this task only. The team's own setting is as it was.
-              </p>
-              <ul className="list-disc pl-4 text-muted-foreground">
-                {seatsChangedForTask(task.settings).map((line) => (
-                  <li key={line}>{line}</li>
+          <TaskDisclosure title="Seat settings" defaultOpen={false}>
+            <SeatSettingsPanel
+              environmentId={props.environmentId}
+              settings={task.settings.map((item) => ({ ...item, now: item.effective }))}
+              chosen={{}}
+              taking={flow?.seats}
+              switchesOnly
+              onChange={(seat, choice) =>
+                void switchSeat(seat, {
+                  ...set[seat],
+                  active: choice.active === "" || choice.active === undefined ? "" : choice.active,
+                })
+              }
+            />
+            {seatsChangedForTask(task.settings).length > 0 ? (
+              <div
+                className="rounded border border-border bg-muted/40 px-2 py-1.5 text-[11px]"
+                data-task-seats-changed
+              >
+                <p className="font-medium">
+                  Changed for this task only. The team's own setting is as it was.
+                </p>
+                <ul className="list-disc pl-4 text-muted-foreground">
+                  {seatsChangedForTask(task.settings).map((line) => (
+                    <li key={line}>{line}</li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+            {problems.length > 0 ? (
+              <ul className="list-disc pl-5 text-[11px] text-warning" data-delivery-problem>
+                {problems.map((item) => (
+                  <li key={item}>{item}</li>
                 ))}
               </ul>
-            </div>
-          ) : null}
-          {problems.length > 0 ? (
-            <ul className="list-disc pl-5 text-[11px] text-warning" data-delivery-problem>
-              {problems.map((item) => (
-                <li key={item}>{item}</li>
-              ))}
-            </ul>
-          ) : null}
-          <p className="text-[11px] text-muted-foreground">
-            {task.workflow === "chat"
-              ? "A change counts from the next message on."
-              : "A run keeps the seats it started with. A change counts for the next run. A seat that is working when it is switched off is asked to stop."}
-          </p>
+            ) : null}
+            <p className="text-[11px] text-muted-foreground">
+              {task.workflow === "chat"
+                ? "A change counts from the next message on."
+                : "A run keeps the seats it started with. A change counts for the next run. A seat that is working when it is switched off is asked to stop."}
+            </p>
+          </TaskDisclosure>
         </section>
       )}
 
-      <RunPanel
-        key={task.id}
-        environmentId={props.environmentId}
-        task={task}
-        onChanged={props.onChanged}
-      />
+      <TaskDisclosure title="Execution and checkpoints" defaultOpen={false}>
+        <RunPanel
+          key={task.id}
+          environmentId={props.environmentId}
+          task={task}
+          onChanged={props.onChanged}
+        />
+      </TaskDisclosure>
 
       <section className="flex flex-col gap-1.5" data-task-roster>
-        <h3 className="text-xs font-medium text-muted-foreground">
-          Team {task.team}
-          {task.defaults > 0 ? `, defaults r${task.defaults}` : ""}
-        </h3>
-        {task.council ? (
-          task.council.seats.map((seat) => (
-            <div key={seat.seat} className="flex items-start justify-between gap-2 text-xs">
-              <span className="min-w-0">
-                {seat.seat}
-                <span className="block text-[10px] text-muted-foreground">
-                  {harnessLabel(seat.harness)}, {seat.requestedModel ?? "its own model"}
-                  {seat.reasoning ? `, ${seat.reasoning}` : ""}
-                  {seat.access && seat.access !== "full" ? `, ${seat.access}` : ""}
-                </span>
-                {seat.waitingWhy ? (
-                  <span className="block text-[10px] text-muted-foreground" data-seat-waiting-why>
-                    {seat.waitingWhy}
+        <TaskDisclosure
+          defaultOpen={false}
+          title={
+            <>
+              Team {task.team}
+              {task.defaults > 0 ? `, defaults r${task.defaults}` : ""}
+            </>
+          }
+        >
+          {task.council ? (
+            task.council.seats.map((seat) => (
+              <div key={seat.seat} className="flex items-start justify-between gap-2 text-xs">
+                <span className="min-w-0">
+                  {seat.seat}
+                  <span className="block text-[10px] text-muted-foreground">
+                    {harnessLabel(seat.harness)}, {seat.requestedModel ?? "its own model"}
+                    {seat.reasoning ? `, ${seat.reasoning}` : ""}
+                    {seat.access && seat.access !== "full" ? `, ${seat.access}` : ""}
                   </span>
-                ) : null}
-                {seat.live && seat.live.items.length > 0 ? <SeatNow live={seat.live} /> : null}
-              </span>
-              <span className="shrink-0 text-right">
-                <Badge size="sm" variant={ACTIVITY_VARIANT[seat.activity] ?? "secondary"}>
-                  {seat.activity}
-                </Badge>
-                <span className="block text-[10px] text-muted-foreground">
-                  {seat.blockedBy
-                    ? `waits for ${seat.blockedBy}`
-                    : seat.verdict
-                      ? `verdict ${seat.verdict}`
-                      : (seat.stage ?? "")}
+                  {seat.waitingWhy ? (
+                    <span className="block text-[10px] text-muted-foreground" data-seat-waiting-why>
+                      {seat.waitingWhy}
+                    </span>
+                  ) : null}
+                  {seat.live && seat.live.items.length > 0 ? <SeatNow live={seat.live} /> : null}
                 </span>
-              </span>
-            </div>
-          ))
-        ) : (
-          <SeatSettingsPanel
-            environmentId={props.environmentId}
-            settings={task.settings}
-            chosen={{}}
-          />
-        )}
+                <span className="shrink-0 text-right">
+                  <Badge size="sm" variant={ACTIVITY_VARIANT[seat.activity] ?? "secondary"}>
+                    {seat.activity}
+                  </Badge>
+                  <span className="block text-[10px] text-muted-foreground">
+                    {seat.blockedBy
+                      ? `waits for ${seat.blockedBy}`
+                      : seat.verdict
+                        ? `verdict ${seat.verdict}`
+                        : (seat.stage ?? "")}
+                  </span>
+                </span>
+              </div>
+            ))
+          ) : (
+            <SeatSettingsPanel
+              environmentId={props.environmentId}
+              settings={task.settings}
+              chosen={{}}
+            />
+          )}
+        </TaskDisclosure>
       </section>
 
       <section className="flex flex-col gap-1">
@@ -1977,6 +2058,7 @@ export function TaskWorkspace(props: {
     onDiscarded: () => props.onClose(),
   });
   const [tab, setTab] = useState<Tab>("history");
+  const [detailsOpen, setDetailsOpen] = useState(true);
   const [taskBrief, setTaskBrief] = useState<string | null>(null);
   const [creatingTask, setCreatingTask] = useState(false);
   const [createProblem, setCreateProblem] = useState<string | null>(null);
@@ -2144,9 +2226,12 @@ export function TaskWorkspace(props: {
             <div className="grid min-h-0 flex-1 grid-cols-1 grid-rows-[minmax(0,1fr)] xl:grid-cols-[minmax(0,5fr)_minmax(0,6fr)_19rem] xl:divide-x xl:divide-border">
               <div className={cn("min-h-0 xl:flex", tab === "details" ? "flex" : "hidden")}>
                 <Details
+                  key={task.id}
                   environmentId={props.environmentId}
                   task={task}
                   onOpenTask={props.onOpenTask}
+                  open={detailsOpen}
+                  onOpenChange={setDetailsOpen}
                 />
               </div>
               <div className={cn("min-h-0 xl:flex", tab === "history" ? "flex" : "hidden")}>
@@ -2158,6 +2243,7 @@ export function TaskWorkspace(props: {
                   onShow={(section) => {
                     // On a narrow screen the task is behind its own tab.
                     setTab("details");
+                    setDetailsOpen(true);
                     requestAnimationFrame(() =>
                       document
                         .querySelector(`[data-task-section="${section}"]`)
@@ -2168,6 +2254,7 @@ export function TaskWorkspace(props: {
               </div>
               <div className={cn("min-h-0 xl:flex", tab === "info" ? "flex" : "hidden")}>
                 <Info
+                  key={task.id}
                   environmentId={props.environmentId}
                   from={props.from}
                   task={task}
