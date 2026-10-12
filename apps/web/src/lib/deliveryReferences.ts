@@ -20,7 +20,11 @@ export function joinReferencePath(root: string, relativePath: string): string {
   const separator = windows ? "\\" : "/";
   const styled = (value: string) => (windows ? value.replaceAll("/", "\\") : value);
   const base = styled(normalizeProjectPathForDispatch(root));
-  const file = styled(relativePath).replace(/^[\\/]+/, "");
+  // On Windows neither separator can begin a file name, so both are stripped;
+  // on POSIX a backslash is a regular character and only '/' is stripped.
+  const file = windows
+    ? styled(relativePath).replace(/^[\\/]+/, "")
+    : relativePath.replace(/^\/+/, "");
   return base.endsWith(separator) ? `${base}${file}` : `${base}${separator}${file}`;
 }
 

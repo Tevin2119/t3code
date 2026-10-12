@@ -422,6 +422,27 @@ describe("profile reference files", () => {
     expect(shownReferences()).toEqual(["/home/me/notes/build.log"]);
   });
 
+  it("keeps a leading backslash in a browsed file name, distinct from the plain name", async () => {
+    mock.folderFiles["env-a|/home/me/notes"] = [
+      { path: "\\a.md", kind: "file" },
+      { path: "a.md", kind: "file" },
+    ];
+    await render();
+    await click(button("Browse files"));
+    await click(row("notes"));
+    // Only the backslash row contains a backslash, so this pick is unambiguous.
+    await click(row("\\a.md"));
+    expect(shownReferences()).toEqual(["/home/me/notes/\\a.md"]);
+
+    // The plain name is a different file; the browse filter drops the
+    // backslash row before the plain one is clicked.
+    await click(button("Browse files"));
+    await click(row("notes"));
+    await search("a");
+    await click(row("a.md"));
+    expect(shownReferences()).toEqual(["/home/me/notes/\\a.md", "/home/me/notes/a.md"]);
+  });
+
   it("goes up a folder from the folder the server resolved", async () => {
     mock.browse["env-a|/home/"] = {
       data: { parentPath: "/home", entries: [{ name: "me", fullPath: "/home/me" }] },

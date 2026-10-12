@@ -8,6 +8,8 @@ describe("joinReferencePath", () => {
     ["/home/me/work/", "docs/a.md", "/home/me/work/docs/a.md"],
     ["/", "a.md", "/a.md"],
     ["/Users/Me", "Docs/A.md", "/Users/Me/Docs/A.md"],
+    ["/home/me/notes", "\\a.md", "/home/me/notes/\\a.md"],
+    ["/home/me/notes/", "\\a.md", "/home/me/notes/\\a.md"],
     ["C:/work", "docs/a.md", "C:\\work\\docs\\a.md"],
     ["C:\\work", "docs/a.md", "C:\\work\\docs\\a.md"],
     ["c:\\Work\\", "docs/a.md", "c:\\Work\\docs\\a.md"],
@@ -36,6 +38,15 @@ describe("addReference", () => {
   it("keeps POSIX paths that differ in case apart", () => {
     expect(addReference(["/Work/a.md"], "/work/a.md")).toEqual(["/Work/a.md", "/work/a.md"]);
     expect(addReference(["/a/B.md"], "/a/b.md")).toEqual(["/a/B.md", "/a/b.md"]);
+  });
+
+  it("keeps a backslash-leading POSIX name distinct from the plain name", () => {
+    const backslash = addReference([], "/home/me/notes/\\a.md");
+    expect(backslash).toEqual(["/home/me/notes/\\a.md"]);
+    expect(addReference(backslash, "/home/me/notes/a.md")).toEqual([
+      "/home/me/notes/\\a.md",
+      "/home/me/notes/a.md",
+    ]);
   });
 
   it("keeps one Windows file whether it came from a project or a browse first", () => {
