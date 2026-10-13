@@ -2180,3 +2180,52 @@ describe("waitForRevertedMessage", () => {
     vi.useRealTimers();
   });
 });
+
+describe("confirmed delivery provider lock", () => {
+  it("prioritizes the binding driver over a running provider and a draft choice", () => {
+    const binding = {
+      threadId,
+      session: "session",
+      team: "development",
+      role: "implementer",
+      seat: "developer",
+      driver: "claudeAgent",
+      harness: "claude",
+      workspace: "/repo",
+      configuration: "development@1#digest",
+      requestedModel: null,
+      memoryScope: "team",
+      tools: [],
+      project: "project",
+      boundAt: now,
+    };
+    const thread = makeThread({ runtime: readySession });
+    expect(
+      deriveLockedProvider({
+        thread,
+        selectedProvider: "pi",
+        threadProvider: "codex",
+        providers: [],
+        deliveryBinding: binding,
+      }),
+    ).toBe("claudeAgent");
+    expect(
+      deriveLockedProvider({
+        thread,
+        selectedProvider: "pi",
+        threadProvider: "codex",
+        providers: [],
+        deliveryBinding: null,
+      }),
+    ).toBe("codex");
+    expect(
+      deriveLockedProvider({
+        thread: makeThread(),
+        selectedProvider: "pi",
+        threadProvider: "codex",
+        providers: [],
+        deliveryBinding: null,
+      }),
+    ).toBeNull();
+  });
+});

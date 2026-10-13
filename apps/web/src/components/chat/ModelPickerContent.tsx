@@ -1,4 +1,10 @@
 import {
+  deliveryModelDisabledReason,
+  matchesModelPickerLock,
+  modelPickerDisabledInstanceIds,
+} from "@t3tools/client-runtime/delivery-model-lock";
+import type { DeliveryThreadBinding } from "@t3tools/contracts";
+import {
   ANTIGRAVITY_DEFAULT_MODEL,
   type ProviderInstanceId,
   type ProviderDriverKind,
@@ -175,6 +181,7 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
    * remain selectable (e.g. locked to `codex` still lets the user switch
    * between the default Codex and a custom Codex Personal).
    */
+  deliveryBinding?: DeliveryThreadBinding | null | undefined;
   lockedProvider: ProviderDriverKind | null;
   lockedContinuationGroupKey?: string | null;
   /**
@@ -354,12 +361,13 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
   );
   const matchesLockedProvider = useCallback(
     (entry: Pick<ProviderInstanceEntry, "driverKind" | "continuationGroupKey">): boolean => {
-      if (props.lockedProvider === null) return true;
-      if (entry.driverKind !== props.lockedProvider) return false;
-      if (!props.lockedContinuationGroupKey) return true;
-      return entry.continuationGroupKey === props.lockedContinuationGroupKey;
+      return matchesModelPickerLock(
+        entry,
+        props.lockedProvider,
+        props.deliveryBinding ? null : props.lockedContinuationGroupKey,
+      );
     },
-    [props.lockedContinuationGroupKey, props.lockedProvider],
+    [props.deliveryBinding, props.lockedContinuationGroupKey, props.lockedProvider],
   );
 
   const selectableUnavailableInstanceIds = useMemo(() => {
@@ -434,18 +442,20 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
 
   const isLocked = props.lockedProvider !== null;
   const isSearching = searchQuery.trim().length > 0;
-  const lockedDisabledInstanceIds = useMemo(() => {
-    if (!isLocked) {
-      return undefined;
-    }
-    const disabled = new Set<ProviderInstanceId>();
-    for (const entry of instanceEntries) {
-      if (!matchesLockedProvider(entry)) {
-        disabled.add(entry.instanceId);
-      }
-    }
-    return disabled;
-  }, [instanceEntries, isLocked, matchesLockedProvider]);
+  const lockedDisabledInstanceIds = useMemo(
+    () =>
+      modelPickerDisabledInstanceIds(
+        instanceEntries,
+        props.lockedProvider,
+        props.deliveryBinding ? null : props.lockedContinuationGroupKey,
+      ),
+    [
+      instanceEntries,
+      props.deliveryBinding,
+      props.lockedProvider,
+      props.lockedContinuationGroupKey,
+    ],
+  );
   const sidebarInstanceEntries = useMemo(() => {
     const enabledEntries = instanceEntries.filter(isProviderInstancePickerVisible);
     if (!isLocked) {
@@ -905,11 +915,15 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
             onFocusSearch={focusSearchInput}
             instanceEntries={sidebarInstanceEntries}
             showFavorites
+            getContextDisabledReason={(entry) =>
+              deliveryModelDisabledReason(props.deliveryBinding, entry.driverKind)
+            }
             {...(selectableUnavailableInstanceIds ? { selectableUnavailableInstanceIds } : {})}
             {...(lockedDisabledInstanceIds
               ? {
                   disabledInstanceIds: lockedDisabledInstanceIds,
                   getDisabledInstanceTooltip: (entry: ProviderInstanceEntry) =>
+                    deliveryModelDisabledReason(props.deliveryBinding, entry.driverKind) ??
                     `${entry.displayName} is unavailable in this thread. Start a new thread to switch providers.`,
                 }
               : {})}

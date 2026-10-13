@@ -1,3 +1,5 @@
+import { useChatComposerProviderSelection } from "../../lib/deliveryComposerSelection";
+import type { DeliveryThreadBinding } from "@t3tools/contracts";
 import { formatProviderSkillDisplayName } from "@t3tools/shared/inlineSkills";
 import { DESKTOP_PASTE_AS_TEXT_EVENT } from "../../lib/desktopPasteAsText";
 import { runtimeModeConfig, runtimeModeOptions as runtimeModes } from "./runtimeModeConfig";
@@ -98,7 +100,6 @@ import {
   getAntigravitySendBlockReason,
   readFileAsDataUrl,
   resolveComposerInteractionMode,
-  resolveComposerProviderSelection,
   threadShellHasStarted,
 } from "../ChatView.logic";
 import {
@@ -1646,6 +1647,7 @@ export interface ChatComposerProps {
   interactionMode: ProviderInteractionMode;
 
   // Provider / model
+  deliveryBinding?: DeliveryThreadBinding | null | undefined;
   lockedProvider: ProviderDriverKind | null;
   providerStatuses: ServerProvider[];
   /** False until the environment's server config has arrived at least once. */
@@ -1796,6 +1798,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     activeProposedPlan,
     runtimeMode,
     interactionMode: requestedInteractionMode,
+    deliveryBinding,
     lockedProvider,
     providerStatuses,
     providerCatalogKnown,
@@ -2158,29 +2161,15 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     requestedDriverKind,
     lockedContinuationGroupKey,
     unavailableProviderInstanceId,
-  } = useMemo(
-    () =>
-      resolveComposerProviderSelection({
-        entries: providerInstanceEntries,
-        candidateInstanceIds: [
-          selectedProviderByThreadId,
-          activeThread?.runtime?.providerInstanceId,
-          activeThreadModelSelection?.instanceId,
-          activeProjectDefaultModelSelection?.instanceId,
-        ],
-        lockedProvider,
-        lockedInstanceId:
-          activeThread?.runtime?.providerInstanceId ?? activeThreadModelSelection?.instanceId,
-      }),
-    [
-      activeProjectDefaultModelSelection?.instanceId,
-      activeThread?.runtime?.providerInstanceId,
-      activeThreadModelSelection?.instanceId,
-      selectedProviderByThreadId,
-      lockedProvider,
-      providerInstanceEntries,
-    ],
-  );
+  } = useChatComposerProviderSelection({
+    entries: providerInstanceEntries,
+    activeThread,
+    activeThreadModelSelection,
+    selectedProviderByThreadId,
+    activeProjectDefaultModelSelection,
+    lockedProvider,
+    deliveryBinding,
+  });
   const selectedInstanceId =
     selectedProviderEntry?.instanceId ?? NO_PROVIDER_MODEL_SELECTION.instanceId;
   const noProviderAvailable =
@@ -5696,6 +5685,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
             ? (activeThreadModelSelection?.model ?? selectedModelForPickerWithCustomFallback)
             : selectedModelForPickerWithCustomFallback
         }
+        deliveryBinding={deliveryBinding}
         lockedProvider={lockedProvider}
         lockedContinuationGroupKey={lockedContinuationGroupKey}
         instanceEntries={providerInstanceEntries}

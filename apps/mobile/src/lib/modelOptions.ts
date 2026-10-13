@@ -1,3 +1,5 @@
+import { deliveryModelDisabledReason } from "@t3tools/client-runtime/delivery-model-lock";
+import type { DeliveryThreadBinding } from "@t3tools/contracts";
 import type { MenuAction } from "@react-native-menu/menu";
 import type {
   ModelCapabilities,
@@ -22,6 +24,7 @@ export type ModelOption = {
   readonly isDefault: boolean;
   readonly isLegacy: boolean;
   readonly isUnavailable?: boolean;
+  readonly disabledReason?: string | null;
   readonly capabilities: ModelCapabilities | null;
   readonly selection: ModelSelection;
   readonly providerUpdateRequired?: ProviderUpdateRequired;
@@ -167,12 +170,15 @@ export function buildModelOptions(
   config: T3ServerConfig | null | undefined,
   fallbackModelSelection: ModelSelection | null,
   providerInstanceId?: ModelSelection["instanceId"],
+  deliveryBinding?: DeliveryThreadBinding | null,
 ): ReadonlyArray<ModelOption> {
   const options = new Map<string, ModelOption>();
 
   for (const provider of config?.providers ?? []) {
     if (
-      (providerInstanceId !== undefined && provider.instanceId !== providerInstanceId) ||
+      (!deliveryBinding &&
+        providerInstanceId !== undefined &&
+        provider.instanceId !== providerInstanceId) ||
       !provider.enabled ||
       !provider.installed ||
       // API-only providers back text generation but cannot run a thread.
@@ -217,7 +223,9 @@ export function buildModelOptions(
 
   if (
     fallbackModelSelection &&
-    (providerInstanceId === undefined || fallbackModelSelection.instanceId === providerInstanceId)
+    (deliveryBinding ||
+      providerInstanceId === undefined ||
+      fallbackModelSelection.instanceId === providerInstanceId)
   ) {
     const key = `${fallbackModelSelection.instanceId}:${fallbackModelSelection.model}`;
     const existing = options.get(key);
@@ -253,7 +261,15 @@ export function buildModelOptions(
         providerDriver,
         isDefault: false,
         isLegacy: model?.isLegacy === true,
-        ...(isModelSelectionUnavailable(config, fallbackModelSelection) ||
+        ...((deliveryBinding &&
+          config &&
+          (!provider ||
+            !provider.enabled ||
+            !provider.installed ||
+            provider.supportsSessions === false ||
+            provider.auth.status === "unauthenticated" ||
+            provider.availability === "unavailable")) ||
+        isModelSelectionUnavailable(config, fallbackModelSelection) ||
         provider?.updateRequiredModels?.some((gated) => gated.slug === fallbackModelSelection.model)
           ? { isUnavailable: true }
           : {}),
@@ -263,7 +279,10 @@ export function buildModelOptions(
     }
   }
 
-  return [...options.values()];
+  return [...options.values()].map((option) => {
+    const disabledReason = deliveryModelDisabledReason(deliveryBinding, option.providerDriver);
+    return disabledReason ? { ...option, disabledReason } : option;
+  });
 }
 
 export function groupByProvider(options: ReadonlyArray<ModelOption>): ReadonlyArray<ProviderGroup> {
@@ -301,6 +320,8 @@ function modelMenuAction(option: ModelOption, selectedModel: ModelSelection | nu
   return {
     id: `model:${option.key}`,
     title: option.label,
+    subtitle: option.disabledReason ?? undefined,
+    attributes: option.disabledReason ? { disabled: true } : undefined,
     state:
       option.selection.instanceId === selectedModel?.instanceId &&
       option.selection.model === selectedModel.model
@@ -345,4 +366,18 @@ export function buildModelMenuActions(
         : []),
     ];
   });
+}
+
+/** Revalidate the selected row against the current catalog, including a changed binding. */
+export function modelOptionSelectionRefusal(
+  option: ModelOption,
+  options: ReadonlyArray<ModelOption>,
+): string | null {
+  const current = options.find((candidate) => candidate.key === option.key);
+  return (
+    current?.disabledReason ??
+    (!current || current.isUnavailable
+      ? "Set up this provider on web or desktop, or select another model."
+      : null)
+  );
 }

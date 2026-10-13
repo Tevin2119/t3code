@@ -3,6 +3,10 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./delivery-model-lock": {
+      "types": "./src/deliveryModelLock.ts",
+      "default": "./src/deliveryModelLock.ts"
+    },
     "./composerThreadItems": {
       "types": "./src/composerThreadItems.ts",
       "default": "./src/composerThreadItems.ts"

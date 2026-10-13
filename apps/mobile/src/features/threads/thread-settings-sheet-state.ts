@@ -1,3 +1,4 @@
+import { modelOptionSelectionRefusal } from "../../lib/modelOptions";
 import type { ModelOption, ProviderGroup } from "../../lib/modelOptions";
 import type { ProviderInstanceId } from "@t3tools/contracts";
 
@@ -70,8 +71,11 @@ export function canCommitPendingModel(
   pending: ModelOption,
   groups: ReadonlyArray<ProviderGroup>,
 ): boolean {
-  return groups.some((group) =>
-    group.models.some((model) => model.key === pending.key && !model.isUnavailable),
+  return (
+    modelOptionSelectionRefusal(
+      pending,
+      groups.flatMap((group) => group.models),
+    ) === null
   );
 }
 

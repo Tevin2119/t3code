@@ -1,3 +1,6 @@
+import { useChatViewComposerProviderSelection } from "../lib/deliveryComposerSelection";
+import { getThreadModelDisabledReason } from "../lib/deliveryModelPicker";
+import type { DeliveryThreadBinding } from "@t3tools/contracts";
 import { ThreadFind, ThreadFindCanvas, type ThreadFindControls } from "./chat/ThreadFindProvider";
 import { THREAD_FIND_BAR_RESERVED_HEIGHT } from "./chat/ThreadFindBar";
 import { usageLimitRecoveryBannerItem } from "./chat/UsageLimitRecoveryBanner";
@@ -565,7 +568,6 @@ import {
   waitForRevertedMessage,
   reconcileMountedTerminalThreadIds,
   resolveComposerInteractionMode,
-  resolveComposerProviderSelection,
   getAntigravitySendBlockReason,
   observeProactivePanelUserChoice,
   resolveProactiveTurnDiffAction,
@@ -631,6 +633,8 @@ import {
   ATTACHMENT_ONLY_BOOTSTRAP_PROMPT,
   recallableComposerPrompt,
 } from "./chat/composerPromptHistory";
+
+const EMPTY_DELIVERY_BINDING_ATOM = Atom.make<DeliveryThreadBinding | null>(null);
 
 const EMPTY_PROVIDERS: ServerProvider[] = [];
 const EMPTY_PROVIDER_MODELS: ServerProvider["models"] = [];
@@ -3040,13 +3044,42 @@ export default function ChatView(props: ChatViewProps) {
     activeThread?.modelSelection.instanceId ??
     activeProjectDefaultModelSelection?.instanceId ??
     null;
+  const deliveryEnabled = useDeliveryEnabled(environmentId);
+  const deliveryTeams = useDeliveryRead(deliveryEnabled ? environmentId : null, "/api/teams");
+  // Read through a ref at send time, so the send path needs no new dependencies.
+  // The same teams the picker offers, so that the picker, the footer and the send agree.
+  const deliveryTeamList = useMemo(() => selectableTeams(deliveryTeams.body), [deliveryTeams.body]);
+  const deliverySendInput = {
+    enabled: deliveryEnabled,
+    teams: deliveryTeamList,
+    status: teamListStatus(deliveryTeams),
+    error: deliveryTeams.error,
+  };
+  const deliverySendRef = useRef(deliverySendInput);
+  deliverySendRef.current = deliverySendInput;
+  // Asked for drafts too: a draft whose first send failed is held on the server.
+  const deliveryThreadState = useEnvironmentQuery(
+    deliveryEnabled && activeThread
+      ? deliveryEnvironment.threadBinding({
+          environmentId,
+          input: { threadId: activeThread.id },
+        })
+      : null,
+  );
+  const deliveryBinding = useAtomValue(
+    deliveryEnabled && activeThread
+      ? deliveryEnvironment.modelBinding({ environmentId, input: { threadId: activeThread.id } })
+      : EMPTY_DELIVERY_BINDING_ATOM,
+  );
   const lockedProvider = deriveLockedProvider({
+    deliveryBinding,
     thread: activeThread,
     selectedProvider: selectedProviderByThreadId,
     threadProvider,
     providers: providerStatuses,
   });
-  const modelPickerLockedProvider = supportsProviderSwitchingViaHandoff ? null : lockedProvider;
+  const modelPickerLockedProvider =
+    supportsProviderSwitchingViaHandoff && !deliveryBinding ? null : lockedProvider;
   const pullRequestsCapabilityKnown = serverConfig !== null;
   const supportsPullRequests = serverConfig?.environment.capabilities.pullRequests === true;
   const attachmentEnvironmentConfig = environmentById.get(environmentId)?.serverConfig ?? null;
@@ -3282,29 +3315,15 @@ export default function ChatView(props: ChatViewProps) {
       ),
     [providerStatuses, settings],
   );
-  const { selectedProviderEntry, requestedDriverKind } = useMemo(
-    () =>
-      resolveComposerProviderSelection({
-        entries: providerInstanceEntries,
-        candidateInstanceIds: [
-          selectedProviderByThreadId,
-          activeRuntime?.providerInstanceId,
-          activeThread?.modelSelection.instanceId,
-          activeProjectDefaultModelSelection?.instanceId,
-        ],
-        lockedProvider,
-        lockedInstanceId:
-          activeRuntime?.providerInstanceId ?? activeThread?.modelSelection.instanceId,
-      }),
-    [
-      activeProjectDefaultModelSelection?.instanceId,
-      activeThread?.modelSelection.instanceId,
-      activeRuntime?.providerInstanceId,
-      lockedProvider,
-      providerInstanceEntries,
-      selectedProviderByThreadId,
-    ],
-  );
+  const { selectedProviderEntry, requestedDriverKind } = useChatViewComposerProviderSelection({
+    entries: providerInstanceEntries,
+    activeThread,
+    activeRuntime,
+    selectedProviderByThreadId,
+    activeProjectDefaultModelSelection,
+    lockedProvider,
+    deliveryBinding,
+  });
   const selectedProvider = selectedProviderEntry?.driverKind ?? requestedDriverKind;
   const activeProviderInstanceId = selectedProviderEntry?.instanceId ?? null;
   const activeProviderStatus = selectedProviderEntry?.snapshot ?? null;
@@ -3322,28 +3341,6 @@ export default function ChatView(props: ChatViewProps) {
     conversationProviderStatus !== null &&
     conversationProviderStatus.supportsConversationRollback !== false;
   const phase = derivePhase(activeRuntime);
-  const deliveryEnabled = useDeliveryEnabled(environmentId);
-  const deliveryTeams = useDeliveryRead(deliveryEnabled ? environmentId : null, "/api/teams");
-  // Read through a ref at send time, so the send path needs no new dependencies.
-  // The same teams the picker offers, so that the picker, the footer and the send agree.
-  const deliveryTeamList = useMemo(() => selectableTeams(deliveryTeams.body), [deliveryTeams.body]);
-  const deliverySendInput = {
-    enabled: deliveryEnabled,
-    teams: deliveryTeamList,
-    status: teamListStatus(deliveryTeams),
-    error: deliveryTeams.error,
-  };
-  const deliverySendRef = useRef(deliverySendInput);
-  deliverySendRef.current = deliverySendInput;
-  // Asked for drafts too: a draft whose first send failed is held on the server.
-  const deliveryThreadState = useEnvironmentQuery(
-    deliveryEnabled && activeThread
-      ? deliveryEnvironment.threadBinding({
-          environmentId,
-          input: { threadId: activeThread.id },
-        })
-      : null,
-  );
   const deliveryStateRef = useRef(deliveryThreadState);
   deliveryStateRef.current = deliveryThreadState;
   const releaseDeliveryThread = useAtomCommand(deliveryEnvironment.releaseThread, {
@@ -10879,7 +10876,8 @@ export default function ChatView(props: ChatViewProps) {
       if (!activeThread) {
         return null;
       }
-      const reason = getStartedThreadModelChangeBlockReason({
+      return getThreadModelDisabledReason({
+        deliveryBinding,
         providers: providerStatuses,
         hasStartedSession: activeRuntime !== null,
         supportsProviderSwitchingViaHandoff,
@@ -10887,9 +10885,14 @@ export default function ChatView(props: ChatViewProps) {
         currentProviderInstanceId: activeRuntime?.providerInstanceId ?? null,
         nextModelSelection: { instanceId, model },
       });
-      return reason ? `${reason.description} Start a new thread to use this model.` : null;
     },
-    [activeRuntime, activeThread, providerStatuses, supportsProviderSwitchingViaHandoff],
+    [
+      activeRuntime,
+      activeThread,
+      deliveryBinding,
+      providerStatuses,
+      supportsProviderSwitchingViaHandoff,
+    ],
   );
 
   const onProviderModelSelect = useCallback(
@@ -10901,7 +10904,7 @@ export default function ChatView(props: ChatViewProps) {
       const entry = providerStatuses.find((snapshot) => snapshot.instanceId === instanceId);
       const resolvedDriverKind = entry?.driver ?? null;
       if (
-        !supportsProviderSwitchingViaHandoff &&
+        (!supportsProviderSwitchingViaHandoff || deliveryBinding !== null) &&
         lockedProvider !== null &&
         resolvedDriverKind !== null &&
         resolvedDriverKind !== lockedProvider
@@ -10910,6 +10913,7 @@ export default function ChatView(props: ChatViewProps) {
         return;
       }
       if (
+        !deliveryBinding &&
         !supportsProviderSwitchingViaHandoff &&
         lockedProvider !== null &&
         activeRuntime?.providerInstanceId
@@ -10947,6 +10951,7 @@ export default function ChatView(props: ChatViewProps) {
           ? { instanceId, model: resolvedModel, options: [...rememberedOptions] }
           : { instanceId, model: resolvedModel };
       const modelChangeBlockReason = getStartedThreadModelChangeBlockReason({
+        deliveryBinding,
         providers: providerStatuses,
         hasStartedSession: activeRuntime !== null,
         supportsProviderSwitchingViaHandoff,
@@ -10977,6 +10982,7 @@ export default function ChatView(props: ChatViewProps) {
       activeThread,
       activeRuntime,
       lockedProvider,
+      deliveryBinding,
       supportsProviderSwitchingViaHandoff,
       scheduleComposerFocus,
       setComposerDraftModelSelection,
@@ -11881,6 +11887,7 @@ export default function ChatView(props: ChatViewProps) {
                               }
                               runtimeMode={runtimeMode}
                               interactionMode={interactionMode}
+                              deliveryBinding={deliveryBinding}
                               lockedProvider={modelPickerLockedProvider}
                               providerStatuses={providerStatuses as ServerProvider[]}
                               providerCatalogKnown={serverConfig !== null}

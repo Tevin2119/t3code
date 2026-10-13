@@ -30,6 +30,25 @@ function describeUnavailableInstance(entry: ProviderInstanceEntry): string {
   return msg ? `${label} — ${kind}. ${msg}` : `${label} — ${kind}.`;
 }
 
+export function modelPickerInstanceTooltip(input: {
+  entry: ProviderInstanceEntry;
+  isContextDisabled: boolean;
+  contextDisabledReason?: string | null | undefined;
+  disabledInstanceTooltip?: string | undefined;
+  showNewBadge: boolean;
+}) {
+  return (
+    (input.isContextDisabled ? input.contextDisabledReason : null) ??
+    (!isProviderInstancePickerReady(input.entry)
+      ? describeUnavailableInstance(input.entry)
+      : input.isContextDisabled
+        ? (input.disabledInstanceTooltip ?? input.entry.displayName)
+        : input.showNewBadge
+          ? `${input.entry.displayName} — New`
+          : input.entry.displayName)
+  );
+}
+
 const SELECTED_INDICATOR_CLASS =
   "pointer-events-none absolute -right-1 top-1/2 z-10 h-5 w-0.75 -translate-y-1/2 rounded-l-full bg-primary";
 const BADGE_BASE_CLASS =
@@ -62,6 +81,7 @@ export const ModelPickerSidebar = memo(function ModelPickerSidebar(props: {
   disabledInstanceIds?: ReadonlySet<ProviderInstanceId>;
   /** Non-ready instances whose selected unavailable model remains reachable. */
   selectableUnavailableInstanceIds?: ReadonlySet<ProviderInstanceId>;
+  getContextDisabledReason?: (entry: ProviderInstanceEntry) => string | null;
   getDisabledInstanceTooltip?: (entry: ProviderInstanceEntry) => string;
   /**
    * Instance id values that should render the "new" sparkle badge. Callers
@@ -195,13 +215,13 @@ export const ModelPickerSidebar = memo(function ModelPickerSidebar(props: {
             const showNewBadge = props.newBadgeInstanceIds?.has(entry.instanceId) ?? false;
             const showInstanceBadge = shouldShowInstanceBadge(entry, props.instanceEntries);
 
-            const tooltip = isUnavailable
-              ? describeUnavailableInstance(entry)
-              : isContextDisabled
-                ? (props.getDisabledInstanceTooltip?.(entry) ?? entry.displayName)
-                : showNewBadge
-                  ? `${entry.displayName} — New`
-                  : entry.displayName;
+            const tooltip = modelPickerInstanceTooltip({
+              entry,
+              isContextDisabled,
+              contextDisabledReason: props.getContextDisabledReason?.(entry),
+              disabledInstanceTooltip: props.getDisabledInstanceTooltip?.(entry),
+              showNewBadge,
+            });
 
             const button = (
               <Toolbar.Button

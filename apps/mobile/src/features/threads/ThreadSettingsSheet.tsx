@@ -1,3 +1,4 @@
+import { modelOptionSelectionRefusal } from "../../lib/modelOptions";
 import { createV5StackNavigator as createNativeStackNavigator } from "../../native/createV5StackNavigator";
 import type {
   EnvironmentId,
@@ -416,7 +417,10 @@ function ThreadSettingsSessionProvider(
       if (!canCommitPendingModel(pendingModel, props.providerGroups)) {
         Alert.alert(
           "Model unavailable",
-          "Set up this provider on web or desktop, or select another model.",
+          modelOptionSelectionRefusal(
+            pendingModel,
+            props.providerGroups.flatMap((group) => group.models),
+          ) ?? "Select another model.",
         );
         return false;
       }
