@@ -206,22 +206,22 @@ describe("settled team availability", () => {
     { name: "no body", body: null, unavailable: false },
     { name: "undefined body", body: undefined, unavailable: false },
   ])("uses $name after a failed reading", ({ body, unavailable }) => {
-    expect(chosenTeamUnavailable({ body, error: "offline" }, { team: "rnd" })).toBe(unavailable);
+    expect(chosenTeamUnavailable(body, selectableTeams(body), { team: "rnd" })).toBe(unavailable);
   });
 
   it("does not rule out a choice still awaiting teams", () => {
+    const body = [{ team: "alpha" }];
     expect(
-      chosenTeamUnavailable(
-        { body: [{ team: "alpha" }], error: "offline" },
-        { team: "rnd", awaitingTeams: true },
-      ),
+      chosenTeamUnavailable(body, selectableTeams(body), { team: "rnd", awaitingTeams: true }),
     ).toBe(false);
   });
 
   it("clears unavailability when a successful reading offers the choice again", () => {
     const draft = { team: "rnd" };
-    expect(chosenTeamUnavailable({ body: [], error: "offline" }, draft)).toBe(true);
-    expect(chosenTeamUnavailable({ body: [{ team: "rnd" }], error: null }, draft)).toBe(false);
+    const missingBody = [] as const;
+    const offeredBody = [{ team: "rnd" }];
+    expect(chosenTeamUnavailable(missingBody, selectableTeams(missingBody), draft)).toBe(true);
+    expect(chosenTeamUnavailable(offeredBody, selectableTeams(offeredBody), draft)).toBe(false);
   });
 });
 

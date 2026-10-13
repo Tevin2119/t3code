@@ -518,16 +518,20 @@ export function teamListStatus(read: {
   return read.error ? "failed" : read.body == null ? "pending" : "loaded";
 }
 
-/** A retained list can rule out a settled choice even when the latest reading failed. */
+/**
+ * A retained list can rule out a settled choice even when the latest reading failed.
+ * Teams is the parsed body from the caller's memo, so it is not re-parsed per render.
+ */
 export function chosenTeamUnavailable(
-  read: { readonly body: unknown; readonly error: string | null },
+  body: unknown,
+  teams: ReadonlyArray<DeliveryTeam>,
   draft: { readonly team: string; readonly awaitingTeams?: boolean } | null,
 ): boolean {
   return (
-    read.body != null &&
+    body != null &&
     draft !== null &&
     !draft.awaitingTeams &&
-    !selectableTeams(read.body).some((team) => team.team === draft.team)
+    !teams.some((team) => team.team === draft.team)
   );
 }
 
