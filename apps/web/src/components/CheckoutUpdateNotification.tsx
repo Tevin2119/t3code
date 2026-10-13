@@ -84,6 +84,7 @@ interface Session {
   readonly startFailedFor: string | null;
   /** This tab asked for the update, so it takes the new build at once. */
   readonly startedHere: boolean;
+  /** A notice closed in this tab; spent once another non-null notice takes its place. */
   readonly closedKey: string | null;
   /** The state when the start request returned; an idle state after it means the supervisor passed. */
   readonly sentState: CheckoutUpdateState | null | undefined;
@@ -141,6 +142,12 @@ export function CheckoutUpdateController({
     getLocalStorageItem(DISMISSED_KEY, DismissedCommit),
   );
   const view = checkoutUpdateView(state, { loadedCommit: current.loadedCommit, dismissedCommit });
+
+  // A close hides the notice as it is; once another notice takes its place the close is spent.
+  // A failure that comes again, even in the same words, is then shown after retry progress.
+  if (current.closedKey !== null && view !== null && view.key !== current.closedKey) {
+    current = { ...current, closedKey: null };
+  }
 
   // A start request is done once the server leaves the offer: under way, failed or done.
   // A supervisor already busy passes on it, so an idle state after the reply also ends it.
