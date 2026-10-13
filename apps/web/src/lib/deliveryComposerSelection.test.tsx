@@ -1,7 +1,9 @@
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
+import { AsyncResult, Atom } from "effect/reactivity";
 import {
   ProviderDriverKind,
+  EnvironmentId,
   ProviderInstanceId,
   ThreadId,
   type DeliveryThreadBinding,
@@ -9,6 +11,7 @@ import {
 } from "@t3tools/contracts";
 import {
   deliveryModelDisabledReason,
+  deliveryBindingAtom,
   modelPickerDisabledInstanceIds,
   matchesModelPickerLock,
 } from "@t3tools/client-runtime/delivery-model-lock";
@@ -22,8 +25,14 @@ import { modelPickerInstanceTooltip } from "../components/chat/ModelPickerSideba
 import {
   useChatViewComposerProviderSelection,
   useChatComposerProviderSelection,
+  useDeliveryThreadModelBinding,
 } from "./deliveryComposerSelection";
 import { getThreadModelDisabledReason } from "./deliveryModelPicker";
+import { deliveryEnvironment } from "../state/delivery";
+
+vi.mock("../state/delivery", () => ({
+  deliveryEnvironment: { modelBinding: vi.fn() },
+}));
 
 const binding: DeliveryThreadBinding = {
   threadId: ThreadId.make("bound"),
@@ -84,92 +93,119 @@ const reason =
   "This thread is the development implementer on pi. Start a new thread to use another harness.";
 
 describe("delivery composer selection through both production integrations", () => {
-  it.each([false, true])("keeps both Pi profiles selectable with handoff=%s", async (handoff) => {
-    let output: ReturnType<typeof useChatComposerProviderSelection> | undefined;
-    function SelectionPath(props: { binding: DeliveryThreadBinding | null }) {
-      const lock = deriveLockedProvider({
-        thread,
-        selectedProvider: "pi_personal",
-        threadProvider: "pi_work",
-        providers,
-        deliveryBinding: props.binding,
-      });
-      const view = useChatViewComposerProviderSelection({
-        entries,
-        activeThread: thread,
-        activeRuntime: thread.runtime,
-        selectedProviderByThreadId: ProviderInstanceId.make("pi_personal"),
-        activeProjectDefaultModelSelection: null,
-        lockedProvider: lock,
-        deliveryBinding: props.binding,
-      });
-      output = useChatComposerProviderSelection({
-        entries,
-        activeThread: thread,
-        activeThreadModelSelection: thread.modelSelection,
-        selectedProviderByThreadId: view.selectedProviderEntry?.instanceId ?? null,
-        activeProjectDefaultModelSelection: null,
-        lockedProvider: handoff && !props.binding ? null : lock,
-        deliveryBinding: props.binding,
-      });
-      expect(view.selectedProviderEntry?.instanceId).toBe(
-        props.binding ? "pi_personal" : "pi_work",
-      );
-      const disabled = modelPickerDisabledInstanceIds(
-        entries,
-        handoff && !props.binding ? null : lock,
-        output.lockedContinuationGroupKey,
-      );
-      for (const entry of entries) {
-        const foreign = entry.driverKind !== "pi";
-        if (props.binding) {
-          expect(disabled?.has(entry.instanceId)).toBe(foreign);
-          expect(matchesModelPickerLock(entry, lock, output.lockedContinuationGroupKey)).toBe(
-            !foreign,
-          );
-          for (const model of entry.snapshot.models) {
-            const input = {
-              providers,
-              hasStartedSession: true,
-              supportsProviderSwitchingViaHandoff: handoff,
-              deliveryBinding: props.binding,
-              currentModelSelection: thread.modelSelection,
-              nextModelSelection: { instanceId: entry.instanceId, model: model.slug },
-            };
-            expect(getThreadModelDisabledReason(input)).toBe(foreign ? reason : null);
-            expect(getStartedThreadModelChangeBlockReason(input)?.description ?? null).toBe(
-              foreign ? reason : null,
+  it.each([
+    { handoff: false, deliveryEnabled: false },
+    { handoff: true, deliveryEnabled: false },
+    { handoff: false, deliveryEnabled: true },
+    { handoff: true, deliveryEnabled: true },
+  ])(
+    "keeps both Pi profiles selectable with handoff=$handoff, Delivery enabled=$deliveryEnabled",
+    async ({ handoff, deliveryEnabled }) => {
+      const query = Atom.make(AsyncResult.success({ binding, pending: null }));
+      const boundAtom = deliveryBindingAtom(query, binding.threadId);
+      const unboundAtom = Atom.make<DeliveryThreadBinding | null>(null);
+      vi.mocked(deliveryEnvironment.modelBinding).mockReturnValue(boundAtom);
+      let output: ReturnType<typeof useChatComposerProviderSelection> | undefined;
+      function SelectionPath(props: { deliveryEnabled: boolean }) {
+        // The setting controls new-team UI only; the production hook reads persisted bindings.
+        const confirmedBinding = useDeliveryThreadModelBinding(
+          EnvironmentId.make("work"),
+          thread.id,
+        );
+        const lock = deriveLockedProvider({
+          thread,
+          selectedProvider: "pi_personal",
+          threadProvider: "pi_work",
+          providers,
+          deliveryBinding: confirmedBinding,
+        });
+        const view = useChatViewComposerProviderSelection({
+          entries,
+          activeThread: thread,
+          activeRuntime: thread.runtime,
+          selectedProviderByThreadId: ProviderInstanceId.make("pi_personal"),
+          activeProjectDefaultModelSelection: null,
+          lockedProvider: lock,
+          deliveryBinding: confirmedBinding,
+        });
+        output = useChatComposerProviderSelection({
+          entries,
+          activeThread: thread,
+          activeThreadModelSelection: thread.modelSelection,
+          selectedProviderByThreadId: view.selectedProviderEntry?.instanceId ?? null,
+          activeProjectDefaultModelSelection: null,
+          lockedProvider: handoff && !confirmedBinding ? null : lock,
+          deliveryBinding: confirmedBinding,
+        });
+        expect(view.selectedProviderEntry?.instanceId).toBe(
+          confirmedBinding ? "pi_personal" : "pi_work",
+        );
+        const disabled = modelPickerDisabledInstanceIds(
+          entries,
+          handoff && !confirmedBinding ? null : lock,
+          output.lockedContinuationGroupKey,
+        );
+        for (const entry of entries) {
+          const foreign = entry.driverKind !== "pi";
+          if (confirmedBinding) {
+            expect(disabled?.has(entry.instanceId)).toBe(foreign);
+            expect(matchesModelPickerLock(entry, lock, output.lockedContinuationGroupKey)).toBe(
+              !foreign,
             );
+            for (const model of entry.snapshot.models) {
+              const input = {
+                providers,
+                hasStartedSession: true,
+                supportsProviderSwitchingViaHandoff: handoff,
+                deliveryBinding: confirmedBinding,
+                currentModelSelection: thread.modelSelection,
+                nextModelSelection: { instanceId: entry.instanceId, model: model.slug },
+              };
+              expect(getThreadModelDisabledReason(input)).toBe(foreign ? reason : null);
+              expect(getStartedThreadModelChangeBlockReason(input)?.description ?? null).toBe(
+                foreign ? reason : null,
+              );
+            }
+            expect(
+              modelPickerInstanceTooltip({
+                entry,
+                isContextDisabled: foreign,
+                contextDisabledReason: deliveryModelDisabledReason(
+                  confirmedBinding,
+                  entry.driverKind,
+                ),
+                showNewBadge: false,
+              }),
+            ).toBe(foreign ? reason : entry.displayName);
           }
-          expect(
-            modelPickerInstanceTooltip({
-              entry,
-              isContextDisabled: foreign,
-              contextDisabledReason: deliveryModelDisabledReason(props.binding, entry.driverKind),
-              showNewBadge: false,
-            }),
-          ).toBe(foreign ? reason : entry.displayName);
         }
+        return props.deliveryEnabled ? <span>New team controls</span> : null;
       }
-      return null;
-    }
-    let renderer: ReactTestRenderer;
-    await act(async () => {
-      renderer = create(<SelectionPath binding={binding} />);
-    });
-    expect(output?.selectedProviderEntry?.instanceId).toBe("pi_personal");
-    expect(output?.lockedContinuationGroupKey).toBeNull();
-    await act(async () => {
-      renderer!.update(<SelectionPath binding={null} />);
-    });
-    await act(async () => {
-      renderer!.update(<SelectionPath binding={binding} />);
-    });
-    expect(output?.selectedProviderEntry?.instanceId).toBe("pi_personal");
-    await act(async () => {
-      renderer!.unmount();
-    });
-  });
+      let renderer: ReactTestRenderer;
+      await act(async () => {
+        renderer = create(<SelectionPath deliveryEnabled={deliveryEnabled} />);
+      });
+      expect(output?.selectedProviderEntry?.instanceId).toBe("pi_personal");
+      expect(output?.lockedContinuationGroupKey).toBeNull();
+      await act(async () => {
+        renderer!.update(<SelectionPath deliveryEnabled={!deliveryEnabled} />);
+      });
+      expect(output?.selectedProviderEntry?.instanceId).toBe("pi_personal");
+      expect(output?.lockedContinuationGroupKey).toBeNull();
+      vi.mocked(deliveryEnvironment.modelBinding).mockReturnValue(unboundAtom);
+      await act(async () => {
+        renderer!.update(<SelectionPath deliveryEnabled={deliveryEnabled} />);
+      });
+      vi.mocked(deliveryEnvironment.modelBinding).mockReturnValue(boundAtom);
+      await act(async () => {
+        renderer!.update(<SelectionPath deliveryEnabled={deliveryEnabled} />);
+      });
+      expect(output?.selectedProviderEntry?.instanceId).toBe("pi_personal");
+      await act(async () => {
+        renderer!.unmount();
+      });
+    },
+  );
   it("prioritizes the binding explanation for an unavailable foreign sidebar instance", () => {
     const foreign = deriveProviderInstanceEntries([
       { ...providers[2]!, installed: false, status: "error", availability: "unavailable" },

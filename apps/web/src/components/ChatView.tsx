@@ -1,6 +1,8 @@
-import { useChatViewComposerProviderSelection } from "../lib/deliveryComposerSelection";
+import {
+  useChatViewComposerProviderSelection,
+  useDeliveryThreadModelBinding,
+} from "../lib/deliveryComposerSelection";
 import { getThreadModelDisabledReason } from "../lib/deliveryModelPicker";
-import type { DeliveryThreadBinding } from "@t3tools/contracts";
 import { ThreadFind, ThreadFindCanvas, type ThreadFindControls } from "./chat/ThreadFindProvider";
 import { THREAD_FIND_BAR_RESERVED_HEIGHT } from "./chat/ThreadFindBar";
 import { usageLimitRecoveryBannerItem } from "./chat/UsageLimitRecoveryBanner";
@@ -633,8 +635,6 @@ import {
   ATTACHMENT_ONLY_BOOTSTRAP_PROMPT,
   recallableComposerPrompt,
 } from "./chat/composerPromptHistory";
-
-const EMPTY_DELIVERY_BINDING_ATOM = Atom.make<DeliveryThreadBinding | null>(null);
 
 const EMPTY_PROVIDERS: ServerProvider[] = [];
 const EMPTY_PROVIDER_MODELS: ServerProvider["models"] = [];
@@ -3066,11 +3066,7 @@ export default function ChatView(props: ChatViewProps) {
         })
       : null,
   );
-  const deliveryBinding = useAtomValue(
-    deliveryEnabled && activeThread
-      ? deliveryEnvironment.modelBinding({ environmentId, input: { threadId: activeThread.id } })
-      : EMPTY_DELIVERY_BINDING_ATOM,
-  );
+  const deliveryBinding = useDeliveryThreadModelBinding(environmentId, activeThread?.id ?? null);
   const lockedProvider = deriveLockedProvider({
     deliveryBinding,
     thread: activeThread,

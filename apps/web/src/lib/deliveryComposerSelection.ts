@@ -1,13 +1,32 @@
 import { useMemo } from "react";
+import { useAtomValue } from "@effect/atom-react";
+import { Atom } from "effect/reactivity";
 import type {
   DeliveryThreadBinding,
+  EnvironmentId,
   ModelSelection,
   ProviderDriverKind,
   ProviderInstanceId,
+  ThreadId,
 } from "@t3tools/contracts";
 import type { ProviderInstanceEntry } from "../providerInstances";
 import type { Thread } from "../types";
 import { resolveComposerProviderSelection } from "../components/ChatView.logic";
+import { deliveryEnvironment } from "../state/delivery";
+
+const emptyDeliveryBindingAtom = Atom.make<DeliveryThreadBinding | null>(null);
+
+/** Persisted bindings still constrain the server when new team controls are disabled. */
+export function useDeliveryThreadModelBinding(
+  environmentId: EnvironmentId,
+  threadId: ThreadId | null,
+) {
+  return useAtomValue(
+    threadId
+      ? deliveryEnvironment.modelBinding({ environmentId, input: { threadId } })
+      : emptyDeliveryBindingAtom,
+  );
+}
 
 type ComposerSelectionInput = {
   entries: ReadonlyArray<ProviderInstanceEntry>;
