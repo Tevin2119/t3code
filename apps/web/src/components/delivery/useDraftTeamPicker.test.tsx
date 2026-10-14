@@ -125,6 +125,48 @@ afterEach(async () => {
 });
 
 describe("the team a new thread's picker shows", () => {
+  it("waits for the team list even when no team was previously chosen", async () => {
+    testState.readings = {};
+    await render();
+    expect(latest.loading).toBe(true);
+    expect(latest.threadSeat).toBeNull();
+    expect(taken).toEqual([]);
+    testState.readings = { "env-a": { body: [], error: null } };
+    await render();
+    expect(latest.loading).toBe(false);
+    expect(latest.resolved).toEqual({ state: "manual" });
+  });
+
+  it.each(["opencode", "pi", "kimi", "hermes"])(
+    "keeps the %s team and role when the loaded list replaces the placeholder",
+    async (driver) => {
+      drafts().chooseTeam("t1", ENV_A, { team: "ilm", role: "reviewer" });
+      testState.readings = {};
+      await render({ driver });
+      expect(latest.loading).toBe(true);
+      expect(taken).toEqual([]);
+      testState.readings = {
+        "env-a": {
+          error: null,
+          body: [
+            {
+              team: "ilm",
+              purpose: "Four assignments",
+              available: true,
+              seats: [seat("reviewer", "reviewer", driver)],
+              settings: [setting("reviewer", "reviewer", driver)],
+            },
+          ],
+        },
+      };
+      await render();
+      expect(latest.loading).toBe(false);
+      expect(latest.choice).toEqual({ team: "ilm", role: "reviewer" });
+      expect(latest.resolved).toEqual({ state: "ready", team: "ilm", role: "reviewer" });
+      expect(latest.warning).toBeNull();
+      expect(latest.threadSeat?.seat).toBe("reviewer");
+    },
+  );
   it("is No team with nothing remembered, where Orchestrator mode starts from development", async () => {
     await render();
     expect(latest.choice).toEqual({ team: null, role: null });

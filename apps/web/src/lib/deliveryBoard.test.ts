@@ -416,6 +416,15 @@ describe("a task made from a conversation", () => {
 });
 
 describe("moveIntent", () => {
+  it("does not let a person fabricate a child-work wait by moving a task", () => {
+    expect(moveIntent({ lane: "ready", actions: [] }, "child-work")).toMatchObject({
+      kind: "refused",
+    });
+    expect(moveIntent({ lane: "child-work", actions: [] }, "child-work")).toEqual({
+      kind: "move",
+      label: "Reorder",
+    });
+  });
   const card = (
     lane: string,
     actions: ReadonlyArray<string> = [],
@@ -584,6 +593,21 @@ describe("boardAttentionCount", () => {
         ]),
       ),
     ).toBe(2);
+  });
+
+  it("keeps a parent's child decision visible without counting autonomous child work as a human stop", () => {
+    expect(
+      boardAttentionCount(
+        reading([
+          lane("needs-decision"),
+          lane("human-review"),
+          lane("child-work", [
+            task("parent-needs-person", "child-work", "person"),
+            task("parent-working", "child-work", "team"),
+          ]),
+        ]),
+      ),
+    ).toBe(1);
   });
 
   it("counts the tasks waiting for your sign-off", () => {

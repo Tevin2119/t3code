@@ -515,6 +515,7 @@ export const LANE_TITLE: Readonly<Record<string, string>> = {
   planning: "Planning",
   implementation: "Building",
   validation: "Testing",
+  "child-work": "Waiting on child work",
   "human-review": "Your sign-off",
   paused: "Paused or recovering",
   rework: "Rework",
@@ -558,9 +559,16 @@ export function boardAttentionCount(body: unknown): number | null {
   ) {
     return null;
   }
-  return board.lanes
-    .filter((lane) => ATTENTION_LANES.includes(lane.lane))
-    .reduce((total, lane) => total + lane.cards.length, 0);
+  return board.lanes.reduce(
+    (total, lane) =>
+      total +
+      (ATTENTION_LANES.includes(lane.lane)
+        ? lane.cards.length
+        : lane.lane === "child-work"
+          ? lane.cards.filter((card) => card.waitingOn === "person").length
+          : 0),
+    0,
+  );
 }
 
 /** What became of a message a person sent, in words a person would use. */
@@ -716,6 +724,11 @@ type MovableCard = Pick<DeliveryCard, "lane" | "actions"> &
  */
 export function moveIntent(card: MovableCard, lane: string): MoveIntent {
   if (lane === card.lane) return { kind: "move", label: "Reorder" };
+  if (lane === "child-work")
+    return {
+      kind: "refused",
+      why: "A parent enters this column while its child work is outstanding. Open its related work instead of moving it here.",
+    };
   const title = (name: string | null | undefined) => (name ? (LANE_TITLE[name] ?? name) : "");
   if (card.lane === "draft") {
     return lane === "triage" || lane === "intake"

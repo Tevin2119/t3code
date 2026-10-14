@@ -45,7 +45,7 @@ import {
   checkKimiProviderStatus,
   probeKimiAuthenticated,
 } from "../KimiProvider.ts";
-import { readKimiUsageLimits } from "../kimiUsageLimits.ts";
+import { withKimiUsageLimits } from "../kimiUsageLimits.ts";
 import { ProviderEventLoggers } from "@t3tools/provider-core/server/ProviderEventLoggers";
 import { makeManagedServerProvider } from "@t3tools/provider-core/server/managedProvider";
 import {
@@ -159,13 +159,7 @@ export const KimiDriver: ProviderDriver<KimiSettings, KimiDriverEnv, KimiUsageRe
       const textGeneration = yield* makeKimiTextGeneration(effectiveConfig, processEnv);
 
       const checkProvider = checkKimiProviderStatus(effectiveConfig, processEnv).pipe(
-        Effect.flatMap((snapshot) =>
-          effectiveConfig.enabled && snapshot.installed && snapshot.auth.status === "authenticated"
-            ? readKimiUsageLimits(processEnv).pipe(
-                Effect.map((usageLimits) => ({ ...snapshot, usageLimits })),
-              )
-            : Effect.succeed(snapshot),
-        ),
+        Effect.flatMap((snapshot) => withKimiUsageLimits(snapshot, processEnv)),
         Effect.map(stampIdentity),
         Effect.provideService(HttpClient.HttpClient, httpClient),
         Effect.provideService(FileSystem.FileSystem, fileSystem),
