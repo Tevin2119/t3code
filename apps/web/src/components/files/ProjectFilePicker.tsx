@@ -20,7 +20,7 @@ interface ProjectFilePickerProps {
   readonly setOpen: (open: boolean) => void;
 }
 
-function HighlightedFuzzyText(props: {
+export function HighlightedFuzzyText(props: {
   readonly active: boolean;
   readonly indices: ReadonlyArray<number>;
   readonly value: string;
@@ -130,7 +130,7 @@ function OpenProjectFilePicker(props: ProjectFilePickerProps & { target: ActiveP
         setHighlightedItemValue(null);
         setQuery(value);
       }}
-      panelClassName="max-h-[min(34rem,76vh)]"
+      panelSize="tall-list"
       testId="project-file-picker"
       value={query}
     >

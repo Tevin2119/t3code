@@ -53,6 +53,7 @@ export type ServerMessage =
   | { readonly type: "t3-checkout.ready" }
   | { readonly type: "t3-checkout.check" }
   | { readonly type: "t3-checkout.update" }
+  | { readonly type: "t3-checkout.preparation-failed" }
   | { readonly type: "t3-checkout.prepared"; readonly threads: number };
 
 const typeOf = (value: unknown): string | null =>
@@ -68,7 +69,8 @@ export function isServerMessage(value: unknown): value is ServerMessage {
     type === "t3-checkout.ready" ||
     type === "t3-checkout.check" ||
     type === "t3-checkout.update" ||
-    type === "t3-checkout.prepared"
+    type === "t3-checkout.prepared" ||
+    type === "t3-checkout.preparation-failed"
   );
 }
 

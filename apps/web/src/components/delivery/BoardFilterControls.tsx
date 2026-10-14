@@ -228,7 +228,7 @@ export function TagFilterMenu(props: {
         align="start"
         className="w-64"
         // The viewport scrolls by itself unless told otherwise; here only the list of tags does.
-        viewportClassName="p-0 [--viewport-inline-padding:0px] not-data-transitioning:overflow-hidden"
+        padding="none"
         initialFocus={searchRef}
       >
         <TagFilterList
@@ -258,14 +258,14 @@ export function ActiveFilterChips(props: {
       className={cn("flex flex-wrap items-center gap-1", props.className)}
       data-board-active-filters
     >
-      <span className="text-[10px] text-muted-foreground">
+      <span className="text-3xs text-muted-foreground">
         {props.shown === undefined ? "Filtered by" : `${props.shown} shown, filtered by`}
       </span>
       {active.map((filter) => (
         <button
           key={filter.key}
           type="button"
-          className="inline-flex h-6 cursor-pointer items-center gap-1 rounded-full border border-border bg-secondary px-2 text-[11px] text-secondary-foreground hover:bg-accent"
+          className="inline-flex h-6 cursor-pointer items-center gap-1 rounded-full border border-border bg-secondary px-2 text-2xs text-secondary-foreground hover:bg-accent"
           aria-label={`Remove the filter ${filter.label}`}
           onClick={() => props.onClear(filter.clear)}
           data-board-active-filter={filter.key}

@@ -256,7 +256,7 @@ export function RepositoryBrowse(props: {
           setHighlighted(null);
           setQuery(next);
         }}
-        panelClassName="max-h-60"
+        panelSize="list"
         value={query}
       >
         {groups.length > 0 ? (
@@ -301,7 +301,7 @@ export function RepositoryBrowse(props: {
           data-board-dialog-repository-name
         />
       </label>
-      <span className="text-[11px] text-muted-foreground">
+      <span className="text-2xs text-muted-foreground">
         The folder is read, not changed. Work is done in worktrees made beside it.
       </span>
       <p role="alert" aria-live="polite" className="text-xs text-warning empty:hidden">
@@ -309,7 +309,7 @@ export function RepositoryBrowse(props: {
       </p>
       <span className="flex items-center justify-end gap-2">
         {blocked ? (
-          <span className="text-[11px] text-muted-foreground" data-board-dialog-add-why>
+          <span className="text-2xs text-muted-foreground" data-board-dialog-add-why>
             {blocked}
           </span>
         ) : null}

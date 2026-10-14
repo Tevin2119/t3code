@@ -1,17 +1,17 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { ThreadId } from "@t3tools/contracts";
-import { HostProcessEnvironment } from "@t3tools/shared/hostProcess";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
-import { HttpClient, HttpClientResponse } from "effect/unstable/http";
+import { HttpClient, HttpClientResponse } from "effect/http";
 
 import * as ServerConfig from "../config.ts";
 import * as ServerSettings from "../serverSettings.ts";
-import { buildRuntimeInstructions } from "../provider/RuntimeInstructions.ts";
+import { buildRuntimeInstructions } from "@t3tools/provider-core/server/runtimeInstructions";
 import * as DeliveryService from "./DeliveryService.ts";
 import * as DeliveryThreadSession from "./DeliveryThreadSession.ts";
 
@@ -70,7 +70,7 @@ const layer = (
 ) =>
   // Fresh, so that a second service in one test is a second start and not the first again.
   Layer.fresh(DeliveryService.layer).pipe(
-    Layer.provideMerge(Layer.succeed(HostProcessEnvironment, options.environment ?? {})),
+    Layer.provideMerge(Layer.succeed(HostProcess.Environment, options.environment ?? {})),
     Layer.provideMerge(
       options.config
         ? Layer.succeed(ServerConfig.ServerConfig, options.config)

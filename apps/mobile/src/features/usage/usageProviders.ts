@@ -14,7 +14,10 @@ export const PROVIDER_ORDER: readonly UsageProviderKind[] = [
   "opencode",
   "kimi",
   "hermes",
+  "cursor",
+
   "antigravity",
+  "pi",
 ];
 
 export const PROVIDER_LABEL: Record<UsageProviderKind, string> = {
@@ -26,7 +29,10 @@ export const PROVIDER_LABEL: Record<UsageProviderKind, string> = {
   opencode: "OpenCode",
   kimi: "Kimi Code",
   hermes: "Hermes",
+  cursor: "Cursor",
+
   antigravity: "Antigravity",
+  pi: "Pi",
 };
 
 /**
@@ -41,9 +47,31 @@ export function useProviderColors(): Record<UsageProviderKind, string> {
     grok: scheme === "dark" ? "#a1a1aa" : "#52525b",
     deepseek: "#4d6bfe",
     pi: "#22a06b",
-    opencode: "#d9a53f",
     kimi: "#2f9fd8",
     hermes: "#a26bd6",
-    antigravity: "#e0457b",
+    cursor: "#8b8b8b",
+    opencode: "#5b9bbd",
+    antigravity: "#8c7bd1",
+    pi: "#4d9f8a",
+  };
+}
+
+/**
+ * Neutral steps for cost and token mixes, so they never borrow a provider's
+ * color. Matches the web steps: oklab mixes of the codex ink into the
+ * background, above the 15 ΔE separation floor for adjacent segments.
+ */
+export function useUsageMixColors() {
+  const { themeAppearance: scheme } = useAppearancePreferences();
+  const dark = scheme === "dark";
+  return {
+    input: dark ? "#737373" : "#848484",
+    cacheRead: dark ? "#282828" : "#c0c0c0",
+    cacheWrite: dark ? "#949494" : "#6d6d6d",
+    output: dark ? "#e6e6e6" : "#3c3c43",
+    other: dark ? "#494949" : "#a3a3a3",
+    standard: dark ? "#313131" : "#b8b8b8",
+    fast: dark ? "#838383" : "#797979",
+    ultrafast: dark ? "#e6e6e6" : "#3c3c43",
   };
 }

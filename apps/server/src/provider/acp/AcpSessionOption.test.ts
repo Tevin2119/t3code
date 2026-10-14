@@ -1,9 +1,9 @@
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Ref from "effect/Ref";
-import type * as EffectAcpSchema from "effect-acp/schema";
+import type * as EffectAcpSchema from "effect-acp/compat";
 
-import { parseSessionUpdateEvent } from "./AcpRuntimeModel.ts";
+import { parseSessionUpdateEvent } from "@t3tools/provider-acp/server/runtimeModel";
 import { ACP_OPTION_HARNESS_DEFAULT, applyAcpSessionOption } from "./AcpSessionOption.ts";
 
 const option = (
@@ -110,6 +110,9 @@ it("reads what a session says it holds of its context window", () => {
     update: { sessionUpdate: "usage_update", used: 42294, size: 1000000 },
   } as EffectAcpSchema.SessionNotification);
   expect(parsed.events).toEqual([
-    expect.objectContaining({ _tag: "UsageUpdated", usedTokens: 42294, maxTokens: 1000000 }),
+    expect.objectContaining({
+      _tag: "UsageUpdated",
+      usage: { usedTokens: 42294, maxTokens: 1000000 },
+    }),
   ]);
 });

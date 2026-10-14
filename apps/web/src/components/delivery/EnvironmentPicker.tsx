@@ -13,8 +13,6 @@ import {
 import {
   Combobox,
   ComboboxEmpty,
-  ComboboxGroup,
-  ComboboxGroupLabel,
   ComboboxItem,
   ComboboxList,
   ComboboxPopup,
@@ -90,8 +88,8 @@ export function EnvironmentPicker(props: {
           <ComboboxEmpty>No environment matches.</ComboboxEmpty>
           <ComboboxList className="max-h-64">
             {groups.map((group) => (
-              <ComboboxGroup key={group.id}>
-                <ComboboxGroupLabel className="flex items-center gap-2">
+              <div key={group.id} role="group" aria-label={group.label}>
+                <div className="flex items-center gap-2">
                   <EnvironmentMachineIcon
                     kind={resolveEnvironmentMachineKind(
                       group.environments[0]?.serverConfig ?? null,
@@ -99,11 +97,11 @@ export function EnvironmentPicker(props: {
                     className="size-3.5"
                   />
                   {group.label}
-                </ComboboxGroupLabel>
+                </div>
                 {group.environments.map((environment) => (
                   <EnvironmentOption key={environment.environmentId} environment={environment} />
                 ))}
-              </ComboboxGroup>
+              </div>
             ))}
           </ComboboxList>
           <div className="border-t border-border/50 p-1">

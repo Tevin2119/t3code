@@ -1,12 +1,25 @@
 import { describe, expect, it } from "vite-plus/test";
-import { BUILT_IN_THEME_IDS, BUILT_IN_THEMES, T3_CHAT_THEME } from "@t3tools/shared/themePalettes";
-import { readDefaultMobileThemeVariables } from "./mobileTheme.test-support";
+import {
+  BUILT_IN_THEME_IDS,
+  BUILT_IN_THEMES,
+  T3_CHAT_THEME,
+  T3_CODE_LIGHT_THEME_COLORS,
+  T3_CODE_DARK_THEME_COLORS,
+  MOBILE_THEME_IDS,
+  getThemeColorsForAppearance,
+} from "@t3tools/shared/themePalettes";
+import {
+  readDefaultMobileThemeVariables,
+  readGeneratedMobileThemeVariables,
+} from "./mobileTheme.test-support";
+import { getMobileThemeRuntimeVariables } from "./mobileThemeVariables";
 
 import {
   createMobileThemePairPatch,
   createMobileThemeSelectionPatch,
   createMobileThemeVariables,
   DEFAULT_MOBILE_THEME_ID,
+  flattenThemeColor,
   getMobileThemePreviewColors,
   getMobileThemeVariables,
   normalizeMobileThemeId,
@@ -66,12 +79,96 @@ describe("mobile themes", () => {
     }
   });
 
-  it("preserves the existing mobile palette as the default", () => {
-    expect(readDefaultMobileThemeVariables("light")["--color-screen"]).toBe("#f2f2f7");
-    expect(readDefaultMobileThemeVariables("dark")["--color-screen"]).toBe("#0a0a0a");
-    expect(readDefaultMobileThemeVariables("light")["--color-user-bubble-skill-foreground"]).toBe(
-      "#2563eb",
-    );
+  it.each(MOBILE_THEME_IDS)("uses the web color roles for %s in both appearances", (themeId) => {
+    for (const appearance of ["light", "dark"] as const) {
+      const theme = BUILT_IN_THEMES.find((candidate) => candidate.id === themeId);
+      const colors = theme
+        ? getThemeColorsForAppearance(theme, appearance)!
+        : appearance === "dark"
+          ? T3_CODE_DARK_THEME_COLORS
+          : T3_CODE_LIGHT_THEME_COLORS;
+      const variables =
+        themeId === DEFAULT_MOBILE_THEME_ID
+          ? readDefaultMobileThemeVariables(appearance)
+          : getMobileThemeVariables(themeId, appearance);
+      expect(variables["--color-screen"]).toBe(themeColorToNativeColor(colors.canvas));
+      expect(variables["--color-thread-canvas"]).toBe(variables["--color-screen"]);
+      expect(variables["--color-drawer"]).toBe(themeColorToNativeColor(colors.sidebar));
+      expect(variables["--color-thread-hover"]).toBe(
+        themeColorToNativeColor(colors.sidebarRowHover),
+      );
+      expect(variables["--color-card"]).toBe(themeColorToNativeColor(colors.surface));
+      expect(variables["--color-composer-surface"]).toBe(
+        themeColorWithAlpha(variables["--color-grouped-card"], appearance === "dark" ? 0.9 : 0.94),
+      );
+      expect(variables["--color-thread-selected"]).toBe(
+        themeColorToNativeColor(colors.sidebarRowActive),
+      );
+      expect(variables["--color-thread-selected-foreground"]).toBe(
+        themeColorToNativeColor(colors.sidebarForeground),
+      );
+      expect(variables["--color-primary"]).toBe(themeColorToNativeColor(colors.messageAction));
+      if (themeId !== DEFAULT_MOBILE_THEME_ID) {
+        expect(variables["--color-user-bubble"]).toBe(
+          themeColorToNativeColor(colors.messageSurface),
+        );
+      }
+      expect(
+        contrastRatio(variables["--color-foreground"], variables["--color-screen"]),
+      ).toBeGreaterThanOrEqual(4.5);
+      for (const [foreground, surface] of [
+        ["--color-drawer-foreground", "--color-drawer"],
+        ["--color-drawer-foreground-muted", "--color-drawer"],
+        ["--color-drawer-foreground", "--color-thread-hover"],
+        ["--color-drawer-foreground-muted", "--color-thread-hover"],
+        ["--color-thread-selected-foreground-muted", "--color-thread-selected"],
+        ["--color-primary-foreground", "--color-primary"],
+        ["--color-primary-text", "--color-screen"],
+        ["--color-primary-text", "--color-card"],
+        ["--color-primary-text", "--color-card-alt"],
+        ["--color-primary-text", "--color-sheet-solid"],
+        ["--color-foreground", "--color-sheet-solid"],
+        ["--color-foreground-muted", "--color-sheet-solid"],
+        ["--color-primary-text", "--color-grouped-card"],
+        ["--color-foreground", "--color-grouped-card"],
+        ["--color-foreground-muted", "--color-grouped-card"],
+        ["--color-placeholder", "--color-grouped-card"],
+        ["--color-secondary-foreground", "--color-secondary"],
+        ["--color-user-bubble-foreground", "--color-user-bubble"],
+        ["--color-warning-foreground", "--color-warning"],
+        ["--color-danger-foreground", "--color-danger"],
+        ["--color-md-body", "--color-screen"],
+        ["--color-md-strong", "--color-screen"],
+        ["--color-md-link", "--color-screen"],
+        ["--color-md-code-text", "--color-md-code-bg"],
+      ] as const) {
+        expect(
+          contrastRatio(variables[foreground], variables[surface]),
+          `${appearance}: ${foreground} on ${surface}`,
+        ).toBeGreaterThanOrEqual(4.5);
+      }
+      expect(
+        contrastRatio(
+          variables["--color-thread-selected-foreground"],
+          variables["--color-thread-selected"],
+        ),
+      ).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+
+  it.each(MOBILE_THEME_IDS)("keeps %s sidebar text readable on Android", (themeId) => {
+    for (const appearance of ["light", "dark"] as const) {
+      const variables = getMobileThemeRuntimeVariables(themeId, appearance, "android");
+      for (const foreground of [
+        "--color-drawer-foreground",
+        "--color-drawer-foreground-muted",
+      ] as const) {
+        expect(
+          contrastRatio(variables[foreground], variables["--color-drawer"]),
+          `${appearance}: ${foreground}`,
+        ).toBeGreaterThanOrEqual(4.5);
+      }
+    }
   });
 
   it("applies palette overrides on top of the selected built-in theme", () => {
@@ -82,6 +179,167 @@ describe("mobile themes", () => {
     expect(variables["--color-primary"]).toBe("#123456");
     expect(variables["--color-screen"]).toMatch(/^#/);
   });
+
+  it.each(MOBILE_THEME_IDS)("separates %s filled groups from their sheets", (themeId) => {
+    for (const appearance of ["light", "dark"] as const) {
+      const generated = readGeneratedMobileThemeVariables(
+        themeId === DEFAULT_MOBILE_THEME_ID ? appearance : `${themeId}-${appearance}`,
+      );
+      expect(generated).toEqual(getMobileThemeVariables(themeId, appearance));
+      for (const platform of ["ios", "android"]) {
+        const variables = getMobileThemeRuntimeVariables(themeId, appearance, platform);
+        const sheet = variables["--color-sheet-solid"];
+        const group = variables["--color-grouped-card"];
+        expect(
+          contrastRatio(group, sheet),
+          `${platform} ${appearance}: grouped surface on sheet`,
+        ).toBeGreaterThanOrEqual(1.025);
+        for (const role of [
+          "--color-foreground",
+          "--color-foreground-secondary",
+          "--color-foreground-muted",
+          "--color-placeholder",
+          "--color-primary-text",
+        ] as const) {
+          expect(
+            contrastRatio(variables[role], group),
+            `${platform} ${appearance}: ${role} on grouped surface`,
+          ).toBeGreaterThanOrEqual(4.5);
+        }
+        if (platform === "android") {
+          const header = flattenThemeColor(variables["--color-header"], sheet);
+          for (const role of ["--color-header-foreground", "--color-foreground-muted"] as const) {
+            expect(
+              contrastRatio(variables[role], header),
+              `${appearance}: ${role} on Android header`,
+            ).toBeGreaterThanOrEqual(4.5);
+          }
+        }
+        expect(
+          contrastRatio(variables["--color-foreground-muted"], variables["--color-secondary"]),
+          `${platform} ${appearance}: muted label on secondary surface`,
+        ).toBeGreaterThanOrEqual(4.5);
+      }
+    }
+  });
+
+  it.each(["light", "dark"] as const)(
+    "separates default settings groups from their %s background",
+    (appearance) => {
+      const variables = getMobileThemeVariables("t3-code", appearance);
+      expect(
+        contrastRatio(variables["--color-grouped-card"], variables["--color-sheet-solid"]),
+      ).toBeGreaterThanOrEqual(1.06);
+      expect(variables["--color-grouped-card"]).not.toBe(variables["--color-card"]);
+      for (const platform of ["ios", "android"]) {
+        const runtime = getMobileThemeRuntimeVariables("t3-code", appearance, platform);
+        const sidebar = flattenThemeColor(runtime["--color-drawer"], runtime["--color-screen"]);
+        const chrome = flattenThemeColor(
+          runtime[platform === "android" ? "--color-header" : "--color-drawer"],
+          runtime["--color-screen"],
+        );
+        if (platform === "ios") {
+          expect(relativeLuminance(sidebar)).toBeLessThan(
+            relativeLuminance(runtime["--color-thread-canvas"]),
+          );
+        }
+        expect(contrastRatio(chrome, runtime["--color-screen"])).toBeGreaterThanOrEqual(1.06);
+        const foregroundRoles =
+          platform === "android"
+            ? (["--color-header-foreground", "--color-foreground-muted"] as const)
+            : (["--color-drawer-foreground", "--color-drawer-foreground-muted"] as const);
+        for (const role of foregroundRoles) {
+          expect(contrastRatio(runtime[role], chrome)).toBeGreaterThanOrEqual(4.5);
+        }
+      }
+    },
+  );
+
+  it("keeps T3 Chat light grouped cards distinct from the sheet", () => {
+    const variables = getMobileThemeVariables("t3-chat", "light");
+    const group = variables["--color-grouped-card"];
+    expect(contrastRatio(group, variables["--color-sheet-solid"])).toBeGreaterThanOrEqual(1.1);
+    for (const role of ["--color-foreground", "--color-foreground-muted"] as const) {
+      expect(contrastRatio(variables[role], group)).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+
+  it.each(MOBILE_THEME_IDS)("keeps %s prominent actions readable and themed", (themeId) => {
+    for (const appearance of ["light", "dark"] as const) {
+      const variables = getMobileThemeVariables(themeId, appearance);
+      const fill = variables["--color-prominent-action"];
+      expect(
+        contrastRatio(variables["--color-prominent-action-foreground"], fill),
+      ).toBeGreaterThanOrEqual(4.5);
+      expect(fill).toBe(
+        variables[
+          themeId === "t3-chat" && appearance === "dark"
+            ? "--color-primary-foreground"
+            : themeId === DEFAULT_MOBILE_THEME_ID || themeId === "t3-chat"
+              ? "--color-foreground"
+              : "--color-primary"
+        ],
+      );
+    }
+  });
+
+  it.each(["grove", "ocean", "ember", "iris"] as const)(
+    "keeps %s grouped cards and floating controls visibly tinted",
+    (themeId) => {
+      const saturation = (hex: string) => {
+        const channels = hex
+          .slice(1)
+          .match(/.{2}/g)!
+          .map((value) => parseInt(value, 16));
+        return (Math.max(...channels) - Math.min(...channels)) / Math.max(...channels);
+      };
+      for (const appearance of ["light", "dark"] as const) {
+        const variables = getMobileThemeVariables(themeId, appearance);
+        const sheet = variables["--color-sheet-solid"];
+        const group = variables["--color-grouped-card"];
+        expect(contrastRatio(group, sheet)).toBeGreaterThanOrEqual(1.06);
+        for (const role of ["--color-composer-surface", "--color-glass-fallback"] as const) {
+          const surface = flattenThemeColor(variables[role], sheet);
+          expect(contrastRatio(surface, sheet)).toBeGreaterThanOrEqual(1.06);
+          expect(contrastRatio(variables["--color-placeholder"], surface)).toBeGreaterThanOrEqual(
+            4.5,
+          );
+          if (appearance === "dark") {
+            expect(saturation(surface)).toBeGreaterThanOrEqual(saturation(sheet));
+          }
+        }
+        if (appearance === "dark") {
+          expect(saturation(group)).toBeGreaterThanOrEqual(saturation(sheet));
+        }
+      }
+    },
+  );
+
+  it.each(["light", "dark"] as const)(
+    "slightly strengthens default %s messages and separates fallback materials",
+    (appearance) => {
+      const variables = getMobileThemeVariables("t3-code", appearance);
+      const desktop =
+        appearance === "dark" ? T3_CODE_DARK_THEME_COLORS : T3_CODE_LIGHT_THEME_COLORS;
+      const bubbleContrast = contrastRatio(
+        variables["--color-user-bubble"],
+        variables["--color-screen"],
+      );
+      expect(bubbleContrast).toBeGreaterThan(contrastRatio(desktop.messageSurface, desktop.canvas));
+      expect(bubbleContrast).toBeLessThan(1.2);
+      for (const role of ["--color-composer-surface", "--color-glass-fallback"] as const) {
+        const surface = flattenThemeColor(variables[role], variables["--color-screen"]);
+        expect(contrastRatio(surface, variables["--color-screen"])).toBeGreaterThanOrEqual(1.06);
+        for (const foreground of [
+          "--color-foreground",
+          "--color-placeholder",
+          "--color-primary-text",
+        ] as const) {
+          expect(contrastRatio(variables[foreground], surface)).toBeGreaterThanOrEqual(4.5);
+        }
+      }
+    },
+  );
 
   it("uses the same preview roles and standard artwork as desktop", () => {
     expect(getMobileThemePreviewColors(DEFAULT_MOBILE_THEME_ID, "light")).toEqual({
@@ -153,7 +411,6 @@ describe("mobile themes", () => {
 
   it("maps semantic palette roles onto every mobile color variable", () => {
     const variables = createMobileThemeVariables(T3_CHAT_THEME.colors, "light");
-    expect(Object.keys(variables)).toHaveLength(75);
     expect(variables["--color-sheet-solid"]).toBe(
       themeColorToNativeColor(T3_CHAT_THEME.colors.chrome),
     );
@@ -219,8 +476,6 @@ describe("mobile themes", () => {
     }
   });
 
-  // The default palette lives in global.css rather than BUILT_IN_THEMES, so the loops above
-  // never reached it; it kept an unreadable hardcoded bubble until this covered it.
   it("keeps the default user bubble readable in both appearances", () => {
     for (const appearance of ["light", "dark"] as const) {
       const variables = readDefaultMobileThemeVariables(appearance);

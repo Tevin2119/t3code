@@ -78,7 +78,7 @@ vi.mock("../ui/combobox", () => ({
   Combobox: "combobox-root",
   ComboboxTrigger: "combobox-trigger",
   ComboboxPopup: "combobox-popup",
-  ComboboxInput: "combobox-input",
+  ComboboxSearchInput: "combobox-input",
   ComboboxItem: "combobox-item",
   ComboboxEmpty: "combobox-empty",
   ComboboxListVirtualized: "combobox-list",
@@ -120,7 +120,7 @@ vi.mock("../ui/select", () => ({
   SelectItem: "select-item",
   SelectGroup: "select-group",
   SelectGroupLabel: "select-group-label",
-  selectTriggerVariants: () => "",
+  SelectButton: "select-button",
 }));
 vi.mock("../ui/dialog", () => ({
   Dialog: "dialog-root",

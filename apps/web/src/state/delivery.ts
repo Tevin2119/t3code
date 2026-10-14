@@ -316,6 +316,8 @@ export function withSeatChoice(
 
 /** A workflow being prepared in the composer. It is saved to the engine as a draft. */
 export interface OrchestratorDraft {
+  readonly started?: boolean;
+  readonly viewTask?: string | null;
   readonly team: string;
   readonly workflow: string;
   readonly seats: Readonly<Record<string, SeatChoice>>;

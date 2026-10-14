@@ -1,5 +1,5 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { HostProcessEnvironment } from "@t3tools/shared/hostProcess";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -29,7 +29,7 @@ it.layer(NodeServices.layer)("account-profile workspace binding", (it) => {
         const home = yield* fs.makeTempDirectoryScoped();
         const read = (env: NodeJS.ProcessEnv) =>
           resolveServerEnvironmentWorkspace().pipe(
-            Effect.provideService(HostProcessEnvironment, env),
+            Effect.provideService(HostProcess.Environment, env),
             Effect.provide(ServerConfig.layerTest(process.cwd(), home)),
           );
         expect(yield* read({})).toBeUndefined();
@@ -56,7 +56,7 @@ it.layer(NodeServices.layer)("account-profile workspace binding", (it) => {
       const fs = yield* FileSystem.FileSystem;
       const home = yield* fs.makeTempDirectoryScoped();
       const failure = yield* resolveServerEnvironmentWorkspace().pipe(
-        Effect.provideService(HostProcessEnvironment, { T3_WORKSPACE_PROFILE_ID: "pm" }),
+        Effect.provideService(HostProcess.Environment, { T3_WORKSPACE_PROFILE_ID: "pm" }),
         Effect.provide(ServerConfig.layerTest(process.cwd(), home)),
         Effect.flip,
       );

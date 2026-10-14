@@ -1,0 +1,35 @@
+[
+  {
+    "driver": "kimi",
+    "t3CodeRange": ">=0.0.0",
+    "recommendedRange": ">=0.0.0",
+    "ranges": [
+      {
+        "range": ">=0.0.0",
+        "status": "supported"
+      }
+    ]
+  },
+  {
+    "driver": "hermes",
+    "t3CodeRange": ">=0.0.0",
+    "recommendedRange": ">=0.0.0",
+    "ranges": [
+      {
+        "range": ">=0.0.0",
+        "status": "supported"
+      }
+    ]
+  },
+  {
+    "driver": "deepseek",
+    "t3CodeRange": ">=0.0.0",
+    "recommendedRange": ">=0.0.0",
+    "ranges": [
+      {
+        "range": ">=0.0.0",
+        "status": "supported"
+      }
+    ]
+  }
+]

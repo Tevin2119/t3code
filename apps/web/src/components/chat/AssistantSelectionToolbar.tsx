@@ -61,6 +61,15 @@ export function AssistantSelectionToolbar({
         return;
       }
       const rects = captured.range.getClientRects();
+      const pointerOnText =
+        pointer !== null &&
+        Array.from(rects).some(
+          (line) =>
+            pointer.x >= line.left - 8 &&
+            pointer.x <= line.right + 8 &&
+            pointer.y >= line.top - 8 &&
+            pointer.y <= line.bottom + 8,
+        );
       setSelection({
         sourceAnchor: { source: captured.source, range: captured.range, viewport },
         citation: {
@@ -72,7 +81,7 @@ export function AssistantSelectionToolbar({
         position: resolveSelectionActionPosition({
           bounds: viewportRect,
           selectionRect: rects.item(rects.length - 1) ?? rect,
-          pointer,
+          pointer: pointerOnText ? pointer : null,
           viewport: { width: window.innerWidth, height: window.innerHeight },
         }),
       });
@@ -134,7 +143,7 @@ export function AssistantSelectionToolbar({
       variant="glass"
       disabled={tooLong}
       aria-label={tooLong ? "Selection is too long to cite" : "Cite selection in composer"}
-      className="fixed z-50 max-w-[calc(100vw-1rem)] rounded-full px-2.5"
+      className="fixed z-50 max-w-[calc(100vw-1rem)]"
       style={{ left: selection.position.x, top: selection.position.y }}
       onPointerDown={(event) => event.preventDefault()}
       onClick={cite}

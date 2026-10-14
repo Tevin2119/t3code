@@ -1,6 +1,5 @@
 import { LegendList, type LegendListRef } from "@legendapp/list/react";
 import type { EnvironmentId } from "@t3tools/contracts";
-import { ChevronDownIcon, SearchIcon } from "lucide-react";
 import { type Ref, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 
 import { shouldLoadNextBranchPageAfterScroll } from "../../state/paginatedBranches";
@@ -9,14 +8,14 @@ import { Button } from "../ui/button";
 import {
   Combobox,
   ComboboxEmpty,
-  ComboboxInput,
+  ComboboxSearchInput,
   ComboboxItem,
   ComboboxListVirtualized,
   ComboboxPopup,
   ComboboxStatus,
   ComboboxTrigger,
 } from "../ui/combobox";
-import { selectTriggerVariants } from "../ui/select";
+import { SelectButton } from "../ui/select";
 
 /**
  * The branches a board's work can start from, read from T3's own branch list for the
@@ -134,15 +133,12 @@ export function BaseBranchPicker({
         key={name}
         index={index}
         value={name}
-        className="pe-1.5"
         onClick={() => choose(name)}
         data-board-dialog-base-option={name}
       >
         <div className="flex w-full min-w-0 items-center justify-between gap-2">
           <span className="min-w-0 flex-1 truncate">{name}</span>
-          {badge ? (
-            <span className="shrink-0 text-[10px] text-muted-foreground">{badge}</span>
-          ) : null}
+          {badge ? <span className="shrink-0 text-3xs text-muted-foreground">{badge}</span> : null}
         </div>
       </ComboboxItem>
     );
@@ -165,7 +161,7 @@ export function BaseBranchPicker({
       <ComboboxTrigger
         ref={ref}
         aria-label="Base branch"
-        className={selectTriggerVariants({ size: "compact" })}
+        render={<SelectButton size="compact" />}
         disabled={props.disabled}
         data-board-dialog-base
       >
@@ -173,28 +169,14 @@ export function BaseBranchPicker({
           {props.value ||
             (props.cwd ? "Choose the branch work starts from" : "Choose a repository first")}
         </span>
-        <ChevronDownIcon className="-me-1 size-3 opacity-50" aria-hidden />
       </ComboboxTrigger>
       <ComboboxPopup align="start" className="flex w-80 flex-col">
-        <div className="shrink-0 px-3 pt-2.5">
-          <div className="relative -translate-y-px border-b border-border/70 pb-1.5 transition-colors focus-within:border-ring">
-            <SearchIcon
-              aria-hidden="true"
-              className="pointer-events-none absolute top-1.5 left-0 size-4 shrink-0 text-muted-foreground/55"
-            />
-            <ComboboxInput
-              className="[&_input]:h-6.5 [&_input]:ps-5 [&_input]:font-sans [&_input]:leading-6.5"
-              inputClassName="rounded-none bg-transparent text-sm"
-              aria-label="Search branches"
-              placeholder="Search branches..."
-              showTrigger={false}
-              size="sm"
-              unstyled
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-            />
-          </div>
-        </div>
+        <ComboboxSearchInput
+          aria-label="Search branches"
+          placeholder="Search branches..."
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+        />
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
           {problem ? (
             <div
@@ -209,7 +191,7 @@ export function BaseBranchPicker({
           ) : null}
           {isInitialLoadPending ? null : <ComboboxEmpty>No branches found.</ComboboxEmpty>}
           <div className="relative min-h-0 w-full max-h-56 flex-1 overflow-hidden">
-            <ComboboxListVirtualized className="size-full min-w-0 p-0">
+            <ComboboxListVirtualized className="size-full min-w-0">
               <LegendList<string>
                 ref={listRef}
                 data={items}

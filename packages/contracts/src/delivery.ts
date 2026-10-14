@@ -194,4 +194,5 @@ export const DELIVERY_HARNESS_BY_DRIVER: Readonly<Record<string, string>> = {
   kimi: "kimi",
   hermes: "hermes",
   deepseek: "dsh",
+  antigravity: "agy",
 };
