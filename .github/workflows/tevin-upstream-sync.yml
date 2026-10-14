@@ -34,7 +34,7 @@ jobs:
           git config --local gc.auto 0
           git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
           auth="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$READ_TOKEN" | base64 -w0)"
-          git -c http.https://github.com/.extraheader="$auth" fetch --no-tags origin '+refs/heads/master:refs/remotes/origin/master'
+          git -c http.https://github.com/.extraheader="$auth" fetch --no-tags origin 'refs/heads/master:refs/remotes/origin/master'
           git checkout -q -B master origin/master
 
       - name: Test trusted helper

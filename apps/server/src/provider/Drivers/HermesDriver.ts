@@ -21,40 +21,45 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
-import { HttpClient } from "effect/unstable/http";
-import { ChildProcessSpawner } from "effect/unstable/process";
+import { HttpClient } from "effect/http";
+import { ChildProcessSpawner } from "effect/process";
 
-import * as BackgroundPolicy from "../../background/BackgroundPolicy.ts";
-import { ServerSettingsService } from "../../serverSettings.ts";
+import type { AcpAdapterV2Env } from "@t3tools/provider-acp/server/adapter";
+import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
+import * as ProviderHost from "@t3tools/provider-core/server/ProviderHost";
+import { resolveSelfInvocation } from "@t3tools/shared/nodeRuntime";
+import { makeAcpNativeLoggerFactory } from "@t3tools/provider-acp/server/nativeLogging";
 import { makeHermesTextGeneration } from "../../textGeneration/HermesTextGeneration.ts";
 import { makeHermesAcpRuntime, makeHermesEnvironment } from "../acp/HermesAcpSupport.ts";
 import { makeCliAuth } from "../CliAuth.ts";
 import { ProviderDriverError } from "../Errors.ts";
+import { hermesUsageReader, type HermesUsageReaderEnv } from "./hermesUsage.ts";
 import { readHermesTurnEnd } from "../acp/HermesTurnEnd.ts";
-import { expandHomePath } from "../../pathExpansion.ts";
-import { makeHermesAdapter, type HermesAdapterOptions } from "../Layers/HermesAdapter.ts";
+import { expandHomePath } from "@t3tools/provider-core/server/pathExpansion";
+import * as HostProcess from "@t3tools/shared/HostProcess";
+import { makeHermesAdapter, type HermesAdapterOptions } from "../HermesAdapter.ts";
 import {
   buildInitialHermesProviderSnapshot,
   checkHermesProviderStatus,
   probeHermesAuthenticated,
   readHermesRuntimeConfig,
-} from "../Layers/HermesProvider.ts";
-import { readHermesUsageLimits } from "../Layers/hermesUsageLimits.ts";
-import { ProviderEventLoggers } from "../Layers/ProviderEventLoggers.ts";
-import { makeManagedServerProvider } from "../makeManagedServerProvider.ts";
+} from "../HermesProvider.ts";
+import { readHermesUsageLimits } from "../hermesUsageLimits.ts";
+import { ProviderEventLoggers } from "@t3tools/provider-core/server/ProviderEventLoggers";
+import { makeManagedServerProvider } from "@t3tools/provider-core/server/managedProvider";
 import {
   defaultProviderContinuationIdentity,
   type ProviderDriver,
   type ProviderInstance,
-} from "../ProviderDriver.ts";
-import { mergeProviderInstanceEnvironment } from "../ProviderInstanceEnvironment.ts";
-import { makeManualOnlyProviderMaintenanceCapabilities } from "../providerMaintenance.ts";
+} from "@t3tools/provider-core/server/driver";
+import { mergeProviderInstanceEnvironment } from "@t3tools/provider-core/server/instanceEnvironment";
+import { makeManualOnlyProviderMaintenanceCapabilities } from "@t3tools/provider-core/server/maintenanceResolver";
 import {
   haveProviderSnapshotSettingsChanged,
   makeProviderSnapshotSettingsSource,
   type ProviderSnapshotSettings,
-} from "../providerUpdateSettings.ts";
-import { withInstanceIdentity } from "./instanceIdentity.ts";
+} from "@t3tools/provider-core/server/snapshotSettings";
+import { withInstanceIdentity } from "@t3tools/provider-core/server/instanceIdentity";
 
 const decodeHermesSettings = Schema.decodeSync(HermesSettings);
 
@@ -65,17 +70,19 @@ const MAINTENANCE_CAPABILITIES = makeManualOnlyProviderMaintenanceCapabilities({
 });
 
 export type HermesDriverEnv =
-  | BackgroundPolicy.BackgroundPolicy
+  | AcpAdapterV2Env
+  | IdAllocator.IdAllocatorV2
+  | ProviderHost.ProviderHost
   | ChildProcessSpawner.ChildProcessSpawner
   | Crypto.Crypto
   | FileSystem.FileSystem
   | HttpClient.HttpClient
   | Path.Path
-  | ProviderEventLoggers
-  | ServerSettingsService;
+  | ProviderEventLoggers;
 
-export const HermesDriver: ProviderDriver<HermesSettings, HermesDriverEnv> = {
+export const HermesDriver: ProviderDriver<HermesSettings, HermesDriverEnv, HermesUsageReaderEnv> = {
   driverKind: DRIVER_KIND,
+  usage: hermesUsageReader,
   metadata: {
     displayName: "Hermes",
     supportsMultipleInstances: true,
@@ -89,13 +96,25 @@ export const HermesDriver: ProviderDriver<HermesSettings, HermesDriverEnv> = {
       const httpClient = yield* HttpClient.HttpClient;
       const fileSystem = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
-      const serverSettings = yield* ServerSettingsService;
       const eventLoggers = yield* ProviderEventLoggers;
+      const selfInvocation = yield* resolveSelfInvocation().pipe(
+        Effect.mapError(
+          (cause) =>
+            new ProviderDriverError({
+              driver: DRIVER_KIND,
+              instanceId,
+              detail: "Could not locate the provider bridge runtime.",
+              cause,
+            }),
+        ),
+      );
+      const makeNativeLogger = yield* makeAcpNativeLoggerFactory();
       // One environment for the ACP agent, the status probes and the credential
       // check, so a scoped `homePath` governs everything the card reports.
+      const homeDirectory = yield* HostProcess.HomeDirectory;
       const processEnv = makeHermesEnvironment(
         config,
-        mergeProviderInstanceEnvironment(environment),
+        yield* mergeProviderInstanceEnvironment(environment),
       );
       const continuationIdentity = defaultProviderContinuationIdentity({
         driverKind: DRIVER_KIND,
@@ -114,24 +133,30 @@ export const HermesDriver: ProviderDriver<HermesSettings, HermesDriverEnv> = {
         makeHermesAcpRuntime({
           ...input,
           hermesSettings: effectiveConfig,
-          environment: processEnv,
+          environment: { ...processEnv, ...input.processEnvironment },
           childProcessSpawner: spawner,
         }).pipe(Effect.provideService(Crypto.Crypto, crypto));
 
       // Where Hermes keeps its sessions: the home it was given, or its own.
       const hermesHome =
         effectiveConfig.homePath.trim().length > 0
-          ? expandHomePath(effectiveConfig.homePath)
+          ? expandHomePath(effectiveConfig.homePath, homeDirectory)
           : processEnv["HERMES_HOME"]?.trim() ||
             (processEnv["LOCALAPPDATA"]
               ? `${processEnv["LOCALAPPDATA"]}/hermes`
-              : expandHomePath("~/.hermes"));
-      const adapter = yield* makeHermesAdapter(effectiveConfig, {
+              : expandHomePath("~/.hermes", homeDirectory));
+      const orchestrationAdapter = yield* makeHermesAdapter(effectiveConfig, {
         instanceId,
         makeRuntime,
         turnEnd: (sessionId) =>
           readHermesTurnEnd({ sessionId, storeFile: `${hermesHome}/state.db` }),
-        ...(eventLoggers.native ? { nativeEventLogger: eventLoggers.native } : {}),
+        selfInvocation,
+        nativeLogging: (threadId) =>
+          makeNativeLogger({
+            nativeEventLogger: eventLoggers.native,
+            provider: DRIVER_KIND,
+            threadId,
+          }),
       });
       const textGeneration = yield* makeHermesTextGeneration(effectiveConfig, processEnv);
 
@@ -156,7 +181,7 @@ export const HermesDriver: ProviderDriver<HermesSettings, HermesDriverEnv> = {
         Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
       );
 
-      const snapshotSettings = makeProviderSnapshotSettingsSource(effectiveConfig, serverSettings);
+      const snapshotSettings = yield* makeProviderSnapshotSettingsSource(effectiveConfig);
       const snapshot = yield* makeManagedServerProvider<ProviderSnapshotSettings<HermesSettings>>({
         resolveMaintenance: () => Effect.succeed(MAINTENANCE_CAPABILITIES),
         getSettings: snapshotSettings.getSettings,
@@ -197,7 +222,7 @@ export const HermesDriver: ProviderDriver<HermesSettings, HermesDriverEnv> = {
         accentColor,
         enabled,
         snapshot,
-        adapter,
+        orchestrationAdapter,
         textGeneration,
         auth,
       } satisfies ProviderInstance;

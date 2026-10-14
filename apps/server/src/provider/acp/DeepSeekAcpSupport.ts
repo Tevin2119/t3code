@@ -14,17 +14,19 @@
  *
  * @module provider/acp/DeepSeekAcpSupport
  */
+import * as NodeOS from "node:os";
+
 import { type DeepSeekSettings } from "@t3tools/contracts";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Scope from "effect/Scope";
-import * as ChildProcessSpawner from "effect/unstable/process/ChildProcessSpawner";
+import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import type * as EffectAcpErrors from "effect-acp/errors";
-import type * as EffectAcpSchema from "effect-acp/schema";
+import type * as EffectAcpSchema from "effect-acp/compat";
 
-import { expandHomePath } from "../../pathExpansion.ts";
-import * as AcpSessionRuntime from "./AcpSessionRuntime.ts";
+import { expandHomePath } from "@t3tools/provider-core/server/pathExpansion";
+import * as AcpSessionRuntime from "@t3tools/provider-acp/server/AcpSessionRuntime";
 
 /** dsh advertises no auth method and accepts any id; this one names what it checks. */
 export const DEEPSEEK_AUTH_METHOD_ID = "deepseek-api-key";
@@ -83,7 +85,7 @@ export function makeDeepSeekEnvironment(
 ): NodeJS.ProcessEnv {
   const homePath = deepseekSettings?.homePath.trim() ?? "";
   if (homePath.length === 0) return baseEnv;
-  return { ...baseEnv, DSH_HOME: expandHomePath(homePath) };
+  return { ...baseEnv, DSH_HOME: expandHomePath(homePath, NodeOS.homedir()) };
 }
 
 export function buildDeepSeekAcpSpawnInput(
@@ -159,6 +161,7 @@ export function deepseekModelSlugFromConfigValue(value: string): string | undefi
 
 export function currentDeepSeekModelIdFromSessionSetup(
   sessionSetupResult:
+    | EffectAcpSchema.ForkSessionResponse
     | EffectAcpSchema.LoadSessionResponse
     | EffectAcpSchema.NewSessionResponse
     | EffectAcpSchema.ResumeSessionResponse,

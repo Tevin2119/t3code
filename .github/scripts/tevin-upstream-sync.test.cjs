@@ -738,10 +738,15 @@ test("the workflow keeps the token in its two publication steps and never forces
   assert.match(workflow, /^ {2}workflow_dispatch:$/m);
   assert.match(workflow, /^permissions:\n {2}contents: read\n {2}pull-requests: read\n\n/m);
   assert.doesNotMatch(workflow, /: write/);
-  assert.match(workflow, /persist-credentials: false/);
   assert.match(workflow, /github\.ref == 'refs\/heads\/master'/);
 
   const steps = workflow.split(/\n(?= {6}- )/);
+  // Checkout is plain git with the read-only job token, sent per command and never saved to config.
+  assert.doesNotMatch(workflow, /uses: actions\/checkout|git submodule|--recurse/);
+  const checkout = steps.find((step) => /name: Checkout master/.test(step));
+  assert.match(checkout, /READ_TOKEN: \$\{\{ github\.token \}\}/);
+  assert.match(checkout, /git -c http\.https:\/\/github\.com\/\.extraheader=/);
+  assert.doesNotMatch(checkout, /git config[^\n]*extraheader/);
   const withSecret = steps.filter((step) => step.includes("UPSTREAM_SYNC_TOKEN"));
   assert.equal(workflow.split("secrets.UPSTREAM_SYNC_TOKEN").length - 1, 2);
   assert.deepEqual(

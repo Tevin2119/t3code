@@ -117,7 +117,7 @@ vi.mock("../files/projectFilesQueryState", async (original) => ({
   },
 }));
 vi.mock("../../state/server", async (original) => {
-  const { Atom } = await import("effect/unstable/reactivity");
+  const { Atom } = await import("effect/reactivity");
   return {
     ...(await original<typeof import("../../state/server")>()),
     primaryServerKeybindingsAtom: Atom.make([]),

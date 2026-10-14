@@ -1,13 +1,11 @@
-import type { EnvironmentId, ScopedThreadRef } from "@t3tools/contracts";
+import type { EnvironmentId, PullRequestRef, ScopedThreadRef } from "@t3tools/contracts";
+import { useAtomValue } from "@effect/atom-react";
 import { useNavigate } from "@tanstack/react-router";
-import { type MouseEvent, useCallback } from "react";
+import { type MouseEvent, useCallback, useMemo } from "react";
 
-import { pullRequestHostOf, type SourceControlProviderKind } from "@t3tools/contracts";
+import { sourceControlClients } from "@t3tools/client-runtime/source-control-clients";
 import { parseChangeRequestUrl, type ChangeRequestLink } from "@t3tools/shared/changeRequestUrl";
-import {
-  canonicalRepositoryKey,
-  sourceControlRepositorySelector,
-} from "@t3tools/shared/sourceControl";
+import { sourceControlRepositorySelector } from "@t3tools/shared/sourceControl";
 
 import { useOpenLink } from "../browser/useOpenLink";
 import { stackedThreadToast, toastManager } from "../components/ui/toast";
@@ -15,6 +13,7 @@ import { useRightPanelStore } from "../rightPanelStore";
 import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
 
 import { useProjects, useServerConfigs } from "../state/entities";
+import { serverEnvironment } from "../state/server";
 import { usePrimaryEnvironmentId } from "../state/environments";
 
 export {
@@ -25,34 +24,6 @@ export {
   matchesLinkedPullRequestUrl,
   changeRequestRepositoryUrl,
 } from "@t3tools/shared/changeRequestUrl";
-
-function resolvedForgejoRepository(project: EnvironmentProject): URL | null {
-  const identity = project.repositoryIdentity;
-  if (identity?.provider !== "forgejo" || !identity.webUrl) return null;
-  try {
-    const url = new URL(identity.webUrl);
-    return url.protocol === "http:" || url.protocol === "https:" ? url : null;
-  } catch {
-    return null;
-  }
-}
-
-/** Keep Forgejo servers on different HTTP ports separate when selecting a project. */
-function matchesChangeRequestAuthority(
-  project: EnvironmentProject,
-  link: ChangeRequestLink,
-): boolean {
-  if (link.authority === undefined) return true;
-  try {
-    const remote = new URL(project.repositoryIdentity?.locator.remoteUrl ?? "");
-    if (remote.protocol === "http:" || remote.protocol === "https:") {
-      return remote.host.toLowerCase() === link.authority;
-    }
-  } catch {
-    // SSH remotes do not specify the server's HTTP port; tea resolves the configured login.
-  }
-  return true;
-}
 
 /**
  * The project a link belongs to, or nothing. Matched the way the server matches: the repository
@@ -66,31 +37,56 @@ export function findProjectForChangeRequest(
 ): EnvironmentProject | undefined {
   return projects.find((project) => {
     const identity = project.repositoryIdentity;
-    if (!identity || !matchesChangeRequestAuthority(project, link)) return false;
-    const kind = identity.provider as SourceControlProviderKind | undefined;
-    if (kind === undefined) return false;
-    const web = resolvedForgejoRepository(project);
-    if (web)
-      return (
-        web.host.toLowerCase() === (link.authority ?? link.host).toLowerCase() &&
-        web.pathname.replace(/^\/+|\/+$/g, "").toLowerCase() === link.repository.toLowerCase()
-      );
-    if (kind === "azure-devops") {
-      return (
-        canonicalRepositoryKey(identity.canonicalKey.toLowerCase()) ===
-        canonicalRepositoryKey(`${link.host}/${link.repository}`.toLowerCase())
-      );
-    }
-    const repository =
-      identity.displayName ??
-      (identity.owner && identity.name ? `${identity.owner}/${identity.name}` : null);
     return (
-      repository !== null &&
-      repository.toLowerCase() === link.repository.toLowerCase() &&
-      (pullRequestHostOf(identity, kind) === link.host.toLowerCase() ||
-        pullRequestHostOf(identity, kind) === link.authority)
+      identity?.provider !== undefined &&
+      sourceControlClients.get(identity.provider).isChangeRequestInRepository(identity, link)
     );
   });
+}
+
+export function resolvePullRequestPreviewTarget({
+  environmentId,
+  projects,
+  pullRequestsEnabled,
+  url,
+}: {
+  environmentId: EnvironmentId | null;
+  projects: ReadonlyArray<EnvironmentProject>;
+  pullRequestsEnabled: boolean;
+  url: string;
+}): { environmentId: EnvironmentId; input: PullRequestRef } | null {
+  if (!pullRequestsEnabled || environmentId === null) return null;
+  const parsed = parseChangeRequestUrl(url);
+  if (parsed === null) return null;
+  const project = findProjectForChangeRequest(
+    projects.filter((candidate) => candidate.environmentId === environmentId),
+    parsed,
+  );
+  if (project === undefined) return null;
+  return {
+    environmentId,
+    input: {
+      projectId: project.id,
+      host: parsed.authority ?? parsed.host,
+      repository: sourceControlRepositorySelector(project.repositoryIdentity) ?? parsed.repository,
+      number: parsed.number,
+    },
+  };
+}
+
+export function usePullRequestPreviewTarget(environmentId: EnvironmentId | null, url: string) {
+  const projects = useProjects();
+  const serverConfig = useAtomValue(serverEnvironment.configValueAtom(environmentId));
+  return useMemo(
+    () =>
+      resolvePullRequestPreviewTarget({
+        environmentId,
+        projects,
+        pullRequestsEnabled: serverConfig?.environment.capabilities.pullRequests === true,
+        url,
+      }),
+    [environmentId, projects, serverConfig, url],
+  );
 }
 
 /**
@@ -104,35 +100,11 @@ export function findProjectOnChangeRequestHost(
 ): EnvironmentProject | undefined {
   const own = findProjectForChangeRequest(projects, link);
   if (own !== undefined) return own;
-  // Azure CLI reads use the checkout's organization and project, not host-wide credentials.
-  if (
-    canonicalRepositoryKey(`${link.host}/${link.repository}`.toLowerCase()).startsWith(
-      "dev.azure.com/",
-    )
-  )
-    return undefined;
   return projects.find((project) => {
     const identity = project.repositoryIdentity;
-    const kind = identity?.provider as SourceControlProviderKind | undefined;
-    const web = resolvedForgejoRepository(project);
-    if (web) {
-      const mount = web.pathname
-        .replace(/^\/+|\/+$/g, "")
-        .split("/")
-        .slice(0, -2)
-        .join("/");
-      return (
-        web.host.toLowerCase() === (link.authority ?? link.host).toLowerCase() &&
-        (!mount || link.repository.toLowerCase().startsWith(`${mount.toLowerCase()}/`))
-      );
-    }
     return (
-      identity != null &&
-      kind !== undefined &&
-      kind !== "azure-devops" &&
-      matchesChangeRequestAuthority(project, link) &&
-      (pullRequestHostOf(identity, kind) === link.host.toLowerCase() ||
-        pullRequestHostOf(identity, kind) === link.authority)
+      identity?.provider !== undefined &&
+      sourceControlClients.get(identity.provider).canReadChangeRequestOnHost(identity, link)
     );
   });
 }

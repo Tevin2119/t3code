@@ -33,9 +33,9 @@ import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
-import type { ProviderAuthController } from "./Services/ProviderAuthService.ts";
+import type { ProviderAuthController } from "./ProviderAuthService.ts";
 
 /** Verification target a device-code CLI prints on its way to waiting. */
 export interface CliAuthChallenge {

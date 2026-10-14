@@ -86,7 +86,7 @@ export function ReferenceFilePicker(props: {
     <CommandDialog open onOpenChange={(open) => (open ? undefined : props.onClose())}>
       <CommandDialogPopup
         aria-label="Add a reference file"
-        className="overflow-hidden p-0"
+        className="overflow-hidden"
         onBackdropPointerDown={props.onClose}
       >
         {step.kind === "projects" ? (
@@ -150,7 +150,7 @@ function ProjectStep(props: {
         setHighlighted(null);
         setQuery(value);
       }}
-      panelClassName="max-h-[min(34rem,76vh)]"
+      panelSize="tall-list"
       testId="reference-project-picker"
       value={query}
     >
@@ -238,7 +238,7 @@ function ProjectFilesStep(props: {
         setHighlighted(null);
         setQuery(value);
       }}
-      panelClassName="max-h-[min(34rem,76vh)]"
+      panelSize="tall-list"
       showBackHint
       testId="reference-file-picker"
       value={query}
@@ -309,7 +309,7 @@ function BrowseStep(props: {
         setHighlighted(null);
         setQuery(value);
       }}
-      panelClassName="max-h-[min(34rem,76vh)]"
+      panelSize="tall-list"
       testId="reference-browse-picker"
       value={query}
     >

@@ -17,6 +17,7 @@ import {
   DialogTitle,
 } from "../ui/dialog";
 import { Input } from "../ui/input";
+import { InputGroup, InputGroupAddon, InputGroupInput } from "../ui/input-group";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import {
   Select,
@@ -24,7 +25,7 @@ import {
   SelectPopup,
   SelectTrigger,
   SelectValue,
-  selectTriggerVariants,
+  SelectButton,
 } from "../ui/select";
 import { Textarea } from "../ui/textarea";
 
@@ -79,10 +80,9 @@ export function BoardPicker(props: {
       <PopoverTrigger
         render={
           props.look === "field" ? (
-            <button
-              type="button"
+            <SelectButton
               aria-label={props.label}
-              className={selectTriggerVariants({ size: "compact" })}
+              size="compact"
               data-board-picker={props.marker}
               data-board-picker-value={props.value}
             />
@@ -106,19 +106,21 @@ export function BoardPicker(props: {
           aria-hidden
         />
       </PopoverTrigger>
-      <PopoverPopup align="start" className="w-80 max-w-[calc(100vw-2rem)] p-0">
+      <PopoverPopup padding="none" align="start" className="w-80 max-w-[calc(100vw-2rem)] ">
         <div className="flex items-center gap-1 border-b border-border p-2">
-          <span className="relative flex min-w-0 flex-1 items-center">
-            <SearchIcon className="pointer-events-none absolute left-2 z-10 size-3.5 text-muted-foreground" />
-            <Input
+          <InputGroup>
+            <InputGroupAddon>
+              <SearchIcon />
+            </InputGroupAddon>
+            <InputGroupInput
               aria-label={`Search ${props.label.toLowerCase()}`}
               placeholder="Search"
-              className="h-7 pl-7 text-xs"
+              size="sm"
               value={query}
               onChange={(event) => setQuery(event.target.value)}
               data-board-picker-search
             />
-          </span>
+          </InputGroup>
           {query ? (
             <Button
               size="icon-xs"
@@ -193,7 +195,7 @@ export function BoardPicker(props: {
                     <span className="text-xs text-muted-foreground tabular-nums">{item.count}</span>
                   ) : null}
                   {item.scope || item.kind === "own" ? (
-                    <span className="ml-auto text-[10px] text-muted-foreground">
+                    <span className="ml-auto text-3xs text-muted-foreground">
                       {item.scope ?? "yours"}
                     </span>
                   ) : null}
@@ -205,7 +207,7 @@ export function BoardPicker(props: {
                 ) : null}
                 {item.kind === "own" && item.target !== undefined ? (
                   <span
-                    className={`truncate text-[11px] ${item.target?.ok ? "text-muted-foreground" : "text-warning"}`}
+                    className={`truncate text-2xs ${item.target?.ok ? "text-muted-foreground" : "text-warning"}`}
                     data-board-picker-target={item.target?.ok ? "ok" : "none"}
                   >
                     {targetLine(item.target ?? null)}
@@ -341,7 +343,7 @@ export function BoardDialog(props: {
               : "A view shows the board's columns you choose, for whichever board is chosen."}
           </DialogDescription>
         </DialogHeader>
-        <DialogPanel className="flex flex-col gap-3">
+        <DialogPanel className="flex flex-col ">
           {isBoard ? (
             <div className="flex flex-col gap-2" data-board-dialog-binding>
               {props.editing && !wasBound ? (
@@ -382,7 +384,7 @@ export function BoardDialog(props: {
                       <SelectItem key={item.id} value={item.id} disabled={!item.ok}>
                         <span className="flex min-w-0 flex-col">
                           <span className="truncate">{item.title}</span>
-                          <span className="truncate text-[11px] text-muted-foreground">
+                          <span className="truncate text-2xs text-muted-foreground">
                             {item.ok ? item.path : item.problem}
                           </span>
                         </span>
@@ -407,7 +409,7 @@ export function BoardDialog(props: {
                     onChange={(event) => setRepoName(event.target.value)}
                     data-board-dialog-repository-name
                   />
-                  <span className="text-[11px] text-muted-foreground">
+                  <span className="text-2xs text-muted-foreground">
                     The folder is read, not changed. Work is done in worktrees made beside it.
                   </span>
                   {addProblem ? <span className="text-xs text-warning">{addProblem}</span> : null}
@@ -443,13 +445,13 @@ export function BoardDialog(props: {
                       <SelectItem key={branch} value={branch}>
                         {branch}
                         {branch === chosen?.defaultBase ? (
-                          <span className="text-[11px] text-muted-foreground"> (default)</span>
+                          <span className="text-2xs text-muted-foreground"> (default)</span>
                         ) : null}
                       </SelectItem>
                     ))}
                   </SelectPopup>
                 </Select>
-                <span className="text-[11px] text-muted-foreground">
+                <span className="text-2xs text-muted-foreground">
                   Work on a task starts from this branch. The team works in a worktree of its own;
                   the branch itself is not changed.
                 </span>
@@ -532,10 +534,7 @@ export function BoardDialog(props: {
                       Seats…
                     </Button>
                     {unsaved ? (
-                      <span
-                        className="text-[11px] text-muted-foreground"
-                        data-board-dialog-seats-why
-                      >
+                      <span className="text-2xs text-muted-foreground" data-board-dialog-seats-why>
                         Save or cancel the changes here first.
                       </span>
                     ) : null}

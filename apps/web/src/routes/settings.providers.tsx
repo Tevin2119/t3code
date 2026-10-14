@@ -6,8 +6,8 @@ import { useSettingsScope } from "../components/settings/SettingsScopeContext";
 
 /**
  * Providers are machine state, so the page shows one environment at a time:
- * the chosen one, or the representative of the selection. A project crumb
- * narrows the candidates to the environments that project is registered on.
+ * the chosen one from the settings scope selector.
+ * A project crumb narrows candidates to where that project is registered.
  */
 function SettingsProvidersRoute() {
   const target = Route.useSearch();
@@ -25,6 +25,13 @@ function SettingsProvidersRoute() {
     <ProviderSettingsPanel
       environmentId={environment.environmentId}
       {...(target.instanceId ? { instanceId: target.instanceId } : {})}
+      projectIds={
+        scope.kind === "project" || scope.kind === "checkout"
+          ? scope.members
+              .filter((member) => member.environmentId === environment.environmentId)
+              .map((member) => member.id)
+          : []
+      }
       scoped
     />
   );

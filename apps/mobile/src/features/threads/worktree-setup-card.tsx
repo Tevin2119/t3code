@@ -6,8 +6,9 @@ import {
 import { worktreeSetupAgentStarted } from "@t3tools/client-runtime/worktree-setup";
 import { formatDuration } from "@t3tools/shared/orchestrationTiming";
 import { useEffect, useState } from "react";
-import { ActivityIndicator, AppState, Pressable, ScrollView, View } from "react-native";
+import { AppState, Platform, Pressable, ScrollView, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { AppActivityIndicator } from "../../components/AppActivityIndicator";
 import { AppText as Text } from "../../components/AppText";
 import { SymbolView, type AppSymbolName } from "../../components/AppSymbol";
 import { WorktreeSetupSheet } from "./worktree-setup-sheet";
@@ -72,7 +73,7 @@ export function WorktreeSetupCard(props: WorktreeSetupCardProps) {
         />
         {!handedOff ? (
           <Text
-            className="text-2xs text-adaptive-neutral-600-400"
+            className="text-2xs text-foreground-secondary"
             style={{ fontVariant: ["tabular-nums"] }}
           >
             {elapsed(snapshot.startedAt, snapshot.endedAt, now)}
@@ -97,27 +98,27 @@ export function WorktreeSetupCard(props: WorktreeSetupCardProps) {
             }
           >
             {backgroundSetup ? (
-              <ActivityIndicator
-                size="small"
-                colorClassName="accent-adaptive-neutral-500-400"
-                style={{ width: 12, height: 12, transform: [{ scale: 0.65 }] }}
+              <AppActivityIndicator
+                size={Platform.OS === "android" ? 12 : "small"}
+                colorClassName="accent-icon-muted"
+                style={{
+                  width: 12,
+                  height: 12,
+                  transform: Platform.OS === "android" ? undefined : [{ scale: 0.65 }],
+                }}
               />
             ) : failed ? (
               <SymbolView
                 name="exclamationmark.circle"
                 size={12}
-                tintColorClassName="accent-adaptive-rose-700-300"
+                tintColorClassName="accent-danger-foreground"
               />
             ) : null}
-            <Text numberOfLines={1} className="shrink text-2xs text-adaptive-neutral-600-400">
+            <Text numberOfLines={1} className="shrink text-2xs text-foreground-secondary">
               {backgroundSetup ? scriptName : "Details"}
             </Text>
             {!backgroundSetup ? (
-              <SymbolView
-                name="chevron.right"
-                size={10}
-                tintColorClassName="accent-adaptive-neutral-500-400"
-              />
+              <SymbolView name="chevron.right" size={10} tintColorClassName="accent-icon-muted" />
             ) : null}
           </View>
         </Pressable>
@@ -166,14 +167,19 @@ function HeaderLabel({
   failed?: boolean;
 }) {
   return active ? (
-    <ShimmeringWorkContent icon="clock" iconSubtleColor="#737373" label={label} showIcon={false} />
+    <ShimmeringWorkContent
+      icon="clock"
+      iconSubtleColor="transparent"
+      label={label}
+      showIcon={false}
+    />
   ) : (
     <Text
       numberOfLines={1}
       className={
         failed
-          ? "flex-1 text-sm text-adaptive-rose-700-300"
-          : "flex-1 text-sm text-adaptive-neutral-600-400"
+          ? "flex-1 text-sm text-danger-foreground"
+          : "flex-1 text-sm text-foreground-secondary"
       }
       style={{ fontVariant: ["tabular-nums"] }}
     >
@@ -211,6 +217,7 @@ function SetupDetailsSheet({
   return (
     <WorktreeSetupSheet height={bodyHeight} onClose={onClose}>
       <ScrollView
+        contentInsetAdjustmentBehavior="automatic"
         bounces={false}
         onContentSizeChange={(_width, height) => setBodyHeight(height)}
         contentContainerStyle={{
@@ -232,7 +239,7 @@ function SetupDetailsSheet({
             </View>
           ))}
         {snapshot.phase === "failed" && snapshot.error ? (
-          <Text selectable className="ml-8 mt-2 text-xs text-adaptive-rose-700-300">
+          <Text selectable className="ml-8 mt-2 text-xs text-danger-foreground">
             {snapshot.error}
           </Text>
         ) : null}
@@ -301,9 +308,9 @@ function StageRow({
     >
       <View className="w-6 items-center">
         {stage.status === "running" && animate ? (
-          <ActivityIndicator
+          <AppActivityIndicator
             size="small"
-            colorClassName="accent-adaptive-neutral-500-400"
+            colorClassName="accent-icon-muted"
             style={{ transform: [{ scale: 0.75 }] }}
           />
         ) : (
@@ -312,10 +319,10 @@ function StageRow({
             size={14}
             tintColorClassName={
               stage.status === "failed"
-                ? "accent-adaptive-rose-700-300"
+                ? "accent-danger-foreground"
                 : stage.status === "warning"
                   ? "accent-warning-foreground"
-                  : "accent-adaptive-neutral-500-400"
+                  : "accent-icon-muted"
             }
           />
         )}
@@ -323,7 +330,7 @@ function StageRow({
       {stage.status === "running" && animate ? (
         <ShimmeringWorkContent
           icon="clock"
-          iconSubtleColor="#737373"
+          iconSubtleColor="transparent"
           label={label}
           showIcon={false}
         />
@@ -332,24 +339,21 @@ function StageRow({
           numberOfLines={1}
           className={
             stage.status === "failed"
-              ? "flex-1 text-sm text-adaptive-rose-700-300"
-              : "flex-1 text-sm text-adaptive-neutral-600-400"
+              ? "flex-1 text-sm text-danger-foreground"
+              : "flex-1 text-sm text-foreground-secondary"
           }
         >
           {label}
         </Text>
       )}
       {detail ? (
-        <Text
-          numberOfLines={1}
-          className="max-w-[25%] shrink text-2xs text-adaptive-neutral-600-400"
-        >
+        <Text numberOfLines={1} className="max-w-[25%] shrink text-2xs text-foreground-secondary">
           {detail}
         </Text>
       ) : null}
       {stage.status !== "pending" && stage.status !== "skipped" ? (
         <Text
-          className="text-2xs text-adaptive-neutral-600-400"
+          className="text-2xs text-foreground-secondary"
           style={{ fontVariant: ["tabular-nums"] }}
         >
           {elapsed(stage.startedAt, stage.endedAt, now)}
@@ -368,8 +372,8 @@ function OutputTail({ lines, failed }: { lines: ReadonlyArray<string>; failed: b
       accessibilityLabel="Setup script output"
       className={
         failed
-          ? "mb-2 ml-8 rounded-md border border-adaptive-rose-700-300/20 bg-adaptive-rose-50-950 px-3 py-2"
-          : "mb-2 ml-8 rounded-md border border-border bg-adaptive-neutral-100-900 px-3 py-2"
+          ? "mb-2 ml-8 rounded-md border border-danger-border bg-danger px-3 py-2"
+          : "mb-2 ml-8 rounded-md border border-border bg-card-alt px-3 py-2"
       }
     >
       {OUTPUT_TAIL_SLOTS.map((slot) => (
@@ -379,8 +383,8 @@ function OutputTail({ lines, failed }: { lines: ReadonlyArray<string>; failed: b
           numberOfLines={1}
           className={
             failed
-              ? "text-2xs leading-5 text-adaptive-rose-700-300 ios:font-[family-name:Menlo] android:font-mono"
-              : "text-2xs leading-5 text-adaptive-neutral-600-400 ios:font-[family-name:Menlo] android:font-mono"
+              ? "text-2xs leading-5 text-danger-foreground ios:font-[family-name:Menlo] android:font-mono"
+              : "text-2xs leading-5 text-foreground-secondary ios:font-[family-name:Menlo] android:font-mono"
           }
         >
           {lines[lines.length - OUTPUT_TAIL_SLOTS.length + slot] || "\u00a0"}

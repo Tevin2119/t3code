@@ -24,6 +24,7 @@ export const HARNESS_LABEL: Readonly<Record<string, string>> = {
   kimi: "Kimi",
   dsh: "DeepSeek",
   hermes: "Hermes",
+  agy: "Antigravity",
 };
 
 export const harnessLabel = (harness: string | null): string =>

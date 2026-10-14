@@ -19,6 +19,8 @@ import { Input } from "../ui/input";
 import { Textarea } from "../ui/textarea";
 
 export const ACTION_HELP: Record<string, string> = {
+  "accept-artifacts":
+    "Accepts the exact non-code deliverables that were reviewed. Nothing is published or submitted for you.",
   submit: "The team takes it on. It goes to triage and on from there without being asked.",
   discard: "The draft is removed. Nothing was asked of anyone.",
   pause: "Nothing more is started for this task until it is resumed. A running step is stopped.",
@@ -64,7 +66,10 @@ type Target = Pick<
   DeliveryCard,
   "id" | "title" | "number" | "run" | "partOf" | "parts" | "publication"
 >;
-type Decision = { readonly card: Target; readonly decision: "approve" | "reject" | "publish" };
+type Decision = {
+  readonly card: Target;
+  readonly decision: "approve" | "reject" | "publish" | "accept-artifacts";
+};
 /** Steps that end or redo work: a drop on a column asks before taking them. */
 const ASKED_FIRST = new Set(["close", "deliver", "retriage"]);
 type Confirming = { readonly card: Target; readonly action: string; readonly lane: string };
@@ -116,7 +121,12 @@ export function useTaskActions(
   const run = useCallback(
     (card: Target, action: string) => {
       // A decision, and publishing what was approved, each need a person's name and the key.
-      if (action === "approve" || action === "reject" || action === "publish") {
+      if (
+        action === "approve" ||
+        action === "reject" ||
+        action === "publish" ||
+        action === "accept-artifacts"
+      ) {
         setProblem(null);
         setDecision({ card, decision: action });
         return;
@@ -220,23 +230,32 @@ export function useTaskActions(
         problem={problem}
         onClose={() => setDecision(null)}
         onDecide={(input) =>
-          decision.decision === "publish"
-            ? send(`/api/tasks/${decision.card.id}/publish`, {
+          decision.decision === "accept-artifacts"
+            ? send(`/api/tasks/${decision.card.id}/control`, {
+                action: "accept-artifacts",
+                run: decision.card.run?.id,
                 by: input.actor,
                 key: input.key,
-                // The commit the dialog names: if another is approved now, nothing is pushed.
-                ...(decision.card.run?.candidate ? { candidate: decision.card.run.candidate } : {}),
               })
-            : decision.card.run
-              ? send(`/api/runs/${decision.card.run.id}/decide`, {
-                  decision: decision.decision,
-                  // The candidate the person was shown: if another is waiting now, nothing is decided.
-                  ...(decision.card.run.candidate
+            : decision.decision === "publish"
+              ? send(`/api/tasks/${decision.card.id}/publish`, {
+                  by: input.actor,
+                  key: input.key,
+                  // The commit the dialog names: if another is approved now, nothing is pushed.
+                  ...(decision.card.run?.candidate
                     ? { candidate: decision.card.run.candidate }
                     : {}),
-                  ...input,
                 })
-              : Promise.resolve(false)
+              : decision.card.run
+                ? send(`/api/runs/${decision.card.run.id}/decide`, {
+                    decision: decision.decision,
+                    // The candidate the person was shown: if another is waiting now, nothing is decided.
+                    ...(decision.card.run.candidate
+                      ? { candidate: decision.card.run.candidate }
+                      : {}),
+                    ...input,
+                  })
+                : Promise.resolve(false)
         }
       />
     ) : null,
@@ -260,19 +279,22 @@ function DecisionDialog(props: {
   const [approvalKey, setApprovalKey] = useState("");
   const [notes, setNotes] = useState("");
   const { card, decision } = props.decision;
-  const approving = decision === "approve";
+  const accepting = decision === "accept-artifacts";
+  const approving = decision === "approve" || accepting;
   const publishing = decision === "publish";
   const whole = card.partOf;
   const parts = card.parts.length;
-  const verb = publishing
-    ? card.publication?.state === "failed"
-      ? "Try publishing again"
-      : "Publish"
-    : approving
-      ? whole
-        ? "Mark as reviewed"
-        : "Approve"
-      : "Send back";
+  const verb = accepting
+    ? "Accept deliverables"
+    : publishing
+      ? card.publication?.state === "failed"
+        ? "Try publishing again"
+        : "Publish"
+      : approving
+        ? whole
+          ? "Mark as reviewed"
+          : "Approve"
+        : "Send back";
   return (
     <Dialog open onOpenChange={(open) => !open && props.onClose()}>
       <DialogPopup data-delivery-decision={decision}>
@@ -301,7 +323,13 @@ function DecisionDialog(props: {
                 : `This sends the whole back, and with it each of its ${parts} parts.`}
             </p>
           ) : null}
-          {publishing ? (
+          {accepting ? (
+            <p className="text-muted-foreground">
+              Records your acceptance against the exact artifact hashes reviewed by the team. No
+              software pull request is opened and nothing is submitted to a course or publisher. Use
+              this environment's approval passphrase. T3 does not save it.
+            </p>
+          ) : publishing ? (
             <p className="text-muted-foreground" data-delivery-decision-publish>
               Pushes the approved commit
               {card.run?.candidate ? ` ${card.run.candidate.slice(0, 10)}` : ""} to its own branch

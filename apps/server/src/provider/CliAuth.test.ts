@@ -8,10 +8,10 @@ import * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
-import { ChildProcessSpawner } from "effect/unstable/process";
+import { ChildProcessSpawner } from "effect/process";
 
 import { makeCliAuth, type CliAuthOptions } from "./CliAuth.ts";
-import type { ProviderAuthController } from "./Services/ProviderAuthService.ts";
+import type { ProviderAuthController } from "./ProviderAuthService.ts";
 
 const INSTANCE_ID = ProviderInstanceId.make("pi");
 const OWNER = "owner-session";

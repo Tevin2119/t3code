@@ -5,15 +5,15 @@
  * the work: it follows a branch, builds the newer commit beside the running
  * one, and swaps the server for it. This service is the server's end of the
  * supervisor's IPC channel. It relays the supervisor's state to clients and
- * their requests to the supervisor. Before the supervisor stops it, it marks
- * the running turns to continue in the replacement.
+ * their requests to the supervisor. Before acknowledging replacement, it stops
+ * the effect worker and providers and persists continuation recovery.
  *
  * Without the supervisor every request fails: such a server is updated by hand.
  *
  * @module CheckoutUpdate
  */
 import { CheckoutUpdateError, CheckoutUpdateState } from "@t3tools/contracts";
-import { HostProcessEnvironment } from "@t3tools/shared/hostProcess";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -74,7 +74,7 @@ const notSupervised = new CheckoutUpdateError({
 
 /** True when this process was started by the checkout supervisor with its channel open. */
 export const isCheckoutSupervised = Effect.gen(function* () {
-  const environment = yield* HostProcessEnvironment;
+  const environment = yield* HostProcess.Environment;
   const channel = yield* CheckoutUpdateHostChannel;
   return environment[CHECKOUT_SUPERVISOR_ENV] === "1" && channel.connected();
 });
@@ -103,16 +103,18 @@ export const make = Effect.gen(function* () {
             Effect.logWarning("checkout supervisor sent a state this server cannot read"),
           onSome: (next) => SubscriptionRef.set(state, Option.some(next)),
         })
-      : // Marking can fail; the supervisor stops the server either way, so it is always answered.
-        startup.markRunningProviderSessionsForContinuation.pipe(
-          Effect.map((threads) => threads.length),
-          Effect.catchCause((cause) =>
-            Effect.logWarning("could not mark running turns before the update", { cause }).pipe(
-              Effect.as(0),
-            ),
+      : startup.prepareForRestart.pipe(
+          Effect.andThen(
+            Effect.sync(() => channel.send({ type: "t3-checkout.prepared", threads: 0 })),
           ),
-          Effect.flatMap((threads) =>
-            Effect.sync(() => channel.send({ type: "t3-checkout.prepared", threads })),
+          Effect.catchCause(() =>
+            Effect.logWarning(
+              "The server could not confirm safe restart preparation. No replacement was authorized.",
+            ).pipe(
+              Effect.andThen(
+                Effect.sync(() => channel.send({ type: "t3-checkout.preparation-failed" })),
+              ),
+            ),
           ),
         );
   yield* Queue.take(inbox).pipe(Effect.flatMap(handle), Effect.forever, Effect.forkScoped);

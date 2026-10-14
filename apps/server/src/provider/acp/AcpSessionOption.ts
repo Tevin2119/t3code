@@ -13,8 +13,11 @@
 import * as Effect from "effect/Effect";
 import type * as EffectAcpErrors from "effect-acp/errors";
 
-import { collectSessionConfigOptionValues, findSessionConfigOption } from "./AcpRuntimeModel.ts";
-import type * as AcpSessionRuntime from "./AcpSessionRuntime.ts";
+import {
+  collectSessionConfigOptionValues,
+  findSessionConfigOption,
+} from "@t3tools/provider-acp/server/runtimeModel";
+import type * as AcpSessionRuntime from "@t3tools/provider-acp/server/AcpSessionRuntime";
 
 type Runtime = Pick<
   AcpSessionRuntime.AcpSessionRuntime["Service"],

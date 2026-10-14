@@ -19,11 +19,14 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
-import { HttpClient } from "effect/unstable/http";
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
+import { HttpClient } from "effect/http";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
-import * as BackgroundPolicy from "../../background/BackgroundPolicy.ts";
-import { ServerSettingsService } from "../../serverSettings.ts";
+import type { AcpAdapterV2Env } from "@t3tools/provider-acp/server/adapter";
+import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
+import * as ProviderHost from "@t3tools/provider-core/server/ProviderHost";
+import { resolveSelfInvocation } from "@t3tools/shared/nodeRuntime";
+import { makeAcpNativeLoggerFactory } from "@t3tools/provider-acp/server/nativeLogging";
 import { makeKimiTextGeneration } from "../../textGeneration/KimiTextGeneration.ts";
 import {
   kimiLoginArgs,
@@ -32,30 +35,32 @@ import {
 } from "../acp/KimiAcpSupport.ts";
 import { makeCliAuth } from "../CliAuth.ts";
 import { ProviderDriverError } from "../Errors.ts";
+import { kimiUsageReader, type KimiUsageReaderEnv } from "./kimiUsage.ts";
 import { countKimiTurnEnds, readKimiTurnEnd } from "../acp/KimiTurnEnd.ts";
-import { expandHomePath } from "../../pathExpansion.ts";
-import { makeKimiAdapter, type KimiAdapterOptions } from "../Layers/KimiAdapter.ts";
+import { expandHomePath } from "@t3tools/provider-core/server/pathExpansion";
+import * as HostProcess from "@t3tools/shared/HostProcess";
+import { makeKimiAdapter, type KimiAdapterOptions } from "../KimiAdapter.ts";
 import {
   buildInitialKimiProviderSnapshot,
   checkKimiProviderStatus,
   probeKimiAuthenticated,
-} from "../Layers/KimiProvider.ts";
-import { readKimiUsageLimits } from "../Layers/kimiUsageLimits.ts";
-import { ProviderEventLoggers } from "../Layers/ProviderEventLoggers.ts";
-import { makeManagedServerProvider } from "../makeManagedServerProvider.ts";
+} from "../KimiProvider.ts";
+import { readKimiUsageLimits } from "../kimiUsageLimits.ts";
+import { ProviderEventLoggers } from "@t3tools/provider-core/server/ProviderEventLoggers";
+import { makeManagedServerProvider } from "@t3tools/provider-core/server/managedProvider";
 import {
   defaultProviderContinuationIdentity,
   type ProviderDriver,
   type ProviderInstance,
-} from "../ProviderDriver.ts";
-import { mergeProviderInstanceEnvironment } from "../ProviderInstanceEnvironment.ts";
-import { makeManualOnlyProviderMaintenanceCapabilities } from "../providerMaintenance.ts";
+} from "@t3tools/provider-core/server/driver";
+import { mergeProviderInstanceEnvironment } from "@t3tools/provider-core/server/instanceEnvironment";
+import { makeManualOnlyProviderMaintenanceCapabilities } from "@t3tools/provider-core/server/maintenanceResolver";
 import {
   haveProviderSnapshotSettingsChanged,
   makeProviderSnapshotSettingsSource,
   type ProviderSnapshotSettings,
-} from "../providerUpdateSettings.ts";
-import { withInstanceIdentity } from "./instanceIdentity.ts";
+} from "@t3tools/provider-core/server/snapshotSettings";
+import { withInstanceIdentity } from "@t3tools/provider-core/server/instanceIdentity";
 
 const decodeKimiSettings = Schema.decodeSync(KimiSettings);
 const isSetupError = Schema.is(ProviderSetupError);
@@ -67,17 +72,19 @@ const MAINTENANCE_CAPABILITIES = makeManualOnlyProviderMaintenanceCapabilities({
 });
 
 export type KimiDriverEnv =
-  | BackgroundPolicy.BackgroundPolicy
+  | AcpAdapterV2Env
+  | IdAllocator.IdAllocatorV2
+  | ProviderHost.ProviderHost
   | ChildProcessSpawner.ChildProcessSpawner
   | Crypto.Crypto
   | FileSystem.FileSystem
   | HttpClient.HttpClient
   | Path.Path
-  | ProviderEventLoggers
-  | ServerSettingsService;
+  | ProviderEventLoggers;
 
-export const KimiDriver: ProviderDriver<KimiSettings, KimiDriverEnv> = {
+export const KimiDriver: ProviderDriver<KimiSettings, KimiDriverEnv, KimiUsageReaderEnv> = {
   driverKind: DRIVER_KIND,
+  usage: kimiUsageReader,
   metadata: {
     displayName: "Kimi",
     supportsMultipleInstances: true,
@@ -91,9 +98,20 @@ export const KimiDriver: ProviderDriver<KimiSettings, KimiDriverEnv> = {
       const httpClient = yield* HttpClient.HttpClient;
       const fileSystem = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
-      const serverSettings = yield* ServerSettingsService;
       const eventLoggers = yield* ProviderEventLoggers;
-      const processEnv = mergeProviderInstanceEnvironment(environment);
+      const selfInvocation = yield* resolveSelfInvocation().pipe(
+        Effect.mapError(
+          (cause) =>
+            new ProviderDriverError({
+              driver: DRIVER_KIND,
+              instanceId,
+              detail: "Could not locate the provider bridge runtime.",
+              cause,
+            }),
+        ),
+      );
+      const makeNativeLogger = yield* makeAcpNativeLoggerFactory();
+      const processEnv = yield* mergeProviderInstanceEnvironment(environment);
       const continuationIdentity = defaultProviderContinuationIdentity({
         driverKind: DRIVER_KIND,
         instanceId,
@@ -111,26 +129,32 @@ export const KimiDriver: ProviderDriver<KimiSettings, KimiDriverEnv> = {
         makeKimiAcpRuntime({
           ...input,
           kimiSettings: effectiveConfig,
-          environment: processEnv,
+          environment: { ...processEnv, ...input.processEnvironment },
           childProcessSpawner: spawner,
         }).pipe(Effect.provideService(Crypto.Crypto, crypto));
 
       // Where Kimi keeps its sessions: the home it was given, or its own.
-      const kimiHome = processEnv["KIMI_CODE_HOME"]?.trim() || expandHomePath("~/.kimi-code");
+      const kimiHome =
+        processEnv["KIMI_CODE_HOME"]?.trim() ||
+        expandHomePath("~/.kimi-code", yield* HostProcess.HomeDirectory);
       const withFiles = <A>(effect: Effect.Effect<A, never, FileSystem.FileSystem | Path.Path>) =>
         effect.pipe(
           Effect.provideService(FileSystem.FileSystem, fileSystem),
           Effect.provideService(Path.Path, path),
         );
-      const adapter = yield* makeKimiAdapter(effectiveConfig, {
+      const orchestrationAdapter = yield* makeKimiAdapter(effectiveConfig, {
         instanceId,
         makeRuntime,
-        turnEnd: {
-          count: (sessionId) => withFiles(countKimiTurnEnds({ sessionId, home: kimiHome })),
-          read: (sessionId, endsBefore) =>
-            withFiles(readKimiTurnEnd({ sessionId, home: kimiHome, endsBefore })),
-        },
-        ...(eventLoggers.native ? { nativeEventLogger: eventLoggers.native } : {}),
+        countTurnEnds: (sessionId) => withFiles(countKimiTurnEnds({ sessionId, home: kimiHome })),
+        turnEnd: (sessionId, endsBefore) =>
+          withFiles(readKimiTurnEnd({ sessionId, home: kimiHome, endsBefore })),
+        selfInvocation,
+        nativeLogging: (threadId) =>
+          makeNativeLogger({
+            nativeEventLogger: eventLoggers.native,
+            provider: DRIVER_KIND,
+            threadId,
+          }),
       });
       const textGeneration = yield* makeKimiTextGeneration(effectiveConfig, processEnv);
 
@@ -149,7 +173,7 @@ export const KimiDriver: ProviderDriver<KimiSettings, KimiDriverEnv> = {
         Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
       );
 
-      const snapshotSettings = makeProviderSnapshotSettingsSource(effectiveConfig, serverSettings);
+      const snapshotSettings = yield* makeProviderSnapshotSettingsSource(effectiveConfig);
       const snapshot = yield* makeManagedServerProvider<ProviderSnapshotSettings<KimiSettings>>({
         resolveMaintenance: () => Effect.succeed(MAINTENANCE_CAPABILITIES),
         getSettings: snapshotSettings.getSettings,
@@ -243,7 +267,7 @@ export const KimiDriver: ProviderDriver<KimiSettings, KimiDriverEnv> = {
         accentColor,
         enabled,
         snapshot,
-        adapter,
+        orchestrationAdapter,
         textGeneration,
         auth,
       } satisfies ProviderInstance;
