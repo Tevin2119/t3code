@@ -5,6 +5,8 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
+import * as Schema from "effect/Schema";
+import { KimiSettings } from "@t3tools/contracts";
 import { HttpClient, HttpClientResponse } from "effect/http";
 
 import { parseDotenv, readHermesUsageLimits } from "./hermesUsageLimits.ts";
@@ -12,13 +14,16 @@ import {
   kimiBaseUrlFromConfig,
   kimiUsageResponseToLimits,
   readKimiUsageLimits,
+  withKimiUsageLimits,
 } from "./kimiUsageLimits.ts";
+import { buildInitialKimiProviderSnapshot } from "./KimiProvider.ts";
 import {
   zaiOriginForBaseUrl,
   zaiQuotaResponseToLimits,
 } from "@t3tools/provider-core/server/zaiUsageLimits";
 
 const checkedAt = "2026-09-27T09:00:00.000Z";
+const decodeKimiSettings = Schema.decodeUnknownEffect(KimiSettings);
 
 // Shaped like a Pro coding plan's answer: a five-hour and a weekly allowance.
 const ZAI_RESPONSE = {
@@ -212,6 +217,49 @@ it.layer(NodeServices.layer)("readKimiUsageLimits", (it) => {
     );
     return directory;
   });
+
+  it.effect("reports native quota when CLI health failed without changing launch readiness", () =>
+    Effect.gen(function* () {
+      const directory = yield* writeHome(600);
+      const settings = yield* decodeKimiSettings({ enabled: true });
+      const initial = yield* buildInitialKimiProviderSnapshot(settings);
+      const snapshot = {
+        ...initial,
+        installed: true,
+        status: "error" as const,
+        auth: { status: "unknown" as const },
+        message: "Kimi CLI version probe timed out.",
+      };
+      const result = yield* withKimiUsageLimits(snapshot, { KIMI_CODE_HOME: directory }).pipe(
+        Effect.provideService(
+          HttpClient.HttpClient,
+          jsonClient({ usages: { limit_5h: { used_ratio: 0.4862 } } }, (request) => {
+            expect(request.url).toBe("https://api.kimi.ai/coding/v1/usages");
+            expect(request.authorization).toBe("Bearer kimi-token");
+          }),
+        ),
+      );
+      expect(result.usageLimits?.windows[0]?.usedPercent).toBeCloseTo(48.62);
+      expect(result.status).toBe("error");
+      expect(result.auth.status).toBe("unknown");
+      expect(result.message).toBe(snapshot.message);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("does not probe quota for a disabled Kimi instance", () =>
+    Effect.gen(function* () {
+      const settings = yield* decodeKimiSettings({ enabled: false });
+      const snapshot = yield* buildInitialKimiProviderSnapshot(settings);
+      const result = yield* withKimiUsageLimits(snapshot, {}).pipe(
+        Effect.provideService(
+          HttpClient.HttpClient,
+          HttpClient.make(() => Effect.die("A disabled instance must not contact the quota API.")),
+        ),
+      );
+      expect(result).toBe(snapshot);
+      expect(result.usageLimits).toBeUndefined();
+    }),
+  );
 
   it.effect("asks the configured region with a live token", () =>
     Effect.gen(function* () {

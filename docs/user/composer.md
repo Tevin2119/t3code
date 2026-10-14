@@ -18,6 +18,20 @@ On web and desktop, select Orchestrator and a team to discuss work in the curren
 project. Team chat can use a project folder without initializing a Git repository.
 The team works from a read-only copy; your original documents stay unchanged.
 
+Choose a board in the team composer to group the conversation. A unique board
+matching the current project folder is suggested for a new draft. If several
+boards match, choose one yourself. **New board** can use an existing T3 project
+folder for chat and non-code work, or a repository and branch for code delivery.
+It never creates a Git repository in a document folder.
+
+To organise an existing chat, change its board in **About**. **Not on a board**
+explicitly removes it from boards, without changing its work folder, deleting
+messages or stopping the team. A task created from a chat keeps its board unless
+you move it. Removing a board keeps its tasks.
+
+Use **Do next** on a live chat to prioritise its seats for the next free slots.
+It does not interrupt other seats or bypass concurrency and memory limits.
+
 Enable **Non-code delivery** in the team's profile to produce stories, reports,
 presentations or assignments. Choose its producer and validation seats, and set
 whether evidence and references are required. Review-duty seats provide the final

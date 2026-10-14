@@ -1844,6 +1844,10 @@ export function parseTarget(value: unknown): DeliveryTarget | null {
 
 /** A target in one line: "PolyMania · main", or why work cannot be done there. */
 export function targetLine(target: DeliveryTarget | null): string {
+  if (target?.path && !target.repository)
+    return target.ok
+      ? `${target.title ?? target.path} · project folder`
+      : `${target.title ?? target.path}: ${target.problem ?? "cannot be read"}`;
   if (!target?.repository) return "Repository not configured";
   const name = target.title ?? target.repository;
   if (!target.ok) return `${name}: ${target.problem ?? "cannot be worked on"}`;

@@ -14,6 +14,7 @@ import { ageLabel, initialsOf, PRIORITY_LABEL } from "../../lib/deliveryBoard";
 import { harnessLabel } from "../../lib/deliverySeats";
 import { cn } from "../../lib/utils";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { relatedTaskGroups } from "./relatedTaskGroups";
 
 const PRIORITY_TONE: Record<TaskPriority, string> = {
   urgent: "bg-red-500/15 text-red-700 dark:text-red-300",
@@ -60,6 +61,7 @@ export const LANE_TONE: Record<string, { readonly bar: string; readonly tint: st
   planning: { bar: "bg-indigo-500", tint: "bg-indigo-500/5" },
   implementation: { bar: "bg-blue-500", tint: "bg-blue-500/5" },
   validation: { bar: "bg-cyan-500", tint: "bg-cyan-500/5" },
+  "child-work": { bar: "bg-indigo-500", tint: "bg-indigo-500/5" },
   "human-review": { bar: "bg-fuchsia-500", tint: "bg-fuchsia-500/8" },
   paused: { bar: "bg-orange-500", tint: "bg-orange-500/5" },
   rework: { bar: "bg-rose-500", tint: "bg-rose-500/5" },
@@ -187,6 +189,7 @@ const plural = (count: number, one: string, many: string) => `${count} ${count =
 /** What is going on with a task, in the few signs a card has room for. */
 export function CardSigns(props: { readonly card: DeliveryCard }) {
   const { card } = props;
+  const parts = relatedTaskGroups(card.parts);
   return (
     <span className="flex flex-wrap items-center gap-x-2 gap-y-0.5" data-card-signs>
       {card.first ? (
@@ -234,8 +237,8 @@ export function CardSigns(props: { readonly card: DeliveryCard }) {
       />
       <Count
         icon={<GitBranchIcon />}
-        count={card.parts.length}
-        label={`${card.partsDelivered} of ${plural(card.parts.length, "part", "parts")} delivered`}
+        count={parts.current.length + parts.completed.length}
+        label={`${parts.current.length} current parts, ${parts.completed.length} completed, ${parts.historical.length} historical. Open Related work for progress.`}
       />
     </span>
   );

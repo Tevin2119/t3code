@@ -50,6 +50,17 @@ export function TeamPicker(props: {
   const overrides = threadSeat && !picker.takeoverOver ? seatOverrides(threadSeat, chosen) : [];
 
   if (!picker.enabled) return null;
+  if (picker.loading) {
+    return (
+      <span
+        role="status"
+        className="flex items-center gap-1.5 px-1.5 text-xs text-muted-foreground"
+      >
+        <UsersIcon className="size-3.5" />
+        Loading teams…
+      </span>
+    );
+  }
 
   const seat =
     team && harness && role
