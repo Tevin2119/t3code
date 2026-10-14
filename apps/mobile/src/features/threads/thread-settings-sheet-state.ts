@@ -2,24 +2,8 @@ import { modelOptionSelectionRefusal } from "../../lib/modelOptions";
 import type { ModelOption, ProviderGroup } from "../../lib/modelOptions";
 import type { ProviderInstanceId } from "@t3tools/contracts";
 
-export type ModelFavorite = {
-  readonly provider: ProviderInstanceId;
-  readonly model: string;
-};
-
 export function modelFavoriteKey(provider: ProviderInstanceId, model: string): string {
   return `${provider}:${model}`;
-}
-
-export function toggleModelFavorite(
-  favorites: ReadonlyArray<ModelFavorite>,
-  option: ModelOption,
-): ReadonlyArray<ModelFavorite> {
-  const provider = option.selection.instanceId;
-  const model = option.selection.model;
-  return favorites.some((favorite) => favorite.provider === provider && favorite.model === model)
-    ? favorites.filter((favorite) => favorite.provider !== provider || favorite.model !== model)
-    : [...favorites, { provider, model }];
 }
 
 /** Keep catalog order within each group when favorites move to the front. */

@@ -5,6 +5,8 @@ const root = NodeURL.fileURLToPath(new URL("../", import.meta.url));
 const tests = [
   "apps/web/src/components/ChatView.logic.test.ts",
   "apps/mobile/src/lib/deliveryModelOptions.test.ts",
+  "apps/mobile/src/lib/modelOptions.test.ts",
+  "apps/mobile/src/features/threads/thread-settings-sheet-state.test.ts",
   "apps/web/src/lib/deliveryComposerSelection.test.tsx",
   "packages/client-runtime/src/deliveryModelLock.test.ts",
   "packages/client-runtime/src/state/deliveryModelBinding.test.ts",

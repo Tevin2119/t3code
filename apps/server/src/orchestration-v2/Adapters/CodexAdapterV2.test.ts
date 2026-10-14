@@ -29,7 +29,7 @@ import {
   TurnItemId,
 } from "@t3tools/contracts";
 import { assert, describe, it } from "@effect/vitest";
-import { HostProcessEnvironment, HostProcessPlatform } from "@t3tools/shared/hostProcess";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import { SpawnExecutableResolution } from "@t3tools/shared/shell";
 import * as CodexClient from "effect-codex-app-server/client";
 import * as CodexError from "effect-codex-app-server/errors";
@@ -698,8 +698,8 @@ describe("CodexAdapterV2 process spawning", () => {
       assert.deepEqual(command.options.env, { CUSTOM: "1" });
       assert.equal(command.options.extendEnv, true);
     }).pipe(
-      Effect.provideService(HostProcessPlatform, "win32"),
-      Effect.provideService(HostProcessEnvironment, {
+      Effect.provideService(HostProcess.Platform, "win32"),
+      Effect.provideService(HostProcess.Environment, {
         PATH: "C:\\Windows\\System32",
         HOST_ONLY: "1",
       }),
@@ -726,7 +726,7 @@ describe("CodexAdapterV2 process spawning", () => {
       assert.deepEqual(command.args, ["app-server"]);
       assert.equal(command.options.shell, false);
     }).pipe(
-      Effect.provideService(HostProcessPlatform, "win32"),
+      Effect.provideService(HostProcess.Platform, "win32"),
       Effect.provideService(SpawnExecutableResolution, () => "C:\\bin\\codex.exe"),
     ),
   );
@@ -774,7 +774,7 @@ describe("CodexAdapterV2 process spawning", () => {
         ["app-server", "--strict-config", "-c", "model_reasoning_summary=detailed"],
         ["app-server", "--enable", "env-feature"],
       ]);
-    }).pipe(Effect.provideService(HostProcessPlatform, "linux")),
+    }).pipe(Effect.provideService(HostProcess.Platform, "linux")),
   );
 
   it.effect("expands ~ in the configured binary path before spawning", () =>
@@ -821,40 +821,86 @@ describe("CodexAdapterV2 process spawning", () => {
       Effect.provide(
         Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
       ),
-      Effect.provideService(HostProcessPlatform, "linux"),
+      Effect.provideService(HostProcess.Platform, "linux"),
     ),
   );
 });
 
 describe("CodexAdapterV2 dynamic tool projection", () => {
-  it.effect("uses the CUA call title while leaving other MCP titles as tool arguments", () =>
+  it.effect("keeps a failed Sky MCP call in Computer Use when its error has no metadata", () =>
     Effect.gen(function* () {
-      const call = {
-        type: "mcpToolCall" as const,
-        id: "inspect",
-        server: "cua_repl",
+      const projection = yield* CodexAdapterV2.projectCodexDynamicToolItem({
+        type: "mcpToolCall",
+        id: "failed-sky-js",
+        server: "node_repl",
         tool: "js",
-        status: "completed" as const,
+        status: "failed",
         arguments: {
-          code: "await game.getAXStateAndScreenshot();",
-          title: "Inspect Saga music screen",
+          title: "Restrict the breakpoint to Git actions",
+          code: "await sky.type_text({app:'T3 Code (Nightly)',text:'debug(ga.run)'});",
         },
-        result: { content: [] },
-      };
-      assert.equal(
-        (yield* CodexAdapterV2.projectCodexDynamicToolItem(call)).title,
-        "Inspect Saga music screen",
-      );
-      assert.equal(
-        (yield* CodexAdapterV2.projectCodexDynamicToolItem({ ...call, arguments: { title: "  " } }))
-          .title,
-        "js",
-      );
-      assert.equal(
-        (yield* CodexAdapterV2.projectCodexDynamicToolItem({ ...call, server: "github" })).title,
-        "js",
-      );
+        result: { content: [{ type: "text", text: "Illegal Unicode escape sequence" }] },
+      });
+      assert.equal(projection.title, "Restrict the breakpoint to Git actions");
+      assert.equal(projection.toolSurface, "computer");
+      assert.deepEqual(projection.toolSource, {
+        key: "computer-use",
+        name: "Computer Use",
+        kind: "computer",
+      });
     }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect.each(["inProgress", "completed", "failed"] as const)(
+    "preserves a bare js action's title and computer surface when %s without result metadata",
+    (status) =>
+      Effect.gen(function* () {
+        const projection = yield* CodexAdapterV2.projectCodexDynamicToolItem({
+          type: "dynamicToolCall",
+          id: "bare-js",
+          tool: "js",
+          status,
+          arguments: { code: "await sky.get_app_state(app);", title: "Read the desktop window" },
+          contentItems: [],
+          success: status !== "failed",
+        });
+        assert.equal(projection.title, "Read the desktop window");
+        assert.equal(projection.toolSurface, "computer");
+      }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect.each(["cua_repl", "node_repl"])(
+    "uses the %s call title while leaving other MCP titles as tool arguments",
+    (server) =>
+      Effect.gen(function* () {
+        const call = {
+          type: "mcpToolCall" as const,
+          id: "inspect",
+          server,
+          tool: "js",
+          status: "completed" as const,
+          arguments: {
+            code: "await game.getAXStateAndScreenshot();",
+            title: "Inspect Saga music screen",
+          },
+          result: { content: [] },
+        };
+        assert.equal(
+          (yield* CodexAdapterV2.projectCodexDynamicToolItem(call)).title,
+          "Inspect Saga music screen",
+        );
+        assert.equal(
+          (yield* CodexAdapterV2.projectCodexDynamicToolItem({
+            ...call,
+            arguments: { title: "  " },
+          })).title,
+          server === "cua_repl" ? "Computer use" : "Run JavaScript",
+        );
+        assert.equal(
+          (yield* CodexAdapterV2.projectCodexDynamicToolItem({ ...call, server: "github" })).title,
+          "js",
+        );
+      }).pipe(Effect.provide(NodeServices.layer)),
   );
 
   it.effect.each(["inProgress", "completed", "failed"] as const)(

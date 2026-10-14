@@ -14,6 +14,8 @@
  *
  * @module provider/acp/DeepSeekAcpSupport
  */
+import * as NodeOS from "node:os";
+
 import { type DeepSeekSettings } from "@t3tools/contracts";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
@@ -83,7 +85,7 @@ export function makeDeepSeekEnvironment(
 ): NodeJS.ProcessEnv {
   const homePath = deepseekSettings?.homePath.trim() ?? "";
   if (homePath.length === 0) return baseEnv;
-  return { ...baseEnv, DSH_HOME: expandHomePath(homePath) };
+  return { ...baseEnv, DSH_HOME: expandHomePath(homePath, NodeOS.homedir()) };
 }
 
 export function buildDeepSeekAcpSpawnInput(

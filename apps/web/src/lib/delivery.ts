@@ -112,6 +112,7 @@ export interface DeliveryFlow extends DeliveryWorkflow {
 }
 
 export const FLOW_START_LABEL: Readonly<Record<string, string>> = {
+  "non-code": "Start non-code delivery",
   chat: "Start team chat",
   plan: "Start plan",
   review: "Start review",
@@ -2048,6 +2049,16 @@ export interface ProfileSeat {
 
 /** A profile as it is edited: everything that can be set, in the words it was written in. */
 export interface ProfileForm {
+  readonly nonCode?: {
+    readonly enabled: boolean;
+    readonly producer: string;
+    readonly researcher: string;
+    readonly referenceVerifier: string;
+    readonly validators: ReadonlyArray<string>;
+    readonly citations: string;
+    readonly minimumIndependentProviders: number;
+    readonly distinctVariations: boolean;
+  } | null;
   readonly name: string;
   readonly purpose: string;
   readonly corePrompt: string;
@@ -2092,6 +2103,18 @@ export function parseProfile(body: unknown): ProfileView | null {
       purpose: text(body.purpose),
       corePrompt: text(body.corePrompt),
       defaultFlow: text(body.defaultFlow, "chat"),
+      nonCode: isRecord(body.nonCode)
+        ? {
+            enabled: flag(body.nonCode.enabled),
+            producer: text(body.nonCode.producer),
+            researcher: text(body.nonCode.researcher),
+            referenceVerifier: text(body.nonCode.referenceVerifier),
+            validators: strings(body.nonCode.validators),
+            citations: text(body.nonCode.citations, "when-cited"),
+            minimumIndependentProviders: count(body.nonCode.minimumIndependentProviders) || 2,
+            distinctVariations: flag(body.nonCode.distinctVariations),
+          }
+        : null,
       memory: { scope: text(memory.scope, "conversation"), notes: text(memory.notes) },
       references: strings(body.references),
       lead: text(body.lead),

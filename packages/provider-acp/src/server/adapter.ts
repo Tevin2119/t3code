@@ -32,6 +32,7 @@ import {
   type ThreadTokenUsageSnapshot,
   type ThreadId,
 } from "@t3tools/contracts";
+import { AgentScope, AgentScopeThreadId } from "@t3tools/shared/AgentScope";
 import { modelSelectionsEqual } from "@t3tools/shared/model";
 import { type SelfInvocation, selfInvocationArgs } from "@t3tools/shared/nodeRuntime";
 import { FILE_HEADERS_ONLY, formatPatch, structuredPatch } from "diff";
@@ -218,7 +219,9 @@ export interface AcpAdapterV2Flavor {
   readonly promptFailure?: (cause: unknown) => OrchestrationV2ProviderFailure;
   readonly driver: ProviderDriverKind;
   readonly capabilities: OrchestrationV2ProviderCapabilities;
-  readonly clientCapabilitiesMeta?: Record<string, boolean>;
+  readonly clientCapabilitiesMeta?: NonNullable<
+    EffectAcpSchema.InitializeRequest["clientCapabilities"]
+  >["_meta"];
   readonly normalizeSessionUpdate?: (
     notification: EffectAcpSchema.SessionNotification,
   ) => EffectAcpSchema.SessionNotification;
@@ -1490,6 +1493,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
   const crypto = yield* Crypto.Crypto;
   const fileSystem = yield* FileSystem.FileSystem;
   const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+  const agentScope = yield* AgentScope;
   const idAllocator = yield* IdAllocator.IdAllocatorV2;
   const host = yield* ProviderHost.ProviderHost;
   const mcpSessions = yield* McpProviderSessions.McpProviderSessions;
@@ -6026,6 +6030,8 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               Effect.provideService(Scope.Scope, runtimeScope),
               Effect.provideService(Crypto.Crypto, crypto),
               Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, childProcessSpawner),
+              Effect.provideService(AgentScope, agentScope),
+              Effect.provideService(AgentScopeThreadId, threadId ?? undefined),
             );
         });
 
@@ -6105,6 +6111,8 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                 Effect.provideService(Scope.Scope, replacementScope),
                 Effect.provideService(Crypto.Crypto, crypto),
                 Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, childProcessSpawner),
+                Effect.provideService(AgentScope, agentScope),
+                Effect.provideService(AgentScopeThreadId, threadId ?? undefined),
               );
             // Session setup may publish commands before it returns. Buffer those
             // notifications, but do not expose request or extension handlers
@@ -6281,6 +6289,10 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           modelSelection: ModelSelection,
           runtimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy,
         ) {
+          // A step failing below leaves the native config partly changed, so
+          // the previously applied selection no longer describes the session.
+          // Callers record the new selection only once this completes.
+          yield* Ref.set(activeSelection, null);
           const requestedModel = flavor.resolveModelId?.(modelSelection) ?? modelSelection.model;
           let appliedModel: string | undefined;
           if (flavor.applyModelSelection !== undefined) {

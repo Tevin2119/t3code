@@ -69,6 +69,13 @@ function Choice(props: {
   }
   return (
     <Select
+      items={[
+        {
+          value: TEAM_DEFAULT,
+          label: `${props.baseLabel}${props.baseValue ? `: ${props.baseValue}` : ""}`,
+        },
+        ...props.options.map((option) => ({ value: option, label: option })),
+      ]}
       value={props.value ?? TEAM_DEFAULT}
       onValueChange={(value) => props.onChange(value === TEAM_DEFAULT ? "" : String(value))}
     >
@@ -104,7 +111,7 @@ export function useSeatCatalog(environmentId: EnvironmentId | null) {
   const providers = environment?.serverConfig?.providers ?? EMPTY_SERVER_PROVIDERS;
   return useMemo(() => {
     const entries = sortProviderInstanceEntries(
-      applyProviderInstanceSettings(deriveProviderInstanceEntries(providers), settings),
+      applyProviderInstanceSettings(deriveProviderInstanceEntries(providers), settings, null),
     ).filter((entry) => harnessOfDriver(entry.driverKind) !== null);
     return { entries, options: getCustomModelOptionsByInstance(settings, providers) };
   }, [providers, settings]);
@@ -271,6 +278,7 @@ export function SeatSettingsPanel(props: {
                     </span>
                   ) : entry ? (
                     <ProviderModelPicker
+                      environmentId={props.environmentId}
                       activeInstanceId={entry.instanceId}
                       model={values.model ?? ""}
                       lockedProvider={null}

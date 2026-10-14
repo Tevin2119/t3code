@@ -5,6 +5,7 @@ export type CheckoutUpdateView =
   | {
       readonly kind: "available";
       readonly key: string;
+      readonly commit: string;
       readonly title: string;
       readonly description: string;
     }
@@ -109,6 +110,7 @@ export function checkoutUpdateView(
     return {
       kind: "available",
       key: `available:${state.available.commit}`,
+      commit: state.available.commit,
       title: "T3 update available",
       description: availableUpdateLine(state.available),
     };
@@ -154,7 +156,8 @@ export function checkoutUpdatePillView(
   view: CheckoutUpdateView | null,
   options: {
     readonly starting: boolean;
-    readonly startFailed: boolean;
+    /** The offered commit a failed start was pressed on. */
+    readonly startFailedFor: string | null;
     /** A notice the person closed; hidden until the view's key changes. */
     readonly closedKey: string | null;
   },
@@ -166,7 +169,10 @@ export function checkoutUpdatePillView(
       return {
         ...base,
         tone: "info",
-        notice: !options.starting && options.startFailed ? CHECKOUT_UPDATE_NOT_STARTED : null,
+        notice:
+          !options.starting && options.startFailedFor === view.commit
+            ? CHECKOUT_UPDATE_NOT_STARTED
+            : null,
         action: options.starting ? "starting" : "update",
         close: options.starting ? null : "dismiss",
       };

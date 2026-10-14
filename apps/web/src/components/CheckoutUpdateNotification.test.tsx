@@ -186,9 +186,48 @@ describe("CheckoutUpdateProvider", () => {
       action: "update",
       notice: "The update did not start. Try again.",
     });
+    await serverSays({ checkout: { ...offered, checkedAt: "2026-10-08T00:00:00.000Z" } });
+    expect(pill?.view).toMatchObject({
+      description: "Newer work · 2 new commits",
+      action: "update",
+      notice: "The update did not start. Try again.",
+    });
     testState.start.mockResolvedValueOnce(success);
     await act(async () => pill!.start());
     expect(testState.start).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps a late failed start tied to its commit and starts the newer offer without a stale notice", async () => {
+    await mount();
+    const finish = deferred();
+    await act(async () => pill!.start());
+    const newer = { ...offered, available: { commit: C, subject: "Newest", behind: 4 } };
+    await serverSays({ checkout: newer });
+    await finish(AsyncResult.failure(Cause.fail(new Error("offline"))));
+    expect(pill?.view).toMatchObject({
+      title: "T3 update available",
+      description: "Newest · 4 new commits",
+      notice: null,
+      action: "update",
+    });
+
+    testState.start.mockResolvedValueOnce(AsyncResult.failure(Cause.fail(new Error("offline"))));
+    await act(async () => pill!.start());
+    expect(pill?.view).toMatchObject({
+      description: "Newest · 4 new commits",
+      notice: "The update did not start. Try again.",
+      action: "update",
+    });
+
+    testState.start.mockResolvedValueOnce(success);
+    await act(async () => pill!.start());
+    expect(pill?.view).toMatchObject({ action: "starting", notice: null });
+    await serverSays({ checkout: { ...newer, phase: "installing" } });
+    expect(pill?.view).toMatchObject({
+      title: "Installing the T3 update",
+      action: null,
+      notice: null,
+    });
   });
 
   it("releases the button when the supervisor passes on the request", async () => {
@@ -241,6 +280,84 @@ describe("CheckoutUpdateProvider", () => {
     expect(pill).toBeNull();
     expect(testState.setStorage).not.toHaveBeenCalled();
     expect(testState.reload).not.toHaveBeenCalled();
+  });
+
+  it("shows an identical recurring failure in the pill after retry progress", async () => {
+    const failed: CheckoutUpdateState = {
+      ...offered,
+      phase: "failed",
+      message: "Building the web app failed",
+    };
+    await mount();
+    await serverSays({ checkout: { ...offered, phase: "installing" } });
+    await serverSays({ checkout: failed });
+    expect(pill?.view).toMatchObject({
+      title: "T3 could not update",
+      description: failed.message,
+      tone: "error",
+    });
+    await act(async () => pill!.close());
+    expect(pill).toBeNull();
+    expect(testState.setStorage).not.toHaveBeenCalled();
+
+    // Settings retries start independently of the pill's start handler.
+    await serverSays({ checkout: { ...offered, phase: "installing" } });
+    await serverSays({ checkout: { ...offered, phase: "building" } });
+    await serverSays({ checkout: { ...failed } });
+    expect(pill?.view).toMatchObject({
+      title: "T3 could not update",
+      description: failed.message,
+      tone: "error",
+    });
+    await act(async () => pill!.close());
+    expect(pill).toBeNull();
+    await serverSays({ checkout: { ...failed } });
+    expect(pill).toBeNull();
+    expect(testState.setStorage).not.toHaveBeenCalled();
+
+    await act(async () => renderer!.unmount());
+    await mount();
+    expect(pill?.view).toMatchObject({
+      title: "T3 could not update",
+      description: failed.message,
+      tone: "error",
+    });
+  });
+
+  it("shows an identical recurring failure toast after retry progress", async () => {
+    const failed: CheckoutUpdateState = {
+      ...offered,
+      phase: "failed",
+      message: "Building the web app failed",
+    };
+    testState.pathname = "/settings";
+    await mount();
+    await serverSays({ checkout: { ...offered, phase: "installing" } });
+    await serverSays({ checkout: failed });
+    const firstFailure = testState.toastAdd.mock.calls.at(-1)![0];
+    expect(firstFailure).toMatchObject({
+      title: "T3 could not update",
+      description: failed.message,
+      type: "error",
+    });
+    await act(async () => firstFailure.data.onClose());
+    expect(testState.setStorage).not.toHaveBeenCalled();
+
+    await serverSays({ checkout: { ...offered, phase: "installing" } });
+    await serverSays({ checkout: { ...offered, phase: "building" } });
+    await serverSays({ checkout: { ...failed } });
+    expect(toastTitles().filter((title) => title === "T3 could not update")).toHaveLength(2);
+    const secondFailure = testState.toastAdd.mock.calls.at(-1)![0];
+    expect(secondFailure).toMatchObject({
+      title: "T3 could not update",
+      description: failed.message,
+      type: "error",
+    });
+    await act(async () => secondFailure.data.onClose());
+    const toastCount = testState.toastAdd.mock.calls.length;
+    await serverSays({ checkout: { ...failed } });
+    expect(testState.toastAdd).toHaveBeenCalledTimes(toastCount);
+    expect(testState.setStorage).not.toHaveBeenCalled();
   });
 
   it("remembers a dismissed offer until a newer commit, in both pill and toast", async () => {

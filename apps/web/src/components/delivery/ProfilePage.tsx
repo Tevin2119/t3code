@@ -3,6 +3,8 @@ import { useNavigate, useSearch } from "@tanstack/react-router";
 import {
   ArrowLeftIcon,
   CopyIcon,
+  FileSearchIcon,
+  FolderOpenIcon,
   HistoryIcon,
   PlusIcon,
   RefreshCwIcon,
@@ -10,7 +12,7 @@ import {
   Trash2Icon,
   XIcon,
 } from "lucide-react";
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { isElectron } from "../../env";
 import {
@@ -24,6 +26,7 @@ import {
   type ProfileSummary,
   type ProfileView,
 } from "../../lib/delivery";
+import { addReference } from "../../lib/deliveryReferences";
 import { entryForHarness, harnessLabel, harnessOfDriver } from "../../lib/deliverySeats";
 import { cn } from "../../lib/utils";
 import {
@@ -54,6 +57,7 @@ import { Switch } from "../ui/switch";
 import { Textarea } from "../ui/textarea";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { WorkspacePageHeader } from "../WorkspacePageHeader";
+import { ReferenceFilePicker } from "./ReferenceFilePicker";
 import { useSeatCatalog } from "./SeatSettingsPanel";
 import { SetupPanel } from "./SetupPanel";
 import { TeamDefaultsDialog } from "./TeamDefaultsDialog";
@@ -61,6 +65,7 @@ import { TrackRecord } from "./TrackRecord";
 
 const NONE = "__none__";
 const FLOW_TITLE: Readonly<Record<string, string>> = {
+  "non-code": "Non-code delivery",
   chat: "Team chat",
   plan: "Plan",
   review: "Review",
@@ -142,6 +147,7 @@ function SeatEditor(props: {
           </span>
         ) : entry ? (
           <ProviderModelPicker
+            environmentId={props.environmentId}
             activeInstanceId={entry.instanceId}
             model={seat.model ?? ""}
             lockedProvider={null}
@@ -471,7 +477,6 @@ function ProfileEditor(props: {
     setForm(view.form);
   }
   const [note, setNote] = useState("");
-  const [reference, setReference] = useState("");
   const [busy, setBusy] = useState(false);
   const working = useRef(false);
   const [problems, setProblems] = useState<ReadonlyArray<string>>([]);
@@ -479,6 +484,20 @@ function ProfileEditor(props: {
   const [section, setSection] = useState<"profile" | "setup">("profile");
   const [removing, setRemoving] = useState(false);
   const locked = !view.editable;
+  // A picker is for the profile and engine it was opened on; another one closes it.
+  const pickContext = `${props.environmentId ?? ""}|${view.profile}`;
+  const [picking, setPicking] = useState<{
+    readonly route: "project" | "browse";
+    readonly context: string;
+  } | null>(null);
+  const pickedFor = useRef(pickContext);
+  useEffect(() => {
+    pickedFor.current = pickContext;
+  }, [pickContext]);
+  const addPicked = (context: string, path: string) => {
+    if (locked || pickedFor.current !== context) return;
+    setForm((current) => ({ ...current, references: addReference(current.references, path) }));
+  };
   const changed = JSON.stringify(form) !== JSON.stringify(view.form);
   const set = (patch: Partial<ProfileForm>) => setForm((current) => ({ ...current, ...patch }));
   const setSeat = (index: number, seat: ProfileSeat) =>
@@ -486,9 +505,11 @@ function ProfileEditor(props: {
   const flows = useMemo(
     () =>
       parseFlows(
-        ["chat", "plan", "review", "standard"].map((id) => ({ id, title: FLOW_TITLE[id] })),
+        ["chat", "plan", "review", "standard", ...(form.nonCode?.enabled ? ["non-code"] : [])].map(
+          (id) => ({ id, title: FLOW_TITLE[id] }),
+        ),
       ),
-    [],
+    [form.nonCode?.enabled],
   );
 
   const save = async () => {
@@ -508,7 +529,7 @@ function ProfileEditor(props: {
       setProblems(result.problems.length > 0 ? result.problems : [result.why]);
       return;
     }
-    setSaid(parseProfile(result.body)?.note ?? "Saved.");
+    setSaid(parseProfile(result.body)?.note || "Saved.");
     setNote("");
     props.onSaved();
   };
@@ -610,6 +631,157 @@ function ProfileEditor(props: {
               </Field>
             </div>
             <aside className="flex min-w-0 flex-col gap-4">
+              <Field
+                label="Non-code delivery"
+                hint="Stories, reports and assignments. Sources stay read-only; returned artifacts are validated and reviewed before acceptance. Review-duty seats provide the final review."
+              >
+                <Checkbox
+                  checked={form.nonCode?.enabled ?? false}
+                  disabled={locked}
+                  onCheckedChange={(enabled) => {
+                    const producer =
+                      form.nonCode?.producer ||
+                      form.seats.find((seat) => seat.id === "writing-coach")?.id ||
+                      form.seats.find((seat) => seat.duties.includes("build"))?.id ||
+                      form.seats[0]?.id ||
+                      "";
+                    set({
+                      nonCode: {
+                        enabled: enabled === true,
+                        producer,
+                        researcher: form.nonCode?.researcher || form.lead,
+                        referenceVerifier: form.nonCode?.referenceVerifier || form.lead,
+                        validators:
+                          form.nonCode?.validators ??
+                          form.seats
+                            .filter((seat) => seat.id !== producer && seat.duties.includes("plan"))
+                            .map((seat) => seat.id),
+                        citations: form.nonCode?.citations ?? "when-cited",
+                        minimumIndependentProviders: form.nonCode?.minimumIndependentProviders ?? 2,
+                        distinctVariations: form.nonCode?.distinctVariations ?? false,
+                      },
+                    });
+                  }}
+                  aria-label="Enable non-code delivery"
+                />
+                {form.nonCode?.enabled ? (
+                  <>
+                    <Select
+                      value={form.nonCode.producer}
+                      items={form.seats.map((seat) => ({ value: seat.id, label: seat.title }))}
+                      disabled={locked}
+                      onValueChange={(producer) => {
+                        if (!producer || !form.nonCode) return;
+                        set({
+                          nonCode: {
+                            ...form.nonCode,
+                            producer: String(producer),
+                            validators: form.nonCode.validators.filter((id) => id !== producer),
+                          },
+                        });
+                      }}
+                    >
+                      <SelectTrigger aria-label="Deliverable producer">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectPopup>
+                        {form.seats.map((seat) => (
+                          <SelectItem key={seat.id} value={seat.id}>
+                            {seat.title}
+                          </SelectItem>
+                        ))}
+                      </SelectPopup>
+                    </Select>
+                    {(["researcher", "referenceVerifier"] as const).map((role) => (
+                      <Select
+                        key={role}
+                        value={form.nonCode?.[role]}
+                        items={form.seats.map((seat) => ({ value: seat.id, label: seat.title }))}
+                        disabled={locked}
+                        onValueChange={(seat) => {
+                          if (seat && form.nonCode)
+                            set({ nonCode: { ...form.nonCode, [role]: String(seat) } });
+                        }}
+                      >
+                        <SelectTrigger
+                          aria-label={
+                            role === "researcher" ? "Evidence researcher" : "Reference verifier"
+                          }
+                        >
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectPopup>
+                          {form.seats.map((seat) => (
+                            <SelectItem key={seat.id} value={seat.id}>
+                              {seat.title}
+                            </SelectItem>
+                          ))}
+                        </SelectPopup>
+                      </Select>
+                    ))}
+                    <div className="flex flex-col gap-2">
+                      <span className="text-sm">Validation seats</span>
+                      {form.seats
+                        .filter((seat) => seat.id !== form.nonCode?.producer)
+                        .map((seat) => (
+                          <label key={seat.id} className="flex items-center gap-2 text-sm">
+                            <Checkbox
+                              disabled={locked}
+                              checked={form.nonCode?.validators.includes(seat.id) ?? false}
+                              onCheckedChange={(checked) => {
+                                if (!form.nonCode) return;
+                                set({
+                                  nonCode: {
+                                    ...form.nonCode,
+                                    validators: checked
+                                      ? [...form.nonCode.validators, seat.id]
+                                      : form.nonCode.validators.filter((id) => id !== seat.id),
+                                  },
+                                });
+                              }}
+                            />
+                            {seat.title}
+                          </label>
+                        ))}
+                    </div>
+                    <label className="flex items-center gap-2 text-sm">
+                      <Checkbox
+                        disabled={locked}
+                        checked={form.nonCode.distinctVariations}
+                        onCheckedChange={(checked) => {
+                          if (form.nonCode)
+                            set({
+                              nonCode: { ...form.nonCode, distinctVariations: checked === true },
+                            });
+                        }}
+                      />
+                      Require distinct, complete variations
+                    </label>
+                    <Select
+                      value={form.nonCode.citations}
+                      disabled={locked}
+                      items={[
+                        { value: "when-cited", label: "Check references when cited" },
+                        { value: "required", label: "Evidence and references required" },
+                        { value: "none", label: "Creative work without references" },
+                      ]}
+                      onValueChange={(citations) => {
+                        if (citations && form.nonCode)
+                          set({ nonCode: { ...form.nonCode, citations: String(citations) } });
+                      }}
+                    >
+                      <SelectTrigger aria-label="Reference verification policy">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectPopup>
+                        <SelectItem value="when-cited">Check references when cited</SelectItem>
+                        <SelectItem value="required">Evidence and references required</SelectItem>
+                        <SelectItem value="none">Creative work without references</SelectItem>
+                      </SelectPopup>
+                    </Select>
+                  </>
+                ) : null}
+              </Field>
               <Field label="Default flow" hint="What this team does when no flow is chosen.">
                 <Select
                   value={form.defaultFlow}
@@ -816,7 +988,7 @@ function ProfileEditor(props: {
             <ul className="flex flex-col gap-0.5 text-xs">
               {form.references.map((file) => (
                 <li key={file} className="flex items-center gap-1">
-                  <span className="min-w-0 flex-1 truncate font-mono text-2xs">{file}</span>
+                  <span className="min-w-0 flex-1 font-mono text-2xs break-all">{file}</span>
                   {locked ? null : (
                     <button
                       type="button"
@@ -833,24 +1005,43 @@ function ProfileEditor(props: {
               ))}
             </ul>
             {locked ? null : (
-              <Input
-                aria-label="Add a reference file"
-                placeholder="Full path of a file on the engine's host, then Enter"
-                className="h-7  "
-                value={reference}
-                onChange={(event) => setReference(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key !== "Enter" || !reference.trim()) return;
-                  set({
-                    references: [
-                      ...form.references.filter((item) => item !== reference.trim()),
-                      reference.trim(),
-                    ],
-                  });
-                  setReference("");
-                }}
-              />
+              <div className="flex flex-wrap items-center gap-1">
+                <Button
+                  size="xs"
+                  variant="outline"
+                  disabled={!props.environmentId}
+                  onClick={() => setPicking({ route: "project", context: pickContext })}
+                  data-profile-reference-project
+                >
+                  <FileSearchIcon />
+                  Add from a project
+                </Button>
+                <Button
+                  size="xs"
+                  variant="outline"
+                  disabled={!props.environmentId}
+                  onClick={() => setPicking({ route: "browse", context: pickContext })}
+                  data-profile-reference-browse
+                >
+                  <FolderOpenIcon />
+                  Browse files
+                </Button>
+                {props.environmentId ? null : (
+                  <span className="text-2xs text-muted-foreground">
+                    Files are picked on the engine's environment, and none is connected.
+                  </span>
+                )}
+              </div>
             )}
+            {!locked && props.environmentId && picking?.context === pickContext ? (
+              <ReferenceFilePicker
+                key={pickContext}
+                environmentId={props.environmentId}
+                route={picking.route}
+                onClose={() => setPicking(null)}
+                onPick={(path) => addPicked(picking.context, path)}
+              />
+            ) : null}
             <p className="text-2xs text-muted-foreground">
               Every seat is told where these files are, and is given the short ones in full.
             </p>

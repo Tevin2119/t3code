@@ -81,9 +81,10 @@ interface Session {
   /** The build this page runs: the commit the server ran when the page first heard from it. */
   readonly loadedCommit: string | null;
   readonly pending: boolean;
-  readonly startFailed: boolean;
+  readonly startFailedFor: string | null;
   /** This tab asked for the update, so it takes the new build at once. */
   readonly startedHere: boolean;
+  /** A notice closed in this tab; spent once another non-null notice takes its place. */
   readonly closedKey: string | null;
   /** The state when the start request returned; an idle state after it means the supervisor passed. */
   readonly sentState: CheckoutUpdateState | null | undefined;
@@ -95,7 +96,7 @@ const newSession = (environmentId: EnvironmentId | null): Session => ({
   lastState: null,
   loadedCommit: null,
   pending: false,
-  startFailed: false,
+  startFailedFor: null,
   startedHere: false,
   closedKey: null,
   sentState: undefined,
@@ -141,6 +142,12 @@ export function CheckoutUpdateController({
     getLocalStorageItem(DISMISSED_KEY, DismissedCommit),
   );
   const view = checkoutUpdateView(state, { loadedCommit: current.loadedCommit, dismissedCommit });
+
+  // A close hides the notice as it is; once another notice takes its place the close is spent.
+  // A failure that comes again, even in the same words, is then shown after retry progress.
+  if (current.closedKey !== null && view !== null && view.key !== current.closedKey) {
+    current = { ...current, closedKey: null };
+  }
 
   // A start request is done once the server leaves the offer: under way, failed or done.
   // A supervisor already busy passes on it, so an idle state after the reply also ends it.
@@ -188,12 +195,13 @@ export function CheckoutUpdateController({
 
   const start = useCallback(() => {
     if (pendingRef.current || environmentId === null) return;
+    const offeredCommit = latestRef.current.state?.available?.commit ?? null;
     pendingRef.current = true;
     const attempt = ++attemptRef.current;
     setSession((previous) => ({
       ...previous,
       pending: true,
-      startFailed: false,
+      startFailedFor: null,
       startedHere: true,
       sentState: undefined,
     }));
@@ -208,7 +216,7 @@ export function CheckoutUpdateController({
       setSession((previous) => ({
         ...previous,
         pending: false,
-        startFailed: true,
+        startFailedFor: offeredCommit,
         startedHere: false,
       }));
       if (presentationRef.current === "toast") {
@@ -246,7 +254,7 @@ export function CheckoutUpdateController({
     presentation === "pill" && !reloadingHere
       ? checkoutUpdatePillView(view, {
           starting: current.pending,
-          startFailed: current.startFailed,
+          startFailedFor: current.startFailedFor,
           closedKey: current.closedKey,
         })
       : null;

@@ -1,5 +1,3 @@
-import * as NodeOS from "node:os";
-
 import type { ServerProviderUsageLimits, ServerProviderUsageWindow } from "@t3tools/contracts";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
@@ -23,6 +21,7 @@ import {
   ZAI_ORIGIN,
   ZHIPU_ORIGIN,
 } from "@t3tools/provider-core/server/zaiUsageLimits";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 
 const AuthFile = Schema.Struct({
   "opencode-go": Schema.optionalKey(Schema.Unknown),
@@ -45,7 +44,7 @@ const readAuthFile = Effect.fn("readOpenCodeAuthFile")(function* (env: NodeJS.Pr
   const path = yield* Path.Path;
   const dataHome =
     env.XDG_DATA_HOME ||
-    path.join(env.HOME || env.USERPROFILE || NodeOS.homedir(), ".local", "share");
+    path.join(env.HOME || env.USERPROFILE || (yield* HostProcess.HomeDirectory), ".local", "share");
   const contents =
     env.OPENCODE_AUTH_CONTENT ||
     (yield* fs.readFileString(path.join(dataHome, "opencode", "auth.json")).pipe(
