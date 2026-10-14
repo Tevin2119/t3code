@@ -18,6 +18,8 @@ import type {
 import type * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 
+import { piUsageFormat, piUsageReader } from "@t3tools/provider-pi/server/usage";
+
 import { claudeUsageFormat, claudeUsageReader } from "./claudeUsage.ts";
 import {
   CodexScanState,
@@ -114,4 +116,31 @@ export const attributedClaudeUsageReader: ProviderUsageReader<ClaudeSettings, Pa
 export const attributedCodexUsageReader: ProviderUsageReader<CodexSettings, Path.Path> = withFormat(
   codexUsageReader,
   attributedCodexUsageFormat as TranscriptUsageFormat<unknown>,
+);
+
+/**
+ * Pi records the provider of each model it called ("openai-codex/gpt-6-luna"). Its tool and
+ * summary records name none.
+ */
+function attributePi(records: readonly UsageRecord[]): readonly UsageRecord[] {
+  return records.map((record) => {
+    const slash = record.model.indexOf("/");
+    const known = slash > 0 && record.model !== "Tools/summaries";
+    return {
+      ...record,
+      modelProvider: known ? record.model.slice(0, slash) : null,
+      modelProviderSource: known ? "recorded" : null,
+    };
+  });
+}
+
+export const attributedPiUsageFormat: TranscriptUsageFormat<{ sessionId: string }> = {
+  ...piUsageFormat,
+  parseLine: (line, state) => attributePi(piUsageFormat.parseLine(line, state)),
+  parseProjected: (projected, state) => attributePi(piUsageFormat.parseProjected(projected, state)),
+};
+
+export const attributedPiUsageReader: typeof piUsageReader = withFormat(
+  piUsageReader,
+  attributedPiUsageFormat as TranscriptUsageFormat<unknown>,
 );

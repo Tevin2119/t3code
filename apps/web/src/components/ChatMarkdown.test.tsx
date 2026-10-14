@@ -17,7 +17,13 @@ import { GitHubIcon } from "./Icons";
 import { Button } from "./ui/button";
 import { setMarkdownTaskChecked } from "./files/filePreviewMode";
 
-vi.mock("@effect/atom-react", () => ({ useAtomValue: () => null }));
+vi.mock("../hooks/useFileMetadata", () => ({ useFileMetadata: () => null }));
+// An image's action bar reads its environment; the tests look only at what it wraps.
+vi.mock("./media/MediaActions", () => ({
+  MediaActions: ({ children }: { children: unknown }) => children,
+  useMediaActions: () => null,
+}));
+vi.mock("@effect/atom-react", () => ({ useAtomValue: () => null, useAtomRefresh: () => () => {} }));
 vi.mock("./chat/MermaidDiagram", () => ({
   // Real Mermaid needs layout APIs jsdom lacks; a rendered diagram is an SVG.
   MermaidDiagram: () => <svg aria-label="Diagram" />,

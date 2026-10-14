@@ -39,9 +39,9 @@ import type {
 import { DeepSeekDriver, type DeepSeekDriverEnv } from "./Drivers/DeepSeekDriver.ts";
 import { HermesDriver, type HermesDriverEnv } from "./Drivers/HermesDriver.ts";
 import { KimiDriver, type KimiDriverEnv } from "./Drivers/KimiDriver.ts";
-import { piUsageReader, type PiUsageReaderEnv } from "./Drivers/piUsage.ts";
 import {
   attributedClaudeUsageReader,
+  attributedPiUsageReader,
   attributedCodexUsageReader,
 } from "./Drivers/usageModelProviders.ts";
 
@@ -95,7 +95,7 @@ export type BuiltInUsageReadersEnv =
   | ProviderUsageReaderEnv<typeof KimiDriver>
   | ProviderUsageReaderEnv<typeof HermesDriver>
   | ProviderUsageReaderEnv<typeof DeepSeekDriver>
-  | PiUsageReaderEnv;
+  | ProviderUsageReaderEnv<typeof PiDriver>;
 
 /**
  * The drivers that keep usage history, in the order the usage page reads
@@ -114,7 +114,7 @@ export const BUILT_IN_USAGE_DRIVERS: ReadonlyArray<
   OpenCodeDriver,
   AntigravityDriver,
   CursorDriver,
-  { ...PiDriver, usage: piUsageReader },
+  { ...PiDriver, usage: attributedPiUsageReader },
   KimiDriver,
   HermesDriver,
   DeepSeekDriver,

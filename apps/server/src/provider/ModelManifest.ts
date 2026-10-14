@@ -33,6 +33,8 @@ import { ServerConfig } from "../config.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { hasValidClaudeManifestAdapters } from "./ClaudeModelManifest.ts";
 import bundledManifestJson from "./model-manifest.json" with { type: "json" };
+// The fork's own harnesses, kept apart from upstream's manifest so a sync never conflicts on it.
+import forkCompatibilityJson from "./fork-compatibility.json" with { type: "json" };
 import { ProviderCompatibilityPolicy } from "./providerCompatibility.ts";
 import * as ModelCatalog from "@t3tools/provider-core/server/ModelCatalog";
 
@@ -123,8 +125,12 @@ export type ModelManifestData = typeof ModelManifestSchema.Type;
 
 const decodeManifest = Schema.decodeUnknownEffect(ModelManifestSchema);
 
-export const BUNDLED_MODEL_MANIFEST: ModelManifestData =
-  Schema.decodeUnknownSync(ModelManifestSchema)(bundledManifestJson);
+export const BUNDLED_MODEL_MANIFEST: ModelManifestData = Schema.decodeUnknownSync(
+  ModelManifestSchema,
+)({
+  ...bundledManifestJson,
+  compatibility: [...(bundledManifestJson.compatibility ?? []), ...forkCompatibilityJson],
+});
 
 /** Epoch millis of the manifest's `updatedAt`, or 0 when absent or unparsable. */
 function manifestUpdatedAtMs(manifest: ModelManifestData): number {
