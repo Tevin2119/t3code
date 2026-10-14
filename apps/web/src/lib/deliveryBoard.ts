@@ -464,8 +464,8 @@ const isLaneEntry = (lane: unknown): boolean =>
 /**
  * How many tasks wait for the person, from a reading of ATTENTION_BOARD_PATH.
  * Null when the reading cannot be trusted, which is not the same as none: the
- * engine lists every lane even when it is empty, so a lane that is missing or
- * malformed says nothing about how many tasks are in it.
+ * engine lists every lane once, even when it is empty, so a lane that is
+ * missing, malformed or listed twice says nothing about how many tasks are in it.
  */
 export function boardAttentionCount(body: unknown): number | null {
   // Checked on the body as it came: parseBoard reads a malformed lane as an empty one.
@@ -474,7 +474,10 @@ export function boardAttentionCount(body: unknown): number | null {
   if (raw.view !== "development" || raw.set !== "all") return null;
   if (!Array.isArray(raw.lanes) || !raw.lanes.every(isLaneEntry)) return null;
   const board = parseBoard(body);
-  if (!board || !ATTENTION_LANES.every((id) => board.lanes.some((lane) => lane.lane === id))) {
+  if (
+    !board ||
+    !ATTENTION_LANES.every((id) => board.lanes.filter((lane) => lane.lane === id).length === 1)
+  ) {
     return null;
   }
   return board.lanes

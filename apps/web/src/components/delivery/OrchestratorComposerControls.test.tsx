@@ -39,13 +39,14 @@ const offered = (...names: ReadonlyArray<string>) =>
   names.map((team) => ({ team, available: true, seats: [], settings: [] }));
 const teams = offered("rnd", "alpha");
 let renderer: ReactTestRenderer | undefined;
+let environment: string | null = "env-a";
 const prompts = { t1: "Build this", t2: "Fix that" } as const;
 type Thread = keyof typeof prompts;
 let cleared: Array<Thread> = [];
 // The composer keeps one instance across threads and passes a fresh callback on each render.
 const view = (threadId: Thread) => (
   <OrchestratorComposerControls
-    environmentId={EnvironmentId.make("env-a")}
+    environmentId={environment === null ? null : EnvironmentId.make(environment)}
     threadId={threadId}
     prompt={prompts[threadId]}
     onPromptCleared={() => cleared.push(threadId)}
@@ -63,8 +64,54 @@ const alert = () =>
     .findAllByProps({ role: "alert" })
     .map((node) => node.children.join(""))
     .join(" ");
+const LOADING = "Teams are still loading.";
+const chosenTeam = () =>
+  renderer!.root.findByProps({ "aria-label": "Team" }).findByType("output").children;
+/** Asks once, and resolves when the work that followed has ended. */
+async function ask(request: "requestStart" | "requestSave") {
+  const ended = new Promise<void>((resolve) => {
+    let began = false;
+    const unsubscribe = useOrchestratorDraftStore.subscribe((state) => {
+      if (state.activity.t1?.busy) began = true;
+      else if (began) {
+        unsubscribe();
+        resolve();
+      }
+    });
+  });
+  await act(async () => {
+    store()[request]("t1");
+  });
+  await ended;
+  await render();
+}
+/** Enters, asks while the teams are still being read, and checks nothing went to the engine. */
+async function askWhilePending(request: "requestStart" | "requestSave") {
+  store().enter("t1", "env-a");
+  await render();
+  await act(() => store()[request]("t1"));
+  expect(alert()).toBe(LOADING);
+  expect(store().drafts.t1?.awaitingTeams).toBe(true);
+  expect(mock.action).not.toHaveBeenCalled();
+}
+async function startsForRnd() {
+  const navigated = new Promise<void>((resolve) =>
+    mock.navigate.mockImplementation(() => resolve()),
+  );
+  await act(async () => {
+    store().requestStart("t1");
+  });
+  await navigated;
+  expect(paths()).toEqual(["/api/tasks", "/api/tasks/task-1/submit"]);
+  expect(mock.action).toHaveBeenCalledWith(
+    "/api/tasks",
+    expect.objectContaining({ team: "rnd", draft: true, text: "Build this" }),
+  );
+  expect(mock.navigate).toHaveBeenCalledWith({ to: "/board", search: { task: "task-1" } });
+}
 beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  environment = "env-a";
   useDeliveryDraftStore.setState({ choices: {}, inherited: {}, remembered: {} });
   useOrchestratorDraftStore.setState({
     drafts: {},
@@ -223,6 +270,112 @@ it.each([null, "saved-task"])(
     expect(alert()).toBe("");
   },
 );
+
+it.each([
+  { engineThread: null, removeFirst: false },
+  { engineThread: null, removeFirst: true },
+  { engineThread: "saved-task", removeFirst: false },
+  { engineThread: "saved-task", removeFirst: true },
+])(
+  "keeps a missing choice blocked after failure ($engineThread, removed first: $removeFirst)",
+  async ({ engineThread, removeFirst }) => {
+    store().enter("t1", "env-a");
+    mock.reading = { body: teams, error: null };
+    await render();
+    await act(() => {
+      store().chooseTeam("t1", "env-a", "rnd");
+      if (engineThread) store().update("t1", { engineThread, savedText: "Earlier prompt" });
+    });
+    const reason = "Team rnd is not offered here. Choose another team.";
+    if (removeFirst) {
+      mock.reading = { body: offered("alpha"), error: null };
+      await render();
+      expect(alert()).toBe(reason);
+    }
+    mock.reading = { body: offered("alpha"), error: "offline" };
+    await render();
+    expect(alert()).toBe(reason);
+    expect(store().activity.t1).toMatchObject({
+      teamAvailabilityReason: reason,
+      blocked: "Delivery engine not reachable. offline",
+    });
+    await act(() => {
+      store().requestSave("t1");
+      store().requestStart("t1");
+    });
+    expect(mock.action).not.toHaveBeenCalled();
+    expect(alert()).toBe(reason);
+
+    mock.reading = { body: teams, error: null };
+    await render();
+    expect(alert()).toBe("");
+    expect(store().activity.t1?.teamAvailabilityReason).toBeNull();
+    expect(mock.action).not.toHaveBeenCalled();
+    await act(async () => store().requestSave("t1"));
+    expect(mock.action).toHaveBeenCalledTimes(1);
+    expect(mock.action).toHaveBeenCalledWith(
+      engineThread ? `/api/tasks/${engineThread}/edit` : "/api/tasks",
+      expect.objectContaining({ team: "rnd" }),
+    );
+  },
+);
+
+it.each([null, "saved-task"])(
+  "distinguishes successful empty from failed retained empty for a settled draft (%s)",
+  async (engineThread) => {
+    store().enter("t1", "env-a");
+    store().chooseTeam("t1", "env-a", "rnd");
+    if (engineThread) store().update("t1", { engineThread });
+    mock.reading = { body: [], error: null };
+    await render();
+    expect(alert()).toBe("No teams are available to choose from.");
+    expect(store().activity.t1?.teamAvailabilityReason).toBe(alert());
+    mock.reading = { body: [], error: "offline" };
+    await render();
+    expect(alert()).toBe("Team rnd is not offered here. Choose another team.");
+    expect(store().activity.t1?.teamAvailabilityReason).toBe(alert());
+    expect(store().activity.t1?.blocked).toBe("Delivery engine not reachable. offline");
+    await act(() => {
+      store().requestSave("t1");
+      store().requestStart("t1");
+    });
+    expect(mock.action).not.toHaveBeenCalled();
+  },
+);
+
+it.each([
+  { name: "settled offered choice", body: offered("rnd"), awaitingTeams: false },
+  { name: "settled choice without a body", body: null, awaitingTeams: false },
+  { name: "awaiting choice without a body", body: null, awaitingTeams: true },
+  {
+    name: "awaiting choice missing from retained list",
+    body: offered("alpha"),
+    awaitingTeams: true,
+  },
+])("preserves Save behavior on failure for $name", async ({ body, awaitingTeams }) => {
+  store().enter("t1", "env-a");
+  if (!awaitingTeams) store().chooseTeam("t1", "env-a", "rnd");
+  const originalTeam = store().drafts.t1?.team;
+  mock.reading = { body, error: "offline" };
+  await render();
+  expect(alert()).toBe("");
+  expect(store().activity.t1?.teamAvailabilityReason).toBeNull();
+  expect(store().activity.t1?.blocked).toBe("Delivery engine not reachable. offline");
+  expect(store().drafts.t1?.team).toBe(originalTeam);
+  expect(store().drafts.t1?.awaitingTeams === true).toBe(awaitingTeams);
+  await act(() => store().requestStart("t1"));
+  expect(mock.action).not.toHaveBeenCalled();
+  await act(async () => store().requestSave("t1"));
+  if (awaitingTeams) {
+    expect(mock.action).not.toHaveBeenCalled();
+  } else {
+    expect(mock.action).toHaveBeenCalledTimes(1);
+    expect(mock.action).toHaveBeenCalledWith(
+      "/api/tasks",
+      expect.objectContaining({ team: "rnd", draft: true }),
+    );
+  }
+});
 
 it("keeps read errors distinct from empty lists", async () => {
   store().enter("t1", "env-a");
@@ -384,3 +537,112 @@ it("starts a thread switched to once, when Start is asked on it", async () => {
   await switchTo("t1");
   expect(paths()).toEqual(["/api/tasks", "/api/tasks/task-2/submit"]);
 });
+const requests = ["requestStart", "requestSave"] as const;
+
+it.each(requests)("drops the loading notice of a pending %s once teams load", async (request) => {
+  await askWhilePending(request);
+  mock.reading = { body: teams, error: null };
+  await render();
+  expect(chosenTeam()).toEqual(["rnd"]);
+  expect(alert()).toBe("");
+  expect(store().activity.t1?.blocked).toBeNull();
+  expect(store().drafts.t1).not.toHaveProperty("awaitingTeams");
+  // A later reading of the same teams does not bring the notice back.
+  mock.reading = { body: offered("rnd", "alpha"), error: null };
+  await render();
+  expect(alert()).toBe("");
+  expect(mock.action).not.toHaveBeenCalled();
+  await startsForRnd();
+});
+
+it.each(requests)(
+  "gives the loading notice of a pending %s up to an empty list, then to nothing",
+  async (request) => {
+    await askWhilePending(request);
+    const alerts = () => renderer!.root.findAllByProps({ role: "alert" }).length;
+    expect(alerts()).toBe(1);
+    mock.reading = { body: [], error: null };
+    await render();
+    expect(alerts()).toBe(1);
+    expect(alert()).toBe("No teams are available to choose from.");
+    expect(store().drafts.t1?.awaitingTeams).toBe(true);
+    mock.reading = { body: teams, error: null };
+    await render();
+    expect(alert()).toBe("");
+    expect(store().drafts.t1).not.toHaveProperty("awaitingTeams");
+    expect(mock.action).not.toHaveBeenCalled();
+    await startsForRnd();
+  },
+);
+
+it.each(requests)(
+  "drops the loading notice of a pending %s under a read error",
+  async (request) => {
+    await askWhilePending(request);
+    mock.reading = { body: null, error: "offline" };
+    await render();
+    expect(alert()).toBe("");
+    expect(store().activity.t1?.blocked).toBe("Delivery engine not reachable. offline");
+    // The request was refused for loading, and it is loading again: the notice is true once more.
+    mock.reading = { body: null, error: null };
+    await render();
+    expect(alert()).toBe(LOADING);
+    expect(mock.action).not.toHaveBeenCalled();
+  },
+);
+
+it("puts a missing environment and a read error before loading on Start", async () => {
+  store().enter("t1", "env-a");
+  environment = null;
+  await render();
+  await act(() => store().requestStart("t1"));
+  expect(alert()).toBe("No environment is connected.");
+  environment = "env-a";
+  mock.reading = { body: null, error: "offline" };
+  await render();
+  await act(() => store().requestStart("t1"));
+  expect(alert()).toBe("Delivery engine not reachable. offline");
+  mock.reading = { body: null, error: null };
+  await render();
+  await act(() => store().requestStart("t1"));
+  expect(alert()).toBe(LOADING);
+  expect(mock.action).not.toHaveBeenCalled();
+});
+
+it.each([
+  ["requestSave", "/api/tasks"],
+  ["requestStart", "/api/tasks/task-1/submit"],
+] as const)(
+  "keeps what the engine said to %s until the next attempt, whatever the teams do",
+  async (request, failing) => {
+    store().enter("t1", "env-a");
+    mock.reading = { body: teams, error: null };
+    await render();
+    expect(store().drafts.t1).not.toHaveProperty("awaitingTeams");
+    // The engine's own words, even these, are not the composer's loading notice.
+    mock.action.mockImplementation(async (path: string) =>
+      path === failing
+        ? { ok: false, problems: [LOADING] }
+        : { ok: true, body: { id: "task-1", card: {} } },
+    );
+    await ask(request);
+    expect(alert()).toBe(LOADING);
+    const asked = mock.action.mock.calls.length;
+
+    mock.reading = { body: null, error: null };
+    await render();
+    expect(alert()).toBe(LOADING);
+    mock.reading = { body: offered("rnd", "alpha"), error: null };
+    await render();
+    expect(alert()).toBe(LOADING);
+    expect(mock.action).toHaveBeenCalledTimes(asked);
+    expect(mock.navigate).not.toHaveBeenCalled();
+
+    mock.action.mockImplementation(async () => ({ ok: true, body: { id: "task-1", card: {} } }));
+    await ask("requestSave");
+    expect(alert()).toBe("");
+    expect(paths().at(-1)).toBe(
+      request === "requestSave" ? "/api/tasks" : "/api/tasks/task-1/edit",
+    );
+  },
+);
