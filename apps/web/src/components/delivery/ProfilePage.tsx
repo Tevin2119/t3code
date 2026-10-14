@@ -3,6 +3,8 @@ import { useNavigate, useSearch } from "@tanstack/react-router";
 import {
   ArrowLeftIcon,
   CopyIcon,
+  FileSearchIcon,
+  FolderOpenIcon,
   HistoryIcon,
   PlusIcon,
   RefreshCwIcon,
@@ -10,7 +12,7 @@ import {
   Trash2Icon,
   XIcon,
 } from "lucide-react";
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { isElectron } from "../../env";
 import {
@@ -24,6 +26,7 @@ import {
   type ProfileSummary,
   type ProfileView,
 } from "../../lib/delivery";
+import { addReference } from "../../lib/deliveryReferences";
 import { entryForHarness, harnessLabel, harnessOfDriver } from "../../lib/deliverySeats";
 import { cn } from "../../lib/utils";
 import {
@@ -54,6 +57,7 @@ import { Switch } from "../ui/switch";
 import { Textarea } from "../ui/textarea";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { WorkspacePageHeader } from "../WorkspacePageHeader";
+import { ReferenceFilePicker } from "./ReferenceFilePicker";
 import { useSeatCatalog } from "./SeatSettingsPanel";
 import { SetupPanel } from "./SetupPanel";
 import { TeamDefaultsDialog } from "./TeamDefaultsDialog";
@@ -473,7 +477,6 @@ function ProfileEditor(props: {
     setForm(view.form);
   }
   const [note, setNote] = useState("");
-  const [reference, setReference] = useState("");
   const [busy, setBusy] = useState(false);
   const working = useRef(false);
   const [problems, setProblems] = useState<ReadonlyArray<string>>([]);
@@ -481,6 +484,20 @@ function ProfileEditor(props: {
   const [section, setSection] = useState<"profile" | "setup">("profile");
   const [removing, setRemoving] = useState(false);
   const locked = !view.editable;
+  // A picker is for the profile and engine it was opened on; another one closes it.
+  const pickContext = `${props.environmentId ?? ""}|${view.profile}`;
+  const [picking, setPicking] = useState<{
+    readonly route: "project" | "browse";
+    readonly context: string;
+  } | null>(null);
+  const pickedFor = useRef(pickContext);
+  useEffect(() => {
+    pickedFor.current = pickContext;
+  }, [pickContext]);
+  const addPicked = (context: string, path: string) => {
+    if (locked || pickedFor.current !== context) return;
+    setForm((current) => ({ ...current, references: addReference(current.references, path) }));
+  };
   const changed = JSON.stringify(form) !== JSON.stringify(view.form);
   const set = (patch: Partial<ProfileForm>) => setForm((current) => ({ ...current, ...patch }));
   const setSeat = (index: number, seat: ProfileSeat) =>
@@ -971,7 +988,7 @@ function ProfileEditor(props: {
             <ul className="flex flex-col gap-0.5 text-xs">
               {form.references.map((file) => (
                 <li key={file} className="flex items-center gap-1">
-                  <span className="min-w-0 flex-1 truncate font-mono text-2xs">{file}</span>
+                  <span className="min-w-0 flex-1 font-mono text-2xs break-all">{file}</span>
                   {locked ? null : (
                     <button
                       type="button"
@@ -988,24 +1005,43 @@ function ProfileEditor(props: {
               ))}
             </ul>
             {locked ? null : (
-              <Input
-                aria-label="Add a reference file"
-                placeholder="Full path of a file on the engine's host, then Enter"
-                className="h-7  "
-                value={reference}
-                onChange={(event) => setReference(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key !== "Enter" || !reference.trim()) return;
-                  set({
-                    references: [
-                      ...form.references.filter((item) => item !== reference.trim()),
-                      reference.trim(),
-                    ],
-                  });
-                  setReference("");
-                }}
-              />
+              <div className="flex flex-wrap items-center gap-1">
+                <Button
+                  size="xs"
+                  variant="outline"
+                  disabled={!props.environmentId}
+                  onClick={() => setPicking({ route: "project", context: pickContext })}
+                  data-profile-reference-project
+                >
+                  <FileSearchIcon />
+                  Add from a project
+                </Button>
+                <Button
+                  size="xs"
+                  variant="outline"
+                  disabled={!props.environmentId}
+                  onClick={() => setPicking({ route: "browse", context: pickContext })}
+                  data-profile-reference-browse
+                >
+                  <FolderOpenIcon />
+                  Browse files
+                </Button>
+                {props.environmentId ? null : (
+                  <span className="text-2xs text-muted-foreground">
+                    Files are picked on the engine's environment, and none is connected.
+                  </span>
+                )}
+              </div>
             )}
+            {!locked && props.environmentId && picking?.context === pickContext ? (
+              <ReferenceFilePicker
+                key={pickContext}
+                environmentId={props.environmentId}
+                route={picking.route}
+                onClose={() => setPicking(null)}
+                onPick={(path) => addPicked(picking.context, path)}
+              />
+            ) : null}
             <p className="text-2xs text-muted-foreground">
               Every seat is told where these files are, and is given the short ones in full.
             </p>
