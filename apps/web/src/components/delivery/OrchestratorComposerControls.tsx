@@ -18,6 +18,8 @@ import {
   teamTaskBlock,
 } from "../../lib/delivery";
 import { cn } from "../../lib/utils";
+import { boardPlacementChoices, matchingProjectBoard } from "../../lib/deliveryBoardPlacement";
+import { BoardDialog, BoardPicker, type PickerItem } from "./BoardPicker";
 import {
   useDeliveryAct,
   useDeliveryRead,
@@ -81,6 +83,53 @@ export function OrchestratorComposerControls(props: {
     );
   }, [awaitingTeams, props.threadId, reconcileTeam, teams, teamsLoaded]);
   const act = useDeliveryAct(props.environmentId, "orchestrator draft");
+  const boardsRead = useDeliveryRead(props.environmentId, "/api/boards", { pollMs: 10_000 });
+  const boards = useMemo(() => boardPlacementChoices(boardsRead.body), [boardsRead.body]);
+  const taskRead = useDeliveryRead(
+    props.environmentId,
+    draft?.engineThread ? `/api/tasks/${draft.engineThread}` : null,
+  );
+  const savedTask = useMemo(() => parseTask(taskRead.body), [taskRead.body]);
+  const board =
+    draft?.board !== undefined
+      ? draft.board
+      : draft?.engineThread
+        ? (savedTask?.card.set ?? null)
+        : matchingProjectBoard(boardsRead.body, props.workspace);
+  const [boardDialog, setBoardDialog] = useState<{ editing: PickerItem | null } | null>(null);
+  const [boardBusy, setBoardBusy] = useState(false);
+  const [boardProblem, setBoardProblem] = useState<string | null>(null);
+  const saveBoard = async (input: {
+    title: string;
+    description: string;
+    repository?: string;
+    base?: string;
+    workspace?: string;
+  }) => {
+    setBoardBusy(true);
+    setBoardProblem(null);
+    try {
+      const result = await act(
+        boardDialog?.editing ? `/api/boards/${boardDialog.editing.id}/edit` : "/api/boards",
+        { ...input, by: person },
+      );
+      if (!result.ok) {
+        setBoardProblem(result.why);
+        return;
+      }
+      if (
+        !boardDialog?.editing &&
+        result.body &&
+        typeof result.body === "object" &&
+        "id" in result.body
+      )
+        update(props.threadId, { board: String(result.body.id) });
+      setBoardDialog(null);
+      boardsRead.refresh();
+    } finally {
+      setBoardBusy(false);
+    }
+  };
   const [busy, setBusy] = useState<"save" | "start" | null>(null);
   // Held from the press to the answer, so a second press cannot start a second workflow.
   const working = useRef(false);
@@ -184,6 +233,7 @@ export function OrchestratorComposerControls(props: {
       text,
       seats: seatsToSend,
       by: person,
+      ...(!draft.engineThread && board ? { board } : {}),
       ...(["chat", "non-code"].includes(flow) && props.workspace
         ? { workspace: props.workspace }
         : {}),
@@ -200,10 +250,25 @@ export function OrchestratorComposerControls(props: {
       report(["The delivery engine answered with something that is not a task."]);
       return null;
     }
-    update(props.threadId, { engineThread: task.id, savedText: text });
+    update(props.threadId, { engineThread: task.id });
+    if (draft.engineThread && draft.board !== undefined && draft.board !== task.card.set) {
+      const placement = await act(`/api/tasks/${task.id}/board`, {
+        board: draft.board,
+        by: person,
+      });
+      if (!placement.ok) {
+        report([placement.why]);
+        return null;
+      }
+    }
+    update(props.threadId, {
+      savedText: text,
+      board: draft.engineThread && draft.board === undefined ? task.card.set : board,
+    });
     return task.id;
   }, [
     act,
+    board,
     draft,
     flow,
     person,
@@ -361,6 +426,41 @@ export function OrchestratorComposerControls(props: {
           ))}
         </SelectPopup>
       </Select>
+
+      <BoardPicker
+        label="Board"
+        marker="composer"
+        look="field"
+        items={[
+          {
+            id: "__no_board__",
+            title: "Not on a board",
+            description: "Keep this work outside boards.",
+            kind: "built-in",
+          },
+          ...boards,
+        ]}
+        value={board ?? "__no_board__"}
+        newLabel="New board…"
+        onChoose={(id) => update(props.threadId, { board: id === "__no_board__" ? null : id })}
+        onCreate={() => setBoardDialog({ editing: null })}
+        onEdit={(editing) => setBoardDialog({ editing })}
+        noneYet="Create a board for this project, or keep the chat off boards."
+      />
+      {boardDialog ? (
+        <BoardDialog
+          key={boardDialog.editing?.id ?? "new"}
+          kind="board"
+          environmentId={props.environmentId}
+          workspace={props.workspace ?? null}
+          by={person}
+          editing={boardDialog.editing}
+          busy={boardBusy}
+          problem={boardProblem}
+          onClose={() => setBoardDialog(null)}
+          onSave={(input) => void saveBoard(input)}
+        />
+      ) : null}
 
       <Popover>
         <PopoverTrigger

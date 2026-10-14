@@ -1,5 +1,6 @@
 import { assert, it } from "@effect/vitest";
 import {
+  DELIVERY_HARNESS_BY_DRIVER,
   DeliveryError,
   ProviderDriverKind,
   ProviderInstanceId,
@@ -37,18 +38,21 @@ const input = {
     cwd: "/workspace",
   },
 };
-const testLayer = (openSession: ProviderAdapterV2["Service"]["openSession"]) => {
+const testLayer = (
+  openSession: ProviderAdapterV2["Service"]["openSession"],
+  testDriver = driver,
+) => {
   const instance: ProviderInstance = {
     instanceId,
-    driverKind: driver,
-    continuationIdentity: { driverKind: driver, continuationKey: "team-provider" },
+    driverKind: testDriver,
+    continuationIdentity: { driverKind: testDriver, continuationKey: "team-provider" },
     displayName: "Team provider",
     enabled: true,
     snapshot: {} as ProviderInstance["snapshot"],
     textGeneration: {} as ProviderInstance["textGeneration"],
     orchestrationAdapter: {
       instanceId,
-      driver,
+      driver: testDriver,
       openSession,
       getCapabilities: () => Effect.die("not used"),
       planSelectionTransition: () => Effect.succeed({ type: "apply_on_next_turn" }),
@@ -66,6 +70,41 @@ const testLayer = (openSession: ProviderAdapterV2["Service"]["openSession"]) => 
     ),
   );
 };
+
+it.effect.each(Object.keys(DELIVERY_HARNESS_BY_DRIVER))(
+  "team setup refusal prevents %s from launching unseeded",
+  (driverName) => {
+    const testDriver = ProviderDriverKind.make(driverName);
+    let launched = false;
+    return Effect.gen(function* () {
+      yield* Effect.acquireRelease(
+        Effect.sync(() =>
+          DeliveryThreadSession.registerDeliveryPreparer((id, actual) => {
+            assert.strictEqual(id, threadId);
+            assert.deepEqual(actual, { driver: driverName, cwd: "/workspace" });
+            return Effect.fail(
+              new DeliveryError({ reason: "mismatch", detail: "Team seeding failed." }),
+            );
+          }),
+        ),
+        () => Effect.sync(() => DeliveryThreadSession.registerDeliveryPreparer(undefined)),
+      );
+      const registry = yield* ProviderAdapterRegistry.ProviderAdapterRegistryV2;
+      const adapter = yield* registry.get(instanceId);
+      const result = yield* adapter.openSession(input).pipe(Effect.result);
+      assert.strictEqual(result._tag, "Failure");
+      assert.strictEqual(launched, false);
+    }).pipe(
+      Effect.provide(
+        testLayer(() => {
+          launched = true;
+          return Effect.die("An unseeded provider must not launch.");
+        }, testDriver),
+      ),
+      Effect.scoped,
+    );
+  },
+);
 
 it.effect(
   "a bound team's setup refusal prevents a provider without an auth controller from launching",

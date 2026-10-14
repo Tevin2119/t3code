@@ -5841,6 +5841,11 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
               traitsMenuContent={
                 hiddenRestingBlockIds.includes("traits") ? providerTraitsMenuContent : undefined
               }
+              teamControls={
+                hiddenRestingBlockIds.includes("team")
+                  ? restingBlockDefs.find((def) => def.id === "team")?.content
+                  : undefined
+              }
               onToggleInteractionMode={toggleInteractionMode}
               onRuntimeModeChange={handleRuntimeModeChange}
             />

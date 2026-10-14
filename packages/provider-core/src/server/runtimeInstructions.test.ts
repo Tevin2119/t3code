@@ -1,7 +1,39 @@
 import { describe, expect, it } from "vite-plus/test";
+import { ThreadId } from "@t3tools/contracts";
+import { clearDeliveryThreadSession, setDeliveryThreadSession } from "./deliveryThreadSession.ts";
 import { buildRuntimeInstructions } from "./runtimeInstructions.ts";
 
 describe("buildRuntimeInstructions", () => {
+  it.each(["OpenCode", "Pi", "Kimi", "Hermes", "DeepSeek", "Antigravity"])(
+    "keeps %s team instructions thread-scoped and reflects updated seeding",
+    (harness) => {
+      const threadId = ThreadId.make(`seed-${harness}`);
+      const otherThreadId = ThreadId.make(`other-${harness}`);
+      const session = {
+        threadId,
+        team: "ilm",
+        role: "reviewer",
+        configuration: "revision-1",
+        instructions: "Review all four assignment variants.",
+        servers: {},
+      };
+      try {
+        setDeliveryThreadSession(session);
+        expect(buildRuntimeInstructions({ harness, threadId })).toContain(session.instructions);
+        expect(buildRuntimeInstructions({ harness, threadId: otherThreadId })).not.toContain(
+          session.instructions,
+        );
+        setDeliveryThreadSession({ ...session, instructions: "Review the revised drafts." });
+        expect(buildRuntimeInstructions({ harness, threadId })).toContain(
+          "Review the revised drafts.",
+        );
+        expect(buildRuntimeInstructions({ harness, threadId })).not.toContain(session.instructions);
+      } finally {
+        clearDeliveryThreadSession(threadId);
+      }
+      expect(buildRuntimeInstructions({ harness, threadId })).not.toContain("team_instructions");
+    },
+  );
   it("requires explicit registration of every PR and stack layer", () => {
     const instructions = buildRuntimeInstructions({ harness: "Codex" });
     expect(instructions).toContain("When the t3-code MCP server exposes link_pull_request");

@@ -7,6 +7,7 @@ import { OrchestratorComposerControls } from "./OrchestratorComposerControls";
 
 const mock = vi.hoisted(() => ({
   reading: { body: null as unknown, error: null as string | null },
+  boards: { body: null as unknown, error: null as string | null, refresh: vi.fn() },
   action: vi.fn(),
   navigate: vi.fn(),
   promptCleared: vi.fn(),
@@ -14,7 +15,8 @@ const mock = vi.hoisted(() => ({
 vi.mock("@tanstack/react-router", () => ({ useNavigate: () => mock.navigate }));
 vi.mock("../../state/delivery", async (original) => ({
   ...(await original<typeof import("../../state/delivery")>()),
-  useDeliveryRead: () => mock.reading,
+  useDeliveryRead: (_environment: unknown, path: string | null) =>
+    path === "/api/boards" ? mock.boards : mock.reading,
   useDeliveryAct: () => mock.action,
 }));
 vi.mock("./OrchestratorPanel", () => ({ useFlowPreview: () => null }));
@@ -35,6 +37,7 @@ vi.mock("./InfoPopover", () => ({ InfoPopover: "info-popover" }));
 vi.mock("./SeatSettingsPanel", () => ({ SeatSettingsPanel: "seat-settings" }));
 vi.mock("./SetupPanel", () => ({ SetupPanel: "setup-panel" }));
 vi.mock("./TeamDefaultsDialog", () => ({ TeamDefaultsDialog: "team-defaults" }));
+vi.mock("./BoardPicker", () => ({ BoardPicker: "board-picker", BoardDialog: "board-dialog" }));
 const store = () => useOrchestratorDraftStore.getState();
 const offered = (...names: ReadonlyArray<string>) =>
   names.map((team) => ({ team, available: true, seats: [], settings: [] }));
@@ -126,6 +129,7 @@ beforeEach(() => {
     startRequests: {},
   });
   mock.reading = { body: null, error: null };
+  mock.boards.body = null;
   mock.navigate.mockReset();
   mock.promptCleared.mockReset();
   cleared = [];
@@ -144,6 +148,53 @@ afterEach(async () => {
   await act(() => renderer?.unmount());
   renderer = undefined;
   vi.unstubAllGlobals();
+});
+
+it("suggests the project board but preserves an explicit choice to stay unboarded", async () => {
+  workspace = "/projects/ILM";
+  mock.reading = { body: teams, error: null };
+  mock.boards.body = [
+    {
+      id: "ilm",
+      title: "ILM",
+      target: { repository: null, base: null, path: workspace, title: "ILM", ok: true },
+    },
+  ];
+  store().enter("t1", "env-a");
+  store().chooseTeam("t1", "env-a", "rnd");
+  await render();
+  expect(renderer!.root.find((node) => String(node.type) === "board-picker").props.value).toBe(
+    "ilm",
+  );
+  await act(() =>
+    renderer!.root
+      .find((node) => String(node.type) === "board-picker")
+      .props.onChoose("__no_board__"),
+  );
+  await ask("requestSave");
+  expect(mock.action.mock.calls[0]?.[1]).not.toHaveProperty("board");
+  expect(store().drafts.t1?.board).toBeNull();
+  await render();
+  expect(renderer!.root.find((node) => String(node.type) === "board-picker").props.value).toBe(
+    "__no_board__",
+  );
+});
+
+it("files a new chat onto the uniquely matched project board", async () => {
+  workspace = "/projects/ILM";
+  mock.reading = { body: teams, error: null };
+  mock.boards.body = [
+    {
+      id: "ilm",
+      title: "ILM",
+      target: { repository: null, base: null, path: workspace, title: "ILM", ok: true },
+    },
+  ];
+  store().enter("t1", "env-a");
+  store().chooseTeam("t1", "env-a", "rnd");
+  await render();
+  await ask("requestSave");
+  expect(mock.action.mock.calls[0]?.[1]).toMatchObject({ board: "ilm" });
 });
 
 it.each(["chat", "non-code"])(

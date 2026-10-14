@@ -518,6 +518,7 @@ function EnvironmentBoardPage({ environmentId }: { readonly environmentId: Envir
     readonly description: string;
     readonly lanes?: ReadonlyArray<string>;
     readonly repository?: string;
+    readonly workspace?: string;
     readonly base?: string;
   }) => {
     if (!dialog) return;
