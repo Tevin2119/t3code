@@ -3,6 +3,7 @@ import * as NodeURL from "node:url";
 
 const root = NodeURL.fileURLToPath(new URL("../", import.meta.url));
 const tests = [
+  "apps/mobile/src/features/usage/usageProviders.test.ts",
   "apps/web/src/components/ChatView.logic.test.ts",
   "apps/mobile/src/lib/deliveryModelOptions.test.ts",
   "apps/mobile/src/lib/modelOptions.test.ts",
@@ -12,6 +13,8 @@ const tests = [
   "packages/client-runtime/src/state/deliveryModelBinding.test.ts",
 ];
 const lint = [
+  "apps/mobile/src/features/usage/usageProviders.ts",
+  "apps/mobile/src/features/usage/usageProviders.test.ts",
   "apps/mobile/src/features/threads/ThreadComposer.tsx",
   "apps/mobile/src/features/threads/ThreadSettingsRows.shared.tsx",
   "apps/mobile/src/features/threads/ThreadSettingsSheet.tsx",
