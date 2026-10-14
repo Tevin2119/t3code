@@ -111,7 +111,7 @@ export function useSeatCatalog(environmentId: EnvironmentId | null) {
   const providers = environment?.serverConfig?.providers ?? EMPTY_SERVER_PROVIDERS;
   return useMemo(() => {
     const entries = sortProviderInstanceEntries(
-      applyProviderInstanceSettings(deriveProviderInstanceEntries(providers), settings),
+      applyProviderInstanceSettings(deriveProviderInstanceEntries(providers), settings, null),
     ).filter((entry) => harnessOfDriver(entry.driverKind) !== null);
     return { entries, options: getCustomModelOptionsByInstance(settings, providers) };
   }, [providers, settings]);
@@ -278,6 +278,7 @@ export function SeatSettingsPanel(props: {
                     </span>
                   ) : entry ? (
                     <ProviderModelPicker
+                      environmentId={props.environmentId}
                       activeInstanceId={entry.instanceId}
                       model={values.model ?? ""}
                       lockedProvider={null}

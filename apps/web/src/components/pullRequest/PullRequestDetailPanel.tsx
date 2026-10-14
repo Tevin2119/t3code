@@ -2,7 +2,12 @@ import { parseChangeRequestUrl } from "@t3tools/shared/changeRequestUrl";
 import { useAtomValue } from "@effect/atom-react";
 import { usePullRequestStack } from "~/state/usePullRequestStack";
 import { RefreshIcon } from "~/components/ui/refresh-icon";
-import { scopedThreadKey, scopeProjectRef } from "@t3tools/client-runtime/environment";
+import { AnimatedWidth } from "~/components/AnimatedWidth";
+import {
+  scopedThreadKey,
+  scopeProjectRef,
+  scopeThreadRef,
+} from "@t3tools/client-runtime/environment";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import {
   AuthOrchestrationOperateScope,
@@ -13,6 +18,7 @@ import {
   type PullRequestListEntry,
   type PullRequestUpdateMethod,
   type PullRequestRef,
+  type PullRequestReviewGuideStop,
   resolveEnvironmentMachineKind,
   type ScopedThreadRef,
 } from "@t3tools/contracts";
@@ -21,6 +27,7 @@ import {
   ArrowLeftIcon,
   ArrowUpRightIcon,
   BookOpenIcon,
+  CheckIcon,
   CircleDotIcon,
   CopyIcon,
   ChevronDownIcon,
@@ -37,6 +44,7 @@ import {
   PanelRightIcon,
   PlayIcon,
   RotateCcwIcon,
+  SparklesIcon,
   TriangleAlertIcon,
 } from "lucide-react";
 import {
@@ -54,6 +62,8 @@ import {
 } from "react";
 
 import { type DraftId, useComposerDraftStore } from "~/composerDraftStore";
+import { useRightPanelStore } from "~/rightPanelStore";
+import { useEnvironmentSettings } from "~/hooks/useSettings";
 import { useNewThreadHandler } from "~/hooks/useHandleNewThread";
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
 import { isCommandPaletteOpen } from "~/commandPaletteBus";
@@ -83,6 +93,7 @@ import {
 } from "~/state/pullRequests";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { PullRequestStackMenu } from "./PullRequestStackMenu";
+import { sourceControlClients } from "@t3tools/client-runtime/source-control-clients";
 import { PullRequestThreadLinks } from "./PullRequestThreadLinks";
 import { vcsEnvironment } from "~/state/vcs";
 import { formatRelativeTimeLabel } from "~/timestampFormat";
@@ -126,6 +137,7 @@ import { PullRequestSummaryTab } from "./PullRequestSummaryTab";
 import { PullRequestTimelineTab } from "./PullRequestTimelineTab";
 import {
   buildAddSelectionToAgentHandoff,
+  buildAskAboutGuideStopHandoff,
   buildAskAboutPullRequestHandoff,
   buildExplainPullRequestHandoff,
   buildFixFindingHandoff,
@@ -174,9 +186,12 @@ import {
   summarizePullRequestChecks,
 } from "./pullRequestPresentation";
 import { PullRequestGlyph } from "./pullRequestIcons";
+import { PullRequestGuideTab } from "./PullRequestGuideTab";
+import { guideRunKey, useGuideRunStore } from "./guide/guideRunStore";
+import { useReviewGuideWriter } from "./guide/useReviewGuideWriter";
 import { useInlineActionConfirm } from "./useInlineActionConfirm";
 
-type DetailTab = "summary" | "timeline" | "code";
+type DetailTab = "summary" | "guide" | "timeline" | "code";
 
 /** Said as the thing that did not happen, rather than as the operation that returned an error. */
 const ACTION_FAILURE_LABELS: Record<PullRequestAction, string> = {
@@ -227,6 +242,7 @@ const UPDATE_BRANCH_REBASE_FAILURE_HINT =
 
 const TABS: ReadonlyArray<{ value: DetailTab; label: string }> = [
   { value: "summary", label: "Summary" },
+  { value: "guide", label: "Guide" },
   { value: "timeline", label: "Timeline" },
   { value: "code", label: "Code" },
 ];
@@ -302,7 +318,7 @@ const openNumberContextMenu = (
   event.stopPropagation();
   void showPullRequestLinkContextMenu({
     url: detail.url,
-    openLabel: openOnHostLabel(detail.provider),
+    openLabel: openOnHostLabel(sourceControlClients.get(detail.provider)),
     position: { x: event.clientX, y: event.clientY },
   });
 };
@@ -405,6 +421,7 @@ export function PullRequestDetailPanel({
   composerDraftTarget,
   onBack,
   onSelectPullRequest,
+  onGuideShown,
 }: {
   environmentId: EnvironmentId;
   shortcutsEnabled: boolean;
@@ -452,6 +469,8 @@ export function PullRequestDetailPanel({
    * expects to land on it, with this one still open behind.
    */
   onBack?: (() => void) | undefined;
+  /** Told when a written guide comes on screen. The page maximizes its panel for the guide. */
+  onGuideShown?: (() => void) | undefined;
 }) {
   const environmentConfigs = useServerConfigs();
   const projects = useProjects();
@@ -483,6 +502,8 @@ export function PullRequestDetailPanel({
       ? listEntry
       : null;
   const [threadPickerOpen, setThreadPickerOpen] = useState(false);
+  // Counted up by the guide's last stop to open the composer on the review.
+  const [openReviewRequest, setOpenReviewRequest] = useState(0);
   const [tab, setTab] = useState<DetailTab>("summary");
   const [timelineOrder, setTimelineOrder] = useState<"newest" | "oldest">("newest");
   const [codeCommitScope, setCodeCommitScope] = useState<{
@@ -498,6 +519,25 @@ export function PullRequestDetailPanel({
     selectCodeCommit(oid);
     setTab("code");
   };
+  // The guide names files; following one shows it in the whole diff, not a single commit's.
+  const [codeRevealRequest, setCodeRevealRequest] = useState<{
+    readonly path: string;
+    readonly nonce: number;
+  } | null>(null);
+  const openFileInCode = (path: string) => {
+    selectCodeCommit(null);
+    setCodeRevealRequest((previous) => ({ path, nonce: (previous?.nonce ?? 0) + 1 }));
+    void loadCodeTab();
+    setTab("code");
+  };
+  // A guide notice asks for its pull request's Guide tab once the page has opened it.
+  const guideOpenRequested = useGuideRunStore(
+    (state) => state.openRequestKey === guideRunKey(environmentId, reference),
+  );
+  if (guideOpenRequested && tab !== "guide") setTab("guide");
+  useEffect(() => {
+    if (guideOpenRequested) useGuideRunStore.getState().requestOpen(null);
+  }, [guideOpenRequested]);
   // Every tab the reader has opened stays mounted behind the active one. The diff viewer
   // always needed this (it virtualizes against its own scroll position); the trace showed the
   // summary needs it too — a large description re-parses its whole markdown on every return
@@ -525,18 +565,44 @@ export function PullRequestDetailPanel({
     setChromeCondensed(chromeStateByTab.current[tab] ?? false);
   }, [tab]);
   const condensed = chromeCondensed;
-  const scrollerRef = useRef<HTMLElement | null>(null);
+  const scrollerByTab = useRef<Partial<Record<DetailTab, HTMLDivElement | null>>>({});
+  const scrollerRefs = useMemo(
+    () => ({
+      summary: (node: HTMLDivElement | null) => {
+        scrollerByTab.current.summary = node;
+      },
+      timeline: (node: HTMLDivElement | null) => {
+        scrollerByTab.current.timeline = node;
+      },
+      code: (node: HTMLDivElement | null) => {
+        scrollerByTab.current.code = node;
+      },
+    }),
+    [],
+  );
   const foldRef = useRef<HTMLDivElement | null>(null);
   const condensedRowRef = useRef<HTMLDivElement | null>(null);
   // Refund after the fold commits so the content under the reader does not jump with its height.
-  const compensationRef = useRef<number | null>(null);
+  const compensationRef = useRef<{
+    tab: DetailTab;
+    scroller: HTMLDivElement;
+    delta: number;
+  } | null>(null);
   useLayoutEffect(() => {
-    if (compensationRef.current === null) return;
-    const scroller = scrollerRef.current;
-    const delta = compensationRef.current;
+    const compensation = compensationRef.current;
+    if (compensation === null) return;
     compensationRef.current = null;
-    if (scroller) scroller.scrollTop = Math.max(0, scroller.scrollTop + delta);
-  }, [condensed]);
+    if (
+      !condensed ||
+      compensation.tab !== tab ||
+      scrollerByTab.current[tab] !== compensation.scroller
+    )
+      return;
+    compensation.scroller.scrollTop = Math.max(
+      0,
+      compensation.scroller.scrollTop + compensation.delta,
+    );
+  }, [condensed, tab]);
   const lastSelectedMergeMethod = useUiStateStore((state) => state.pullRequestMergeMethod);
   const setLastSelectedMergeMethod = useUiStateStore((state) => state.setPullRequestMergeMethod);
   const resolveProjectDefaultMergeMethod = usePullRequestDefaultMergeMethodResolver(
@@ -732,16 +798,18 @@ export function PullRequestDetailPanel({
     if (detail?.autoMergeMethod !== undefined) setMergeMethod(detail.autoMergeMethod);
   }, [detail?.autoMergeMethod, pullRequestKey]);
   const repositoryUrl = detail === null ? null : changeRequestRepositoryUrl(detail.url);
+  const hostClient = sourceControlClients.get(detail?.provider);
   const markdownContext = useMemo(
-    () => ({ repositoryUrl: detail?.provider === "github" ? repositoryUrl : null, threadRef }),
-    [detail?.provider, repositoryUrl, threadRef],
+    () => ({
+      repositoryUrl:
+        repositoryUrl === null ? null : hostClient.referenceAutolinkRepositoryUrl(repositoryUrl),
+      threadRef,
+    }),
+    [hostClient, repositoryUrl, threadRef],
   );
   const authorProfileUrl =
-    detail?.provider === "github" &&
-    detail.author !== null &&
-    !detail.author.login.endsWith("[bot]") &&
-    repositoryUrl !== null
-      ? new URL(`/${encodeURIComponent(detail.author.login)}`, repositoryUrl).toString()
+    detail?.author && repositoryUrl !== null
+      ? hostClient.authorProfileUrl(detail.author.login, repositoryUrl)
       : null;
   const checkoutCommand = handoffSummary
     ? pullRequestCheckoutCommand(
@@ -1041,6 +1109,17 @@ export function PullRequestDetailPanel({
   const canPrepareWorktree = prepareThread.isAllowed && canOperateThread;
   const canFixFindings = attachTarget !== null || canPrepareWorktree;
   const handoffLabels = pullRequestHandoffLabels(attachTarget !== null);
+  // The guide is written from the menu as well as its tab, so a reader can ask for a rewrite
+  // without the tour carrying a control for it.
+  const guideWriter = useReviewGuideWriter({
+    environmentId,
+    reference,
+    title: detail?.title ?? null,
+  });
+  const writeGuide = () => {
+    void guideWriter.write();
+    if (guideWriter.data?.guide == null) setTab("guide");
+  };
 
   const writeTaskToComposer = (target: ScopedThreadRef | DraftId, task: ThreadTask) => {
     const store = useComposerDraftStore.getState();
@@ -1107,8 +1186,16 @@ export function PullRequestDetailPanel({
     return session;
   };
 
-  /** A question about the change, which needs a thread and nothing else. */
-  const startAsk = async (kind: string, task: ThreadTask) => {
+  /**
+   * A question about the change, which needs a thread and nothing else. `keepGuide` keeps the
+   * reader's place: the new thread opens with this pull request beside it on the Guide tab, at the
+   * stop they asked from, so the answer and the tour can be read together.
+   */
+  const startAsk = async (
+    kind: string,
+    task: ThreadTask,
+    options?: { readonly keepGuide?: boolean },
+  ) => {
     if (!detail || handoff !== null) return;
     if (attachTarget !== null) {
       writeTaskToComposer(attachTarget, task);
@@ -1126,6 +1213,22 @@ export function PullRequestDetailPanel({
     const projectRef = scopeProjectRef(actingEnvironmentId, acting?.projectId ?? detail.projectId);
     const opened = await openThreadWithTask(projectRef, task);
     setHandoff(null);
+    if (opened !== null && options?.keepGuide === true) {
+      const draft = useComposerDraftStore.getState().getDraftSession(opened.draftId);
+      if (draft !== null) {
+        useRightPanelStore
+          .getState()
+          .openPullRequest(scopeThreadRef(draft.environmentId, draft.threadId), {
+            environmentId,
+            projectId: reference.projectId,
+            ...(reference.host === undefined ? {} : { host: reference.host }),
+            repository: reference.repository,
+            number: reference.number,
+            url: detail.url,
+          });
+        useGuideRunStore.getState().requestOpen(guideRunKey(environmentId, reference));
+      }
+    }
     if (opened === null) {
       toastManager.add({
         type: "error",
@@ -1324,7 +1427,35 @@ export function PullRequestDetailPanel({
     });
   };
 
-  const addSelectionToAgent = (selection: PullRequestAgentSelectionInput) => {
+  const askAboutGuideStop = (stop: PullRequestReviewGuideStop, index: number, question: string) => {
+    if (!detail) return;
+    void startAsk(
+      `guide-stop:${index}`,
+      buildAskAboutGuideStopHandoff({
+        number: detail.number,
+        title: detail.title,
+        url: detail.url,
+        headBranch: detail.headBranch,
+        baseBranch: detail.baseBranch,
+        state: detail.state,
+        isDraft: detail.isDraft,
+        stop: {
+          index,
+          title: stop.title,
+          summary: stop.summary,
+          attention: stop.attention?.note ?? null,
+          excerpts: stop.excerpts,
+        },
+        question,
+      }),
+      { keepGuide: true },
+    );
+  };
+
+  const addSelectionToAgent = (
+    selection: PullRequestAgentSelectionInput,
+    options?: { readonly keepGuide?: boolean },
+  ) => {
     if (!detail) return;
     void startAsk(
       `selection:${selection.comment.id}`,
@@ -1339,6 +1470,7 @@ export function PullRequestDetailPanel({
         comment: selection.comment,
         request: selection.request,
       }),
+      options,
     );
   };
 
@@ -1424,8 +1556,15 @@ export function PullRequestDetailPanel({
   // A host that cannot produce a patch has no Code tab to open. While detail is loading the ghost
   // uses this optimistic tab set to reserve the same chrome; a host without a patch removes Code
   // when its capabilities arrive.
+  // The Guide tab is a beta the pull request's server opts into in Settings → Source Control.
+  const reviewGuidesEnabled = useEnvironmentSettings(
+    environmentId,
+    (settings) => settings.reviewGuidesEnabled,
+  );
   const visibleTabs = TABS.filter(
-    (item) => item.value !== "code" || detail === null || detail.capabilities.diff,
+    (item) =>
+      (item.value !== "code" || detail === null || detail.capabilities.diff) &&
+      (item.value !== "guide" || reviewGuidesEnabled),
   );
   // The Code tab can be opened while the detail is still on its way, and the detail may then say
   // this host has no patch to show. The tab goes, so whoever was standing on it is moved back to
@@ -1725,7 +1864,7 @@ export function PullRequestDetailPanel({
                       </button>
                     }
                   />
-                  <TooltipPopup side="top">{openOnHostLabel(detail.provider)}</TooltipPopup>
+                  <TooltipPopup side="top">{openOnHostLabel(hostClient)}</TooltipPopup>
                 </Tooltip>
               </>
             ) : null}
@@ -1780,7 +1919,7 @@ export function PullRequestDetailPanel({
                       </button>
                     }
                   />
-                  <TooltipPopup side="top">{openOnHostLabel(detail.provider)}</TooltipPopup>
+                  <TooltipPopup side="top">{openOnHostLabel(hostClient)}</TooltipPopup>
                 </Tooltip>
                 <Tooltip>
                   <TooltipTrigger
@@ -1806,6 +1945,7 @@ export function PullRequestDetailPanel({
               ) : null}
               {nativeStack ? (
                 <PullRequestStackMenu
+                  hostLabel={hostClient.label}
                   stack={nativeStack}
                   notice={nativeStackQuery.notice}
                   onRetry={nativeStackQuery.error ? nativeStackQuery.refresh : undefined}
@@ -1905,22 +2045,25 @@ export function PullRequestDetailPanel({
                                 : pendingAutoMergeLabel
                           }
                         >
-                          <PullRequestGlyph.merged aria-hidden className="size-3.5" />
-                          <span className="inline-grid @max-[30rem]/pr-header:hidden">
-                            <span aria-hidden className="invisible col-start-1 row-start-1">
-                              {pendingAutoMergeLabel}
+                          {inlineConfirm.isArmed("enable-auto-merge") ? (
+                            <CheckIcon aria-hidden className="size-3.5" />
+                          ) : (
+                            <PullRequestGlyph.merged aria-hidden className="size-3.5" />
+                          )}
+                          <AnimatedWidth className="@max-[30rem]/pr-header:hidden">
+                            <span className="grid">
+                              <span aria-hidden className="invisible col-start-1 row-start-1">
+                                {pendingAutoMergeLabel}
+                              </span>
+                              <span className="col-start-1 row-start-1">
+                                {pendingAction === "enable-auto-merge"
+                                  ? "Enabling..."
+                                  : inlineConfirm.isArmed("enable-auto-merge")
+                                    ? "Confirm auto-merge?"
+                                    : pendingAutoMergeLabel}
+                              </span>
                             </span>
-                            <span aria-hidden className="invisible col-start-1 row-start-1">
-                              Confirm auto-merge?
-                            </span>
-                            <span className="col-start-1 row-start-1">
-                              {pendingAction === "enable-auto-merge"
-                                ? "Enabling..."
-                                : inlineConfirm.isArmed("enable-auto-merge")
-                                  ? "Confirm auto-merge?"
-                                  : pendingAutoMergeLabel}
-                            </span>
-                          </span>
+                          </AnimatedWidth>
                         </Button>
                       </span>
                     }
@@ -1974,22 +2117,25 @@ export function PullRequestDetailPanel({
                                 : selectedMergeMethodLabel
                           }
                         >
-                          <PullRequestGlyph.merged aria-hidden className="size-3.5" />
-                          <span className="inline-grid @max-[30rem]/pr-header:hidden">
-                            <span aria-hidden className="invisible col-start-1 row-start-1">
-                              {selectedMergeMethodLabel}
+                          {inlineConfirm.isArmed("merge") ? (
+                            <CheckIcon aria-hidden className="size-3.5" />
+                          ) : (
+                            <PullRequestGlyph.merged aria-hidden className="size-3.5" />
+                          )}
+                          <AnimatedWidth className="@max-[30rem]/pr-header:hidden">
+                            <span className="grid">
+                              <span aria-hidden className="invisible col-start-1 row-start-1">
+                                {selectedMergeMethodLabel}
+                              </span>
+                              <span className="col-start-1 row-start-1">
+                                {pendingAction === "merge"
+                                  ? "Merging..."
+                                  : inlineConfirm.isArmed("merge")
+                                    ? "Confirm merge?"
+                                    : selectedMergeMethodLabel}
+                              </span>
                             </span>
-                            <span aria-hidden className="invisible col-start-1 row-start-1">
-                              Confirm merge?
-                            </span>
-                            <span className="col-start-1 row-start-1">
-                              {pendingAction === "merge"
-                                ? "Merging..."
-                                : inlineConfirm.isArmed("merge")
-                                  ? "Confirm merge?"
-                                  : selectedMergeMethodLabel}
-                            </span>
-                          </span>
+                          </AnimatedWidth>
                         </Button>
                       </span>
                     }
@@ -2087,6 +2233,16 @@ export function PullRequestDetailPanel({
                     <HammerIcon className="size-3.5" />
                     {handoff === "findings" ? "Preparing..." : handoffLabels.fixFindings}
                   </MenuItem>
+                  {reviewGuidesEnabled && guideWriter.canWrite ? (
+                    <MenuItem disabled={guideWriter.running} onClick={writeGuide}>
+                      <SparklesIcon className="size-3.5" />
+                      {guideWriter.running
+                        ? "Writing guide..."
+                        : guideWriter.data?.guide == null
+                          ? "Write guide"
+                          : "Rewrite guide"}
+                    </MenuItem>
+                  ) : null}
                   {pickableEnvironments.length > 0 ? (
                     <ActOnEnvironmentPicker
                       environments={pickableEnvironments}
@@ -2211,7 +2367,7 @@ export function PullRequestDetailPanel({
                   ) : null}
                   <MenuItem onClick={() => void readLocalApi()?.shell.openExternal(detail.url)}>
                     <ArrowUpRightIcon className="size-3.5" />
-                    {openOnHostLabel(detail.provider)}
+                    {openOnHostLabel(hostClient)}
                   </MenuItem>
                   <MenuItem onClick={() => copyReference(detail.url, "PR link")}>
                     <LinkIcon className="size-3.5" />
@@ -2733,8 +2889,8 @@ export function PullRequestDetailPanel({
       <div
         className="relative flex min-h-0 flex-1 flex-col overflow-hidden"
         onScrollCapture={(event) => {
-          const scroller = event.target as HTMLElement;
-          scrollerRef.current = scroller;
+          const scroller = scrollerByTab.current[tab];
+          if (event.target !== scroller || scroller === null || scroller === undefined) return;
           const top = scroller.scrollTop;
           setChromeCondensed((previous) => {
             let next = previous;
@@ -2749,7 +2905,7 @@ export function PullRequestDetailPanel({
                 next = false;
               }
             } else if (foldHeight > 0 && top > foldHeight + 32) {
-              compensationRef.current = -chromeDelta;
+              compensationRef.current = { tab, scroller, delta: -chromeDelta };
               next = true;
             }
             chromeStateByTab.current[tab] = next;
@@ -2775,6 +2931,7 @@ export function PullRequestDetailPanel({
             {mountedTabs.has("summary") ? (
               <div className={cn("absolute inset-0", tab !== "summary" && "invisible")}>
                 <PullRequestSummaryTab
+                  scrollerRef={scrollerRefs.summary}
                   environmentId={environmentId}
                   threadRef={threadRef}
                   reference={reference}
@@ -2791,6 +2948,33 @@ export function PullRequestDetailPanel({
                 />
               </div>
             ) : null}
+            {mountedTabs.has("guide") ? (
+              <div className={cn("absolute inset-0", tab !== "guide" && "invisible")}>
+                <PullRequestGuideTab
+                  environmentId={environmentId}
+                  reference={reference}
+                  active={tab === "guide"}
+                  title={detail.title}
+                  workspaceRoot={detail.workspaceRoot}
+                  canComment={
+                    detail.capabilities.review.inlineComment && detail.viewerPermissions.comment
+                  }
+                  onAskAboutLines={(comment, request) =>
+                    addSelectionToAgent({ comment, request }, { keepGuide: true })
+                  }
+                  onAskAboutStop={askAboutGuideStop}
+                  onFinishReview={
+                    detail.capabilities.review.verdicts.some((verdict) =>
+                      detail.viewerPermissions.verdicts.includes(verdict),
+                    )
+                      ? () => setOpenReviewRequest((count) => count + 1)
+                      : null
+                  }
+                  onOpenFile={openFileInCode}
+                  onTourShown={onGuideShown}
+                />
+              </div>
+            ) : null}
             {mountedTabs.has("timeline") ? (
               <div className={cn("absolute inset-0", tab !== "timeline" && "invisible")}>
                 {activityPending ? (
@@ -2802,6 +2986,7 @@ export function PullRequestDetailPanel({
                   />
                 ) : (
                   <PullRequestTimelineTab
+                    scrollerRef={scrollerRefs.timeline}
                     detail={detail}
                     environmentId={environmentId}
                     threadRef={threadRef}
@@ -2817,6 +3002,7 @@ export function PullRequestDetailPanel({
               <div className={cn("absolute inset-0", tab !== "code" && "invisible")}>
                 <Suspense fallback={<DiffPanelLoadingState label="Loading pull request diff..." />}>
                   <PullRequestCodeTab
+                    scrollerRef={scrollerRefs.code}
                     onAddToAgentSelection={addSelectionToAgent}
                     environmentId={environmentId}
                     reference={reference}
@@ -2828,6 +3014,7 @@ export function PullRequestDetailPanel({
                     {...(canFixFindings ? { onFixFinding: startFixFinding } : {})}
                     onRefresh={refreshDetail}
                     refreshToken={codeRefreshToken}
+                    revealRequest={codeRevealRequest}
                   />
                 </Suspense>
               </div>
@@ -2854,6 +3041,7 @@ export function PullRequestDetailPanel({
             onCommentAction={performCommentAction}
             onCommented={refreshDetail}
             onReviewSubmitted={refreshDetail}
+            openReviewRequest={openReviewRequest}
           />
         </div>
       ) : null}

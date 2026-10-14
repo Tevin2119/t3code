@@ -91,6 +91,8 @@ type SerializedRecord = readonly [
   modelProviderIndex: number,
   /** Index into `PROVIDER_SOURCE_CODES`, or -1 when the record has none. */
   modelProviderSource: number,
+  /** Optional trailing field keeps existing cache rows readable. */
+  rateModelIndex?: number | null,
 ];
 
 interface SerializedFile {
@@ -157,6 +159,9 @@ function serializeFile(entry: CachedFile, tables: InternTables): SerializedFile 
     record.modelProviderSource === undefined
       ? -1
       : PROVIDER_SOURCE_CODES.indexOf(record.modelProviderSource),
+    record.rateModel === undefined
+      ? null
+      : intern(tables.models, tables.modelIndex, record.rateModel),
   ];
   return {
     s: entry.size,
@@ -293,6 +298,8 @@ export function decodeScanCache(
           : undefined;
       const modelProviderIndex = version >= 6 ? row[11] : forkLegacy ? row[10] : -2;
       const sourceIndex = version >= 6 ? row[12] : forkLegacy ? row[11] : -1;
+      // Upstream's rate model trails the fork's provider fields; rows written before it have none.
+      const rateModelIndex = version >= 6 ? row[13] : undefined;
       const modelProvider =
         modelProviderIndex === -2
           ? undefined
@@ -315,10 +322,12 @@ export function decodeScanCache(
       }
 
       const model = typeof modelIndex === "number" ? models[modelIndex] : undefined;
+      const rateModel = typeof rateModelIndex === "number" ? models[rateModelIndex] : undefined;
       if (
         typeof timestampMs !== "number" ||
         !Number.isFinite(timestampMs) ||
         model === undefined ||
+        (rateModelIndex != null && rateModel === undefined) ||
         !Number.isFinite(uncached) ||
         !Number.isFinite(cached) ||
         !Number.isFinite(cacheCreation) ||
@@ -335,6 +344,7 @@ export function decodeScanCache(
         model,
         ...(modelProvider === undefined ? {} : { modelProvider }),
         ...(modelProviderSource === undefined ? {} : { modelProviderSource }),
+        ...(rateModel === undefined ? {} : { rateModel }),
         sessionId: (typeof sessionIndex === "number" ? sessions[sessionIndex] : undefined) ?? "",
         totals: {
           uncachedInputTokens: uncached,

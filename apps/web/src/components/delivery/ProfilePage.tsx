@@ -143,6 +143,7 @@ function SeatEditor(props: {
           </span>
         ) : entry ? (
           <ProviderModelPicker
+            environmentId={props.environmentId}
             activeInstanceId={entry.instanceId}
             model={seat.model ?? ""}
             lockedProvider={null}

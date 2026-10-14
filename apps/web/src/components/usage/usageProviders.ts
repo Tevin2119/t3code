@@ -48,8 +48,8 @@ export const PROVIDER_PRESENTATION = {
     driverKind: ProviderDriverKind.make("deepseek"),
   },
   pi: {
-    label: "pi",
-    color: "#22a06b",
+    label: "Pi",
+    color: "#4d9f8a",
     driverKind: ProviderDriverKind.make("pi"),
   },
   kimi: {

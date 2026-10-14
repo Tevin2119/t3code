@@ -11,8 +11,11 @@ import { FetchHttpClient } from "effect/http";
 import { UsageAggregator } from "../../usage/usageAggregation.ts";
 import { hermesRecordFrom } from "./hermesUsage.ts";
 import { kimiSessionId, kimiUsageReader, parseKimiLine } from "./kimiUsage.ts";
-import { parsePiLine, piSessionId, piUsageReader } from "./piUsage.ts";
-import { attributedClaudeUsageFormat, attributedCodexUsageFormat } from "./usageModelProviders.ts";
+import {
+  attributedClaudeUsageFormat,
+  attributedCodexUsageFormat,
+  attributedPiUsageFormat,
+} from "./usageModelProviders.ts";
 
 /** Shaped after a real pi assistant entry. */
 const PI_LINE = JSON.stringify({
@@ -47,32 +50,42 @@ const KIMI_LINE = JSON.stringify({
 
 describe("pi", () => {
   it("keeps the provider and model pi recorded, and its own cost", () => {
-    const record = parsePiLine(PI_LINE, "01a0e7fd");
-    expect(record).toMatchObject({
-      provider: "pi",
-      speed: "standard",
-      model: "gpt-6-luna",
-      modelProvider: "openai-codex",
-      modelProviderSource: "recorded",
-      sessionId: "01a0e7fd",
-      reportedCostUsd: 0.000204,
-      dedupeKey: "pi:01a0e7fd:663459a3",
-      totals: {
-        uncachedInputTokens: 1765,
-        cachedInputTokens: 200,
-        cacheCreationTokens: 0,
-        outputTokens: 55,
-        reasoningTokens: 20,
+    const records = attributedPiUsageFormat.parseLine(PI_LINE, { sessionId: "01a0e7fd" });
+    expect(records).toMatchObject([
+      {
+        provider: "pi",
+        speed: "standard",
+        model: "openai-codex/gpt-6-luna",
+        rateModel: "gpt-6-luna",
+        modelProvider: "openai-codex",
+        modelProviderSource: "recorded",
+        sessionId: "01a0e7fd",
+        reportedCostUsd: 0.000204,
+        totals: {
+          uncachedInputTokens: 1765,
+          cachedInputTokens: 200,
+          cacheCreationTokens: 0,
+          outputTokens: 55,
+          reasoningTokens: 20,
+        },
       },
+    ]);
+  });
+
+  it("names no provider for a record of pi's tools and summaries", () => {
+    const line = JSON.stringify({
+      type: "custom",
+      timestamp: "2026-09-28T12:28:49.347Z",
+      usage: { input: 10, output: 2, cacheRead: 0, cacheWrite: 0 },
     });
+    for (const record of attributedPiUsageFormat.parseLine(line, { sessionId: "s" })) {
+      expect([record.modelProvider, record.modelProviderSource]).toEqual([null, null]);
+    }
   });
+});
 
-  it("reads nothing from a line that is not an assistant's", () => {
-    expect(parsePiLine(JSON.stringify({ type: "model_change", model: "x" }), "s")).toBeNull();
-  });
-
-  it("takes the session from the name of its file", () => {
-    expect(piSessionId("/p/2026-09-28T12-28-44-844Z_01a0e7fd-2fab.jsonl")).toBe("01a0e7fd-2fab");
+describe("Kimi Code", () => {
+  it("takes the session from the folder of its agent", () => {
     expect(kimiSessionId("/k/sessions/wd_x/session_75398f63/agents/main/wire.jsonl")).toBe(
       "session_75398f63",
     );
@@ -80,9 +93,7 @@ describe("pi", () => {
       "session_1",
     );
   });
-});
 
-describe("Kimi Code", () => {
   it("splits the provider key from the model Kimi names", () => {
     expect(parseKimiLine(KIMI_LINE, "sess-1")).toMatchObject({
       provider: "kimi",
@@ -246,36 +257,6 @@ describe("harness stores on disk", () => {
         again.flatMap((source) => source.files ?? []).flatMap((file) => file.records),
       ).toHaveLength(3);
     }).pipe(Effect.provide(NodeServices.layer)),
-  );
-
-  it.effect("reads pi's sessions and leaves out those last written before the window", () =>
-    Effect.gen(function* () {
-      const fileSystem = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const home = yield* fileSystem.makeTempDirectoryScoped({ prefix: "pi-usage-" });
-      const sessions = path.join(home, "sessions", "--work--");
-      yield* fileSystem.makeDirectory(sessions, { recursive: true });
-      const file = path.join(sessions, "2026-09-28T12-28-44-844Z_01a0e7fd.jsonl");
-      yield* fileSystem.writeFileString(file, PI_LINE + "\n");
-
-      const scans = yield* scanWith(piUsageReader, { PI_CODING_AGENT_DIR: home });
-      expect(
-        scans.flatMap((source) => source.files ?? []).map((entry) => entry.records.length),
-      ).toEqual([1]);
-      // Last written at the start of September; a window opening in October leaves it out.
-      yield* fileSystem.utimes(file, new Date("2026-09-01"), new Date("2026-09-01"));
-      const later = yield* scanWith(
-        piUsageReader,
-        { PI_CODING_AGENT_DIR: home },
-        Date.parse("2026-10-01T00:00:00Z"),
-      );
-      expect(later.flatMap((source) => source.files ?? [])).toEqual([]);
-      const missing = yield* scanWith(piUsageReader, {
-        PI_CODING_AGENT_DIR: path.join(home, "none"),
-      });
-      expect(missing.map((source) => source.files)).toEqual([null]);
-      // Delivery is off in default settings, so the engine is never asked.
-    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, FetchHttpClient.layer))),
   );
 });
 
