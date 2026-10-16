@@ -228,51 +228,57 @@ function FileViewer(props: {
         <DialogHeader>
           <DialogTitle className="break-all">{file.name}</DialogTitle>
         </DialogHeader>
-        <DialogPanel className="flex flex-col gap-3 text-sm">
-          <p className="text-xs text-muted-foreground">
-            {file.type}, {formatBytes(file.size)}, added by {file.by} at {file.at}
-          </p>
-          {content.problem ? <p className="text-warning">{content.problem}</p> : null}
-          {shown && !content.url && content.text === null && !content.problem ? (
-            <p className="flex items-center gap-2 text-muted-foreground">
-              <Spinner className="size-3.5" />
-              Reading, {formatBytes(content.received)} of {formatBytes(file.size)}
+        <DialogPanel>
+          <div className="flex flex-col gap-7 text-sm">
+            <p className="text-xs text-muted-foreground">
+              {file.type}, {formatBytes(file.size)}, added by {file.by} at {file.at}
             </p>
-          ) : null}
-          {kind === "image" && content.url ? (
-            <img src={content.url} alt={file.name} className="max-h-[65vh] w-full object-contain" />
-          ) : null}
-          {kind === "video" && content.url ? (
-            // A recording a person attached has no captions to offer.
-            <video src={content.url} controls className="max-h-[65vh] w-full" />
-          ) : null}
-          {kind === "audio" && content.url ? (
-            <audio src={content.url} controls className="w-full" />
-          ) : null}
-          {content.text !== null ? (
-            <pre className="max-h-[65vh] overflow-auto rounded border border-border bg-muted/40 p-3 text-xs whitespace-pre-wrap">
-              {content.text}
-            </pre>
-          ) : null}
-          <p className="font-mono text-[10px] break-all text-muted-foreground">
-            On the engine's host: {file.path}
-          </p>
-          <div>
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={saving}
-              onClick={() => {
-                setSaving(true);
-                void download(file).then((result) => {
-                  setSaving(false);
-                  if ("blob" in result) saveBlob(result.blob, file.name);
-                });
-              }}
-            >
-              <DownloadIcon />
-              {saving ? "Reading" : "Save a copy"}
-            </Button>
+            {content.problem ? <p className="text-warning">{content.problem}</p> : null}
+            {shown && !content.url && content.text === null && !content.problem ? (
+              <p className="flex items-center gap-2 text-muted-foreground">
+                <Spinner className="size-3.5" />
+                Reading, {formatBytes(content.received)} of {formatBytes(file.size)}
+              </p>
+            ) : null}
+            {kind === "image" && content.url ? (
+              <img
+                src={content.url}
+                alt={file.name}
+                className="max-h-[65vh] w-full object-contain"
+              />
+            ) : null}
+            {kind === "video" && content.url ? (
+              // A recording a person attached has no captions to offer.
+              <video src={content.url} controls className="max-h-[65vh] w-full" />
+            ) : null}
+            {kind === "audio" && content.url ? (
+              <audio src={content.url} controls className="w-full" />
+            ) : null}
+            {content.text !== null ? (
+              <pre className="max-h-[65vh] overflow-auto rounded border border-border bg-muted/40 p-3 text-xs whitespace-pre-wrap">
+                {content.text}
+              </pre>
+            ) : null}
+            <p className="font-mono text-3xs break-all text-muted-foreground">
+              On the engine's host: {file.path}
+            </p>
+            <div>
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={saving}
+                onClick={() => {
+                  setSaving(true);
+                  void download(file).then((result) => {
+                    setSaving(false);
+                    if ("blob" in result) saveBlob(result.blob, file.name);
+                  });
+                }}
+              >
+                <DownloadIcon />
+                {saving ? "Reading" : "Save a copy"}
+              </Button>
+            </div>
           </div>
         </DialogPanel>
       </DialogPopup>
@@ -351,7 +357,7 @@ export function TaskFileList(props: {
             >
               <Icon className="size-3.5 shrink-0 text-muted-foreground" />
               <span className="truncate">{file.name}</span>
-              <span className="shrink-0 text-[10px] text-muted-foreground">
+              <span className="shrink-0 text-3xs text-muted-foreground">
                 {formatBytes(file.size)}
               </span>
             </button>

@@ -404,14 +404,11 @@ export function OrchestratorComposerControls(props: {
         value={flow}
         onValueChange={(value) => update(props.threadId, { workflow: String(value) })}
       >
-        <SelectTrigger
-          aria-label="Flow"
-          size="compact"
-          variant="ghost"
-          className={cn("w-auto min-w-0", chosen && !chosen.ready && "text-warning")}
-        >
-          <WorkflowIcon className="size-3.5" />
-          <SelectValue>{chosen?.title ?? flow}</SelectValue>
+        <SelectTrigger aria-label="Flow" size="compact" variant="ghost" className="w-auto min-w-0">
+          <span className={cn("contents", chosen && !chosen.ready && "text-warning")}>
+            <WorkflowIcon className="size-3.5" />
+            <SelectValue>{chosen?.title ?? flow}</SelectValue>
+          </span>
         </SelectTrigger>
         <SelectPopup alignItemWithTrigger={false}>
           {flows.map((item) => (
@@ -474,7 +471,7 @@ export function OrchestratorComposerControls(props: {
         </PopoverTrigger>
         <PopoverPopup side="top" align="start" className="w-[34rem] max-w-[calc(100vw-2rem)]">
           <div className="flex items-center justify-between gap-2 pb-1">
-            <PopoverTitle className="text-sm">Seats of team {draft.team}</PopoverTitle>
+            <PopoverTitle>Seats of team {draft.team}</PopoverTitle>
             <Button size="xs" variant="ghost" onClick={() => setEditingDefaults(true)}>
               Team defaults
             </Button>
@@ -485,7 +482,7 @@ export function OrchestratorComposerControls(props: {
             recorded with the run.
           </p>
           {chosen && chosen.problems.length > 0 ? (
-            <ul className="list-disc pb-2 pl-5 text-[11px] text-warning" data-flow-problems>
+            <ul className="list-disc pb-2 pl-5 text-2xs text-warning" data-flow-problems>
               {chosen.problems.map((item) => (
                 <li key={item}>{item}</li>
               ))}
@@ -526,7 +523,7 @@ export function OrchestratorComposerControls(props: {
             Setup
           </PopoverTrigger>
           <PopoverPopup side="top" align="start" className="w-[38rem] max-w-[calc(100vw-2rem)]">
-            <PopoverTitle className="pb-2 text-sm">What each seat is given</PopoverTitle>
+            <PopoverTitle className="mb-2">What each seat is given</PopoverTitle>
             <SetupPanel
               environmentId={props.environmentId}
               team={team.team}
@@ -617,7 +614,7 @@ export function OrchestratorPrimaryActions(props: {
                 role="status"
                 aria-label={SAVED_LABEL[activity.saved]}
                 data-delivery-draft-state={activity.saved}
-                className="flex items-center gap-1 text-[10px] text-muted-foreground"
+                className="flex items-center gap-1 text-3xs text-muted-foreground"
               />
             }
           >
@@ -625,9 +622,9 @@ export function OrchestratorPrimaryActions(props: {
               className={cn(
                 "size-1.5 rounded-full",
                 activity.saved === "saved"
-                  ? "bg-emerald-500"
+                  ? "bg-success"
                   : activity.saved === "changed"
-                    ? "bg-amber-500"
+                    ? "bg-warning"
                     : "bg-muted-foreground/40",
               )}
             />
@@ -638,42 +635,44 @@ export function OrchestratorPrimaryActions(props: {
           </TooltipPopup>
         </Tooltip>
       )}
-      <Tooltip>
-        <TooltipTrigger
-          render={
-            <Button
-              type="button"
-              size="icon-sm"
-              variant="ghost"
-              className="rounded-full"
-              aria-label="Save draft"
-              disabled={
-                busy ||
-                activity.awaitingTeams ||
-                activity.teamAvailabilityReason !== null ||
-                !props.promptHasText
-              }
-              {...pointerFocusProps}
-              onClick={() => requestSave(props.threadId)}
-              data-delivery-save-draft
-            />
-          }
-        >
-          {activity.busy === "save" ? <Spinner className="size-3.5" /> : <SaveIcon />}
-        </TooltipTrigger>
-        <TooltipPopup side="top">
-          {activity.teamAvailabilityReason ??
-            (activity.awaitingTeams
-              ? TEAMS_LOADING
-              : "Save draft. It is kept on the engine and nothing is started.")}
-        </TooltipPopup>
-      </Tooltip>
+      {/* Round, like the start button beside it. */}
+      <span className="flex shrink-0 [--control-radius:9999px]">
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <Button
+                type="button"
+                size="icon-sm"
+                variant="ghost"
+                aria-label="Save draft"
+                disabled={
+                  busy ||
+                  activity.awaitingTeams ||
+                  activity.teamAvailabilityReason !== null ||
+                  !props.promptHasText
+                }
+                {...pointerFocusProps}
+                onClick={() => requestSave(props.threadId)}
+                data-delivery-save-draft
+              />
+            }
+          >
+            {activity.busy === "save" ? <Spinner className="size-3.5" /> : <SaveIcon />}
+          </TooltipTrigger>
+          <TooltipPopup side="top">
+            {activity.teamAvailabilityReason ??
+              (activity.awaitingTeams
+                ? TEAMS_LOADING
+                : "Save draft. It is kept on the engine and nothing is started.")}
+          </TooltipPopup>
+        </Tooltip>
+      </span>
       <Tooltip>
         <TooltipTrigger
           render={
             <button
               type="submit"
-              className="relative flex h-9 w-9 items-center justify-center rounded-full bg-message-action text-message-action-foreground shadow-xs transition-all duration-150 enabled:cursor-pointer enabled:shadow-message-action/24 enabled:inset-shadow-[0_1px_--theme(--color-white/16%)] hover:scale-105 hover:bg-message-action-hover disabled:pointer-events-none disabled:opacity-30 disabled:shadow-none sm:h-8 sm:w-8"
+              className="relative flex h-9 w-9 items-center justify-center rounded-full bg-message-action text-message-action-foreground shadow-xs transition-all duration-150 enabled:cursor-pointer enabled:shadow-message-action/24 enabled:inset-shadow-control-highlight hover:scale-105 hover:bg-message-action-hover disabled:pointer-events-none disabled:opacity-30 disabled:shadow-none sm:h-8 sm:w-8"
               aria-label={startLabel}
               disabled={busy || activity.blocked !== null || !props.promptHasText}
               {...pointerFocusProps}

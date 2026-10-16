@@ -91,12 +91,14 @@ export function TeamPicker(props: {
                 aria-describedby={warning ? warningId : undefined}
                 size="compact"
                 variant="ghost"
-                className={warning ? "w-auto min-w-0 text-warning" : "w-auto min-w-0"}
+                className="w-auto min-w-0"
               />
             }
           >
-            <UsersIcon className="size-3.5" />
-            <SelectValue>{choice.team ?? "No team"}</SelectValue>
+            <span className={warning ? "contents text-warning" : "contents"}>
+              <UsersIcon className="size-3.5" />
+              <SelectValue>{choice.team ?? "No team"}</SelectValue>
+            </span>
           </TooltipTrigger>
           <SelectPopup alignItemWithTrigger={false}>
             {teams.map((item) => (
@@ -114,7 +116,7 @@ export function TeamPicker(props: {
               </span>
             </SelectItem>
             <p
-              className="max-w-72 border-t border-border px-2 pt-1.5 pb-1 text-[11px] text-muted-foreground"
+              className="max-w-72 border-t border-border px-2 pt-1.5 pb-1 text-2xs text-muted-foreground"
               data-delivery-thread-note
             >
               A thread is a conversation, with or without a team seat. Sending here puts nothing on
@@ -138,9 +140,11 @@ export function TeamPicker(props: {
             aria-label="Role"
             size="compact"
             variant="ghost"
-            className={chooseRole ? "w-auto min-w-0 text-warning" : "w-auto min-w-0"}
+            className="w-auto min-w-0"
           >
-            <SelectValue>{role ?? "Choose a role"}</SelectValue>
+            <span className={chooseRole ? "contents text-warning" : "contents"}>
+              <SelectValue>{role ?? "Choose a role"}</SelectValue>
+            </span>
           </SelectTrigger>
           <SelectPopup alignItemWithTrigger={false}>
             {offered.roles.map((item) => (
@@ -166,13 +170,15 @@ export function TeamPicker(props: {
                 type="button"
                 size="xs"
                 variant="ghost"
-                className="min-w-0 gap-1 px-1.5 font-normal text-warning"
+                className="min-w-0"
                 data-delivery-seat-overrides={overrides.map((item) => item.setting).join(" ")}
                 onClick={() => onSeat(threadSeat, "reset")}
               />
             }
           >
-            {overrides.length === 1 ? "1 override" : `${overrides.length} overrides`}
+            <span className="contents font-normal text-warning">
+              {overrides.length === 1 ? "1 override" : `${overrides.length} overrides`}
+            </span>
           </TooltipTrigger>
           <TooltipPopup side="top" className="max-w-96">
             <span className="flex flex-col gap-0.5">
@@ -207,7 +213,7 @@ export function TeamPicker(props: {
             <InfoIcon />
           </PopoverTrigger>
           <PopoverPopup side="top" align="start" className="w-[38rem] max-w-[calc(100vw-2rem)]">
-            <PopoverTitle className="pb-2 text-sm">What this session is given</PopoverTitle>
+            <PopoverTitle className="mb-2">What this session is given</PopoverTitle>
             {seat ? (
               <SetupPanel environmentId={props.environmentId} team={team.team} seat={seat.seat} />
             ) : (

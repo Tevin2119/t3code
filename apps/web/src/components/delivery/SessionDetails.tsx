@@ -32,7 +32,7 @@ function Row(props: { readonly label: string; readonly children: ReactNode }) {
 function Section(props: { readonly title: string; readonly children: ReactNode }) {
   return (
     <section className="border-t border-border pt-2 first:border-t-0 first:pt-0">
-      <h3 className="pb-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+      <h3 className="pb-1 text-2xs font-medium uppercase tracking-wide text-muted-foreground">
         {props.title}
       </h3>
       <dl>{props.children}</dl>
@@ -89,18 +89,23 @@ export function SessionDetails(props: {
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger
-        className={
-          described.managed
-            ? "max-w-64 cursor-pointer truncate rounded px-1 text-foreground underline decoration-dotted underline-offset-2"
-            : "max-w-64 cursor-pointer truncate rounded px-1 underline decoration-dotted underline-offset-2"
+        render={
+          <button
+            type="button"
+            className={
+              described.managed
+                ? "max-w-64 cursor-pointer truncate rounded px-1 text-foreground underline decoration-dotted underline-offset-2"
+                : "max-w-64 cursor-pointer truncate rounded px-1 underline decoration-dotted underline-offset-2"
+            }
+          />
         }
         aria-label="Session details"
       >
         {described.label}
       </PopoverTrigger>
       <PopoverPopup side="top" align="start" className="w-[26rem] max-w-[calc(100vw-2rem)]">
-        <PopoverTitle className="pb-2 text-sm">Session details</PopoverTitle>
-        <div className="flex max-h-[60vh] flex-col gap-2 overflow-y-auto font-mono text-[11px] leading-relaxed">
+        <PopoverTitle className="mb-2">Session details</PopoverTitle>
+        <div className="flex max-h-[60vh] flex-col gap-2 overflow-y-auto font-mono text-2xs leading-relaxed">
           <Section title="Identity">
             <Row label="Status">
               {described.managed ? "Team session, single harness" : "Manual / legacy"}

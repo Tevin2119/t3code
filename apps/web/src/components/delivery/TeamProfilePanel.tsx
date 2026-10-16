@@ -17,7 +17,7 @@ function Block(props: {
       <header className="flex items-baseline justify-between gap-2 border-b border-border px-2 py-1">
         <h4 className="text-xs font-medium">{props.title}</h4>
         {props.meta ? (
-          <span className="truncate font-mono text-[10px] text-muted-foreground">{props.meta}</span>
+          <span className="truncate font-mono text-3xs text-muted-foreground">{props.meta}</span>
         ) : null}
       </header>
       <div className="px-2 py-1.5 text-xs">{props.children}</div>
@@ -59,7 +59,7 @@ export function TeamProfilePanel(props: {
           Team {profile.team}, role {profile.role}
           {profile.harness ? ` on ${profile.harness}` : ""}
         </p>
-        <p className="font-mono text-[10px] text-muted-foreground">setup {profile.configuration}</p>
+        <p className="font-mono text-3xs text-muted-foreground">setup {profile.configuration}</p>
         <p className="text-muted-foreground">{profile.purpose}</p>
         {profile.harness && !profile.heldByASeat ? (
           <p className="text-muted-foreground">
@@ -89,7 +89,7 @@ export function TeamProfilePanel(props: {
                     Read by the harness itself from the repository it works in.
                   </p>
                 ) : (
-                  <pre className="font-mono text-[11px] leading-relaxed whitespace-pre-wrap">
+                  <pre className="font-mono text-2xs leading-relaxed whitespace-pre-wrap">
                     {layer.text}
                   </pre>
                 )}
@@ -103,9 +103,7 @@ export function TeamProfilePanel(props: {
                   Runs as {tool.runsAs}
                   {tool.onlyWith ? `. Only for a role with the ${tool.onlyWith} resource` : ""}.
                 </p>
-                <p className="font-mono text-[11px]">
-                  {tool.offers.join(", ") || "no tools listed"}
-                </p>
+                <p className="font-mono text-2xs">{tool.offers.join(", ") || "no tools listed"}</p>
               </Block>
             ))
           : null}
@@ -121,7 +119,7 @@ export function TeamProfilePanel(props: {
             </p>
             {profile.specialists.map((specialist) => (
               <Block key={specialist.name} title={specialist.name}>
-                <pre className="font-mono text-[11px] leading-relaxed whitespace-pre-wrap">
+                <pre className="font-mono text-2xs leading-relaxed whitespace-pre-wrap">
                   {specialist.text}
                 </pre>
               </Block>
