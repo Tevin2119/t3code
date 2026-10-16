@@ -1,7 +1,6 @@
 const assert = require("node:assert/strict");
 const childProcess = require("node:child_process");
 const fs = require("node:fs");
-const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
 
@@ -10,7 +9,7 @@ const {
   PR_TITLE,
   REPORT_MARKER,
   REPORT_PATH,
-  SYNC_BRANCH,
+  LEGACY_BRANCH,
   findRangeStart,
   prepare,
   publishBranch,
@@ -28,7 +27,10 @@ const ODD_PATHS = [
 
 // Each fixture gets its own HOME and global config, so results match on any machine.
 function createFixture() {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "tevin-upstream-sync-"));
+  const temporary = path.join(__dirname, "../../.plans");
+  fs.mkdirSync(temporary, { recursive: true });
+  const root = fs.mkdtempSync(path.join(temporary, "tevin-upstream-sync-"));
+  test.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const globalConfig = path.join(root, "gitconfig");
   fs.writeFileSync(
     globalConfig,
@@ -137,15 +139,6 @@ function createFixture() {
       run(root, ["clone", "--quiet", "-b", "master", origin, dir]);
       return dir;
     },
-    /** A person's clone of the sync branch, used to push resolutions. */
-    humanClone() {
-      fixture.runs += 1;
-      const dir = path.join(root, `human-${fixture.runs}`);
-      run(root, ["clone", "--quiet", "-b", SYNC_BRANCH, origin, dir]);
-      run(dir, ["remote", "add", "upstream", upstream]);
-      run(dir, ["fetch", "--quiet", "upstream"]);
-      return dir;
-    },
   };
   return fixture;
 }
@@ -153,40 +146,40 @@ function createFixture() {
 function createGitHub() {
   const prs = [];
   const calls = [];
-  let failNextCreate = false;
+  const comments = [];
+  let failure;
   const api = {
     async request(method, apiPath, body) {
       calls.push({ method, apiPath, body });
+      if (failure && failure(method, apiPath, body)) {
+        failure = null;
+        throw new Error("GitHub injected failure: 502");
+      }
       const [pathname, search] = apiPath.split("?");
       if (method === "GET" && pathname === `/repos/${REPO}/pulls`) {
         const query = new URLSearchParams(search);
-        assert.equal(query.get("head"), `Tevin2119:${SYNC_BRANCH}`);
         assert.equal(query.get("base"), "master");
         assert.equal(query.get("state"), "open");
-        return prs.filter((pr) => pr.state === "open").map((pr) => ({ ...pr }));
+        const filtered = prs.filter(
+          (pr) =>
+            pr.state === "open" &&
+            pr.base.ref === query.get("base") &&
+            (!query.has("head") || `Tevin2119:${pr.head.ref}` === query.get("head")),
+        );
+        const size = Number(query.get("per_page") ?? 30);
+        const start = (Number(query.get("page") ?? 1) - 1) * size;
+        return filtered.slice(start, start + size).map((pr) => ({ ...pr }));
       }
       if (method === "POST" && pathname === `/repos/${REPO}/pulls`) {
-        if (failNextCreate) {
-          failNextCreate = false;
-          throw new Error("GitHub POST /pulls failed: 502");
-        }
-        const pr = {
-          number: prs.length + 1,
-          node_id: `PR_${prs.length + 1}`,
-          html_url: `https://github.com/${REPO}/pull/${prs.length + 1}`,
-          state: "open",
-          title: body.title,
-          body: body.body,
-          draft: Boolean(body.draft),
-          head: { ref: body.head, repo: { full_name: REPO } },
-          base: { ref: body.base },
-        };
-        prs.push(pr);
-        return { ...pr };
+        return { ...add(body.head, body) };
       }
-      const update = pathname.match(new RegExp(`^/repos/${REPO}/pulls/(\\d+)$`));
+      const comment = pathname.match(/\/issues\/(\d+)\/comments$/);
+      if (method === "POST" && comment) {
+        comments.push({ number: Number(comment[1]), body: body.body });
+        return {};
+      }
+      const update = pathname.match(/\/pulls\/(\d+)$/);
       if (method === "PATCH" && update) {
-        // REST cannot change draft state on an existing PR, so a draft field here is a bug.
         assert.ok(!("draft" in body), "draft state must change through GraphQL");
         const pr = prs.find((candidate) => candidate.number === Number(update[1]));
         Object.assign(pr, body);
@@ -203,25 +196,48 @@ function createGitHub() {
       return {};
     },
   };
+  function add(branch, overrides = {}) {
+    const number = prs.length + 1;
+    const pr = {
+      number,
+      node_id: `PR_${number}`,
+      html_url: `https://github.com/${REPO}/pull/${number}`,
+      state: "open",
+      title: PR_TITLE,
+      body: "",
+      draft: false,
+      ...overrides,
+      head: { ref: branch, repo: { full_name: overrides.repo ?? REPO } },
+      base: { ref: overrides.base ?? "master" },
+    };
+    prs.push(pr);
+    return pr;
+  }
   return {
     api,
     prs,
     calls,
-    failCreateOnce() {
-      failNextCreate = true;
+    comments,
+    add,
+    failOnce(predicate) {
+      failure = predicate;
     },
     open: () => prs.filter((pr) => pr.state === "open"),
   };
 }
 
 /** One workflow run: prepare, push and PR, with master checked untouched afterwards. */
-async function sync(fixture, github, { token = TOKEN } = {}) {
+async function sync(
+  fixture,
+  github,
+  { token = TOKEN, date = "2026-10-16", cwd = fixture.checkout() } = {},
+) {
   const masterBefore = fixture.originRef("master");
-  const cwd = fixture.checkout();
   const logs = [];
   const log = (line) => logs.push(line);
   const state = prepare({
     cwd,
+    date,
     forkUrl: fixture.origin,
     upstreamUrl: fixture.upstream,
     env: fixture.env,
@@ -278,7 +294,64 @@ function baseFixture() {
   return { fixture, base };
 }
 
-test("does nothing when upstream main is already in master, even on repeat runs", async () => {
+const DAY = "automation/upstream-sync-2026-10-16";
+const quiet = () => {};
+const prepared = (fixture, cwd = fixture.checkout(), date = "2026-10-16") => ({
+  cwd,
+  state: prepare({
+    cwd,
+    date,
+    forkUrl: fixture.origin,
+    upstreamUrl: fixture.upstream,
+    env: fixture.env,
+  }),
+});
+const push = (fixture, candidate) =>
+  publishBranch({
+    ...candidate,
+    pushUrl: fixture.origin,
+    token: TOKEN,
+    env: fixture.env,
+    log: quiet,
+  });
+const openPr = (github, state) =>
+  upsertPullRequest({ api: github.api, repo: REPO, state, log: quiet });
+
+function assertClean(fixture, { cwd, state, pr }) {
+  assert.equal(state.status, "clean");
+  assert.deepEqual(fixture.out(cwd, ["show", "-s", "--format=%P", state.head]).split(" "), [
+    state.base,
+    state.target,
+  ]);
+  assert.equal(
+    fixture.out(cwd, ["rev-list", "--count", state.head, `^${state.base}`, `^${state.target}`]),
+    "1",
+  );
+  assert.equal(
+    fixture.out(cwd, ["rev-list", "--first-parent", "--count", `${state.base}..${state.head}`]),
+    "1",
+  );
+  assert.equal(
+    fixture.run(cwd, ["cat-file", "-e", `${state.head}:${REPORT_PATH}`], { allowFailure: true })
+      .status,
+    128,
+  );
+  assert.doesNotMatch(
+    fixture.out(cwd, ["log", "--format=%s", state.head, `^${state.base}`, `^${state.target}`]),
+    /report upstream sync conflicts|remove resolved/,
+  );
+  assert.equal(
+    fixture.run(cwd, ["symbolic-ref", "-q", "HEAD"], { allowFailure: true }).stdout.trim(),
+    "",
+  );
+  assert.equal(fixture.originRef(state.branch), state.head);
+  if (pr) {
+    assert.equal(pr.draft, false);
+    assert.equal(pr.head.ref, state.branch);
+  }
+}
+
+test("noop and missing token never publish", async () => {
   const { fixture } = baseFixture();
   const github = createGitHub();
   for (let i = 0; i < 2; i += 1) {
@@ -287,256 +360,309 @@ test("does nothing when upstream main is already in master, even on repeat runs"
     assert.equal(result.push.pushed, false);
     assert.equal(result.pr, null);
   }
-  assert.equal(fixture.originRef(SYNC_BRANCH), null);
-  assert.deepEqual(github.calls, []);
-});
-
-test("a missing UPSTREAM_SYNC_TOKEN fails before any push, on the no-op and the gap path", async () => {
-  const { fixture } = baseFixture();
-  const github = createGitHub();
   await assert.rejects(sync(fixture, github, { token: "" }), /UPSTREAM_SYNC_TOKEN/);
-  fixture.upstreamCommit({ "README.md": "upstream 2\n" }, "upstream 2");
+  fixture.upstreamCommit({ "new.md": "new\n" }, "new");
   await assert.rejects(sync(fixture, github, { token: null }), /UPSTREAM_SYNC_TOKEN/);
-  assert.equal(fixture.originRef(SYNC_BRANCH), null);
+  assert.equal(fixture.originRef(DAY), null);
   assert.deepEqual(github.calls, []);
 });
 
-test("a clean sync that changes workflow files pushes and opens one ready PR with the range", async () => {
-  const { fixture, base } = baseFixture();
-  const github = createGitHub();
-  fixture.upstreamCommit({ "README.md": "upstream 2\n" }, "upstream 2");
-  const target = fixture.upstreamCommit(
-    { ".github/workflows/ci.yml": "name: CI\non: pull_request\n" },
-    "upstream: change ci",
-  );
+for (const fastForward of [false, true]) {
+  test(`clean ${fastForward ? "fast-forwardable" : "divergent"} history publishes exactly a merge`, async () => {
+    const { fixture, base } = baseFixture();
+    if (fastForward) {
+      fixture.run(fixture.fork, ["checkout", "--quiet", "-B", "master", base]);
+      // An isolated fixture origin with no fork-only commits yet.
+      fixture.run(fixture.fork, ["push", "--quiet", "--force", "origin", "master"]);
+    }
+    const github = createGitHub();
+    fixture.upstreamCommit({ "README.md": "upstream 2\n" }, "upstream 2");
+    const target = fixture.upstreamCommit(
+      { ".github/workflows/ci.yml": "name: CI\non: pull_request\n" },
+      "upstream ci",
+    );
+    const result = await sync(fixture, github);
+    assertClean(fixture, result);
+    assert.equal(result.state.branch, DAY);
+    assert.equal(result.state.rangeStart, base);
+    assert.equal(result.state.target, target);
+    assert.equal(result.state.commitCount, 2);
+    assert.ok(result.pr.body.includes(`compare/${base}...${target}`));
+    assert.equal(
+      fixture.out(result.cwd, ["show", "HEAD:.github/workflows/ci.yml"]),
+      "name: CI\non: pull_request",
+    );
+    github.prs[0].body = `Reviewer notes.\n\n${github.prs[0].body}\nFooter.`;
+    await openPr(github, JSON.parse(JSON.stringify(result.state)));
+    assert.equal(github.prs.length, 1);
+    assert.match(github.prs[0].body, /^Reviewer notes\./);
+    assert.match(github.prs[0].body, /Footer\.$/);
+    assert.equal(github.prs[0].body.split(BODY_START).length, 2);
+  });
+}
 
-  const first = await sync(fixture, github);
-  assert.equal(first.state.status, "clean");
-  assert.equal(first.state.rangeStart, base);
-  assert.equal(first.state.target, target);
-  assert.equal(first.state.commitCount, 2);
-  const tip = fixture.originRef(SYNC_BRANCH);
-  fixture.run(fixture.root, [
-    "--git-dir",
-    fixture.origin,
-    "merge-base",
-    "--is-ancestor",
-    target,
-    tip,
-  ]);
-  assert.equal(
-    fixture.out(fixture.root, [
-      "--git-dir",
-      fixture.origin,
-      "show",
-      `${tip}:.github/workflows/ci.yml`,
-    ]),
-    "name: CI\non: pull_request",
-  );
-  assert.equal(github.prs.length, 1);
-  const [pr] = github.prs;
-  assert.equal(pr.title, PR_TITLE);
-  assert.equal(pr.draft, false);
-  assert.equal(pr.head.ref, SYNC_BRANCH);
-  assert.ok(pr.body.includes(base) && pr.body.includes(target));
-  assert.ok(pr.body.includes(`compare/${base}...${target}`));
-
-  // A rerun with nothing new pushes nothing and keeps the same PR and a person's notes.
-  pr.body = `Reviewer notes.\n\n${pr.body}`;
-  const second = await sync(fixture, github);
-  assert.equal(second.state.changed, false);
-  assert.equal(second.push.pushed, false);
-  assert.equal(fixture.originRef(SYNC_BRANCH), tip);
-  assert.equal(github.prs.length, 1);
-  assert.ok(pr.body.startsWith("Reviewer notes."));
-  assert.equal(pr.body.split(BODY_START).length, 2);
-});
-
-test("a conflicting sync opens a draft listing every conflicting path, with no conflict markers", async () => {
+test("true conflicts match merge-tree exactly and leave only a report above captured master", async () => {
   const { fixture } = baseFixture();
   const github = createGitHub();
-  fixture.masterCommit(
+  const base = fixture.masterCommit(
     Object.fromEntries(ODD_PATHS.map((file) => [file, "fork\n"])),
-    "fork: edit odd paths",
+    "fork edits",
   );
   const target = fixture.upstreamCommit(
     Object.fromEntries(ODD_PATHS.map((file) => [file, "upstream\n"])),
-    "upstream: edit odd paths",
+    "upstream edits",
   );
-
   const result = await sync(fixture, github);
-  const expected = mergeTreeConflicts(fixture, result.cwd, "refs/tevin-sync/master", target);
-  assert.equal(expected.length, ODD_PATHS.length);
-  assert.equal(result.state.status, "conflict");
-  assert.equal(result.state.stage, "upstream");
-  assert.deepEqual(result.state.conflicts, expected);
-  assert.equal(fixture.out(result.cwd, ["ls-files", "-u"]), "");
-
-  // The pushed candidate differs from master only by the generated report.
-  const tip = fixture.originRef(SYNC_BRANCH);
-  const master = fixture.originRef("master");
-  assert.equal(
-    fixture.out(fixture.root, ["--git-dir", fixture.origin, "diff", "--name-only", master, tip]),
-    REPORT_PATH,
-  );
-  const report = fixture.out(fixture.root, [
-    "--git-dir",
-    fixture.origin,
-    "show",
-    `${tip}:${REPORT_PATH}`,
-  ]);
-  assert.ok(report.startsWith(REPORT_MARKER));
-  assert.ok(report.includes("``tick`pipe|name.md``"));
-
-  const [pr] = github.prs;
+  const { cwd, state, pr } = result;
+  const expected = mergeTreeConflicts(fixture, cwd, base, target);
+  assert.deepEqual(expected, [...ODD_PATHS].sort());
+  assert.deepEqual(state.conflicts, expected);
+  assert.equal(state.status, "conflict");
   assert.equal(pr.draft, true);
-  for (const file of ODD_PATHS) assert.ok(pr.body.includes(file), file);
-
-  // The same conflict again adds no commit and reuses the draft.
-  const again = await sync(fixture, github);
-  assert.equal(again.state.changed, false);
-  assert.equal(fixture.originRef(SYNC_BRANCH), tip);
-  assert.equal(github.prs.length, 1);
-});
-
-test("a person's resolution survives, and the next sync marks the same PR ready", async () => {
-  const { fixture } = baseFixture();
-  const github = createGitHub();
-  fixture.masterCommit({ "README.md": "fork readme\n" }, "fork: readme");
-  const target = fixture.upstreamCommit({ "README.md": "upstream readme\n" }, "upstream: readme");
-  await sync(fixture, github);
-  assert.equal(github.prs[0].draft, true);
-
-  const human = fixture.humanClone();
-  fixture.run(human, ["merge", "--quiet", target], { allowFailure: true });
-  fixture.write(human, { "README.md": "resolved\n", [REPORT_PATH]: null });
-  fixture.run(human, ["commit", "--quiet", "--no-edit"]);
-  fixture.run(human, ["push", "--quiet", "origin", SYNC_BRANCH]);
-  const resolved = fixture.out(human, ["rev-parse", "HEAD"]);
-
-  const next = fixture.upstreamCommit({ "NEW.md": "new\n" }, "upstream: new file");
-  const result = await sync(fixture, github);
-  assert.equal(result.state.status, "clean");
-  const tip = fixture.originRef(SYNC_BRANCH);
-  fixture.run(fixture.root, [
-    "--git-dir",
-    fixture.origin,
-    "merge-base",
-    "--is-ancestor",
-    resolved,
-    tip,
-  ]);
-  fixture.run(fixture.root, [
-    "--git-dir",
-    fixture.origin,
-    "merge-base",
-    "--is-ancestor",
-    next,
-    tip,
-  ]);
-  assert.equal(github.prs.length, 1);
-  assert.equal(github.prs[0].draft, false);
-  assert.ok(github.calls.some((call) => call.query?.includes("markPullRequestReadyForReview")));
-});
-
-test("a clean run removes a report a person left behind, and later conflicts convert to draft", async () => {
-  const { fixture } = baseFixture();
-  const github = createGitHub();
-  fixture.masterCommit({ "README.md": "fork readme\n" }, "fork: readme");
-  const target = fixture.upstreamCommit({ "README.md": "upstream readme\n" }, "upstream: readme");
-  await sync(fixture, github);
-
-  // Resolved but forgot to delete the report.
-  const human = fixture.humanClone();
-  fixture.run(human, ["merge", "--quiet", target], { allowFailure: true });
-  fixture.write(human, { "README.md": "resolved\n" });
-  fixture.run(human, ["commit", "--quiet", "--no-edit"]);
-  fixture.run(human, ["push", "--quiet", "origin", SYNC_BRANCH]);
-  await sync(fixture, github);
-  const tip = fixture.originRef(SYNC_BRANCH);
-  const ls = fixture.out(fixture.root, [
-    "--git-dir",
-    fixture.origin,
-    "ls-tree",
-    "--name-only",
-    "-r",
-    tip,
-  ]);
-  assert.ok(!ls.split("\n").includes(REPORT_PATH));
-  assert.equal(github.prs[0].draft, false);
-
-  fixture.masterCommit({ "README.md": "fork again\n" }, "fork: readme again");
-  fixture.upstreamCommit({ "README.md": "upstream again\n" }, "upstream: readme again");
-  const result = await sync(fixture, github);
-  assert.equal(result.state.status, "conflict");
-  assert.equal(github.prs.length, 1);
-  assert.equal(github.prs[0].draft, true);
-  assert.ok(github.calls.some((call) => call.query?.includes("convertPullRequestToDraft")));
-});
-
-test("a conflict merging master into the sync branch is reported without trying upstream", async () => {
-  const { fixture } = baseFixture();
-  const github = createGitHub();
-  fixture.upstreamCommit({ "NEW.md": "new\n" }, "upstream: new");
-  await sync(fixture, github);
-
-  const human = fixture.humanClone();
-  fixture.commit(human, { "apps/web/src/components/delivery/Board.tsx": "sync edit\n" }, "human");
-  fixture.run(human, ["push", "--quiet", "origin", SYNC_BRANCH]);
-  const humanTip = fixture.out(human, ["rev-parse", "HEAD"]);
-  fixture.masterCommit({ "apps/web/src/components/delivery/Board.tsx": "master edit\n" }, "master");
-  fixture.upstreamCommit({ "NEWER.md": "newer\n" }, "upstream: newer");
-
-  const result = await sync(fixture, github);
-  assert.equal(result.state.status, "conflict");
-  assert.equal(result.state.stage, "master");
-  assert.deepEqual(result.state.conflicts, ["apps/web/src/components/delivery/Board.tsx"]);
-  assert.ok(github.prs[0].body.includes("Upstream integration was not attempted."));
-  const tip = fixture.originRef(SYNC_BRANCH);
-  fixture.run(fixture.root, [
-    "--git-dir",
-    fixture.origin,
-    "merge-base",
-    "--is-ancestor",
-    humanTip,
-    tip,
-  ]);
-});
-
-test("a sync branch that moved during the run is never overwritten", async () => {
-  const { fixture } = baseFixture();
-  const github = createGitHub();
-  fixture.upstreamCommit({ "NEW.md": "new\n" }, "upstream: new");
-  await sync(fixture, github);
-  fixture.upstreamCommit({ "NEWER.md": "newer\n" }, "upstream: newer");
-
-  const cwd = fixture.checkout();
-  const state = prepare({
-    cwd,
-    forkUrl: fixture.origin,
-    upstreamUrl: fixture.upstream,
-    env: fixture.env,
-  });
-  const human = fixture.humanClone();
-  fixture.commit(human, { "HUMAN.md": "human\n" }, "human: concurrent");
-  fixture.run(human, ["push", "--quiet", "origin", SYNC_BRANCH]);
-  const humanTip = fixture.out(human, ["rev-parse", "HEAD"]);
-
-  assert.throws(
-    () =>
-      publishBranch({
-        cwd,
-        state,
-        pushUrl: fixture.origin,
-        token: TOKEN,
-        env: fixture.env,
-        log() {},
-      }),
-    /not overwritten/,
+  assert.equal(pr.head.ref, DAY);
+  assert.equal(fixture.out(cwd, ["show", "-s", "--format=%P", state.head]), base);
+  assert.equal(fixture.out(cwd, ["diff", "--name-only", base, state.head]), REPORT_PATH);
+  assert.equal(fixture.out(cwd, ["ls-files", "-u"]), "");
+  for (const file of ODD_PATHS)
+    assert.equal(fs.readFileSync(path.join(cwd, file), "utf8"), "fork\n");
+  const report = fs.readFileSync(path.join(cwd, REPORT_PATH), "utf8");
+  assert.ok(report.startsWith(REPORT_MARKER));
+  assert.deepEqual(
+    report.split("\n").filter((line) => line.startsWith("- `")),
+    expected.map((file) => `- ${require("./tevin-upstream-sync.cjs").codeSpan(file)}`),
   );
-  assert.equal(fixture.originRef(SYNC_BRANCH), humanTip);
+  assert.doesNotMatch(
+    fixture.out(cwd, ["diff", base, state.head]),
+    /\+<<<<<<<|\+=======|\+>>>>>>>/,
+  );
+  assert.match(pr.body, new RegExp(DAY));
 });
 
+test("fresh fetched master ignores stale legacy report history and a stale runner checkout", async () => {
+  const { fixture } = baseFixture();
+  const cwd = fixture.checkout();
+  const stale = fixture.out(cwd, ["rev-parse", "HEAD"]);
+  fixture.run(fixture.fork, ["checkout", "--quiet", "-b", LEGACY_BRANCH]);
+  fixture.commit(
+    fixture.fork,
+    { [REPORT_PATH]: `${REPORT_MARKER}\nold report\n`, "README.md": "legacy edit\n" },
+    "chore: report upstream sync conflicts",
+  );
+  fixture.run(fixture.fork, ["push", "--quiet", "origin", LEGACY_BRANCH]);
+  const legacy = fixture.originRef(LEGACY_BRANCH);
+  const base = fixture.masterCommit({ "README.md": "new master\n" }, "advance master");
+  fixture.upstreamCommit({ "new.md": "new upstream\n" }, "advance upstream");
+  const github = createGitHub();
+  const old = github.add(LEGACY_BRANCH);
+  const result = await sync(fixture, github, { cwd });
+  assert.notEqual(stale, base);
+  assert.equal(result.state.base, base);
+  assertClean(fixture, result);
+  assert.equal(old.state, "closed");
+  assert.equal(fixture.originRef(LEGACY_BRANCH), legacy);
+  assert.ok(github.comments[0].body.includes(result.pr.html_url));
+});
+
+test("two UTC days use each fetched master and close the prior PR after a superseded note", async () => {
+  const { fixture } = baseFixture();
+  const github = createGitHub();
+  fixture.upstreamCommit({ "new.md": "new\n" }, "new");
+  const first = await sync(fixture, github, { date: "2026-10-16T23:30:00-01:00" });
+  assert.equal(first.state.branch, "automation/upstream-sync-2026-10-17");
+  const base = fixture.masterCommit({ "later.md": "later\n" }, "master advances");
+  const second = await sync(fixture, github, { date: "2026-10-18" });
+  assertClean(fixture, first);
+  assertClean(fixture, second);
+  assert.equal(second.state.base, base);
+  assert.notEqual(first.state.base, base);
+  assert.equal(github.open().length, 1);
+  assert.equal(github.prs[0].state, "closed");
+  const creation = github.calls.findIndex(
+    (call) => call.method === "POST" && call.body.head === second.state.branch,
+  );
+  const comment = github.calls.findIndex((call) => call.apiPath?.endsWith("/issues/1/comments"));
+  const closure = github.calls.findIndex(
+    (call) => call.method === "PATCH" && call.body.state === "closed",
+  );
+  assert.ok(creation < comment && comment < closure);
+  assert.match(github.comments[0].body, /Superseded/);
+  assert.ok(github.comments[0].body.includes(second.pr.html_url));
+});
+
+test("same-day local and remote collisions use numeric suffixes without checking out held branches", async () => {
+  const { fixture } = baseFixture();
+  const github = createGitHub();
+  fixture.upstreamCommit({ "new.md": "new\n" }, "new");
+  const first = await sync(fixture, github);
+  const held = path.join(fixture.root, "held");
+  fixture.run(first.cwd, ["branch", DAY, first.state.head]);
+  fixture.run(first.cwd, ["worktree", "add", "--quiet", held, DAY]);
+  fixture.run(first.cwd, ["branch", `${DAY}-1`, first.state.base]);
+  const content = fs.readFileSync(path.join(held, "README.md"), "utf8");
+  const second = await sync(fixture, github, { cwd: first.cwd });
+  assert.equal(second.state.branch, `${DAY}-2`);
+  assertClean(fixture, second);
+  assert.equal(fixture.out(held, ["symbolic-ref", "--short", "HEAD"]), DAY);
+  assert.equal(fixture.out(held, ["rev-parse", "HEAD"]), first.state.head);
+  assert.equal(fixture.out(first.cwd, ["rev-parse", DAY]), first.state.head);
+  assert.equal(fs.readFileSync(path.join(held, "README.md"), "utf8"), content);
+  assert.equal(fixture.out(held, ["status", "--porcelain"]), "");
+  const third = await sync(fixture, github);
+  assert.equal(third.state.branch, `${DAY}-3`);
+  assertClean(fixture, third);
+  assert.equal(github.prs[0].state, "closed");
+  assert.equal(github.prs[1].state, "closed");
+  assert.deepEqual(
+    github.open().map((pr) => pr.number),
+    [third.pr.number],
+  );
+  assert.ok(
+    github.comments.some(
+      (comment) =>
+        comment.number === second.pr.number &&
+        comment.body.includes("Superseded") &&
+        comment.body.includes(third.pr.html_url),
+    ),
+  );
+  assert.equal(fixture.originRef(first.state.branch), first.state.head);
+  assert.equal(fixture.originRef(second.state.branch), second.state.head);
+  assert.equal(fixture.out(first.cwd, ["rev-parse", `${DAY}-1`]), first.state.base);
+  assert.equal(fixture.out(held, ["symbolic-ref", "--short", "HEAD"]), DAY);
+  assert.equal(fixture.out(held, ["rev-parse", "HEAD"]), first.state.head);
+  assert.equal(fs.readFileSync(path.join(held, "README.md"), "utf8"), content);
+  assert.equal(fixture.out(held, ["status", "--porcelain"]), "");
+});
+
+test("a concurrent divergent remote branch rejects the plain push and keeps the remote tip", () => {
+  const { fixture } = baseFixture();
+  fixture.upstreamCommit({ "new.md": "new\n" }, "new");
+  const candidate = prepared(fixture);
+  const human = fixture.checkout();
+  const humanTip = fixture.commit(human, { "human.md": "concurrent\n" }, "concurrent");
+  fixture.run(human, ["push", "--quiet", "origin", `HEAD:refs/heads/${candidate.state.branch}`]);
+  assert.throws(() => push(fixture, candidate), /not overwritten/);
+  assert.equal(fixture.originRef(candidate.state.branch), humanTip);
+});
+
+for (const operation of ["create", "comment", "close"]) {
+  test(`${operation} failure surfaces and same-state PR retry completes supersession`, async () => {
+    const { fixture } = baseFixture();
+    fixture.upstreamCommit({ "new.md": "new\n" }, "new");
+    const github = createGitHub();
+    const old = github.add(LEGACY_BRANCH);
+    const candidate = prepared(fixture);
+    push(fixture, candidate);
+    const state = JSON.parse(JSON.stringify(candidate.state));
+    github.failOnce((method, apiPath, body) =>
+      operation === "create"
+        ? method === "POST" && apiPath.endsWith("/pulls")
+        : operation === "comment"
+          ? apiPath.endsWith("/comments")
+          : body?.state === "closed",
+    );
+    await assert.rejects(openPr(github, state), /502/);
+    assert.equal(old.state, "open");
+    if (operation === "create") assert.equal(github.comments.length, 0);
+    else github.prs[1].body = `Reviewer text\n${github.prs[1].body}`;
+    await openPr(github, state);
+    assert.equal(github.prs.length, 2);
+    assert.equal(old.state, "closed");
+    if (operation !== "create") assert.match(github.prs[1].body, /^Reviewer text/);
+    assert.equal(fixture.originRef(state.branch), state.head);
+  });
+}
+
+test("snapshot all shrinking open-PR pages before closing only exact older sync branches", async () => {
+  const github = createGitHub();
+  for (let i = 1; i <= 205; i += 1) github.add(`automation/upstream-sync-2026-10-15-${i}`);
+  const legacy = github.add(LEGACY_BRANCH);
+  const preserved = [
+    github.add("automation/upstream-sync-2026-10-17"),
+    github.add(`${DAY}-9`),
+    github.add(`${DAY}-01`),
+    github.add("automation/upstream-sync-2026-10-15-extra"),
+    github.add("feature/unrelated"),
+    github.add(LEGACY_BRANCH, { repo: "someone/t3code" }),
+    github.add(LEGACY_BRANCH, { base: "main" }),
+  ];
+  const state = {
+    status: "clean",
+    branch: DAY,
+    rangeStart: "a".repeat(40),
+    target: "b".repeat(40),
+    commitCount: 1,
+  };
+  const replacement = await openPr(github, state);
+  assert.equal(legacy.state, "closed");
+  assert.ok(github.prs.slice(0, 205).every((pr) => pr.state === "closed"));
+  assert.ok(preserved.every((pr) => pr.state === "open"));
+  assert.equal(github.prs.at(-1).state, "open");
+  assert.equal(github.comments.length, 206);
+  assert.ok(github.comments.every((comment) => comment.body.includes(replacement.html_url)));
+  const pages = github.calls
+    .map((call, index) => ({ call, index }))
+    .filter(({ call }) => call.method === "GET" && call.apiPath.includes("per_page=100"));
+  assert.equal(pages.length, 3);
+  const firstMutation = github.calls.findIndex((call) => call.apiPath.endsWith("/comments"));
+  assert.ok(pages.every(({ index }) => index < firstMutation));
+});
+
+test("same-state retry changes draft state through GraphQL and rejects ambiguous matches", async () => {
+  const github = createGitHub();
+  const state = {
+    status: "clean",
+    branch: DAY,
+    rangeStart: "a".repeat(40),
+    target: "b".repeat(40),
+    commitCount: 1,
+  };
+  await openPr(github, state);
+  await openPr(github, { ...state, status: "conflict", conflicts: ["a.txt"] });
+  assert.equal(github.prs[0].draft, true);
+  await openPr(github, state);
+  assert.equal(github.prs[0].draft, false);
+  github.add(DAY);
+  await assert.rejects(openPr(github, state), /Found 2 open sync PRs/);
+});
+
+test("reserved paths, unrelated histories, and unowned master reports stop safely", () => {
+  for (const kind of ["reserved", "unrelated", "unowned"]) {
+    const { fixture } = baseFixture();
+    if (kind === "reserved")
+      fixture.upstreamCommit({ ".github/workflows/tevin-upstream-sync.yml": "x\n" }, "reserved");
+    if (kind === "unrelated") {
+      fixture.run(fixture.up, ["checkout", "--quiet", "--orphan", "other"]);
+      fixture.run(fixture.up, ["rm", "-r", "--quiet", "-f", "."]);
+      fixture.commit(fixture.up, { "x.txt": "x\n" }, "unrelated");
+      fixture.run(fixture.up, ["push", "--quiet", "--force", "origin", "other:main"]);
+    }
+    if (kind === "unowned") {
+      fixture.masterCommit({ [REPORT_PATH]: "human notes\n" }, "notes");
+      fixture.upstreamCommit({ "new.md": "new\n" }, "new");
+    }
+    assert.throws(
+      () => prepared(fixture),
+      /fork-reserved|shares no history|without the automation marker/,
+    );
+    assert.equal(fixture.originRef(DAY), null);
+  }
+});
+
+test("owned report on master is removed inside the one clean merge commit", async () => {
+  const { fixture } = baseFixture();
+  fixture.masterCommit({ [REPORT_PATH]: `${REPORT_MARKER}\nold\n` }, "landed report");
+  fixture.upstreamCommit({ "new.md": "new\n" }, "new");
+  assertClean(fixture, await sync(fixture, createGitHub()));
+});
+
+test("non-conflict merge errors fail instead of opening a report", () => {
+  const { fixture } = baseFixture();
+  fixture.upstreamCommit({ "new.md": "new\n" }, "new");
+  const cwd = fixture.checkout();
+  fs.writeFileSync(path.join(cwd, "new.md"), "untracked obstruction\n");
+  assert.throws(() => prepared(fixture, cwd), /failed without conflicts/);
+  assert.equal(fs.existsSync(path.join(cwd, REPORT_PATH)), false);
+});
 test("the range starts at the newest first-parent upstream commit master contains", () => {
   const fixture = createFixture();
   fixture.upstreamCommit({ "a.txt": "a\n" }, "u1");
@@ -595,139 +721,6 @@ test("criss-cross history with several merge bases still syncs", async () => {
   assert.equal(result.state.target, target);
 });
 
-test("unrelated upstream history fails clearly", () => {
-  const { fixture } = baseFixture();
-  fixture.run(fixture.up, ["checkout", "--quiet", "--orphan", "other"]);
-  fixture.run(fixture.up, ["rm", "-r", "--quiet", "-f", "."]);
-  fixture.commit(fixture.up, { "x.txt": "x\n" }, "unrelated");
-  fixture.run(fixture.up, ["push", "--quiet", "-f", "origin", "other:main"]);
-  const cwd = fixture.checkout();
-  assert.throws(
-    () =>
-      prepare({ cwd, forkUrl: fixture.origin, upstreamUrl: fixture.upstream, env: fixture.env }),
-    /shares no history/,
-  );
-  assert.equal(fixture.originRef(SYNC_BRANCH), null);
-});
-
-test("upstream taking a fork-reserved path stops the sync", () => {
-  const { fixture } = baseFixture();
-  fixture.upstreamCommit({ ".github/workflows/tevin-upstream-sync.yml": "x\n" }, "collide");
-  const cwd = fixture.checkout();
-  assert.throws(
-    () =>
-      prepare({ cwd, forkUrl: fixture.origin, upstreamUrl: fixture.upstream, env: fixture.env }),
-    /fork-reserved/,
-  );
-});
-
-test("a conflict report the automation did not write is never overwritten", async () => {
-  const { fixture } = baseFixture();
-  const github = createGitHub();
-  fixture.upstreamCommit({ "NEW.md": "new\n" }, "upstream: new");
-  await sync(fixture, github);
-  const human = fixture.humanClone();
-  fixture.commit(human, { [REPORT_PATH]: "my own notes\n" }, "human notes");
-  fixture.run(human, ["push", "--quiet", "origin", SYNC_BRANCH]);
-  fixture.masterCommit({ "README.md": "fork\n" }, "fork readme");
-  fixture.upstreamCommit({ "README.md": "upstream\n" }, "upstream readme");
-  await assert.rejects(sync(fixture, github), /without the automation marker/);
-});
-
-test("a PR create that failed after the push is retried without duplicates", async () => {
-  const { fixture } = baseFixture();
-  const github = createGitHub();
-  fixture.upstreamCommit({ "NEW.md": "new\n" }, "upstream: new");
-  github.failCreateOnce();
-  await assert.rejects(sync(fixture, github), /502/);
-  assert.ok(fixture.originRef(SYNC_BRANCH));
-  const retry = await sync(fixture, github);
-  assert.equal(retry.push.pushed, false);
-  assert.equal(github.prs.length, 1);
-  await sync(fixture, github);
-  assert.equal(github.prs.length, 1);
-});
-
-test("two open sync PRs fail instead of guessing", async () => {
-  const github = createGitHub();
-  const pr = (number) => ({
-    number,
-    state: "open",
-    head: { ref: SYNC_BRANCH, repo: { full_name: REPO } },
-    base: { ref: "master" },
-  });
-  github.prs.push(pr(1), pr(2));
-  const state = {
-    status: "clean",
-    rangeStart: "a".repeat(40),
-    target: "b".repeat(40),
-    commitCount: 1,
-  };
-  await assert.rejects(
-    upsertPullRequest({ api: github.api, repo: REPO, state, log() {} }),
-    /Found 2 open sync PRs/,
-  );
-});
-
-// After the PR lands (or closes), the next gap must give one usable PR and keep human commits.
-for (const landing of ["merge", "squash", "rebase", "close"]) {
-  for (const deleteBranch of [false, true]) {
-    if (landing === "close" && deleteBranch) continue;
-    test(`after a ${landing}${deleteBranch ? " and branch deletion" : ""}, the next gap opens one PR`, async () => {
-      const { fixture } = baseFixture();
-      const github = createGitHub();
-      const u1 = fixture.upstreamCommit({ "one.md": "1\n" }, "upstream one");
-      const u2 = fixture.upstreamCommit({ "two.md": "2\n" }, "upstream two");
-      await sync(fixture, github);
-      const human = fixture.humanClone();
-      const humanTip = fixture.commit(human, { "HUMAN.md": "human\n" }, "human");
-      fixture.run(human, ["push", "--quiet", "origin", SYNC_BRANCH]);
-
-      const fork = fixture.fork;
-      fixture.run(fork, ["checkout", "--quiet", "master"]);
-      fixture.run(fork, ["fetch", "--quiet", "origin"]);
-      fixture.run(fork, ["fetch", "--quiet", "upstream"]);
-      if (landing === "merge") {
-        fixture.run(fork, ["merge", "--quiet", "--no-ff", "--no-edit", `origin/${SYNC_BRANCH}`]);
-      } else if (landing === "squash") {
-        fixture.run(fork, ["merge", "--quiet", "--squash", `origin/${SYNC_BRANCH}`]);
-        fixture.run(fork, ["commit", "--quiet", "-m", "squash sync"]);
-      } else if (landing === "rebase") {
-        fixture.run(fork, ["cherry-pick", u1, u2, humanTip]);
-      }
-      fixture.run(fork, ["push", "--quiet", "origin", "master"]);
-      github.prs[0].state = landing === "close" ? "closed" : "merged";
-      if (deleteBranch) fixture.run(fork, ["push", "--quiet", "origin", "--delete", SYNC_BRANCH]);
-
-      const u3 = fixture.upstreamCommit({ "three.md": "3\n" }, "upstream three");
-      const result = await sync(fixture, github);
-      assert.equal(result.state.status, "clean");
-      const tip = fixture.originRef(SYNC_BRANCH);
-      fixture.run(fixture.root, [
-        "--git-dir",
-        fixture.origin,
-        "merge-base",
-        "--is-ancestor",
-        u3,
-        tip,
-      ]);
-      if (!deleteBranch) {
-        fixture.run(fixture.root, [
-          "--git-dir",
-          fixture.origin,
-          "merge-base",
-          "--is-ancestor",
-          humanTip,
-          tip,
-        ]);
-      }
-      assert.equal(github.open().length, 1);
-      assert.equal(github.open()[0].draft, false);
-      assert.equal(github.prs.length, 2);
-    });
-  }
-}
-
 test("the workflow keeps the token in its two publication steps and never forces or targets master", () => {
   const workflow = fs.readFileSync(
     path.join(__dirname, "../workflows/tevin-upstream-sync.yml"),
@@ -758,8 +751,15 @@ test("the workflow keeps the token in its two publication steps and never forces
     assert.match(step, /node "\$RUNNER_TEMP\/tevin-upstream-sync\.cjs"/);
   }
 
+  const testIndex = workflow.indexOf("node --test .github/scripts/tevin-upstream-sync.test.cjs");
+  const copyIndex = workflow.indexOf(
+    'cp .github/scripts/tevin-upstream-sync.cjs "$RUNNER_TEMP/tevin-upstream-sync.cjs"',
+  );
+  const prepareIndex = workflow.indexOf('node "$RUNNER_TEMP/tevin-upstream-sync.cjs" prepare');
+  assert.ok(testIndex > 0 && testIndex < copyIndex && copyIndex < prepareIndex);
+
   const pushes = helper.match(/\["push"[^\]]*\]/g);
-  assert.deepEqual(pushes, ['["push", "--no-verify", pushUrl, `HEAD:refs/heads/${SYNC_BRANCH}`]']);
+  assert.deepEqual(pushes, ['["push", "--no-verify", pushUrl, `HEAD:refs/heads/${state.branch}`]']);
   for (const source of [workflow, ...pushes]) {
     assert.doesNotMatch(source, /--force|force-with-lease|\+HEAD|\+refs/);
   }
