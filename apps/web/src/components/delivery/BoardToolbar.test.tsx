@@ -103,6 +103,8 @@ function ResponsiveControls({ portrait }: { portrait: boolean }) {
       <Sheet open={portrait && open} modal={portrait} onOpenChange={setOpen}>
         <SheetPopup side="bottom" container={portal} keepMounted inline={!portrait}>
           <SheetTitle>Board filters</SheetTitle>
+          <button>Environment</button>
+          <button>Group</button>
           <input
             aria-label="Owner"
             value={value}
@@ -110,6 +112,8 @@ function ResponsiveControls({ portrait }: { portrait: boolean }) {
           />
         </SheetPopup>
       </Sheet>
+      <input aria-label="Search tasks" />
+      <button>New task</button>
       <EnginePanel environmentId={EnvironmentId.make("local")} compact={portrait} />
     </>
   );
@@ -142,6 +146,37 @@ async function type(input: HTMLInputElement, value: string) {
 
 async function render(portrait: boolean) {
   await act(async () => root.render(<ResponsiveControls portrait={portrait} />));
+}
+
+// jsdom has no native Tab default action; choose from the current tab order after keydown.
+async function tab(backward = false) {
+  await act(async () => {
+    const active = document.activeElement;
+    if (!active) throw new Error("Missing active element");
+    const permitted = active.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "Tab",
+        shiftKey: backward,
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    if (permitted) {
+      const stops = Array.from(
+        container.querySelectorAll<HTMLElement>("button,input,[tabindex]"),
+      ).filter(
+        (node) =>
+          node.tabIndex >= 0 &&
+          !node.matches(":disabled") &&
+          !node.closest('[hidden],[inert],[aria-hidden="true"]'),
+      );
+      const index = stops.indexOf(active as HTMLElement);
+      stops[index + (backward ? -1 : 1)]?.focus();
+    }
+    document.activeElement?.dispatchEvent(
+      new KeyboardEvent("keyup", { key: "Tab", shiftKey: backward, bubbles: true }),
+    );
+  });
 }
 
 const defaultOptions: Partial<BoardToolbarProps> = {};
@@ -282,6 +317,48 @@ describe("responsive board control ownership", () => {
     await render(false);
     expect(element('input[aria-label="Owner"]')).toBe(owner);
     expect(owner.value).toBe("traveller");
+  });
+
+  it("keeps inline filters in sequential tab order after leaving and crossing breakpoints", async () => {
+    await render(false);
+    const environment = button("Environment");
+    const group = button("Group");
+    const owner = element<HTMLInputElement>('input[aria-label="Owner"]');
+    const search = element<HTMLInputElement>('input[aria-label="Search tasks"]');
+    const parent = group.parentElement;
+
+    for (const crossBreakpoint of [false, true, true]) {
+      if (crossBreakpoint) {
+        await render(true);
+        await click("Filters");
+        await render(false);
+      }
+      await act(async () => button("Filters").focus());
+      await tab();
+      expect(document.activeElement).toBe(environment);
+      await tab();
+      expect(document.activeElement).toBe(group);
+      await tab();
+      expect(document.activeElement).toBe(owner);
+      await tab();
+      expect(document.activeElement).toBe(search);
+      await tab();
+      expect(document.activeElement).toBe(button("New task"));
+      await tab(true);
+      expect(document.activeElement).toBe(search);
+      await tab(true);
+      expect(document.activeElement).toBe(owner);
+      await tab(true);
+      expect(document.activeElement).toBe(group);
+      await tab(true);
+      expect(document.activeElement).toBe(environment);
+      await tab(true);
+      expect(document.activeElement).toBe(button("Filters"));
+      await tab();
+      expect(document.activeElement).toBe(environment);
+      expect(button("Group")).toBe(group);
+      expect(group.parentElement).toBe(parent);
+    }
   });
 
   it("retains the real engine dialog and an update in flight until its matching completion", async () => {

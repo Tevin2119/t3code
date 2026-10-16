@@ -2,7 +2,7 @@
 
 import { Dialog as SheetPrimitive } from "@base-ui/react/dialog";
 import { XIcon } from "lucide-react";
-import type { CSSProperties } from "react";
+import { useLayoutEffect, useState, type CSSProperties } from "react";
 import { cn } from "~/lib/utils";
 import { Button } from "~/components/ui/button";
 
@@ -76,9 +76,30 @@ function SheetPopup({
       ? undefined
       : ({ transitionDuration: `${transitionDurationMs}ms` } satisfies CSSProperties);
   const instant = transitionDurationMs === 0;
+  const [portal, setPortal] = useState<HTMLDivElement | null>(null);
+
+  useLayoutEffect(() => {
+    if (!inline || !portal) return;
+
+    // Base UI has no portal tab-order opt-out. Its capture listener saves tab stops
+    // on focusout even with a closed root; restore them before the next Tab without
+    // stopping focus events that nested controls need.
+    const restoreTabOrder = () => {
+      for (const element of portal.querySelectorAll<HTMLElement>("[data-tabindex]")) {
+        const tabIndex = element.dataset.tabindex;
+        delete element.dataset.tabindex;
+        if (tabIndex) element.setAttribute("tabindex", tabIndex);
+        else element.removeAttribute("tabindex");
+      }
+    };
+    restoreTabOrder();
+    portal.addEventListener("focusout", restoreTabOrder);
+    return () => portal.removeEventListener("focusout", restoreTabOrder);
+  }, [inline, portal]);
 
   return (
     <SheetPortal
+      ref={setPortal}
       keepMounted={keepMounted}
       container={container}
       className={inline ? "contents" : undefined}
