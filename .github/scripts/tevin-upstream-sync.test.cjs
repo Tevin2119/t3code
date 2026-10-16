@@ -399,6 +399,58 @@ test("a conflicting sync opens a draft listing every conflicting path, with no c
   assert.equal(github.prs.length, 1);
 });
 
+for (const scenario of ["ordinary file", "directory/file", "directory/file after master merge"]) {
+  test(`${scenario} conflict report matches the merge-tree oracle`, (t) => {
+    const directoryFile = scenario !== "ordinary file";
+    const fixture = createFixture();
+    fixture.upstreamCommit({ df: "base\n" }, "upstream: file");
+    fixture.forkFromUpstream();
+    let syncTip;
+    if (scenario === "directory/file after master merge") {
+      fixture.run(fixture.fork, ["checkout", "--quiet", "-b", SYNC_BRANCH]);
+      syncTip = fixture.commit(fixture.fork, { "sync.txt": "human\n" }, "human: sync edit");
+      fixture.run(fixture.fork, ["push", "--quiet", "origin", SYNC_BRANCH]);
+    }
+    const master = fixture.masterCommit({ df: "fork\n" }, "fork: edit file");
+    const theirs = fixture.upstreamCommit(
+      directoryFile ? { df: null, "df/x.txt": "upstream\n" } : { df: "upstream\n" },
+      "upstream: replace file",
+    );
+    const cwd = fixture.checkout();
+    const state = prepare({
+      cwd,
+      forkUrl: fixture.origin,
+      upstreamUrl: fixture.upstream,
+      env: fixture.env,
+    });
+    const ours = fixture.out(cwd, ["rev-parse", `${state.head}^`]);
+    if (syncTip) {
+      assert.notEqual(ours, master);
+      assert.deepEqual(fixture.out(cwd, ["show", "-s", "--format=%P", ours]).split(" "), [
+        syncTip,
+        master,
+      ]);
+    } else {
+      assert.equal(ours, master);
+    }
+    const expected = mergeTreeConflicts(fixture, cwd, ours, theirs);
+    assert.deepEqual(expected, [directoryFile ? `df~${ours}` : "df"]);
+    assert.equal(state.status, "conflict");
+    assert.equal(state.stage, "upstream");
+    assert.equal(fixture.out(cwd, ["ls-files", "-u"]), "");
+    assert.equal(
+      fixture.run(cwd, ["rev-parse", "--verify", "MERGE_HEAD"], { allowFailure: true }).status,
+      128,
+    );
+    const report = fixture.out(cwd, ["show", `${state.head}:${REPORT_PATH}`]);
+    assert.ok(report.startsWith(REPORT_MARKER));
+    const reported = [...report.matchAll(/^- `([^`]+)`$/gm)].map((match) => match[1]).sort();
+    t.diagnostic(JSON.stringify({ ours, theirs, expected, reported }));
+    assert.deepEqual(reported, expected);
+    assert.deepEqual(state.conflicts, expected);
+  });
+}
+
 test("a person's resolution survives, and the next sync marks the same PR ready", async () => {
   const { fixture } = baseFixture();
   const github = createGitHub();
