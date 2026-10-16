@@ -1,3 +1,4 @@
+import { deliveryEnvironment, emptyDeliveryBindingAtom } from "../../state/delivery";
 import type { ComposerTextPaste } from "../../native/T3ComposerEditor.types";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
@@ -90,6 +91,7 @@ import {
 } from "../../lib/composerImages";
 import {
   buildModelOptions,
+  modelOptionSelectionRefusal,
   groupByProvider,
   isModelSelectionUnavailable,
 } from "../../lib/modelOptions";
@@ -659,6 +661,14 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
   // ── Model menu ───────────────────────────────────────────
   // A session that hands the conversation to another provider lets the picker
   // offer the whole catalog; one that can't stays on its own instance.
+  const deliveryBinding = useAtomValue(
+    props.environmentId
+      ? deliveryEnvironment.modelBinding({
+          environmentId: props.environmentId,
+          input: { threadId: props.selectedThread.id },
+        })
+      : emptyDeliveryBindingAtom,
+  );
   const lockedProviderInstanceId = props.canSwitchProvider
     ? undefined
     : currentModelSelection.instanceId;
@@ -669,12 +679,15 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
         currentModelSelection,
         lockedProviderInstanceId,
         props.selectedThread.projectId,
+        false,
+        deliveryBinding,
       ),
     [
       props.serverConfig,
       currentModelSelection,
       lockedProviderInstanceId,
       props.selectedThread.projectId,
+      deliveryBinding,
     ],
   );
   const threadProviderGroups = useMemo(() => groupByProvider(modelOptions), [modelOptions]);
@@ -701,10 +714,17 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
       providerInstanceId: currentModelSelection.instanceId,
       ...(lockedProviderInstanceId ? { lockedProviderInstanceId } : {}),
       providerGroups: threadProviderGroups,
+      deliveryBinding,
       selectedModel: currentModelSelection,
       reportedModelSelection: props.reportedModelSelection,
-      onSelectModel: (option) =>
-        props.onUpdateModelSelection(withRememberedModelOptions(option.selection)),
+      onSelectModel: (option) => {
+        const refusal = modelOptionSelectionRefusal(option, modelOptions);
+        if (refusal) {
+          Alert.alert("Model unavailable", refusal);
+          return;
+        }
+        props.onUpdateModelSelection(withRememberedModelOptions(option.selection));
+      },
       optionDescriptors: providerOptionDescriptors,
       onUpdateOptionSelections: (options) => {
         rememberModelOptions(
@@ -727,6 +747,9 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
       settingsOwnerId,
       lockedProviderInstanceId,
       threadProviderGroups,
+      modelOptions,
+      deliveryBinding,
+      props.environmentId,
       props.selectedThread.projectId,
     ],
   );

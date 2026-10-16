@@ -17,7 +17,6 @@ export const PROVIDER_ORDER: readonly UsageProviderKind[] = [
   "cursor",
 
   "antigravity",
-  "pi",
 ];
 
 export const PROVIDER_LABEL: Record<UsageProviderKind, string> = {
@@ -25,14 +24,13 @@ export const PROVIDER_LABEL: Record<UsageProviderKind, string> = {
   codex: "Codex",
   grok: "Grok Build",
   deepseek: "DeepSeek",
-  pi: "pi",
+  pi: "Pi",
   opencode: "OpenCode",
   kimi: "Kimi Code",
   hermes: "Hermes",
   cursor: "Cursor",
 
   antigravity: "Antigravity",
-  pi: "Pi",
 };
 
 /**
@@ -46,13 +44,12 @@ export function useProviderColors(): Record<UsageProviderKind, string> {
     codex: scheme === "dark" ? "#e6e6e6" : "#3c3c43",
     grok: scheme === "dark" ? "#a1a1aa" : "#52525b",
     deepseek: "#4d6bfe",
-    pi: "#22a06b",
+    pi: "#4d9f8a",
     kimi: "#2f9fd8",
     hermes: "#a26bd6",
     cursor: "#8b8b8b",
     opencode: "#5b9bbd",
     antigravity: "#8c7bd1",
-    pi: "#4d9f8a",
   };
 }
 

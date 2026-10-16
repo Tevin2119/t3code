@@ -1,12 +1,21 @@
 import { WS_METHODS } from "@t3tools/contracts";
-import type { Atom } from "effect/reactivity";
+import { Atom } from "effect/reactivity";
 
+import { deliveryBindingAtom } from "../deliveryModelLock.ts";
 import type { EnvironmentRegistry } from "../connection/registry.ts";
 import { createEnvironmentRpcCommand, createEnvironmentRpcQueryAtomFamily } from "./runtime.ts";
 
 export function createDeliveryEnvironmentAtoms<R, E>(
   runtime: Atom.AtomRuntime<EnvironmentRegistry | R, E>,
 ) {
+  const threadBinding = createEnvironmentRpcQueryAtomFamily(runtime, {
+    label: "environment-data:delivery:thread-binding",
+    tag: WS_METHODS.deliveryThreadBinding,
+    staleTimeMs: 1_000,
+  });
+  const modelBinding = Atom.family((query: ReturnType<typeof threadBinding>) =>
+    Atom.family((threadId: string) => deliveryBindingAtom(query, threadId)),
+  );
   return {
     /** Engine state changes while a team works, so a reading goes stale quickly. */
     read: createEnvironmentRpcQueryAtomFamily(runtime, {
@@ -15,11 +24,10 @@ export function createDeliveryEnvironmentAtoms<R, E>(
       staleTimeMs: 2_000,
     }),
     /** A thread's team, or the team choice that is still held. Cheap, and read often. */
-    threadBinding: createEnvironmentRpcQueryAtomFamily(runtime, {
-      label: "environment-data:delivery:thread-binding",
-      tag: WS_METHODS.deliveryThreadBinding,
-      staleTimeMs: 1_000,
-    }),
+    threadBinding,
+    /** Query families include the environment and thread; previous query values never carry over. */
+    modelBinding: (target: Parameters<typeof threadBinding>[0]) =>
+      modelBinding(threadBinding(target))(target.input.threadId),
     /** One reading asked for by hand, such as a piece of a file. Not kept and not refreshed. */
     fetch: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:delivery:fetch",

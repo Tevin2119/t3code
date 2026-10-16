@@ -1,3 +1,5 @@
+import type { DeliveryThreadBinding } from "@t3tools/contracts";
+import { modelOptionSelectionRefusal } from "../../lib/modelOptions";
 import { createV5StackNavigator as createNativeStackNavigator } from "../../native/createV5StackNavigator";
 import { DEFAULT_SERVER_SETTINGS } from "@t3tools/contracts";
 import {
@@ -256,6 +258,7 @@ type ThreadSettingsSessionProps = {
   readonly projectId: ProjectId | null;
   readonly providerInstanceId?: ProviderInstanceId;
   readonly lockedProviderInstanceId?: ProviderInstanceId;
+  readonly deliveryBinding?: DeliveryThreadBinding | null;
   readonly providerGroups: ReadonlyArray<ProviderGroup>;
   readonly selectedModel: ModelSelection | null;
   readonly reportedModelSelection?: ModelSelection | null;
@@ -368,6 +371,7 @@ function ThreadSettingsSessionProvider(
               props.lockedProviderInstanceId,
               props.projectId,
               true,
+              props.deliveryBinding,
             ),
           )
         : props.providerGroups,
@@ -377,6 +381,7 @@ function ThreadSettingsSessionProvider(
       props.providerGroups,
       props.selectedModel,
       props.lockedProviderInstanceId,
+      props.deliveryBinding,
       props.projectId,
     ],
   );
@@ -561,7 +566,10 @@ function ThreadSettingsSessionProvider(
       if (!canCommitPendingModel(pendingModel, props.providerGroups)) {
         Alert.alert(
           "Model unavailable",
-          "Set up this provider on web or desktop, or select another model.",
+          modelOptionSelectionRefusal(
+            pendingModel,
+            props.providerGroups.flatMap((group) => group.models),
+          ) ?? "Select another model.",
         );
         return false;
       }

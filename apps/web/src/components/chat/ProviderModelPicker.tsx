@@ -1,3 +1,4 @@
+import type { DeliveryThreadBinding } from "@t3tools/contracts";
 import { UsersIcon } from "lucide-react";
 import {
   ANTIGRAVITY_DEFAULT_MODEL,
@@ -39,6 +40,7 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
   model: string;
   selectedModels?: ReadonlyArray<{ instanceId: ProviderInstanceId; model: string }>;
   onToggleModel?: (instanceId: ProviderInstanceId, model: string) => void;
+  deliveryBinding?: DeliveryThreadBinding | null | undefined;
   lockedProvider: ProviderDriverKind | null;
   lockedContinuationGroupKey?: string | null;
   /** Instance entries rendered in the sidebar + used to resolve display name. */
@@ -341,6 +343,7 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
                 },
               }
             : {})}
+          deliveryBinding={props.deliveryBinding}
           lockedProvider={props.lockedProvider}
           lockedContinuationGroupKey={props.lockedContinuationGroupKey ?? null}
           instanceEntries={props.instanceEntries}
