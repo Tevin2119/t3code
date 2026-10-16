@@ -137,7 +137,6 @@ export function readAntigravityAuthMethod(config: unknown): AntigravityAuthMetho
   );
 }
 
-/** Setup state belongs to the selected environment and is never saved in client settings. */
 export function ProviderSetupSection(props: ProviderSetupSectionProps) {
   return (
     <section

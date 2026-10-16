@@ -37,7 +37,6 @@ const rates: RateTable = new Map([
 function record(overrides: Partial<UsageRecord> = {}): UsageRecord {
   return {
     provider: "claude",
-    // 2026-08-07T04:05Z is still Aug 6 in Los Angeles.
     timestampMs: Date.parse("2026-08-07T04:05:13.944Z"),
     model: "claude-fable-5",
     modelProvider: "anthropic",
@@ -98,7 +97,6 @@ describe("UsageAggregator", () => {
   it("splits a bucket's cost by category and speed", () => {
     const [bucket] = aggregate([record(), record({ speed: "fast" })]).buckets;
 
-    // Standard costs $0.005625 and fast twice that.
     expect(bucket).toMatchObject({
       costUsd: expect.closeTo(0.016875),
       categoryCostUsd: {
@@ -142,7 +140,6 @@ describe("UsageAggregator", () => {
   });
 
   it("finds the day at a quarter-hour zone's midnight across interleaved buckets", () => {
-    // Kathmandu is UTC+5:45, so its midnight falls at 18:15 UTC.
     const result = aggregate(
       [
         record({ timestampMs: Date.parse("2026-08-01T18:14:59.999Z") }),
@@ -161,7 +158,6 @@ describe("UsageAggregator", () => {
   });
 
   it("finds the day at a fixed offset's midnight between quarter hours", () => {
-    // At +00:01, midnight falls at 23:59 UTC.
     const result = aggregate(
       [
         record({ timestampMs: Date.parse("2026-08-01T23:58:59.999Z") }),
@@ -225,7 +221,6 @@ describe("UsageAggregator", () => {
   it("prices against the rate table", () => {
     const result = aggregate([record()]);
 
-    // 100*1e-5 + 1000*1e-6 + 10*1.25e-5 + 50*5e-5
     expect(result.buckets[0]?.costUsd).toBeCloseTo(0.004625, 9);
     expect(result.buckets[0]?.costSource).toBe("modelPriced");
   });

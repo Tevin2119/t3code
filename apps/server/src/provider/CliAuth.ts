@@ -323,11 +323,16 @@ export const makeCliAuth = Effect.fn("makeCliAuth")(function* (
                 `${options.providerName} setup is already in progress.`,
               );
             }
-            const flowId = yield* crypto.randomUUIDv4.pipe(
-              Effect.mapError(() =>
-                setupError("start", `Could not start ${options.providerName} sign-in. Try again.`),
-              ),
-            );
+            const flowId = yield* crypto
+              .randomUUIDv4()
+              .pipe(
+                Effect.mapError(() =>
+                  setupError(
+                    "start",
+                    `Could not start ${options.providerName} sign-in. Try again.`,
+                  ),
+                ),
+              );
             const expiresAtMillis = (yield* Clock.currentTimeMillis) + flowTimeoutMs;
             const state: ProviderAuthState = {
               ...emptyState,
