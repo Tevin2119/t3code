@@ -10,6 +10,7 @@ const path = require("node:path");
 
 const LEGACY_BRANCH = "automation/tevin-upstream-sync";
 const DAILY_PREFIX = "automation/upstream-sync-";
+const DAILY_BRANCH_PATTERN = /^automation\/upstream-sync-(\d{4}-\d{2}-\d{2})(?:-([1-9]\d*))?$/;
 const BASE_BRANCH = "master";
 const UPSTREAM_REPO = "pingdotgg/t3code";
 const UPSTREAM_URL = `https://github.com/${UPSTREAM_REPO}.git`;
@@ -61,10 +62,6 @@ function isAncestor(cwd, ancestor, descendant, env) {
     git(cwd, ["merge-base", "--is-ancestor", ancestor, descendant], { env, allowFailure: true })
       .status === 0
   );
-}
-
-function remoteHasBranch(cwd, url, branch, env) {
-  return gitOut(cwd, ["ls-remote", "--heads", url, `refs/heads/${branch}`], { env }) !== "";
 }
 
 /**
@@ -160,19 +157,24 @@ function commitIfStaged(cwd, message, env) {
   return true;
 }
 
-/** Select an unused branch without checking it out, even if another worktree holds it. */
+/** Advance past all same-day suffixes so supersession order survives fresh checkouts. */
 function selectBranch(cwd, forkUrl, date, env) {
   const day = new Date(date).toISOString().slice(0, 10);
   const stem = `${DAILY_PREFIX}${day}`;
-  for (let suffix = 0; ; suffix += 1) {
-    const branch = suffix ? `${stem}-${suffix}` : stem;
-    const local =
-      git(cwd, ["show-ref", "--verify", "--quiet", `refs/heads/${branch}`], {
-        env,
-        allowFailure: true,
-      }).status === 0;
-    if (!local && !remoteHasBranch(cwd, forkUrl, branch, env)) return branch;
+  const local = gitOut(cwd, ["for-each-ref", "--format=%(refname)", `refs/heads/${stem}*`], {
+    env,
+  });
+  const remote = gitOut(cwd, ["ls-remote", "--heads", forkUrl, `refs/heads/${stem}*`], { env });
+  let suffix = 0;
+  for (const line of `${local}\n${remote}`.split("\n")) {
+    const branch = line
+      .split("\t")
+      .at(-1)
+      .replace(/^refs\/heads\//, "");
+    const match = DAILY_BRANCH_PATTERN.exec(branch);
+    if (match?.[1] === day) suffix = Math.max(suffix, Number(match[2] ?? 0) + 1);
   }
+  return suffix ? `${stem}-${suffix}` : stem;
 }
 
 /** Prepare detached from captured master; old sync branches never enter the candidate. */
@@ -321,9 +323,8 @@ function mergeBody(existing, section) {
 
 function isOlderSyncBranch(branch, replacement) {
   if (branch === LEGACY_BRANCH) return true;
-  const pattern = /^automation\/upstream-sync-(\d{4}-\d{2}-\d{2})(?:-([1-9]\d*))?$/;
-  const old = pattern.exec(branch ?? "");
-  const next = pattern.exec(replacement);
+  const old = DAILY_BRANCH_PATTERN.exec(branch ?? "");
+  const next = DAILY_BRANCH_PATTERN.exec(replacement);
   if (!old || !next) return false;
   return old[1] < next[1] || (old[1] === next[1] && Number(old[2] ?? 0) < Number(next[2] ?? 0));
 }

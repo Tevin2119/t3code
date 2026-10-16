@@ -2,8 +2,9 @@
 
 The fork-only [upstream sync](../../.github/workflows/tevin-upstream-sync.yml) runs daily on
 Tevin2119/t3code. Each run fetches current `master` and merges pingdotgg/t3code `main`
-into a fresh branch, `automation/upstream-sync-YYYY-MM-DD` (UTC). If that name already exists
-locally or remotely, it chooses an unused numeric suffix such as `-1`. A clean merge opens
+into a fresh branch, `automation/upstream-sync-YYYY-MM-DD` (UTC). If any same-day branch exists
+locally or remotely, it chooses a numeric suffix above every existing same-day local and remote
+suffix, so a fresh checkout still supersedes earlier runs. A clean merge opens
 a normal PR, `chore: sync upstream pingdotgg/t3code`, against `master`, with the upstream range
 in its body. After the replacement PR exists, the workflow comments with its link and closes
 older open sync PRs, including the legacy `automation/tevin-upstream-sync` PR. Branches remain

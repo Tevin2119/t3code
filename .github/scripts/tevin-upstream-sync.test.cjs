@@ -508,9 +508,29 @@ test("same-day local and remote collisions use numeric suffixes without checking
   assert.equal(fs.readFileSync(path.join(held, "README.md"), "utf8"), content);
   assert.equal(fixture.out(held, ["status", "--porcelain"]), "");
   const third = await sync(fixture, github);
-  assert.equal(third.state.branch, `${DAY}-1`);
-  // Suffix order determines which same-day PR is older; the higher suffix remains open.
-  assert.equal(github.prs[1].state, "open");
+  assert.equal(third.state.branch, `${DAY}-3`);
+  assertClean(fixture, third);
+  assert.equal(github.prs[0].state, "closed");
+  assert.equal(github.prs[1].state, "closed");
+  assert.deepEqual(
+    github.open().map((pr) => pr.number),
+    [third.pr.number],
+  );
+  assert.ok(
+    github.comments.some(
+      (comment) =>
+        comment.number === second.pr.number &&
+        comment.body.includes("Superseded") &&
+        comment.body.includes(third.pr.html_url),
+    ),
+  );
+  assert.equal(fixture.originRef(first.state.branch), first.state.head);
+  assert.equal(fixture.originRef(second.state.branch), second.state.head);
+  assert.equal(fixture.out(first.cwd, ["rev-parse", `${DAY}-1`]), first.state.base);
+  assert.equal(fixture.out(held, ["symbolic-ref", "--short", "HEAD"]), DAY);
+  assert.equal(fixture.out(held, ["rev-parse", "HEAD"]), first.state.head);
+  assert.equal(fs.readFileSync(path.join(held, "README.md"), "utf8"), content);
+  assert.equal(fixture.out(held, ["status", "--porcelain"]), "");
 });
 
 test("a concurrent divergent remote branch rejects the plain push and keeps the remote tip", () => {
