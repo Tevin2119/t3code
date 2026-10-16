@@ -1,14 +1,15 @@
 // Fork-only upstream sync for Tevin2119/t3code. Used by
 // .github/workflows/tevin-upstream-sync.yml in three steps:
-//   prepare  merge master and pingdotgg/t3code main into the sync branch locally
+//   prepare  merge pingdotgg/t3code main into freshly fetched master locally
 //   push     publish the sync branch with UPSTREAM_SYNC_TOKEN (never forced)
-//   pr       create or update the one sync pull request with UPSTREAM_SYNC_TOKEN
+//   pr       open the replacement PR and supersede older sync PRs
 // The workflow runs a copy of this file taken from master, never the candidate's.
 const childProcess = require("node:child_process");
 const fs = require("node:fs");
 const path = require("node:path");
 
-const SYNC_BRANCH = "automation/tevin-upstream-sync";
+const LEGACY_BRANCH = "automation/tevin-upstream-sync";
+const DAILY_PREFIX = "automation/upstream-sync-";
 const BASE_BRANCH = "master";
 const UPSTREAM_REPO = "pingdotgg/t3code";
 const UPSTREAM_URL = `https://github.com/${UPSTREAM_REPO}.git`;
@@ -28,7 +29,6 @@ const RESERVED_PATHS = [
 // Private ref namespace so fetches never collide with remotes of the checkout.
 const REFS = {
   base: "refs/tevin-sync/master",
-  branch: "refs/tevin-sync/branch",
   upstream: "refs/tevin-sync/upstream",
 };
 const BOT_IDENTITY = {
@@ -86,9 +86,12 @@ function unmergedPaths(cwd, env) {
   return [...new Set(raw.split("\0").filter(Boolean))].sort();
 }
 
-/** Merges `ref` into HEAD. Returns the conflicting paths, or [] when clean. */
+/** Leaves a clean merge staged; aborts genuine conflicts and returns their paths. */
 function mergeRef(cwd, ref, message, env) {
-  const result = git(cwd, ["merge", "--no-edit", "-m", message, ref], { env, allowFailure: true });
+  const result = git(cwd, ["merge", "--no-ff", "--no-commit", "-m", message, ref], {
+    env,
+    allowFailure: true,
+  });
   if (result.status === 0) return [];
   const hasUnmerged = gitOut(cwd, ["ls-files", "-u"], { env }) !== "";
   if (!hasUnmerged) {
@@ -101,7 +104,7 @@ function mergeRef(cwd, ref, message, env) {
 
 /** Renders a path as an inline code span that survives backticks and control characters. */
 function codeSpan(value) {
-  // oxlint-disable-next-line no-control-regex
+  // oxlint-disable-next-line no-control-regex -- Git paths can contain control characters.
   const visible = value.replace(/[\u0000-\u001f\u007f]/g, (char) =>
     char === "\n" ? "\\n" : `\\x${char.charCodeAt(0).toString(16).padStart(2, "0")}`,
   );
@@ -112,10 +115,8 @@ function codeSpan(value) {
   return `${fence}${pad}${visible}${pad}${fence}`;
 }
 
-function stageLabel(stage) {
-  return stage === "master"
-    ? `merging \`${BASE_BRANCH}\` into \`${SYNC_BRANCH}\``
-    : `merging \`${UPSTREAM_REPO}\` main into \`${SYNC_BRANCH}\``;
+function stageLabel(state) {
+  return `merging \`${UPSTREAM_REPO}\` main into \`${state.branch}\``;
 }
 
 function compareUrl(start, target) {
@@ -130,10 +131,9 @@ function renderReport(state) {
     "",
     "Written by the upstream sync workflow. Resolve the conflicts on this branch, delete this file, and push.",
     "",
-    `- Failed while ${stageLabel(state.stage)}.`,
+    `- Failed while ${stageLabel(state)}.`,
     `- Upstream range: \`${state.rangeStart}\`..\`${state.target}\``,
   ];
-  if (state.stage === "master") lines.push("- Upstream integration was not attempted.");
   lines.push("", `## Conflicting files (${state.conflicts.length})`, "");
   for (const file of state.conflicts) lines.push(`- ${codeSpan(file)}`);
   return `${lines.join("\n")}\n`;
@@ -160,19 +160,25 @@ function commitIfStaged(cwd, message, env) {
   return true;
 }
 
-/**
- * Fetches master, the sync branch and upstream main, then merges master and
- * upstream into the sync branch tip in the checkout at `cwd` (detached HEAD).
- * Never rewrites the fetched sync branch; it only adds commits on top.
- */
-function prepare({ cwd, forkUrl, upstreamUrl = UPSTREAM_URL, env }) {
+/** Select an unused branch without checking it out, even if another worktree holds it. */
+function selectBranch(cwd, forkUrl, date, env) {
+  const day = new Date(date).toISOString().slice(0, 10);
+  const stem = `${DAILY_PREFIX}${day}`;
+  for (let suffix = 0; ; suffix += 1) {
+    const branch = suffix ? `${stem}-${suffix}` : stem;
+    const local =
+      git(cwd, ["show-ref", "--verify", "--quiet", `refs/heads/${branch}`], {
+        env,
+        allowFailure: true,
+      }).status === 0;
+    if (!local && !remoteHasBranch(cwd, forkUrl, branch, env)) return branch;
+  }
+}
+
+/** Prepare detached from captured master; old sync branches never enter the candidate. */
+function prepare({ cwd, forkUrl, upstreamUrl = UPSTREAM_URL, env, date = new Date() }) {
   git(cwd, ["fetch", "--no-tags", forkUrl, `+refs/heads/${BASE_BRANCH}:${REFS.base}`], { env });
   git(cwd, ["fetch", "--no-tags", upstreamUrl, `+refs/heads/main:${REFS.upstream}`], { env });
-  const branchExists = remoteHasBranch(cwd, forkUrl, SYNC_BRANCH, env);
-  if (branchExists) {
-    git(cwd, ["fetch", "--no-tags", forkUrl, `+refs/heads/${SYNC_BRANCH}:${REFS.branch}`], { env });
-  }
-
   const reserved = gitOut(
     cwd,
     ["ls-tree", "-r", "--name-only", REFS.upstream, "--", ...RESERVED_PATHS],
@@ -188,9 +194,8 @@ function prepare({ cwd, forkUrl, upstreamUrl = UPSTREAM_URL, env }) {
 
   const target = gitOut(cwd, ["rev-parse", REFS.upstream], { env });
   const base = gitOut(cwd, ["rev-parse", REFS.base], { env });
-  const remoteTip = branchExists ? gitOut(cwd, ["rev-parse", REFS.branch], { env }) : null;
   if (isAncestor(cwd, target, base, env)) {
-    return { status: "noop", target, base, remoteTip, head: remoteTip, changed: false };
+    return { status: "noop", target, base, head: base, changed: false };
   }
   const rangeStart = findRangeStart(cwd, REFS.upstream, REFS.base, env);
   if (!rangeStart) {
@@ -200,33 +205,27 @@ function prepare({ cwd, forkUrl, upstreamUrl = UPSTREAM_URL, env }) {
   }
   const commitCount = Number(gitOut(cwd, ["rev-list", "--count", target, `^${base}`], { env }));
 
-  git(cwd, ["checkout", "--quiet", "--detach", remoteTip ?? base], { env });
-  let stage = "master";
-  let conflicts = mergeRef(cwd, base, `Merge ${BASE_BRANCH} into ${SYNC_BRANCH}`, env);
-  if (conflicts.length === 0) {
-    stage = "upstream";
-    conflicts = mergeRef(cwd, target, `${PR_TITLE} to ${target.slice(0, 12)}`, env);
-  }
-
+  const branch = selectBranch(cwd, forkUrl, date, env);
+  git(cwd, ["checkout", "--quiet", "--detach", base], { env });
   const existingReport = readHeadFile(cwd, REPORT_PATH, env);
   assertOwnedReport(existingReport);
-  const state = { target, base, rangeStart, commitCount, remoteTip, conflicts, stage: null };
+  const message = `${PR_TITLE} to ${target.slice(0, 12)}`;
+  const conflicts = mergeRef(cwd, target, message, env);
+  const state = { target, base, branch, rangeStart, commitCount, conflicts, stage: "upstream" };
   if (conflicts.length > 0) {
     state.status = "conflict";
-    state.stage = stage;
     fs.mkdirSync(path.join(cwd, path.dirname(REPORT_PATH)), { recursive: true });
     fs.writeFileSync(path.join(cwd, REPORT_PATH), renderReport(state));
     git(cwd, ["add", "--", REPORT_PATH], { env });
     commitIfStaged(cwd, "chore: report upstream sync conflicts", env);
   } else {
     state.status = "clean";
-    if (existingReport !== null) {
-      git(cwd, ["rm", "--quiet", "--", REPORT_PATH], { env });
-      commitIfStaged(cwd, "chore: remove resolved upstream sync conflict report", env);
-    }
+    // Remove a previously landed owned report within the merge itself, without a cleanup commit.
+    if (existingReport !== null) git(cwd, ["rm", "--quiet", "--", REPORT_PATH], { env });
+    git(cwd, ["commit", "--no-verify", "-m", message], { env });
   }
   state.head = gitOut(cwd, ["rev-parse", "HEAD"], { env });
-  state.changed = state.head !== remoteTip;
+  state.changed = true;
   return state;
 }
 
@@ -249,7 +248,7 @@ function publishBranch({ cwd, state, pushUrl, token, env, log = console.log }) {
     return { pushed: false };
   }
   if (!state.changed) {
-    log(`${SYNC_BRANCH} is already at ${state.head}; nothing to push.`);
+    log(`${state.branch} is already at ${state.head}; nothing to push.`);
     return { pushed: false };
   }
   // The header lives only in this process's environment, never in a remote, file or argv.
@@ -261,7 +260,7 @@ function publishBranch({ cwd, state, pushUrl, token, env, log = console.log }) {
     GIT_CONFIG_KEY_0: "http.https://github.com/.extraheader",
     GIT_CONFIG_VALUE_0: header,
   };
-  const result = git(cwd, ["push", "--no-verify", pushUrl, `HEAD:refs/heads/${SYNC_BRANCH}`], {
+  const result = git(cwd, ["push", "--no-verify", pushUrl, `HEAD:refs/heads/${state.branch}`], {
     env: authEnv,
     allowFailure: true,
   });
@@ -269,14 +268,14 @@ function publishBranch({ cwd, state, pushUrl, token, env, log = console.log }) {
     const stderr = result.stderr.split(token).join("***").trim();
     if (/rejected|non-fast-forward|fetch first/.test(stderr)) {
       throw new Error(
-        `${SYNC_BRANCH} changed on the remote during this run; it was not overwritten. Run the sync again.\n${stderr}`,
+        `${state.branch} changed on the remote during this run; it was not overwritten. Run the sync again.\n${stderr}`,
       );
     }
     throw new Error(
-      `Pushing ${SYNC_BRANCH} failed. Check that ${TOKEN_NAME} is valid and has Contents and Workflows write access.\n${stderr}`,
+      `Pushing ${state.branch} failed. Check that ${TOKEN_NAME} is valid and has Contents and Workflows write access.\n${stderr}`,
     );
   }
-  log(`Pushed ${state.head} to ${SYNC_BRANCH}.`);
+  log(`Pushed ${state.head} to ${state.branch}.`);
   return { pushed: true };
 }
 
@@ -292,19 +291,17 @@ function renderSection(state) {
     );
   } else {
     lines.push(
-      `Upstream sync is pending: ${state.conflicts.length} file(s) conflicted while ${stageLabel(state.stage)}.`,
+      `Upstream sync is pending: ${state.conflicts.length} file(s) conflicted while ${stageLabel(state)}.`,
       "",
       `- Last upstream commit already in \`${BASE_BRANCH}\`: \`${state.rangeStart}\``,
       `- Upstream main commit to merge: \`${state.target}\` (${state.commitCount} commit(s))`,
       `- Range: [\`${state.rangeStart.slice(0, 12)}...${state.target.slice(0, 12)}\`](${compareUrl(state.rangeStart, state.target)})`,
     );
-    if (state.stage === "master") lines.push("- Upstream integration was not attempted.");
     lines.push("", "Conflicting files:", "");
     for (const file of state.conflicts) lines.push(`- ${codeSpan(file)}`);
     lines.push(
       "",
-      `To resolve: check out \`${SYNC_BRANCH}\`, run \`git merge ${state.stage === "master" ? BASE_BRANCH : state.target}\`` +
-        `${state.stage === "master" ? ` then \`git merge ${state.target}\`` : ""}, resolve the files, delete \`${REPORT_PATH}\`, commit and push to the same branch.`,
+      `To resolve: check out \`${state.branch}\`, run \`git merge ${state.target}\`, resolve the files, delete \`${REPORT_PATH}\`, commit and push to the same branch.`,
     );
   }
   lines.push(BODY_END);
@@ -322,19 +319,57 @@ function mergeBody(existing, section) {
   return body.trim() ? `${section}\n\n${body}` : section;
 }
 
-/** Creates or updates the one open sync PR and sets its draft state. */
+function isOlderSyncBranch(branch, replacement) {
+  if (branch === LEGACY_BRANCH) return true;
+  const pattern = /^automation\/upstream-sync-(\d{4}-\d{2}-\d{2})(?:-([1-9]\d*))?$/;
+  const old = pattern.exec(branch ?? "");
+  const next = pattern.exec(replacement);
+  if (!old || !next) return false;
+  return old[1] < next[1] || (old[1] === next[1] && Number(old[2] ?? 0) < Number(next[2] ?? 0));
+}
+
+async function supersedePullRequests(api, repo, state, replacement) {
+  const listed = [];
+  // Closing a PR shrinks the open-only pages. Snapshot every page before any mutation.
+  for (let page = 1; ; page += 1) {
+    const query = new URLSearchParams({
+      state: "open",
+      base: BASE_BRANCH,
+      per_page: "100",
+      page: String(page),
+    });
+    const batch = await api.request("GET", `/repos/${repo}/pulls?${query}`);
+    listed.push(...batch);
+    if (batch.length < 100) break;
+  }
+  for (const pr of listed) {
+    if (
+      pr.number === replacement.number ||
+      pr.head?.repo?.full_name !== repo ||
+      pr.base?.ref !== BASE_BRANCH ||
+      !isOlderSyncBranch(pr.head?.ref, state.branch)
+    )
+      continue;
+    await api.request("POST", `/repos/${repo}/issues/${pr.number}/comments`, {
+      body: `Superseded by ${replacement.html_url}. The branch is retained for recovery of unmerged resolutions.`,
+    });
+    await api.request("PATCH", `/repos/${repo}/pulls/${pr.number}`, { state: "closed" });
+  }
+}
+
+/** Retry by the prepared branch; preserve reviewer text and supersede only after success. */
 async function upsertPullRequest({ api, repo, state, log = console.log }) {
   if (state.status === "noop") return null;
   const owner = repo.split("/")[0];
   const query = new URLSearchParams({
     state: "open",
     base: BASE_BRANCH,
-    head: `${owner}:${SYNC_BRANCH}`,
+    head: `${owner}:${state.branch}`,
   });
   const listed = await api.request("GET", `/repos/${repo}/pulls?${query}`);
   const matches = listed.filter(
     (pr) =>
-      pr.head?.ref === SYNC_BRANCH &&
+      pr.head?.ref === state.branch &&
       pr.head?.repo?.full_name === repo &&
       pr.base?.ref === BASE_BRANCH,
   );
@@ -349,7 +384,7 @@ async function upsertPullRequest({ api, repo, state, log = console.log }) {
   if (!pr) {
     pr = await api.request("POST", `/repos/${repo}/pulls`, {
       title: PR_TITLE,
-      head: SYNC_BRANCH,
+      head: state.branch,
       base: BASE_BRANCH,
       body: section,
       draft: wantDraft,
@@ -376,6 +411,7 @@ async function upsertPullRequest({ api, repo, state, log = console.log }) {
     pr = { ...pr, draft: wantDraft };
     log(`Sync PR #${pr.number} is now ${wantDraft ? "a draft" : "ready for review"}.`);
   }
+  await supersedePullRequests(api, repo, state, pr);
   return pr;
 }
 
@@ -423,7 +459,7 @@ function summarize(state, pr) {
     state.status === "clean"
       ? `Clean sync of ${range}.`
       : `${state.conflicts.length} conflicting file(s) syncing ${range}.`;
-  return pr ? `${head} PR: ${pr.html_url}` : head;
+  return `${head} Branch: \`${state.branch}\`.${pr ? ` PR: ${pr.html_url}` : ""}`;
 }
 
 function appendFile(file, text) {
@@ -473,7 +509,7 @@ module.exports = {
   PR_TITLE,
   REPORT_MARKER,
   REPORT_PATH,
-  SYNC_BRANCH,
+  LEGACY_BRANCH,
   codeSpan,
   createApi,
   findRangeStart,
