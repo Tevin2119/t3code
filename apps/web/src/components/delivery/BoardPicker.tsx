@@ -109,7 +109,7 @@ export function BoardPicker(props: {
               size="xs"
               variant="ghost"
               aria-label={props.label}
-              className="max-w-48 min-w-0"
+              className="max-w-48 min-w-0 max-md:max-w-full"
               data-board-picker={props.marker}
               data-board-picker-value={props.value}
             />
