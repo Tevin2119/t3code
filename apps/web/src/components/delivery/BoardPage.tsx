@@ -44,7 +44,7 @@ import {
   useStaleReading,
 } from "../../state/delivery";
 import { Button } from "../ui/button";
-import { Input } from "../ui/input";
+import { InputGroup, InputGroupAddon, InputGroupInput } from "../ui/input-group";
 import { EngineDownNotice, EnginePanel } from "./EnginePanel";
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
 import { RefreshIcon } from "../ui/refresh-icon";
@@ -85,17 +85,17 @@ const CardFace = memo(function CardFace(props: {
     <div
       className={cn(
         "flex flex-col gap-1.5 rounded-md border bg-card p-2 text-xs shadow-xs",
-        waitsOnPerson ? "border-amber-500/60" : "border-border",
+        waitsOnPerson ? "border-warning/60" : "border-border",
       )}
     >
       <div className="flex items-center gap-1.5">
         <PriorityPill priority={card.priority} by={card.priorityBy} />
-        <span className="font-mono text-[10px] text-muted-foreground" data-card-number>
+        <span className="font-mono text-3xs text-muted-foreground" data-card-number>
           #{card.number}
         </span>
         {card.flow !== "standard" ? (
           <span
-            className="rounded bg-muted px-1 text-[10px] text-muted-foreground"
+            className="rounded bg-muted px-1 text-3xs text-muted-foreground"
             data-card-flow={card.flow}
           >
             {FLOW_LABEL[card.flow] ?? card.flow}
@@ -106,13 +106,13 @@ const CardFace = memo(function CardFace(props: {
           {props.menu}
         </span>
       </div>
-      <p className="text-[13px] leading-snug font-medium break-words">{card.title}</p>
+      <p className="text-sm leading-snug font-medium break-words">{card.title}</p>
       <TagList tags={card.tags} onPick={props.onPickTag} />
       {card.blocker ? (
         <p
           className={cn(
-            "line-clamp-2 text-[11px]",
-            waitsOnPerson ? "text-amber-700 dark:text-amber-300" : "text-muted-foreground",
+            "line-clamp-2 text-2xs",
+            waitsOnPerson ? "text-warning-foreground" : "text-muted-foreground",
           )}
           data-card-blocker
         >
@@ -162,7 +162,7 @@ function DraggableCard(props: {
         if (event.key === "Enter" && event.target === event.currentTarget) props.onOpen(card);
       }}
       className={cn(
-        "cursor-pointer rounded-md outline-hidden ring-ring focus-visible:ring-2",
+        "cursor-pointer rounded-md outline-hidden ring-ring focus-visible:ring-2 focus-visible:ring-inset",
         drag.isDragging && "opacity-30",
         drop.isOver && !drag.isDragging && props.accepts && "ring-2 ring-ring/60",
       )}
@@ -261,7 +261,7 @@ function Lane(props: {
           </span>
           <span className="[writing-mode:vertical-rl]">{lane.title}</span>
           {props.dragged && offer ? (
-            <span className="text-[10px] [writing-mode:vertical-rl]">{offer}</span>
+            <span className="text-3xs [writing-mode:vertical-rl]">{offer}</span>
           ) : null}
         </button>
       </section>
@@ -283,14 +283,14 @@ function Lane(props: {
       <h2 className="flex shrink-0 items-center gap-2 px-2.5 py-2 text-xs font-medium">
         <span className="min-w-0 truncate">{lane.title}</span>
         <span
-          className="rounded-full bg-background px-1.5 font-mono text-[10px] text-muted-foreground"
+          className="rounded-full bg-background px-1.5 font-mono text-3xs text-muted-foreground"
           data-lane-count
         >
           {lane.cards.length}
           {lane.cards.length !== props.total ? ` of ${props.total}` : ""}
         </span>
         {props.dragged && offer ? (
-          <span className="text-[10px] font-normal text-muted-foreground">{offer}</span>
+          <span className="text-3xs font-normal text-muted-foreground">{offer}</span>
         ) : null}
         <button
           type="button"
@@ -305,7 +305,7 @@ function Lane(props: {
         {groups.map((group) => (
           <div key={group.key} className="flex flex-col gap-1.5">
             {group.title ? (
-              <h3 className="px-1 pt-1 text-[10px] font-medium tracking-wide text-muted-foreground uppercase">
+              <h3 className="px-1 pt-1 text-3xs font-medium tracking-wide text-muted-foreground uppercase">
                 {group.title} <span className="font-mono">{group.cards.length}</span>
               </h3>
             ) : null}
@@ -607,7 +607,7 @@ function EnvironmentBoardPage({ environmentId }: { readonly environmentId: Envir
   }
 
   return (
-    <SidebarInset className="isolate h-dvh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground">
+    <SidebarInset className="isolate h-dvh min-h-0 overflow-hidden overscroll-y-none">
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         <WorkspacePageHeader electron={isElectron} className="h-auto">
           <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2 py-2">
@@ -653,16 +653,18 @@ function EnvironmentBoardPage({ environmentId }: { readonly environmentId: Envir
                   onCreate={() => setDialog({ kind: "view", editing: null })}
                   onEdit={(item) => setDialog({ kind: "view", editing: item })}
                 />
-                <span className="relative hidden items-center md:flex">
-                  <SearchIcon className="pointer-events-none absolute left-2 z-10 size-3.5 text-muted-foreground" />
-                  <Input
+                <InputGroup className="hidden h-7 w-64 md:inline-flex">
+                  <InputGroupAddon>
+                    <SearchIcon className="size-3.5 text-muted-foreground" />
+                  </InputGroupAddon>
+                  <InputGroupInput
+                    size="compact"
                     aria-label="Search tasks"
                     placeholder="Search by #number, title, tag, owner"
-                    className="h-7 w-64 pl-7 text-xs"
                     value={filters.q}
                     onChange={(event) => setFilters({ q: event.target.value })}
                   />
-                </span>
+                </InputGroup>
                 <Button
                   size="icon-xs"
                   variant={filters.q ? "secondary" : "ghost"}
@@ -675,17 +677,19 @@ function EnvironmentBoardPage({ environmentId }: { readonly environmentId: Envir
                   {mobileSearchOpen ? <XIcon /> : <SearchIcon />}
                 </Button>
                 {mobileSearchOpen ? (
-                  <span className="relative flex min-w-0 basis-full items-center md:hidden">
-                    <SearchIcon className="pointer-events-none absolute left-2 z-10 size-3.5 text-muted-foreground" />
-                    <Input
+                  <InputGroup className="h-7 min-w-0 basis-full md:hidden">
+                    <InputGroupAddon>
+                      <SearchIcon className="size-3.5 text-muted-foreground" />
+                    </InputGroupAddon>
+                    <InputGroupInput
+                      size="compact"
                       aria-label="Search tasks"
                       placeholder="Search by #number, title, tag, owner"
-                      className="h-7 w-full pl-7 text-xs"
                       value={filters.q}
                       onChange={(event) => setFilters({ q: event.target.value })}
                       autoFocus
                     />
-                  </span>
+                  </InputGroup>
                 ) : null}
                 <Select
                   value={grouping}
@@ -720,18 +724,17 @@ function EnvironmentBoardPage({ environmentId }: { readonly environmentId: Envir
                   <Button
                     size="xs"
                     variant={filters.waiting ? "secondary" : "ghost"}
-                    className="text-amber-700 dark:text-amber-300"
                     onClick={() => setFilters({ waiting: !filters.waiting })}
                     data-board-waiting
                   >
-                    {parsed.waiting} waiting on you
+                    <span className="text-warning-foreground">{parsed.waiting} waiting on you</span>
                   </Button>
                 ) : null}
               </>
             ) : null}
             <div className="ml-auto flex items-center gap-1">
               {!shared ? (
-                <span className="font-mono text-[10px] text-muted-foreground">
+                <span className="font-mono text-3xs text-muted-foreground">
                   {board.readAt ? (stale ? "stale" : "live") : enabled ? "not read yet" : ""}
                 </span>
               ) : null}

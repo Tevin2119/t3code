@@ -69,47 +69,49 @@ export function MoveTaskDialog(props: {
             {moveOutcomeLine({ isDraft: task.isDraft, to, from })}
           </DialogDescription>
         </DialogHeader>
-        <DialogPanel className="flex flex-col gap-3 text-sm">
-          <div className="flex flex-col gap-1">
-            <span className="text-xs text-muted-foreground">Board</span>
-            <Select value={board} onValueChange={(value) => value && setBoard(String(value))}>
-              <SelectTrigger aria-label="Board to move to" data-move-task-board={board}>
-                <SelectValue>{chosen?.title ?? "Choose a board"}</SelectValue>
-              </SelectTrigger>
-              <SelectPopup alignItemWithTrigger={false}>
-                {props.boards.map((item) => (
-                  <SelectItem key={item.id} value={item.id}>
-                    <span className="flex flex-col">
-                      <span>{item.title}</span>
-                      <span className="text-[11px] text-muted-foreground">
-                        {item.target?.repository
-                          ? `${item.target.title ?? item.target.repository} · ${item.target.base ?? "its checkout"}`
-                          : "No repository set"}
+        <DialogPanel>
+          <div className="flex flex-col gap-7 text-sm">
+            <div className="flex flex-col gap-1">
+              <span className="text-xs text-muted-foreground">Board</span>
+              <Select value={board} onValueChange={(value) => value && setBoard(String(value))}>
+                <SelectTrigger aria-label="Board to move to" data-move-task-board={board}>
+                  <SelectValue>{chosen?.title ?? "Choose a board"}</SelectValue>
+                </SelectTrigger>
+                <SelectPopup alignItemWithTrigger={false}>
+                  {props.boards.map((item) => (
+                    <SelectItem key={item.id} value={item.id}>
+                      <span className="flex flex-col">
+                        <span>{item.title}</span>
+                        <span className="text-2xs text-muted-foreground">
+                          {item.target?.repository
+                            ? `${item.target.title ?? item.target.repository} · ${item.target.base ?? "its checkout"}`
+                            : "No repository set"}
+                        </span>
                       </span>
-                    </span>
-                  </SelectItem>
-                ))}
-              </SelectPopup>
-            </Select>
+                    </SelectItem>
+                  ))}
+                </SelectPopup>
+              </Select>
+            </div>
+            <label className="flex flex-col gap-1">
+              <span className="text-xs text-muted-foreground">Base branch</span>
+              <Input
+                aria-label="Base branch"
+                placeholder={chosen?.target?.base ?? "The board's own"}
+                value={base}
+                onChange={(event) => setBase(event.target.value)}
+                data-move-task-base
+              />
+              <span className="text-2xs text-muted-foreground">
+                Left empty, it starts from the board's own base branch.
+              </span>
+            </label>
+            {problem ? (
+              <p className="text-xs text-destructive" role="alert" data-move-task-problem>
+                {problem}
+              </p>
+            ) : null}
           </div>
-          <label className="flex flex-col gap-1">
-            <span className="text-xs text-muted-foreground">Base branch</span>
-            <Input
-              aria-label="Base branch"
-              placeholder={chosen?.target?.base ?? "The board's own"}
-              value={base}
-              onChange={(event) => setBase(event.target.value)}
-              data-move-task-base
-            />
-            <span className="text-[11px] text-muted-foreground">
-              Left empty, it starts from the board's own base branch.
-            </span>
-          </label>
-          {problem ? (
-            <p className="text-xs text-destructive" role="alert" data-move-task-problem>
-              {problem}
-            </p>
-          ) : null}
         </DialogPanel>
         <DialogFooter>
           <Button variant="outline" disabled={busy} onClick={props.onClose}>

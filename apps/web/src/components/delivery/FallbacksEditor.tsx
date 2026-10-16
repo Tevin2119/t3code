@@ -34,7 +34,7 @@ export function FallbacksEditor(props: {
   const { item } = props;
   if (!item.fallbacksAllowed) {
     return (
-      <p className="text-[11px] text-muted-foreground" data-seat-fallbacks="none">
+      <p className="text-2xs text-muted-foreground" data-seat-fallbacks="none">
         {item.why.harness
           ? "No fallbacks: the team's policy keeps this seat on its harness."
           : "No fallbacks: the QA gate counts each provider once, so a seat of the gate that cannot answer is counted as missing."}
@@ -58,7 +58,7 @@ export function FallbacksEditor(props: {
     const none = () => props.onChange([]);
     return (
       <div
-        className="flex flex-wrap items-center gap-1 text-[11px] text-muted-foreground"
+        className="flex flex-wrap items-center gap-1 text-2xs text-muted-foreground"
         data-seat-fallbacks="inherited"
       >
         <span>
@@ -103,7 +103,7 @@ export function FallbacksEditor(props: {
 
   return (
     <div className="flex flex-col gap-1" data-seat-fallbacks="set">
-      <span className="text-[11px] text-muted-foreground">
+      <span className="text-2xs text-muted-foreground">
         {list.length === 0
           ? "No fallbacks: when this seat cannot answer, its step waits, and the team's own pair is not used either."
           : "Fallbacks, in order. A usage limit moves the step to the next; a harness that cannot sign in is passed over for the rest of the step."}
@@ -113,7 +113,7 @@ export function FallbacksEditor(props: {
         return (
           // oxlint-disable-next-line no-array-index-key -- rows are positions in an ordered list
           <div key={index} className="flex flex-wrap items-center gap-1">
-            <span className="w-4 text-[11px] text-muted-foreground">{index + 1}.</span>
+            <span className="w-4 text-2xs text-muted-foreground">{index + 1}.</span>
             <Select
               value={fallback.harness}
               onValueChange={(value) =>
@@ -143,7 +143,8 @@ export function FallbacksEditor(props: {
               <>
                 <Input
                   aria-label={`Fallback ${index + 1} model for ${item.title}`}
-                  className="h-7 w-48 text-xs"
+                  size="compact"
+                  className="w-48"
                   placeholder="Model"
                   list={`${id}-${index}`}
                   value={fallback.model ?? ""}
@@ -162,7 +163,7 @@ export function FallbacksEditor(props: {
                 </datalist>
               </>
             ) : (
-              <span className="text-[11px] text-muted-foreground">its own model</span>
+              <span className="text-2xs text-muted-foreground">its own model</span>
             )}
             <Button
               size="icon-xs"

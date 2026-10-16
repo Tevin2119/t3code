@@ -37,7 +37,7 @@ export function TrackRecord(props: {
   return (
     <div className="flex flex-col gap-1" data-track-record>
       <div className="overflow-x-auto">
-        <table className="w-full min-w-[34rem] text-left text-[11px]">
+        <table className="w-full min-w-[34rem] text-left text-2xs">
           <thead className="text-muted-foreground">
             <tr>
               {props.team ? null : <th className="py-1 pr-2 font-medium">Team</th>}
@@ -82,7 +82,7 @@ export function TrackRecord(props: {
           </tbody>
         </table>
       </div>
-      <p className="text-[11px] text-muted-foreground">
+      <p className="text-2xs text-muted-foreground">
         Counted from the work done on this host. It is not a benchmark: a row with few attempts says
         little.
       </p>
