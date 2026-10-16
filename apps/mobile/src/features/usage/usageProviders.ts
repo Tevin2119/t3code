@@ -1,10 +1,6 @@
 import type { UsageProviderKind } from "@t3tools/contracts";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 
-/**
- * Series and table order. The chart stacks providers from the bottom in this
- * order, so it also fixes which band sits on top of the bars.
- */
 export const PROVIDER_ORDER: readonly UsageProviderKind[] = [
   "codex",
   "claude",
@@ -33,10 +29,6 @@ export const PROVIDER_LABEL: Record<UsageProviderKind, string> = {
   antigravity: "Antigravity",
 };
 
-/**
- * Claude's brand orange holds in both themes; Codex and Grok are neutrals and
- * must flip with the theme or their bars vanish against the matching background.
- */
 export function useProviderColors(): Record<UsageProviderKind, string> {
   const { themeAppearance: scheme } = useAppearancePreferences();
   return {
@@ -53,11 +45,6 @@ export function useProviderColors(): Record<UsageProviderKind, string> {
   };
 }
 
-/**
- * Neutral steps for cost and token mixes, so they never borrow a provider's
- * color. Matches the web steps: oklab mixes of the codex ink into the
- * background, above the 15 ΔE separation floor for adjacent segments.
- */
 export function useUsageMixColors() {
   const { themeAppearance: scheme } = useAppearancePreferences();
   const dark = scheme === "dark";
