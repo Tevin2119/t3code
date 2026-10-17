@@ -2,7 +2,7 @@
 
 import { Dialog as SheetPrimitive } from "@base-ui/react/dialog";
 import { XIcon } from "lucide-react";
-import type { CSSProperties } from "react";
+import { useLayoutEffect, useState, type CSSProperties } from "react";
 import { cn } from "~/lib/utils";
 import { Button } from "~/components/ui/button";
 
@@ -58,8 +58,13 @@ function SheetPopup({
   side = "right",
   variant = "default",
   style,
+  inline = false,
+  container,
   ...props
 }: SheetPrimitive.Popup.Props & {
+  /** Root must be closed and non-modal; keep the portal container fixed to preserve controls. */
+  inline?: boolean;
+  container?: SheetPrimitive.Portal.Props["container"];
   showCloseButton?: boolean;
   keepMounted?: boolean;
   transitionDurationMs?: number;
@@ -71,9 +76,34 @@ function SheetPopup({
       ? undefined
       : ({ transitionDuration: `${transitionDurationMs}ms` } satisfies CSSProperties);
   const instant = transitionDurationMs === 0;
+  const [portal, setPortal] = useState<HTMLDivElement | null>(null);
+
+  useLayoutEffect(() => {
+    if (!inline || !portal) return;
+
+    // Base UI has no portal tab-order opt-out. Its capture listener saves tab stops
+    // on focusout even with a closed root; restore them before the next Tab without
+    // stopping focus events that nested controls need.
+    const restoreTabOrder = () => {
+      for (const element of portal.querySelectorAll<HTMLElement>("[data-tabindex]")) {
+        const tabIndex = element.dataset.tabindex;
+        delete element.dataset.tabindex;
+        if (tabIndex) element.setAttribute("tabindex", tabIndex);
+        else element.removeAttribute("tabindex");
+      }
+    };
+    restoreTabOrder();
+    portal.addEventListener("focusout", restoreTabOrder);
+    return () => portal.removeEventListener("focusout", restoreTabOrder);
+  }, [inline, portal]);
 
   return (
-    <SheetPortal keepMounted={keepMounted}>
+    <SheetPortal
+      ref={setPortal}
+      keepMounted={keepMounted}
+      container={container}
+      className={inline ? "contents" : undefined}
+    >
       <SheetBackdrop
         className={
           instant
@@ -82,30 +112,55 @@ function SheetPopup({
         }
         style={transitionStyle}
       />
-      <SheetViewport side={side} variant={variant}>
+      <SheetViewport
+        side={side}
+        variant={variant}
+        {...(inline
+          ? {
+              hidden: false,
+              role: undefined,
+              style: { display: "contents", pointerEvents: "auto" },
+            }
+          : {})}
+      >
         <SheetPrimitive.Popup
-          className={cn(
-            "relative flex max-h-full min-h-0 w-full min-w-0 flex-col bg-popover not-dark:bg-clip-padding text-popover-foreground shadow-lg/5 transition-[opacity,translate] duration-200 ease-in-out will-change-transform before:pointer-events-none before:absolute before:inset-0 before:shadow-[0_1px_--theme(--color-black/4%)] data-ending-style:opacity-0 data-starting-style:opacity-0 max-sm:before:hidden dark:before:shadow-[0_-1px_--theme(--color-white/6%)]",
-            side === "bottom" &&
-              "row-start-2 border-t data-ending-style:translate-y-8 data-starting-style:translate-y-8",
-            side === "top" &&
-              "data-ending-style:-translate-y-8 data-starting-style:-translate-y-8 border-b",
-            side === "left" &&
-              "data-ending-style:-translate-x-8 data-starting-style:-translate-x-8 w-[calc(100%-(--spacing(12)))] max-w-md border-e",
-            side === "right" &&
-              "col-start-2 w-[calc(100%-(--spacing(12)))] max-w-md border-s data-ending-style:translate-x-8 data-starting-style:translate-x-8",
-            variant === "inset" &&
-              "before:hidden sm:rounded-2xl sm:border sm:before:rounded-[calc(var(--radius-2xl)-1px)] sm:**:data-[slot=sheet-footer]:rounded-b-[calc(var(--radius-2xl)-1px)]",
-            instant &&
-              "transition-none! will-change-auto! data-ending-style:translate-x-0! data-starting-style:translate-x-0! data-ending-style:translate-y-0! data-starting-style:translate-y-0! data-ending-style:opacity-100! data-starting-style:opacity-100!",
-            className,
-          )}
+          className={
+            inline
+              ? undefined
+              : cn(
+                  "relative flex max-h-full min-h-0 w-full min-w-0 flex-col bg-popover not-dark:bg-clip-padding text-popover-foreground shadow-lg/5 transition-[opacity,translate] duration-200 ease-in-out will-change-transform before:pointer-events-none before:absolute before:inset-0 before:shadow-[0_1px_--theme(--color-black/4%)] data-ending-style:opacity-0 data-starting-style:opacity-0 max-sm:before:hidden dark:before:shadow-[0_-1px_--theme(--color-white/6%)]",
+                  side === "bottom" &&
+                    "row-start-2 border-t data-ending-style:translate-y-8 data-starting-style:translate-y-8",
+                  side === "top" &&
+                    "data-ending-style:-translate-y-8 data-starting-style:-translate-y-8 border-b",
+                  side === "left" &&
+                    "data-ending-style:-translate-x-8 data-starting-style:-translate-x-8 w-[calc(100%-(--spacing(12)))] max-w-md border-e",
+                  side === "right" &&
+                    "col-start-2 w-[calc(100%-(--spacing(12)))] max-w-md border-s data-ending-style:translate-x-8 data-starting-style:translate-x-8",
+                  variant === "inset" &&
+                    "before:hidden sm:rounded-2xl sm:border sm:before:rounded-[calc(var(--radius-2xl)-1px)] sm:**:data-[slot=sheet-footer]:rounded-b-[calc(var(--radius-2xl)-1px)]",
+                  instant &&
+                    "transition-none! will-change-auto! data-ending-style:translate-x-0! data-starting-style:translate-x-0! data-ending-style:translate-y-0! data-starting-style:translate-y-0! data-ending-style:opacity-100! data-starting-style:opacity-100!",
+                  className,
+                )
+          }
           data-slot="sheet-popup"
-          style={{ ...transitionStyle, ...style }}
+          style={{ ...transitionStyle, ...style, ...(inline ? { display: "contents" } : {}) }}
           {...props}
+          {...(inline
+            ? {
+                hidden: false,
+                role: undefined,
+                tabIndex: undefined,
+                "aria-labelledby": undefined,
+                "aria-describedby": undefined,
+                initialFocus: false,
+                finalFocus: false,
+              }
+            : {})}
         >
           {children}
-          {showCloseButton && (
+          {showCloseButton && !inline && (
             <SheetPrimitive.Close
               aria-label="Close"
               className="absolute end-2 top-2"

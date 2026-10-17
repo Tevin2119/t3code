@@ -1,7 +1,7 @@
 name: Upstream Sync
 
-# Fork-only: merges pingdotgg/t3code main into automation/tevin-upstream-sync
-# and keeps one sync PR against master open. See docs/operations/development.md.
+# Fork-only: merges pingdotgg/t3code main into a fresh daily branch from master.
+# Replaces older sync PRs. See docs/operations/tevin-upstream-sync.md.
 on:
   schedule:
     # Avoid minute zero, when GitHub scheduled jobs are busiest.
