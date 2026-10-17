@@ -53,6 +53,7 @@ export interface ServerProcess {
   send(message: SupervisorMessage): void;
   kill(signal?: NodeJS.Signals): void;
   on(event: "message", listener: (message: unknown) => void): unknown;
+  on(event: "error", listener: (error: Error) => void): unknown;
   on(
     event: "exit",
     listener: (code: number | null, signal: NodeJS.Signals | null) => void,
@@ -113,6 +114,7 @@ export class CheckoutSupervisor {
   #lastOutcome: CheckoutUpdateSnapshot["lastOutcome"] = null;
   #server: ServerProcess | null = null;
   #swapping = false;
+  #killing = false;
   #busy = false;
   #stopping = false;
   #restarts: number[] = [];
@@ -161,8 +163,19 @@ export class CheckoutSupervisor {
   }
 
   #broadcast() {
+    this.#send({ type: "t3-checkout.state", state: this.snapshot() });
+  }
+
+  #send(message: SupervisorMessage) {
     const server = this.#server;
-    if (server?.connected) server.send({ type: "t3-checkout.state", state: this.snapshot() });
+    if (!server?.connected) return;
+    try {
+      server.send(message);
+    } catch (error) {
+      this.#options.log(
+        `Server IPC error: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
   }
 
   #releaseDir(commit: string) {
@@ -245,6 +258,9 @@ export class CheckoutSupervisor {
   #start(commit: string) {
     const server = this.#options.startServer(this.#releaseDir(commit));
     this.#server = server;
+    server.on("error", (error) => {
+      if (server === this.#server) this.#options.log(`Server IPC error: ${error.message}`);
+    });
     server.on("message", (message) => {
       if (server === this.#server && isServerMessage(message)) void this.#onMessage(message);
     });
@@ -252,10 +268,19 @@ export class CheckoutSupervisor {
       if (server !== this.#server) return;
       this.#ready.settle(false);
       this.#exited.settle(true);
+      const description = code === null ? `signal ${signal}` : `exit code ${code}`;
+      if (this.#swapping && !this.#killing && !this.#stopping) {
+        this.#options.log(`Server exited (${description}) during an update.`);
+        this.#server = null;
+        this.#crashExit = { code, signal };
+        this.#pendingCrashRestart = true;
+        return;
+      }
       if (this.#swapping) return;
       if (this.#stopping) return this.#finish(code ?? (signal ? 1 : 0));
       this.#server = null;
       this.#crashExit = { code, signal };
+      this.#options.log(`Server exited (${description}).`);
       this.#restartAfterCrash();
     });
     return server;
@@ -312,6 +337,7 @@ export class CheckoutSupervisor {
     const server = this.#server;
     if (!server) return;
     const exited = this.#exited.wait(this.#options.timeouts?.stopMs ?? 20_000, false);
+    this.#killing = true;
     server.kill("SIGTERM");
     if (!(await exited)) {
       const killed = this.#exited.wait(5_000, false);
@@ -414,7 +440,7 @@ export class CheckoutSupervisor {
     try {
       this.#set("restarting", `Restarting into ${short(target.commit)}.`);
       const prepared = this.#prepared.wait(this.#options.timeouts?.prepareMs ?? 15_000, false);
-      this.#server?.send({ type: "t3-checkout.prepare" });
+      this.#send({ type: "t3-checkout.prepare" });
       if (!(await prepared)) {
         this.#set(
           "failed",
@@ -458,6 +484,7 @@ export class CheckoutSupervisor {
       }
     } finally {
       this.#swapping = false;
+      this.#killing = false;
       this.#busy = false;
       if (this.#pendingCrashRestart) {
         this.#pendingCrashRestart = false;

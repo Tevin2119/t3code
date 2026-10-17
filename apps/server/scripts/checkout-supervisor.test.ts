@@ -322,8 +322,81 @@ describe("CheckoutSupervisor crash recovery", () => {
     expect(await context.supervisor.finished).toBe(130);
     await vi.advanceTimersByTimeAsync(20_000);
     expect(context.servers).toHaveLength(1);
-    expect(context.logs.filter((line) => line.includes("Server exited"))).toEqual([]);
+    expect(context.logs).toContain("Server exited (exit code 3).");
+    expect(context.logs.filter((line) => line.includes("; restarting"))).toEqual([]);
   });
+
+  it.each([false, true])(
+    "records a crash during preparation and respects a following stop: %s",
+    async (stop) => {
+      vi.useFakeTimers();
+      const context = setup({ prepareMs: 100, prepareReply: "none" });
+      await started(context);
+      const server = context.servers[0]!;
+      const preparing = Promise.withResolvers<void>();
+      server.on("sent", (message: SupervisorMessage) => {
+        if (message.type === "t3-checkout.prepare") preparing.resolve();
+      });
+      const finished = vi.fn();
+      void context.supervisor.finished.then(finished);
+      const updating = context.supervisor.update();
+      await preparing.promise;
+      server.emit("exit", 3, null);
+      expect(context.logs).toContain("Server exited (exit code 3) during an update.");
+      if (stop) {
+        await context.supervisor.stop("SIGTERM");
+        expect(await context.supervisor.finished).toBe(130);
+      }
+      await vi.advanceTimersByTimeAsync(100);
+      await updating;
+      expect(context.servers.map((child) => NodePath.basename(child.releaseDir))).toEqual(
+        stop ? [A] : [A, A],
+      );
+      expect(context.logs.filter((line) => line.includes("; restarting"))).toEqual(
+        stop ? [] : ["Server exited (exit code 3); restarting (1/5)."],
+      );
+      expect(context.pointer()).toBe(A);
+      expect(context.supervisor.snapshot()).toMatchObject({
+        running: { commit: A },
+        phase: "failed",
+        message: expect.stringContaining("did not confirm restart preparation"),
+      });
+      if (!stop) expect(finished).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["send", "error"] as const)(
+    "survives an IPC %s failure before the dying child's exit is delivered",
+    async (failure) => {
+      vi.useFakeTimers();
+      const context = setup({ restartMs: 100 });
+      await started(context);
+      const server = context.servers[0]!;
+      const error = Object.assign(new Error("write EPIPE"), { code: "EPIPE" });
+      expect(server.connected).toBe(true);
+      if (failure === "send") {
+        vi.spyOn(server, "send").mockImplementation(() => {
+          throw error;
+        });
+        await expect(context.supervisor.check()).resolves.toBeUndefined();
+        expect(context.logs).toContain("Server IPC error: write EPIPE");
+      } else {
+        expect(() => server.emit("error", error)).not.toThrow();
+        expect(
+          context.logs.filter((line) => line === "Server IPC error: write EPIPE"),
+        ).toHaveLength(1);
+      }
+      server.emit("exit", 3, null);
+      await vi.advanceTimersByTimeAsync(100);
+      expect(context.servers.map((child) => NodePath.basename(child.releaseDir))).toEqual([A, A]);
+      expect(context.logs).toContain("Server exited (exit code 3); restarting (1/5).");
+      const errorLogs = context.logs.filter((line) => line.startsWith("Server IPC error:"));
+      server.emit("error", error);
+      expect(context.logs.filter((line) => line.startsWith("Server IPC error:"))).toEqual(
+        errorLogs,
+      );
+    },
+  );
 
   it("defers a restart until an overlapping swap refuses preparation", async () => {
     vi.useFakeTimers();
