@@ -78,13 +78,10 @@ function findRangeStart(cwd, upstreamRef, baseRef, env) {
   return chain.find((sha) => sha && !missing.has(sha)) ?? null;
 }
 
-function unmergedPaths(cwd, env) {
-  const raw = git(cwd, ["diff", "--name-only", "--diff-filter=U", "-z"], { env }).stdout;
-  return [...new Set(raw.split("\0").filter(Boolean))].sort();
-}
-
 /** Leaves a clean merge staged; aborts genuine conflicts and returns their paths. */
 function mergeRef(cwd, ref, message, env) {
+  const ours = gitOut(cwd, ["rev-parse", "HEAD^{commit}"], { env });
+  const theirs = gitOut(cwd, ["rev-parse", `${ref}^{commit}`], { env });
   const result = git(cwd, ["merge", "--no-ff", "--no-commit", "-m", message, ref], {
     env,
     allowFailure: true,
@@ -94,9 +91,23 @@ function mergeRef(cwd, ref, message, env) {
   if (!hasUnmerged) {
     throw new Error(`git merge ${ref} failed without conflicts: ${result.stderr.trim()}`);
   }
-  const paths = unmergedPaths(cwd, env);
   git(cwd, ["merge", "--abort"], { env });
-  return paths;
+  // Full operand IDs keep synthetic directory/file paths consistent with merge-tree.
+  const tree = git(cwd, ["merge-tree", "--write-tree", "--name-only", "-z", ours, theirs], {
+    env,
+    allowFailure: true,
+  });
+  if (tree.status !== 1) {
+    throw new Error(
+      `git merge-tree ${ours} ${theirs} expected conflicts, exited ${tree.status}: ${tree.stderr.trim()}`,
+    );
+  }
+  const entries = tree.stdout.split("\0");
+  const separator = entries.indexOf("", 1);
+  if (!entries[0] || separator <= 1) {
+    throw new Error(`git merge-tree ${ours} ${theirs} returned no conflicting path section`);
+  }
+  return [...new Set(entries.slice(1, separator))].sort();
 }
 
 /** Renders a path as an inline code span that survives backticks and control characters. */

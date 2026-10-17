@@ -425,7 +425,7 @@ test("true conflicts match merge-tree exactly and leave only a report above capt
   assert.equal(fixture.out(cwd, ["ls-files", "-u"]), "");
   for (const file of ODD_PATHS)
     assert.equal(fs.readFileSync(path.join(cwd, file), "utf8"), "fork\n");
-  const report = fs.readFileSync(path.join(cwd, REPORT_PATH), "utf8");
+  const report = fixture.out(cwd, ["show", `${state.head}:${REPORT_PATH}`]);
   assert.ok(report.startsWith(REPORT_MARKER));
   assert.deepEqual(
     report.split("\n").filter((line) => line.startsWith("- `")),
@@ -437,6 +437,39 @@ test("true conflicts match merge-tree exactly and leave only a report above capt
   );
   assert.match(pr.body, new RegExp(DAY));
 });
+
+for (const directoryFile of [false, true]) {
+  test(`${directoryFile ? "directory/file" : "ordinary file"} conflict report matches the merge-tree oracle`, (t) => {
+    const fixture = createFixture();
+    fixture.upstreamCommit({ df: "base\n" }, "upstream: file");
+    fixture.forkFromUpstream();
+    const ours = fixture.masterCommit({ df: "fork\n" }, "fork: edit file");
+    const theirs = fixture.upstreamCommit(
+      directoryFile ? { df: null, "df/x.txt": "upstream\n" } : { df: "upstream\n" },
+      "upstream: replace file",
+    );
+    const { cwd, state } = prepared(fixture);
+    const expected = mergeTreeConflicts(fixture, cwd, ours, theirs);
+    assert.deepEqual(expected, [directoryFile ? `df~${ours}` : "df"]);
+    assert.equal(state.status, "conflict");
+    assert.equal(state.stage, "upstream");
+    assert.equal(state.base, ours);
+    assert.equal(state.target, theirs);
+    assert.equal(fixture.out(cwd, ["show", "-s", "--format=%P", state.head]), ours);
+    assert.equal(fixture.out(cwd, ["diff", "--name-only", ours, state.head]), REPORT_PATH);
+    assert.equal(fixture.out(cwd, ["ls-files", "-u"]), "");
+    assert.equal(
+      fixture.run(cwd, ["rev-parse", "--verify", "MERGE_HEAD"], { allowFailure: true }).status,
+      128,
+    );
+    const report = fixture.out(cwd, ["show", `${state.head}:${REPORT_PATH}`]);
+    assert.ok(report.startsWith(REPORT_MARKER));
+    const reported = [...report.matchAll(/^- `([^`]+)`$/gm)].map((match) => match[1]).sort();
+    t.diagnostic(JSON.stringify({ ours, theirs, expected, reported }));
+    assert.deepEqual(reported, expected);
+    assert.deepEqual(state.conflicts, expected);
+  });
+}
 
 test("fresh fetched master ignores stale legacy report history and a stale runner checkout", async () => {
   const { fixture } = baseFixture();
