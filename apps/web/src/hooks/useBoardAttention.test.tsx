@@ -77,6 +77,12 @@ const MALFORMED = {
   lanes: [{ lane: "needs-decision", cards: "oops" }, { lane: "human-review" }],
 };
 
+/** A reading wrong only in listing one lane that counts twice: 1 is needs-decision, 2 is human-review. */
+const twice = (index: 1 | 2, waiting: number, signOff = 0) => {
+  const good = board(waiting, signOff);
+  return { ...good, lanes: [...good.lanes, good.lanes[index]] };
+};
+
 const keyOf = (environmentId: EnvironmentId) => `${environmentId} ${ATTENTION_BOARD_PATH}`;
 const answer = (environmentId: EnvironmentId, next: Answer) =>
   engine.answers.set(keyOf(environmentId), next);
@@ -197,7 +203,7 @@ it("does not take a malformed answer for none", () => {
   expect(count).toBe(4);
   answer(local, { body: MALFORMED });
   poll();
-  expect(count).toBe(4);
+  expect(count).toBeNull();
   answer(local, { body: board(1) });
   poll();
   expect(count).toBe(1);
@@ -240,7 +246,7 @@ it("does not bring a count back when the environment is left and returned to", (
   expect(count).toBe(3);
 });
 
-it("keeps the count through a card that is not one, among good ones", () => {
+it("clears the count on a card that is not one, among good ones", () => {
   answer(local, { body: board(2, 1) });
   mount(local);
   expect(count).toBe(3);
@@ -249,7 +255,7 @@ it("keeps the count through a card that is not one, among good ones", () => {
     body: { ...mixed, lanes: [...mixed.lanes, { lane: "ready", cards: [{ id: "a" }, null] }] },
   });
   poll();
-  expect(count).toBe(3);
+  expect(count).toBeNull();
   answer(local, {
     body: {
       ...mixed,
@@ -257,7 +263,7 @@ it("keeps the count through a card that is not one, among good ones", () => {
     },
   });
   poll();
-  expect(count).toBe(3);
+  expect(count).toBeNull();
   answer(local, { body: board(0) });
   poll();
   expect(count).toBe(0);
@@ -299,4 +305,68 @@ it("forgets the count when delivery is turned off", () => {
   answer(local, { body: board(1) });
   poll();
   expect(count).toBe(1);
+});
+
+it.each([
+  ["needs-decision", 1],
+  ["human-review", 2],
+] as const)("does not count a reading that lists %s twice", (_lane, index) => {
+  // As the first reading: not known, and still not after the same again.
+  answer(local, { body: twice(index, 2, 1) });
+  mount(local);
+  expect(count).toBeNull();
+  poll();
+  expect(count).toBeNull();
+  answer(local, { body: board(2, 1) });
+  poll();
+  expect(count).toBe(3);
+  // After a count: the number goes rather than staying or growing.
+  answer(local, { body: twice(index, 2, 1) });
+  poll();
+  expect(count).toBeNull();
+  poll();
+  expect(count).toBeNull();
+  answer(local, { body: board(1) });
+  poll();
+  expect(count).toBe(1);
+  answer(local, { body: twice(index, 0) });
+  poll();
+  expect(count).toBeNull();
+  answer(local, { body: board(0) });
+  poll();
+  expect(count).toBe(0);
+});
+
+it("does not bring an earlier count back when a reading fails after a lane listed twice", () => {
+  answer(local, { body: board(2, 1) });
+  mount(local);
+  expect(count).toBe(3);
+  answer(local, { body: twice(1, 2, 1) });
+  poll();
+  expect(count).toBeNull();
+  // The failed reading hands back the body before it, which is the one listed twice.
+  answer(local, { failure: "engine unreachable" });
+  poll();
+  expect(count).toBeNull();
+  poll();
+  expect(count).toBeNull();
+  answer(local, { body: board(2, 1) });
+  poll();
+  expect(count).toBe(3);
+});
+
+it("clears the count on an answer of nothing at all, and through a failed reading after it", () => {
+  answer(local, { body: board(2, 1) });
+  mount(local);
+  expect(count).toBe(3);
+  // The engine answered, and what it answered was null: not the same as no reading.
+  answer(local, { body: null });
+  poll();
+  expect(count).toBeNull();
+  answer(local, { failure: "engine unreachable" });
+  poll();
+  expect(count).toBeNull();
+  answer(local, { body: board(1, 1) });
+  poll();
+  expect(count).toBe(2);
 });
