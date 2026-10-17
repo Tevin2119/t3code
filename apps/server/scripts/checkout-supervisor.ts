@@ -16,7 +16,8 @@
  * does not report ready, the previous one is started again.
  *
  * The release a data directory runs is recorded in it (`checkout-release.json`).
- * Ctrl-C stops the server and the supervisor.
+ * An unexpected exit triggers bounded restarts of the same release; after the
+ * limit the supervisor gives up and exits. Ctrl-C stops both processes.
  */
 import * as NodeChildProcess from "node:child_process";
 import * as NodeCrypto from "node:crypto";
@@ -37,6 +38,8 @@ import {
 const READY_MARKER = ".t3-release-ready";
 const POINTER = "checkout-release.json";
 const CHECK_EVERY_MS = 30 * 60 * 1000;
+export const RESTART_LIMIT = 5;
+export const RESTART_WINDOW_MS = 10 * 60 * 1000;
 
 export interface ExecResult {
   readonly code: number;
@@ -72,6 +75,7 @@ export interface SupervisorOptions {
     readonly prepareMs?: number;
     readonly stopMs?: number;
     readonly readyMs?: number;
+    readonly restartMs?: number;
   };
 }
 
@@ -111,6 +115,10 @@ export class CheckoutSupervisor {
   #swapping = false;
   #busy = false;
   #stopping = false;
+  #restarts: number[] = [];
+  #restartTimer: NodeJS.Timeout | null = null;
+  #pendingCrashRestart = false;
+  #crashExit: { code: number | null; signal: NodeJS.Signals | null } | null = null;
   readonly #ready = new Waiter<boolean>();
   readonly #prepared = new Waiter<boolean>();
   readonly #exited = new Waiter<boolean>();
@@ -245,10 +253,44 @@ export class CheckoutSupervisor {
       this.#ready.settle(false);
       this.#exited.settle(true);
       if (this.#swapping) return;
-      // Outside an update the server's end is the supervisor's.
-      this.#finish(code ?? (signal ? 1 : 0));
+      if (this.#stopping) return this.#finish(code ?? (signal ? 1 : 0));
+      this.#server = null;
+      this.#crashExit = { code, signal };
+      this.#restartAfterCrash();
     });
     return server;
+  }
+
+  #restartAfterCrash(immediate = false) {
+    const exit = this.#crashExit;
+    if (!exit) return;
+    const description = exit.code === null ? `signal ${exit.signal}` : `exit code ${exit.code}`;
+    this.#restarts = this.#restarts.filter(
+      (time) => this.#now().getTime() - time < RESTART_WINDOW_MS,
+    );
+    if (this.#restarts.length >= RESTART_LIMIT) {
+      this.#options.log(
+        `Server exited (${description}); giving up after ${RESTART_LIMIT} restarts in ${RESTART_WINDOW_MS}ms.`,
+      );
+      this.#finish(exit.code ?? (exit.signal ? 1 : 0));
+      return;
+    }
+    const restart = () => {
+      this.#restartTimer = null;
+      if (this.#stopping) return;
+      if (this.#swapping) {
+        this.#pendingCrashRestart = true;
+        return;
+      }
+      if (this.#server) return;
+      this.#restarts.push(this.#now().getTime());
+      this.#options.log(
+        `Server exited (${description}); restarting (${this.#restarts.length}/${RESTART_LIMIT}).`,
+      );
+      this.#start(this.#running.commit);
+    };
+    if (immediate) restart();
+    else this.#restartTimer = setTimeout(restart, this.#options.timeouts?.restartMs ?? 1_000);
   }
 
   async #onMessage(message: ServerMessage) {
@@ -307,6 +349,9 @@ export class CheckoutSupervisor {
   async stop(signal: NodeJS.Signals) {
     if (this.#stopping) return;
     this.#stopping = true;
+    if (this.#restartTimer) clearTimeout(this.#restartTimer);
+    this.#restartTimer = null;
+    this.#pendingCrashRestart = false;
     this.#swapping = false;
     const server = this.#server;
     if (!server) return this.#finish(130);
@@ -414,6 +459,10 @@ export class CheckoutSupervisor {
     } finally {
       this.#swapping = false;
       this.#busy = false;
+      if (this.#pendingCrashRestart) {
+        this.#pendingCrashRestart = false;
+        if (this.#server === null && !this.#stopping) this.#restartAfterCrash(true);
+      }
     }
   }
 }
