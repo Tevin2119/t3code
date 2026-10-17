@@ -107,7 +107,7 @@ export function TeamBadge(props: {
             type="button"
             size="xs"
             variant="ghost"
-            className="min-w-0 gap-1 px-1.5 font-normal"
+            className="min-w-0"
             aria-label={`Team ${binding.team}, role ${binding.role}. Fixed for this thread.`}
             data-delivery-team-badge={binding.team}
             data-delivery-team-role={binding.role}
@@ -115,16 +115,18 @@ export function TeamBadge(props: {
           />
         }
       >
-        <UsersIcon className="size-3.5 shrink-0" />
-        <span className="truncate">{binding.team}</span>
-        <span className="text-muted-foreground">/</span>
-        <span className="truncate">{binding.role}</span>
-        {overrides.length > 0 ? (
-          <span className="shrink-0 text-warning">
-            {overrides.length === 1 ? "1 override" : `${overrides.length} overrides`}
-          </span>
-        ) : null}
-        <LockIcon className="size-3 shrink-0 text-muted-foreground" />
+        <span className="contents font-normal">
+          <UsersIcon className="size-3.5 shrink-0" />
+          <span className="truncate">{binding.team}</span>
+          <span className="text-muted-foreground">/</span>
+          <span className="truncate">{binding.role}</span>
+          {overrides.length > 0 ? (
+            <span className="shrink-0 text-warning">
+              {overrides.length === 1 ? "1 override" : `${overrides.length} overrides`}
+            </span>
+          ) : null}
+          <LockIcon className="size-3 shrink-0 text-muted-foreground" />
+        </span>
       </PopoverTrigger>
       <PopoverPopup align="start" className="w-[min(36rem,calc(100vw-2rem))]">
         <PopoverTitle>The team of this thread</PopoverTitle>

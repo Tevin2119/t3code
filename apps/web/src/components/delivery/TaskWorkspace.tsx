@@ -202,10 +202,10 @@ function Message(props: {
         className={cn(
           "flex min-w-0 flex-col gap-1 rounded-lg px-3 py-2 text-sm",
           mine ? "bg-accent" : "border border-border",
-          open && "border-amber-500/70 bg-amber-500/5",
+          open && "border-warning/70 bg-warning/5",
         )}
       >
-        <p className="text-[10px] text-muted-foreground">
+        <p className="text-3xs text-muted-foreground">
           <span className="font-medium text-foreground">{mine ? entry.by : entry.by}</span>
           {", "}
           {MESSAGE_KIND_LABEL[entry.kind] ?? entry.kind}, {time(entry.at)}
@@ -231,7 +231,7 @@ function Message(props: {
         ) : null}
         <TaskFileList environmentId={props.environmentId} files={entry.files} />
         {entry.evidence ? (
-          <p className="font-mono text-[10px] break-all text-muted-foreground">
+          <p className="font-mono text-3xs break-all text-muted-foreground">
             evidence: {entry.evidence}
           </p>
         ) : null}
@@ -265,7 +265,7 @@ function Message(props: {
           </div>
         ) : null}
         {state && (mine || open) ? (
-          <p className="text-[10px] text-muted-foreground" data-message-state-label>
+          <p className="text-3xs text-muted-foreground" data-message-state-label>
             {state}
           </p>
         ) : null}
@@ -294,10 +294,10 @@ function Happening(props: {
         <span className="font-medium text-foreground/80">{entry.by}</span> {entry.text}
         <ShowSection entry={entry} onShow={props.onShow} />
         {entry.evidence ? (
-          <span className="block font-mono text-[10px] break-all">{entry.evidence}</span>
+          <span className="block font-mono text-3xs break-all">{entry.evidence}</span>
         ) : null}
       </p>
-      <span className="shrink-0 text-[10px]">{time(entry.at)}</span>
+      <span className="shrink-0 text-3xs">{time(entry.at)}</span>
     </div>
   );
 }
@@ -325,8 +325,8 @@ function MobileHelp(props: {
       >
         <InfoIcon />
       </PopoverTrigger>
-      <PopoverPopup side="top" className="max-w-[min(20rem,calc(100vw-2rem))] text-xs">
-        {props.children}
+      <PopoverPopup side="top" className="max-w-[min(20rem,calc(100vw-2rem))]">
+        <div className="text-xs">{props.children}</div>
       </PopoverPopup>
     </Popover>
   );
@@ -342,7 +342,7 @@ function SeatNow(props: { readonly live: SeatLive }) {
         <li
           key={keys[index]}
           className={cn(
-            "text-[10px] break-words",
+            "text-3xs break-words",
             item.kind === "said" ? "text-foreground/80" : "font-mono text-muted-foreground",
           )}
         >
@@ -438,12 +438,12 @@ function RunPanel(props: {
           ))}
         </div>
       ) : (
-        <p className="text-[11px] text-muted-foreground">
+        <p className="text-2xs text-muted-foreground">
           No plan, review or evidence written yet. Each shows here once the run writes it.
         </p>
       )}
       {council.steers.length > 0 ? (
-        <ul className="flex flex-col gap-1 text-[11px]" data-run-steers>
+        <ul className="flex flex-col gap-1 text-2xs" data-run-steers>
           {council.steers.map((steer, index) => (
             <li key={steerKeys[index]} className="rounded border border-border px-2 py-1">
               <span className="text-muted-foreground">
@@ -477,7 +477,6 @@ function RunPanel(props: {
           <Textarea
             aria-label="An instruction for the run"
             placeholder="Steer the work: say what to do differently from now on"
-            className="text-xs"
             value={text}
             onChange={(event) => setText(event.target.value)}
           />
@@ -490,14 +489,14 @@ function RunPanel(props: {
           >
             Give the instruction
           </Button>
-          <p className="text-[10px] text-muted-foreground">
+          <p className="text-3xs text-muted-foreground">
             Every seat at work stops, and the step starts again once all have ended, with the
             instruction given to the seat it names (or to all). To change what is asked, write a
             change instead: that goes through triage.
           </p>
         </div>
       ) : null}
-      {said ? <p className="text-[11px] text-muted-foreground">{said}</p> : null}
+      {said ? <p className="text-2xs text-muted-foreground">{said}</p> : null}
       {reading ? (
         <RunDocument
           environmentId={props.environmentId}
@@ -531,27 +530,29 @@ function RunDocument(props: {
             {DOCUMENT_LABEL[props.name] ?? props.name}, run {props.run}
           </DialogTitle>
         </DialogHeader>
-        <DialogPanel className="text-sm">
-          {doc !== null ? (
-            <>
-              <ChatMarkdown
-                text={doc}
-                cwd={undefined}
-                environmentId={props.environmentId ?? undefined}
-                parseRawHtml={false}
-                allowMedia={false}
-              />
-              {body?.cut === true ? (
-                <p className="pt-2 text-xs text-muted-foreground">
-                  Only the first part is shown; the whole is in the run's evidence folder.
-                </p>
-              ) : null}
-            </>
-          ) : (
-            <p className="text-xs text-muted-foreground">
-              {read.error ? `It cannot be read: ${read.error}` : "Reading it."}
-            </p>
-          )}
+        <DialogPanel>
+          <div className="space-y-4 text-sm">
+            {doc !== null ? (
+              <>
+                <ChatMarkdown
+                  text={doc}
+                  cwd={undefined}
+                  environmentId={props.environmentId ?? undefined}
+                  parseRawHtml={false}
+                  allowMedia={false}
+                />
+                {body?.cut === true ? (
+                  <p className="pt-2 text-xs text-muted-foreground">
+                    Only the first part is shown; the whole is in the run's evidence folder.
+                  </p>
+                ) : null}
+              </>
+            ) : (
+              <p className="text-xs text-muted-foreground">
+                {read.error ? `It cannot be read: ${read.error}` : "Reading it."}
+              </p>
+            )}
+          </div>
         </DialogPanel>
       </DialogPopup>
     </Dialog>
@@ -574,7 +575,7 @@ function Briefing(props: { readonly brief: TaskBriefing }) {
     // The whole panel, headline too, is held to part of the screen and scrolls within, so the
     // history and the composer keep their room on a phone.
     <div
-      className="max-h-[40dvh] shrink-0 overflow-y-auto overscroll-contain border-b border-amber-500/40 bg-amber-500/5 px-3 py-2 text-xs"
+      className="max-h-[40dvh] shrink-0 overflow-y-auto overscroll-contain border-b border-warning/40 bg-warning/5 px-3 py-2 text-xs"
       data-task-brief
     >
       <button
@@ -583,11 +584,9 @@ function Briefing(props: { readonly brief: TaskBriefing }) {
         aria-expanded={open}
         onClick={() => setOpen(!open)}
       >
-        <span className="mt-0.5 shrink-0 font-medium text-amber-700 dark:text-amber-300">
-          Needs you
-        </span>
+        <span className="mt-0.5 shrink-0 font-medium text-warning-foreground">Needs you</span>
         <span className="min-w-0 flex-1 font-medium">{brief.headline}</span>
-        <span className="shrink-0 text-[10px] text-muted-foreground">{open ? "Less" : "More"}</span>
+        <span className="shrink-0 text-3xs text-muted-foreground">{open ? "Less" : "More"}</span>
       </button>
       {open ? (
         <dl className="mt-1.5 grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1">
@@ -630,7 +629,7 @@ function Briefing(props: { readonly brief: TaskBriefing }) {
                     <li key={optionKeys[index]}>
                       <span className="font-medium">{option.label}</span>
                       {option.recommended ? (
-                        <span className="ml-1 rounded bg-amber-500/15 px-1 text-[10px] text-amber-700 dark:text-amber-300">
+                        <span className="ml-1 rounded bg-warning/15 px-1 text-3xs text-warning-foreground">
                           suggested
                         </span>
                       ) : null}
@@ -783,7 +782,7 @@ function Composer(props: {
         ) : null}
         {replying ? (
           <p
-            className="flex items-start gap-1 rounded border border-amber-500/60 bg-amber-500/5 px-2 py-1 text-xs"
+            className="flex items-start gap-1 rounded border border-warning/60 bg-warning/5 px-2 py-1 text-xs"
             data-task-composer-reply
           >
             <CornerDownRightIcon className="mt-0.5 size-3 shrink-0" />
@@ -802,7 +801,7 @@ function Composer(props: {
             </button>
           </p>
         ) : waits ? (
-          <p className="text-xs text-amber-700 dark:text-amber-300">
+          <p className="text-xs text-warning-foreground">
             A question of {waits.by} waits for you. Choose Answer a question below, or press Answer
             on it.
           </p>
@@ -880,30 +879,32 @@ function Composer(props: {
             </p>
             <p className="mt-2 text-muted-foreground">{help(kind)}</p>
           </MobileHelp>
-          <Tooltip>
-            <TooltipTrigger
-              render={
-                <Button
-                  size="icon-sm"
-                  className="ml-auto rounded-full"
-                  aria-label={`Send: ${COMPOSER_KIND_LABEL[kind]}`}
-                  disabled={!canSend}
-                  onClick={() => void send()}
-                  data-task-send
-                />
-              }
-            >
-              <SendIcon />
-            </TooltipTrigger>
-            <TooltipPopup side="top">
-              {uploading ? "Files are still on their way." : `Send: ${COMPOSER_KIND_LABEL[kind]}`}
-            </TooltipPopup>
-          </Tooltip>
+          {/* The send button is round, like the chat composer's. */}
+          <span className="ml-auto flex shrink-0 [--control-radius:9999px]">
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Button
+                    size="icon-sm"
+                    aria-label={`Send: ${COMPOSER_KIND_LABEL[kind]}`}
+                    disabled={!canSend}
+                    onClick={() => void send()}
+                    data-task-send
+                  />
+                }
+              >
+                <SendIcon />
+              </TooltipTrigger>
+              <TooltipPopup side="top">
+                {uploading ? "Files are still on their way." : `Send: ${COMPOSER_KIND_LABEL[kind]}`}
+              </TooltipPopup>
+            </Tooltip>
+          </span>
         </div>
         {/* Said only when sending moves the work; the rest is behind the info icon. */}
         {effect.moves ? (
           <p
-            className="hidden items-start gap-1.5 text-[11px] text-amber-700 dark:text-amber-300 [@media(min-width:640px)_and_(min-height:600px)]:flex"
+            className="hidden items-start gap-1.5 text-2xs text-warning-foreground [@media(min-width:640px)_and_(min-height:600px)]:flex"
             data-task-composer-effect="moves"
           >
             <span className="shrink-0 font-medium">Moves the work:</span>
@@ -930,49 +931,51 @@ function DecisionBar(props: {
   const deciding = props.actions.some((action) => action === "approve" || action === "reject");
   return (
     <section
-      className="flex shrink-0 flex-col gap-1 border-t border-border bg-muted/30 px-3 py-1 pb-[calc(env(safe-area-inset-bottom)+0.25rem)] [@media(min-width:640px)_and_(min-height:600px)]:gap-2 [@media(min-width:640px)_and_(min-height:600px)]:py-2"
+      className="flex shrink-0 flex-col border-t border-border bg-muted/30 pb-safe"
       aria-label="Your decision"
       data-task-decisions
     >
-      <p className="hidden text-xs font-medium [@media(min-width:640px)_and_(min-height:600px)]:block">
-        {deciding ? "Your decision" : "What you can do next"}
-        {deciding ? (
-          <span className="font-normal text-muted-foreground">
-            {" "}
-            Messages never count as a decision.
-          </span>
-        ) : null}
-      </p>
-      <div className="flex items-center gap-2 [@media(min-width:640px)_and_(min-height:600px)]:flex-wrap">
-        {props.actions.map((action) => (
-          <div
-            key={action}
-            className="flex min-w-0 flex-1 flex-col gap-0.5 [@media(min-width:640px)_and_(min-height:600px)]:max-w-80 [@media(min-width:640px)_and_(min-height:600px)]:flex-none"
-          >
-            <Button
-              size="sm"
-              variant={action === "reject" ? "outline" : "default"}
-              className="w-full justify-center"
-              disabled={props.busy}
-              onClick={() => props.onAction(action)}
-              data-task-action={action}
-            >
-              <span className="truncate">{actionLabel(action, props.task.card)}</span>
-            </Button>
-            <span className="hidden text-[10px] text-muted-foreground [@media(min-width:640px)_and_(min-height:600px)]:block">
-              {actionHelp(action, props.task.card)}
+      <div className="flex flex-col gap-1 px-3 py-1 [@media(min-width:640px)_and_(min-height:600px)]:gap-2 [@media(min-width:640px)_and_(min-height:600px)]:py-2">
+        <p className="hidden text-xs font-medium [@media(min-width:640px)_and_(min-height:600px)]:block">
+          {deciding ? "Your decision" : "What you can do next"}
+          {deciding ? (
+            <span className="font-normal text-muted-foreground">
+              {" "}
+              Messages never count as a decision.
             </span>
-          </div>
-        ))}
-        <MobileHelp label="About your decision">
-          {deciding ? <p>Messages never count as a decision.</p> : null}
-          {props.actions.map((item) => (
-            <p key={item} className="mt-2">
-              <strong>{actionLabel(item, props.task.card)}: </strong>
-              {actionHelp(item, props.task.card)}
-            </p>
+          ) : null}
+        </p>
+        <div className="flex items-center gap-2 [@media(min-width:640px)_and_(min-height:600px)]:flex-wrap">
+          {props.actions.map((action) => (
+            <div
+              key={action}
+              className="flex min-w-0 flex-1 flex-col gap-0.5 [@media(min-width:640px)_and_(min-height:600px)]:max-w-80 [@media(min-width:640px)_and_(min-height:600px)]:flex-none"
+            >
+              <Button
+                size="sm"
+                variant={action === "reject" ? "outline" : "default"}
+                className="w-full justify-center"
+                disabled={props.busy}
+                onClick={() => props.onAction(action)}
+                data-task-action={action}
+              >
+                <span className="truncate">{actionLabel(action, props.task.card)}</span>
+              </Button>
+              <span className="hidden text-3xs text-muted-foreground [@media(min-width:640px)_and_(min-height:600px)]:block">
+                {actionHelp(action, props.task.card)}
+              </span>
+            </div>
           ))}
-        </MobileHelp>
+          <MobileHelp label="About your decision">
+            {deciding ? <p>Messages never count as a decision.</p> : null}
+            {props.actions.map((item) => (
+              <p key={item} className="mt-2">
+                <strong>{actionLabel(item, props.task.card)}: </strong>
+                {actionHelp(item, props.task.card)}
+              </p>
+            ))}
+          </MobileHelp>
+        </div>
       </div>
     </section>
   );
@@ -1041,7 +1044,7 @@ function Communications(props: {
         <h2 className="text-xs font-medium">History and messages</h2>
         <button
           type="button"
-          className="cursor-pointer text-[11px] text-muted-foreground underline"
+          className="cursor-pointer text-2xs text-muted-foreground underline"
           aria-pressed={showDetail}
           onClick={() => setShowDetail(!showDetail)}
           data-task-detail-toggle
@@ -1260,9 +1263,7 @@ function Details(props: {
                 {comment.points.length > 0 ? `. ${comment.points.join(" ")}` : ""}
               </p>
             ))}
-            <p className="font-mono text-[10px] break-all text-muted-foreground">
-              {task.plan.file}
-            </p>
+            <p className="font-mono text-3xs break-all text-muted-foreground">{task.plan.file}</p>
           </section>
         ) : null}
         {task.review ? (
@@ -1289,7 +1290,7 @@ function Details(props: {
                       <li key={`${finding.title}:${finding.where}`}>
                         {finding.blocking ? <span className="text-warning">Blocking. </span> : null}
                         {finding.title}{" "}
-                        <span className="font-mono text-[10px] text-muted-foreground">
+                        <span className="font-mono text-3xs text-muted-foreground">
                           {finding.where}
                         </span>
                         <span className="block text-muted-foreground">{finding.detail}</span>
@@ -1304,9 +1305,7 @@ function Details(props: {
                 No answer from {task.review.missing.join(", ")}.
               </p>
             ) : null}
-            <p className="font-mono text-[10px] break-all text-muted-foreground">
-              {task.review.file}
-            </p>
+            <p className="font-mono text-3xs break-all text-muted-foreground">{task.review.file}</p>
           </section>
         ) : null}
         <Listed title="Requirements" items={task.requirements} />
@@ -1333,7 +1332,7 @@ function Details(props: {
               <ul className="flex flex-col gap-2">
                 {task.revisions.toReversed().map((revision) => (
                   <li key={revision.revision} className="rounded border border-border p-2 text-xs">
-                    <p className="font-mono text-[10px] text-muted-foreground">
+                    <p className="font-mono text-3xs text-muted-foreground">
                       r{revision.revision}, {time(revision.created)}
                       {revision.notes ? `, ${revision.notes}` : ""}
                     </p>
@@ -1452,7 +1451,7 @@ function Info(props: {
     >
       {suggested && suggested.id !== card.set ? (
         <div
-          className="flex items-start justify-between gap-2 rounded border border-amber-500/60 bg-amber-500/5 px-2 py-1.5 text-xs"
+          className="flex items-start justify-between gap-2 rounded border border-warning/60 bg-warning/5 px-2 py-1.5 text-xs"
           data-task-suggested-board={suggested.id}
         >
           <span>
@@ -1535,7 +1534,7 @@ function Info(props: {
                             <span className={cn("size-2 rounded-full", laneTone(lane).bar)} />
                             {title}
                             {lane !== task.lane ? (
-                              <span className="text-[10px] text-muted-foreground">
+                              <span className="text-3xs text-muted-foreground">
                                 {intent.kind === "refused"
                                   ? "not from here, choose to see why"
                                   : said}
@@ -1581,21 +1580,26 @@ function Info(props: {
                   });
                 }}
               >
-                <SelectTrigger
-                  aria-label="Board"
-                  size="compact"
-                  variant="ghost"
+                {/* A board other than the suggested one is outlined in the warning tone. */}
+                <span
                   className={cn(
-                    "w-auto min-w-0",
-                    suggested && suggested.id !== card.set && "ring-1 ring-amber-500/60",
+                    "inline-flex min-w-0 rounded-md",
+                    suggested && suggested.id !== card.set && "ring-1 ring-warning/60",
                   )}
-                  data-task-board={card.set ?? ""}
                 >
-                  <SelectValue>
-                    {boards.find((item) => item.id === card.set)?.title ??
-                      (card.set ? card.set : "Not on a board")}
-                  </SelectValue>
-                </SelectTrigger>
+                  <SelectTrigger
+                    aria-label="Board"
+                    size="compact"
+                    variant="ghost"
+                    className="w-auto min-w-0"
+                    data-task-board={card.set ?? ""}
+                  >
+                    <SelectValue>
+                      {boards.find((item) => item.id === card.set)?.title ??
+                        (card.set ? card.set : "Not on a board")}
+                    </SelectValue>
+                  </SelectTrigger>
+                </span>
                 <SelectPopup alignItemWithTrigger={false}>
                   <SelectItem value={NO_BOARD}>Not on a board</SelectItem>
                   {boards.map((item) => (
@@ -1615,7 +1619,7 @@ function Info(props: {
               className={cn(
                 "rounded border px-2 py-1 text-xs",
                 card.waitingOn === "person"
-                  ? "border-amber-500/60 bg-amber-500/5"
+                  ? "border-warning/60 bg-warning/5"
                   : "border-border text-muted-foreground",
               )}
               data-task-blocker
@@ -1631,7 +1635,7 @@ function Info(props: {
               {worker.seat} on {harnessLabel(worker.harness)}, {worker.stage}
               {worker.waiting ? `, ${waitingWords(worker.waiting)}` : ""}
               {worker.waitingWhy ? (
-                <span className="block text-[11px] text-muted-foreground">{worker.waitingWhy}</span>
+                <span className="block text-2xs text-muted-foreground">{worker.waitingWhy}</span>
               ) : null}
               {worker.specialist ? ` as ${worker.specialist}` : ""}{" "}
               <Age at={worker.since} now={now} label="Since" />
@@ -1658,7 +1662,7 @@ function Info(props: {
                   {approval.stands ? "stands" : "no longer stands"}
                 </span>
                 {approval.verifiedAt ? (
-                  <span className="text-[10px] text-muted-foreground">
+                  <span className="text-3xs text-muted-foreground">
                     checked{" "}
                     {ageLabel(approval.verifiedAt, now) === "now" ||
                     !ageLabel(approval.verifiedAt, now)
@@ -1713,7 +1717,7 @@ function Info(props: {
                 {targetLine(task.target)}
               </span>
               {task.target?.ok && task.target.path ? (
-                <span className="truncate font-mono text-[11px] text-muted-foreground">
+                <span className="truncate font-mono text-2xs text-muted-foreground">
                   {task.target.path}
                 </span>
               ) : null}
@@ -1742,7 +1746,8 @@ function Info(props: {
             ) : (
               <Input
                 aria-label="Tags"
-                className="h-7 w-44 text-xs"
+                size="compact"
+                className="w-44"
                 autoFocus
                 value={tags}
                 onChange={(event) => setTags(event.target.value)}
@@ -1762,7 +1767,7 @@ function Info(props: {
           {task.submitted ? <Row label="Submitted">{time(task.submitted)}</Row> : null}
           <Row label="Last changed">{time(task.updated)}</Row>
           <Row label="Id">
-            <span className="font-mono text-[10px]">{task.id}</span>
+            <span className="font-mono text-3xs">{task.id}</span>
           </Row>
           {problem ? <p className="text-xs text-warning">{problem}</p> : null}
         </TaskDisclosure>
@@ -1772,22 +1777,22 @@ function Info(props: {
         <section className="flex flex-col gap-1.5">
           <TaskDisclosure title="Run and evidence" defaultOpen={false}>
             <Row label="Run">
-              <span className="font-mono text-[10px]">{card.run.id}</span>
+              <span className="font-mono text-3xs">{card.run.id}</span>
             </Row>
             <Row label="State">
               {card.run.state} at {card.run.stage}
             </Row>
             {card.run.candidate ? (
               <Row label="Candidate">
-                <span className="font-mono text-[10px]">{card.run.candidate.slice(0, 12)}</span>
+                <span className="font-mono text-3xs">{card.run.candidate.slice(0, 12)}</span>
               </Row>
             ) : null}
             <Row label="Setup">
-              <span className="font-mono text-[10px]">{card.run.configuration}</span>
+              <span className="font-mono text-3xs">{card.run.configuration}</span>
             </Row>
             {task.council?.evidence ? (
               <Row label="Evidence">
-                <span className="font-mono text-[10px] break-all">{task.council.evidence}</span>
+                <span className="font-mono text-3xs break-all">{task.council.evidence}</span>
               </Row>
             ) : null}
             {task.children.length > 1 ? (
@@ -1799,7 +1804,7 @@ function Info(props: {
 
       <section className="flex flex-col gap-1.5" data-task-related>
         <TaskDisclosure title="Linked conversations" defaultOpen={false}>
-          <p className="text-[11px] text-muted-foreground">
+          <p className="text-2xs text-muted-foreground">
             What is said on this task is its conversation with the team. A thread in the chat list
             is a conversation of its own; it becomes a task only when you create one from it.
           </p>
@@ -1825,7 +1830,7 @@ function Info(props: {
           ) : null}
           {card.run ? (
             <Row label="Run">
-              <span className="font-mono text-[10px]" data-task-related-run>
+              <span className="font-mono text-3xs" data-task-related-run>
                 {card.run.id}
                 {card.run.candidate ? ` · commit ${card.run.candidate.slice(0, 10)}` : ""}
               </span>
@@ -1858,7 +1863,7 @@ function Info(props: {
             />
             {seatsChangedForTask(task.settings).length > 0 ? (
               <div
-                className="rounded border border-border bg-muted/40 px-2 py-1.5 text-[11px]"
+                className="rounded border border-border bg-muted/40 px-2 py-1.5 text-2xs"
                 data-task-seats-changed
               >
                 <p className="font-medium">
@@ -1872,13 +1877,13 @@ function Info(props: {
               </div>
             ) : null}
             {problems.length > 0 ? (
-              <ul className="list-disc pl-5 text-[11px] text-warning" data-delivery-problem>
+              <ul className="list-disc pl-5 text-2xs text-warning" data-delivery-problem>
                 {problems.map((item) => (
                   <li key={item}>{item}</li>
                 ))}
               </ul>
             ) : null}
-            <p className="text-[11px] text-muted-foreground">
+            <p className="text-2xs text-muted-foreground">
               {task.workflow === "chat"
                 ? "A change counts from the next message on."
                 : "A run keeps the seats it started with. A change counts for the next run. A seat that is working when it is switched off is asked to stop."}
@@ -1911,13 +1916,13 @@ function Info(props: {
               <div key={seat.seat} className="flex items-start justify-between gap-2 text-xs">
                 <span className="min-w-0">
                   {seat.seat}
-                  <span className="block text-[10px] text-muted-foreground">
+                  <span className="block text-3xs text-muted-foreground">
                     {harnessLabel(seat.harness)}, {seat.requestedModel ?? "its own model"}
                     {seat.reasoning ? `, ${seat.reasoning}` : ""}
                     {seat.access && seat.access !== "full" ? `, ${seat.access}` : ""}
                   </span>
                   {seat.waitingWhy ? (
-                    <span className="block text-[10px] text-muted-foreground" data-seat-waiting-why>
+                    <span className="block text-3xs text-muted-foreground" data-seat-waiting-why>
                       {seat.waitingWhy}
                     </span>
                   ) : null}
@@ -1927,7 +1932,7 @@ function Info(props: {
                   <Badge size="sm" variant={ACTIVITY_VARIANT[seat.activity] ?? "secondary"}>
                     {seat.activity}
                   </Badge>
-                  <span className="block text-[10px] text-muted-foreground">
+                  <span className="block text-3xs text-muted-foreground">
                     {seat.blockedBy
                       ? `waits for ${seat.blockedBy}`
                       : seat.verdict
@@ -1952,7 +1957,7 @@ function Info(props: {
         <Input
           aria-label="Your name"
           placeholder="Written on what you do here"
-          className="h-7 text-xs"
+          size="compact"
           value={name}
           onChange={(event) => setPerson(event.target.value)}
         />
@@ -2010,7 +2015,7 @@ function PublicationRows(props: { readonly task: TaskView }) {
                 #{publication?.pullRequest?.number} on the repository host
               </a>
             ) : (
-              <span className="font-mono text-[10px]" data-task-related-pr-link>
+              <span className="font-mono text-3xs" data-task-related-pr-link>
                 {url} (stand-in host)
               </span>
             )
@@ -2020,7 +2025,7 @@ function PublicationRows(props: { readonly task: TaskView }) {
       </Row>
       {publication ? (
         <Row label="Branch">
-          <span className="font-mono text-[10px] break-all" data-task-related-branch>
+          <span className="font-mono text-3xs break-all" data-task-related-branch>
             {publication.branch} · {publication.commit.slice(0, 10)}
           </span>
         </Row>
@@ -2093,7 +2098,7 @@ export function TaskWorkspace(props: {
   const others = task?.actions.filter((action) => !primary?.includes(action)) ?? [];
 
   return (
-    <SidebarInset className="isolate h-dvh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground">
+    <SidebarInset className="isolate h-dvh min-h-0 overflow-hidden overscroll-y-none">
       <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-task-workspace={props.taskId}>
         <WorkspacePageHeader electron={isElectron} className="h-auto">
           <div className="flex min-w-0 flex-1 items-center gap-1 py-1 [@media(min-width:640px)_and_(min-height:600px)]:flex-wrap [@media(min-width:640px)_and_(min-height:600px)]:gap-2 [@media(min-width:640px)_and_(min-height:600px)]:py-2">
@@ -2128,7 +2133,7 @@ export function TaskWorkspace(props: {
                 </Badge>
                 <span
                   className={cn(
-                    "font-mono text-[10px] text-muted-foreground",
+                    "font-mono text-3xs text-muted-foreground",
                     !stale && "hidden [@media(min-width:640px)_and_(min-height:600px)]:inline-flex",
                   )}
                 >

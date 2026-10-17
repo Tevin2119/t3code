@@ -1,3 +1,5 @@
+import { deliveryModelDisabledReason } from "@t3tools/client-runtime/delivery-model-lock";
+import type { DeliveryThreadBinding } from "@t3tools/contracts";
 import type { MenuAction } from "@react-native-menu/menu";
 import type {
   ModelCapabilities,
@@ -24,6 +26,7 @@ export type ModelOption = {
   readonly isDefault: boolean;
   readonly isLegacy: boolean;
   readonly isUnavailable?: boolean;
+  readonly disabledReason?: string | null;
   readonly isHidden?: boolean;
   readonly canHide?: boolean;
   readonly capabilities: ModelCapabilities | null;
@@ -40,7 +43,6 @@ export type ProviderGroup = {
   readonly providerKey: string;
   readonly providerLabel: string;
   readonly models: ReadonlyArray<ModelOption>;
-  /** The provider fields that name announced models its CLI is too old to run. */
   readonly updateRequired?: ProviderUpdateRequired;
 };
 
@@ -56,13 +58,6 @@ function providerDisplayLabel(provider: {
   return provider.instanceId;
 }
 
-/**
- * `provider.enabled` reflects the machine plus any project's keep-alive
- * override, so it alone can't tell this project apart from one that merely
- * shares the instance. Settings carry the real per-project view the server
- * itself enforces, so a project with no override of its own must resolve
- * from there, not from a snapshot another project may be keeping alive.
- */
 function isProviderEnabledForProject(
   config: T3ServerConfig | null | undefined,
   provider:
@@ -78,10 +73,6 @@ function isProviderEnabledForProject(
     : provider.enabled;
 }
 
-/**
- * Whether the project has explicitly turned this instance off, as opposed
- * to it merely being disabled or unreachable at the machine level.
- */
 function isProjectDisabledOverride(
   config: T3ServerConfig | null | undefined,
   instanceId: ModelSelection["instanceId"],
@@ -96,13 +87,6 @@ function isProjectDisabledOverride(
   );
 }
 
-/**
- * Whether the project cannot use this instance at all, whether the project
- * turned it off itself or it merely inherits a machine-level disable. Either
- * way the server's `ThreadManagementService.dispatch` refuses a send, and the
- * instance may still look installed and running in the snapshot because
- * another project's keep-alive left it up.
- */
 function isDisabledForProject(
   config: T3ServerConfig | null | undefined,
   provider:
@@ -143,13 +127,9 @@ function normalizeSelectionOptions(
 }
 
 /**
- * Whether the selection cannot be sent as is: the instance resolves disabled
- * for the project (its own override, or an inherited machine-level disable),
- * or a known Antigravity selection needs setup or a different model.
- *
- * `projectId` has no default: a caller that forgets it would silently check
- * only the machine-wide state and miss a project that turned this instance
- * off. Pass `null` explicitly outside a project's scope.
+ * `projectId` has no default: a caller that forgets it would silently check only the
+ * machine-wide state and miss a project that turned this instance off. Pass `null` explicitly
+ * outside a project's scope.
  */
 export function isModelSelectionUnavailable(
   config: T3ServerConfig | null | undefined,
@@ -177,7 +157,6 @@ export function isModelSelectionUnavailable(
   );
 }
 
-/** Why `isModelSelectionUnavailable` refused a selection, worded for the recovery that applies. */
 export function describeUnavailableModelSelection(
   config: T3ServerConfig | null | undefined,
   selection: ModelSelection,
@@ -197,13 +176,6 @@ export function describeUnavailableModelSelection(
       };
 }
 
-/**
- * Keep Antigravity selections when setup or catalog changes make them
- * unavailable. Other providers fall through to the server default when they
- * are disabled, missing, or signed out. Without config, keep stored selections.
- *
- * `projectId` has no default; see `isModelSelectionUnavailable`.
- */
 export function resolveSelectableModelSelection(
   config: T3ServerConfig | null | undefined,
   selection: ModelSelection | null,
@@ -228,13 +200,6 @@ export function resolveSelectableModelSelection(
     : null;
 }
 
-/**
- * Reject legacy models for implicit defaults, except Antigravity selections,
- * which must not silently change after a catalog update. Explicit picks in
- * the settings sheet are unaffected.
- *
- * `projectId` has no default; see `isModelSelectionUnavailable`.
- */
 export function resolveDefaultableModelSelection(
   config: T3ServerConfig | null | undefined,
   selection: ModelSelection | null,
@@ -265,21 +230,21 @@ export function resolveNewTaskModelSelection(input: {
   );
 }
 
-/**
- * `projectId` has no default; see `isModelSelectionUnavailable`.
- */
 export function buildModelOptions(
   config: T3ServerConfig | null | undefined,
   fallbackModelSelection: ModelSelection | null,
   providerInstanceId: ModelSelection["instanceId"] | undefined,
   projectId: ProjectId | null,
   includeHidden = false,
+  deliveryBinding?: DeliveryThreadBinding | null,
 ): ReadonlyArray<ModelOption> {
   const options = new Map<string, ModelOption>();
 
   for (const provider of config?.providers ?? []) {
     if (
-      (providerInstanceId !== undefined && provider.instanceId !== providerInstanceId) ||
+      (!deliveryBinding &&
+        providerInstanceId !== undefined &&
+        provider.instanceId !== providerInstanceId) ||
       !isProviderEnabledForProject(config, provider, projectId) ||
       !provider.installed ||
       // API-only providers back text generation but cannot run a thread.
@@ -334,7 +299,8 @@ export function buildModelOptions(
 
   if (
     fallbackModelSelection &&
-    (providerInstanceId === undefined ||
+    (deliveryBinding ||
+      providerInstanceId === undefined ||
       fallbackModelSelection.instanceId === providerInstanceId) &&
     (!config?.settings?.providerModelPreferences?.[
       fallbackModelSelection.instanceId
@@ -377,8 +343,15 @@ export function buildModelOptions(
         providerDriver,
         isDefault: false,
         isLegacy: model?.isLegacy === true,
-        ...(isModelSelectionUnavailable(config, fallbackModelSelection, projectId) ||
-        (provider !== undefined && !isProviderEnabledForProject(config, provider, projectId)) ||
+        ...((deliveryBinding &&
+          config &&
+          (!provider ||
+            !isProviderEnabledForProject(config, provider, projectId) ||
+            !provider.installed ||
+            provider.supportsSessions === false ||
+            provider.auth.status === "unauthenticated" ||
+            provider.availability === "unavailable")) ||
+        isModelSelectionUnavailable(config, fallbackModelSelection, projectId) ||
         provider?.updateRequiredModels?.some((gated) => gated.slug === fallbackModelSelection.model)
           ? { isUnavailable: true }
           : {}),
@@ -388,7 +361,10 @@ export function buildModelOptions(
     }
   }
 
-  return [...options.values()];
+  return [...options.values()].map((option) => {
+    const disabledReason = deliveryModelDisabledReason(deliveryBinding, option.providerDriver);
+    return disabledReason ? { ...option, disabledReason } : option;
+  });
 }
 
 export function groupByProvider(options: ReadonlyArray<ModelOption>): ReadonlyArray<ProviderGroup> {
@@ -426,6 +402,8 @@ function modelMenuAction(option: ModelOption, selectedModel: ModelSelection | nu
   return {
     id: `model:${option.key}`,
     title: option.label,
+    subtitle: option.disabledReason ?? undefined,
+    attributes: option.disabledReason ? { disabled: true } : undefined,
     state:
       option.selection.instanceId === selectedModel?.instanceId &&
       option.selection.model === selectedModel.model
@@ -470,4 +448,19 @@ export function buildModelMenuActions(
         : []),
     ];
   });
+}
+
+/** Revalidate the selected row against the current catalog, including a changed binding. */
+export function modelOptionSelectionRefusal(
+  option: ModelOption,
+  options: ReadonlyArray<ModelOption>,
+): string | null {
+  const current = options.find((candidate) => candidate.key === option.key);
+  return (
+    current?.disabledReason ??
+    (current?.isHidden ? "Show this model or select another model." : null) ??
+    (!current || current.isUnavailable
+      ? "Set up this provider on web or desktop, or select another model."
+      : null)
+  );
 }

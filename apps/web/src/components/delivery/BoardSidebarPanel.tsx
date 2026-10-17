@@ -36,7 +36,7 @@ import {
 import { useDeliveryEnvironmentId } from "../../state/delivery";
 import { useEnvironments } from "../../state/environments";
 import { Button } from "../ui/button";
-import { Input } from "../ui/input";
+import { InputGroup, InputGroupAddon, InputGroupInput } from "../ui/input-group";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { SidebarContent, SidebarGroup, useSidebar } from "../ui/sidebar";
 import { APP_BUILD } from "../../branding";
@@ -64,14 +64,12 @@ function Row(props: {
         onClick={() => props.onOpen(card)}
         className={cn(
           "flex w-full cursor-pointer flex-col gap-0.5 rounded-md px-2 py-1.5 text-left text-xs hover:bg-sidebar-row-hover",
-          props.selected && "bg-sidebar-accent",
+          props.selected && "bg-sidebar-row-selected",
         )}
       >
         <span className="flex items-center gap-1.5">
           <span className={cn("size-2 shrink-0 rounded-full", laneTone(card.lane).bar)} />
-          <span className="font-mono text-[10px] text-sidebar-muted-foreground">
-            #{card.number}
-          </span>
+          <span className="font-mono text-3xs text-sidebar-muted-foreground">#{card.number}</span>
           <span className="min-w-0 flex-1 truncate font-medium">{card.title}</span>
           <Age at={card.updated} now={props.now} label="Last changed" />
         </span>
@@ -79,7 +77,7 @@ function Row(props: {
           <PriorityPill priority={card.priority} />
           <CardSigns card={card} />
           {card.workers.length > 0 ? (
-            <span className="truncate text-[10px] text-sidebar-muted-foreground">
+            <span className="truncate text-3xs text-sidebar-muted-foreground">
               {crewLine(card)}
             </span>
           ) : null}
@@ -109,7 +107,7 @@ function Group(props: {
     <section data-board-panel-section={props.name} data-folded={folded ? "true" : "false"}>
       <button
         type="button"
-        className="flex min-h-8 w-full cursor-pointer items-center gap-1 rounded-md px-1 text-left text-[10px] font-medium tracking-wide text-sidebar-muted-foreground uppercase hover:bg-sidebar-row-hover"
+        className="flex min-h-8 w-full cursor-pointer items-center gap-1 rounded-md px-1 text-left text-3xs font-medium tracking-wide text-sidebar-muted-foreground uppercase hover:bg-sidebar-row-hover"
         aria-expanded={!folded}
         onClick={() => foldPanel(props.name, !folded)}
         data-board-panel-fold={props.name}
@@ -124,9 +122,7 @@ function Group(props: {
         {props.count !== undefined ? <span className="font-mono">{props.count}</span> : null}
       </button>
       {folded && props.hint ? (
-        <p className="px-6 pb-1 text-[10px] text-sidebar-muted-foreground normal-case">
-          {props.hint}
-        </p>
+        <p className="px-6 pb-1 text-3xs text-sidebar-muted-foreground normal-case">{props.hint}</p>
       ) : null}
       {folded ? null : props.children}
     </section>
@@ -296,7 +292,7 @@ function EnvironmentBoardSidebar({
   if (shared)
     return (
       <SidebarContent className="overflow-x-hidden" data-board-panel>
-        <SidebarGroup className="gap-2 p-[var(--sidebar-content-inset)]">
+        <SidebarGroup>
           <p className="px-1 text-xs text-sidebar-muted-foreground">
             A shared board is selected for this environment. Its tasks and allocation controls
             appear in the board workspace. Choose another board from the Board selector.
@@ -307,280 +303,288 @@ function EnvironmentBoardSidebar({
 
   return (
     <SidebarContent className="overflow-x-hidden" data-board-panel>
-      <SidebarGroup className="gap-2 p-[var(--sidebar-content-inset)]">
-        <EnvironmentPicker value={environmentId} onChoose={chooseEnvironment} />
-        <div className="flex items-center gap-1">
-          <Button
-            size="sm"
-            className="flex-1 justify-start"
-            disabled={!enabled}
-            onClick={() => {
-              close();
-              void navigate({
-                to: "/board",
-                search: { new: true, ...(environmentId ? { environment: environmentId } : {}) },
-              });
-            }}
-            data-board-panel-new
-          >
-            <PlusIcon />
-            New task
-          </Button>
-          <Button
-            size="icon-sm"
-            variant="ghost"
-            aria-label="Profiles"
-            onClick={() => {
-              close();
-              if (environmentId) setDeliveryEnvironment(environmentId);
-              void navigate({ to: "/profiles" });
-            }}
-            data-board-panel-profiles
-          >
-            <UsersIcon />
-          </Button>
-          <Button
-            size="icon-sm"
-            variant="ghost"
-            aria-label="Show the board"
-            onClick={() => {
-              close();
-              void navigate({
-                to: "/board",
-                search: { ...(environmentId ? { environment: environmentId } : {}) },
-              });
-            }}
-          >
-            <BoardIcon />
-          </Button>
-          <Button
-            size="icon-sm"
-            variant={filters.q ? "secondary" : "ghost"}
-            aria-label={mobileSearchOpen ? "Close task search" : "Search tasks"}
-            aria-expanded={mobileSearchOpen}
-            className="md:hidden"
-            onClick={() => setMobileSearchOpen((open) => !open)}
-          >
-            {mobileSearchOpen ? <XIcon /> : <SearchIcon />}
-          </Button>
-        </div>
+      <SidebarGroup>
+        <div className="flex flex-col gap-2">
+          <EnvironmentPicker value={environmentId} onChoose={chooseEnvironment} />
+          <div className="flex items-center gap-1">
+            <Button
+              size="sm"
+              className="flex-1 justify-start"
+              disabled={!enabled}
+              onClick={() => {
+                close();
+                void navigate({
+                  to: "/board",
+                  search: { new: true, ...(environmentId ? { environment: environmentId } : {}) },
+                });
+              }}
+              data-board-panel-new
+            >
+              <PlusIcon />
+              New task
+            </Button>
+            <Button
+              size="icon-sm"
+              variant="ghost"
+              aria-label="Profiles"
+              onClick={() => {
+                close();
+                if (environmentId) setDeliveryEnvironment(environmentId);
+                void navigate({ to: "/profiles" });
+              }}
+              data-board-panel-profiles
+            >
+              <UsersIcon />
+            </Button>
+            <Button
+              size="icon-sm"
+              variant="ghost"
+              aria-label="Show the board"
+              onClick={() => {
+                close();
+                void navigate({
+                  to: "/board",
+                  search: { ...(environmentId ? { environment: environmentId } : {}) },
+                });
+              }}
+            >
+              <BoardIcon />
+            </Button>
+            <Button
+              size="icon-sm"
+              variant={filters.q ? "secondary" : "ghost"}
+              aria-label={mobileSearchOpen ? "Close task search" : "Search tasks"}
+              aria-expanded={mobileSearchOpen}
+              className="md:hidden"
+              onClick={() => setMobileSearchOpen((open) => !open)}
+            >
+              {mobileSearchOpen ? <XIcon /> : <SearchIcon />}
+            </Button>
+          </div>
 
-        <span className="relative hidden items-center md:flex">
-          <SearchIcon className="pointer-events-none absolute left-2 z-10 size-3.5 text-sidebar-muted-foreground" />
-          <Input
-            type="search"
-            aria-label="Search tasks"
-            placeholder="#1001, a title, a tag"
-            className="h-8 pl-7 text-xs"
-            value={filters.q}
-            onChange={(event) => setFilters({ q: event.target.value })}
-            data-board-panel-search
-          />
-        </span>
-        {mobileSearchOpen ? (
-          <span className="relative flex items-center md:hidden">
-            <SearchIcon className="pointer-events-none absolute left-2 z-10 size-3.5 text-sidebar-muted-foreground" />
-            <Input
+          <InputGroup className="hidden h-8 md:inline-flex">
+            <InputGroupAddon>
+              <SearchIcon className="size-3.5 text-sidebar-muted-foreground" />
+            </InputGroupAddon>
+            <InputGroupInput
+              size="compact"
               type="search"
               aria-label="Search tasks"
               placeholder="#1001, a title, a tag"
-              className="h-8 pl-7 text-xs"
               value={filters.q}
               onChange={(event) => setFilters({ q: event.target.value })}
               data-board-panel-search
-              autoFocus
             />
-          </span>
-        ) : null}
-
-        {boardSet !== "unsorted" ? (
-          <p
-            className="px-1 text-[10px] text-sidebar-muted-foreground"
-            data-board-panel-set={boardSet}
-          >
-            Showing: {board?.sets.find((item) => item.id === boardSet)?.title ?? boardSet}. Change
-            it at the top of the Board.
-          </p>
-        ) : null}
-        <Group
-          environmentId={environmentId}
-          name="filters"
-          title="Filters"
-          count={filterCount}
-          hint={filterCount > 0 ? "Some are on: see below." : null}
-        >
-          <div className="flex flex-wrap items-center gap-1 pb-1 pl-1">
-            <Button
-              size="xs"
-              variant={filters.waiting ? "secondary" : "ghost"}
-              aria-pressed={filters.waiting}
-              onClick={() => setFilters({ waiting: !filters.waiting })}
-            >
-              Waiting on you
-            </Button>
-            <LaneFilterMenu
-              lanes={laneChoices}
-              chosen={filters.lanes}
-              onChange={(chosen) => setFilters({ lanes: chosen })}
-            />
-            <Select
-              value={filters.priority ?? ANY}
-              onValueChange={(value) =>
-                setFilters({ priority: value === ANY ? null : (value as TaskPriority) })
-              }
-            >
-              <SelectTrigger
-                aria-label="Priority"
+          </InputGroup>
+          {mobileSearchOpen ? (
+            <InputGroup className="h-8 md:hidden">
+              <InputGroupAddon>
+                <SearchIcon className="size-3.5 text-sidebar-muted-foreground" />
+              </InputGroupAddon>
+              <InputGroupInput
                 size="compact"
-                variant="ghost"
-                className="w-auto min-w-0"
+                type="search"
+                aria-label="Search tasks"
+                placeholder="#1001, a title, a tag"
+                value={filters.q}
+                onChange={(event) => setFilters({ q: event.target.value })}
+                data-board-panel-search
+                autoFocus
+              />
+            </InputGroup>
+          ) : null}
+
+          {boardSet !== "unsorted" ? (
+            <p
+              className="px-1 text-3xs text-sidebar-muted-foreground"
+              data-board-panel-set={boardSet}
+            >
+              Showing: {board?.sets.find((item) => item.id === boardSet)?.title ?? boardSet}. Change
+              it at the top of the Board.
+            </p>
+          ) : null}
+          <Group
+            environmentId={environmentId}
+            name="filters"
+            title="Filters"
+            count={filterCount}
+            hint={filterCount > 0 ? "Some are on: see below." : null}
+          >
+            <div className="flex flex-wrap items-center gap-1 pb-1 pl-1">
+              <Button
+                size="xs"
+                variant={filters.waiting ? "secondary" : "ghost"}
+                aria-pressed={filters.waiting}
+                onClick={() => setFilters({ waiting: !filters.waiting })}
               >
-                <SelectValue>
-                  {filters.priority ? PRIORITY_LABEL[filters.priority] : "Priority"}
-                </SelectValue>
-              </SelectTrigger>
-              <SelectPopup alignItemWithTrigger={false}>
-                <SelectItem value={ANY}>Any priority</SelectItem>
-                {TASK_PRIORITIES.map((priority) => (
-                  <SelectItem key={priority} value={priority}>
-                    {PRIORITY_LABEL[priority]}
-                  </SelectItem>
-                ))}
-              </SelectPopup>
-            </Select>
-            {teams.length > 1 ? (
+                Waiting on you
+              </Button>
+              <LaneFilterMenu
+                lanes={laneChoices}
+                chosen={filters.lanes}
+                onChange={(chosen) => setFilters({ lanes: chosen })}
+              />
               <Select
-                value={filters.team ?? ANY}
+                value={filters.priority ?? ANY}
                 onValueChange={(value) =>
-                  setFilters({ team: value === ANY ? null : String(value) })
+                  setFilters({ priority: value === ANY ? null : (value as TaskPriority) })
                 }
               >
                 <SelectTrigger
-                  aria-label="Team"
+                  aria-label="Priority"
                   size="compact"
                   variant="ghost"
                   className="w-auto min-w-0"
                 >
-                  <SelectValue>{filters.team ?? "Team"}</SelectValue>
+                  <SelectValue>
+                    {filters.priority ? PRIORITY_LABEL[filters.priority] : "Priority"}
+                  </SelectValue>
                 </SelectTrigger>
                 <SelectPopup alignItemWithTrigger={false}>
-                  <SelectItem value={ANY}>Any team</SelectItem>
-                  {teams.map((team) => (
-                    <SelectItem key={team} value={team}>
-                      {team}
+                  <SelectItem value={ANY}>Any priority</SelectItem>
+                  {TASK_PRIORITIES.map((priority) => (
+                    <SelectItem key={priority} value={priority}>
+                      {PRIORITY_LABEL[priority]}
                     </SelectItem>
                   ))}
                 </SelectPopup>
               </Select>
-            ) : null}
-            {tags.length > 0 ? (
-              <TagFilterMenu
-                tags={tags}
-                chosen={filters.tags}
-                onChange={(chosen) => setFilters({ tags: chosen })}
-              />
-            ) : null}
-          </div>
-        </Group>
-        {/* What is on is shown whether the filters are folded or not. */}
-        <ActiveFilterChips
-          filters={filters}
-          laneTitle={laneTitle}
-          shown={kept.length}
-          onClear={(patch) => setFilters(patch)}
-          onReset={clearFilters}
-        />
+              {teams.length > 1 ? (
+                <Select
+                  value={filters.team ?? ANY}
+                  onValueChange={(value) =>
+                    setFilters({ team: value === ANY ? null : String(value) })
+                  }
+                >
+                  <SelectTrigger
+                    aria-label="Team"
+                    size="compact"
+                    variant="ghost"
+                    className="w-auto min-w-0"
+                  >
+                    <SelectValue>{filters.team ?? "Team"}</SelectValue>
+                  </SelectTrigger>
+                  <SelectPopup alignItemWithTrigger={false}>
+                    <SelectItem value={ANY}>Any team</SelectItem>
+                    {teams.map((team) => (
+                      <SelectItem key={team} value={team}>
+                        {team}
+                      </SelectItem>
+                    ))}
+                  </SelectPopup>
+                </Select>
+              ) : null}
+              {tags.length > 0 ? (
+                <TagFilterMenu
+                  tags={tags}
+                  chosen={filters.tags}
+                  onChange={(chosen) => setFilters({ tags: chosen })}
+                />
+              ) : null}
+            </div>
+          </Group>
+          {/* What is on is shown whether the filters are folded or not. */}
+          <ActiveFilterChips
+            filters={filters}
+            laneTitle={laneTitle}
+            shown={kept.length}
+            onClear={(patch) => setFilters(patch)}
+            onReset={clearFilters}
+          />
+        </div>
       </SidebarGroup>
 
-      <SidebarGroup className="gap-1 px-[var(--sidebar-content-inset)] pt-0">
-        {!environmentId ? (
-          <p className="px-2 text-xs text-sidebar-muted-foreground">
-            {isReady ? "This environment is unavailable." : "Loading environments..."}
-          </p>
-        ) : !enabled ? (
-          <p className="px-2 text-xs text-sidebar-muted-foreground">
-            Delivery is turned off for this environment.
-          </p>
-        ) : read.error && cards.length === 0 ? (
-          <EngineDownNotice
-            className="px-2 text-xs"
-            environmentId={environmentId}
-            message={`Delivery engine not reachable. ${read.error}`}
-          />
-        ) : searching ? (
-          <Section
-            environmentId={environmentId}
-            name="found"
-            title="Found"
-            cards={kept}
-            empty={unread ?? "No task matches."}
-            now={now}
-            selected={selected}
-            onOpen={open}
-          />
-        ) : (
-          <>
+      <SidebarGroup>
+        <div className="flex flex-col gap-1">
+          {!environmentId ? (
+            <p className="px-2 text-xs text-sidebar-muted-foreground">
+              {isReady ? "This environment is unavailable." : "Loading environments..."}
+            </p>
+          ) : !enabled ? (
+            <p className="px-2 text-xs text-sidebar-muted-foreground">
+              Delivery is turned off for this environment.
+            </p>
+          ) : read.error && cards.length === 0 ? (
+            <EngineDownNotice
+              className="px-2 text-xs"
+              environmentId={environmentId}
+              message={`Delivery engine not reachable. ${read.error}`}
+            />
+          ) : searching ? (
             <Section
               environmentId={environmentId}
-              name="waiting"
-              title="Waiting on you"
-              cards={waiting}
-              empty={unread ?? "Nothing waits for you."}
+              name="found"
+              title="Found"
+              cards={kept}
+              empty={unread ?? "No task matches."}
               now={now}
               selected={selected}
               onOpen={open}
             />
-            <Section
-              environmentId={environmentId}
-              name="working"
-              title="Being worked on"
-              cards={working}
-              now={now}
-              selected={selected}
-              onOpen={open}
-            />
-            <Section
-              environmentId={environmentId}
-              name="chats"
-              title="Team chats"
-              cards={chats}
-              now={now}
-              selected={selected}
-              onOpen={open}
-            />
-            <Section
-              environmentId={environmentId}
-              name="drafts"
-              title="Drafts"
-              cards={kept.filter((card) => card.lane === "draft")}
-              now={now}
-              selected={selected}
-              onOpen={open}
-            />
-            <Section
-              environmentId={environmentId}
-              name="open"
-              title="With the team"
-              cards={rest}
-              now={now}
-              selected={selected}
-              onOpen={open}
-            />
-            <Section
-              environmentId={environmentId}
-              name="done"
-              title="Done"
-              cards={kept.filter((card) => card.lane === "completed").slice(0, 20)}
-              now={now}
-              selected={selected}
-              onOpen={open}
-              defaultFolded
-            />
-          </>
-        )}
+          ) : (
+            <>
+              <Section
+                environmentId={environmentId}
+                name="waiting"
+                title="Waiting on you"
+                cards={waiting}
+                empty={unread ?? "Nothing waits for you."}
+                now={now}
+                selected={selected}
+                onOpen={open}
+              />
+              <Section
+                environmentId={environmentId}
+                name="working"
+                title="Being worked on"
+                cards={working}
+                now={now}
+                selected={selected}
+                onOpen={open}
+              />
+              <Section
+                environmentId={environmentId}
+                name="chats"
+                title="Team chats"
+                cards={chats}
+                now={now}
+                selected={selected}
+                onOpen={open}
+              />
+              <Section
+                environmentId={environmentId}
+                name="drafts"
+                title="Drafts"
+                cards={kept.filter((card) => card.lane === "draft")}
+                now={now}
+                selected={selected}
+                onOpen={open}
+              />
+              <Section
+                environmentId={environmentId}
+                name="open"
+                title="With the team"
+                cards={rest}
+                now={now}
+                selected={selected}
+                onOpen={open}
+              />
+              <Section
+                environmentId={environmentId}
+                name="done"
+                title="Done"
+                cards={kept.filter((card) => card.lane === "completed").slice(0, 20)}
+                now={now}
+                selected={selected}
+                onOpen={open}
+                defaultFolded
+              />
+            </>
+          )}
+        </div>
       </SidebarGroup>
       <p
-        className="mt-auto px-[calc(var(--sidebar-content-inset)+0.5rem)] pb-2 font-mono text-[10px] text-sidebar-muted-foreground"
+        className="mt-auto mx-(--sidebar-content-inset) px-2 pb-2 font-mono text-3xs text-sidebar-muted-foreground"
         data-app-build={APP_BUILD}
       >
         build {APP_BUILD}

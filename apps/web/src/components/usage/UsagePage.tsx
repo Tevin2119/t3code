@@ -173,19 +173,16 @@ export function UsagePage() {
     isPartial,
     refresh,
   } = useUsage(window, selectedEnvironmentIds, usageFilter, hiddenProviders);
-  // Until a new window's first answer, the previous one stays on screen, muted.
   const merged = shown?.merged ?? answeredUsage;
   const shownWindow = shown?.window ?? window;
   const shownHourly = shownWindow.resolution === "hour";
   const refreshingUsage = isRefreshing && !showingLimits;
-  // Usage kept from another window is all old, so every figure stays muted.
   const showingKept = shown !== null && shown.window !== window;
   const loading = useMemo(() => {
     if (showingKept) {
       return { partial: true, everyProvider: true, providers: new Set<UsageProviderKind>() };
     }
     const state = usageLoadingState(selectedEnvironments, refreshingUsage);
-    // A hidden provider still refreshing must not add its row or mute the totals.
     const providers = new Set([...state.providers].filter((p) => !hiddenProviders.has(p)));
     return {
       partial: state.everyProvider || providers.size > 0,
@@ -237,8 +234,6 @@ export function UsagePage() {
         : enumerateHourStarts(shownWindow.sinceTime, shownWindow.untilTime),
     [shownWindow.sinceTime, shownWindow.untilTime],
   );
-  // Newest first: the window can run 90 periods, so the interesting end
-  // belongs at the top of the table.
   const breakdownPeriods = useMemo<readonly (DailyTotals | HourlyTotals)[]>(
     () => (shownHourly ? merged.hourly : merged.daily).toReversed(),
     [shownHourly, merged.daily, merged.hourly],
@@ -251,7 +246,6 @@ export function UsagePage() {
     [breakdown, merged.models, metric],
   );
   const providersWithData = useMemo(() => providersWithUsage(merged.providers), [merged.providers]);
-  // A provider still refreshing keeps its row and line before its usage lands.
   const activeProviders = useMemo(
     () =>
       PROVIDER_ORDER.filter(
@@ -275,6 +269,10 @@ export function UsagePage() {
           (model) =>
             `${model.provider}:${model.modelProvider ?? ""}:${model.model}` === selectedModelKey,
         );
+  const breakdownPeak = breakdownModels.reduce(
+    (peak, model) => Math.max(peak, metric === "tokens" ? model.totalTokens : model.costUsd),
+    0,
+  );
   const summaryRows: Array<
     | { readonly kind: "usage"; readonly provider: UsageProviderKind }
     | { readonly kind: "enable"; readonly environment: EnvironmentUsageStatus }
@@ -395,7 +393,6 @@ export function UsagePage() {
     if (showingLimits && connectedLimitsEnvironments) autoRefreshLimits();
   }, [showingLimits, connectedLimitsEnvironments]);
 
-  // Names the period on screen, which is the previous one until the new one answers.
   const windowLabel =
     shownHourly && shownWindow.sinceTime !== undefined && shownWindow.untilTime !== undefined
       ? `${formatDateTimeShort(shownWindow.sinceTime, shownWindow.timeZone)} to ${formatDateTimeShort(shownWindow.untilTime, shownWindow.timeZone)}`
@@ -450,8 +447,6 @@ export function UsagePage() {
             </Toggle>
           ))}
         </ToggleGroup>
-        {/* The period does not apply to Limits, so it stays in place but
-            disabled; unmounting it shifted the metric toggle ~300px. */}
         <ToggleGroup
           aria-label="Usage period"
           variant="segmented"
@@ -733,7 +728,6 @@ export function UsagePage() {
                                   : formatTokens(totals?.totalTokens ?? 0)}
                             </span>
                           </div>
-                          {/* Kept while awaiting data so the row does not grow when it lands. */}
                           <span
                             className={cn(
                               "text-xs text-muted-foreground",
@@ -885,66 +879,73 @@ export function UsagePage() {
                       }
                     />
                   ) : breakdown === "model" ? (
-                    <table className="w-full table-fixed text-sm">
-                      <colgroup>
-                        <col className="w-2/5" />
-                        <col className="w-1/5" />
-                        <col className="w-1/5" />
-                        <col className="w-1/5" />
-                      </colgroup>
+                    <table className="w-full text-sm">
                       <thead>
-                        <tr className="border-b border-border text-left text-xs text-muted-foreground">
-                          <th className="py-2 font-normal">Model, harness and provider</th>
-                          <th className="py-2 text-right font-normal">Cost</th>
-                          <th className="py-2 text-right font-normal">Share</th>
-                          <th className="py-2 text-right font-normal">Tokens</th>
+                        <tr className="border-b border-border text-right text-xs text-muted-foreground">
+                          <th className="py-2 pr-3 text-left font-normal">#</th>
+                          <th className="w-full py-2 text-left font-normal">Model</th>
+                          <th className="py-2 pl-6 font-normal">Cost</th>
+                          <th className="hidden py-2 pl-6 font-normal sm:table-cell">Share</th>
+                          <th className="py-2 pl-6 font-normal">Tokens</th>
                         </tr>
                       </thead>
                       <tbody>
                         {breakdownModels.length === 0 ? (
                           <tr>
-                            <td colSpan={4} className="py-6 text-center text-muted-foreground">
+                            <td colSpan={5} className="py-6 text-center text-muted-foreground">
                               No activity in this window.
                             </td>
                           </tr>
                         ) : (
-                          breakdownModels.map((model) => {
+                          breakdownModels.map((model, index) => {
                             const key = `${model.provider}:${model.modelProvider ?? ""}:${model.model}`;
+                            const value = metric === "tokens" ? model.totalTokens : model.costUsd;
                             const share = modelShare(
                               model,
                               metric === "tokens" ? "tokens" : "cost",
                             );
+                            const rowFigures = figureClass(isProviderLoading(model.provider));
                             return (
                               <tr
                                 key={key}
-                                className="relative border-b border-border/50 transition-colors hover:bg-muted/50 has-focus-visible:bg-muted/50"
+                                className="relative border-b border-border/50 text-right whitespace-nowrap text-muted-foreground tabular-nums transition-colors hover:bg-muted/50 has-focus-visible:bg-muted/50"
                                 data-usage-model-row
                               >
-                                <td className="py-2 text-foreground">
-                                  <span className="flex items-start gap-2">
-                                    <ProviderMark
-                                      provider={model.provider}
-                                      className="mt-0.5 size-3.5"
-                                    />
-                                    <span className="flex min-w-0 flex-col">
-                                      <button
-                                        type="button"
-                                        className="truncate text-left outline-none after:absolute after:inset-0"
-                                        onClick={() => setSelectedModelKey(key)}
-                                      >
-                                        {model.model}
-                                      </button>
-                                      <span className="truncate text-2xs text-muted-foreground">
-                                        {PROVIDER_PRESENTATION[model.provider].label} ·{" "}
-                                        {modelProviderLabel(
-                                          model.modelProvider,
-                                          model.modelProviderSource,
-                                        )}
-                                      </span>
-                                    </span>
+                                <td className="py-2.5 pr-3 text-left text-xs">{index + 1}</td>
+                                <td className="py-2.5 text-left whitespace-normal">
+                                  <button
+                                    type="button"
+                                    onClick={() => setSelectedModelKey(key)}
+                                    className="flex items-center gap-2 text-left text-foreground outline-none after:absolute after:inset-0"
+                                  >
+                                    <ProviderMark provider={model.provider} className="size-3.5" />
+                                    {model.model}
+                                  </button>
+                                  <span className="block truncate text-2xs text-muted-foreground">
+                                    {PROVIDER_PRESENTATION[model.provider].label} ·{" "}
+                                    {modelProviderLabel(
+                                      model.modelProvider,
+                                      model.modelProviderSource,
+                                    )}
                                   </span>
+                                  <div
+                                    aria-hidden
+                                    className={cn("mt-1.5 h-0.5 max-w-48", rowFigures)}
+                                  >
+                                    <div
+                                      className="h-full rounded-full"
+                                      style={{
+                                        width:
+                                          value > 0 && breakdownPeak > 0
+                                            ? `max(0.5rem, ${(value / breakdownPeak) * 100}%)`
+                                            : 0,
+                                        backgroundColor:
+                                          PROVIDER_PRESENTATION[model.provider].color,
+                                      }}
+                                    />
+                                  </div>
                                 </td>
-                                <td className="py-2 text-right text-foreground tabular-nums">
+                                <td className={cn("py-2.5 pl-6 text-foreground", rowFigures)}>
                                   {isModelCostUnknown(model) ? (
                                     <span className="text-muted-foreground">Unpriced</span>
                                   ) : model.onPlan ? (
@@ -958,10 +959,10 @@ export function UsagePage() {
                                     formatUsd(model.costUsd)
                                   )}
                                 </td>
-                                <td className="py-2 text-right text-muted-foreground tabular-nums">
+                                <td className={cn("hidden py-2.5 pl-6 sm:table-cell", rowFigures)}>
                                   {share === null ? "" : formatPercent(share)}
                                 </td>
-                                <td className="py-2 text-right text-muted-foreground tabular-nums">
+                                <td className={cn("py-2.5 pl-6", rowFigures)}>
                                   {formatTokens(model.totalTokens)}
                                 </td>
                               </tr>
@@ -1216,7 +1217,6 @@ function CursorEnableLimits({
   );
 }
 
-/** Brand mark for the harness a row belongs to. */
 function ProviderMark({
   provider,
   className,
@@ -1234,7 +1234,6 @@ function ProviderMark({
   );
 }
 
-/** Mutes a figure that is still coming in. The delay keeps a quick answer from flashing. */
 function figureClass(loading: boolean) {
   return cn("transition-opacity", loading && "opacity-40 delay-150");
 }
@@ -1260,10 +1259,6 @@ function Metric({
   );
 }
 
-/**
- * Explains failed or incompatible environments and deduplicated transcripts.
- * Shown inside the environment filter so arriving results do not move the page.
- */
 function UsageCoverageNotice({
   environments,
   duplicateSources,
@@ -1307,7 +1302,6 @@ function UsageCoverageNotice({
   );
 }
 
-/** Environment selection, with each environment's scan status in the menu. */
 function UsageEnvironmentFilter({
   environments,
   selectedEnvironments,
@@ -1444,7 +1438,6 @@ function UsageEnvironmentFilter({
   );
 }
 
-/** Provider visibility shared by every tab. Stored as the hidden set. */
 function UsageProviderFilter({
   hiddenProviders,
   onChange,
@@ -1504,11 +1497,6 @@ function UsageProviderFilter({
   );
 }
 
-/**
- * Stand-in with the loaded page's shape, using the shared `Skeleton` bars so it
- * breathes with the same `animate-skeleton` pulse as every other loading state.
- * Replaced by results as soon as the first environment answers.
- */
 function UsageSkeleton() {
   return (
     <>

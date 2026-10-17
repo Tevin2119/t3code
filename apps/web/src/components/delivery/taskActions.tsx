@@ -194,16 +194,18 @@ export function useTaskActions(
               {confirming.card.title}
             </DialogTitle>
           </DialogHeader>
-          <DialogPanel className="flex flex-col gap-2 text-sm">
-            <p>
-              Moving it to {LANE_TITLE[confirming.lane] ?? confirming.lane} means this step.{" "}
-              {actionHelp(confirming.action, confirming.card)}
-            </p>
-            {problem ? (
-              <p className="text-warning" data-delivery-problem>
-                {problem}
+          <DialogPanel>
+            <div className="flex flex-col gap-6 text-sm">
+              <p>
+                Moving it to {LANE_TITLE[confirming.lane] ?? confirming.lane} means this step.{" "}
+                {actionHelp(confirming.action, confirming.card)}
               </p>
-            ) : null}
+              {problem ? (
+                <p className="text-warning" data-delivery-problem>
+                  {problem}
+                </p>
+              ) : null}
+            </div>
           </DialogPanel>
           <DialogFooter>
             <Button variant="outline" disabled={busy} onClick={() => setConfirming(null)}>
@@ -303,78 +305,81 @@ function DecisionDialog(props: {
             {verb}: #{card.number} {card.title}
           </DialogTitle>
         </DialogHeader>
-        <DialogPanel className="flex flex-col gap-3 text-sm">
-          {whole ? (
-            <p
-              className="rounded-md border border-border bg-muted/40 p-2"
-              data-delivery-decision-part
-            >
-              {approving
-                ? `This is a part of #${whole.number} ${whole.title}. Marking it as reviewed does not approve the whole. The whole is decided on its own, when every part is built and they were tested together.`
-                : `This is a part of #${whole.number} ${whole.title}. Sent back, this part is built again, and the whole is put together and tested again after it.`}
-            </p>
-          ) : parts > 0 ? (
-            <p
-              className="rounded-md border border-border bg-muted/40 p-2"
-              data-delivery-decision-whole
-            >
-              {approving
-                ? `This decides the whole, and with it each of its ${parts} parts. It can be approved only while every part is the one that was tested together and the checks of the whole passed.`
-                : `This sends the whole back, and with it each of its ${parts} parts.`}
-            </p>
-          ) : null}
-          {accepting ? (
-            <p className="text-muted-foreground">
-              Records your acceptance against the exact artifact hashes reviewed by the team. No
-              software pull request is opened and nothing is submitted to a course or publisher. Use
-              this environment's approval passphrase. T3 does not save it.
-            </p>
-          ) : publishing ? (
-            <p className="text-muted-foreground" data-delivery-decision-publish>
-              Pushes the approved commit
-              {card.run?.candidate ? ` ${card.run.candidate.slice(0, 10)}` : ""} to its own branch
-              and opens one pull request for it, or finds the one already open. It is checked again
-              first: the approval must still stand for that commit and every check must have passed.
-              Nothing is merged; that is done on the repository host. Use this environment's
-              approval passphrase, or its terminal key if no passphrase is set. T3 does not save it.
-            </p>
-          ) : (
-            <p className="text-muted-foreground">
-              A decision is recorded against the commit that was tested
-              {card.run?.candidate ? ` (${card.run.candidate.slice(0, 10)})` : ""}. Approving is not
-              merging. Where publishing is on, the approved commit is then pushed and one pull
-              request opened for review. Use this environment's approval passphrase, or its terminal
-              key if no passphrase is set. T3 does not save it.
-            </p>
-          )}
-          <Input
-            aria-label="Your name"
-            placeholder="Your name"
-            value={actor}
-            onChange={(event) => setActor(event.target.value)}
-          />
-          <Input
-            aria-label="Approval passphrase or terminal key"
-            placeholder="Approval passphrase or terminal key"
-            name="delivery-approval"
-            type="password"
-            autoComplete="current-password"
-            value={approvalKey}
-            onChange={(event) => setApprovalKey(event.target.value)}
-          />
-          {approving || publishing ? null : (
-            <Textarea
-              aria-label="What to redo"
-              placeholder="What to redo"
-              value={notes}
-              onChange={(event) => setNotes(event.target.value)}
+        <DialogPanel>
+          <div className="flex flex-col gap-7 text-sm">
+            {whole ? (
+              <p
+                className="rounded-md border border-border bg-muted/40 p-2"
+                data-delivery-decision-part
+              >
+                {approving
+                  ? `This is a part of #${whole.number} ${whole.title}. Marking it as reviewed does not approve the whole. The whole is decided on its own, when every part is built and they were tested together.`
+                  : `This is a part of #${whole.number} ${whole.title}. Sent back, this part is built again, and the whole is put together and tested again after it.`}
+              </p>
+            ) : parts > 0 ? (
+              <p
+                className="rounded-md border border-border bg-muted/40 p-2"
+                data-delivery-decision-whole
+              >
+                {approving
+                  ? `This decides the whole, and with it each of its ${parts} parts. It can be approved only while every part is the one that was tested together and the checks of the whole passed.`
+                  : `This sends the whole back, and with it each of its ${parts} parts.`}
+              </p>
+            ) : null}
+            {accepting ? (
+              <p className="text-muted-foreground">
+                Records your acceptance against the exact artifact hashes reviewed by the team. No
+                software pull request is opened and nothing is submitted to a course or publisher.
+                Use this environment's approval passphrase. T3 does not save it.
+              </p>
+            ) : publishing ? (
+              <p className="text-muted-foreground" data-delivery-decision-publish>
+                Pushes the approved commit
+                {card.run?.candidate ? ` ${card.run.candidate.slice(0, 10)}` : ""} to its own branch
+                and opens one pull request for it, or finds the one already open. It is checked
+                again first: the approval must still stand for that commit and every check must have
+                passed. Nothing is merged; that is done on the repository host. Use this
+                environment's approval passphrase, or its terminal key if no passphrase is set. T3
+                does not save it.
+              </p>
+            ) : (
+              <p className="text-muted-foreground">
+                A decision is recorded against the commit that was tested
+                {card.run?.candidate ? ` (${card.run.candidate.slice(0, 10)})` : ""}. Approving is
+                not merging. Where publishing is on, the approved commit is then pushed and one pull
+                request opened for review. Use this environment's approval passphrase, or its
+                terminal key if no passphrase is set. T3 does not save it.
+              </p>
+            )}
+            <Input
+              aria-label="Your name"
+              placeholder="Your name"
+              value={actor}
+              onChange={(event) => setActor(event.target.value)}
             />
-          )}
-          {props.problem ? (
-            <p className="text-warning" data-delivery-problem>
-              {props.problem}
-            </p>
-          ) : null}
+            <Input
+              aria-label="Approval passphrase or terminal key"
+              placeholder="Approval passphrase or terminal key"
+              name="delivery-approval"
+              type="password"
+              autoComplete="current-password"
+              value={approvalKey}
+              onChange={(event) => setApprovalKey(event.target.value)}
+            />
+            {approving || publishing ? null : (
+              <Textarea
+                aria-label="What to redo"
+                placeholder="What to redo"
+                value={notes}
+                onChange={(event) => setNotes(event.target.value)}
+              />
+            )}
+            {props.problem ? (
+              <p className="text-warning" data-delivery-problem>
+                {props.problem}
+              </p>
+            ) : null}
+          </div>
         </DialogPanel>
         <DialogFooter>
           <Button variant="outline" onClick={props.onClose}>

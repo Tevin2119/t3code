@@ -21,9 +21,8 @@ export function InfoPopover(props: {
         render={
           <Button
             size="icon-xs"
-            variant="ghost"
+            variant="ghost-muted"
             aria-label={props.label}
-            className="text-muted-foreground"
             data-info-popover-trigger={props.label}
           />
         }

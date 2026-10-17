@@ -10,7 +10,7 @@ export function BoardEnvironmentControls() {
   const setEnvironment = useBoardStore((state) => state.setDeliveryEnvironment);
   const navigate = useNavigate();
   return (
-    <div className="no-drag relative z-10 ml-1 flex shrink-0 items-center gap-0.5">
+    <div className="relative z-10 ml-1 flex shrink-0 items-center gap-0.5">
       <EnvironmentPicker
         compact
         value={environmentId}

@@ -28,7 +28,7 @@ export function PriorityPill(props: { readonly priority: TaskPriority; readonly 
     <span
       data-priority={props.priority}
       className={cn(
-        "inline-flex h-4 shrink-0 items-center rounded px-1.5 text-[10px] font-medium tracking-wide uppercase",
+        "inline-flex h-4 shrink-0 items-center rounded px-1.5 text-3xs font-medium tracking-wide uppercase",
         PRIORITY_TONE[props.priority],
       )}
     >
@@ -102,7 +102,7 @@ export function Avatar(props: {
           <span
             tabIndex={0}
             className={cn(
-              "relative inline-flex size-5 shrink-0 items-center justify-center text-[9px] font-semibold text-white",
+              "relative inline-flex size-5 shrink-0 items-center justify-center text-3xs font-semibold text-white",
               props.seat ? "rounded" : "rounded-full",
               toneFor(props.name),
             )}
@@ -111,7 +111,7 @@ export function Avatar(props: {
       >
         {initialsOf(props.name)}
         {props.working ? (
-          <span className="absolute -right-0.5 -bottom-0.5 size-2 rounded-full border border-background bg-emerald-500" />
+          <span className="absolute -right-0.5 -bottom-0.5 size-2 rounded-full border border-background bg-success" />
         ) : null}
       </TooltipTrigger>
       <TooltipPopup side="top">{props.detail}</TooltipPopup>
@@ -135,12 +135,12 @@ export function TagList(props: {
               event.stopPropagation();
               props.onPick?.(tag);
             }}
-            className="cursor-pointer rounded bg-muted px-1 text-[10px] text-muted-foreground hover:text-foreground"
+            className="cursor-pointer rounded bg-muted px-1 text-3xs text-muted-foreground hover:text-foreground"
           >
             #{tag}
           </button>
         ) : (
-          <span key={tag} className="rounded bg-muted px-1 text-[10px] text-muted-foreground">
+          <span key={tag} className="rounded bg-muted px-1 text-3xs text-muted-foreground">
             #{tag}
           </span>
         ),
@@ -163,7 +163,7 @@ function Count(props: {
           <span
             tabIndex={0}
             className={cn(
-              "inline-flex items-center gap-0.5 text-[10px] text-muted-foreground [&_svg]:size-3",
+              "inline-flex items-center gap-0.5 text-3xs text-muted-foreground [&_svg]:size-3",
               props.tone,
             )}
           />
@@ -194,7 +194,7 @@ export function CardSigns(props: { readonly card: DeliveryCard }) {
     <span className="flex flex-wrap items-center gap-x-2 gap-y-0.5" data-card-signs>
       {card.first ? (
         <span
-          className="rounded bg-primary/15 px-1 text-[10px] font-medium text-primary"
+          className="rounded bg-primary/15 px-1 text-3xs font-medium text-primary"
           data-card-first
           aria-label="Next: put first for the next free slots"
         >
@@ -203,7 +203,7 @@ export function CardSigns(props: { readonly card: DeliveryCard }) {
       ) : null}
       {card.set === "qualification" ? (
         <span
-          className="rounded border border-border px-1 text-[10px] text-muted-foreground"
+          className="rounded border border-border px-1 text-3xs text-muted-foreground"
           data-card-set="qualification"
         >
           Qualification
@@ -257,11 +257,11 @@ export function QaVotes(props: { readonly qa: DeliveryCard["qa"] }) {
             key={vote.seat}
             className={cn(
               "size-2 rounded-full",
-              vote.verdict === "pass" ? "bg-emerald-500" : "bg-rose-500",
+              vote.verdict === "pass" ? "bg-success" : "bg-destructive",
             )}
           />
         ))}
-        <span className="pl-0.5 text-[10px] text-muted-foreground">
+        <span className="pl-0.5 text-3xs text-muted-foreground">
           QA {passed}/{props.qa.needed ?? props.qa.votes.length}
         </span>
       </TooltipTrigger>
@@ -305,8 +305,8 @@ export function WaitingOn(props: { readonly card: DeliveryCard; readonly classNa
     <span
       data-waiting-on={card.waitingOn}
       className={cn(
-        "inline-flex items-center gap-1 text-[10px] [&_svg]:size-3",
-        onPerson ? "font-medium text-amber-600 dark:text-amber-400" : "text-muted-foreground",
+        "inline-flex items-center gap-1 text-3xs [&_svg]:size-3",
+        onPerson ? "font-medium text-warning-foreground" : "text-muted-foreground",
         props.className,
       )}
     >
@@ -329,7 +329,7 @@ export function Age(props: {
   if (!age) return null;
   return (
     <Tooltip>
-      <TooltipTrigger render={<span tabIndex={0} className="text-[10px] text-muted-foreground" />}>
+      <TooltipTrigger render={<span tabIndex={0} className="text-3xs text-muted-foreground" />}>
         {age}
       </TooltipTrigger>
       <TooltipPopup side="top">

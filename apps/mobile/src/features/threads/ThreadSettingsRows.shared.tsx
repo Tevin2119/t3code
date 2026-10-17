@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { Pressable, View } from "react-native";
-import { AppText as Text } from "../../components/AppText";
-import { SymbolView } from "../../components/AppSymbol";
+import { AppText as Text } from "../../components/ui/AppText";
+import { SymbolView } from "../../components/ui/AppSymbol";
 import { cn } from "../../lib/cn";
 import type { ModelOption } from "../../lib/modelOptions";
 
@@ -50,14 +50,23 @@ export function ModelRowContent(
       )}
     >
       <Pressable
-        accessibilityLabel={[props.option.label, props.option.subtitle].filter(Boolean).join(", ")}
+        accessibilityLabel={[props.option.label, props.option.subtitle, props.option.disabledReason]
+          .filter(Boolean)
+          .join(", ")}
         accessibilityRole="radio"
         accessibilityState={{
           checked: props.selected,
-          disabled: props.option.isUnavailable === true || props.option.isHidden === true,
+          disabled:
+            props.option.isUnavailable === true ||
+            props.option.isHidden === true ||
+            Boolean(props.option.disabledReason),
         }}
         className="min-h-11 min-w-0 flex-1 flex-row items-center gap-2 active:opacity-70"
-        disabled={props.option.isUnavailable || props.option.isHidden}
+        disabled={
+          props.option.isUnavailable ||
+          props.option.isHidden ||
+          Boolean(props.option.disabledReason)
+        }
         onPress={props.onPress}
       >
         {props.leadingSelection}
@@ -86,6 +95,9 @@ export function ModelRowContent(
               <Text className="text-xs text-foreground">Unavailable</Text>
             ) : null}
           </View>
+          {props.option.disabledReason ? (
+            <Text className="text-xs text-foreground-muted">{props.option.disabledReason}</Text>
+          ) : null}
           {props.option.subtitle ? (
             <Text
               className="text-xs text-foreground-muted"
@@ -135,7 +147,6 @@ export function ModelRowContent(
   );
 }
 
-/** Single option inside a submenu panel. */
 export function ChoiceRowContent(props: ChoiceRowProps & RowSelectionProps) {
   return (
     <Pressable

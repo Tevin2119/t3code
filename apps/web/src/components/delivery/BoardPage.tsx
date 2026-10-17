@@ -12,17 +12,20 @@ import {
 } from "@dnd-kit/core";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import type { EnvironmentId } from "@t3tools/contracts";
-import { ChevronsLeftRightIcon, EllipsisIcon, PlusIcon, SearchIcon, XIcon } from "lucide-react";
+import { ChevronsLeftRightIcon, EllipsisIcon, XIcon } from "lucide-react";
 import { memo, useEffect, useMemo, useState } from "react";
 
 import { isElectron } from "../../env";
-import { parseBoard, type DeliveryCard, type DeliveryLane } from "../../lib/delivery";
+import {
+  deliveryEnvironmentChoice,
+  parseBoard,
+  type DeliveryCard,
+  type DeliveryLane,
+} from "../../lib/delivery";
 import {
   boardSetOf,
-  BOARD_GROUPINGS,
   filterLanes,
   FLOW_LABEL,
-  GROUPING_LABEL,
   groupCards,
   hasFilters,
   moveIntent,
@@ -30,7 +33,7 @@ import {
   type DeliveryBoardSearch,
 } from "../../lib/deliveryBoard";
 import { cn } from "../../lib/utils";
-import { useEnvironments } from "../../state/environments";
+import { useEnvironments, usePrimaryEnvironmentId } from "../../state/environments";
 import {
   useBoardStore,
   useBoardPreferences,
@@ -43,12 +46,9 @@ import {
   useMinuteClock,
   useStaleReading,
 } from "../../state/delivery";
-import { Button } from "../ui/button";
-import { Input } from "../ui/input";
-import { EngineDownNotice, EnginePanel } from "./EnginePanel";
+import { BoardEngineNotice, BoardNotice } from "./BoardEngineNotice";
+import { BoardToolbar } from "./BoardToolbar";
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
-import { RefreshIcon } from "../ui/refresh-icon";
-import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { SidebarInset } from "../ui/sidebar";
 import { WorkspacePageHeader } from "../WorkspacePageHeader";
 import { actionLabel, useTaskActions } from "./taskActions";
@@ -64,7 +64,7 @@ import {
   WaitingOn,
 } from "./taskParts";
 import { TaskWorkspace } from "./TaskWorkspace";
-import { ActiveFilterChips, LaneFilterMenu } from "./BoardFilterControls";
+import { ActiveFilterChips } from "./BoardFilterControls";
 import { BoardDialog, BoardPicker, type PickerItem } from "./BoardPicker";
 import { BoardSeatsDialog } from "./BoardSeatsDialog";
 import { EnvironmentPicker } from "./EnvironmentPicker";
@@ -85,17 +85,17 @@ const CardFace = memo(function CardFace(props: {
     <div
       className={cn(
         "flex flex-col gap-1.5 rounded-md border bg-card p-2 text-xs shadow-xs",
-        waitsOnPerson ? "border-amber-500/60" : "border-border",
+        waitsOnPerson ? "border-warning/60" : "border-border",
       )}
     >
       <div className="flex items-center gap-1.5">
         <PriorityPill priority={card.priority} by={card.priorityBy} />
-        <span className="font-mono text-[10px] text-muted-foreground" data-card-number>
+        <span className="font-mono text-3xs text-muted-foreground" data-card-number>
           #{card.number}
         </span>
         {card.flow !== "standard" ? (
           <span
-            className="rounded bg-muted px-1 text-[10px] text-muted-foreground"
+            className="rounded bg-muted px-1 text-3xs text-muted-foreground"
             data-card-flow={card.flow}
           >
             {FLOW_LABEL[card.flow] ?? card.flow}
@@ -106,13 +106,13 @@ const CardFace = memo(function CardFace(props: {
           {props.menu}
         </span>
       </div>
-      <p className="text-[13px] leading-snug font-medium break-words">{card.title}</p>
+      <p className="text-sm leading-snug font-medium break-words">{card.title}</p>
       <TagList tags={card.tags} onPick={props.onPickTag} />
       {card.blocker ? (
         <p
           className={cn(
-            "line-clamp-2 text-[11px]",
-            waitsOnPerson ? "text-amber-700 dark:text-amber-300" : "text-muted-foreground",
+            "line-clamp-2 text-2xs",
+            waitsOnPerson ? "text-warning-foreground" : "text-muted-foreground",
           )}
           data-card-blocker
         >
@@ -162,7 +162,7 @@ function DraggableCard(props: {
         if (event.key === "Enter" && event.target === event.currentTarget) props.onOpen(card);
       }}
       className={cn(
-        "cursor-pointer rounded-md outline-hidden ring-ring focus-visible:ring-2",
+        "cursor-pointer rounded-md outline-hidden ring-ring focus-visible:ring-2 focus-visible:ring-inset",
         drag.isDragging && "opacity-30",
         drop.isOver && !drag.isDragging && props.accepts && "ring-2 ring-ring/60",
       )}
@@ -261,7 +261,7 @@ function Lane(props: {
           </span>
           <span className="[writing-mode:vertical-rl]">{lane.title}</span>
           {props.dragged && offer ? (
-            <span className="text-[10px] [writing-mode:vertical-rl]">{offer}</span>
+            <span className="text-3xs [writing-mode:vertical-rl]">{offer}</span>
           ) : null}
         </button>
       </section>
@@ -283,14 +283,14 @@ function Lane(props: {
       <h2 className="flex shrink-0 items-center gap-2 px-2.5 py-2 text-xs font-medium">
         <span className="min-w-0 truncate">{lane.title}</span>
         <span
-          className="rounded-full bg-background px-1.5 font-mono text-[10px] text-muted-foreground"
+          className="rounded-full bg-background px-1.5 font-mono text-3xs text-muted-foreground"
           data-lane-count
         >
           {lane.cards.length}
           {lane.cards.length !== props.total ? ` of ${props.total}` : ""}
         </span>
         {props.dragged && offer ? (
-          <span className="text-[10px] font-normal text-muted-foreground">{offer}</span>
+          <span className="text-3xs font-normal text-muted-foreground">{offer}</span>
         ) : null}
         <button
           type="button"
@@ -305,7 +305,7 @@ function Lane(props: {
         {groups.map((group) => (
           <div key={group.key} className="flex flex-col gap-1.5">
             {group.title ? (
-              <h3 className="px-1 pt-1 text-[10px] font-medium tracking-wide text-muted-foreground uppercase">
+              <h3 className="px-1 pt-1 text-3xs font-medium tracking-wide text-muted-foreground uppercase">
                 {group.title} <span className="font-mono">{group.cards.length}</span>
               </h3>
             ) : null}
@@ -418,7 +418,15 @@ export function BoardPage() {
 }
 
 function EnvironmentBoardPage({ environmentId }: { readonly environmentId: EnvironmentId | null }) {
-  const { isReady } = useEnvironments();
+  const { environments, isReady } = useEnvironments();
+  const primary = usePrimaryEnvironmentId();
+  const defaultEnvironment = deliveryEnvironmentChoice({
+    fromConversation: null,
+    chosen: null,
+    primary,
+    isReady,
+    connected: environments.map((environment) => environment.environmentId),
+  });
   const search = useSearch({ strict: false }) as DeliveryBoardSearch;
   const enabled = useDeliveryEnabled(environmentId);
   const active = enabled ? environmentId : null;
@@ -453,7 +461,6 @@ function EnvironmentBoardPage({ environmentId }: { readonly environmentId: Envir
     null,
   );
   const [dialogProblem, setDialogProblem] = useState<string | null>(null);
-  const [mobileSearchOpen, setMobileSearchOpen] = useState(false);
   const board = useDeliveryRead(active, `/api/lanes?view=${view}&set=${boardSet}`, {
     pollMs: shared && showingBoard ? 0 : showingBoard ? 4_000 : 15_000,
   });
@@ -607,161 +614,84 @@ function EnvironmentBoardPage({ environmentId }: { readonly environmentId: Envir
   }
 
   return (
-    <SidebarInset className="isolate h-dvh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground">
+    <SidebarInset className="isolate h-dvh min-h-0 overflow-hidden overscroll-y-none">
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         <WorkspacePageHeader electron={isElectron} className="h-auto">
-          <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2 py-2">
-            <h1 className="text-sm font-medium">Board</h1>
-            <EnvironmentPicker value={environmentId} onChoose={chooseEnvironment} />
-            {active ? <EnginePanel environmentId={active} /> : null}
-            <BoardPicker
-              label="Board"
-              marker="board"
-              items={unifiedBoardChoices(
-                parsed?.sets ??
-                  (knownBoards.length > 0
-                    ? knownBoards
-                    : [{ id: boardSet, title: boardSet, description: "", kind: "built-in" }]),
-                sharedView?.boards ?? [],
-                sharedView?.enabled === true,
-              )}
-              value={shared ? `shared:${sharedBoardSet}` : `local:${boardSet}`}
-              everything={{ id: "local:all", label: "Show every task in this environment" }}
-              newLabel="New board…"
-              noneYet="You have no boards yet. New board… makes one to group tasks, such as Pilot work; tasks are put on it from New task or a task's page."
-              onChoose={setBoardSelection}
-              onCreate={() => {
-                setBoardSelection(`local:${boardSet}`);
-                setDialog({ kind: "board", editing: null });
-              }}
-              onEdit={(item) =>
-                setDialog({ kind: "board", editing: { ...item, id: item.id.slice(6) } })
-              }
-            />
-            {!shared ? (
-              <>
-                <BoardPicker
-                  label="Board view"
-                  marker="view"
-                  items={
-                    parsed?.views ?? [{ id: view, title: view, description: "", kind: "built-in" }]
-                  }
-                  value={view}
-                  everything={{ id: "development", label: "Show every column" }}
-                  newLabel="New view…"
-                  onChoose={setView}
-                  onCreate={() => setDialog({ kind: "view", editing: null })}
-                  onEdit={(item) => setDialog({ kind: "view", editing: item })}
-                />
-                <span className="relative hidden items-center md:flex">
-                  <SearchIcon className="pointer-events-none absolute left-2 z-10 size-3.5 text-muted-foreground" />
-                  <Input
-                    aria-label="Search tasks"
-                    placeholder="Search by #number, title, tag, owner"
-                    className="h-7 w-64 pl-7 text-xs"
-                    value={filters.q}
-                    onChange={(event) => setFilters({ q: event.target.value })}
-                  />
-                </span>
-                <Button
-                  size="icon-xs"
-                  variant={filters.q ? "secondary" : "ghost"}
-                  aria-label={mobileSearchOpen ? "Close board search" : "Search the board"}
-                  aria-expanded={mobileSearchOpen}
-                  className="md:hidden"
-                  onClick={() => setMobileSearchOpen((open) => !open)}
-                  data-board-search-toggle
-                >
-                  {mobileSearchOpen ? <XIcon /> : <SearchIcon />}
-                </Button>
-                {mobileSearchOpen ? (
-                  <span className="relative flex min-w-0 basis-full items-center md:hidden">
-                    <SearchIcon className="pointer-events-none absolute left-2 z-10 size-3.5 text-muted-foreground" />
-                    <Input
-                      aria-label="Search tasks"
-                      placeholder="Search by #number, title, tag, owner"
-                      className="h-7 w-full pl-7 text-xs"
-                      value={filters.q}
-                      onChange={(event) => setFilters({ q: event.target.value })}
-                      autoFocus
-                    />
-                  </span>
-                ) : null}
-                <Select
-                  value={grouping}
-                  onValueChange={(value) => setGrouping(String(value) as BoardGrouping)}
-                >
-                  <SelectTrigger
-                    aria-label="Group cards by"
-                    size="compact"
-                    variant="ghost"
-                    className="w-auto min-w-0"
-                  >
-                    <SelectValue>
-                      {grouping === "none"
-                        ? "Group"
-                        : `By ${GROUPING_LABEL[grouping].toLowerCase()}`}
-                    </SelectValue>
-                  </SelectTrigger>
-                  <SelectPopup alignItemWithTrigger={false}>
-                    {BOARD_GROUPINGS.map((item) => (
-                      <SelectItem key={item} value={item}>
-                        {GROUPING_LABEL[item]}
-                      </SelectItem>
-                    ))}
-                  </SelectPopup>
-                </Select>
-                <LaneFilterMenu
-                  lanes={laneChoices}
-                  chosen={filters.lanes}
-                  onChange={(chosen) => setFilters({ lanes: chosen })}
-                />
-                {parsed && parsed.waiting > 0 ? (
-                  <Button
-                    size="xs"
-                    variant={filters.waiting ? "secondary" : "ghost"}
-                    className="text-amber-700 dark:text-amber-300"
-                    onClick={() => setFilters({ waiting: !filters.waiting })}
-                    data-board-waiting
-                  >
-                    {parsed.waiting} waiting on you
-                  </Button>
-                ) : null}
-              </>
-            ) : null}
-            <div className="ml-auto flex items-center gap-1">
-              {!shared ? (
-                <span className="font-mono text-[10px] text-muted-foreground">
-                  {board.readAt ? (stale ? "stale" : "live") : enabled ? "not read yet" : ""}
-                </span>
-              ) : null}
-              <Button
-                size="xs"
-                disabled={!enabled}
-                onClick={() =>
-                  void navigate({
-                    to: "/board",
-                    search: { new: true, ...(environmentId ? { environment: environmentId } : {}) },
-                  })
+          <BoardToolbar
+            environmentId={active}
+            environmentPicker={
+              <EnvironmentPicker value={environmentId} onChoose={chooseEnvironment} />
+            }
+            boardPicker={
+              <BoardPicker
+                label="Board"
+                marker="board"
+                items={unifiedBoardChoices(
+                  parsed?.sets ??
+                    (knownBoards.length > 0
+                      ? knownBoards
+                      : [{ id: boardSet, title: boardSet, description: "", kind: "built-in" }]),
+                  sharedView?.boards ?? [],
+                  sharedView?.enabled === true,
+                )}
+                value={shared ? `shared:${sharedBoardSet}` : `local:${boardSet}`}
+                everything={{ id: "local:all", label: "Show every task in this environment" }}
+                newLabel="New board…"
+                noneYet="You have no boards yet. New board… makes one to group tasks, such as Pilot work; tasks are put on it from New task or a task's page."
+                onChoose={setBoardSelection}
+                onCreate={() => {
+                  setBoardSelection(`local:${boardSet}`);
+                  setDialog({ kind: "board", editing: null });
+                }}
+                onEdit={(item) =>
+                  setDialog({ kind: "board", editing: { ...item, id: item.id.slice(6) } })
                 }
-                data-board-new-task
-              >
-                <PlusIcon />
-                New task
-              </Button>
-              <HowItFits />
-              {!shared ? (
-                <Button
-                  size="icon-sm"
-                  variant="ghost"
-                  aria-label="Refresh board"
-                  onClick={board.refresh}
-                >
-                  <RefreshIcon className="size-3.5" refreshing={board.isPending} />
-                </Button>
-              ) : null}
-            </div>
-          </div>
+              />
+            }
+            viewPicker={
+              <BoardPicker
+                label="Board view"
+                marker="view"
+                items={
+                  parsed?.views ?? [{ id: view, title: view, description: "", kind: "built-in" }]
+                }
+                value={view}
+                everything={{ id: "development", label: "Show every column" }}
+                newLabel="New view…"
+                onChoose={setView}
+                onCreate={() => setDialog({ kind: "view", editing: null })}
+                onEdit={(item) => setDialog({ kind: "view", editing: item })}
+              />
+            }
+            help={<HowItFits />}
+            filters={filters}
+            grouping={grouping}
+            view={view}
+            environmentChanged={environmentId !== defaultEnvironment}
+            cards={(parsed?.lanes ?? []).flatMap((lane) => lane.cards)}
+            lanes={laneChoices}
+            waiting={parsed?.waiting ?? 0}
+            shared={shared}
+            enabled={enabled}
+            status={board.readAt ? (stale ? "stale" : "live") : enabled ? "not read yet" : ""}
+            pending={board.isPending}
+            onFilters={setFilters}
+            onGrouping={setGrouping}
+            onReset={() => {
+              clearFilters();
+              setGrouping("none");
+              setView("development");
+              if (defaultEnvironment && environmentId !== defaultEnvironment)
+                chooseEnvironment(defaultEnvironment);
+            }}
+            onNew={() =>
+              void navigate({
+                to: "/board",
+                search: { new: true, ...(environmentId ? { environment: environmentId } : {}) },
+              })
+            }
+            onRefresh={board.refresh}
+          />
         </WorkspacePageHeader>
         {!shared && hasFilters(filters) ? (
           <ActiveFilterChips
@@ -793,7 +723,7 @@ function EnvironmentBoardPage({ environmentId }: { readonly environmentId: Envir
             onOpen={open}
           />
         ) : board.error ? (
-          <EngineDownNotice
+          <BoardEngineNotice
             className="p-6 text-sm"
             environmentId={environmentId}
             message={`Delivery engine not reachable. ${board.error} Nothing shown here is current.`}
@@ -817,7 +747,10 @@ function EnvironmentBoardPage({ environmentId }: { readonly environmentId: Envir
               </p>
             ) : null}
             {chosenBoard && chosenBoard.id !== "unsorted" && chosenBoard.description ? (
-              <p className="px-4 pt-2 text-xs text-muted-foreground" data-board-set-note>
+              <p
+                className="hidden px-4 pt-2 text-xs text-muted-foreground md:block"
+                data-board-set-note
+              >
                 {chosenBoard.title}: {chosenBoard.description}
               </p>
             ) : null}
@@ -871,12 +804,16 @@ function EnvironmentBoardPage({ environmentId }: { readonly environmentId: Envir
               />
             ) : null}
             {parsed?.note ? (
-              <p className="px-4 pt-2 text-xs text-muted-foreground">{parsed.note}</p>
+              <BoardNotice summary={parsed.note}>
+                <p className="px-4 pt-2 text-xs text-muted-foreground">{parsed.note}</p>
+              </BoardNotice>
             ) : null}
             {parsed?.notices.map((notice) => (
-              <p key={notice.key} className="px-4 pt-2 text-xs text-warning">
-                {notice.text} Seen {notice.count} time{notice.count === 1 ? "" : "s"}.
-              </p>
+              <BoardNotice key={notice.key} summary={notice.text}>
+                <p className="px-4 pt-2 text-xs text-warning">
+                  {notice.text} Seen {notice.count} time{notice.count === 1 ? "" : "s"}.
+                </p>
+              </BoardNotice>
             ))}
             <BoardColumns
               environmentId={environmentId}
