@@ -80,9 +80,10 @@ export function OrchestratorComposerControls(props: {
     );
   }, [awaitingTeams, props.threadId, reconcileTeam, teams, teamsLoaded]);
   const act = useDeliveryAct(props.environmentId, "orchestrator draft");
-  const [busy, setBusy] = useState<"save" | "start" | null>(null);
-  // Held from the press to the answer, so a second press cannot start a second workflow.
-  const working = useRef(false);
+  const [busyThreads, setBusyThreads] = useState<Record<string, "save" | "start">>({});
+  const busy = busyThreads[props.threadId] ?? null;
+  // Held per thread from the press to the answer, so a second press cannot start a second workflow.
+  const working = useRef<Record<string, true>>({});
   const [problems, setProblems] = useState<ReadonlyArray<string>>([]);
   // The thread whose save or start was last refused only because teams were still loading.
   const [loadingNoticeFor, setLoadingNoticeFor] = useState<string | null>(null);
@@ -180,17 +181,25 @@ export function OrchestratorComposerControls(props: {
     return task.id;
   }, [act, draft, flow, person, props.threadId, report, seatsToSend, text, update]);
 
-  const once = useCallback(async (kind: "save" | "start", work: () => Promise<void>) => {
-    if (working.current) return;
-    working.current = true;
-    setBusy(kind);
-    try {
-      await work();
-    } finally {
-      working.current = false;
-      setBusy(null);
-    }
-  }, []);
+  const once = useCallback(
+    async (kind: "save" | "start", work: () => Promise<void>) => {
+      const thread = props.threadId;
+      if (working.current[thread]) return;
+      working.current[thread] = true;
+      setBusyThreads((prev) => ({ ...prev, [thread]: kind }));
+      try {
+        await work();
+      } finally {
+        delete working.current[thread];
+        setBusyThreads((prev) => {
+          const next = { ...prev };
+          delete next[thread];
+          return next;
+        });
+      }
+    },
+    [props.threadId],
+  );
 
   const { onPromptCleared, threadId } = props;
   const onSave = useCallback(() => {

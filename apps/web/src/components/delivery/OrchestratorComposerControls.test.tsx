@@ -435,6 +435,90 @@ function navigation() {
   return new Promise<void>((resolve) => mock.navigate.mockImplementation(() => resolve()));
 }
 
+async function holdFirstThreadStart() {
+  mock.reading = { body: teams, error: null };
+  store().enter("t1", "env-a");
+  store().enter("t2", "env-a");
+  await render("t2");
+  await render("t1");
+  let resolveSave!: (result: { ok: false; problems: string[] }) => void;
+  const pendingSave = new Promise<{ ok: false; problems: string[] }>((resolve) => {
+    resolveSave = resolve;
+  });
+  mock.action.mockImplementationOnce(() => pendingSave);
+  await act(() => store().requestStart("t1"));
+  expect(paths()).toEqual(["/api/tasks"]);
+  expect(mock.action).toHaveBeenLastCalledWith(
+    "/api/tasks",
+    expect.objectContaining({ text: prompts.t1, draft: true }),
+  );
+  expect(store().activity.t1?.busy).toBe("start");
+  return resolveSave;
+}
+
+async function startSecondThreadWhileFirstIsPending() {
+  await render("t2");
+  expect(store().activity.t2).toMatchObject({
+    busy: null,
+    blocked: null,
+    awaitingTeams: false,
+  });
+  await act(async () => {
+    store().requestStart("t2");
+  });
+  expect(paths()).toEqual(["/api/tasks", "/api/tasks", "/api/tasks/task-2/submit"]);
+  expect(mock.action).toHaveBeenNthCalledWith(
+    2,
+    "/api/tasks",
+    expect.objectContaining({ text: prompts.t2, draft: true }),
+  );
+  expect(cleared).toEqual(["t2"]);
+  expect(store().drafts.t2).toBeUndefined();
+  expect(mock.navigate).toHaveBeenCalledExactlyOnceWith({
+    to: "/board",
+    search: { task: "task-2" },
+  });
+}
+
+it("starts the second thread while the first thread's save is still in flight", async () => {
+  const resolveSave = await holdFirstThreadStart();
+  await startSecondThreadWhileFirstIsPending();
+  await act(async () => resolveSave({ ok: false, problems: ["engine says no"] }));
+});
+
+it("keeps the first thread latched through the second's cleanup and releases it after failure", async () => {
+  const resolveSave = await holdFirstThreadStart();
+  await startSecondThreadWhileFirstIsPending();
+  await render("t1");
+  expect(store().activity.t1?.busy).toBe("start");
+  await act(() => store().requestStart("t1"));
+  expect(paths()).toEqual(["/api/tasks", "/api/tasks", "/api/tasks/task-2/submit"]);
+
+  mock.navigate.mockClear();
+  await act(async () => resolveSave({ ok: false, problems: ["engine says no"] }));
+  expect(alert()).toBe("engine says no");
+  expect(mock.navigate).not.toHaveBeenCalled();
+  expect(store().activity.t1?.busy).toBeNull();
+  await act(async () => {
+    store().requestStart("t1");
+  });
+  expect(paths().slice(3)).toEqual(["/api/tasks", "/api/tasks/task-1/submit"]);
+  expect(mock.navigate).toHaveBeenLastCalledWith({ to: "/board", search: { task: "task-1" } });
+  expect(cleared).toEqual(["t2", "t1"]);
+  expect(store().drafts.t1).toBeUndefined();
+
+  store().enter("t2", "env-a");
+  await render("t2");
+  expect(store().activity.t2?.busy).toBeNull();
+  await act(async () => {
+    store().requestStart("t2");
+  });
+  expect(paths().slice(5)).toEqual(["/api/tasks", "/api/tasks/task-2/submit"]);
+  expect(mock.navigate).toHaveBeenLastCalledWith({ to: "/board", search: { task: "task-2" } });
+  expect(cleared).toEqual(["t2", "t1", "t2"]);
+  expect(store().drafts.t2).toBeUndefined();
+});
+
 it("does not start a thread when switching to it after a refused start elsewhere", async () => {
   await settleT2ThenRefuseStartOnT1();
   await switchTo("t2");
