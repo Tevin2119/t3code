@@ -1,4 +1,4 @@
-// @effect-diagnostics nodeBuiltinImport:off globalTimers:off - drives the launcher with fake processes.
+// @effect-diagnostics nodeBuiltinImport:off globalTimers:off globalDate:off - drives the launcher with fake processes.
 import * as NodeChildProcess from "node:child_process";
 import * as NodeCrypto from "node:crypto";
 import * as NodeEvents from "node:events";
@@ -6,8 +6,7 @@ import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
-import { afterEach, describe, expect, it } from "@effect/vitest";
-import { vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "@effect/vitest";
 
 import type { SupervisorMessage } from "../src/checkoutUpdate/protocol.ts";
 import {
@@ -117,7 +116,7 @@ function setup(input: {
     baseDir,
     exec,
     log: (line) => logs.push(line),
-    now: input.now,
+    ...(input.now ? { now: input.now } : {}),
     timeouts: {
       prepareMs: input.prepareMs ?? 1_000,
       stopMs: 1_000,

@@ -1390,6 +1390,7 @@ export const makeCodexAppServerSpawnCommand = Effect.fn(
     name: "codex",
     threadId: input.threadId,
     env: input.env,
+    shared: true,
   });
   const spawnCommand = yield* resolveSpawnCommand(launch.command, launch.args, {
     ...(input.env === undefined ? {} : { env: input.env }),
@@ -3150,13 +3151,17 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             if (attachmentPath === null) {
               return yield* toProtocolError(`Invalid attachment id '${attachment.id}'`);
             }
-            const bytes = yield* fileSystem
-              .readFile(attachmentPath)
-              .pipe(
-                Effect.mapError((cause) =>
-                  toProtocolError(`Failed to read attachment '${attachment.id}'.`, cause),
-                ),
-              );
+            const bytes = yield* fileSystem.readFile(attachmentPath).pipe(
+              Effect.mapError(
+                (cause) =>
+                  new ProviderAdapter.ProviderAdapterProtocolError({
+                    driver: CODEX_PROVIDER,
+                    detail: `Failed to read attachment '${attachment.id}'.`,
+                    reason: "attachment_unreadable",
+                    payload: cause,
+                  }),
+              ),
+            );
             return {
               type: "image" as const,
               url: `data:${attachment.mimeType};base64,${Buffer.from(bytes).toString("base64")}`,
@@ -5661,6 +5666,14 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             const hasActiveDescendants = Array.from((yield* Ref.get(activeTurns)).values()).some(
               (candidate) => isDescendantCodexTurn(candidate, input.context),
             );
+            // Native subagents run on their own threads, so a failed root leaves
+            // them working. Holding the root until they finish would keep the
+            // run open with no turn to steer. Stop interrupts the whole lineage,
+            // so an interrupted root still waits for its descendants to settle.
+            if (event.status === "failed" && hasActiveDescendants) {
+              yield* emitRootTerminal(input.context, { ...event, childTurnsContinue: true });
+              return;
+            }
             if (event.status !== "completed" && hasActiveDescendants) {
               yield* Ref.update(deferredRootTerminals, (current) => {
                 const updated = new Map(current);

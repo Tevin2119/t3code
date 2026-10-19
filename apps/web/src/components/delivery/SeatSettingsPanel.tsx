@@ -1,6 +1,6 @@
 import type { EnvironmentId, ProviderInstanceId } from "@t3tools/contracts";
 import { RotateCcwIcon } from "lucide-react";
-import { useMemo, type ReactNode } from "react";
+import type { ReactNode } from "react";
 
 import { useEnvironmentSettings } from "../../hooks/useSettings";
 import {
@@ -26,7 +26,7 @@ import {
   deriveProviderInstanceEntries,
   sortProviderInstanceEntries,
 } from "../../providerInstances";
-import { useEnvironment } from "../../state/environments";
+import { useEnvironmentProviders } from "../../state/environments";
 import { EMPTY_SERVER_PROVIDERS } from "../../state/server";
 import { ProviderModelPicker } from "../chat/ProviderModelPicker";
 import type { ModelEsque } from "../chat/providerIconUtils";
@@ -106,15 +106,15 @@ function Choice(props: {
 
 /** The harnesses and models of this environment, as the composer's own picker has them. */
 export function useSeatCatalog(environmentId: EnvironmentId | null) {
-  const environment = useEnvironment(environmentId);
+  const providersByEnvironment = useEnvironmentProviders();
   const settings = useEnvironmentSettings((environmentId ?? "") as EnvironmentId);
-  const providers = environment?.serverConfig?.providers ?? EMPTY_SERVER_PROVIDERS;
-  return useMemo(() => {
-    const entries = sortProviderInstanceEntries(
-      applyProviderInstanceSettings(deriveProviderInstanceEntries(providers), settings, null),
-    ).filter((entry) => harnessOfDriver(entry.driverKind) !== null);
-    return { entries, options: getCustomModelOptionsByInstance(settings, providers) };
-  }, [providers, settings]);
+  const providers =
+    (environmentId === null ? undefined : providersByEnvironment.get(environmentId)) ??
+    EMPTY_SERVER_PROVIDERS;
+  const entries = sortProviderInstanceEntries(
+    applyProviderInstanceSettings(deriveProviderInstanceEntries(providers), settings, null),
+  ).filter((entry) => harnessOfDriver(entry.driverKind) !== null);
+  return { entries, options: getCustomModelOptionsByInstance(settings, providers) };
 }
 
 /**

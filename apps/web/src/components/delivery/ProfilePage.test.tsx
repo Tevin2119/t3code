@@ -339,6 +339,11 @@ function posixEnvironment(environment: string, home: string) {
 
 beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  // The palette focuses its input on the next frame; the test renderer has no frames.
+  vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) =>
+    setTimeout(() => callback(0), 0),
+  );
+  vi.stubGlobal("cancelAnimationFrame", (frame: number) => clearTimeout(frame));
   mock.environment = "env-a";
   mock.editable = true;
   mock.revision = 1;

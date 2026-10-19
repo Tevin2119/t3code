@@ -45,6 +45,9 @@ vi.mock("@t3tools/client-runtime/state/delivery", () => ({
   }),
 }));
 vi.mock("../connection/runtime", () => ({ connectionAtomRuntime: {} }));
+// The environment catalog is built from the runtime at load; nothing here reads it.
+vi.mock("../connection/catalog", () => ({ environmentCatalog: {} }));
+vi.mock("../state/relay", () => ({ relayEnvironmentDiscovery: {} }));
 // Only useDeliveryEnabled reads settings, and the hook is told whether delivery is on.
 vi.mock("./useSettings", () => ({ useEnvironmentSettings: () => false }));
 

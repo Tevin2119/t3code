@@ -6,6 +6,7 @@ import type {
 } from "@t3tools/provider-core/server/usage";
 import * as Schema from "effect/Schema";
 
+import { CLAUDE_SYNTHETIC_MODEL } from "../provider/Drivers/claudeUsage.ts";
 import { GUARD_LENGTH, type TranscriptParsePosition } from "./usageTranscriptReader.ts";
 
 // v2: Codex fork-copy suppression changed what a file parses to, so v1
@@ -292,6 +293,10 @@ export function decodeScanCache(
       ) {
         return null;
       }
+
+      // Unchanged and deleted transcripts may only exist in the cache, so the
+      // parser cannot remove their previously saved local placeholders.
+      if (provider === "claude" && model === CLAUDE_SYNTHETIC_MODEL) continue;
 
       records.push({
         provider,

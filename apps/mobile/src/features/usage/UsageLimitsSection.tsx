@@ -8,14 +8,13 @@ import {
   type ServerProvider,
   type ServerProviderResetCredits,
   type ServerProviderUsageWindow,
-  type UsageProviderKind,
 } from "@t3tools/contracts";
 import {
-  elapsedShare,
   formatDuration,
   formatResetsIn,
   limitsNotice,
   paceOf,
+  paceRemainingPercent,
   remainingPercent,
 } from "@t3tools/shared/usageLimits";
 import { type ReactNode, useEffect, useEffectEvent, useRef, useState } from "react";
@@ -28,7 +27,7 @@ import { environmentPresentations } from "../../state/presentation";
 import { serverEnvironment } from "../../state/server";
 import { readEnvironmentScope, useEnvironmentScope } from "../../state/session";
 import { useAtomCommand } from "../../state/use-atom-command";
-import { useProviderColors } from "./usageProviders";
+import { usageProviderKind, useProviderColors } from "./usageProviders";
 
 const PACE_LABEL = { ahead: "ahead of pace", on: "on pace", under: "under pace" } as const;
 
@@ -36,8 +35,7 @@ type Driver = ServerProvider["driver"];
 
 function useBarColor(driver: Driver): string | null {
   const colors = useProviderColors();
-  const kind: UsageProviderKind | null =
-    driver === "codex" ? "codex" : driver === "claudeAgent" ? "claude" : null;
+  const kind = usageProviderKind(driver);
   return kind ? colors[kind] : null;
 }
 
@@ -48,8 +46,7 @@ function WindowRow(props: {
 }) {
   const { window, now } = props;
   const remaining = remainingPercent(window);
-  const elapsed = elapsedShare(window, now);
-  const timeLeft = elapsed === null ? null : Math.round((1 - elapsed) * 100);
+  const timeLeft = paceRemainingPercent(window, now);
   const pace = paceOf(window, now);
   const resetsIn = formatResetsIn(window, now);
   return (
@@ -297,27 +294,23 @@ export function useRefreshLimits(
         presentation.connection.phase === "connected" &&
         (selectedEnvironmentIds === null || selectedEnvironmentIds.has(environmentId)),
     );
-    try {
-      await Promise.all(
-        connected.map(async ([environmentId, presentation]) => {
-          const result = await refreshUsageLimits(
-            environmentId,
-            () => refreshProviders({ environmentId, input: {} }),
-            automatic,
-            afterPending,
-          );
-          if (result === undefined) return;
-          setFailedEnvironments((previous) => [
-            ...previous.filter((failed) => failed.environmentId !== environmentId),
-            ...(result._tag === "Failure"
-              ? [{ environmentId, label: presentation.entry.target.label }]
-              : []),
-          ]);
-        }),
-      );
-    } finally {
-      setNow(Date.now());
-    }
+    await Promise.all(
+      connected.map(async ([environmentId, presentation]) => {
+        const result = await refreshUsageLimits(
+          environmentId,
+          () => refreshProviders({ environmentId, input: {} }),
+          automatic,
+          afterPending,
+        );
+        if (result === undefined) return;
+        setFailedEnvironments((previous) => [
+          ...previous.filter((failed) => failed.environmentId !== environmentId),
+          ...(result._tag === "Failure"
+            ? [{ environmentId, label: presentation.entry.target.label }]
+            : []),
+        ]);
+      }),
+    ).finally(() => setNow(Date.now()));
   };
   // Always toggles `refreshing`, even with nothing to probe: Android's
   // RefreshControl keeps its spinner up until it sees true then false.
@@ -325,12 +318,10 @@ export function useRefreshLimits(
     if (refreshingRef.current) return;
     refreshingRef.current = true;
     setRefreshing(true);
-    try {
-      await refresh();
-    } finally {
+    await refresh().finally(() => {
       refreshingRef.current = false;
       setRefreshing(false);
-    }
+    });
   };
   const connectedLimitsEnvironments = [...presentations]
     .filter(

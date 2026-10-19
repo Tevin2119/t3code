@@ -13,6 +13,7 @@ import * as Metric from "effect/Metric";
 import * as Queue from "effect/Queue";
 import * as EffectScheduler from "effect/Scheduler";
 import * as Schema from "effect/Schema";
+import * as SqlClient from "effect/sql/SqlClient";
 import * as TestClock from "effect/testing/TestClock";
 
 import * as ThreadLaunchService from "../orchestration-v2/ThreadLaunchService.ts";
@@ -64,6 +65,7 @@ const withService = <A, E>(
   body: (input: {
     readonly service: ScheduledTaskService.ScheduledTaskService["Service"];
     readonly launches: Queue.Queue<LaunchInput>;
+    readonly sql: SqlClient.SqlClient;
     readonly secretsByRef: Map<string, string>;
   }) => Effect.Effect<A, E, never>,
   options: { readonly gate?: Deferred.Deferred<void>; readonly relayHookBaseUrl?: string } = {},
@@ -98,7 +100,8 @@ const withService = <A, E>(
     );
     return yield* Effect.gen(function* () {
       const service = yield* ScheduledTaskService.ScheduledTaskService;
-      return yield* body({ service, launches, secretsByRef });
+      const sql = yield* SqlClient.SqlClient;
+      return yield* body({ service, launches, sql, secretsByRef });
     }).pipe(Effect.provide(ScheduledTaskService.layer.pipe(Layer.provide(layerDependencies))));
   }).pipe(Effect.provide(SqlitePersistence.layerMemory));
 
@@ -114,10 +117,10 @@ it.effect("dispatches exactly the rendered prompt and logs the delivery", () =>
       const result = yield* service.triggerWebhook(requestFor(task));
       assert.equal(result._tag, "accepted");
       const launched = yield* Queue.take(launches);
-      assert.equal(
-        launched.initialMessage?.text,
-        "Review this PR: https://github.com/org/repo/pull/45",
-      );
+      const framed =
+        /^Review this PR: <(webhook-data-[0-9a-f]{12})>https:\/\/github\.com\/org\/repo\/pull\/45<\/\1>\n\nText between <\1> and <\/\1> was copied from the webhook request\./;
+      const frame = framed.exec(launched.initialMessage?.text ?? "")?.[1];
+      assert.isDefined(frame);
       assert.equal(
         launched.commandId,
         `scheduled-task:${task.id}:webhook:${result._tag === "accepted" ? result.deliveryId : ""}`,
@@ -132,6 +135,12 @@ it.effect("dispatches exactly the rendered prompt and logs the delivery", () =>
       });
       assert.equal(delivery.body, new TextDecoder().decode(pullRequestBody));
       assert.equal(delivery.renderedPrompt, launched.initialMessage?.text);
+
+      // Each delivery gets its own frame, so a request can't predict the tag that closes it.
+      yield* service.triggerWebhook(requestFor(task));
+      const next = framed.exec((yield* Queue.take(launches)).initialMessage?.text ?? "")?.[1];
+      assert.isDefined(next);
+      assert.notEqual(next, frame);
     }),
   ),
 );
@@ -494,8 +503,11 @@ it.effect("logs a body's first 64 KiB by bytes, not characters", () =>
 it.effect("counts the prompt as the provider does, without surrounding whitespace", () =>
   withService(({ service, launches }) =>
     Effect.gen(function* () {
-      const { task } = yield* service.upsert(yield* webhookTaskInput({ prompt: "{{body.text}}" }));
-      const text = `{"text":"${" ".repeat(1_000)}${"x".repeat(119_990)}${"\\n".repeat(1_000)}"}`;
+      // Values are framed, so only an empty placeholder can leave padding at the edge.
+      const { task } = yield* service.upsert(
+        yield* webhookTaskInput({ prompt: `{{body.none}}${" ".repeat(2_000)}{{body.text}}` }),
+      );
+      const text = JSON.stringify({ text: "x".repeat(119_000) });
       const result = yield* service.triggerWebhook(
         requestFor(task, { body: new TextEncoder().encode(text), bodyText: text }),
       );
@@ -543,6 +555,52 @@ it.effect("a held request already delivered directly runs only once", () =>
       yield* Queue.take(launches);
       const logged = (yield* service.listWebhookDeliveries({ id: task.id })).deliveries;
       assert.equal(logged.length, 1);
+    }),
+  ),
+);
+
+it.effect("relay retries recover failed acceptance without releasing another request's claim", () =>
+  withService(({ service, launches, sql }) =>
+    Effect.gen(function* () {
+      const { task } = yield* service.upsert(yield* webhookTaskInput());
+      const request = requestFor(task, { relayDeliveryId: "retry-after-log-failure" });
+      yield* sql`
+        CREATE TRIGGER fail_webhook_delivery_log
+        BEFORE INSERT ON scheduled_task_webhook_deliveries
+        BEGIN
+          SELECT RAISE(FAIL, 'injected delivery log failure');
+        END
+      `;
+      const error = yield* service.triggerWebhook(request).pipe(Effect.flip);
+      assert.equal(error.message, "Could not record webhook delivery.");
+      assert.equal(yield* Queue.size(launches), 0);
+      assert.isEmpty((yield* service.listWebhookDeliveries({ id: task.id })).deliveries);
+      yield* sql`DROP TRIGGER fail_webhook_delivery_log`;
+
+      const retried = yield* Effect.all(
+        [service.triggerWebhook(request), service.triggerWebhook(request)],
+        { concurrency: "unbounded" },
+      );
+      assert.deepEqual(
+        retried.map((result) => (result._tag === "accepted" ? result.outcome : result._tag)).sort(),
+        ["accepted", "duplicate"],
+      );
+      assert.include((yield* Queue.take(launches)).commandId, request.relayDeliveryId!);
+
+      yield* sql`
+        CREATE TRIGGER fail_webhook_claim
+        BEFORE INSERT ON scheduled_task_webhook_relay_deliveries
+        BEGIN
+          SELECT RAISE(FAIL, 'injected claim failure');
+        END
+      `;
+      const retryError = yield* service.triggerWebhook(request).pipe(Effect.flip);
+      assert.equal(retryError.message, "Could not record webhook delivery.");
+      yield* sql`DROP TRIGGER fail_webhook_claim`;
+      const replayed = yield* service.triggerWebhook(request);
+      assert.equal(replayed._tag === "accepted" ? replayed.outcome : replayed._tag, "duplicate");
+      assert.equal(yield* Queue.size(launches), 0);
+      assert.equal((yield* service.listWebhookDeliveries({ id: task.id })).deliveries.length, 1);
     }),
   ),
 );

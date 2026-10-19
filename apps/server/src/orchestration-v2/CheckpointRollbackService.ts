@@ -5,6 +5,7 @@ import {
   type OrchestrationV2DomainEvent,
   ProviderThreadId,
   ThreadId,
+  VcsProcessExitError,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -16,15 +17,19 @@ import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 
 import * as GitWorkflowService from "../git/GitWorkflowService.ts";
+import type * as ServerConfig from "../config.ts";
+import type * as ServerSettings from "../serverSettings.ts";
+import { makeIsManagedWorktreePath } from "../worktreesDirectory.ts";
 import { withWorkspaceLease } from "../workspace/workspaceLease.ts";
 import {
   isCheckpointRestoreIsolated,
   SHARED_WORKSPACE_RESTORE_MESSAGE,
 } from "./CheckpointRestoreSafety.ts";
-import { CheckpointServiceV2 } from "./CheckpointService.ts";
+import { CheckpointRestoreError, CheckpointServiceV2 } from "./CheckpointService.ts";
 import { EventSinkV2 } from "./EventSink.ts";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import { ProjectionStoreV2 } from "./ProjectionStore.ts";
+import { GIT_INDEX_LOCKED_DETAIL } from "../vcs/VcsProcess.ts";
 import * as ProjectStore from "./ProjectStore.ts";
 import type * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
 import { ProviderSessionManagerV2 } from "./ProviderSessionManager.ts";
@@ -67,6 +72,20 @@ export class CheckpointRollbackExecutionError extends Schema.TaggedError<Checkpo
 }
 
 const isCheckpointRollbackExecutionError = Schema.is(CheckpointRollbackExecutionError);
+const isVcsProcessExitError = Schema.is(VcsProcessExitError);
+const isCheckpointRestoreError = Schema.is(CheckpointRestoreError);
+
+/**
+ * The message clients see when a rollback fails. Only a held Git index lock
+ * gets its own explanation; other reasons carry internal ids or raw Git
+ * output, so they fall back to the generic message.
+ */
+export function rollbackFailureClientMessage(error: CheckpointRollbackExecutionError): string {
+  const restoreCause = isCheckpointRestoreError(error.cause) ? error.cause.cause : undefined;
+  return isVcsProcessExitError(restoreCause) && restoreCause.detail === GIT_INDEX_LOCKED_DETAIL
+    ? GIT_INDEX_LOCKED_DETAIL
+    : ROLLBACK_FAILED_MESSAGE;
+}
 
 export interface CheckpointRollbackServiceV2Shape {
   readonly execute: (input: {
@@ -96,6 +115,8 @@ export const layer: Layer.Layer<
   | FileSystem.FileSystem
   | Path.Path
   | ProjectStore.ProjectStoreV2
+  | ServerConfig.ServerConfig
+  | ServerSettings.ServerSettingsService
   | ThreadCommandExecutor.ThreadCommandExecutor
 > = Layer.effect(
   CheckpointRollbackServiceV2,
@@ -111,6 +132,7 @@ export const layer: Layer.Layer<
     const projects = yield* ProjectStore.ProjectStoreV2;
     const path = yield* Path.Path;
     const threadCommands = yield* ThreadCommandExecutor.ThreadCommandExecutor;
+    const isManagedWorktreePath = yield* makeIsManagedWorktreePath;
 
     const execute = Effect.fn("orchestrationV2.checkpointRollback.execute")(function* (input: {
       readonly threadId: ThreadId;
@@ -196,7 +218,13 @@ export const layer: Layer.Layer<
             });
 
       const { worktreePath, branch } = projection.thread;
-      if (worktreePath != null && branch != null && !(yield* fileSystem.exists(worktreePath))) {
+      // Recreated only where the server would have made it, as turn start does.
+      if (
+        worktreePath != null &&
+        branch != null &&
+        !(yield* fileSystem.exists(worktreePath)) &&
+        (yield* isManagedWorktreePath(worktreePath))
+      ) {
         const project = yield* projects.get(projection.thread.projectId);
         if (Option.isSome(project)) {
           yield* gitWorkflow.pruneWorktrees({ cwd: project.value.workspaceRoot });
