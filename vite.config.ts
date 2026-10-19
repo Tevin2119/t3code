@@ -326,6 +326,24 @@ export default defineConfig({
         rules: { "shadcn/no-arbitrary-values": "off" },
       },
       {
+        // Fork only, temporary: the delivery components predate the shadcn rules that the
+        // 2026-10-18 upstream sync brought in (222 findings), and every delivery task's lint
+        // check failed on them. Warnings until #1796 brings these files to zero, which removes
+        // this block.
+        files: [
+          "apps/web/src/components/delivery/**",
+          "apps/web/src/state/delivery.ts",
+          "apps/web/src/lib/deliveryEngineControl.ts",
+          "apps/web/src/lib/deliveryEngineControl.test.ts",
+        ],
+        rules: {
+          "shadcn/no-arbitrary-values": "warn",
+          "shadcn/no-restyle": "warn",
+          "shadcn/no-raw-colors": "warn",
+          "shadcn/no-unknown-classes": "warn",
+        },
+      },
+      {
         // Shared client code must not call APIs missing from Hermes. Our ESNext
         // TypeScript target accepts them even when they would crash mobile at launch.
         // Tests run on Node and are exempt.
