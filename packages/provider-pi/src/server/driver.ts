@@ -218,7 +218,11 @@ export const PiDriver: ProviderDriver<PiSettings, PiDriverEnv, Path.Path> = {
                   ),
                 ),
               ]).pipe(
-                Effect.map(([machineSnapshot, commands]) => ({ ...machineSnapshot, ...commands })),
+                Effect.map(([machineSnapshot, commands]) => ({
+                  ...machineSnapshot,
+                  ...commands,
+                  slashCommandsPending: false,
+                })),
               ),
         orchestrationAdapter,
         textGeneration,

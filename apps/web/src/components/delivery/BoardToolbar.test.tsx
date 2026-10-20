@@ -21,6 +21,11 @@ vi.mock("@tanstack/react-router", () => ({ useNavigate: () => vi.fn() }));
 const mock = vi.hoisted(() => ({
   read: { body: null as unknown, error: null, isPending: false, refresh: vi.fn() },
   action: vi.fn(),
+  listeners: new Set<() => void>(),
+  /** A reading changed under a mounted panel: as the real atom would, wake its subscribers. */
+  notify: () => {
+    for (const listener of mock.listeners) listener();
+  },
 }));
 
 vi.mock("@effect/atom-react", () => ({ useAtomValue: () => ({ cwd: "/test" }) }));
@@ -38,11 +43,24 @@ vi.mock("../../state/environments", () => ({
     })),
   }),
 }));
-vi.mock("../../state/delivery", () => ({
-  useDeliveryRead: () => mock.read,
-  useDeliveryAct: () => mock.action,
-  useDeliveryEnabled: () => true,
-}));
+vi.mock("../../state/delivery", async () => {
+  const { useSyncExternalStore } = await import("react");
+  return {
+    // Subscribed, as the real read is: a compiled parent re-renders no child on its own.
+    useDeliveryRead: () => {
+      const body = useSyncExternalStore(
+        (listener) => {
+          mock.listeners.add(listener);
+          return () => mock.listeners.delete(listener);
+        },
+        () => mock.read.body,
+      );
+      return { ...mock.read, body };
+    },
+    useDeliveryAct: () => mock.action,
+    useDeliveryEnabled: () => true,
+  };
+});
 vi.mock("../../state/server", () => ({
   primaryServerKeybindingsAtom: {},
   serverEnvironment: { configValueAtom: () => ({}) },
@@ -418,6 +436,7 @@ describe("responsive board control ownership", () => {
           },
         },
       };
+      mock.notify();
       root.render(<ToolbarFixture />);
     });
     expect(element('[data-slot="dialog-popup"]')).toBe(dialog);

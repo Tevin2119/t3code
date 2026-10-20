@@ -1,13 +1,17 @@
 import { ArrowLeftIcon, ChartNoAxesColumnIcon, HomeIcon, SettingsIcon } from "lucide-react";
 import type { ReactNode } from "react";
-import { memo, useCallback } from "react";
+import { memo } from "react";
 import { Link, useLocation, useNavigate } from "@tanstack/react-router";
 
 import { useBoardAttention } from "../../hooks/useBoardAttention";
 import { useEnvironmentIdentificationMode } from "../../hooks/useSettings";
 import { cn } from "../../lib/utils";
 import { useDeliveryEnabled } from "../../state/delivery";
-import { useEnvironment, useEnvironments, usePrimaryEnvironmentId } from "../../state/environments";
+import {
+  useEnvironment,
+  usePrimaryEnvironmentId,
+  usePullRequestsSupported,
+} from "../../state/environments";
 
 import { T3Wordmark } from "../T3Wordmark";
 import {
@@ -90,14 +94,11 @@ export function SidebarBrandWidthProbe({
 }: {
   onWidthChange: (width: number) => void;
 }) {
-  const observeWidth = useCallback(
-    (probe: HTMLDivElement) => {
-      return observeResize(probe, ([entry]) => {
-        if (entry) onWidthChange(entry.borderBoxSize[0]?.inlineSize ?? probe.offsetWidth);
-      });
-    },
-    [onWidthChange],
-  );
+  const observeWidth = (probe: HTMLDivElement) => {
+    return observeResize(probe, ([entry]) => {
+      if (entry) onWidthChange(entry.borderBoxSize[0]?.inlineSize ?? probe.offsetWidth);
+    });
+  };
 
   return (
     <div
@@ -209,51 +210,45 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
   // Settings outlast a connection, so delivery being on does not say the count can be read.
   const primaryConnected = useEnvironment(primaryEnvironmentId)?.connection.phase === "connected";
   const boardAttention = useBoardAttention(primaryEnvironmentId, deliveryEnabled, primaryConnected);
-  const { environments } = useEnvironments();
-  // The page reads every connected server, so one of them offering pull requests is enough for
-  // the link to lead somewhere.
-  const pullRequestsSupported = environments.some(
-    (environment) => environment.serverConfig?.environment.capabilities.pullRequests === true,
-  );
-
-  const closeMobileSidebar = useCallback(() => {
+  const pullRequestsSupported = usePullRequestsSupported();
+  const closeMobileSidebar = () => {
     if (isMobile) {
       setOpenMobile(false);
     }
-  }, [isMobile, setOpenMobile]);
-  const handlePullRequestsClick = useCallback(() => {
+  };
+  const handlePullRequestsClick = () => {
     closeMobileSidebar();
     void navigate({
       to: "/pull-requests",
       search: readPullRequestListPreferences(),
     });
-  }, [closeMobileSidebar, navigate]);
-  const handleSettingsClick = useCallback(() => {
+  };
+  const handleSettingsClick = () => {
     closeMobileSidebar();
     void navigate({ to: "/settings" });
-  }, [closeMobileSidebar, navigate]);
+  };
 
-  const handleUsageClick = useCallback(() => {
+  const handleUsageClick = () => {
     if (isMobile) {
       setOpenMobile(false);
     }
     void navigate({ to: "/usage" });
-  }, [isMobile, navigate, setOpenMobile]);
+  };
 
-  const handleBoardClick = useCallback(() => {
+  const handleBoardClick = () => {
     closeMobileSidebar();
     void navigate({ to: "/board" });
-  }, [closeMobileSidebar, navigate]);
+  };
 
-  const handleBackClick = useCallback(() => {
+  const handleBackClick = () => {
     closeMobileSidebar();
     void navigateToMainApp();
-  }, [closeMobileSidebar, navigateToMainApp]);
+  };
 
-  const handleHomeClick = useCallback(() => {
+  const handleHomeClick = () => {
     closeMobileSidebar();
     void navigate({ to: "/" });
-  }, [closeMobileSidebar, navigate]);
+  };
 
   return (
     <SidebarMenu className="flex-row items-center">

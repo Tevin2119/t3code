@@ -32,17 +32,18 @@ const make = Effect.gen(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const host = yield* ProviderHost.ProviderHost;
-  const hostEnvironment = yield* HostProcess.Environment;
   const cache = makeAntigravityUsageCache();
 
-  const dataRoots = Effect.gen(function* () {
+  const dataRoots = Effect.fn("AntigravityUsage.dataRoots")(function* (
+    environment: NodeJS.ProcessEnv,
+  ) {
     const home = yield* HostProcess.HomeDirectory;
-    const configured = hostEnvironment["ANTIGRAVITY_DATA_DIR"]
+    const configured = environment["ANTIGRAVITY_DATA_DIR"]
       ?.split(",")
       .map((value) => value.trim())
       .filter(Boolean);
     const geminiHome = expandHomePath(
-      hostEnvironment["GEMINI_HOME"]?.trim() || path.join(home, ".gemini"),
+      environment["GEMINI_HOME"]?.trim() || path.join(home, ".gemini"),
       home,
     );
     const defaults = [
@@ -65,7 +66,8 @@ const make = Effect.gen(function* () {
     instances,
     windowStartMs,
   }) {
-    const roots = yield* dataRoots;
+    const roots: Array<string> = [];
+    for (const instance of instances) roots.push(...(yield* dataRoots(instance.environment)));
     // The model provider of each root's usage (fork). With a Google account the
     // tokens come out of the account's plan; an API key or Agent Platform bills
     // them at Gemini's or Vertex AI's rates.

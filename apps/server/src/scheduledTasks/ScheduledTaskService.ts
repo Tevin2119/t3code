@@ -761,6 +761,8 @@ export const layer = Layer.effect(
                 }),
               )
             : yield* Effect.exit(
+                // The stored selection only seeds fresh threads. A bound run
+                // follows the thread's current provider, so it passes none.
                 threadManagement.sendToThread({
                   projectId: active.projectId,
                   commandId,
@@ -769,7 +771,6 @@ export const layer = Layer.effect(
                   scheduledTaskId: active.id,
                   text: prompt,
                   attachments: [],
-                  modelSelection: active.modelSelection,
                   mode: "queue",
                   createdBy: active.createdBy,
                   creationSource: active.creationSource,
@@ -1397,8 +1398,9 @@ export const layer = Layer.effect(
         // because the delivery log is trimmed. A rate-limited delivery stays
         // held on the relay, so it must give up its claim or the next pass
         // would treat it as already delivered.
+        let claimAcquired = false;
         const releaseClaim = <A>(result: A) =>
-          request.relayDeliveryId === undefined
+          !claimAcquired || request.relayDeliveryId === undefined
             ? Effect.succeed(result)
             : sql`
                 DELETE FROM scheduled_task_webhook_relay_deliveries
@@ -1426,6 +1428,7 @@ export const layer = Layer.effect(
                 yield* observe("duplicate");
                 return { _tag: "accepted" as const, deliveryId, outcome: "duplicate" as const };
               }
+              claimAcquired = true;
               yield* sql`
                 DELETE FROM scheduled_task_webhook_relay_deliveries
                 WHERE seen_at < ${iso(DateTime.subtract(now, { hours: 48 }))}
@@ -1495,7 +1498,11 @@ export const layer = Layer.effect(
               return { _tag: "expired" as const };
             }
 
-            const rendered = renderWebhookPrompt(task.prompt, request);
+            const frameId = yield* crypto.randomBytes(6).pipe(
+              Effect.map((bytes) => Buffer.from(bytes).toString("hex")),
+              Effect.mapError((cause) => taskError("Could not generate frame id.", { cause })),
+            );
+            const rendered = renderWebhookPrompt(task.prompt, request, frameId);
             // Providers trim the prompt before checking, so whitespace around
             // it is free.
             if (rendered.prompt.trim().length > PROVIDER_SEND_TURN_MAX_INPUT_CHARS) {
@@ -1576,8 +1583,10 @@ export const layer = Layer.effect(
               Effect.ensuring(release),
               Effect.forkIn(serviceScope),
             );
+            // Dispatch owns the accepted delivery now; retries must keep its claim.
+            claimAcquired = false;
             return { _tag: "accepted" as const, deliveryId, outcome: "accepted" as const };
-          }),
+          }).pipe(Effect.onError(() => releaseClaim(undefined))),
         );
       });
 
