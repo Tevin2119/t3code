@@ -150,11 +150,15 @@ it("keeps artifact acceptance keyed inside an approval window", async () => {
   });
 });
 
-it.each([409, null])("does not force a key after status %s", async (status) => {
+it.each(
+  ["approve", "publish"].flatMap((action) =>
+    [403, 409, null].map((status) => ({ action, status })),
+  ),
+)("reasks only for a 403 after $action fails with $status", async ({ action, status }) => {
   mock.action.mockResolvedValueOnce({ ok: false, why: "Refused", status });
-  await open();
+  await open(action);
   await act(async () => submit().props.onClick());
-  expect(password()).toHaveLength(0);
+  expect(password()).toHaveLength(status === 403 ? 1 : 0);
 });
 it("follows the name edited inside the dialog", async () => {
   await open();

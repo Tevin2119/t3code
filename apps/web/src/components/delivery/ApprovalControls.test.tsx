@@ -186,3 +186,16 @@ it("disables turn off when the name is missing", async () => {
   expect(mock.action).not.toHaveBeenCalled();
   expect(JSON.stringify(renderer.toJSON())).toContain("Set your name");
 });
+
+it("prevents activation if the name is removed during the passphrase step", async () => {
+  await render();
+  await open();
+  input.value = "one-use";
+  await act(() => renderer.root.findByType("input").props.onChange({ target: input }));
+  mock.person = "";
+  await act(() => renderer.update(view()));
+  expect(find("data-full-auto-on").props.disabled).toBe(true);
+  expect(JSON.stringify(renderer.toJSON())).toContain("Set your name");
+  await act(() => find("data-full-auto-on").props.onClick());
+  expect(mock.action).not.toHaveBeenCalled();
+});
