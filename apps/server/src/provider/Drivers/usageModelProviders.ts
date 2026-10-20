@@ -18,6 +18,8 @@ import type {
 import type * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 
+import type * as CodexUsageHistory from "../../usage/CodexUsageHistory.ts";
+
 import { piUsageFormat, piUsageReader } from "@t3tools/provider-pi/server/usage";
 
 import { claudeUsageFormat, claudeUsageReader } from "./claudeUsage.ts";
@@ -113,10 +115,10 @@ export const attributedCodexUsageFormat: TranscriptUsageFormat<AttributedCodexSc
 export const attributedClaudeUsageReader: ProviderUsageReader<ClaudeSettings, Path.Path> =
   withFormat(claudeUsageReader, attributedClaudeUsageFormat as TranscriptUsageFormat<unknown>);
 
-export const attributedCodexUsageReader: ProviderUsageReader<CodexSettings, Path.Path> = withFormat(
-  codexUsageReader,
-  attributedCodexUsageFormat as TranscriptUsageFormat<unknown>,
-);
+export const attributedCodexUsageReader: ProviderUsageReader<
+  CodexSettings,
+  Path.Path | CodexUsageHistory.CodexUsageHistory
+> = withFormat(codexUsageReader, attributedCodexUsageFormat as TranscriptUsageFormat<unknown>);
 
 /**
  * Pi records the provider of each model it called ("openai-codex/gpt-6-luna"). Its tool and

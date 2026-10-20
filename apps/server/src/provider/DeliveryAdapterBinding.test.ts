@@ -186,9 +186,10 @@ it.effect("prepared team instructions and stdio tools reach the V2 native provid
               .mcpServers,
             "qualified",
           );
+          // Codex config overrides address each server by its own dotted key.
           assert.property(
-            codexThreadRuntimeParams({ mcpSession: undefined, threadId }).config.mcp_servers,
-            "qualified",
+            codexThreadRuntimeParams({ mcpSession: undefined, threadId }).config,
+            "mcp_servers.qualified",
           );
           return yield* new ProviderAdapterOpenSessionError({
             driver,

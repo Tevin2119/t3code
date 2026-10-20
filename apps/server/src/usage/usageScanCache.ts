@@ -16,10 +16,14 @@ import { GUARD_LENGTH, type TranscriptParsePosition } from "./usageTranscriptRea
 // v4: records carry Claude fast mode, which v3 rows never captured.
 // v5: Codex records carry their service tier. v4 rows store speed the same
 // way, so v4 entries still load; see `decodeScanCache` for v4 stateful entries.
-// v6 (fork): records also carry the model provider and how it is known. The
-// fork's own earlier v5 rows put those two where upstream v5 rows keep the
-// speed; such a row is 12 long, an upstream v5 row 11.
-const USAGE_SCAN_CACHE_VERSION = 6 as const;
+// v6, v7 (upstream): files count their malformed records, and Codex records
+// may name the turn whose service tier is still unresolved.
+// v8 (fork): records also carry the model provider and how it is known, as two
+// fields after the speed and before upstream's rate model. The fork wrote that
+// layout under version 6 too; such a row is at least 13 long where an upstream
+// v6 row is at most 12. The fork's own v5 rows put the two fields where
+// upstream v5 rows keep the speed; such a row is 12 long, an upstream v5 row 11.
+const USAGE_SCAN_CACHE_VERSION = 8 as const;
 const SPEED_COMPATIBLE_SINCE_VERSION = 4;
 /** Serialised as the index into this list. */
 const PROVIDER_SOURCE_CODES = [null, "recorded", "harness"] as const;
@@ -29,10 +33,13 @@ const PROVIDER_SOURCE_CODES = [null, "recorded", "harness"] as const;
  * replace it, dropping saved usage for deleted transcripts. Separate files keep
  * both.
  */
-export const SCAN_CACHE_FILE_NAME = "usage-scan-cache-v6.json";
-/** Upstream's v5 file, or the fork's own v5 file before it moved to v6. */
-export const PREVIOUS_SCAN_CACHE_FILE_NAME = "usage-scan-cache-v5.json";
-export const LEGACY_SCAN_CACHE_FILE_NAME = "usage-scan-cache.json";
+export const SCAN_CACHE_FILE_NAME = "usage-scan-cache-v8.json";
+export const LEGACY_SCAN_CACHE_FILE_NAMES = [
+  "usage-scan-cache-v7.json",
+  "usage-scan-cache-v6.json",
+  "usage-scan-cache-v5.json",
+  "usage-scan-cache.json",
+] as const;
 
 const SPEEDS: readonly UsageSpeed[] = ["standard", "fast", "ultrafast"];
 
@@ -47,6 +54,8 @@ export interface CachedFile {
    * re-reads that segment and would otherwise double count it.
    */
   readonly tailRecords: readonly UsageRecord[];
+  /** Whole-file count, including diagnostics from the tentative tail. */
+  readonly malformedRecords: number;
   readonly position: TranscriptParsePosition;
 }
 
@@ -68,8 +77,8 @@ type SerializedRecord = readonly [
   modelProviderIndex: number,
   /** Index into `PROVIDER_SOURCE_CODES`, or -1 when the record has none. */
   modelProviderSource: number,
-  /** Optional trailing field keeps existing cache rows readable. */
   rateModelIndex?: number | null,
+  unresolvedServiceTierTurnId?: string,
 ];
 
 interface SerializedFile {
@@ -78,6 +87,7 @@ interface SerializedFile {
   readonly p: UsageProviderKind;
   readonly r: readonly SerializedRecord[];
   readonly t: readonly SerializedRecord[];
+  readonly mr: number;
   readonly o: number;
   readonly gl: number;
   readonly gh: number;
@@ -135,6 +145,9 @@ function serializeFile(entry: CachedFile, tables: InternTables): SerializedFile 
     record.rateModel === undefined
       ? null
       : intern(tables.models, tables.modelIndex, record.rateModel),
+    ...(record.unresolvedServiceTierTurnId === undefined
+      ? ([] as const)
+      : ([record.unresolvedServiceTierTurnId] as const)),
   ];
   return {
     s: entry.size,
@@ -142,6 +155,7 @@ function serializeFile(entry: CachedFile, tables: InternTables): SerializedFile 
     p: entry.provider,
     r: entry.records.map(serializeRecord),
     t: entry.tailRecords.map(serializeRecord),
+    mr: entry.malformedRecords,
     o: entry.position.resumeOffset,
     gl: entry.position.guardLength,
     gh: entry.position.guardHash,
@@ -231,7 +245,11 @@ export function decodeScanCache(
   ): UsageRecord[] | null => {
     const records: UsageRecord[] = [];
     for (const row of rows) {
-      if (!isRecordArray(row) || row.length < (version >= 6 ? 13 : 11)) return null;
+      if (!isRecordArray(row)) return null;
+      // Fork rows carry the provider fields after the speed; upstream rows go
+      // straight to the rate model. Version 6 exists in both layouts.
+      const forkLayout = version >= 8 || (version === 6 && row.length >= 13);
+      if (row.length < (forkLayout ? 13 : 11)) return null;
       const [
         timestampMs,
         modelIndex,
@@ -252,10 +270,15 @@ export function decodeScanCache(
         : typeof speedIndex === "number"
           ? SPEEDS[speedIndex]
           : undefined;
-      const modelProviderIndex = version >= 6 ? row[11] : forkLegacy ? row[10] : -2;
-      const sourceIndex = version >= 6 ? row[12] : forkLegacy ? row[11] : -1;
-      // Upstream's rate model trails the fork's provider fields; rows written before it have none.
-      const rateModelIndex = version >= 6 ? row[13] : undefined;
+      const modelProviderIndex = forkLayout ? row[11] : forkLegacy ? row[10] : -2;
+      const sourceIndex = forkLayout ? row[12] : forkLegacy ? row[11] : -1;
+      const rateModelIndex = (forkLayout ? row[13] : forkLegacy ? undefined : row[11]) as
+        | number
+        | null
+        | undefined;
+      const unresolvedServiceTierTurnId = (
+        forkLayout ? row[14] : forkLegacy ? undefined : row[12]
+      ) as string | undefined;
       const modelProvider =
         modelProviderIndex === -2
           ? undefined
@@ -283,6 +306,8 @@ export function decodeScanCache(
         typeof timestampMs !== "number" ||
         !Number.isFinite(timestampMs) ||
         model === undefined ||
+        (unresolvedServiceTierTurnId !== undefined &&
+          typeof unresolvedServiceTierTurnId !== "string") ||
         (rateModelIndex != null && rateModel === undefined) ||
         !Number.isFinite(uncached) ||
         !Number.isFinite(cached) ||
@@ -315,6 +340,9 @@ export function decodeScanCache(
         },
         reportedCostUsd: typeof reportedCostUsd === "number" ? reportedCostUsd : null,
         speed,
+        ...(version >= 7 && unresolvedServiceTierTurnId !== undefined
+          ? { unresolvedServiceTierTurnId }
+          : {}),
         dedupeKey: typeof dedupeKey === "string" ? dedupeKey : null,
       });
     }
@@ -329,6 +357,8 @@ export function decodeScanCache(
     const format = formats.get(entry.p);
     if (format === undefined) continue;
     if (!isRecordArray(entry.r) || !isRecordArray(entry.t)) continue;
+    const malformedRecords = entry.mr === undefined ? 0 : entry.mr;
+    if (!Number.isSafeInteger(malformedRecords) || malformedRecords < 0) continue;
     // Position fields feed byte offsets and a Buffer allocation in the reader,
     // so anything outside their real ranges must reject the entry: a bogus
     // guard length would otherwise fail every parse of the file, silently
@@ -347,11 +377,10 @@ export function decodeScanCache(
     ) {
       continue;
     }
-    // v4 records of stateful formats (Codex) predate service tiers, so they
-    // all priced as standard. Keep them, because the rollout may be gone, but
-    // make a live rollout re-parse whole: no file has size -1, and a zero
-    // position cannot resume.
-    const legacy = format.state !== undefined && version < USAGE_SCAN_CACHE_VERSION;
+    // Keep history for deleted rollouts, but re-parse incompatible reducer state.
+    // Only Codex requires new provenance state in v7.
+    const legacy =
+      format.state !== undefined && (version < 6 || (entry.p === "codex" && version < 7));
     // A corrupt state disqualifies the entry: resuming with it would attach
     // appended usage to the wrong model or replay fork-copied history.
     if (!legacy && !isValidState.get(entry.p)?.(entry.cs)) continue;
@@ -367,6 +396,7 @@ export function decodeScanCache(
       provider,
       records,
       tailRecords,
+      malformedRecords,
       position: legacy
         ? { resumeOffset: 0, guardLength: 0, guardHash: 0, state: null }
         : {
