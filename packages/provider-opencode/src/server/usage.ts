@@ -307,33 +307,28 @@ export const readOpenCodeUsage = Effect.fn("readOpenCodeUsage")(function* (
 });
 
 const resolveOpenCodeDataDirs = Effect.fn("resolveOpenCodeDataDirs")(function* (
-  instanceEnvironments: ReadonlyArray<NodeJS.ProcessEnv> = [],
+  environment: NodeJS.ProcessEnv,
 ) {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const hostEnvironment = yield* HostProcess.Environment;
   const homeDirectory = yield* HostProcess.HomeDirectory;
+  const roots = environment["OPENCODE_DATA_DIR"]
+    ?.split(",")
+    .map((value) => value.trim())
+    .filter(Boolean);
+  const dataHome = environment["XDG_DATA_HOME"]?.trim();
+  const defaults = [
+    path.join(
+      dataHome && path.isAbsolute(dataHome)
+        ? dataHome
+        : path.join(homeDirectory, ".local", "share"),
+      "opencode",
+    ),
+  ];
   const canonical = new Set<string>();
-  for (const environment of [hostEnvironment, ...instanceEnvironments]) {
-    const roots = environment["OPENCODE_DATA_DIR"]
-      ?.split(",")
-      .map((value) => value.trim())
-      .filter(Boolean);
-    const dataHome = environment["XDG_DATA_HOME"]?.trim();
-    const defaults = [
-      path.join(
-        dataHome && path.isAbsolute(dataHome)
-          ? dataHome
-          : path.join(homeDirectory, ".local", "share"),
-        "opencode",
-      ),
-    ];
-    for (const root of roots?.length ? roots : defaults) {
-      const resolved = path.resolve(expandHomePath(root, homeDirectory));
-      canonical.add(
-        yield* fileSystem.realPath(resolved).pipe(Effect.orElseSucceed(() => resolved)),
-      );
-    }
+  for (const root of roots?.length ? roots : defaults) {
+    const resolved = path.resolve(expandHomePath(root, homeDirectory));
+    canonical.add(yield* fileSystem.realPath(resolved).pipe(Effect.orElseSucceed(() => resolved)));
   }
   return [...canonical];
 });
@@ -344,9 +339,10 @@ export const openCodeUsageReader: ProviderUsageReader<OpenCodeSettings, OpenCode
   kind: "scan",
   provider: "opencode",
   scan: Effect.fn("openCodeUsageReader.scan")(function* ({ instances, windowStartMs }) {
-    const roots = yield* resolveOpenCodeDataDirs(
-      instances.filter((instance) => instance.configured).map((instance) => instance.environment),
-    );
+    const roots = new Set<string>();
+    for (const instance of instances) {
+      for (const root of yield* resolveOpenCodeDataDirs(instance.environment)) roots.add(root);
+    }
     return yield* Effect.forEach(
       roots,
       (dir) =>

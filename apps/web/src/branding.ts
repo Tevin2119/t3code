@@ -27,3 +27,4 @@ export const APP_DISPLAY_NAME =
 export const APP_VERSION = import.meta.env.APP_VERSION || "0.0.0";
 /** The commit and time of the build that is running, as `abc123def · 2026-09-29 19:40 UTC`. */
 export const APP_BUILD = import.meta.env.APP_BUILD || "development";
+export const DESKTOP_DOWNLOAD_URL = "https://t3.codes/download";
