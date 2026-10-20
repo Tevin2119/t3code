@@ -178,3 +178,15 @@ it("never uses someone else's window", async () => {
   await open();
   expect(password()).toHaveLength(1);
 });
+
+it("requires the passphrase when the actor's reported window has expired", async () => {
+  mock.body = {
+    approvalWindow: {
+      open: true,
+      windows: [{ by: "Sam", expiresAt: "2026-10-19T09:59:00Z" }],
+    },
+  };
+  await open();
+  expect(password()).toHaveLength(1);
+  expect(submit().props.disabled).toBe(true);
+});

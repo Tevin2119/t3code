@@ -53,6 +53,14 @@ async function open() {
   expect(JSON.stringify(find("data-full-auto-warning").props.children)).toContain(
     "bypassing approvals",
   );
+  const warning = find("data-full-auto-warning").props.children;
+  for (const fact of [
+    "engine signs off by itself",
+    "go straight to pull requests",
+    "stays on until you turn it off",
+    "merges, closes or moves work",
+  ])
+    expect(warning).toContain(fact);
   await act(() => find("data-full-auto-continue").props.onClick());
 }
 beforeEach(() => {
@@ -185,6 +193,24 @@ it("disables turn off when the name is missing", async () => {
   await act(async () => find("data-full-auto-off").props.onClick());
   expect(mock.action).not.toHaveBeenCalled();
   expect(JSON.stringify(renderer.toJSON())).toContain("Set your name");
+});
+
+it("disables the off switch when no person is set", async () => {
+  mock.person = "";
+  await render();
+  expect(renderer.root.findByType("switch").props.disabled).toBe(true);
+  expect(JSON.stringify(renderer.toJSON())).toContain("Set your name");
+  expect(mock.action).not.toHaveBeenCalled();
+});
+
+it("hides an expired window without hiding the supported auto switch", async () => {
+  body.approvalWindow = {
+    open: true,
+    windows: [{ by: "Sam", expiresAt: "2026-10-19T09:59:00Z" }],
+  };
+  await render();
+  expect(renderer.root.findAllByProps({ "data-approval-end": true })).toHaveLength(0);
+  expect(renderer.root.findByType("switch").props.checked).toBe(false);
 });
 
 it("prevents activation if the name is removed during the passphrase step", async () => {
