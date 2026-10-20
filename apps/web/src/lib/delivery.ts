@@ -1376,9 +1376,13 @@ export interface TimelineEntry {
 export function fullAutoAttribution(entry: Pick<TimelineEntry, "by" | "fullAuto">) {
   if (entry.fullAuto) return entry.fullAuto;
   const match = /^full auto, turned on by (.+) at (.+)$/.exec(entry.by);
-  return match && Number.isFinite(Date.parse(match[2]!))
-    ? { by: match[1]!, since: match[2]! }
-    : null;
+  if (match) {
+    return {
+      by: match[1]!.trim() || null,
+      since: Number.isFinite(Date.parse(match[2]!)) ? match[2]! : null,
+    };
+  }
+  return entry.by === "full auto" ? { by: null, since: null } : null;
 }
 
 const parseTimeline = (value: unknown): ReadonlyArray<TimelineEntry> =>

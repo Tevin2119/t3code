@@ -11,12 +11,16 @@ const mock = vi.hoisted(() => ({
   setPerson: vi.fn(),
   body: null as unknown,
   error: null as string | null,
+  read: vi.fn(),
 }));
 vi.mock("../../state/delivery", () => ({
   usePersonName: () => "Sam",
   useMinuteClock: () => Date.parse("2026-10-19T10:00:00Z"),
   useDeliveryAct: () => mock.action,
-  useDeliveryRead: () => ({ body: mock.body, error: mock.error, refresh: mock.refresh }),
+  useDeliveryRead: (...args: unknown[]) => {
+    mock.read(...args);
+    return { body: mock.body, error: mock.error, refresh: mock.refresh };
+  },
   useBoardStore: (select: (state: { setPerson: typeof mock.setPerson }) => unknown) =>
     select({ setPerson: mock.setPerson }),
 }));
@@ -67,6 +71,7 @@ beforeEach(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   mock.action.mockReset().mockResolvedValue({ ok: true });
   mock.refresh.mockClear();
+  mock.read.mockClear();
   mock.body = openWindow;
   mock.error = null;
 });
@@ -83,7 +88,7 @@ it.each(["approve", "publish"])("omits the key property for keyless %s", async (
       ? [["/api/runs/run-1/decide", { decision: "approve", candidate: "abc123", actor: "Sam" }]]
       : [["/api/tasks/task-1/publish", { by: "Sam", candidate: "abc123" }]],
   );
-  expect(mock.refresh).toHaveBeenCalledOnce();
+  expect(mock.refresh).toHaveBeenCalledTimes(2);
 });
 it.each([{}, { approvalWindow: { open: "true" } }, null])(
   "keeps keyed sign-off for absent or invalid window %j",
@@ -107,7 +112,7 @@ it("restores the key in place on refusal, preserving notes and candidate", async
     renderer.root.findByType("textarea").props.onChange({ target: { value: "Keep these notes" } }),
   );
   await act(async () => submit().props.onClick());
-  expect(mock.refresh).toHaveBeenCalledOnce();
+  expect(mock.refresh).toHaveBeenCalledTimes(2);
   expect(password()).toHaveLength(1);
   expect(renderer.root.findByType("textarea").props.value).toBe("Keep these notes");
   expect(JSON.stringify(renderer.toJSON())).toContain("Window ended");
@@ -189,4 +194,19 @@ it("requires the passphrase when the actor's reported window has expired", async
   await open();
   expect(password()).toHaveLength(1);
   expect(submit().props.disabled).toBe(true);
+});
+
+it.each([{}, openWindow])("polls faster only with an open sign-off dialog: %j", async (body) => {
+  mock.body = body;
+  await act(() => {
+    renderer = create(<Probe />);
+  });
+  expect(mock.read.mock.lastCall?.[1]).toBe("/api/health");
+  expect(mock.read.mock.lastCall?.[2]?.pollMs).toBeUndefined();
+  expect(mock.refresh).not.toHaveBeenCalled();
+  await act(() => actions.run(target, "approve"));
+  expect(mock.refresh).toHaveBeenCalledOnce();
+  expect(mock.read.mock.lastCall?.[2]?.pollMs).toBe(5000);
+  await act(() => renderer.root.findByType("dialog").props.onOpenChange(false));
+  expect(mock.read.mock.lastCall?.[2]?.pollMs).toBeUndefined();
 });

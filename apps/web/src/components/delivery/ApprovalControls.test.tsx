@@ -33,8 +33,10 @@ let renderer: ReactTestRenderer;
 let input: { value: string };
 let body: Record<string, unknown>;
 let error: string | null;
+let sidebar: boolean;
 const view = () => (
   <ApprovalControls
+    sidebar={sidebar}
     environmentId={EnvironmentId.make("env-a")}
     health={{ body, error, refresh: mock.refresh }}
   />
@@ -71,6 +73,7 @@ beforeEach(() => {
   mock.personRead.mockClear();
   input = { value: "" };
   error = null;
+  sidebar = false;
   body = { fullAuto: { on: false, by: null, since: null } };
 });
 afterEach(async () => {
@@ -224,4 +227,50 @@ it("prevents activation if the name is removed during the passphrase step", asyn
   expect(JSON.stringify(renderer.toJSON())).toContain("Set your name");
   await act(() => find("data-full-auto-on").props.onClick());
   expect(mock.action).not.toHaveBeenCalled();
+});
+
+it.each([false, true])(
+  "keeps the off switch engine-only for another person's window (sidebar=%s)",
+  async (value) => {
+    sidebar = value;
+    body.approvalWindow = {
+      open: true,
+      windows: [{ by: "Alex", expiresAt: "2026-10-19T10:10:00Z" }],
+    };
+    await render();
+    if (sidebar) expect(renderer.toJSON()).toBeNull();
+    else expect(renderer.root.findByType("switch").props.checked).toBe(false);
+  },
+);
+it.each([
+  { by: "Alex", expiresAt: "2026-10-19T10:10:00Z" },
+  { by: "Sam", expiresAt: "2026-10-19T10:00:00Z" },
+])("renders no sidebar wrapper without a current window: %j", async (window) => {
+  sidebar = true;
+  body = { approvalWindow: { open: true, windows: [window] } };
+  await render();
+  expect(renderer.toJSON()).toBeNull();
+});
+it.each([
+  { by: "", since: null },
+  { by: "   ", since: "oops" },
+  { by: "Alex", since: "oops" },
+  { by: "", since: "2026-10-19T09:00:00Z" },
+])("keeps turn off available with partial attribution %j", async (attribution) => {
+  body = { fullAuto: { on: true, ...attribution } };
+  await render();
+  const output = JSON.stringify(renderer.toJSON());
+  expect(output).toContain("Full auto ");
+  expect(renderer.root.findByType("switch").props.checked).toBe(true);
+  expect(output).not.toContain("Turned on by ,");
+  if (!attribution.by.trim()) expect(output).not.toContain("Turned on by");
+  if (attribution.since === "oops" || attribution.since === null)
+    expect(output).not.toContain("since ");
+  await act(async () => find("data-full-auto-off").props.onClick());
+  expect(mock.action).toHaveBeenCalledExactlyOnceWith("/api/engine/auto/off", { by: "Sam" });
+});
+it("shows the supported off switch in the sidebar without a window", async () => {
+  sidebar = true;
+  await render();
+  expect(renderer.root.findByType("switch").props.checked).toBe(false);
 });

@@ -235,18 +235,25 @@ describe("approval capabilities", () => {
   ])("ignores unusable window %j", (approvalWindow) => {
     expect(parseDeliveryEngineHealth({ approvalWindow }).approvalWindow).toBeNull();
   });
-  it.each([
-    null,
-    [],
-    "wrong",
-    { on: "true" },
-    { on: true },
-    { on: true, by: "Sam", since: "oops" },
-  ])("ignores unusable auto %j", (fullAuto) => {
+  it.each([null, [], "wrong", { on: "true" }])("ignores unusable auto %j", (fullAuto) => {
     expect(parseDeliveryEngineHealth({ fullAuto }).fullAuto).toBeNull();
   });
   it("counts remaining minutes without negative ages", () => {
     expect(minutesLeft(older.expiresAt, Date.parse(older.openedAt))).toBe(10);
     expect(minutesLeft(older.expiresAt, Date.parse(newer.expiresAt))).toBe(0);
+  });
+});
+
+it.each([
+  { on: true },
+  { on: true, by: "", since: null },
+  { on: true, by: "   ", since: "oops" },
+  { on: true, by: "Sam", since: "oops" },
+  { on: true, by: "", since: "2026-10-19T10:00:00Z" },
+])("retains enabled auto with unknown attribution: %j", (fullAuto) => {
+  expect(parseDeliveryEngineHealth({ fullAuto }).fullAuto).toEqual({
+    on: true,
+    by: fullAuto.by?.trim() ? fullAuto.by : null,
+    since: fullAuto.since && fullAuto.since !== "oops" ? fullAuto.since : null,
   });
 });

@@ -173,7 +173,11 @@ function ShowSection(props: {
   );
 }
 
-function FullAutoAttribution({ entry }: { readonly entry: TimelineEntry }) {
+export function FullAutoAttribution({
+  entry,
+}: {
+  readonly entry: Pick<TimelineEntry, "by" | "fullAuto">;
+}) {
   const attribution = fullAutoAttribution(entry);
   if (!attribution) return null;
   return (
@@ -182,9 +186,13 @@ function FullAutoAttribution({ entry }: { readonly entry: TimelineEntry }) {
       data-full-auto-attribution
     >
       <Badge variant="outline">Full auto</Badge>
-      <span>
-        turned on by {attribution.by}, {time(attribution.since)}
-      </span>
+      {attribution.by || attribution.since ? (
+        <span>
+          {attribution.by ? `turned on by ${attribution.by}` : null}
+          {attribution.by && attribution.since ? ", " : null}
+          {attribution.since ? time(attribution.since) : null}
+        </span>
+      ) : null}
     </span>
   );
 }

@@ -56,11 +56,14 @@ function parseApprovalWindow(value: unknown, person?: string) {
 function parseFullAuto(value: unknown) {
   if (!isRecord(value) || typeof value.on !== "boolean") return null;
   if (!value.on) return { on: false, by: null, since: null };
-  return typeof value.by === "string" &&
-    typeof value.since === "string" &&
-    Number.isFinite(Date.parse(value.since))
-    ? { on: true, by: value.by, since: value.since }
-    : null;
+  return {
+    on: true,
+    by: typeof value.by === "string" && value.by.trim() ? value.by : null,
+    since:
+      typeof value.since === "string" && Number.isFinite(Date.parse(value.since))
+        ? value.since
+        : null,
+  };
 }
 
 export function minutesLeft(until: string | null, now: number): number {

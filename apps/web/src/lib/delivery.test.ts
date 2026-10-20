@@ -1543,6 +1543,10 @@ it("attributes the engine actor string and prefers structured full auto data", (
   expect(fullAutoAttribution({ by, fullAuto })).toEqual(fullAuto);
   expect(
     fullAutoAttribution({ by: "full auto, turned on by Alex at oops", fullAuto: null }),
-  ).toBeNull();
+  ).toEqual({ by: "Alex", since: null });
+  expect(fullAutoAttribution({ by: "full auto", fullAuto: null })).toEqual({
+    by: null,
+    since: null,
+  });
   expect(fullAutoAttribution({ by: "Sam", fullAuto: null })).toBeNull();
 });

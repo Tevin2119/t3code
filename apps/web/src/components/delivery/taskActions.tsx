@@ -94,41 +94,42 @@ export function useTaskActions(
 ) {
   const person = usePersonName();
   const act = useDeliveryAct(environmentId, "task action");
-  const health = useDeliveryRead(environmentId, "/api/health", { pollMs: 5000 });
+  const [decision, setDecision] = useState<Decision | null>(null);
+  const health = useDeliveryRead(
+    environmentId,
+    "/api/health",
+    decision !== null ? { pollMs: 5000 } : {},
+  );
   const { refresh: refreshHealth } = health;
   const [requireKey, setRequireKey] = useState(false);
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
-  const [decision, setDecision] = useState<Decision | null>(null);
   const [confirming, setConfirming] = useState<Confirming | null>(null);
   const { onDone, onDiscarded } = options;
   // One request at a time. A second press while one is out is dropped, not queued: the state it
   // was pressed against may be gone by the time the first returns. A lost answer is not sent again.
   const inFlight = useRef(false);
 
-  const sendDecision = useCallback(
-    async (path: string, body: Record<string, unknown>) => {
-      if (inFlight.current) {
-        setProblem("Another step is being sent. Wait for it, then try again.");
-        return { ok: false, status: null };
-      }
-      inFlight.current = true;
-      setBusy(true);
-      setProblem(null);
-      const result = await act(path, body);
-      const signoff = path.endsWith("/decide") || path.endsWith("/publish");
-      if (signoff || Object.hasOwn(body, "key")) refreshHealth();
-      inFlight.current = false;
-      setBusy(false);
-      onDone();
-      if (!result.ok) {
-        setProblem(result.why);
-        return { ok: false, status: result.status };
-      }
-      return { ok: true, status: null };
-    },
-    [act, onDone, refreshHealth],
-  );
+  const sendDecision = async (path: string, body: Record<string, unknown>) => {
+    if (inFlight.current) {
+      setProblem("Another step is being sent. Wait for it, then try again.");
+      return { ok: false, status: null };
+    }
+    inFlight.current = true;
+    setBusy(true);
+    setProblem(null);
+    const result = await act(path, body);
+    const signoff = path.endsWith("/decide") || path.endsWith("/publish");
+    if (signoff || Object.hasOwn(body, "key")) refreshHealth();
+    inFlight.current = false;
+    setBusy(false);
+    onDone();
+    if (!result.ok) {
+      setProblem(result.why);
+      return { ok: false, status: result.status };
+    }
+    return { ok: true, status: null };
+  };
 
   const send = async (path: string, body: Record<string, unknown>) =>
     (await sendDecision(path, body)).ok;
@@ -149,6 +150,7 @@ export function useTaskActions(
       ) {
         setProblem(null);
         setRequireKey(false);
+        refreshHealth();
         setDecision({ card, decision: action });
         return;
       }
@@ -165,7 +167,7 @@ export function useTaskActions(
         if (card.run) void send(`/api/runs/${card.run.id}/stop`, {});
       } else void send(`/api/tasks/${card.id}/control`, { action, by: person });
     },
-    [onDiscarded, person, send],
+    [onDiscarded, person, refreshHealth, send],
   );
 
   const move = useCallback(

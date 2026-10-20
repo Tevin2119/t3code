@@ -29,27 +29,33 @@ export function SidebarApprovalControls() {
   const connected = useEnvironment(environmentId)?.connection.phase === "connected";
   const active = enabled && connected ? environmentId : null;
   const health = useDeliveryRead(active, active ? "/api/health" : null, { pollMs: 30_000 });
-  return active ? <ApprovalControls environmentId={active} health={health} /> : null;
+  return active ? <ApprovalControls environmentId={active} health={health} sidebar /> : null;
 }
 
 /** Shared by the sidebar and the engine dialog; health alone controls the switch. */
 export function ApprovalControls({
   environmentId,
   health,
+  sidebar = false,
 }: {
+  readonly sidebar?: boolean;
   readonly environmentId: EnvironmentId;
   readonly health: Pick<ReturnType<typeof useDeliveryRead>, "body" | "error" | "refresh">;
 }) {
   if (health.error || health.body === null) return null;
   const summary = parseDeliveryEngineHealth(health.body);
   if (summary.approvalWindow === null && summary.fullAuto === null) return null;
-  return <SupportedApprovalControls environmentId={environmentId} health={health} />;
+  return (
+    <SupportedApprovalControls environmentId={environmentId} health={health} sidebar={sidebar} />
+  );
 }
 
 function SupportedApprovalControls({
   environmentId,
   health,
+  sidebar = false,
 }: {
+  readonly sidebar?: boolean;
   readonly environmentId: EnvironmentId;
   readonly health: Pick<ReturnType<typeof useDeliveryRead>, "body" | "error" | "refresh">;
 }) {
@@ -94,10 +100,12 @@ function SupportedApprovalControls({
   if (health.error || health.body === null) return null;
   const window = summary.approvalWindow;
   const auto = summary.fullAuto;
-  if (!window?.open && !auto) return null;
+  const ownWindow = window?.open && window.by === person && minutesLeft(window.until, now) > 0;
+  const showAuto = auto !== null && !(sidebar && window?.open && window.by !== person && !auto.on);
+  if (!ownWindow && !showAuto) return null;
   return (
     <div className="flex flex-col gap-2 text-xs">
-      {window?.open && window.by === person && minutesLeft(window.until, now) > 0 ? (
+      {ownWindow ? (
         <div
           data-delivery-approval-window
           className="flex flex-wrap items-center gap-2 rounded-lg bg-sidebar-control-surface px-2 py-1.5"
@@ -114,7 +122,7 @@ function SupportedApprovalControls({
           </Button>
         </div>
       ) : null}
-      {auto ? (
+      {showAuto && auto ? (
         <div
           data-delivery-full-auto
           className="flex flex-wrap items-center gap-2 rounded-lg bg-sidebar-control-surface px-2 py-1.5"
@@ -134,10 +142,13 @@ function SupportedApprovalControls({
           />
           {auto.on ? (
             <>
-              <span className="min-w-0 wrap-break-word">
-                Turned on by {auto.by}, since{" "}
-                {auto.since ? new Date(auto.since).toLocaleString() : ""}
-              </span>
+              {auto.by || auto.since ? (
+                <span className="min-w-0 wrap-break-word">
+                  {auto.by ? `Turned on by ${auto.by}` : null}
+                  {auto.by && auto.since ? ", " : null}
+                  {auto.since ? `since ${new Date(auto.since).toLocaleString()}` : null}
+                </span>
+              ) : null}
               <Button
                 size="xs"
                 variant="outline"
