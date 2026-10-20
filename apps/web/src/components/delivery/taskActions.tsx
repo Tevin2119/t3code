@@ -1,11 +1,18 @@
 import type { EnvironmentId } from "@t3tools/contracts";
 import { useCallback, useRef, useState } from "react";
 
+import { minutesLeft, parseDeliveryEngineHealth } from "../../lib/deliveryEngineControl";
 import type { DeliveryCard } from "../../lib/delivery";
 import { ACTION_LABEL, LANE_TITLE, moveIntent } from "../../lib/deliveryBoard";
 
 export { ACTION_LABEL };
-import { useBoardStore, useDeliveryAct, usePersonName } from "../../state/delivery";
+import {
+  useBoardStore,
+  useDeliveryAct,
+  useDeliveryRead,
+  useMinuteClock,
+  usePersonName,
+} from "../../state/delivery";
 import { Button } from "../ui/button";
 import {
   Dialog,
@@ -87,6 +94,9 @@ export function useTaskActions(
 ) {
   const person = usePersonName();
   const act = useDeliveryAct(environmentId, "task action");
+  const health = useDeliveryRead(environmentId, "/api/health", { pollMs: 5000 });
+  const { refresh: refreshHealth } = health;
+  const [requireKey, setRequireKey] = useState(false);
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
   const [decision, setDecision] = useState<Decision | null>(null);
@@ -96,27 +106,37 @@ export function useTaskActions(
   // was pressed against may be gone by the time the first returns. A lost answer is not sent again.
   const inFlight = useRef(false);
 
-  const send = useCallback(
+  const sendDecision = useCallback(
     async (path: string, body: Record<string, unknown>) => {
       if (inFlight.current) {
         setProblem("Another step is being sent. Wait for it, then try again.");
-        return false;
+        return { ok: false, status: null };
       }
       inFlight.current = true;
       setBusy(true);
       setProblem(null);
       const result = await act(path, body);
+      const signoff = path.endsWith("/decide") || path.endsWith("/publish");
+      if (signoff || Object.hasOwn(body, "key")) refreshHealth();
       inFlight.current = false;
       setBusy(false);
       onDone();
       if (!result.ok) {
         setProblem(result.why);
-        return false;
+        return { ok: false, status: result.status };
       }
-      return true;
+      return { ok: true, status: null };
     },
-    [act, onDone],
+    [act, onDone, refreshHealth],
   );
+
+  const send = async (path: string, body: Record<string, unknown>) =>
+    (await sendDecision(path, body)).ok;
+  const decide = async (path: string, body: Record<string, unknown>) => {
+    const result = await sendDecision(path, body);
+    if (!result.ok && result.status === 403 && !Object.hasOwn(body, "key")) setRequireKey(true);
+    return result.ok;
+  };
 
   const run = useCallback(
     (card: Target, action: string) => {
@@ -128,6 +148,7 @@ export function useTaskActions(
         action === "accept-artifacts"
       ) {
         setProblem(null);
+        setRequireKey(false);
         setDecision({ card, decision: action });
         return;
       }
@@ -228,28 +249,30 @@ export function useTaskActions(
     ) : decision ? (
       <DecisionDialog
         decision={decision}
+        healthBody={!health.error ? health.body : null}
+        requireKey={requireKey}
         busy={busy}
         problem={problem}
         onClose={() => setDecision(null)}
         onDecide={(input) =>
           decision.decision === "accept-artifacts"
-            ? send(`/api/tasks/${decision.card.id}/control`, {
+            ? decide(`/api/tasks/${decision.card.id}/control`, {
                 action: "accept-artifacts",
                 run: decision.card.run?.id,
                 by: input.actor,
                 key: input.key,
               })
             : decision.decision === "publish"
-              ? send(`/api/tasks/${decision.card.id}/publish`, {
+              ? decide(`/api/tasks/${decision.card.id}/publish`, {
                   by: input.actor,
-                  key: input.key,
+                  ...(input.key === undefined ? {} : { key: input.key }),
                   // The commit the dialog names: if another is approved now, nothing is pushed.
                   ...(decision.card.run?.candidate
                     ? { candidate: decision.card.run.candidate }
                     : {}),
                 })
               : decision.card.run
-                ? send(`/api/runs/${decision.card.run.id}/decide`, {
+                ? decide(`/api/runs/${decision.card.run.id}/decide`, {
                     decision: decision.decision,
                     // The candidate the person was shown: if another is waiting now, nothing is decided.
                     ...(decision.card.run.candidate
@@ -266,18 +289,30 @@ export function useTaskActions(
 
 function DecisionDialog(props: {
   readonly decision: Decision;
+  readonly healthBody: unknown;
+  readonly requireKey: boolean;
   readonly busy: boolean;
   readonly problem: string | null;
   readonly onClose: () => void;
   readonly onDecide: (input: {
     readonly actor: string;
-    readonly key: string;
+    readonly key?: string;
     readonly notes?: string;
   }) => Promise<boolean>;
 }) {
   const person = usePersonName();
+  const now = useMinuteClock();
   const setPerson = useBoardStore((state) => state.setPerson);
   const [actor, setActor] = useState(person);
+  const window = parseDeliveryEngineHealth(props.healthBody, actor.trim()).approvalWindow;
+  const windowUntil =
+    !props.requireKey &&
+    props.decision.decision !== "accept-artifacts" &&
+    window?.open &&
+    window.by === actor.trim()
+      ? window.until
+      : null;
+  const windowOpen = windowUntil !== null && minutesLeft(windowUntil, now) > 0;
   const [approvalKey, setApprovalKey] = useState("");
   const [notes, setNotes] = useState("");
   const { card, decision } = props.decision;
@@ -338,17 +373,20 @@ function DecisionDialog(props: {
                 {card.run?.candidate ? ` ${card.run.candidate.slice(0, 10)}` : ""} to its own branch
                 and opens one pull request for it, or finds the one already open. It is checked
                 again first: the approval must still stand for that commit and every check must have
-                passed. Nothing is merged; that is done on the repository host. Use this
-                environment's approval passphrase, or its terminal key if no passphrase is set. T3
-                does not save it.
+                passed. Nothing is merged; that is done on the repository host.{" "}
+                {windowOpen
+                  ? ""
+                  : "Use this environment's approval passphrase, or its terminal key if no passphrase is set. T3 does not save it."}
               </p>
             ) : (
               <p className="text-muted-foreground">
                 A decision is recorded against the commit that was tested
                 {card.run?.candidate ? ` (${card.run.candidate.slice(0, 10)})` : ""}. Approving is
                 not merging. Where publishing is on, the approved commit is then pushed and one pull
-                request opened for review. Use this environment's approval passphrase, or its
-                terminal key if no passphrase is set. T3 does not save it.
+                request opened for review.{" "}
+                {windowOpen
+                  ? ""
+                  : "Use this environment's approval passphrase, or its terminal key if no passphrase is set. T3 does not save it."}
               </p>
             )}
             <Input
@@ -357,15 +395,22 @@ function DecisionDialog(props: {
               value={actor}
               onChange={(event) => setActor(event.target.value)}
             />
-            <Input
-              aria-label="Approval passphrase or terminal key"
-              placeholder="Approval passphrase or terminal key"
-              name="delivery-approval"
-              type="password"
-              autoComplete="current-password"
-              value={approvalKey}
-              onChange={(event) => setApprovalKey(event.target.value)}
-            />
+            {windowOpen ? (
+              <p data-approvals-open>
+                Approvals are open; no passphrase needed. {minutesLeft(windowUntil, now)} minutes
+                left.
+              </p>
+            ) : (
+              <Input
+                aria-label="Approval passphrase or terminal key"
+                placeholder="Approval passphrase or terminal key"
+                name="delivery-approval"
+                type="password"
+                autoComplete="current-password"
+                value={approvalKey}
+                onChange={(event) => setApprovalKey(event.target.value)}
+              />
+            )}
             {approving || publishing ? null : (
               <Textarea
                 aria-label="What to redo"
@@ -389,7 +434,7 @@ function DecisionDialog(props: {
             disabled={
               props.busy ||
               !actor.trim() ||
-              !approvalKey ||
+              (!windowOpen && !approvalKey) ||
               (!approving && !publishing && !notes.trim())
             }
             onClick={() => {
@@ -397,7 +442,7 @@ function DecisionDialog(props: {
               void props
                 .onDecide({
                   actor: actor.trim(),
-                  key: approvalKey,
+                  ...(windowOpen ? {} : { key: approvalKey }),
                   ...(notes.trim() ? { notes: notes.trim() } : {}),
                 })
                 .then((done) => {

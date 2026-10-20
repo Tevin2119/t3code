@@ -1,3 +1,4 @@
+import { ApprovalControls } from "./ApprovalControls";
 import { useAtomValue } from "@effect/atom-react";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
@@ -241,6 +242,7 @@ function EngineControl(props: {
             </p>
             {reachable ? (
               <>
+                <ApprovalControls environmentId={environmentId} health={health} />
                 <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-xs">
                   <dt className="text-muted-foreground">Account profile</dt>
                   <dd>{summary.profile ?? "Not reported"}</dd>

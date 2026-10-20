@@ -98,6 +98,7 @@ export type DeliveryActResult =
   | { readonly ok: true; readonly body: unknown }
   | {
       readonly ok: false;
+      readonly status: number | null;
       readonly why: string;
       /** What the engine listed when it refused, one entry for each thing that is wrong. */
       readonly problems: ReadonlyArray<string>;
@@ -109,7 +110,7 @@ export function useDeliveryAct(environmentId: EnvironmentId | null, label: strin
   return useCallback(
     async (path: string, body: unknown = {}): Promise<DeliveryActResult> => {
       if (!environmentId) {
-        return { ok: false, why: "No environment is connected.", problems: [] };
+        return { ok: false, why: "No environment is connected.", problems: [], status: null };
       }
       const result = await act({
         environmentId,
@@ -119,6 +120,13 @@ export function useDeliveryAct(environmentId: EnvironmentId | null, label: strin
         const failure = squashAtomCommandFailure(result);
         return {
           ok: false,
+          status:
+            typeof failure === "object" &&
+            failure !== null &&
+            "status" in failure &&
+            typeof failure.status === "number"
+              ? failure.status
+              : null,
           why: deliveryFailureText(failure),
           problems: deliveryFailureProblems(failure),
         };
@@ -138,12 +146,13 @@ export function useDeliveryFetch(environmentId: EnvironmentId | null) {
   return useCallback(
     async (path: string): Promise<DeliveryActResult> => {
       if (!environmentId) {
-        return { ok: false, why: "No environment is connected.", problems: [] };
+        return { ok: false, why: "No environment is connected.", problems: [], status: null };
       }
       const result = await read({ environmentId, input: { path: path as never } });
       if (result._tag === "Failure") {
         return {
           ok: false,
+          status: null,
           why: deliveryFailureText(squashAtomCommandFailure(result)),
           problems: [],
         };

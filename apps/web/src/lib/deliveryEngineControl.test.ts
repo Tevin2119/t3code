@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 import {
+  minutesLeft,
   controlDeliveryEngine,
   deliveryUpdatePending,
   parseDeliveryEngineHealth,
@@ -24,6 +25,8 @@ describe("engine health summary", () => {
       approval: "passphrase",
       commit: "9c594ca",
       versions: null,
+      approvalWindow: null,
+      fullAuto: null,
     });
   });
 
@@ -37,6 +40,8 @@ describe("engine health summary", () => {
         approval: "terminal-key",
         commit: null,
         versions: null,
+        approvalWindow: null,
+        fullAuto: null,
       });
     },
   );
@@ -180,5 +185,68 @@ describe("engine restart safety", () => {
       },
     });
     expect(starts).toBe(0);
+  });
+});
+
+describe("approval capabilities", () => {
+  const older = { by: "Sam", openedAt: "2026-10-19T10:00:00Z", expiresAt: "2026-10-19T10:10:00Z" };
+  const newer = { ...older, by: "Alex", expiresAt: "2026-10-19T10:20:00Z" };
+  it("selects only the person's window and never falls back", () => {
+    const body = {
+      approvalWindow: { open: true, windows: [older, newer, { by: "bad", expiresAt: "oops" }] },
+    };
+    expect(parseDeliveryEngineHealth(body, "Sam").approvalWindow).toEqual({
+      open: true,
+      by: "Sam",
+      until: older.expiresAt,
+    });
+    expect(parseDeliveryEngineHealth(body).approvalWindow?.by).toBeNull();
+    expect(parseDeliveryEngineHealth(body, "Nobody").approvalWindow?.by).toBeNull();
+    expect(parseDeliveryEngineHealth(body, "").approvalWindow?.by).toBeNull();
+    expect(
+      parseDeliveryEngineHealth(
+        {
+          approvalWindow: {
+            open: true,
+            windows: [older, { ...older, expiresAt: newer.expiresAt }],
+          },
+        },
+        "Sam",
+      ).approvalWindow?.until,
+    ).toBe(newer.expiresAt);
+    expect(
+      parseDeliveryEngineHealth({ approvalWindow: { open: false } }).approvalWindow?.open,
+    ).toBe(false);
+  });
+  it("reads explicit off and attributed on", () => {
+    expect(
+      parseDeliveryEngineHealth({ fullAuto: { on: false, by: null, since: null } }).fullAuto,
+    ).toEqual({ on: false, by: null, since: null });
+    const auto = { on: true, by: "Sam", since: older.openedAt };
+    expect(parseDeliveryEngineHealth({ fullAuto: auto }).fullAuto).toEqual(auto);
+  });
+  it.each([
+    null,
+    [],
+    "wrong",
+    { open: "true" },
+    { open: true, windows: {} },
+    { open: true, windows: [{ by: "Sam", expiresAt: "oops" }] },
+  ])("ignores unusable window %j", (approvalWindow) => {
+    expect(parseDeliveryEngineHealth({ approvalWindow }).approvalWindow).toBeNull();
+  });
+  it.each([
+    null,
+    [],
+    "wrong",
+    { on: "true" },
+    { on: true },
+    { on: true, by: "Sam", since: "oops" },
+  ])("ignores unusable auto %j", (fullAuto) => {
+    expect(parseDeliveryEngineHealth({ fullAuto }).fullAuto).toBeNull();
+  });
+  it("counts remaining minutes without negative ages", () => {
+    expect(minutesLeft(older.expiresAt, Date.parse(older.openedAt))).toBe(10);
+    expect(minutesLeft(older.expiresAt, Date.parse(newer.expiresAt))).toBe(0);
   });
 });
