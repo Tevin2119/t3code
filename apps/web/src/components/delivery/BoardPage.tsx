@@ -224,7 +224,10 @@ function Lane(props: {
 }) {
   const { lane } = props;
   const tone = laneTone(lane.lane);
-  const drop = useDroppable({ id: `lane:${lane.lane}`, data: { lane: lane.lane, before: null } });
+  const { isOver, setNodeRef } = useDroppable({
+    id: `lane:${lane.lane}`,
+    data: { lane: lane.lane, before: null },
+  });
   // The same table as the drop and the task view's column choice: what this lane would do.
   const intent = props.dragged ? moveIntent(props.dragged, lane.lane) : null;
   const offer =
@@ -239,14 +242,14 @@ function Lane(props: {
   if (props.collapsed) {
     return (
       <section
-        ref={drop.setNodeRef}
+        ref={setNodeRef}
         data-lane={lane.lane}
         data-lane-collapsed
         className={cn(
           "flex w-9 shrink-0 flex-col items-center overflow-hidden rounded-lg border border-border",
           tone.tint,
           refused && "opacity-40",
-          drop.isOver && offer && "ring-2 ring-ring",
+          isOver && offer && "ring-2 ring-ring",
         )}
       >
         <span className={cn("h-1 w-full shrink-0", tone.bar)} />
@@ -270,13 +273,13 @@ function Lane(props: {
 
   return (
     <section
-      ref={drop.setNodeRef}
+      ref={setNodeRef}
       data-lane={lane.lane}
       className={cn(
         "flex w-68 shrink-0 flex-col overflow-hidden rounded-lg border border-border",
         tone.tint,
         refused && "opacity-40",
-        drop.isOver && offer && "ring-2 ring-ring",
+        isOver && offer && "ring-2 ring-ring",
       )}
     >
       <span className={cn("h-1 w-full shrink-0", tone.bar)} />

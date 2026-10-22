@@ -377,12 +377,10 @@ export function TaskEditor(props: {
     if (working.current) return;
     working.current = true;
     setBusy(kind);
-    try {
-      await work();
-    } finally {
+    await work().finally(() => {
       working.current = false;
       setBusy(null);
-    }
+    });
   };
 
   const onSave = () =>
