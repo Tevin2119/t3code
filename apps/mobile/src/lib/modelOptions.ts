@@ -3,6 +3,8 @@ import {
   resolveProviderInstanceDisplayName,
   shouldShowInstanceBadge,
 } from "@t3tools/client-runtime/state/provider-instance-display";
+import { deliveryModelDisabledReason } from "@t3tools/client-runtime/delivery-model-lock";
+import type { DeliveryThreadBinding } from "@t3tools/contracts";
 import type { MenuAction } from "@react-native-menu/menu";
 import type {
   ModelCapabilities,
@@ -34,6 +36,7 @@ export type ModelOption = {
   readonly isDefault: boolean;
   readonly isLegacy: boolean;
   readonly isUnavailable?: boolean;
+  readonly disabledReason?: string | null;
   readonly isHidden?: boolean;
   readonly canHide?: boolean;
   readonly capabilities: ModelCapabilities | null;
@@ -158,6 +161,7 @@ export function isModelSelectionUnavailable(
     driver === "antigravity" &&
     (!provider ||
       !provider.installed ||
+      provider.supportsSessions === false ||
       provider.auth.status === "unauthenticated" ||
       provider.availability === "unavailable" ||
       !provider.models.some((model) => model.slug === selection.model))
@@ -243,6 +247,7 @@ export function buildModelOptions(
   providerInstanceId: ModelSelection["instanceId"] | undefined,
   projectId: ProjectId | null,
   includeHidden = false,
+  deliveryBinding?: DeliveryThreadBinding | null,
 ): ReadonlyArray<ModelOption> {
   const options = new Map<string, ModelOption>();
   const lockedProvider = config?.providers.find(
@@ -299,7 +304,7 @@ export function buildModelOptions(
 
   for (const provider of config?.providers ?? []) {
     if (
-      !matchesLockedProvider(provider) ||
+      (!deliveryBinding && !matchesLockedProvider(provider)) ||
       !isProviderEnabledForProject(config, provider, projectId) ||
       !provider.installed ||
       provider.auth.status === "unauthenticated" ||
@@ -354,7 +359,8 @@ export function buildModelOptions(
 
   if (
     fallbackModelSelection &&
-    (providerInstanceId === undefined ||
+    (deliveryBinding ||
+      providerInstanceId === undefined ||
       fallbackModelSelection.instanceId === providerInstanceId) &&
     (!config?.settings?.providerModelPreferences?.[
       fallbackModelSelection.instanceId
@@ -398,8 +404,15 @@ export function buildModelOptions(
         providerBadge: providerBadgeFor(fallbackModelSelection.instanceId),
         isDefault: false,
         isLegacy: model?.isLegacy === true,
-        ...(isModelSelectionUnavailable(config, fallbackModelSelection, projectId) ||
-        (provider !== undefined && !isProviderEnabledForProject(config, provider, projectId)) ||
+        ...((deliveryBinding &&
+          config &&
+          (!provider ||
+            !isProviderEnabledForProject(config, provider, projectId) ||
+            !provider.installed ||
+            provider.supportsSessions === false ||
+            provider.auth.status === "unauthenticated" ||
+            provider.availability === "unavailable")) ||
+        isModelSelectionUnavailable(config, fallbackModelSelection, projectId) ||
         provider?.updateRequiredModels?.some((gated) => gated.slug === fallbackModelSelection.model)
           ? { isUnavailable: true }
           : {}),
@@ -409,7 +422,10 @@ export function buildModelOptions(
     }
   }
 
-  return [...options.values()];
+  return [...options.values()].map((option) => {
+    const disabledReason = deliveryModelDisabledReason(deliveryBinding, option.providerDriver);
+    return disabledReason ? { ...option, disabledReason } : option;
+  });
 }
 
 export function groupByProvider(options: ReadonlyArray<ModelOption>): ReadonlyArray<ProviderGroup> {
@@ -447,6 +463,8 @@ function modelMenuAction(option: ModelOption, selectedModel: ModelSelection | nu
   return {
     id: `model:${option.key}`,
     title: option.label,
+    subtitle: option.disabledReason ?? undefined,
+    attributes: option.disabledReason ? { disabled: true } : undefined,
     state:
       option.selection.instanceId === selectedModel?.instanceId &&
       option.selection.model === selectedModel.model
@@ -491,4 +509,19 @@ export function buildModelMenuActions(
         : []),
     ];
   });
+}
+
+/** Revalidate the selected row against the current catalog, including a changed binding. */
+export function modelOptionSelectionRefusal(
+  option: ModelOption,
+  options: ReadonlyArray<ModelOption>,
+): string | null {
+  const current = options.find((candidate) => candidate.key === option.key);
+  return (
+    current?.disabledReason ??
+    (current?.isHidden ? "Show this model or select another model." : null) ??
+    (!current || current.isUnavailable
+      ? "Set up this provider on web or desktop, or select another model."
+      : null)
+  );
 }

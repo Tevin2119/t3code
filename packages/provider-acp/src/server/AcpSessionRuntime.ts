@@ -2213,10 +2213,30 @@ export const make = Effect.fn("AcpSessionRuntime.make")(function* (
           mcpServers: sessionMcpServers(initializeResult),
           ...additionalDirectories,
         } satisfies EffectAcpSchema.NewSessionRequest;
+        // A provider that never answers session/new (e.g. Hermes with a heavy
+        // config) would otherwise leave startup spinning forever.
         const created = yield* runLoggedRequest(
           "session/new",
           createPayload,
-          acp.agent.createSession(createPayload),
+          acp.agent.createSession(createPayload).pipe(
+            Effect.timeoutOption(
+              Duration.fromInputUnsafe(options.sessionLoadTimeout ?? defaultSessionLoadTimeout),
+            ),
+            Effect.flatMap(
+              Option.match({
+                onNone: () =>
+                  Effect.fail(
+                    new EffectAcpErrors.AcpTransportError({
+                      operation: "call-rpc",
+                      method: "session/new",
+                      detail: "session/new timed out waiting for the agent response.",
+                      cause: undefined,
+                    }),
+                  ),
+                onSome: Effect.succeed,
+              }),
+            ),
+          ),
         );
         sessionId = created.sessionId;
         sessionSetupResult = created;

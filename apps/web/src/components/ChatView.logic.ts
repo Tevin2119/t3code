@@ -1,3 +1,6 @@
+import { getThreadModelDisabledReason } from "../lib/deliveryModelPicker";
+import { deliveryModelDisabledReason } from "@t3tools/client-runtime/delivery-model-lock";
+import type { DeliveryThreadBinding } from "@t3tools/contracts";
 import { type OrchestrationV2ProviderTurn, type RunAttemptId } from "@t3tools/contracts";
 import {
   deriveLatestThreadRun,
@@ -566,6 +569,7 @@ export function buildLocalDraftThread(
 export function resolveComposerProviderSelection(input: {
   entries: ReadonlyArray<ProviderInstanceEntry>;
   candidateInstanceIds: ReadonlyArray<ProviderInstanceId | null | undefined>;
+  deliveryBinding?: DeliveryThreadBinding | null | undefined;
   lockedProvider: ProviderDriverKind | null;
   lockedInstanceId: ProviderInstanceId | null | undefined;
 }) {
@@ -577,12 +581,14 @@ export function resolveComposerProviderSelection(input: {
     input.entries.find((entry) => entry.instanceId === requestedInstanceId)?.driverKind ??
     input.entries[0]?.driverKind ??
     ProviderDriverKind.make("unconfigured");
-  const lockedContinuationGroupKey = input.lockedProvider
-    ? (input.entries.find((entry) => entry.instanceId === input.lockedInstanceId)
-        ?.continuationGroupKey ?? null)
-    : null;
+  const lockedContinuationGroupKey =
+    input.lockedProvider && !input.deliveryBinding
+      ? (input.entries.find((entry) => entry.instanceId === input.lockedInstanceId)
+          ?.continuationGroupKey ?? null)
+      : null;
   // Missing metadata must not move Antigravity history into another Google profile.
   const requiresExactInstance =
+    !input.deliveryBinding &&
     input.lockedProvider === "antigravity" &&
     input.lockedInstanceId != null &&
     lockedContinuationGroupKey === null;
@@ -986,11 +992,13 @@ export function threadShellHasStarted(
 // Imported history has no session until its first prompt. Resolve its instance
 // through the environment's provider catalog before locking to a driver.
 export function deriveLockedProvider(input: {
+  deliveryBinding?: DeliveryThreadBinding | null | undefined;
   thread: Thread | null | undefined;
   selectedProvider: string | null;
   threadProvider: string | null;
   providers: ReadonlyArray<Pick<ServerProvider, "instanceId" | "driver">>;
 }): ProviderDriverKind | null {
+  if (input.deliveryBinding) return ProviderDriverKind.make(input.deliveryBinding.driver);
   if (!threadHasStarted(input.thread)) {
     return null;
   }
@@ -1014,13 +1022,26 @@ export function deriveLockedProvider(input: {
 }
 
 export function getStartedThreadModelChangeBlockReason(input: {
-  providers: ReadonlyArray<Pick<ServerProvider, "instanceId" | "requiresNewThreadForModelChange">>;
+  deliveryBinding?: DeliveryThreadBinding | null | undefined;
+  providers: ReadonlyArray<
+    Pick<ServerProvider, "instanceId" | "requiresNewThreadForModelChange"> &
+      Partial<Pick<ServerProvider, "driver">>
+  >;
   hasStartedSession: boolean;
   supportsProviderSwitchingViaHandoff?: boolean;
   currentModelSelection: ModelSelection;
   currentProviderInstanceId?: ModelSelection["instanceId"] | null | undefined;
   nextModelSelection: ModelSelection;
 }): { title: string; description: string } | null {
+  if (input.deliveryBinding) {
+    const driver = input.providers.find(
+      (entry) => entry.instanceId === input.nextModelSelection.instanceId,
+    )?.driver;
+    const reason = deliveryModelDisabledReason(input.deliveryBinding, driver);
+    return reason
+      ? { title: "Start a new thread to use another harness", description: reason }
+      : null;
+  }
   if (!input.hasStartedSession) {
     return null;
   }
@@ -1467,11 +1488,7 @@ export function makeModelDisabledReason(
 ) {
   return (instanceId: ProviderInstanceId, model: string): string | null => {
     if (!context) return null;
-    const reason = getStartedThreadModelChangeBlockReason({
-      ...context,
-      nextModelSelection: { instanceId, model },
-    });
-    return reason ? `${reason.description} Start a new thread to use this model.` : null;
+    return getThreadModelDisabledReason({ ...context, nextModelSelection: { instanceId, model } });
   };
 }
 

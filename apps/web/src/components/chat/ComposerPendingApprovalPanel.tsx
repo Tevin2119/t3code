@@ -86,6 +86,10 @@ export const ComposerPendingApprovalPanel = memo(function ComposerPendingApprova
           ? "Provider process is gone — interrupt or restart the run to respond."
           : approval.detail || fallbackLabel}
       </Detail>
+      <span className="text-[10px] text-muted-foreground" data-approval-scope>
+        Allows or refuses this one action of the harness. It does not approve a task or its work:
+        that is decided on the task, on the Board.
+      </span>
       {approval.reason ? (
         <span className="w-full min-w-0 text-2xs text-muted-foreground wrap-break-word">
           {approval.reason}

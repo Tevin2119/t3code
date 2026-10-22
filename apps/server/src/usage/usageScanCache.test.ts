@@ -17,6 +17,8 @@ function record(overrides: Partial<UsageRecord> = {}): UsageRecord {
     provider: "claude",
     timestampMs: 1_786_000_000_000,
     model: "claude-fable-5",
+    modelProvider: "anthropic",
+    modelProviderSource: "harness",
     sessionId: "session-a",
     totals: {
       uncachedInputTokens: 2,
@@ -59,6 +61,73 @@ function cacheWith(entries: readonly [string, number, readonly UsageRecord[]][])
 }
 
 describe("scan cache round trip", () => {
+  it("distinguishes upstream and fork v8 rows without losing usage history", () => {
+    const usage = record({
+      rateModel: "claude-fable-5",
+      modelProvider: "anthropic",
+      modelProviderSource: "recorded",
+    });
+    const current = encodeScanCache(cacheWith([["/v8.jsonl", 100, [usage]]]));
+    const fork = { ...current, version: 8 };
+    const upstream = {
+      ...current,
+      version: 8,
+      files: Object.fromEntries(
+        Object.entries(current.files).map(([file, entry]) => [
+          file,
+          { ...entry, r: entry.r.map((row) => [...row.slice(0, 11), ...row.slice(13)]) },
+        ]),
+      ),
+    };
+    expect(decodeScanCache(fork, TEST_FORMAT_MAP).get("/v8.jsonl")?.records[0]).toMatchObject({
+      modelProvider: "anthropic",
+      modelProviderSource: "recorded",
+      totals: usage.totals,
+    });
+    const decoded = decodeScanCache(upstream, TEST_FORMAT_MAP).get("/v8.jsonl")?.records[0];
+    expect(decoded).toMatchObject({ rateModel: usage.rateModel, totals: usage.totals });
+    expect(decoded?.modelProvider).toBeUndefined();
+  });
+  it("distinguishes fork provider-attribution v5 tuples from upstream speed v5 tuples", () => {
+    const usage = record({
+      model: "glm-5.3",
+      modelProvider: "zai-coding-plan",
+      modelProviderSource: "recorded",
+      speed: "fast",
+    });
+    const current = encodeScanCache(cacheWith([["/legacy.jsonl", 100, [usage]]]));
+    expect(current.version).toBe(9);
+    const fork = {
+      ...current,
+      version: 5,
+      files: Object.fromEntries(
+        Object.entries(current.files).map(([file, entry]) => [
+          file,
+          { ...entry, r: entry.r.map((row) => [...row.slice(0, 10), row[11], row[12]]) },
+        ]),
+      ),
+    };
+    const upstream = {
+      ...current,
+      version: 5,
+      files: Object.fromEntries(
+        Object.entries(current.files).map(([file, entry]) => [
+          file,
+          { ...entry, r: entry.r.map((row) => row.slice(0, 11)) },
+        ]),
+      ),
+    };
+    expect(decodeScanCache(fork, TEST_FORMAT_MAP).get("/legacy.jsonl")?.records[0]).toMatchObject({
+      modelProvider: "zai-coding-plan",
+      modelProviderSource: "recorded",
+      speed: "standard",
+      totals: usage.totals,
+    });
+    const speedRecord = decodeScanCache(upstream, TEST_FORMAT_MAP).get("/legacy.jsonl")?.records[0];
+    expect(speedRecord).toMatchObject({ speed: "fast", totals: usage.totals });
+    expect(speedRecord?.modelProvider).toBeUndefined();
+  });
+
   it("restores cached history unchanged except for Claude local placeholders", () => {
     const original = cacheWith([
       [
@@ -212,18 +281,51 @@ describe("scan cache round trip", () => {
         },
       };
 
-      const restored = decodeScanCache(JSON.parse(JSON.stringify(legacy)), TEST_FORMAT_MAP);
-      expect(restored.get("/gone.jsonl")).toEqual(original.get("/gone.jsonl"));
+      // The fork's v5 rows hold the provider fields where upstream's hold the
+      // speed, and no rate model. Version 6 rows already have today's layout.
+      // Only upstream wrote v7, so its rows go straight from the speed to the rate model.
+      const forkV5 = (row: readonly unknown[]) => [...row.slice(0, 10), row[11], row[12]];
+      const upstreamV7 = (row: readonly unknown[]) => [...row.slice(0, 11), ...row.slice(13)];
+      const toLegacyRow = version === 5 ? forkV5 : version === 7 ? upstreamV7 : undefined;
+      const document =
+        toLegacyRow === undefined
+          ? legacy
+          : {
+              ...legacy,
+              files: Object.fromEntries(
+                Object.entries(legacy.files).map(([file, value]) => [
+                  file,
+                  { ...value, r: value.r.map(toLegacyRow), t: value.t.map(toLegacyRow) },
+                ]),
+              ),
+            };
+      const expected = (file: NonNullable<ReturnType<typeof original.get>>) =>
+        version === 5
+          ? {
+              ...file,
+              records: file.records.map((record) => ({ ...record, speed: "standard" as const })),
+            }
+          : version === 7
+            ? {
+                ...file,
+                records: file.records.map(
+                  ({ modelProvider: _provider, modelProviderSource: _source, ...record }) => record,
+                ),
+              }
+            : file;
+
+      const restored = decodeScanCache(JSON.parse(JSON.stringify(document)), TEST_FORMAT_MAP);
+      expect(restored.get("/gone.jsonl")).toEqual(expected(original.get("/gone.jsonl")!));
       expect(restored.get("/gone-codex.jsonl")).toEqual({
-        ...original.get("/gone-codex.jsonl"),
+        ...expected(original.get("/gone-codex.jsonl")!),
         size: -1,
         position: { resumeOffset: 0, guardLength: 0, guardHash: 0, state: null },
       });
       expect(restored.get("/gone-pi.jsonl")).toEqual(
         version >= 6
-          ? original.get("/gone-pi.jsonl")
+          ? expected(original.get("/gone-pi.jsonl")!)
           : {
-              ...original.get("/gone-pi.jsonl"),
+              ...expected(original.get("/gone-pi.jsonl")!),
               size: -1,
               position: { resumeOffset: 0, guardLength: 0, guardHash: 0, state: null },
             },
@@ -250,6 +352,15 @@ describe("scan cache round trip", () => {
     const document = JSON.parse(write(cache, { sources }));
     expect(decodeScanCache(document, TEST_FORMAT_MAP)).toEqual(cache);
     expect(document.sources).toEqual(sources);
+  });
+
+  it("interns repeated model and session strings", () => {
+    const encoded = encodeScanCache(
+      cacheWith([["/a.jsonl", 100, [record(), record({ dedupeKey: "msg_2:" }), record()]]]),
+    );
+
+    expect(encoded.models).toEqual(["claude-fable-5", "anthropic"]);
+    expect(encoded.sessions).toEqual(["session-a"]);
   });
 
   it("treats a corrupt or foreign document as an empty cache", () => {

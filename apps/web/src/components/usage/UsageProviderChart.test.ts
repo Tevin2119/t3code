@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import { buildPeriodColumns } from "./UsageProviderChart";
+import { PROVIDER_ORDER, providersWithUsage } from "./usageProviders";
 
 describe("buildPeriodColumns", () => {
   const days = ["2026-08-01", "2026-08-02", "2026-08-03"];
@@ -32,14 +33,12 @@ describe("buildPeriodColumns", () => {
   it("keeps band values absolute rather than cumulative", () => {
     const [first] = buildPeriodColumns(days, byDay, "cost");
 
-    expect(first?.bands).toEqual([
-      { provider: "codex", value: 10 },
-      { provider: "claude", value: 20 },
-      { provider: "grok", value: 0 },
-      { provider: "cursor", value: 0 },
-      { provider: "opencode", value: 0 },
-      { provider: "antigravity", value: 0 },
-      { provider: "pi", value: 5 },
-    ]);
+    // One band per harness, in the shared reading order; harnesses with no usage are zero.
+    expect(first?.bands).toEqual(
+      PROVIDER_ORDER.map((provider) => ({
+        provider,
+        value: provider === "codex" ? 10 : provider === "claude" ? 20 : provider === "pi" ? 5 : 0,
+      })),
+    );
   });
 });

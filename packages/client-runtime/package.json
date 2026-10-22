@@ -135,6 +135,10 @@
       "types": "./src/state/assets.ts",
       "default": "./src/state/assets.ts"
     },
+    "./state/delivery": {
+      "types": "./src/state/delivery.ts",
+      "default": "./src/state/delivery.ts"
+    },
     "./state/attachments": {
       "types": "./src/state/attachments.ts",
       "default": "./src/state/attachments.ts"
@@ -442,6 +446,10 @@
     "./model-traits": {
       "types": "./src/modelTraits.ts",
       "default": "./src/modelTraits.ts"
+    },
+    "./delivery-model-lock": {
+      "types": "./src/deliveryModelLock.ts",
+      "default": "./src/deliveryModelLock.ts"
     }
   },
   "scripts": {

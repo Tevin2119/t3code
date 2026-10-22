@@ -1,4 +1,5 @@
 import { useSidebarWorkspaceTabs } from "../workspace/useSystemWorkspaceTabBar";
+import { deliveryEnvironment, emptyDeliveryBindingAtom } from "../../state/delivery";
 import { Button } from "../../components/ui/Button";
 import * as Dialog from "../../components/ui/Dialog";
 import type { ComposerTextPaste } from "../../native/T3ComposerEditor.types";
@@ -83,6 +84,7 @@ import {
 } from "../../lib/composerImages";
 import {
   buildModelOptions,
+  modelOptionSelectionRefusal,
   groupByProvider,
   isModelSelectionUnavailable,
 } from "../../lib/modelOptions";
@@ -714,6 +716,16 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
     });
   };
 
+  // A session that hands the conversation to another provider lets the picker
+  // offer the whole catalog; one that can't stays on its own instance.
+  const deliveryBinding = useAtomValue(
+    props.environmentId
+      ? deliveryEnvironment.modelBinding({
+          environmentId: props.environmentId,
+          input: { threadId: props.selectedThread.id },
+        })
+      : emptyDeliveryBindingAtom,
+  );
   const lockedProviderInstanceId = props.canSwitchProvider
     ? undefined
     : currentModelSelection.instanceId;
@@ -722,6 +734,8 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
     currentModelSelection,
     lockedProviderInstanceId,
     props.selectedThread.projectId,
+    false,
+    deliveryBinding,
   );
   const threadProviderGroups = groupByProvider(modelOptions);
   const currentModelOption =
@@ -742,12 +756,19 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
     providerInstanceId: currentModelSelection.instanceId,
     ...(lockedProviderInstanceId ? { lockedProviderInstanceId } : {}),
     providerGroups: threadProviderGroups,
+    deliveryBinding,
     selectedModel: currentModelSelection,
     prompt: draftMessage,
     onPromptChange: (text) => setComposerDraftText(composerDraftKey, text),
     reportedModelSelection: props.reportedModelSelection,
-    onSelectModel: (option) =>
-      props.onUpdateModelSelection(withRememberedModelOptions(option.selection)),
+    onSelectModel: (option) => {
+      const refusal = modelOptionSelectionRefusal(option, modelOptions);
+      if (refusal) {
+        Dialog.alert("Model unavailable", refusal);
+        return;
+      }
+      props.onUpdateModelSelection(withRememberedModelOptions(option.selection));
+    },
     restoreSelection: withRememberedModelOptions,
     optionDescriptors: providerOptionDescriptors,
     onUpdateOptionSelections: (options) => {

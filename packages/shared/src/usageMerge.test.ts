@@ -560,4 +560,98 @@ describe("mergeUsage", () => {
     expect(merged.sessions).toBe(1);
     expect(merged.providers[0]?.sessions).toBe(1);
   });
+
+  it("returns empty totals with no environments", () => {
+    const merged = mergeUsage([], USAGE_CONTRACT_VERSION);
+    expect(merged.costUsd).toBe(0);
+    expect(merged.daily).toHaveLength(0);
+    expect(merged.hourly).toHaveLength(0);
+  });
+
+  it("omits providers with no sessions or usage", () => {
+    const merged = mergeUsage(
+      [
+        environment(
+          "env-a",
+          summary(
+            [],
+            [
+              {
+                provider: "claude",
+                hostId: "mac",
+                homePath: "/a/.claude",
+                distinctSessions: 0,
+              },
+            ],
+          ),
+        ),
+      ],
+      USAGE_CONTRACT_VERSION,
+    );
+
+    expect(merged.providers).toEqual([]);
+  });
+
+  it("derives hourly totals without losing the daily rollup", () => {
+    const merged = mergeUsage(
+      [
+        environment(
+          "env-a",
+          summary(
+            [
+              bucket({ hourStart: "2026-08-07T09:37:00.000Z", costUsd: 3 }),
+              bucket({ hourStart: "2026-08-07T10:37:00.000Z", costUsd: 7 }),
+            ],
+            [{ provider: "claude", hostId: "mac", homePath: "/a/.claude" }],
+          ),
+        ),
+      ],
+      USAGE_CONTRACT_VERSION,
+    );
+
+    expect(merged.hourly.map((hour) => [hour.hourStart, hour.costUsd])).toEqual([
+      ["2026-08-07T09:37:00.000Z", 3],
+      ["2026-08-07T10:37:00.000Z", 7],
+    ]);
+    expect(merged.daily).toHaveLength(1);
+    expect(merged.daily[0]?.costUsd).toBe(10);
+  });
+
+  it("says which part of a harness's cost came through a coding plan", () => {
+    const merged = mergeUsage(
+      [
+        environment(
+          "env-a",
+          summary(
+            [
+              bucket({
+                provider: "opencode",
+                model: "glm-5.3",
+                modelProvider: "zai-coding-plan",
+                modelProviderSource: "recorded",
+                costUsd: 6,
+              }),
+              bucket({
+                provider: "opencode",
+                model: "gemini-3-pro-preview",
+                modelProvider: "google",
+                modelProviderSource: "recorded",
+                costUsd: 4,
+              }),
+            ],
+            [{ provider: "opencode", hostId: "mac", homePath: "/a/opencode" }],
+          ),
+        ),
+      ],
+      USAGE_CONTRACT_VERSION,
+    );
+
+    const opencode = merged.providers.find((provider) => provider.provider === "opencode");
+    expect(opencode?.costUsd).toBe(10);
+    expect(opencode?.planCostUsd).toBe(6);
+    expect(Object.fromEntries(merged.models.map((model) => [model.model, model.onPlan]))).toEqual({
+      "glm-5.3": true,
+      "gemini-3-pro-preview": false,
+    });
+  });
 });

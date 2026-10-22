@@ -2,6 +2,8 @@ import {
   getPromptControlledTraits,
   getTraitSelectChange,
 } from "@t3tools/client-runtime/model-traits";
+import type { DeliveryThreadBinding } from "@t3tools/contracts";
+import { modelOptionSelectionRefusal } from "../../lib/modelOptions";
 import { SheetHeader } from "../../components/ui/SheetHeader";
 import { Toolbar } from "../../components/ui/Toolbar";
 import * as Dialog from "../../components/ui/Dialog";
@@ -250,6 +252,7 @@ type ThreadSettingsSessionProps = {
   readonly projectId: ProjectId | null;
   readonly providerInstanceId?: ProviderInstanceId;
   readonly lockedProviderInstanceId?: ProviderInstanceId;
+  readonly deliveryBinding?: DeliveryThreadBinding | null;
   readonly providerGroups: ReadonlyArray<ProviderGroup>;
   readonly selectedModel: ModelSelection | null;
   readonly prompt: string;
@@ -367,6 +370,7 @@ function ThreadSettingsSessionProvider(
             props.lockedProviderInstanceId,
             props.projectId,
             true,
+            props.deliveryBinding,
           ),
         )
       : props.providerGroups;
@@ -537,7 +541,10 @@ function ThreadSettingsSessionProvider(
       if (!canCommitPendingModel(pendingModel, props.providerGroups)) {
         Dialog.alert(
           "Model unavailable",
-          "Set up this provider on web or desktop, or select another model.",
+          modelOptionSelectionRefusal(
+            pendingModel,
+            props.providerGroups.flatMap((group) => group.models),
+          ) ?? "Select another model.",
         );
         return false;
       }

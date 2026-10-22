@@ -1,5 +1,6 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { expect, it } from "@effect/vitest";
+import * as NodePath from "@effect/platform-node/NodePath";
+import { assert, expect, it } from "@effect/vitest";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -140,6 +141,29 @@ it.layer(NodeServices.layer)("host CLI commands", (it) => {
 });
 
 it.layer(NodeServices.layer)("manual server installation ownership", (it) => {
+  it.effect("matches backslash real paths while preserving the native install prefix", () =>
+    Effect.gen(function* () {
+      const path = yield* Path.Path.pipe(Effect.provide(NodePath.layerWin32));
+      const prefix = "C:\\Users\\fixture\\node";
+      const entry = path.join(prefix, "lib/node_modules/t3/dist/bin.mjs");
+      const globalBin = path.join(prefix, "bin/t3");
+      const fileSystem = FileSystem.makeNoop({
+        realPath: (file) => Effect.succeed(file === globalBin ? entry : path.normalize(file)),
+        readFileString: () =>
+          Effect.succeed('{"name":"t3","version":"0.0.45","bin":{"t3":"./dist/bin.mjs"}}'),
+      });
+      const installation = yield* resolveServerInstallation.pipe(
+        Effect.provideService(FileSystem.FileSystem, fileSystem),
+        Effect.provideService(Path.Path, path),
+        Effect.provideService(HostProcess.Environment, {}),
+        Effect.provideService(HostProcess.Arguments, ["node", entry]),
+        Effect.provideService(HostProcess.IsExecutable, false),
+        Effect.provideService(HostProcess.Platform, "linux"),
+      );
+      expect(installation).toEqual({ kind: "npm-global", prefix });
+    }),
+  );
+
   it.effect("recognizes runner caches for script packages and the npm launcher", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;

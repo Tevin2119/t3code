@@ -64,6 +64,7 @@ import {
   ServerUpdateAction,
   ServerUpdateProgress,
 } from "../ServerUpdateAction";
+import { CheckoutUpdateAction } from "../CheckoutUpdateAction";
 import { CloudEnvironmentConnectRows } from "../cloud/CloudEnvironmentConnectList";
 
 type SavedBackendListRowProps = {
@@ -319,6 +320,10 @@ export function SavedBackendListRow({
             <div className="mt-1 max-w-md">
               <ServerUpdateProgress state={serverUpdateState} />
             </div>
+          ) : enabled &&
+            isConnected &&
+            environment.serverConfig?.environment.capabilities.checkoutUpdate === true ? (
+            <CheckoutUpdateAction environmentId={environmentId} />
           ) : null}
         </>
       }

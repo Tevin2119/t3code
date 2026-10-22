@@ -1,3 +1,5 @@
+import type { EnvironmentServerConfig } from "@t3tools/client-runtime/connection";
+import { sameWorkspaceProfile } from "@t3tools/contracts";
 import { useLoadBalancedEnvironment } from "../../hooks/useLoadBalancedEnvironment";
 import { useLogicalProjectEnvironments } from "../../hooks/useLogicalProjectEnvironments";
 import { useScratchProject } from "../../hooks/useScratchProject";
@@ -22,6 +24,7 @@ import { useProjects } from "../../state/entities";
 import type { DraftSessionState } from "../../composerDraftStore";
 
 interface DraftEnvironmentRoutingInput {
+  readonly serverConfig: EnvironmentServerConfig | null;
   readonly draftId: DraftId | null;
   readonly draftThread: DraftSessionState | null;
   readonly envLocked: boolean;
@@ -65,6 +68,7 @@ export function useDraftEnvironmentRouting(input: DraftEnvironmentRoutingInput) 
     activeProjectIsScratch,
     projectGroupingSettings,
     sendInFlightRef,
+    serverConfig,
   } = input;
   const setDraftThreadContext = useComposerDraftStore((store) => store.setDraftThreadContext);
   const getDraftSession = useComposerDraftStore((store) => store.getDraftSession);
@@ -80,6 +84,10 @@ export function useDraftEnvironmentRouting(input: DraftEnvironmentRoutingInput) 
           const environment = environmentById.get(candidate.environmentId);
           return (
             environment?.connection.phase === "connected" &&
+            sameWorkspaceProfile(
+              serverConfig?.environment.workspace,
+              environment.serverConfig?.environment.workspace,
+            ) &&
             (loadBalancingSettings.loadBalancingWeights[candidate.environmentId] ?? 50) > 0 &&
             referencedThreadContexts.every(
               (record) => record.environmentId === candidate.environmentId,

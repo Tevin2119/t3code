@@ -1,3 +1,8 @@
+import {
+  runtimeModeNote,
+  runtimeModeUnavailableReason,
+  type RuntimeModeSupport,
+} from "./runtimeModeConfig";
 import type {
   ModelSelection,
   ProviderInstanceId,
@@ -34,7 +39,10 @@ export const ComposerFooterModeControls = memo(function ComposerFooterModeContro
   showInteractionModeToggle: boolean;
   interactionMode: ProviderInteractionMode;
   runtimeMode: RuntimeMode;
+  /** What the chosen provider can honour. A mode it cannot is shown and cannot be picked. */
+  runtimeModeSupport: RuntimeModeSupport;
   runtimeModeOptions: ReadonlyArray<RuntimeModeOption>;
+
   size?: "sm" | "xs";
   hidden?: boolean;
   onToggleInteractionMode: () => void;
@@ -47,6 +55,10 @@ export const ComposerFooterModeControls = memo(function ComposerFooterModeContro
     props.runtimeModeOptions.find((option) => option.mode === props.runtimeMode) ??
     supervisedRuntimeModeOption;
   const RuntimeModeIcon = runtimeModeOption.icon;
+  const chosenUnavailable = runtimeModeUnavailableReason(
+    props.runtimeModeSupport,
+    props.runtimeMode,
+  );
   const interactionModeTooltip =
     props.interactionMode === "plan"
       ? "Plan mode — click to return to normal build mode"
@@ -106,21 +118,33 @@ export const ComposerFooterModeControls = memo(function ComposerFooterModeContro
               <ComposerSelectControl
                 data-composer-shortcut="composer.mode"
                 size={size}
+
                 aria-label="Runtime mode"
+                data-runtime-mode={props.runtimeMode}
+                data-runtime-mode-unavailable={chosenUnavailable ? "true" : undefined}
               />
             }
           >
             <ComposerControlIcon icon={RuntimeModeIcon} size={size} />
-            <SelectValue data-composer-control-label>{runtimeModeOption.label}</SelectValue>
+            <SelectValue data-composer-control-label>
+              {chosenUnavailable
+                ? `${runtimeModeOption.label} (unavailable)`
+                : runtimeModeOption.label}
+            </SelectValue>
           </TooltipTrigger>
           <SelectPopup alignItemWithTrigger={false} {...composerFloatingLayerProps}>
             {props.runtimeModeOptions.map((option) => {
               const OptionIcon = option.icon;
+              const unavailable = runtimeModeUnavailableReason(
+                props.runtimeModeSupport,
+                option.mode,
+              );
               return (
                 <SelectItem
                   key={option.mode}
                   value={option.mode}
                   hideIndicator
+                  disabled={unavailable !== undefined}
                   className="min-w-64"
                 >
                   <div className="flex min-w-0 items-center gap-3">
@@ -128,9 +152,12 @@ export const ComposerFooterModeControls = memo(function ComposerFooterModeContro
                       <span className="inline-flex items-center gap-1.5 font-medium text-foreground">
                         <OptionIcon className="size-3.5 shrink-0 text-muted-foreground" />
                         {option.label}
+                        {unavailable ? " (unavailable)" : null}
                       </span>
                       <span className="text-muted-foreground text-xs leading-4">
-                        {option.description}
+                        {unavailable ??
+                          runtimeModeNote(props.runtimeModeSupport, option.mode) ??
+                          option.description}
                       </span>
                     </div>
                   </div>
@@ -139,7 +166,12 @@ export const ComposerFooterModeControls = memo(function ComposerFooterModeContro
             })}
           </SelectPopup>
         </Select>
-        <TooltipPopup side="top">{runtimeModeOption.description}</TooltipPopup>
+        <TooltipPopup side="top">
+          {chosenUnavailable
+            ? `${chosenUnavailable} Choose another access mode before sending.`
+            : (runtimeModeNote(props.runtimeModeSupport, props.runtimeMode) ??
+              runtimeModeOption.description)}
+        </TooltipPopup>
       </Tooltip>
 
       {interactionModeToggle}

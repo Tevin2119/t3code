@@ -1,3 +1,5 @@
+import type { DeliveryThreadBinding } from "@t3tools/contracts";
+import { getThreadModelDisabledReason } from "../../lib/deliveryModelPicker";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 import type { UnifiedSettings } from "@t3tools/contracts";
 import type { Dispatch } from "react";
@@ -26,6 +28,7 @@ import {
   makeModelDisabledReason,
 } from "../ChatView.logic";
 interface ComposerSelectionInput {
+  readonly deliveryBinding: DeliveryThreadBinding | null;
   readonly environmentId: EnvironmentId;
   readonly composerDraftTarget: ComposerThreadTarget;
   readonly draftThread: DraftSessionState | null;
@@ -78,6 +81,7 @@ export function useComposerSelection(input: ComposerSelectionInput) {
     setPendingServerThreadEnvModeEntry,
     setPendingServerThreadStartFromOriginByThreadId,
     scheduleComposerFocus,
+    deliveryBinding,
   } = input;
   const navigate = useNavigate();
   const setStickyComposerModelSelection = useComposerDraftStore(
@@ -131,6 +135,7 @@ export function useComposerSelection(input: ComposerSelectionInput) {
   const getModelDisabledReason = makeModelDisabledReason(
     currentModelSelection
       ? {
+          deliveryBinding,
           providers: providerStatuses,
           hasStartedSession,
           supportsProviderSwitchingViaHandoff,
@@ -149,7 +154,7 @@ export function useComposerSelection(input: ComposerSelectionInput) {
     const entry = providerStatuses.find((snapshot) => snapshot.instanceId === instanceId);
     const resolvedDriverKind = entry?.driver ?? null;
     if (
-      !supportsProviderSwitchingViaHandoff &&
+      (!supportsProviderSwitchingViaHandoff || deliveryBinding !== null) &&
       lockedProvider !== null &&
       resolvedDriverKind !== null &&
       resolvedDriverKind !== lockedProvider
@@ -158,6 +163,7 @@ export function useComposerSelection(input: ComposerSelectionInput) {
       return;
     }
     if (
+      !deliveryBinding &&
       !supportsProviderSwitchingViaHandoff &&
       lockedProvider !== null &&
       activeRuntime?.providerInstanceId
@@ -191,6 +197,7 @@ export function useComposerSelection(input: ComposerSelectionInput) {
         ? { instanceId, model: resolvedModel, options: [...rememberedOptions] }
         : { instanceId, model: resolvedModel };
     const modelChangeBlockReason = getStartedThreadModelChangeBlockReason({
+      deliveryBinding,
       providers: providerStatuses,
       hasStartedSession: activeRuntime !== null,
       supportsProviderSwitchingViaHandoff,

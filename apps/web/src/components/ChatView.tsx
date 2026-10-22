@@ -1,3 +1,22 @@
+import { Button } from "./ui/button";
+import { SquareKanbanIcon } from "lucide-react";
+import { SessionStatusFooter } from "./chat/SessionStatusFooter";
+import { resolveDraftTeam, selectableTeams, teamListStatus } from "../lib/delivery";
+import {
+  deliveryEnvironment,
+  useOrchestratorDraftStore,
+  useDeliveryDraftStore,
+  useDeliveryEnabled,
+  useDeliveryRead,
+  useDraftTeamChoice,
+  useHasDraftTeamChoice,
+} from "../state/delivery";
+import { taskStandsIn, useThreadTasks } from "./delivery/ThreadTaskLinks";
+import {
+  useChatViewComposerProviderSelection,
+  useDeliveryThreadModelBinding,
+} from "../lib/deliveryComposerSelection";
+import { TaskWorkspace } from "./delivery/TaskWorkspace";
 import { ScrollToEndButton, WorkspaceFileDropOverlay } from "./chat/TimelineOverlays";
 import { usePasteToFocusComposer } from "./chat/usePasteToFocusComposer";
 import {
@@ -324,7 +343,6 @@ import {
   deriveLockedProvider,
   resolveFileAttachmentUrl,
   resolveComposerInteractionMode,
-  resolveComposerProviderSelection,
   resolveThreadMetadataUpdateForNextTurn,
   resolveSendEnvMode,
   revokeUserMessagePreviewUrls,
@@ -1175,13 +1193,36 @@ export default function ChatView(props: ChatViewProps) {
     activeThread?.modelSelection.instanceId ??
     activeProjectDefaultModelSelection?.instanceId ??
     null;
+  const deliveryEnabled = useDeliveryEnabled(environmentId);
+  const deliveryTeams = useDeliveryRead(deliveryEnabled ? environmentId : null, "/api/teams");
+  // Read through a ref at send time, so the send path needs no new dependencies.
+  // The same teams the picker offers, so that the picker, the footer and the send agree.
+  const deliveryTeamList = selectableTeams(deliveryTeams.body);
+  const deliverySendInput = {
+    enabled: deliveryEnabled,
+    teams: deliveryTeamList,
+    status: teamListStatus(deliveryTeams),
+    error: deliveryTeams.error,
+  };
+  // Asked for drafts too: a draft whose first send failed is held on the server.
+  const deliveryThreadState = useEnvironmentQuery(
+    deliveryEnabled && activeThread
+      ? deliveryEnvironment.threadBinding({
+          environmentId,
+          input: { threadId: activeThread.id },
+        })
+      : null,
+  );
+  const deliveryBinding = useDeliveryThreadModelBinding(environmentId, activeThread?.id ?? null);
   const lockedProvider = deriveLockedProvider({
+    deliveryBinding,
     thread: activeThread,
     selectedProvider: selectedProviderByThreadId,
     threadProvider,
     providers: providerStatuses,
   });
-  const modelPickerLockedProvider = supportsProviderSwitchingViaHandoff ? null : lockedProvider;
+  const modelPickerLockedProvider =
+    supportsProviderSwitchingViaHandoff && !deliveryBinding ? null : lockedProvider;
   const pullRequestsCapabilityKnown = serverConfig !== null;
   const supportsPullRequests = serverConfig?.environment.capabilities.pullRequests === true;
   const attachmentEnvironmentConfig = environmentById.get(environmentId)?.serverConfig ?? null;
@@ -1241,17 +1282,14 @@ export default function ChatView(props: ChatViewProps) {
       activeProject?.id ?? null,
     ),
   );
-  const activeThreadModelInstanceId = activeThread?.modelSelection.instanceId;
-  const { selectedProviderEntry, requestedDriverKind } = resolveComposerProviderSelection({
+  const { selectedProviderEntry, requestedDriverKind } = useChatViewComposerProviderSelection({
     entries: providerInstanceEntries,
-    candidateInstanceIds: [
-      selectedProviderByThreadId,
-      activeRuntime?.providerInstanceId,
-      activeThreadModelInstanceId,
-      activeProjectDefaultModelSelection?.instanceId,
-    ],
+    activeThread,
+    activeRuntime,
+    selectedProviderByThreadId,
+    activeProjectDefaultModelSelection,
     lockedProvider,
-    lockedInstanceId: activeRuntime?.providerInstanceId ?? activeThreadModelInstanceId,
+    deliveryBinding,
   });
   const selectedProvider = selectedProviderEntry?.driverKind ?? requestedDriverKind;
   const activeProviderInstanceId = selectedProviderEntry?.instanceId ?? null;
@@ -1270,6 +1308,31 @@ export default function ChatView(props: ChatViewProps) {
     conversationProviderStatus !== null &&
     conversationProviderStatus.supportsConversationRollback !== false;
   const phase = derivePhase(activeRuntime);
+  const readDeliveryState = useStableCallback(() => deliveryThreadState);
+  const releaseDeliveryThread = useAtomCommand(deliveryEnvironment.releaseThread, {
+    label: "start without a team",
+    reportFailure: false,
+  });
+  const activeDraftTeamThreadId = activeThread?.id ?? null;
+  const storedDraftTeamChoice = useDraftTeamChoice(activeDraftTeamThreadId, environmentId);
+  const draftTeamIsExplicit = useHasDraftTeamChoice(activeDraftTeamThreadId);
+  const draftTeamChoice = resolveDraftTeam({
+    draft: storedDraftTeamChoice,
+    explicit: draftTeamIsExplicit,
+    teams: deliveryTeamList,
+    status: deliverySendInput.status,
+  });
+  // "Start without a team" on a thread whose team setup failed: "No team" for
+  // this thread alone, or the next send would ask for the same team again. It
+  // is a way out of a failure, so what is remembered for the environment stands.
+  const startHeldThreadWithoutTeam = () => {
+    if (activeDraftTeamThreadId === null) return;
+    useDeliveryDraftStore.getState().setChoice(activeDraftTeamThreadId, { team: null, role: null });
+    void releaseDeliveryThread({
+      environmentId,
+      input: { threadId: activeDraftTeamThreadId },
+    }).then(() => readDeliveryState().refresh());
+  };
   const serverThreadId = serverThread?.id;
   const serverThreadEnvironmentId = serverThread?.environmentId;
   const setThreadError = makeThreadErrorSetter({
@@ -1576,6 +1639,12 @@ export default function ChatView(props: ChatViewProps) {
         worktreePath: activeThread?.worktreePath ?? null,
       })
     : null;
+  const teamConversationId = useOrchestratorDraftStore((state) => {
+    const draft = activeThread ? state.drafts[activeThread.id] : undefined;
+    return draft?.started && ["chat", "non-code"].includes(draft.workflow)
+      ? (draft.viewTask ?? draft.engineThread)
+      : null;
+  });
   const gitStatusCwd = activeThread?.worktreePath ?? gitCwd;
   const gitStatusQuery = useEnvironmentQuery(
     gitStatusCwd === null
@@ -1753,6 +1822,7 @@ export default function ChatView(props: ChatViewProps) {
     readPendingEnvironmentChange,
     onEnvironmentChangeStable,
   } = useDraftEnvironmentRouting({
+    serverConfig,
     draftId,
     draftThread,
     envLocked,
@@ -2570,6 +2640,42 @@ export default function ChatView(props: ChatViewProps) {
     void handleSwitchCheckoutToThread();
   };
   const handleRestoreThreadBranchStable = useStableCallback(handleRestoreThreadBranch);
+  // The tasks a person made from this conversation, shown above the composer at every width.
+  const threadTasks = useThreadTasks(
+    environmentId,
+    isServerThread ? (activeThread?.id ?? null) : null,
+  );
+  const threadTasksBannerItem = ((): ComposerBannerStackItem | null => {
+    const newest = threadTasks[0];
+    if (!newest) return null;
+    return {
+      id: `thread-tasks:${activeThread?.id ?? "unknown"}`,
+      variant: "info",
+      priority: "notice",
+      icon: <SquareKanbanIcon />,
+      title: (
+        <span data-thread-task-links>
+          {threadTasks.length === 1
+            ? `Task #${newest.number} was made from this conversation`
+            : `${threadTasks.length} tasks were made from this conversation`}
+        </span>
+      ),
+      description: threadTasks
+        .slice(0, 3)
+        .map((task) => `#${task.number} ${taskStandsIn(task)}`)
+        .join(" · "),
+      actions: (
+        <Button
+          size="xs"
+          variant="ghost"
+          onClick={() => void navigate({ to: "/board", search: { task: newest.id } })}
+        >
+          Open #{newest.number}
+        </Button>
+      ),
+    };
+  })();
+  const threadTaskItems = threadTasksBannerItem === null ? [] : [threadTasksBannerItem];
   const feedbackBannerItems = feedbackSubmissions.flatMap((submission) => {
     const item = feedbackBannerItem(submission, () => {
       setFeedbackSubmissionsByThreadKey((current) => ({
@@ -2613,6 +2719,7 @@ export default function ChatView(props: ChatViewProps) {
         ...limitRecoveryItems,
         ...usageLimitsItems,
         ...projectCloneItems,
+        ...threadTaskItems,
         ...systemComposerBannerItems,
         ...backgroundWorkItems,
       ];
@@ -2622,6 +2729,7 @@ export default function ChatView(props: ChatViewProps) {
       ...limitRecoveryItems,
       ...usageLimitsItems,
       ...projectCloneItems,
+      ...threadTaskItems,
       ...systemComposerBannerItems,
       ...backgroundWorkItems,
       branchMismatchBannerItem({
@@ -2802,6 +2910,7 @@ export default function ChatView(props: ChatViewProps) {
     openProviderSetupStable,
     toggleInteractionModeStable,
   } = useComposerSelection({
+    deliveryBinding,
     environmentId,
     composerDraftTarget,
     draftThread,
@@ -3152,6 +3261,25 @@ export default function ChatView(props: ChatViewProps) {
     addFiles: addDroppedFilesToComposer,
     addFolders: addDroppedFoldersToComposer,
   });
+
+  if (teamConversationId) {
+    return (
+      <TaskWorkspace
+        environmentId={activeThread.environmentId}
+        taskId={teamConversationId}
+        from="Orchestrator"
+        onClose={() => {
+          const draft = useOrchestratorDraftStore.getState().drafts[activeThread.id];
+          if (draft?.viewTask)
+            useOrchestratorDraftStore.getState().update(activeThread.id, { viewTask: null });
+          else handleNewThreadInActiveProject();
+        }}
+        onOpenTask={(taskId) => {
+          useOrchestratorDraftStore.getState().update(activeThread.id, { viewTask: taskId });
+        }}
+      />
+    );
+  }
 
   const content = (
     <div
@@ -3558,6 +3686,7 @@ export default function ChatView(props: ChatViewProps) {
                               }
                               runtimeMode={runtimeMode}
                               interactionMode={interactionMode}
+                              deliveryBinding={deliveryBinding}
                               lockedProvider={modelPickerLockedProvider}
                               providerStatuses={providerStatuses as ServerProvider[]}
                               providerCatalogKnown={serverConfig !== null}
@@ -3711,6 +3840,30 @@ export default function ChatView(props: ChatViewProps) {
                         </div>
                       </div>
                     </ComposerSurface.Shell>
+                    <SessionStatusFooter
+                      project={activeProject?.title ?? "No project"}
+                      cwd={gitCwd}
+                      branch={gitStatusQuery.data?.refName ?? null}
+                      dirty={gitStatusQuery.data?.hasWorkingTreeChanges ?? false}
+                      model={activeThread?.modelSelection.model ?? null}
+                      phase={phase}
+                      context={activeContextWindow}
+                      limits={conversationProviderStatus?.usageLimits}
+                      delivery={
+                        deliveryEnabled
+                          ? {
+                              environmentId,
+                              binding: deliveryThreadState.data?.binding ?? null,
+                              held: deliveryThreadState.data?.pending ?? null,
+                              unreadable: deliveryThreadState.error,
+                              pending: isServerThread ? null : (draftTeamChoice.team ?? "none"),
+                              onRelease: activeThread ? startHeldThreadWithoutTeam : undefined,
+                              harness:
+                                conversationProviderStatus?.driver ?? selectedProvider ?? null,
+                            }
+                          : undefined
+                      }
+                    />
                     <div
                       aria-hidden
                       className="h-[calc(env(safe-area-inset-bottom)+1rem)] sm:h-[calc(env(safe-area-inset-bottom)+1.25rem)]"

@@ -50,6 +50,7 @@ export function useComposerProviderModel(
     candidateInstanceIds,
     lockedProvider,
     lockedInstanceId,
+    deliveryBinding,
   } = input;
   const draftModelState = useComposerDraftModelState(threadRef);
   const providerInstanceEntries: ReadonlyArray<ProviderInstanceEntry> = sortProviderInstanceEntries(
@@ -63,6 +64,8 @@ export function useComposerProviderModel(
     entries: providerInstanceEntries,
     candidateInstanceIds,
     lockedProvider,
+    // A confirmed team binding locks the picker to the seat's harness (fork).
+    deliveryBinding,
     lockedInstanceId,
   });
   const selectedInstanceId =

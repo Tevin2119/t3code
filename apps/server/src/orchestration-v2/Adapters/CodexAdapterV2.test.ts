@@ -1,3 +1,4 @@
+import { mapCodexModelCapabilities } from "../../provider/CodexProvider.ts";
 import { historyResponseItems } from "@t3tools/provider-core/server/handoffBudget";
 import {
   makeProviderTextDeltaCoalescer,
@@ -6143,4 +6144,55 @@ describe("CodexAdapterV2 post-settle continuation", () => {
       ),
     );
   });
+});
+
+describe("reported Codex effort defaults", () => {
+  // DIVERGES FROM UPSTREAM. The fork advertises the default Codex reports and sends no
+  // effort for an unselected one; upstream advertises and sends "medium" for Astra.
+  it.effect("advertises Astra's reported effort default and sends only explicit selections", () =>
+    Effect.gen(function* () {
+      const model = "gpt-6-astra";
+      const capabilities = mapCodexModelCapabilities({
+        id: model,
+        model,
+        displayName: model,
+        description: "Test model",
+        hidden: false,
+        isDefault: true,
+        defaultReasoningEffort: "low",
+        supportedReasoningEfforts: ["low", "medium", "high"].map((reasoningEffort) => ({
+          reasoningEffort,
+          description: reasoningEffort,
+        })),
+        additionalSpeedTiers: [],
+      });
+      const advertised = capabilities.optionDescriptors?.find(
+        (option) => option.id === "reasoningEffort",
+      )?.currentValue;
+      assert.equal(advertised, "low");
+      for (const selected of [undefined, "high"] as const) {
+        const params = yield* CodexAdapterV2.buildCodexTurnStartParams({
+          nativeThreadId: "native-astra-effort",
+          codexInput: [{ type: "text", text: "test" }],
+          runtimePolicy: { runtimeMode: "full-access", interactionMode: "default", cwd: null },
+          modelSelection: {
+            instanceId: ProviderInstanceId.make("codex"),
+            model,
+            ...(selected ? { options: [{ id: "reasoningEffort", value: selected }] } : {}),
+          },
+          hasT3Mcp: true,
+        });
+        const runtimeContext = params.additionalContext?.t3_code_runtime?.value ?? "";
+        if (selected === undefined) {
+          assert.isUndefined(params.effort);
+          assert.notProperty(params.collaborationMode?.settings, "reasoning_effort");
+          assert.notInclude(runtimeContext, "reasoning effort");
+        } else {
+          assert.equal(params.effort, selected);
+          assert.equal(params.collaborationMode?.settings.reasoning_effort, selected);
+          assert.include(runtimeContext, `${selected} reasoning effort`);
+        }
+      }
+    }),
+  );
 });

@@ -277,3 +277,17 @@ describe("ChatMarkdown Windows file links", () => {
     }
   });
 });
+
+// Evidence documents (fork) show media as text; ordinary chat renders it.
+describe("ChatMarkdown evidence media", () => {
+  it("keeps evidence media as text while ordinary chat can render images", async () => {
+    const text = "![Run diagram](https://example.invalid/tracker.png)";
+    const { container, rerender } = await render(
+      <ChatMarkdown cwd={undefined} text={text} parseRawHtml={false} allowMedia={false} />,
+    );
+    expect(container.querySelectorAll("img")).toHaveLength(0);
+    expect(container.textContent).toContain("Run diagram");
+    await rerender(<ChatMarkdown cwd={undefined} text={text} />);
+    expect(container.querySelectorAll("img")).toHaveLength(1);
+  });
+});
