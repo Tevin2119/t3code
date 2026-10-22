@@ -26,6 +26,7 @@ import {
 } from "@t3tools/provider-core/server/textGenerationUtils";
 import { codexModelFamily, getModelSelectionStringOptionValue } from "@t3tools/shared/model";
 import { getCodexServiceTierOptionValue } from "../codexModelOptions.ts";
+import { codexContextWindowConfig } from "../provider/CodexContextWindow.ts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 
 const CODEX_TIMEOUT_MS = 180_000;
@@ -304,6 +305,10 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
           "--config",
           `model_reasoning_effort="${reasoningEffort}"`,
           ...(serviceTier ? ["--config", `service_tier="${serviceTier}"`] : []),
+          ...Object.entries(codexContextWindowConfig(modelSelection)).flatMap(([key, value]) => [
+            "--config",
+            `${key}=${value}`,
+          ]),
           "--output-schema",
           schemaPath,
           "--output-last-message",

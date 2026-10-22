@@ -2000,6 +2000,77 @@ describe("CodexAdapterV2 post-settle continuation", () => {
       ),
   );
 
+  it.effect(
+    "reloads changed context windows, preserves unchanged sessions, and restores defaults",
+    () =>
+      Effect.gen(function* () {
+        const scenario = "context-window-resume";
+        const nativeThreadId = "context-window-native";
+        const entries = codexReplayPreamble({
+          nativeThreadId,
+          nativeTurnId: "unused",
+          prompt: "unused",
+        }).slice(0, 5);
+        let id = 3;
+        let previous: number | undefined;
+        const selections = [872000, 872000, 272000, undefined];
+        for (const tokens of selections) {
+          if (tokens !== previous) {
+            entries.push(
+              {
+                type: "expect_outbound",
+                frame: { id, method: "thread/unsubscribe", params: { threadId: nativeThreadId } },
+              },
+              { type: "emit_inbound", frame: { id, result: { status: "unsubscribed" } } },
+            );
+            id++;
+          }
+          entries.push(
+            {
+              type: "expect_outbound",
+              frame: {
+                id,
+                method: "thread/resume",
+                params: {
+                  threadId: nativeThreadId,
+                  excludeTurns: true,
+                  config: {
+                    ...CodexAdapterV2.CODEX_THREAD_CONFIG,
+                    ...(tokens === undefined ? {} : { model_context_window: tokens }),
+                  },
+                },
+              },
+            },
+            {
+              type: "emit_inbound",
+              frame: { id, result: { thread: { id: nativeThreadId, updatedAt: 1782622450 } } },
+            },
+          );
+          id++;
+          previous = tokens;
+        }
+        const harness = yield* makeCodexReplayHarness(
+          makeCodexReplayTranscript({ scenario, entries }),
+        );
+        for (const tokens of selections) {
+          const resumed = yield* harness.runtime.resumeThread({
+            providerThread: harness.providerThread,
+            modelSelection: {
+              ...CODEX_TEST_MODEL_SELECTION,
+              options: tokens === undefined ? [] : [{ id: "contextWindow", value: String(tokens) }],
+            },
+            runtimePolicy: CODEX_TEST_RUNTIME_POLICY,
+          });
+          assert.equal(resumed.nativeThreadRef?.nativeId, nativeThreadId);
+        }
+      }).pipe(
+        Effect.scoped,
+        Effect.provide(
+          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+        ),
+      ),
+  );
+
   it.effect("resumes a provider thread without requesting or decoding its history", () =>
     Effect.scoped(
       Effect.gen(function* () {
