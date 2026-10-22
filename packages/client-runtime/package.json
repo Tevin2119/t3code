@@ -3,9 +3,9 @@
   "private": true,
   "type": "module",
   "exports": {
-    "./delivery-model-lock": {
-      "types": "./src/deliveryModelLock.ts",
-      "default": "./src/deliveryModelLock.ts"
+    "./workspace-basename-lookup": {
+      "types": "./src/workspaceBasenameLookup.ts",
+      "default": "./src/workspaceBasenameLookup.ts"
     },
     "./composerThreadItems": {
       "types": "./src/composerThreadItems.ts",
@@ -134,10 +134,6 @@
     "./state/assets": {
       "types": "./src/state/assets.ts",
       "default": "./src/state/assets.ts"
-    },
-    "./state/delivery": {
-      "types": "./src/state/delivery.ts",
-      "default": "./src/state/delivery.ts"
     },
     "./state/attachments": {
       "types": "./src/state/attachments.ts",
@@ -323,6 +319,10 @@
       "types": "./src/state/threadSubagents.ts",
       "default": "./src/state/threadSubagents.ts"
     },
+    "./state/thread-undo": {
+      "types": "./src/state/threadUndo.ts",
+      "default": "./src/state/threadUndo.ts"
+    },
     "./state/thread-settled": {
       "types": "./src/state/threadSettled.ts",
       "default": "./src/state/threadSettled.ts"
@@ -438,10 +438,14 @@
     "./pull-request-query": {
       "types": "./src/pullRequestQuery.ts",
       "default": "./src/pullRequestQuery.ts"
+    },
+    "./model-traits": {
+      "types": "./src/modelTraits.ts",
+      "default": "./src/modelTraits.ts"
     }
   },
   "scripts": {
-    "typecheck": "tsc-rs --noEmit",
+    "typecheck": "tsc --noEmit",
     "test": "vp test run"
   },
   "dependencies": {

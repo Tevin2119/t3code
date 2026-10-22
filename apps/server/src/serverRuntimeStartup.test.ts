@@ -2,7 +2,6 @@ import { assert, it } from "@effect/vitest";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import {
   DEFAULT_SERVER_SETTINGS,
-  DEFAULT_MODEL,
   ProjectId,
   ProviderInstanceId,
   ProviderDriverKind,
@@ -47,13 +46,6 @@ import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
 import * as ServerSettings from "./serverSettings.ts";
 import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
 import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
-
-it("uses the canonical Codex model for auto-bootstrap", () => {
-  assert.deepEqual(ServerRuntimeStartup.getAutoBootstrapThreadModelSelection(), {
-    instanceId: ProviderInstanceId.make("codex"),
-    model: DEFAULT_MODEL,
-  });
-});
 
 it.effect.each([
   "disabled-codex",
@@ -250,33 +242,6 @@ it.effect.each([
   ),
 );
 
-it.effect("starts without scanning or rebuilding projection history", () =>
-  Effect.gen(function* () {
-    const calls = yield* Ref.make<ReadonlyArray<string>>([]);
-    const record = (label: string) => Ref.update(calls, (current) => [...current, label]);
-
-    const result = yield* ServerRuntimeStartup.runOrderedV2StartupPhases({
-      importLegacyShells: record("import"),
-      recover: record("recover").pipe(Effect.as({ closedRequests: 2 })),
-      recoverDelegatedTasks: record("delegated"),
-      startEffectWorker: record("worker"),
-      autoBootstrap: record("bootstrap").pipe(Effect.as({ projectId: "project-1" })),
-    });
-
-    assert.deepEqual(yield* Ref.get(calls), [
-      "import",
-      "recover",
-      "delegated",
-      "worker",
-      "bootstrap",
-    ]);
-    assert.deepEqual(result, {
-      recovery: { closedRequests: 2 },
-      bootstrap: { projectId: "project-1" },
-    });
-  }),
-);
-
 it.effect("interrupts the effect worker when awareness relay startup fails", () =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -336,138 +301,6 @@ it.effect("enqueueCommand fails queued work when readiness fails", () =>
 
       const error = yield* Effect.flip(Fiber.join(queuedCommandFiber));
       assert.equal(error.message, "Server runtime startup failed before command readiness.");
-    }),
-  ),
-);
-
-it.effect("resolveWelcomeBase derives cwd and project name from server config", () =>
-  Effect.gen(function* () {
-    const welcome = yield* ServerRuntimeStartup.resolveWelcomeBase.pipe(
-      Effect.provideService(ServerConfig.ServerConfig, {
-        cwd: "/tmp/startup-project",
-      } as never),
-    );
-
-    assert.deepStrictEqual(welcome, {
-      cwd: "/tmp/startup-project",
-      projectName: "startup-project",
-    });
-  }),
-);
-
-it.effect("restart closes an already ready command gate and late startup cannot reopen it", () =>
-  Effect.scoped(
-    Effect.gen(function* () {
-      const gate = yield* ServerRuntimeStartup.makeCommandGate;
-      const ran = yield* Ref.make(false);
-      yield* gate.signalCommandReady;
-      yield* gate.awaitCommandReady;
-      const failure = new ServerRuntimeStartup.ServerRuntimeStartupError({
-        mode: "web",
-        host: "127.0.0.1",
-        port: 3773,
-        cause: "Restart preparation",
-      });
-      yield* gate.failCommandReady(failure);
-      yield* gate.signalCommandReady;
-      assert.strictEqual(yield* Effect.flip(gate.awaitCommandReady), failure);
-      assert.strictEqual(yield* Effect.flip(gate.enqueueCommand(Ref.set(ran, true))), failure);
-      assert.isFalse(yield* Ref.get(ran));
-    }),
-  ),
-);
-
-it.effect(
-  "restart interrupts the live worker before persisting continuations and shares preparation",
-  () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const calls = yield* Ref.make<ReadonlyArray<string>>([]);
-        const record = (name: string) => Ref.update(calls, (current) => [...current, name]);
-        const workerStarted = yield* Deferred.make<void>();
-        const persisting = yield* Deferred.make<void>();
-        const releasePersistence = yield* Deferred.make<void>();
-        const worker = yield* Deferred.succeed(workerStarted, undefined).pipe(
-          Effect.andThen(Effect.never),
-          Effect.ensuring(record("worker-stopped")),
-          Effect.forkScoped,
-        );
-        yield* Deferred.await(workerStarted);
-        const prepare = yield* ServerRuntimeStartup.makeRestartPreparation({
-          denyCommands: record("deny"),
-          interruptEffectWorker: Fiber.interrupt(worker),
-          persistContinuations: record("persist").pipe(
-            Effect.andThen(Deferred.succeed(persisting, undefined)),
-            Effect.andThen(Deferred.await(releasePersistence)),
-          ),
-          stopProviderSessions: record("provider-stop"),
-          reconcile: record("reconcile"),
-        });
-        const first = yield* prepare.pipe(Effect.forkScoped);
-        yield* Deferred.await(persisting);
-        const second = yield* prepare.pipe(Effect.forkScoped);
-        assert.deepEqual(yield* Ref.get(calls), ["deny", "worker-stopped", "persist"]);
-        yield* Deferred.succeed(releasePersistence, undefined);
-        yield* Fiber.join(first);
-        yield* Fiber.join(second);
-        yield* prepare;
-        assert.deepEqual(yield* Ref.get(calls), [
-          "deny",
-          "worker-stopped",
-          "persist",
-          "provider-stop",
-          "reconcile",
-        ]);
-      }),
-    ),
-);
-
-it.effect("failed persistence still stops providers and caches failure without reconciling", () =>
-  Effect.gen(function* () {
-    const calls = yield* Ref.make<ReadonlyArray<string>>([]);
-    const record = (name: string) => Ref.update(calls, (current) => [...current, name]);
-    const prepare = yield* ServerRuntimeStartup.makeRestartPreparation({
-      denyCommands: record("deny"),
-      interruptEffectWorker: record("worker-stop"),
-      persistContinuations: record("persist").pipe(
-        Effect.andThen(Effect.fail("persistence failed")),
-      ),
-      stopProviderSessions: record("provider-stop"),
-      reconcile: record("reconcile"),
-    });
-    assert.equal(yield* Effect.flip(prepare), "persistence failed");
-    assert.equal(yield* Effect.flip(prepare), "persistence failed");
-    assert.deepEqual(yield* Ref.get(calls), ["deny", "worker-stop", "persist", "provider-stop"]);
-  }),
-);
-
-it.effect("interrupting a preparation caller cannot leave a cached partial shutdown", () =>
-  Effect.scoped(
-    Effect.gen(function* () {
-      const entered = yield* Deferred.make<void>();
-      const release = yield* Deferred.make<void>();
-      const interruptStarted = yield* Deferred.make<void>();
-      const completed = yield* Ref.make(false);
-      const prepare = yield* ServerRuntimeStartup.makeRestartPreparation({
-        denyCommands: Effect.void,
-        interruptEffectWorker: Effect.void,
-        persistContinuations: Deferred.succeed(entered, undefined).pipe(
-          Effect.andThen(Deferred.await(release)),
-        ),
-        stopProviderSessions: Effect.void,
-        reconcile: Ref.set(completed, true),
-      });
-      const caller = yield* prepare.pipe(Effect.forkScoped);
-      yield* Deferred.await(entered);
-      const interrupt = yield* Deferred.succeed(interruptStarted, undefined).pipe(
-        Effect.andThen(Fiber.interrupt(caller)),
-        Effect.forkScoped,
-      );
-      yield* Deferred.await(interruptStarted);
-      yield* Deferred.succeed(release, undefined);
-      yield* Fiber.join(interrupt);
-      yield* prepare;
-      assert.isTrue(yield* Ref.get(completed));
     }),
   ),
 );

@@ -9,24 +9,8 @@ import * as Schema from "effect/Schema";
 import { CLAUDE_SYNTHETIC_MODEL } from "../provider/Drivers/claudeUsage.ts";
 import { GUARD_LENGTH, type TranscriptParsePosition } from "./usageTranscriptReader.ts";
 
-// v2: Codex fork-copy suppression changed what a file parses to, so v1
-// entries would keep serving double-counted records forever.
-// v3: entries carry the parse position and reducer state so a grown file
-// re-parses only its appended bytes instead of starting over.
-// v4: records carry Claude fast mode, which v3 rows never captured.
-// v5: Codex records carry their service tier. v4 rows store speed the same
-// way, so v4 entries still load; see `decodeScanCache` for v4 stateful entries.
-// v6, v7 (upstream): files count their malformed records, and Codex records
-// may name the turn whose service tier is still unresolved.
-// v8 (fork): records also carry the model provider and how it is known, as two
-// fields after the speed and before upstream's rate model. The fork wrote that
-// layout under version 6 too; such a row is at least 13 long where an upstream
-// v6 row is at most 12. The fork's own v5 rows put the two fields where
-// upstream v5 rows keep the speed; such a row is 12 long, an upstream v5 row 11.
 const USAGE_SCAN_CACHE_VERSION = 8 as const;
 const SPEED_COMPATIBLE_SINCE_VERSION = 4;
-/** Serialised as the index into this list. */
-const PROVIDER_SOURCE_CODES = [null, "recorded", "harness"] as const;
 
 /**
  * An older server sharing that directory cannot read a newer cache and would
@@ -73,10 +57,6 @@ type SerializedRecord = readonly [
   dedupeKey: string | null,
   reportedCostUsd: number | null,
   speed: number,
-  /** Interned in the model table; -1 is a recorded absence, -2 no attribution at all. */
-  modelProviderIndex: number,
-  /** Index into `PROVIDER_SOURCE_CODES`, or -1 when the record has none. */
-  modelProviderSource: number,
   rateModelIndex?: number | null,
   unresolvedServiceTierTurnId?: string,
 ];
@@ -134,14 +114,6 @@ function serializeFile(entry: CachedFile, tables: InternTables): SerializedFile 
     record.dedupeKey,
     record.reportedCostUsd,
     SPEEDS.indexOf(record.speed),
-    record.modelProvider === undefined
-      ? -2
-      : record.modelProvider === null
-        ? -1
-        : intern(tables.models, tables.modelIndex, record.modelProvider),
-    record.modelProviderSource === undefined
-      ? -1
-      : PROVIDER_SOURCE_CODES.indexOf(record.modelProviderSource),
     record.rateModel === undefined
       ? null
       : intern(tables.models, tables.modelIndex, record.rateModel),
@@ -245,11 +217,7 @@ export function decodeScanCache(
   ): UsageRecord[] | null => {
     const records: UsageRecord[] = [];
     for (const row of rows) {
-      if (!isRecordArray(row)) return null;
-      // Fork rows carry the provider fields after the speed; upstream rows go
-      // straight to the rate model. Version 6 exists in both layouts.
-      const forkLayout = version >= 8 || (version === 6 && row.length >= 13);
-      if (row.length < (forkLayout ? 13 : 11)) return null;
+      if (!isRecordArray(row) || row.length < 11) return null;
       const [
         timestampMs,
         modelIndex,
@@ -262,43 +230,10 @@ export function decodeScanCache(
         dedupeKey,
         reportedCostUsd,
         speedIndex,
+        rateModelIndex,
+        unresolvedServiceTierTurnId,
       ] = row as SerializedRecord;
-      // The fork's own v5 rows hold the model provider where upstream keeps the speed.
-      const forkLegacy = version < 6 && row.length === 12;
-      const speed = forkLegacy
-        ? "standard"
-        : typeof speedIndex === "number"
-          ? SPEEDS[speedIndex]
-          : undefined;
-      const modelProviderIndex = forkLayout ? row[11] : forkLegacy ? row[10] : -2;
-      const sourceIndex = forkLayout ? row[12] : forkLegacy ? row[11] : -1;
-      const rateModelIndex = (forkLayout ? row[13] : forkLegacy ? undefined : row[11]) as
-        | number
-        | null
-        | undefined;
-      const unresolvedServiceTierTurnId = (
-        forkLayout ? row[14] : forkLegacy ? undefined : row[12]
-      ) as string | undefined;
-      const modelProvider =
-        modelProviderIndex === -2
-          ? undefined
-          : modelProviderIndex === -1
-            ? null
-            : typeof modelProviderIndex === "number"
-              ? models[modelProviderIndex]
-              : undefined;
-      const modelProviderSource =
-        sourceIndex === -1
-          ? undefined
-          : typeof sourceIndex === "number"
-            ? PROVIDER_SOURCE_CODES[sourceIndex]
-            : undefined;
-      if (
-        (modelProviderIndex !== -2 && modelProvider === undefined) ||
-        (sourceIndex !== -1 && modelProviderSource === undefined)
-      ) {
-        return null;
-      }
+      const speed = typeof speedIndex === "number" ? SPEEDS[speedIndex] : undefined;
 
       const model = typeof modelIndex === "number" ? models[modelIndex] : undefined;
       const rateModel = typeof rateModelIndex === "number" ? models[rateModelIndex] : undefined;
@@ -327,8 +262,6 @@ export function decodeScanCache(
         provider,
         timestampMs,
         model,
-        ...(modelProvider === undefined ? {} : { modelProvider }),
-        ...(modelProviderSource === undefined ? {} : { modelProviderSource }),
         ...(rateModel === undefined ? {} : { rateModel }),
         sessionId: (typeof sessionIndex === "number" ? sessions[sessionIndex] : undefined) ?? "",
         totals: {
@@ -378,9 +311,9 @@ export function decodeScanCache(
       continue;
     }
     // Keep history for deleted rollouts, but re-parse incompatible reducer state.
-    // Only Codex requires new provenance state in v7.
+    // Older Codex entries lack provenance state (v7) or misread compaction and resume counters (v8).
     const legacy =
-      format.state !== undefined && (version < 6 || (entry.p === "codex" && version < 7));
+      format.state !== undefined && (version < 6 || (entry.p === "codex" && version < 8));
     // A corrupt state disqualifies the entry: resuming with it would attach
     // appended usage to the wrong model or replay fork-copied history.
     if (!legacy && !isValidState.get(entry.p)?.(entry.cs)) continue;

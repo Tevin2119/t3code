@@ -1,5 +1,8 @@
-import { deliveryModelDisabledReason } from "@t3tools/client-runtime/delivery-model-lock";
-import type { DeliveryThreadBinding } from "@t3tools/contracts";
+import {
+  normalizeProviderAccentColor,
+  resolveProviderInstanceDisplayName,
+  shouldShowInstanceBadge,
+} from "@t3tools/client-runtime/state/provider-instance-display";
 import type { MenuAction } from "@react-native-menu/menu";
 import type {
   ModelCapabilities,
@@ -23,10 +26,14 @@ export type ModelOption = {
   readonly providerDriver: string;
   readonly supportedRuntimeModes?: ReadonlyArray<RuntimeMode>;
   readonly providerIconUrl?: string | undefined;
+  readonly providerBadge?: {
+    readonly displayName: string;
+    readonly accentColor?: string;
+    readonly showBadge: boolean;
+  };
   readonly isDefault: boolean;
   readonly isLegacy: boolean;
   readonly isUnavailable?: boolean;
-  readonly disabledReason?: string | null;
   readonly isHidden?: boolean;
   readonly canHide?: boolean;
   readonly capabilities: ModelCapabilities | null;
@@ -236,19 +243,65 @@ export function buildModelOptions(
   providerInstanceId: ModelSelection["instanceId"] | undefined,
   projectId: ProjectId | null,
   includeHidden = false,
-  deliveryBinding?: DeliveryThreadBinding | null,
 ): ReadonlyArray<ModelOption> {
   const options = new Map<string, ModelOption>();
+  const lockedProvider = config?.providers.find(
+    (provider) => provider.instanceId === providerInstanceId,
+  );
+  const matchesLockedProvider = (provider: T3ServerConfig["providers"][number]) => {
+    if (providerInstanceId === undefined || provider.instanceId === providerInstanceId) return true;
+    if (!lockedProvider || provider.driver !== lockedProvider.driver) return false;
+    const groupKey = lockedProvider.continuation?.groupKey;
+    if (groupKey) return provider.continuation?.groupKey === groupKey;
+    return provider.driver !== "antigravity";
+  };
+  const registryAgentId = (instanceId: ModelSelection["instanceId"]) => {
+    const configValue = config?.settings?.providerInstances[instanceId]?.config;
+    if (configValue === null || typeof configValue !== "object") return undefined;
+    const agentId = "agentId" in configValue ? configValue.agentId : undefined;
+    return "source" in configValue && configValue.source === "local"
+      ? undefined
+      : typeof agentId === "string"
+        ? agentId.trim() || undefined
+        : undefined;
+  };
+  const badgeEntries = (config?.providers ?? []).map((provider) => ({
+    driverKind: provider.driver,
+    enabled: provider.enabled,
+    acpRegistryAgentId: registryAgentId(provider.instanceId),
+  }));
+  const providerBadgeFor = (instanceId: ModelSelection["instanceId"]) => {
+    const snapshot = config?.providers.find((provider) => provider.instanceId === instanceId);
+    const instance = config?.settings?.providerInstances[instanceId];
+    const driver = snapshot?.driver ?? instance?.driver;
+    if (!driver) return undefined;
+    const accentColor = normalizeProviderAccentColor(
+      snapshot?.accentColor ?? instance?.accentColor,
+    );
+    return {
+      displayName: resolveProviderInstanceDisplayName({
+        instanceId,
+        driver,
+        displayName: snapshot?.displayName ?? instance?.displayName,
+      }),
+      ...(accentColor ? { accentColor } : {}),
+      showBadge: shouldShowInstanceBadge(
+        {
+          driverKind: driver,
+          accentColor,
+          acpRegistryAgentId: registryAgentId(instanceId),
+          enabled: snapshot?.enabled ?? instance?.enabled ?? false,
+        },
+        badgeEntries,
+      ),
+    };
+  };
 
   for (const provider of config?.providers ?? []) {
     if (
-      (!deliveryBinding &&
-        providerInstanceId !== undefined &&
-        provider.instanceId !== providerInstanceId) ||
+      !matchesLockedProvider(provider) ||
       !isProviderEnabledForProject(config, provider, projectId) ||
       !provider.installed ||
-      // API-only providers back text generation but cannot run a thread.
-      provider.supportsSessions === false ||
       provider.auth.status === "unauthenticated" ||
       (provider.driver === "antigravity" && provider.availability === "unavailable")
     ) {
@@ -256,6 +309,7 @@ export function buildModelOptions(
     }
 
     const providerLabel = providerDisplayLabel(provider);
+    const providerBadge = providerBadgeFor(provider.instanceId);
     const updateRequired = provider.updateRequiredModels?.length
       ? { driver: provider.driver, updateRequiredModels: provider.updateRequiredModels }
       : undefined;
@@ -276,6 +330,7 @@ export function buildModelOptions(
         providerKey: provider.instanceId,
         providerLabel,
         providerDriver: provider.driver,
+        providerBadge,
         ...(provider.supportedRuntimeModes === undefined
           ? {}
           : { supportedRuntimeModes: provider.supportedRuntimeModes }),
@@ -299,8 +354,7 @@ export function buildModelOptions(
 
   if (
     fallbackModelSelection &&
-    (deliveryBinding ||
-      providerInstanceId === undefined ||
+    (providerInstanceId === undefined ||
       fallbackModelSelection.instanceId === providerInstanceId) &&
     (!config?.settings?.providerModelPreferences?.[
       fallbackModelSelection.instanceId
@@ -341,17 +395,11 @@ export function buildModelOptions(
         providerKey: fallbackModelSelection.instanceId,
         providerLabel,
         providerDriver,
+        providerBadge: providerBadgeFor(fallbackModelSelection.instanceId),
         isDefault: false,
         isLegacy: model?.isLegacy === true,
-        ...((deliveryBinding &&
-          config &&
-          (!provider ||
-            !isProviderEnabledForProject(config, provider, projectId) ||
-            !provider.installed ||
-            provider.supportsSessions === false ||
-            provider.auth.status === "unauthenticated" ||
-            provider.availability === "unavailable")) ||
-        isModelSelectionUnavailable(config, fallbackModelSelection, projectId) ||
+        ...(isModelSelectionUnavailable(config, fallbackModelSelection, projectId) ||
+        (provider !== undefined && !isProviderEnabledForProject(config, provider, projectId)) ||
         provider?.updateRequiredModels?.some((gated) => gated.slug === fallbackModelSelection.model)
           ? { isUnavailable: true }
           : {}),
@@ -361,10 +409,7 @@ export function buildModelOptions(
     }
   }
 
-  return [...options.values()].map((option) => {
-    const disabledReason = deliveryModelDisabledReason(deliveryBinding, option.providerDriver);
-    return disabledReason ? { ...option, disabledReason } : option;
-  });
+  return [...options.values()];
 }
 
 export function groupByProvider(options: ReadonlyArray<ModelOption>): ReadonlyArray<ProviderGroup> {
@@ -402,8 +447,6 @@ function modelMenuAction(option: ModelOption, selectedModel: ModelSelection | nu
   return {
     id: `model:${option.key}`,
     title: option.label,
-    subtitle: option.disabledReason ?? undefined,
-    attributes: option.disabledReason ? { disabled: true } : undefined,
     state:
       option.selection.instanceId === selectedModel?.instanceId &&
       option.selection.model === selectedModel.model
@@ -448,19 +491,4 @@ export function buildModelMenuActions(
         : []),
     ];
   });
-}
-
-/** Revalidate the selected row against the current catalog, including a changed binding. */
-export function modelOptionSelectionRefusal(
-  option: ModelOption,
-  options: ReadonlyArray<ModelOption>,
-): string | null {
-  const current = options.find((candidate) => candidate.key === option.key);
-  return (
-    current?.disabledReason ??
-    (current?.isHidden ? "Show this model or select another model." : null) ??
-    (!current || current.isUnavailable
-      ? "Set up this provider on web or desktop, or select another model."
-      : null)
-  );
 }
