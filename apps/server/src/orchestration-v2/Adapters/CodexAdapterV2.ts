@@ -20,6 +20,7 @@ import {
   buildCodexInitializeParams,
   codexAppServerEnvironment,
 } from "../../provider/CodexProvider.ts";
+import { codexContextWindowConfig } from "../../provider/CodexContextWindow.ts";
 import {
   codexRateLimitsToUpdate,
   mergeCodexRateLimits,
@@ -1377,7 +1378,7 @@ export function codexThreadRuntimeParams(input: {
   readonly mcpSession: McpProviderSession.McpProviderSessionConfig | undefined;
   /** A team-bound thread's delivery servers are added beside T3's own. */
   readonly threadId?: ThreadId | null;
-  readonly modelSelection?: { readonly model: string };
+  readonly modelSelection?: Pick<ModelSelection, "model" | "options">;
   readonly runtimePolicy?: ProviderAdapter.ProviderAdapterV2RuntimePolicy;
 }): {
   readonly cwd?: string;
@@ -1390,6 +1391,7 @@ export function codexThreadRuntimeParams(input: {
     ...(input.modelSelection === undefined ? {} : { model: input.modelSelection.model }),
     config: {
       ...CODEX_THREAD_CONFIG,
+      ...codexContextWindowConfig(input.modelSelection),
       // Each server overrides only its own key so launch-argument MCP servers survive.
       ...(input.threadId == null ? {} : deliveryMcpServerOverrides(input.threadId)),
       ...(mcpSession === undefined
@@ -1875,6 +1877,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
         );
         const activeTurns = yield* Ref.make(new Map<string, ActiveCodexTurnContext>());
         const turnTokenUsageByThread = new Map<string, CodexTurnTokenUsageState>();
+        const contextWindowByThread = new Map<string, number | undefined>();
         const usageStateForThread = (nativeThreadId: string) => {
           let state = turnTokenUsageByThread.get(nativeThreadId);
           if (!state) {
@@ -6682,16 +6685,20 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                   }),
                 ),
               ),
-              Effect.map((response): OrchestrationV2ProviderThread =>
-                providerThreadFromCodexThread({
+              Effect.map((response): OrchestrationV2ProviderThread => {
+                contextWindowByThread.set(
+                  response.thread.id,
+                  codexContextWindowConfig(threadInput.modelSelection).model_context_window,
+                );
+                return providerThreadFromCodexThread({
                   appThreadId: threadInput.threadId,
                   idAllocator,
                   ownerNodeId: null,
                   providerSessionId: input.providerSessionId,
                   providerInstanceId: adapterOptions.instanceId,
                   thread: response.thread,
-                }),
-              ),
+                });
+              }),
               Effect.mapError(
                 (cause) =>
                   new ProviderAdapter.ProviderAdapterEnsureThreadError({
@@ -6704,6 +6711,22 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           resumeThread: Effect.fn("CodexAdapterV2.resumeThread")(
             function* (threadInput) {
               const nativeThreadId = yield* getNativeThreadId(threadInput.providerThread);
+              const previousWindow = contextWindowByThread.get(nativeThreadId);
+              const contextWindow =
+                threadInput.modelSelection === undefined
+                  ? previousWindow
+                  : codexContextWindowConfig(threadInput.modelSelection).model_context_window;
+              // Codex ignores config overrides on an already loaded thread. Reload only
+              // when the window changes, and never interrupt retained agent/terminal work.
+              if (contextWindow !== previousWindow) {
+                if (yield* runtime.hasPendingBackgroundWorkForThread!(threadInput.providerThread)) {
+                  return yield* toProtocolError(
+                    "Wait for this thread's background work to finish before changing its context window.",
+                  );
+                }
+                yield* ensureInitialized;
+                yield* client.request("thread/unsubscribe", { threadId: nativeThreadId });
+              }
               // excludeTurns is not in the generated request schema yet.
               const resume = client.raw.request("thread/resume", {
                 threadId: nativeThreadId,
@@ -6742,6 +6765,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 ),
                 Effect.flatMap(decodeCodexResumeMetadata),
               );
+              contextWindowByThread.set(nativeThreadId, contextWindow);
               return {
                 ...threadInput.providerThread,
                 providerSessionId: input.providerSessionId,
@@ -7524,6 +7548,10 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 ),
               );
               let forkedThread = response.thread;
+              contextWindowByThread.set(
+                forkedThread.id,
+                codexContextWindowConfig(threadInput.modelSelection).model_context_window,
+              );
               if (boundary.rollbackTurnCount > 0) {
                 const { historyMode } = yield* ensureInitialized.pipe(
                   Effect.andThen(readCodexThreadHistoryMetadata(client.raw, response.thread.id)),
