@@ -82,20 +82,16 @@ function SupportedApprovalControls({
     // The input is cleared before awaiting. No passphrase is kept in React state.
     if (keyInput.current) keyInput.current.value = "";
     setHasKey(false);
-    try {
-      const result = await act(path, {
-        by: person,
-        ...(key === undefined ? {} : { key, confirmed: true }),
-      });
-      if (!result.ok) setProblem(result.why);
-    } catch (error) {
-      setProblem(error instanceof Error ? error.message : "The engine request failed.");
-    } finally {
-      clear();
-      inFlight.current = false;
-      setBusy(false);
-      health.refresh();
-    }
+    // The engine request settles into a result, so cleanup can follow the await.
+    const result = await act(path, {
+      by: person,
+      ...(key === undefined ? {} : { key, confirmed: true }),
+    });
+    if (!result.ok) setProblem(result.why);
+    clear();
+    inFlight.current = false;
+    setBusy(false);
+    health.refresh();
   };
   if (health.error || health.body === null) return null;
   const window = summary.approvalWindow;

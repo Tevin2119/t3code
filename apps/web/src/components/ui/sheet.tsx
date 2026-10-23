@@ -1,4 +1,5 @@
-"use client";
+import { ControlledOpenContext, renderRetainedPopup } from "~/components/ui/dialog";
+("use client");
 
 import { Dialog as SheetPrimitive } from "@base-ui/react/dialog";
 import { XIcon } from "lucide-react";
@@ -144,6 +145,7 @@ function SheetPopup({
                   className,
                 )
           }
+          render={keepMounted || inline ? undefined : renderRetainedPopup}
           data-slot="sheet-popup"
           style={{ ...transitionStyle, ...style, ...(inline ? { display: "contents" } : {}) }}
           {...props}

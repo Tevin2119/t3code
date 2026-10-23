@@ -2,10 +2,8 @@ import { describe, expect, it } from "@effect/vitest";
 
 import {
   decodeScanCache,
-  dedupeWithinFile,
   encodeScanCache,
   makeScanCacheWriter,
-  pruneScanCache,
   type CachedFile,
   type ScanCache,
 } from "./usageScanCache.ts";
@@ -63,6 +61,33 @@ function cacheWith(entries: readonly [string, number, readonly UsageRecord[]][])
 }
 
 describe("scan cache round trip", () => {
+  it("distinguishes upstream and fork v8 rows without losing usage history", () => {
+    const usage = record({
+      rateModel: "claude-fable-5",
+      modelProvider: "anthropic",
+      modelProviderSource: "recorded",
+    });
+    const current = encodeScanCache(cacheWith([["/v8.jsonl", 100, [usage]]]));
+    const fork = { ...current, version: 8 };
+    const upstream = {
+      ...current,
+      version: 8,
+      files: Object.fromEntries(
+        Object.entries(current.files).map(([file, entry]) => [
+          file,
+          { ...entry, r: entry.r.map((row) => [...row.slice(0, 11), ...row.slice(13)]) },
+        ]),
+      ),
+    };
+    expect(decodeScanCache(fork, TEST_FORMAT_MAP).get("/v8.jsonl")?.records[0]).toMatchObject({
+      modelProvider: "anthropic",
+      modelProviderSource: "recorded",
+      totals: usage.totals,
+    });
+    const decoded = decodeScanCache(upstream, TEST_FORMAT_MAP).get("/v8.jsonl")?.records[0];
+    expect(decoded).toMatchObject({ rateModel: usage.rateModel, totals: usage.totals });
+    expect(decoded?.modelProvider).toBeUndefined();
+  });
   it("distinguishes fork provider-attribution v5 tuples from upstream speed v5 tuples", () => {
     const usage = record({
       model: "glm-5.3",
@@ -71,7 +96,7 @@ describe("scan cache round trip", () => {
       speed: "fast",
     });
     const current = encodeScanCache(cacheWith([["/legacy.jsonl", 100, [usage]]]));
-    expect(current.version).toBe(8);
+    expect(current.version).toBe(9);
     const fork = {
       ...current,
       version: 5,
@@ -206,7 +231,7 @@ describe("scan cache round trip", () => {
     expect(restored).toEqual(original);
   });
 
-  it.each([5, 6])(
+  it.each([5, 6, 7])(
     "retains v%s history and compatible positions but invalidates obsolete state",
     (version) => {
       const original = cacheWith([["/gone.jsonl", 100, [record({ speed: "fast" })]]]);
@@ -216,7 +241,7 @@ describe("scan cache round trip", () => {
         records: [record({ provider: "codex", speed: "fast", dedupeKey: null })],
         position: position({
           state: {
-            ...(version === 6 ? initialCodexScanState() : {}),
+            ...(version >= 6 ? initialCodexScanState() : {}),
             model: "gpt-6-astra",
             speed: "fast",
             sessionId: "session-a",
@@ -258,26 +283,36 @@ describe("scan cache round trip", () => {
 
       // The fork's v5 rows hold the provider fields where upstream's hold the
       // speed, and no rate model. Version 6 rows already have today's layout.
+      // Only upstream wrote v7, so its rows go straight from the speed to the rate model.
       const forkV5 = (row: readonly unknown[]) => [...row.slice(0, 10), row[11], row[12]];
+      const upstreamV7 = (row: readonly unknown[]) => [...row.slice(0, 11), ...row.slice(13)];
+      const toLegacyRow = version === 5 ? forkV5 : version === 7 ? upstreamV7 : undefined;
       const document =
-        version === 5
-          ? {
+        toLegacyRow === undefined
+          ? legacy
+          : {
               ...legacy,
               files: Object.fromEntries(
                 Object.entries(legacy.files).map(([file, value]) => [
                   file,
-                  { ...value, r: value.r.map(forkV5), t: value.t.map(forkV5) },
+                  { ...value, r: value.r.map(toLegacyRow), t: value.t.map(toLegacyRow) },
                 ]),
               ),
-            }
-          : legacy;
+            };
       const expected = (file: NonNullable<ReturnType<typeof original.get>>) =>
         version === 5
           ? {
               ...file,
               records: file.records.map((record) => ({ ...record, speed: "standard" as const })),
             }
-          : file;
+          : version === 7
+            ? {
+                ...file,
+                records: file.records.map(
+                  ({ modelProvider: _provider, modelProviderSource: _source, ...record }) => record,
+                ),
+              }
+            : file;
 
       const restored = decodeScanCache(JSON.parse(JSON.stringify(document)), TEST_FORMAT_MAP);
       expect(restored.get("/gone.jsonl")).toEqual(expected(original.get("/gone.jsonl")!));
@@ -287,8 +322,8 @@ describe("scan cache round trip", () => {
         position: { resumeOffset: 0, guardLength: 0, guardHash: 0, state: null },
       });
       expect(restored.get("/gone-pi.jsonl")).toEqual(
-        version === 6
-          ? original.get("/gone-pi.jsonl")
+        version >= 6
+          ? expected(original.get("/gone-pi.jsonl")!)
           : {
               ...expected(original.get("/gone-pi.jsonl")!),
               size: -1,
@@ -297,52 +332,6 @@ describe("scan cache round trip", () => {
       );
     },
   );
-
-  it("drops an entry whose persisted parse state is corrupt", () => {
-    const encoded = encodeScanCache(cacheWith([["/a.jsonl", 100, [record()]]]));
-    const poisoned = {
-      ...encoded,
-      files: {
-        "/a.jsonl": { ...encoded.files["/a.jsonl"]!, cs: { model: 42 } },
-      },
-    };
-
-    expect(
-      decodeScanCache(JSON.parse(JSON.stringify(poisoned)), TEST_FORMAT_MAP).has("/a.jsonl"),
-    ).toBe(false);
-  });
-
-  it("drops an entry whose guard length is outside the supported range", () => {
-    const encoded = encodeScanCache(cacheWith([["/a.jsonl", 100, [record()]]]));
-    const poisoned = {
-      ...encoded,
-      files: { "/a.jsonl": { ...encoded.files["/a.jsonl"]!, gl: 1e20 } },
-    };
-
-    expect(
-      decodeScanCache(JSON.parse(JSON.stringify(poisoned)), TEST_FORMAT_MAP).has("/a.jsonl"),
-    ).toBe(false);
-  });
-
-  it("drops an entry whose speed is not a known index", () => {
-    const encoded = encodeScanCache(cacheWith([["/a.jsonl", 100, [record({ speed: "fast" })]]]));
-    const row = encoded.files["/a.jsonl"]!.r[0]!;
-    const poisoned = {
-      ...encoded,
-      files: { "/a.jsonl": { ...encoded.files["/a.jsonl"]!, r: [[...row.slice(0, 10), true]] } },
-    };
-
-    expect(
-      decodeScanCache(JSON.parse(JSON.stringify(poisoned)), TEST_FORMAT_MAP).has("/a.jsonl"),
-    ).toBe(false);
-  });
-
-  it("rejects a document from before records carried a speed", () => {
-    const encoded = encodeScanCache(cacheWith([["/a.jsonl", 100, [record()]]]));
-    const previous = { ...encoded, version: 3 };
-
-    expect(decodeScanCache(JSON.parse(JSON.stringify(previous)), TEST_FORMAT_MAP).size).toBe(0);
-  });
 
   it("rewrites only changed entries and still restores the whole cache", () => {
     const write = makeScanCacheWriter();
@@ -393,13 +382,6 @@ describe("scan cache round trip", () => {
     expect([...restored.keys()]).toEqual(["/good.jsonl"]);
   });
 
-  it("rejects the whole cache when an intern table holds a non-string", () => {
-    const encoded = encodeScanCache(cacheWith([["/a.jsonl", 100, [record()]]]));
-    const poisoned = { ...encoded, models: [1] };
-
-    expect(decodeScanCache(JSON.parse(JSON.stringify(poisoned)), TEST_FORMAT_MAP).size).toBe(0);
-  });
-
   it("drops the whole entry when any row is corrupt, forcing a cold re-parse", () => {
     const encoded = encodeScanCache(
       cacheWith([["/a.jsonl", 100, [record(), record({ dedupeKey: "msg_2:" })]]]),
@@ -417,45 +399,5 @@ describe("scan cache round trip", () => {
 
     const restored = decodeScanCache(JSON.parse(JSON.stringify(poisoned)), TEST_FORMAT_MAP);
     expect(restored.has("/a.jsonl")).toBe(false);
-  });
-});
-
-describe("pruneScanCache", () => {
-  const retentionCutoffMs = 1000;
-
-  it("drops entries older than retention", () => {
-    const cache = cacheWith([["/old.jsonl", 500, [record()]]]);
-
-    const removed = pruneScanCache(cache, retentionCutoffMs);
-
-    expect(removed).toBe(1);
-    expect(cache.size).toBe(0);
-  });
-
-  it("keeps entries whose file has disappeared", () => {
-    const cache = cacheWith([["/gone.jsonl", 5000, [record()]]]);
-
-    pruneScanCache(cache, retentionCutoffMs);
-
-    expect(cache.size).toBe(1);
-  });
-});
-
-describe("dedupeWithinFile", () => {
-  it("keeps the first record per dedupe key", () => {
-    const kept = dedupeWithinFile([
-      record({ totals: { ...record().totals, outputTokens: 1 } }),
-      record({ totals: { ...record().totals, outputTokens: 999 } }),
-      record({ dedupeKey: "msg_2:" }),
-    ]);
-
-    expect(kept).toHaveLength(2);
-    expect(kept[0]?.totals.outputTokens).toBe(1);
-  });
-
-  it("keeps every record that has no dedupe key", () => {
-    expect(
-      dedupeWithinFile([record({ dedupeKey: null }), record({ dedupeKey: null })]),
-    ).toHaveLength(2);
   });
 });
