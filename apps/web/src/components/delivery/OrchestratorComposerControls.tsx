@@ -73,15 +73,20 @@ export function OrchestratorComposerControls(props: {
   const [editingDefaults, setEditingDefaults] = useState(false);
 
   const team = teams.find((candidate) => candidate.team === draft?.team) ?? null;
-  const flow = flowFor(team, draft?.workflow ?? null);
+  const resolved = flowFor(team, draft?.workflow ?? null);
+  const flow =
+    resolved === "standard"
+      ? (team?.flows.find((item) => item.offered && item.id !== "standard")?.id ?? "chat")
+      : resolved;
   const text = props.prompt.trim();
   const seatsToSend = useMemo(
     () => (team && draft ? seatSettingsToSend(team.settings, draft.seats) : {}),
     [draft, team],
   );
   const preview = useFlowPreview(props.environmentId, team?.team ?? null, flow, seatsToSend);
-  const flows = preview?.flows ?? team?.flows ?? [];
-  const chosen = flows.find((item) => item.id === flow) ?? null;
+  const allFlows = preview?.flows ?? team?.flows ?? [];
+  const flows = allFlows.filter((item) => item.id !== "standard");
+  const chosen = allFlows.find((item) => item.id === flow) ?? null;
   const seatsOn = team
     ? team.settings.filter((item) => seatIsOn(item, draft?.seats[item.seat] ?? {})).length
     : 0;
