@@ -40,6 +40,7 @@ import {
 } from "../../lib/deliveryBoard";
 import { cn } from "../../lib/utils";
 import {
+  useBoardStore,
   useDeliveryAct,
   useDeliveryRead,
   usePersonName,
@@ -144,6 +145,8 @@ export function TaskEditor(props: {
   readonly board?: { readonly id: string; readonly title: string } | null;
 }) {
   const person = usePersonName();
+  const personRaw = useBoardStore((state) => state.person);
+  const setPerson = useBoardStore((state) => state.setPerson);
   const navigate = useNavigate();
   const conversationRef = useMemo(() => {
     const ref = props.taskId ? null : (props.fromConversation ?? null);
@@ -462,8 +465,13 @@ export function TaskEditor(props: {
       : saved && taskTarget?.repository
         ? `${targetLine(taskTarget)}. The task keeps this target: put it on a board whose repository works and press Use, or fix the repository.`
         : `${targetLine(taskTarget)}. Choose a board bound to a repository first.`;
+  const nameBlock = !person ? "Set your name first." : null;
   const canSubmit =
-    form.text.trim().length > 0 && teamBlock === null && targetBlock === null && busy === null;
+    form.text.trim().length > 0 &&
+    teamBlock === null &&
+    targetBlock === null &&
+    nameBlock === null &&
+    busy === null;
   const engineDown = teamsRead.error ?? taskRead.error;
   const state = !props.taskId ? "Not saved yet" : changed ? "Changed since it was saved" : "Saved";
 
@@ -568,13 +576,15 @@ export function TaskEditor(props: {
                       : flowStartLabel(flow)}
                 </TooltipTrigger>
                 <TooltipPopup side="bottom">
-                  {teamBlock
-                    ? teamBlock
-                    : targetBlock
-                      ? targetBlock
-                      : form.text.trim().length === 0
-                        ? "Write what is asked first."
-                        : `Saves it and gives it to team ${form.team}. ${chosenFlow?.summary ?? ""}`}
+                  {nameBlock
+                    ? nameBlock
+                    : teamBlock
+                      ? teamBlock
+                      : targetBlock
+                        ? targetBlock
+                        : form.text.trim().length === 0
+                          ? "Write what is asked first."
+                          : `Saves it and gives it to team ${form.team}. ${chosenFlow?.summary ?? ""}`}
                 </TooltipPopup>
               </Tooltip>
             </div>
@@ -669,6 +679,18 @@ export function TaskEditor(props: {
             </div>
 
             <aside className="flex min-w-0 flex-col gap-4">
+              <Field
+                label="Your name"
+                hint="Written on what you do: saves, submissions, decisions."
+              >
+                <Input
+                  aria-label="Your name"
+                  placeholder="Your name"
+                  className={!person ? "border-warning" : ""}
+                  value={personRaw}
+                  onChange={(event) => setPerson(event.target.value)}
+                />
+              </Field>
               {saved?.card.set === "qualification" ? null : (
                 <div className="flex flex-col gap-1" data-task-editor-board={boardNow}>
                   <span className="text-xs font-medium">Board</span>
