@@ -1,4 +1,5 @@
 import * as NodeModule from "node:module";
+import * as NodeNet from "node:net";
 
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -6,9 +7,9 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
-import { HostProcessArchitecture, HostProcessPlatform } from "@t3tools/shared/hostProcess";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 
-import * as PtyAdapter from "./PtyAdapter.ts";
+import * as PtyAdapter from "@t3tools/shared/PtyAdapter";
 
 export class NodePtyModuleLoadError extends Schema.TaggedError<NodePtyModuleLoadError>()(
   "NodePtyModuleLoadError",
@@ -34,7 +35,6 @@ const requireForNodePty = NodeModule.createRequire(import.meta.url);
 const loadNodePty: NodePtyModuleLoader = () =>
   Promise.resolve().then(() => requireForNodePty("node-pty") as typeof import("node-pty"));
 
-/** Injectable so tests can substitute a fake module; `require` bypasses module mocks. */
 export const NodePtyModuleLoaderRef = Context.Reference<NodePtyModuleLoader>(
   "server/terminal/NodePtyModuleLoader",
   { defaultValue: () => loadNodePty },
@@ -45,8 +45,8 @@ let didEnsureSpawnHelperExecutable = false;
 const resolveNodePtySpawnHelperPath = Effect.gen(function* () {
   const path = yield* Path.Path;
   const fs = yield* FileSystem.FileSystem;
-  const platform = yield* HostProcessPlatform;
-  const architecture = yield* HostProcessArchitecture;
+  const platform = yield* HostProcess.Platform;
+  const architecture = yield* HostProcess.Architecture;
 
   const packageJsonPath = requireForNodePty.resolve("node-pty/package.json");
   const packageDir = path.dirname(packageJsonPath);
@@ -66,7 +66,7 @@ const resolveNodePtySpawnHelperPath = Effect.gen(function* () {
 
 const ensureNodePtySpawnHelperExecutable = Effect.fn(function* () {
   const fs = yield* FileSystem.FileSystem;
-  const platform = yield* HostProcessPlatform;
+  const platform = yield* HostProcess.Platform;
   if (platform === "win32") return;
   if (didEnsureSpawnHelperExecutable) return;
 
@@ -78,17 +78,110 @@ const ensureNodePtySpawnHelperExecutable = Effect.fn(function* () {
     return;
   }
 
-  // Best-effort: avoid FileSystem.stat in packaged mode where some fs metadata can be missing.
   yield* fs.chmod(helperPath, 0o755).pipe(Effect.orElseSucceed(() => undefined));
 });
+
+/**
+ * node-pty defers creation to avoid blocking on named pipes:
+ * https://github.com/microsoft/node-pty/pull/885 Its public API has no
+ * readiness event. The private ready_datapipe handler sets pid before our
+ * listener runs.
+ */
+const waitForWindowsPid = (
+  process: import("node-pty").IPty,
+  trackedProcess: NodePtyProcess,
+  shell: string,
+) =>
+  Effect.callback<void, PtyAdapter.PtySpawnError>((resume) => {
+    const hasPid = () => Number.isInteger(process.pid) && process.pid > 0;
+    const failure = (cause: unknown) =>
+      Effect.fail(new PtyAdapter.PtySpawnError({ adapter: "node-pty", shell, cause }));
+
+    if (hasPid()) {
+      resume(Effect.void);
+      return;
+    }
+
+    if (!("_socket" in process) || !(process._socket instanceof NodeNet.Socket)) {
+      resume(failure(new Error("Windows PTY readiness socket is unavailable.")));
+      return;
+    }
+
+    const socket = process._socket;
+    const onReady = () => {
+      cleanup();
+      resume(
+        hasPid()
+          ? Effect.void
+          : failure(new Error("Windows PTY became ready without a valid PID.")),
+      );
+    };
+    const onError = (cause: Error) => {
+      cleanup();
+      resume(failure(cause));
+    };
+    const onClose = () => onError(new Error("Windows PTY closed before its PID was available."));
+    let stopExit = () => {};
+    const cleanup = () => {
+      socket.off("ready_datapipe", onReady);
+      socket.off("error", onError);
+      socket.off("close", onClose);
+      stopExit();
+    };
+    socket.once("ready_datapipe", onReady);
+    socket.once("error", onError);
+    socket.once("close", onClose);
+    stopExit = trackedProcess.onExit(({ exitCode }) =>
+      onError(
+        new Error(`Windows PTY exited before its PID was available (exit code ${exitCode}).`),
+      ),
+    );
+    return Effect.sync(cleanup);
+  });
+
+/**
+ * Cancels Windows startup without waiting for the first output, unlike public kill().
+ * The private agent can cancel the pending connection before a child exists.
+ */
+const killStartingWindowsPty = (process: import("node-pty").IPty) =>
+  Effect.try(() => {
+    if (
+      "_agent" in process &&
+      typeof process._agent === "object" &&
+      process._agent !== null &&
+      "kill" in process._agent &&
+      typeof process._agent.kill === "function"
+    ) {
+      process._agent.kill();
+    } else {
+      process.kill();
+    }
+  }).pipe(
+    Effect.catch((error) =>
+      Effect.logWarning("failed to cancel Windows terminal startup", {
+        terminalPid: process.pid,
+        cause: error,
+      }),
+    ),
+  );
 
 class NodePtyProcess implements PtyAdapter.PtyProcess {
   private readonly process: import("node-pty").IPty;
   private readonly platform: NodeJS.Platform;
+  private exitEvent: PtyAdapter.PtyExitEvent | undefined;
+  private readonly exitListeners = new Set<(event: PtyAdapter.PtyExitEvent) => void>();
+  private readonly exitSubscription: import("node-pty").IDisposable;
 
   constructor(process: import("node-pty").IPty, platform: NodeJS.Platform) {
     this.process = process;
     this.platform = platform;
+    this.exitSubscription = process.onExit((event) => {
+      if (this.exitEvent) return;
+      this.exitEvent = { exitCode: event.exitCode, signal: event.signal ?? null };
+      this.exitSubscription.dispose();
+      for (const listener of this.exitListeners) listener(this.exitEvent);
+      this.exitListeners.clear();
+    });
   }
 
   get pid(): number {
@@ -116,24 +209,28 @@ class NodePtyProcess implements PtyAdapter.PtyProcess {
   }
 
   onExit(callback: (event: PtyAdapter.PtyExitEvent) => void): () => void {
-    const disposable = this.process.onExit((event) => {
-      callback({
-        exitCode: event.exitCode,
-        signal: event.signal ?? null,
-      });
-    });
+    if (this.exitEvent) {
+      callback(this.exitEvent);
+      return () => {};
+    }
+    this.exitListeners.add(callback);
     return () => {
-      disposable.dispose();
+      this.exitListeners.delete(callback);
     };
+  }
+
+  disposeExitSubscription(): void {
+    this.exitSubscription.dispose();
+    this.exitListeners.clear();
   }
 }
 
-export const make = Effect.fn("NodePtyAdapter.make")(function* () {
+const make = Effect.fn("NodePtyAdapter.make")(function* () {
   const loadNodePtyModule = yield* NodePtyModuleLoaderRef;
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const platform = yield* HostProcessPlatform;
-  const architecture = yield* HostProcessArchitecture;
+  const platform = yield* HostProcess.Platform;
+  const architecture = yield* HostProcess.Architecture;
 
   const nodePty = yield* Effect.tryPromise({
     try: loadNodePtyModule,
@@ -149,8 +246,8 @@ export const make = Effect.fn("NodePtyAdapter.make")(function* () {
     ensureNodePtySpawnHelperExecutable().pipe(
       Effect.provideService(FileSystem.FileSystem, fs),
       Effect.provideService(Path.Path, path),
-      Effect.provideService(HostProcessPlatform, platform),
-      Effect.provideService(HostProcessArchitecture, architecture),
+      Effect.provideService(HostProcess.Platform, platform),
+      Effect.provideService(HostProcess.Architecture, architecture),
       Effect.orElseSucceed(() => undefined),
     ),
   );
@@ -166,14 +263,16 @@ export const make = Effect.fn("NodePtyAdapter.make")(function* () {
           ? { ...input.env, TERM: "xterm-256color" }
           : input.env;
       const ptyProcess = yield* Effect.try({
-        try: () =>
-          nodePty.spawn(input.shell, input.args ?? [], {
+        try: () => {
+          const nativeProcess = nodePty.spawn(input.shell, input.args ?? [], {
             cwd: input.cwd,
             cols: input.cols,
             rows: input.rows,
             env,
             name: "xterm-256color",
-          }),
+          });
+          return { nativeProcess, process: new NodePtyProcess(nativeProcess, platform) };
+        },
         catch: (cause) =>
           new PtyAdapter.PtySpawnError({
             adapter: "node-pty",
@@ -181,7 +280,16 @@ export const make = Effect.fn("NodePtyAdapter.make")(function* () {
             cause,
           }),
       });
-      return new NodePtyProcess(ptyProcess, platform);
+      if (platform === "win32") {
+        yield* waitForWindowsPid(ptyProcess.nativeProcess, ptyProcess.process, input.shell).pipe(
+          Effect.onError(() =>
+            Effect.sync(() => ptyProcess.process.disposeExitSubscription()).pipe(
+              Effect.andThen(killStartingWindowsPty(ptyProcess.nativeProcess)),
+            ),
+          ),
+        );
+      }
+      return ptyProcess.process;
     }),
   });
 });

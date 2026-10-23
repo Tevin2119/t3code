@@ -1,13 +1,16 @@
-import { ScreenScrollView as ScrollView } from "../../components/ScreenScrollView";
+import { AppActivityIndicator } from "../../components/ui/AppActivityIndicator";
+import { ScreenScrollView as ScrollView } from "../../components/ui/ScreenScrollView";
+import * as Application from "expo-application";
 import Constants from "expo-constants";
 import * as Updates from "expo-updates";
 import { useEffect, useState } from "react";
-import { ActivityIndicator, Platform, Pressable, View } from "react-native";
+import { View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-import { SymbolView } from "../../components/AppSymbol";
-import { AppText as Text } from "../../components/AppText";
+import { SymbolView } from "../../components/ui/AppSymbol";
+import { AppText as Text } from "../../components/ui/AppText";
 import { tryCopyTextWithHaptic } from "../../lib/copyTextWithHaptic";
+import { SettingsActionRow } from "../settings/components/SettingsActionRow";
 import { SettingsScreen } from "../settings/components/SettingsScreen";
 import { SettingsSection } from "../settings/components/SettingsSection";
 import {
@@ -28,18 +31,12 @@ type CrashLogState =
 function appIdentity() {
   return {
     version: Constants.expoConfig?.version ?? "0.0.0",
-    build:
-      (Platform.OS === "ios"
-        ? Constants.platform?.ios?.buildNumber
-        : Constants.platform?.android?.versionCode?.toString()) ?? "dev",
+    // EAS assigns build numbers remotely, so expo-constants never sees them;
+    // only the installed binary knows its own.
+    build: Application.nativeBuildVersion ?? "dev",
   };
 }
 
-/**
- * Startup crashes that TestFlight and the stores strip from their reports.
- * expo-updates' ErrorRecovery writes the JS error and component stack to its
- * own log before aborting the process, so the next launch can show it here.
- */
 export function SettingsDiagnosticsRouteScreen() {
   const insets = useSafeAreaInsets();
   const [state, setState] = useState<CrashLogState>(() =>
@@ -84,7 +81,7 @@ export function SettingsDiagnosticsRouteScreen() {
         <SettingsSection title="Startup crashes">
           {state.status === "loading" ? (
             <View className="items-center gap-3 px-6 py-8">
-              <ActivityIndicator />
+              <AppActivityIndicator />
               <Text className="text-center text-sm text-foreground-muted">Reading crash log…</Text>
             </View>
           ) : state.status === "unavailable" ? (
@@ -108,23 +105,12 @@ export function SettingsDiagnosticsRouteScreen() {
 
         <View className="gap-3">
           <SettingsSection title="Actions">
-            <Pressable
-              accessibilityRole="button"
+            <SettingsActionRow
+              icon={copied ? "checkmark" : "doc.on.doc"}
+              label={copied ? "Copied" : "Copy crash report"}
               disabled={state.status !== "ready"}
               onPress={() => void copyReport()}
-              className="flex-row items-center gap-4 p-4 disabled:opacity-40"
-            >
-              <SymbolView
-                name={copied ? "checkmark" : "doc.on.doc"}
-                size={22}
-                tintColorClassName="accent-icon"
-                type="monochrome"
-                weight="regular"
-              />
-              <Text className="flex-1 text-lg text-foreground">
-                {copied ? "Copied" : "Copy crash report"}
-              </Text>
-            </Pressable>
+            />
           </SettingsSection>
           <Text className="px-2 text-sm leading-normal text-foreground-muted">
             Paste the report into a GitHub issue. It contains the app version, the JavaScript error

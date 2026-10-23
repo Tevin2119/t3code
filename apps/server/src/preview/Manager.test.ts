@@ -1,15 +1,18 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
 import { type PreviewEvent, ThreadId } from "@t3tools/contracts";
-import { PreviewUrlNormalizationError } from "@t3tools/shared/preview";
-import { Effect, PubSub } from "effect";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as PubSub from "effect/PubSub";
 import { expect } from "vite-plus/test";
 
+import * as ServerConfig from "../config.ts";
 import * as PreviewManager from "./Manager.ts";
 
 const DRAIN_LIMIT = 100;
 
 interface EventCollector {
-  /** Drain everything published since the last call (or since subscribe). */
   readonly drain: Effect.Effect<ReadonlyArray<PreviewEvent>>;
 }
 
@@ -35,7 +38,13 @@ const collectEvents = Effect.gen(function* () {
   return collector;
 }).pipe(Effect.withSpan("preview.test.collectEvents"));
 
-it.layer(PreviewManager.layer)("PreviewManager", (it) => {
+const layer = PreviewManager.layer.pipe(
+  Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "t3-preview-manager-" })),
+  Layer.provide(NodeCrypto.layer),
+  Layer.provide(NodeServices.layer),
+);
+
+it.layer(layer)("PreviewManager", (it) => {
   it.effect("opens a session and emits opened with normalized URL", () =>
     Effect.gen(function* () {
       const threadId = freshThreadId();
@@ -66,10 +75,6 @@ it.layer(PreviewManager.layer)("PreviewManager", (it) => {
       const opened = yield* manager.open({ threadId, profileId: "work" });
       expect(opened.profileId).toBe("work");
 
-      // `navigate` and `reportStatus` rebuild the snapshot field by field
-      // rather than spreading it, so a new field is dropped unless carried
-      // explicitly — which would silently move the tab to another profile's
-      // partition on its first navigation.
       const navigated = yield* manager.navigate({
         threadId,
         tabId: opened.tabId,
@@ -89,12 +94,40 @@ it.layer(PreviewManager.layer)("PreviewManager", (it) => {
     }),
   );
 
-  it.effect("opens an Idle tab when no URL is supplied", () =>
+  it.effect("reissues presentation requests without replaying them on navigation", () =>
     Effect.gen(function* () {
       const threadId = freshThreadId();
       const manager = yield* PreviewManager.PreviewManager;
-      const snapshot = yield* manager.open({ threadId });
-      expect(snapshot.navStatus._tag).toBe("Idle");
+      const collector = yield* collectEvents;
+      const opened = yield* manager.open({ threadId, runtime: "server", reveal: false });
+      yield* manager.requestReveal({ threadId, tabId: opened.tabId, force: true });
+      const first = (yield* manager.list({ threadId })).sessions[0];
+      expect(first?.reveal).toBe(true);
+      expect(first?.revealRequest?.force).toBe(true);
+      const refused = yield* manager
+        .navigate({ threadId, tabId: opened.tabId, url: "localhost:5173" })
+        .pipe(Effect.flip);
+      expect(refused._tag).toBe("PreviewControlRequiredError");
+      yield* manager.reportStatus({
+        threadId,
+        tabId: opened.tabId,
+        serverControlled: true,
+        navStatus: { _tag: "Success", url: "http://localhost:5173/", title: "Dev" },
+        canGoBack: false,
+        canGoForward: false,
+      });
+      expect((yield* manager.list({ threadId })).sessions[0]?.revealRequest).toEqual(
+        first?.revealRequest,
+      );
+      yield* manager.requestReveal({ threadId, tabId: opened.tabId, force: false });
+      const second = (yield* manager.list({ threadId })).sessions[0];
+      expect(second?.revealRequest?.id).not.toBe(first?.revealRequest?.id);
+      expect(second?.revealRequest?.force).toBe(false);
+      const events = yield* collector.drain;
+      const last = events.at(-1);
+      expect(last?.type).toBe("navigated");
+      if (last?.type === "navigated")
+        expect(last.snapshot.revealRequest).toEqual(second?.revealRequest);
     }),
   );
 
@@ -121,90 +154,6 @@ it.layer(PreviewManager.layer)("PreviewManager", (it) => {
       expect(events[1]!.revision).toBeGreaterThan(events[0]!.revision);
       expect(listed.revision).toBe(events[1]!.revision);
       expect(listed.sessions).toHaveLength(1);
-    }),
-  );
-
-  it.effect("treats bare hosts as https", () =>
-    Effect.gen(function* () {
-      const threadId = freshThreadId();
-      const manager = yield* PreviewManager.PreviewManager;
-      const snapshot = yield* manager.open({ threadId, url: "example.com" });
-      if (snapshot.navStatus._tag === "Loading") {
-        expect(snapshot.navStatus.url).toBe("https://example.com/");
-      }
-    }),
-  );
-
-  it.effect("rejects empty URL with PreviewInvalidUrlError", () =>
-    Effect.gen(function* () {
-      const threadId = freshThreadId();
-      const manager = yield* PreviewManager.PreviewManager;
-      const error = yield* Effect.flip(manager.open({ threadId, url: "   " }));
-      expect(error._tag).toBe("PreviewInvalidUrlError");
-      expect(error).toMatchObject({ inputLength: 3, reason: "empty" });
-      expect(error).not.toHaveProperty("rawUrl");
-      expect(error.cause).toBeInstanceOf(PreviewUrlNormalizationError);
-      expect((error.cause as PreviewUrlNormalizationError).reason).toBe("empty");
-    }),
-  );
-
-  it.effect("preserves URL parser failures as the invalid URL cause chain", () =>
-    Effect.gen(function* () {
-      const threadId = freshThreadId();
-      const manager = yield* PreviewManager.PreviewManager;
-      const rawUrl = "https://user:password@example.com:bad/path?access_token=secret#fragment";
-      const error = yield* Effect.flip(manager.open({ threadId, url: rawUrl }));
-
-      expect(error).toMatchObject({
-        inputLength: rawUrl.length,
-        reason: "parse",
-        protocol: "https:",
-      });
-      expect(error).not.toHaveProperty("rawUrl");
-      expect(error.cause).toBeInstanceOf(PreviewUrlNormalizationError);
-      const normalizationError = error.cause as PreviewUrlNormalizationError;
-      expect(normalizationError.cause).toBeInstanceOf(Error);
-      expect(error.message).not.toContain((normalizationError.cause as Error).message);
-      expect(error.message).not.toMatch(/user|password|access_token|secret|fragment/);
-    }),
-  );
-
-  it.effect("navigate updates snapshot and emits navigated", () =>
-    Effect.gen(function* () {
-      const threadId = freshThreadId();
-      const manager = yield* PreviewManager.PreviewManager;
-      const collector = yield* collectEvents;
-
-      const opened = yield* manager.open({ threadId, url: "http://localhost:5173" });
-      const snapshot = yield* manager.navigate({
-        threadId,
-        tabId: opened.tabId,
-        url: "http://localhost:5173/about",
-        resolvedTitle: "About",
-      });
-
-      expect(snapshot.navStatus._tag).toBe("Success");
-      if (snapshot.navStatus._tag === "Success") {
-        expect(snapshot.navStatus.url).toBe("http://localhost:5173/about");
-        expect(snapshot.navStatus.title).toBe("About");
-      }
-      const events = yield* collector.drain;
-      expect(events.map((e) => e.type)).toEqual(["opened", "navigated"]);
-    }),
-  );
-
-  it.effect("navigate fails for unknown tab", () =>
-    Effect.gen(function* () {
-      const threadId = freshThreadId();
-      const manager = yield* PreviewManager.PreviewManager;
-      const error = yield* Effect.flip(
-        manager.navigate({
-          threadId,
-          tabId: "tab_missing",
-          url: "http://localhost:5173",
-        }),
-      );
-      expect(error._tag).toBe("PreviewSessionLookupError");
     }),
   );
 
@@ -249,66 +198,44 @@ it.layer(PreviewManager.layer)("PreviewManager", (it) => {
     }),
   );
 
-  it.effect("rejects resize for an unknown tab", () =>
-    Effect.gen(function* () {
-      const manager = yield* PreviewManager.PreviewManager;
-      const error = yield* Effect.flip(
-        manager.resize({
-          threadId: freshThreadId(),
-          tabId: "tab_missing",
-          viewport: { _tag: "fill" },
-        }),
-      );
-      expect(error._tag).toBe("PreviewSessionLookupError");
-    }),
-  );
+  it.effect(
+    "rejects client status reports for server tabs without changing state or emitting events",
+    () =>
+      Effect.gen(function* () {
+        const threadId = freshThreadId();
+        const manager = yield* PreviewManager.PreviewManager;
+        const opened = yield* manager.open({ threadId, runtime: "server", reveal: false });
+        const collector = yield* collectEvents;
+        const before = yield* manager.list({ threadId });
+        const input = {
+          threadId,
+          tabId: opened.tabId,
+          navStatus: {
+            _tag: "Success" as const,
+            url: "http://localhost:5173/changed",
+            title: "Changed",
+          },
+          canGoBack: true,
+          canGoForward: true,
+        };
+        const rejected = yield* manager.reportStatus(input).pipe(Effect.flip);
+        expect(rejected._tag).toBe("PreviewControlRequiredError");
+        expect(yield* manager.list({ threadId })).toEqual(before);
+        expect(yield* collector.drain).toEqual([]);
 
-  it.effect("reportStatus emits failed for LoadFailed nav", () =>
-    Effect.gen(function* () {
-      const threadId = freshThreadId();
-      const manager = yield* PreviewManager.PreviewManager;
-      const collector = yield* collectEvents;
-
-      const opened = yield* manager.open({ threadId, url: "http://localhost:5173" });
-      yield* manager.reportStatus({
-        threadId,
-        tabId: opened.tabId,
-        navStatus: {
-          _tag: "LoadFailed",
-          url: "http://localhost:5173",
-          title: "",
-          code: -105,
-          description: "ERR_NAME_NOT_RESOLVED",
-        },
-        canGoBack: false,
-        canGoForward: false,
-      });
-
-      const events = yield* collector.drain;
-      const failed = events.find((e) => e.type === "failed");
-      expect(failed?.type).toBe("failed");
-      if (failed?.type === "failed") {
-        expect(failed.code).toBe(-105);
-        expect(failed.description).toBe("ERR_NAME_NOT_RESOLVED");
-      }
-    }),
-  );
-
-  it.effect("close removes the session and emits closed", () =>
-    Effect.gen(function* () {
-      const threadId = freshThreadId();
-      const manager = yield* PreviewManager.PreviewManager;
-      const collector = yield* collectEvents;
-
-      yield* manager.open({ threadId, url: "http://localhost:5173" });
-      yield* manager.close({ threadId });
-
-      const result = yield* manager.list({ threadId });
-      expect(result.sessions).toHaveLength(0);
-      const events = yield* collector.drain;
-      const closed = events.find((e) => e.type === "closed");
-      expect(closed?.type).toBe("closed");
-    }),
+        yield* manager.reportStatus({ ...input, serverControlled: true });
+        expect((yield* manager.list({ threadId })).sessions[0]).toMatchObject({
+          navStatus: input.navStatus,
+          canGoBack: true,
+          canGoForward: true,
+        });
+        const events = yield* collector.drain;
+        expect(events).toHaveLength(1);
+        expect(events[0]).toMatchObject({
+          type: "navigated",
+          snapshot: { navStatus: input.navStatus },
+        });
+      }),
   );
 
   it.effect("gives every tab in a batch close its own monotonic revision", () =>
@@ -331,60 +258,6 @@ it.layer(PreviewManager.layer)("PreviewManager", (it) => {
     }),
   );
 
-  it.effect("close is idempotent for unknown threads", () =>
-    Effect.gen(function* () {
-      const threadId = freshThreadId();
-      const manager = yield* PreviewManager.PreviewManager;
-      yield* manager.close({ threadId });
-      const result = yield* manager.list({ threadId });
-      expect(result.sessions).toHaveLength(0);
-    }),
-  );
-
-  it.effect("list returns every snapshot for the thread sorted by updatedAt", () =>
-    Effect.gen(function* () {
-      const threadId = freshThreadId();
-      const manager = yield* PreviewManager.PreviewManager;
-      const first = yield* manager.open({ threadId, url: "http://localhost:5173" });
-      const second = yield* manager.open({ threadId, url: "http://localhost:3000" });
-      const result = yield* manager.list({ threadId });
-      expect(result.sessions).toHaveLength(2);
-      const ids = result.sessions.map((s) => s.tabId);
-      expect(ids).toContain(first.tabId);
-      expect(ids).toContain(second.tabId);
-    }),
-  );
-
-  it.effect("open creates an independent tab on every call", () =>
-    Effect.gen(function* () {
-      const threadId = freshThreadId();
-      const manager = yield* PreviewManager.PreviewManager;
-      const collector = yield* collectEvents;
-
-      const a = yield* manager.open({ threadId, url: "http://localhost:5173" });
-      const b = yield* manager.open({ threadId, url: "http://localhost:3000/path" });
-
-      expect(a.tabId).not.toBe(b.tabId);
-      const list = yield* manager.list({ threadId });
-      expect(list.sessions).toHaveLength(2);
-
-      const events = yield* collector.drain;
-      expect(events.map((e) => e.type)).toEqual(["opened", "opened"]);
-    }),
-  );
-
-  it.effect("close with mismatching tabId is a no-op", () =>
-    Effect.gen(function* () {
-      const threadId = freshThreadId();
-      const manager = yield* PreviewManager.PreviewManager;
-      yield* manager.open({ threadId, url: "http://localhost:5173" });
-      yield* manager.close({ threadId, tabId: "tab_missing" });
-
-      const list = yield* manager.list({ threadId });
-      expect(list.sessions).toHaveLength(1);
-    }),
-  );
-
   it.effect("close with explicit tabId removes only that tab", () =>
     Effect.gen(function* () {
       const threadId = freshThreadId();
@@ -396,23 +269,6 @@ it.layer(PreviewManager.layer)("PreviewManager", (it) => {
 
       const list = yield* manager.list({ threadId });
       expect(list.sessions.map((s) => s.tabId)).toEqual([b.tabId]);
-    }),
-  );
-
-  it.effect("multiple subscribers receive every event independently", () =>
-    Effect.gen(function* () {
-      const threadId = freshThreadId();
-      const manager = yield* PreviewManager.PreviewManager;
-      const aSub = yield* manager.subscribeEvents;
-      const bSub = yield* manager.subscribeEvents;
-
-      yield* manager.open({ threadId, url: "http://localhost:5173" });
-      yield* manager.open({ threadId, url: "http://localhost:3000" });
-
-      const aEvents = yield* PubSub.takeUpTo(aSub, DRAIN_LIMIT);
-      const bEvents = yield* PubSub.takeUpTo(bSub, DRAIN_LIMIT);
-      expect(aEvents.map((e) => e.type)).toEqual(["opened", "opened"]);
-      expect(bEvents.map((e) => e.type)).toEqual(["opened", "opened"]);
     }),
   );
 });

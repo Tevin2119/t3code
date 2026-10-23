@@ -4,7 +4,7 @@ import { cn } from "../../lib/cn";
 import { MOBILE_CODE_SURFACE } from "../../lib/typography";
 
 import type { ReviewRenderableLineRow } from "./reviewModel";
-import type { ReviewHighlightedToken } from "./shikiReviewHighlighter";
+import type { ReviewHighlightedToken } from "./reviewHighlightedToken.types";
 
 export const REVIEW_MONO_FONT_FAMILY = Platform.select({
   ios: "ui-monospace",
@@ -103,11 +103,10 @@ export function DiffTokenText(props: {
       }}
     >
       {(() => {
-        let offset = 0;
+        const starts = tokenStartOffsets(props.tokens);
 
-        return props.tokens.map((token) => {
-          const start = offset;
-          offset += token.content.length;
+        return props.tokens.map((token, index) => {
+          const start = starts[index]!;
 
           const fontWeight =
             token.fontStyle !== null && (token.fontStyle & 2) === 2
@@ -141,4 +140,14 @@ export function DiffTokenText(props: {
       })()}
     </NativeText>
   );
+}
+
+function tokenStartOffsets(tokens: ReadonlyArray<{ readonly content: string }>): number[] {
+  const starts: number[] = [];
+  let offset = 0;
+  for (const token of tokens) {
+    starts.push(offset);
+    offset += token.content.length;
+  }
+  return starts;
 }

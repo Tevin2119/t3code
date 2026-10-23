@@ -1,3 +1,4 @@
+import { Button } from "../../components/ui/Button";
 import { DateTimePicker } from "@expo/ui/community/datetime-picker";
 import {
   localSnoozeDate,
@@ -15,8 +16,8 @@ import {
   TextInput,
   View,
 } from "react-native";
-import { AppText } from "../../components/AppText";
-import { SegmentedControl } from "../../components/SegmentedControl";
+import { AppText } from "../../components/ui/AppText";
+import { SegmentedControl } from "../../components/ui/SegmentedControl";
 
 export function CustomSnoozeSheet(props: {
   readonly onClose: () => void;
@@ -31,7 +32,7 @@ export function CustomSnoozeSheet(props: {
   return (
     <Modal visible transparent animationType="fade" onRequestClose={props.onClose}>
       <KeyboardAvoidingView
-        className="flex-1 items-center justify-center bg-black/40 px-6"
+        className="flex-1 items-center justify-center bg-backdrop px-6"
         behavior={Platform.OS === "ios" ? "padding" : undefined}
       >
         <ScrollView
@@ -143,16 +144,10 @@ export function CustomSnoozeSheet(props: {
             </AppText>
           )}
           <View className="flex-row justify-end gap-3">
-            <Pressable
-              accessibilityRole="button"
-              className="min-h-12 justify-center px-3"
-              onPress={props.onClose}
-            >
-              <AppText>Cancel</AppText>
-            </Pressable>
-            <Pressable
-              accessibilityRole="button"
-              className="min-h-12 justify-center rounded-xl bg-primary px-3"
+            <Button label="Cancel" tone="text" onPress={props.onClose} />
+            <Button
+              label="Snooze"
+              tone="secondary"
               onPress={() => {
                 const input: CustomSnoozeInput =
                   mode === "date"
@@ -170,9 +165,7 @@ export function CustomSnoozeSheet(props: {
                 props.onSnooze(snoozedUntil);
                 props.onClose();
               }}
-            >
-              <AppText className="text-primary-foreground">Snooze</AppText>
-            </Pressable>
+            />
           </View>
         </ScrollView>
       </KeyboardAvoidingView>

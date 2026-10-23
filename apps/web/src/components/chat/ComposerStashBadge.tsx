@@ -4,14 +4,6 @@ import { memo } from "react";
 import { cn } from "~/lib/utils";
 import { ComposerBanner } from "./ComposerBanner";
 
-/**
- * Bookmark tab that shows the stash count beside the composer's other attachments
- * and opens the stash menu.
- *
- * On save the badge gives one quiet acknowledgement: it lifts to full
- * opacity and the count ticks over. `pulseKey` changes per stash, remounting
- * the count so the transition replays without a continuous animation.
- */
 export const ComposerStashBadge = memo(function ComposerStashBadge(props: {
   count: number;
   menuOpen: boolean;
@@ -25,7 +17,7 @@ export const ComposerStashBadge = memo(function ComposerStashBadge(props: {
       key={props.pulseKey}
       className={cn(
         props.pulsing
-          ? "animate-[prompt-stash-count-enter_180ms_ease-out_both] text-primary motion-reduce:animate-none"
+          ? "text-primary transition-[opacity,translate] duration-180 ease-out starting:translate-y-0.5 starting:opacity-0 motion-reduce:transition-none"
           : "text-muted-foreground",
       )}
     >

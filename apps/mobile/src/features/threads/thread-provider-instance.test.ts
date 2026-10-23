@@ -7,8 +7,14 @@ import {
   type ServerConfig,
 } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
+import { Atom, AtomRegistry } from "effect/reactivity";
 
-import { resolveThreadProviderInstance } from "./thread-provider-instance";
+import { createThreadListEnvironmentsAtom } from "../../state/thread-list-environments";
+
+import {
+  createThreadRowProviderInstanceResolver,
+  resolveThreadProviderInstance,
+} from "./thread-provider-instance";
 
 function makeConfig(
   providers: ReadonlyArray<{
@@ -18,7 +24,11 @@ function makeConfig(
     readonly accentColor?: string;
   }>,
 ): ServerConfig {
-  return { providers } as unknown as ServerConfig;
+  return {
+    providers: providers.map((provider) => ({ enabled: true, ...provider })),
+    environment: { capabilities: {}, platform: { machine: "laptop" } },
+    settings: {},
+  } as unknown as ServerConfig;
 }
 
 function makeThread(environmentId: EnvironmentId, instanceId: string): EnvironmentThreadShell {
@@ -32,13 +42,13 @@ function makeThread(environmentId: EnvironmentId, instanceId: string): Environme
     interactionMode: "default",
     branch: null,
     worktreePath: null,
-    latestTurn: null,
+    latestRun: null,
     createdAt: "2026-06-01T00:00:00.000Z",
     updatedAt: "2026-06-01T00:00:00.000Z",
     archivedAt: null,
     settledOverride: null,
     settledAt: null,
-    session: null,
+    runtime: null,
     latestUserMessageAt: null,
     hasPendingApprovals: false,
     hasPendingUserInput: false,
@@ -61,38 +71,100 @@ describe("resolveThreadProviderInstance", () => {
     const threadA = makeThread(environmentA, "codex");
     const threadB = makeThread(environmentB, "codex");
 
-    expect(resolveThreadProviderInstance(serverConfigs, threadA)?.accentColor).toBe("#ff8800");
-    expect(resolveThreadProviderInstance(serverConfigs, threadB)?.accentColor).toBeUndefined();
+    expect(
+      resolveThreadProviderInstance(serverConfigs.get(environmentA)?.providers, threadA)
+        ?.accentColor,
+    ).toBe("#ff8800");
+    expect(
+      resolveThreadProviderInstance(serverConfigs.get(environmentB)?.providers, threadB)
+        ?.accentColor,
+    ).toBeUndefined();
   });
 
-  it("labels a custom instance by its id so its initials differ from the default", () => {
+  it("uses the current runtime owner after a provider handoff", () => {
     const environmentId = EnvironmentId.make("environment-a");
     const serverConfigs = new Map<EnvironmentId, ServerConfig>([
       [
         environmentId,
         makeConfig([
+          { instanceId: "claudeAgent", driver: "claudeAgent" },
           { instanceId: "codex", driver: "codex", displayName: "Codex" },
-          { instanceId: "codex_personal", driver: "codex", displayName: "Codex" },
+          { instanceId: "codex_work", driver: "codex", displayName: "Codex" },
         ]),
       ],
     ]);
+    const thread = {
+      ...makeThread(environmentId, "claudeAgent"),
+      runtime: {
+        status: "running" as const,
+        activeRunId: null,
+        providerInstanceId: ProviderInstanceId.make("codex_work"),
+        providerName: "Codex",
+        lastError: null,
+        updatedAt: "2026-06-01T00:01:00.000Z",
+      },
+    };
 
     expect(
-      resolveThreadProviderInstance(serverConfigs, makeThread(environmentId, "codex"))?.displayName,
-    ).toBe("Codex");
-    expect(
-      resolveThreadProviderInstance(serverConfigs, makeThread(environmentId, "codex_personal"))
-        ?.displayName,
-    ).toBe("Codex Personal");
+      resolveThreadProviderInstance(serverConfigs.get(environmentId)?.providers, thread),
+    ).toMatchObject({
+      driverKind: "codex",
+      displayName: "Codex Work",
+      showBadge: true,
+    });
   });
+});
 
-  it("hides the badge for a single instance with no accent color", () => {
+describe("createThreadRowProviderInstanceResolver", () => {
+  it("updates thread badges through the environment projection when a sibling is disabled and re-enabled", () => {
     const environmentId = EnvironmentId.make("environment-a");
-    const serverConfigs = new Map<EnvironmentId, ServerConfig>([
-      [environmentId, makeConfig([{ instanceId: "codex", driver: "codex" }])],
+    const personal = makeThread(environmentId, "codex");
+    const work = makeThread(environmentId, "codex_work");
+    const config = makeConfig([
+      { instanceId: "codex", driver: "codex" },
+      { instanceId: "codex_work", driver: "codex" },
     ]);
-    const thread = makeThread(environmentId, "codex");
+    const configs = Atom.make<ReadonlyMap<EnvironmentId, ServerConfig>>(
+      new Map([[environmentId, config]]),
+    );
+    const environments = createThreadListEnvironmentsAtom(configs);
+    const registry = AtomRegistry.make();
+    registry.mount(environments);
+    try {
+      const before = createThreadRowProviderInstanceResolver(
+        registry.get(environments).providersByEnvironmentId,
+      );
+      expect(before(personal)?.showBadge).toBe(true);
+      expect(before(work)?.showBadge).toBe(true);
 
-    expect(resolveThreadProviderInstance(serverConfigs, thread)?.showBadge).toBe(false);
+      registry.set(
+        configs,
+        new Map([
+          [
+            environmentId,
+            {
+              ...config,
+              providers: config.providers.map((provider) =>
+                provider.instanceId === "codex_work" ? { ...provider, enabled: false } : provider,
+              ),
+            },
+          ],
+        ]),
+      );
+      const disabled = createThreadRowProviderInstanceResolver(
+        registry.get(environments).providersByEnvironmentId,
+      );
+      expect(disabled(personal)?.showBadge).toBe(false);
+      expect(disabled(work)?.showBadge).toBe(true);
+
+      registry.set(configs, new Map([[environmentId, config]]));
+      const restored = createThreadRowProviderInstanceResolver(
+        registry.get(environments).providersByEnvironmentId,
+      );
+      expect(restored(personal)?.showBadge).toBe(true);
+      expect(restored(work)?.showBadge).toBe(true);
+    } finally {
+      registry.dispose();
+    }
   });
 });

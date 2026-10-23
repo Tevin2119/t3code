@@ -1,0 +1,162 @@
+import { type AntigravitySettings, UsageReadError } from "@t3tools/contracts";
+import { expandHomePath } from "@t3tools/provider-core/server/pathExpansion";
+import * as ProviderHost from "@t3tools/provider-core/server/ProviderHost";
+import type {
+  ProviderUsageInstance,
+  ProviderUsageReader,
+  ProviderUsageScan,
+} from "@t3tools/provider-core/server/usage";
+import * as HostProcess from "@t3tools/shared/HostProcess";
+import * as Context from "effect/Context";
+import * as Crypto from "effect/Crypto";
+import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
+import * as Layer from "effect/Layer";
+import * as Path from "effect/Path";
+
+import { resolveAntigravityInstanceDirectories } from "../antigravityAuthSupport.ts";
+import { makeAntigravityUsageCache, readAntigravityUsage } from "./antigravityUsageReader.ts";
+
+export class AntigravityUsage extends Context.Service<
+  AntigravityUsage,
+  {
+    readonly scan: (input: {
+      readonly instances: ReadonlyArray<ProviderUsageInstance<AntigravitySettings>>;
+      readonly windowStartMs: number;
+    }) => Effect.Effect<ReadonlyArray<ProviderUsageScan>, UsageReadError>;
+  }
+>()("t3/provider/Drivers/AntigravityUsage") {}
+
+const make = Effect.gen(function* () {
+  const crypto = yield* Crypto.Crypto;
+  const fileSystem = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const host = yield* ProviderHost.ProviderHost;
+  const cache = makeAntigravityUsageCache();
+
+  const dataRoots = Effect.fn("AntigravityUsage.dataRoots")(function* (
+    environment: NodeJS.ProcessEnv,
+  ) {
+    const home = yield* HostProcess.HomeDirectory;
+    const configured = environment["ANTIGRAVITY_DATA_DIR"]
+      ?.split(",")
+      .map((value) => value.trim())
+      .filter(Boolean);
+    const geminiHome = expandHomePath(
+      environment["GEMINI_HOME"]?.trim() || path.join(home, ".gemini"),
+      home,
+    );
+    const defaults = [
+      ...["antigravity", "antigravity-cli", "antigravity-ide", "antigravity-backup"].map((name) =>
+        path.join(geminiHome, name),
+      ),
+      path.join(home, ".config", "antigravity"),
+    ];
+    const canonical = new Set<string>();
+    for (const root of configured?.length ? configured : defaults) {
+      const resolved = path.resolve(expandHomePath(root, home));
+      canonical.add(
+        yield* fileSystem.realPath(resolved).pipe(Effect.orElseSucceed(() => resolved)),
+      );
+    }
+    return [...canonical];
+  });
+
+  const scan: AntigravityUsage["Service"]["scan"] = Effect.fn("AntigravityUsage.scan")(function* ({
+    instances,
+    windowStartMs,
+  }) {
+    const roots: Array<string> = [];
+    for (const instance of instances) roots.push(...(yield* dataRoots(instance.environment)));
+    // The model provider of each root's usage (fork). With a Google account the
+    // tokens come out of the account's plan; an API key or Agent Platform bills
+    // them at Gemini's or Vertex AI's rates.
+    const billingByRoot = new Map<string, string>();
+    for (const { instanceId, config } of instances.filter((instance) => instance.configured)) {
+      const directories = yield* resolveAntigravityInstanceDirectories(
+        host.paths.stateDir,
+        instanceId,
+      ).pipe(
+        Effect.provideService(Crypto.Crypto, crypto),
+        Effect.provideService(Path.Path, path),
+        Effect.mapError(
+          (cause) =>
+            new UsageReadError({
+              reason: "scanFailed",
+              detail: "Antigravity profile directory could not be resolved.",
+              cause,
+            }),
+        ),
+      );
+      const root = path.join(directories.profile, "antigravity-acp");
+      roots.push(root);
+      const authMethod = config?.authMethod ?? "oauth-personal";
+      billingByRoot.set(
+        root,
+        authMethod === "gemini-api-key"
+          ? "gemini"
+          : authMethod === "agent-platform"
+            ? "vertex_ai"
+            : "antigravity",
+      );
+    }
+    const conversationDirs = new Set<string>();
+    const billingByDir = new Map<string, string>();
+    for (const root of roots) {
+      const resolvedRoot = yield* fileSystem.realPath(root).pipe(Effect.orElseSucceed(() => root));
+      const nested = path.join(resolvedRoot, "conversations");
+      const dir = (yield* fileSystem
+        .exists(nested)
+        .pipe(Effect.catchCause(() => Effect.succeed(false))))
+        ? nested
+        : resolvedRoot;
+      const canonical = yield* fileSystem.realPath(dir).pipe(Effect.orElseSucceed(() => dir));
+      conversationDirs.add(canonical);
+      const billing = billingByRoot.get(root);
+      if (billing !== undefined) billingByDir.set(canonical, billing);
+    }
+    const result = yield* readAntigravityUsage([...conversationDirs], windowStartMs, cache).pipe(
+      Effect.provideService(FileSystem.FileSystem, fileSystem),
+      Effect.provideService(Path.Path, path),
+    );
+    const scanned: ProviderUsageScan[] = [];
+    for (const dir of conversationDirs) {
+      const exists = yield* fileSystem
+        .exists(dir)
+        .pipe(Effect.catchCause(() => Effect.succeed(false)));
+      const failed = result.errors.some(
+        (error) => error === dir || error.startsWith(`${dir}${path.sep}`),
+      );
+      scanned.push({
+        dir,
+        files:
+          !exists && !failed
+            ? null
+            : result.files
+                .filter((file) => file.root === dir)
+                .map((file) => ({
+                  ...file,
+                  records: file.records.map((record) => ({
+                    ...record,
+                    modelProvider: billingByDir.get(dir) ?? "antigravity",
+                    modelProviderSource: "harness" as const,
+                  })),
+                })),
+        status: failed ? "partial" : "ok",
+        ...(failed ? { message: "Some Antigravity history could not be read." } : {}),
+      });
+    }
+    return scanned;
+  });
+
+  return AntigravityUsage.of({ scan });
+});
+
+export const layer = Layer.effect(AntigravityUsage, make);
+
+export const antigravityUsageReader: ProviderUsageReader<AntigravitySettings, AntigravityUsage> = {
+  kind: "scan",
+  provider: "antigravity",
+  scan: ({ instances, windowStartMs }) =>
+    AntigravityUsage.pipe(Effect.flatMap((usage) => usage.scan({ instances, windowStartMs }))),
+};

@@ -1,10 +1,34 @@
 /**
  * What the board and the task workspace work out for themselves: how a card
  * is labelled, which cards a search keeps, and how a file is cut up to be
- * sent. Where a card may go is the engine's to decide; `laneAccepts` only
- * says which lanes are worth offering while a card is dragged.
+ * sent. Where a card may go is the engine's to decide; `moveIntent` says
+ * what a move would come to, for the drag, the column choice and the step.
  */
-import type { DeliveryCard, DeliveryLane, TaskPriority } from "./delivery";
+import { parseBoard, type DeliveryCard, type DeliveryLane, type TaskPriority } from "./delivery";
+
+export interface DeliveryBoardSearch {
+  readonly environment?: string;
+  readonly task?: string;
+  readonly new?: boolean;
+  readonly from?: string;
+}
+
+export function parseBoardSearch(raw: Record<string, unknown>): DeliveryBoardSearch {
+  const environment =
+    typeof raw.environment === "string" &&
+    raw.environment.trim().length > 0 &&
+    raw.environment.length <= 200
+      ? { environment: raw.environment }
+      : {};
+  if (isTaskId(raw.task)) return { ...environment, task: raw.task };
+  if (raw.new === true)
+    return {
+      ...environment,
+      new: true,
+      ...(isConversationRef(raw.from) ? { from: raw.from } : {}),
+    };
+  return environment;
+}
 
 export const PRIORITY_LABEL: Record<TaskPriority, string> = {
   urgent: "Urgent",
@@ -50,7 +74,8 @@ export interface BoardFilters {
   readonly q: string;
   readonly priority: TaskPriority | null;
   readonly team: string | null;
-  readonly tag: string | null;
+  /** A card is kept when it carries any one of these. None: every card. */
+  readonly tags: ReadonlyArray<string>;
   readonly owner: string | null;
   /** Only what waits for a person. */
   readonly waiting: boolean;
@@ -62,7 +87,7 @@ export const NO_FILTERS: BoardFilters = {
   q: "",
   priority: null,
   team: null,
-  tag: null,
+  tags: [],
   owner: null,
   waiting: false,
   lanes: [],
@@ -72,7 +97,7 @@ export const hasFilters = (filters: BoardFilters): boolean =>
   filters.q.trim() !== "" ||
   filters.priority !== null ||
   filters.team !== null ||
-  filters.tag !== null ||
+  filters.tags.length > 0 ||
   filters.owner !== null ||
   filters.waiting ||
   filters.lanes.length > 0;
@@ -85,7 +110,7 @@ export const hasFilters = (filters: BoardFilters): boolean =>
 export function matchesCard(card: DeliveryCard, filters: BoardFilters): boolean {
   if (filters.priority && card.priority !== filters.priority) return false;
   if (filters.team && card.team !== filters.team) return false;
-  if (filters.tag && !card.tags.includes(filters.tag)) return false;
+  if (filters.tags.length > 0 && !filters.tags.some((tag) => card.tags.includes(tag))) return false;
   if (filters.owner && card.owner.toLowerCase() !== filters.owner.toLowerCase()) return false;
   if (filters.waiting && card.waitingOn !== "person") return false;
   if (filters.lanes.length > 0 && !filters.lanes.includes(card.lane)) return false;
@@ -160,10 +185,62 @@ export function activeFilters(
     });
   if (filters.team)
     found.push({ key: "team", label: `Team ${filters.team}`, clear: { team: null } });
-  if (filters.tag) found.push({ key: "tag", label: `#${filters.tag}`, clear: { tag: null } });
+  for (const tag of filters.tags) {
+    found.push({
+      key: `tag:${tag}`,
+      label: `#${tag}`,
+      clear: { tags: filters.tags.filter((item) => item !== tag) },
+    });
+  }
   if (filters.owner)
     found.push({ key: "owner", label: `Owner ${filters.owner}`, clear: { owner: null } });
   return found;
+}
+
+/**
+ * Every tag that can be chosen: those of the cards of each reading, and those chosen already,
+ * so that a chosen tag can be unticked while the board is still being read. Each once, in order.
+ */
+export function tagChoices(
+  readings: ReadonlyArray<ReadonlyArray<DeliveryCard>>,
+  chosen: ReadonlyArray<string>,
+): ReadonlyArray<string> {
+  return [
+    ...new Set([...readings.flatMap((cards) => cards.flatMap((card) => card.tags)), ...chosen]),
+  ].sort();
+}
+
+/** The tags a search in the tag filter keeps: those that contain what was typed, in any case. */
+export function tagsMatching(tags: ReadonlyArray<string>, search: string): ReadonlyArray<string> {
+  // A tag is shown with `#` before it, so one typed that way is found too.
+  const wanted = search.trim().replace(/^#/, "").toLowerCase();
+  return wanted ? tags.filter((tag) => tag.toLowerCase().includes(wanted)) : tags;
+}
+
+/** What the closed tag filter reads: the tag for one, how many for several. */
+export function tagFilterLabel(chosen: ReadonlyArray<string>): string {
+  if (chosen.length === 0) return "Tag";
+  return chosen.length === 1 ? `#${chosen[0]}` : `${chosen.length} tags`;
+}
+
+/**
+ * The cards the sidebar filters. The list of tasks stops at a number of them, so without a
+ * search the cards of the board that it left out are added after it, and a card on both is
+ * taken from the board. With a search the engine's answer stands alone: it looks in what is
+ * asked, which a card does not carry.
+ */
+export function sidebarCandidates(
+  taskCards: ReadonlyArray<DeliveryCard>,
+  boardCards: ReadonlyArray<DeliveryCard>,
+  q: string,
+): ReadonlyArray<DeliveryCard> {
+  if (q.trim() || boardCards.length === 0) return taskCards;
+  const onBoard = new Map(boardCards.map((card) => [card.id, card]));
+  const listed = new Set(taskCards.map((card) => card.id));
+  return [
+    ...taskCards.map((card) => onBoard.get(card.id) ?? card),
+    ...[...onBoard.values()].filter((card) => !listed.has(card.id)),
+  ];
 }
 
 /**
@@ -237,29 +314,6 @@ export function groupCards(
     title: grouping === "priority" ? PRIORITY_LABEL[key as TaskPriority] : key,
     cards: groups.get(key)!,
   }));
-}
-
-/**
- * What dropping a card on a lane would ask of the engine, or null where the
- * engine is known to refuse. The engine answers the request either way.
- */
-export function laneAccepts(
-  card: Pick<DeliveryCard, "lane" | "held" | "submitted" | "state">,
-  lane: string,
-): string | null {
-  if (lane === card.lane) return "Reorder";
-  if (card.lane === "draft") return lane === "intake" || lane === "triage" ? "Submit" : null;
-  if (lane === "draft") return null;
-  if (card.lane === "completed") return null;
-  // A chat, a plan that is ready and a review that is ready are not moved by hand.
-  if (card.lane === "chat" || lane === "chat") return null;
-  if (["planned", "reviewed"].includes(card.state)) return null;
-  if (lane === "paused") return "Pause";
-  if (card.lane === "paused" && card.held) return "Resume";
-  if (lane === "intake" || lane === "triage") {
-    return card.submitted ? "Send to triage again" : "Submit";
-  }
-  return null;
 }
 
 export type FileKind = "image" | "video" | "audio" | "text" | "pdf" | "other";
@@ -370,6 +424,7 @@ export function linesFromText(value: string): ReadonlyArray<string> {
 }
 
 export const FLOW_LABEL: Readonly<Record<string, string>> = {
+  "non-code": "Non-code delivery",
   chat: "Chat",
   plan: "Plan",
   review: "Review",
@@ -460,6 +515,7 @@ export const LANE_TITLE: Readonly<Record<string, string>> = {
   planning: "Planning",
   implementation: "Building",
   validation: "Testing",
+  "child-work": "Waiting on child work",
   "human-review": "Your sign-off",
   paused: "Paused or recovering",
   rework: "Rework",
@@ -467,6 +523,53 @@ export const LANE_TITLE: Readonly<Record<string, string>> = {
   "pull-request": "Pull request open",
   completed: "Done",
 };
+
+/** The lanes where a task waits for the person: for an answer, or for a sign-off. */
+export const ATTENTION_LANES: ReadonlyArray<string> = ["needs-decision", "human-review"];
+
+/** The reading the attention count is taken from: every board, every lane, no filter. */
+export const ATTENTION_BOARD_PATH = "/api/lanes?view=development&set=all";
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+// Every card has to be a record too: parseBoard drops one that is not, and a dropped card is a miscount.
+const isLaneEntry = (lane: unknown): boolean =>
+  isRecord(lane) &&
+  typeof lane.lane === "string" &&
+  Array.isArray(lane.cards) &&
+  lane.cards.every(isRecord);
+
+/**
+ * How many tasks wait for the person, from a reading of ATTENTION_BOARD_PATH.
+ * Null when the reading cannot be trusted, which is not the same as none: the
+ * engine lists every lane once, even when it is empty, so a lane that is
+ * missing, malformed or listed twice says nothing about how many tasks are in it.
+ */
+export function boardAttentionCount(body: unknown): number | null {
+  // Checked on the body as it came: parseBoard reads a malformed lane as an empty one.
+  if (!isRecord(body)) return null;
+  const raw = body;
+  if (raw.view !== "development" || raw.set !== "all") return null;
+  if (!Array.isArray(raw.lanes) || !raw.lanes.every(isLaneEntry)) return null;
+  const board = parseBoard(body);
+  if (
+    !board ||
+    !ATTENTION_LANES.every((id) => board.lanes.filter((lane) => lane.lane === id).length === 1)
+  ) {
+    return null;
+  }
+  return board.lanes.reduce(
+    (total, lane) =>
+      total +
+      (ATTENTION_LANES.includes(lane.lane)
+        ? lane.cards.length
+        : lane.lane === "child-work"
+          ? lane.cards.filter((card) => card.waitingOn === "person").length
+          : 0),
+    0,
+  );
+}
 
 /** What became of a message a person sent, in words a person would use. */
 export function messageStateLabel(state: string | null, revision: number | null): string | null {
@@ -542,4 +645,173 @@ export function taskFromConversation(input: {
     ...(lastAnswer ? ["## Where the conversation ended", quoted(lastAnswer.text)] : []),
   ];
   return { title: input.title.trim().slice(0, 120), text: sections.join("\n\n") };
+}
+
+/**
+ * The part of the task view a line of its history points at: the acceptance checklist triage
+ * wrote, or the plan. Null when it points at neither.
+ */
+export function sectionOf(entry: {
+  readonly kind: string | null;
+  readonly text: string;
+}): "acceptance" | "plan" | null {
+  if (
+    /[1-9]\d* item\(s\) on the acceptance checklist|(wrote|updated) the acceptance checklist/i.test(
+      entry.text,
+    )
+  )
+    return "acceptance";
+  if (
+    entry.kind === "run.planned" ||
+    entry.kind === "plan.settled" ||
+    /\bthe plan is (settled|ready|written)\b/i.test(entry.text)
+  )
+    return "plan";
+  return null;
+}
+
+/** What each step a person can take on a task is called. */
+export const ACTION_LABEL: Record<string, string> = {
+  "accept-artifacts": "Accept deliverables",
+  submit: "Submit",
+  discard: "Discard draft",
+  pause: "Pause",
+  resume: "Resume",
+  stop: "Stop the running step",
+  retry: "Try again",
+  retriage: "Send to triage again",
+  "start-anyway": "Start without waiting",
+  approve: "Approve",
+  reject: "Send back",
+  deliver: "Start delivery",
+  close: "Close",
+  publish: "Publish",
+  first: "Do next",
+  "not-first": "No longer next",
+};
+
+/**
+ * What dropping a card on a column, or choosing that column for it, comes to. One table for the
+ * highlight while a card is dragged, the choices offered in the task view, and what is done.
+ */
+export type MoveIntent =
+  /** The engine's own move: reordering, pausing, resuming where it stood, submitting a draft. */
+  | { readonly kind: "move"; readonly label: string }
+  /** A step the card offers, taken the way its own button takes it: a decision asks for the key. */
+  | { readonly kind: "action"; readonly action: string; readonly label: string }
+  /** Nothing a person can do by moving it there; the card stays where it is, and this says why. */
+  | { readonly kind: "refused"; readonly why: string };
+
+/** The columns a step leads to. Start delivery leads to Ready: the engine takes it on from there. */
+const STEP_FOR_LANE: Readonly<Record<string, ReadonlyArray<string>>> = {
+  approved: ["approve"],
+  rework: ["reject"],
+  "pull-request": ["publish"],
+  completed: ["close"],
+  ready: ["deliver"],
+  triage: ["retriage"],
+  intake: ["retriage"],
+};
+
+type MovableCard = Pick<DeliveryCard, "lane" | "actions"> &
+  Partial<Pick<DeliveryCard, "resumesIn" | "recovering" | "workers">>;
+
+/**
+ * What moving a card to a lane comes to. A column a step leads to is reached by that step,
+ * through the same dialog as its button. A paused card goes on only where it stood. A column the
+ * engine fills by itself is refused with the reason, so a card is never left between two states.
+ * The engine checks every one of these again.
+ */
+export function moveIntent(card: MovableCard, lane: string): MoveIntent {
+  if (lane === card.lane) return { kind: "move", label: "Reorder" };
+  if (lane === "child-work")
+    return {
+      kind: "refused",
+      why: "A parent enters this column while its child work is outstanding. Open its related work instead of moving it here.",
+    };
+  const title = (name: string | null | undefined) => (name ? (LANE_TITLE[name] ?? name) : "");
+  if (card.lane === "draft") {
+    return lane === "triage" || lane === "intake"
+      ? { kind: "move", label: "Submit" }
+      : { kind: "refused", why: "A draft is submitted first. Drop it on Triage to submit it." };
+  }
+  if (lane === "draft") {
+    return {
+      kind: "refused",
+      why: "A task that was submitted is kept as a record. It cannot go back to being a draft.",
+    };
+  }
+  if (card.lane === "paused") {
+    if (card.recovering) {
+      return {
+        kind: "refused",
+        why: "The engine holds this task after a failure and goes on by itself when it can. Try the step again from the task, or wait; moving it does neither.",
+      };
+    }
+    if (card.resumesIn && lane === card.resumesIn) return { kind: "move", label: "Resume" };
+    return {
+      kind: "refused",
+      why: card.resumesIn
+        ? `A paused task goes on where it stood, in ${title(card.resumesIn)}. Drop it there, or press Resume.`
+        : "A paused task goes on where it stood. Press Resume.",
+    };
+  }
+  if (lane === "paused") {
+    return card.actions.includes("pause")
+      ? { kind: "move", label: "Pause" }
+      : { kind: "refused", why: "Nothing is started for this task that a pause would hold." };
+  }
+  if ((lane === "triage" || lane === "intake") && card.actions.includes("submit")) {
+    return { kind: "move", label: "Submit" };
+  }
+  if (
+    (lane === "triage" || lane === "intake") &&
+    card.actions.includes("stop") &&
+    !card.actions.includes("retriage")
+  ) {
+    const held =
+      (card.workers ?? []).length > 0 && (card.workers ?? []).every((worker) => worker.waiting);
+    return {
+      kind: "refused",
+      why: held
+        ? "A seat is about to start on it, waiting for room. Pause it, then send it to triage again."
+        : "A seat is working on it. Pause it, or wait for the step to end, then send it to triage again.",
+    };
+  }
+  const step = (STEP_FOR_LANE[lane] ?? []).find((action) => card.actions.includes(action));
+  if (step) return { kind: "action", action: step, label: ACTION_LABEL[step] ?? step };
+  if (card.lane === "completed") {
+    return {
+      kind: "refused",
+      why: "This task is closed. What was said and found is kept; a new task starts the work again.",
+    };
+  }
+  if (lane === "approved") {
+    return {
+      kind: "refused",
+      why: `A card reaches ${title(lane)} by a person's decision, with the approval key, on a delivery that passed the QA gate. This one has none waiting.`,
+    };
+  }
+  if (lane === "rework") {
+    return {
+      kind: "refused",
+      why: "A card reaches Rework when QA or a person sends the work back. This one has nothing waiting to be sent back.",
+    };
+  }
+  if (lane === "pull-request") {
+    return {
+      kind: "refused",
+      why: "A pull request is opened by publishing an approved change. This one has none to publish.",
+    };
+  }
+  if (lane === "completed") {
+    return {
+      kind: "refused",
+      why: "A delivery is done when it is approved and merged. A chat, a plan or a review can be closed; this card cannot be from here.",
+    };
+  }
+  return {
+    kind: "refused",
+    why: `The engine puts a card in ${title(lane)} when its work reaches that stage. A card can be paused, resumed where it stood, sent to triage again, or decided.`,
+  };
 }

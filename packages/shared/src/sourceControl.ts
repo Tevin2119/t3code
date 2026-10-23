@@ -1,11 +1,15 @@
-import type {
-  RepositoryIdentity,
-  SourceControlProviderInfo,
-  SourceControlProviderKind,
-} from "@t3tools/contracts";
+import { SourceControlProviderKind } from "@t3tools/contracts";
+import type { RepositoryIdentity, SourceControlProviderInfo } from "@t3tools/contracts";
 
 export interface ChangeRequestPresentation {
-  readonly icon: "github" | "gitlab" | "forgejo" | "azure-devops" | "bitbucket" | "change-request";
+  readonly icon:
+    | "github"
+    | "gitlab"
+    | "forgejo"
+    | "azure-devops"
+    | "bitbucket"
+    | "gitcafe"
+    | "change-request";
   readonly providerName: string;
   readonly shortName: string;
   readonly longName: string;
@@ -19,11 +23,6 @@ export interface ChangeRequestTerminology {
   readonly shortLabel: string;
   readonly singular: string;
 }
-
-export const DEFAULT_CHANGE_REQUEST_TERMINOLOGY: ChangeRequestTerminology = {
-  shortLabel: "PR",
-  singular: "pull request",
-};
 
 const GITHUB_CHANGE_REQUEST_PRESENTATION: ChangeRequestPresentation = {
   icon: "github",
@@ -79,6 +78,17 @@ const BITBUCKET_CHANGE_REQUEST_PRESENTATION: ChangeRequestPresentation = {
   urlExample: "https://bitbucket.org/workspace/repo/pull-requests/42",
 };
 
+const GITCAFE_CHANGE_REQUEST_PRESENTATION: ChangeRequestPresentation = {
+  icon: "gitcafe",
+  providerName: "GitCafe",
+  shortName: "PR",
+  longName: "pull request",
+  pluralLongName: "pull requests",
+  providerLongName: "GitCafe pull request",
+  checkoutCommandExample: "cafe pr checkout 123",
+  urlExample: "https://git.cafe/owner/repo/pulls/42",
+};
+
 const GENERIC_CHANGE_REQUEST_PRESENTATION: ChangeRequestPresentation = {
   icon: "change-request",
   providerName: "source control",
@@ -89,7 +99,7 @@ const GENERIC_CHANGE_REQUEST_PRESENTATION: ChangeRequestPresentation = {
   urlExample: "#42",
 };
 
-export function resolveChangeRequestPresentation(
+function resolveChangeRequestPresentation(
   provider: SourceControlProviderInfo | null | undefined,
 ): ChangeRequestPresentation {
   switch (provider?.kind) {
@@ -104,7 +114,9 @@ export function resolveChangeRequestPresentation(
       return AZURE_DEVOPS_CHANGE_REQUEST_PRESENTATION;
     case "bitbucket":
       return BITBUCKET_CHANGE_REQUEST_PRESENTATION;
-    case "unknown":
+    case "gitcafe":
+      return GITCAFE_CHANGE_REQUEST_PRESENTATION;
+    default:
       return GENERIC_CHANGE_REQUEST_PRESENTATION;
   }
 }
@@ -113,20 +125,6 @@ function resolveChangeRequestPresentationForKind(
   kind: SourceControlProviderKind,
 ): ChangeRequestPresentation {
   return resolveChangeRequestPresentation({ kind, name: "", baseUrl: "" });
-}
-
-export function getChangeRequestTerminology(
-  provider: SourceControlProviderInfo | null | undefined,
-): ChangeRequestTerminology {
-  if (!provider) {
-    return DEFAULT_CHANGE_REQUEST_TERMINOLOGY;
-  }
-
-  const presentation = resolveChangeRequestPresentation(provider);
-  return {
-    shortLabel: presentation.shortName,
-    singular: presentation.longName,
-  };
 }
 
 export function getChangeRequestTerminologyForKind(
@@ -158,7 +156,8 @@ function parseRemoteHost(remoteUrl: string): string | null {
   }
 
   try {
-    return new URL(trimmed).host.toLowerCase();
+    const url = new URL(trimmed);
+    return (url.protocol === "ssh:" ? url.hostname : url.host).toLowerCase();
   } catch {
     return null;
   }
@@ -180,8 +179,9 @@ function hasDnsLabel(host: string, label: string): boolean {
   return host.split(".").includes(label);
 }
 
+/** `*.ghe.com` is GitHub Enterprise Cloud with data residency, one subdomain per enterprise. */
 function isGitHubHost(host: string): boolean {
-  return host === "github.com" || hasDnsLabel(host, "github");
+  return host === "github.com" || host.endsWith(".ghe.com") || hasDnsLabel(host, "github");
 }
 
 function isGitLabHost(host: string): boolean {
@@ -200,6 +200,10 @@ function isAzureDevOpsHost(host: string): boolean {
   );
 }
 
+function isGitCafeHost(host: string): boolean {
+  return host === "git.cafe" || host === "staging.git.cafe";
+}
+
 function isBitbucketHost(host: string): boolean {
   return host === "bitbucket.org" || hasDnsLabel(host, "bitbucket");
 }
@@ -213,13 +217,21 @@ export function detectSourceControlProviderFromRemoteUrl(
   }
   const hostname = parseHostName(host);
 
+  if (isGitCafeHost(hostname)) {
+    return {
+      kind: SourceControlProviderKind.make("gitcafe"),
+      name: "GitCafe",
+      baseUrl: toBaseUrl(hostname),
+    };
+  }
+
   if (
     hostname === "codeberg.org" ||
     hasDnsLabel(hostname, "forgejo") ||
     hasDnsLabel(hostname, "gitea")
   ) {
     return {
-      kind: "forgejo",
+      kind: SourceControlProviderKind.make("forgejo"),
       name: "Forgejo",
       baseUrl: /^https?:/iu.test(remoteUrl.trim())
         ? new URL(remoteUrl.trim()).origin
@@ -229,7 +241,7 @@ export function detectSourceControlProviderFromRemoteUrl(
 
   if (isGitHubHost(hostname)) {
     return {
-      kind: "github",
+      kind: SourceControlProviderKind.make("github"),
       name: hostname === "github.com" ? "GitHub" : "GitHub Self-Hosted",
       baseUrl: toBaseUrl(host),
     };
@@ -237,7 +249,7 @@ export function detectSourceControlProviderFromRemoteUrl(
 
   if (isGitLabHost(hostname)) {
     return {
-      kind: "gitlab",
+      kind: SourceControlProviderKind.make("gitlab"),
       name: hostname === "gitlab.com" ? "GitLab" : "GitLab Self-Hosted",
       baseUrl: toBaseUrl(host),
     };
@@ -245,7 +257,7 @@ export function detectSourceControlProviderFromRemoteUrl(
 
   if (isAzureDevOpsHost(hostname)) {
     return {
-      kind: "azure-devops",
+      kind: SourceControlProviderKind.make("azure-devops"),
       name: "Azure DevOps",
       baseUrl: toBaseUrl(host),
     };
@@ -253,31 +265,34 @@ export function detectSourceControlProviderFromRemoteUrl(
 
   if (isBitbucketHost(hostname)) {
     return {
-      kind: "bitbucket",
+      kind: SourceControlProviderKind.make("bitbucket"),
       name: hostname === "bitbucket.org" ? "Bitbucket" : "Bitbucket Self-Hosted",
       baseUrl: toBaseUrl(host),
     };
   }
 
   return {
-    kind: "unknown",
+    kind: SourceControlProviderKind.make("unknown"),
     name: host,
     baseUrl: toBaseUrl(host),
   };
 }
 
+function decodeUrlPathSegment(segment: string): string {
+  try {
+    return decodeURIComponent(segment);
+  } catch {
+    return segment;
+  }
+}
+
 /**
- * The provider-native repository selector. `displayName` is the full path below the host, which
- * is what nested GitLab groups need; owner/name is the two-segment fallback for identities
- * recorded before that field existed.
- *
  * Azure DevOps is the exception: `az repos pr list --repository` takes a repository name, and
  * takes the organisation and project from the checkout it detects — so the recorded
  * `org/project/_git/repo` path is refused outright and the whole repository reads as
- * unavailable. Its name is the last segment, which is what this hands over.
- *
- * One function because everything downstream is keyed by what it answers: the rows' own
- * `repository`, the per-repository cursors, and the detail and diff reads a row leads to.
+ * unavailable. Its name is the last segment, which is what this hands over. The segment comes
+ * from the remote URL, where a name with a space reads `my%20repo`; `az` looks that up literally
+ * and answers 404, so it goes out decoded.
  */
 export function sourceControlRepositorySelector(
   identity:
@@ -288,7 +303,8 @@ export function sourceControlRepositorySelector(
   if (!identity) return null;
   if (identity.provider === "azure-devops") {
     const segments = (identity.displayName ?? "").split("/").filter((part) => part !== "_git");
-    return identity.name || segments.at(-1) || null;
+    const name = identity.name || segments.at(-1);
+    return name ? decodeUrlPathSegment(name) : null;
   }
   if (identity.displayName) return identity.displayName;
   return identity.owner && identity.name ? `${identity.owner}/${identity.name}` : null;

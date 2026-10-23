@@ -7,12 +7,6 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
 import { DIFF_SURFACE_THEME_UNSAFE_CSS } from "~/lib/diffRendering";
 import { cn } from "~/lib/utils";
 
-/**
- * One header row for every file surface in the side panel, whether the file
- * comes from the workspace or was captured as an attachment: crumbs on the
- * left, icon-only actions on the right. Attachments and workspace files must
- * not grow separate chrome.
- */
 export const FILE_SURFACE_SUBHEADER_CLASS =
   "flex h-10 min-h-10 shrink-0 items-center gap-2 border-b border-border/60 bg-background px-3 in-data-[preview-panel-mode=inline]:mb-3 in-data-[preview-panel-mode=inline]:h-7 in-data-[preview-panel-mode=inline]:min-h-7 in-data-[preview-panel-mode=inline]:border-b-transparent";
 
@@ -29,8 +23,11 @@ export const FILE_LINK_REVEAL_UNSAFE_CSS = `
     color: var(--code-foreground, var(--foreground)) !important;
   }
 
+  /* Tint through --diffs-line-bg, not background-color. The editor paints row
+     tints on a layer below its text selection; a background on the row itself
+     covers the selection and makes selected text on this line invisible. */
   [${FILE_LINK_REVEAL_ATTRIBUTE}][data-line] {
-    background-color: light-dark(
+    --diffs-line-bg: light-dark(
       color-mix(
         in lab,
         var(--diffs-computed-diff-line-bg) 82%,
@@ -61,11 +58,6 @@ export const FILE_LINK_REVEAL_UNSAFE_CSS = `
   }
 `;
 
-/**
- * An icon-only header action with its label in a tooltip, the same control workspace files use.
- * A `pressed` action is a toggle and says so; a command (Copy, Save, Close) is a plain button,
- * because announcing it as an unpressed toggle tells a screen reader it has a state it has not.
- */
 export function FileSurfaceAction(props: {
   readonly label: string;
   readonly pressed?: boolean;
@@ -114,7 +106,7 @@ export function FileSurfaceNotice(props: { readonly children: ReactNode }) {
   return (
     <div
       role="status"
-      className="shrink-0 border-b border-warning/20 bg-warning-surface px-3 py-1.5 text-[11px] text-warning-foreground"
+      className="shrink-0 border-b border-warning/20 bg-warning-surface px-3 py-1.5 text-2xs text-warning-foreground"
     >
       {props.children}
     </div>
@@ -131,7 +123,7 @@ export function FileSurfaceLoading(props: { readonly className?: string }) {
         props.className,
       )}
     >
-      <Spinner className="size-5" />
+      <Spinner size="lg" />
     </div>
   );
 }
@@ -150,7 +142,7 @@ export function FileSurfaceFailure(props: {
         <button
           type="button"
           onClick={props.onRetry}
-          className="rounded-md border border-input px-2.5 py-1 text-xs text-foreground hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
+          className="rounded-md border border-input px-2.5 py-1 text-xs text-foreground hover:bg-accent focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
         >
           Try again
         </button>

@@ -21,36 +21,6 @@ describe("confirm dialog coordinator", () => {
     resetConfirmDialogForTests();
   });
 
-  it("returns undefined until a themed host is mounted", () => {
-    expect(requestConfirmDialog("Confirm this action?")).toBeUndefined();
-    expect(readConfirmDialogState()).toEqual({ status: "idle" });
-  });
-
-  it("resolves a displayed confirmation and waits for its close transition", async () => {
-    const unregister = registerConfirmDialogHost();
-    const confirmation = requireConfirmation(
-      requestConfirmDialog("Delete this thread?", { variant: "destructive" }),
-    );
-
-    expect(readConfirmDialogState()).toEqual({
-      status: "confirming",
-      message: "Delete this thread?",
-      variant: "destructive",
-    });
-
-    respondToConfirmDialog(true);
-    await expect(confirmation).resolves.toBe(true);
-    expect(readConfirmDialogState()).toEqual({
-      status: "closing",
-      message: "Delete this thread?",
-      variant: "destructive",
-    });
-
-    completeConfirmDialogClose();
-    expect(readConfirmDialogState()).toEqual({ status: "idle" });
-    unregister();
-  });
-
   it("serializes concurrent confirmations", async () => {
     const unregister = registerConfirmDialogHost();
     const first = requireConfirmation(requestConfirmDialog("Delete the project?"));

@@ -134,15 +134,13 @@ const makeHarness = Effect.fn("RelayDiscoveryTest.makeHarness")(function* () {
               ),
             ),
             clerkToken: Ref.get(clerkToken).pipe(
-              Effect.flatMap((token) =>
-                token === null
-                  ? Effect.fail(
-                      new ConnectionBlockedError({
-                        reason: "authentication",
-                        detail: "Signed out.",
-                      }),
-                    )
-                  : Effect.succeed(token),
+              Effect.filterOrFail(
+                (token) => token !== null,
+                () =>
+                  new ConnectionBlockedError({
+                    reason: "authentication",
+                    detail: "Signed out.",
+                  }),
               ),
             ),
           }),
@@ -289,7 +287,7 @@ describe("RelayEnvironmentDiscovery", () => {
           Layer.mergeAll(
             Layer.succeed(ManagedRelay.ManagedRelayClient, client),
             Layer.succeed(ClientCapabilities.CloudSession, {
-              identity: Effect.succeed(Option.some({ accountId: "account-1" })),
+              identity: Effect.succeedSome({ accountId: "account-1" }),
               clerkToken: Effect.succeed("clerk-token"),
             }),
             Layer.succeed(Connectivity.Connectivity, {
@@ -367,8 +365,6 @@ describe("RelayEnvironmentDiscovery", () => {
         // a real sign-in which always happens long after service start.
         yield* Effect.yieldNow;
 
-        // Sign-in activates the session and emits credentials-changed; the
-        // list must populate without any screen having asked for a refresh.
         yield* harness.wake("credentials-changed");
         const populated = yield* SubscriptionRef.changes(discovery.state).pipe(
           Stream.filter(

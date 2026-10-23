@@ -7,33 +7,53 @@ import {
 } from "@react-navigation/native";
 import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import { useCallback, useEffect, useRef } from "react";
+import { Platform } from "react-native";
+import { useAndroidWorkspaceSelection } from "../workspace/useAndroidWorkspaceSelection";
 
 type ThreadSelection = Pick<EnvironmentThreadShell, "environmentId" | "id">;
+
+export function createHomeThreadRouteAction(input: {
+  readonly state: Pick<NavigationState, "index" | "routes">;
+  readonly dismissingRouteKey: string | null;
+  readonly params: ReactNavigation.RootParamList["Thread"];
+}) {
+  const currentRoute = input.state.routes[input.state.index];
+  if (input.dismissingRouteKey !== null && currentRoute?.key === input.dismissingRouteKey) {
+    return StackActions.push("Thread", input.params);
+  }
+  if (currentRoute?.name === "Thread") {
+    return {
+      ...CommonActions.setParams({
+        environmentId: undefined,
+        threadId: undefined,
+        draft: undefined,
+        ...input.params,
+      }),
+      source: currentRoute.key,
+    };
+  }
+  return CommonActions.navigate("Thread", input.params);
+}
 
 export function createHomeThreadNavigationAction(input: {
   readonly state: Pick<NavigationState, "index" | "routes">;
   readonly dismissingRouteKey: string | null;
   readonly thread: ThreadSelection;
 }) {
-  const currentRoute = input.state.routes[input.state.index];
-  const params = {
-    environmentId: input.thread.environmentId,
-    threadId: input.thread.id,
-  };
-
-  // Native swipe-back pops the outgoing route after its animation. Reusing
-  // that key would also discard this selection when the dismissal arrives.
-  if (input.dismissingRouteKey !== null && currentRoute?.key === input.dismissingRouteKey) {
-    return StackActions.push("Thread", params);
-  }
-
-  return CommonActions.navigate("Thread", params);
+  return createHomeThreadRouteAction({
+    ...input,
+    params: {
+      environmentId: input.thread.environmentId,
+      threadId: input.thread.id,
+    },
+  });
 }
 
-export function useHomeThreadSelection() {
+export function useHomeThreadRouteSelection() {
   const navigation =
     useNavigation<NativeStackNavigationProp<ReactNavigation.RootParamList, "Home">>();
   const dismissingRouteKey = useRef<string | null>(null);
+  const selectAndroidWorkspace = useAndroidWorkspaceSelection();
 
   useEffect(() => {
     const clear = () => {
@@ -57,15 +77,31 @@ export function useHomeThreadSelection() {
   }, [navigation]);
 
   return useCallback(
-    (thread: ThreadSelection) => {
+    (params: ReactNavigation.RootParamList["Thread"]) => {
+      if (Platform.OS === "android") {
+        selectAndroidWorkspace({
+          name: "Thread",
+          params,
+        });
+        return;
+      }
       navigation.dispatch((state) =>
-        createHomeThreadNavigationAction({
+        createHomeThreadRouteAction({
           state,
           dismissingRouteKey: dismissingRouteKey.current,
-          thread,
+          params,
         }),
       );
     },
-    [navigation],
+    [navigation, selectAndroidWorkspace],
+  );
+}
+
+export function useHomeThreadSelection() {
+  const selectRoute = useHomeThreadRouteSelection();
+  return useCallback(
+    (thread: ThreadSelection) =>
+      selectRoute({ environmentId: thread.environmentId, threadId: thread.id }),
+    [selectRoute],
   );
 }

@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 import { ProviderDriverKind } from "@t3tools/contracts";
+
+const refreshProviders = vi.hoisted(() => vi.fn());
 vi.mock("react-native", () => ({ Alert: { alert: vi.fn() } }));
 
 vi.mock("../../state/queries", () => ({
@@ -8,6 +10,7 @@ vi.mock("../../state/queries", () => ({
 }));
 vi.mock("../../state/use-composer-drafts", () => ({
   getComposerDraftSnapshot: vi.fn(),
+  readComposerDraftSelection: vi.fn(),
   setComposerDraftContext: vi.fn(),
 }));
 vi.mock("../../lib/uuid", () => ({ uuidv4: () => "context-id" }));
@@ -15,7 +18,7 @@ vi.mock("../../state/server", () => ({
   serverEnvironment: { refreshProviders: Symbol("refreshProviders") },
 }));
 vi.mock("../../state/use-atom-command", () => ({
-  useAtomCommand: () => vi.fn(),
+  useAtomCommand: () => refreshProviders,
 }));
 
 import {
@@ -56,18 +59,6 @@ describe("mobile slash commands", () => {
     },
   );
 
-  it("does not offer a native command inside the message", () => {
-    expect(
-      buildComposerSlashCommandItems({
-        query: "plan",
-        atMessageStart: false,
-        hasThread: false,
-        allowInteractionMode: true,
-        selectedProviderStatus: antigravity,
-      }),
-    ).toEqual([]);
-  });
-
   it("still applies the T3 plan command for supported providers", () => {
     const items = buildComposerSlashCommandItems({
       query: "plan",
@@ -90,7 +81,6 @@ describe("mobile slash commands", () => {
       }),
     ).toEqual({ text: "", cursor: 0, interactionMode: "plan" });
 
-    // A provider switch can invalidate an open menu before a tap arrives.
     expect(
       resolveComposerCommandSelection({
         draftMessage: "/plan",

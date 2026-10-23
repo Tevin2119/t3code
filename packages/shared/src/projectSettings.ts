@@ -1,27 +1,30 @@
 import {
   type ModelSelection,
+  PROJECT_FILE_BACKED_SETTINGS,
   PROJECT_SCOPED_SERVER_SETTING_KEYS,
+  type ProjectFileBackedSettingKey,
   type ProjectId,
   type ProjectScopedServerSettingKey,
   type ProjectSettingsOverrides,
+  resolveProjectProviderInstanceEnabled,
+  type ResolvedServerSettings,
   type ServerSettings,
+  type T3ProjectFile,
   type ThreadEnvMode,
   type WorktreeCleanupRules,
 } from "@t3tools/contracts";
-import { isModelSelectionProviderEnabled } from "./serverSettings.ts";
+import { normalizeProjectPathForComparison } from "./path.ts";
+import { fallbackTextGenerationModelSelection } from "./serverSettings.ts";
 
-export type ProjectSettingSource = "environment" | "project";
+export type ProjectSettingSource = "environment" | "project" | "t3.json";
 
 export type ProjectSettingSources = Readonly<
   Record<ProjectScopedServerSettingKey, ProjectSettingSource>
 >;
 
-export interface ResolvedProjectSettings {
-  /** Environment settings with the project's overrides applied. */
-  readonly settings: ServerSettings;
-  /** Where each scopable key's effective value came from. */
+export interface ResolvedProjectSettings<Settings extends ServerSettings = ServerSettings> {
+  readonly settings: Settings;
   readonly sources: ProjectSettingSources;
-  /** The project's raw override entry; `{}` when it has none. */
   readonly overrides: ProjectSettingsOverrides;
 }
 
@@ -31,12 +34,13 @@ const ENVIRONMENT_SOURCES: ProjectSettingSources = Object.fromEntries(
   PROJECT_SCOPED_SERVER_SETTING_KEYS.map((key) => [key, "environment"]),
 ) as Record<ProjectScopedServerSettingKey, ProjectSettingSource>;
 
-/** Cheap check so hot paths skip the projectId lookup when nothing is overridden. */
 export function hasProjectSettingsOverrides(
   settings: Pick<ServerSettings, "projectSettingsOverrides">,
 ): boolean {
   for (const entry of Object.values(settings.projectSettingsOverrides)) {
-    if (Object.keys(entry).length > 0) return true;
+    // A forward-compatible decode can leave an unknown value as a present
+    // undefined; that is not an override.
+    if (Object.values(entry).some((value) => value !== undefined)) return true;
   }
   return false;
 }
@@ -52,16 +56,64 @@ export interface LegacyProjectSettingsFields {
   readonly defaultThreadEnvMode?: ThreadEnvMode | null | undefined;
 }
 
-/**
- * Apply one project's overrides on top of environment settings. A model
- * override whose provider is disabled on this environment falls back to the
- * environment value, the same guard the environment-level selection gets.
- */
 export function resolveProjectSettings(
   settings: ServerSettings,
   projectId: ProjectId | null,
-  // Nullable, not just optional: the mobile new-task flow passes its selected
-  // project straight through, and that is null until the shell snapshot lands.
+  project?: LegacyProjectSettingsFields | null,
+): ResolvedProjectSettings;
+export function resolveProjectSettings(
+  settings: ServerSettings,
+  projectId: ProjectId | null,
+  project: LegacyProjectSettingsFields | null | undefined,
+  projectFile: T3ProjectFile | null,
+): ResolvedProjectSettings<ResolvedServerSettings>;
+export function resolveProjectSettings(
+  settings: ServerSettings,
+  projectId: ProjectId | null,
+  project?: LegacyProjectSettingsFields | null,
+  projectFile?: T3ProjectFile | null,
+): ResolvedProjectSettings {
+  const resolved = resolveProjectOverrides(settings, projectId, project);
+  return projectFile === undefined ? resolved : applyProjectFile(resolved, projectFile);
+}
+
+function applyProjectFile(
+  resolved: ResolvedProjectSettings,
+  projectFile: T3ProjectFile | null,
+): ResolvedProjectSettings {
+  let effective: Record<string, unknown> | null = null;
+  let sources: Record<ProjectScopedServerSettingKey, ProjectSettingSource> | null = null;
+  for (const key of Object.keys(PROJECT_FILE_BACKED_SETTINGS) as ProjectFileBackedSettingKey[]) {
+    if (resolved.settings[key] !== null) continue;
+    const { value, source } = resolveProjectFileBackedSetting(key, null, projectFile);
+    effective ??= { ...resolved.settings };
+    sources ??= { ...resolved.sources };
+    effective[key] = value;
+    sources[key] = source;
+  }
+  return effective === null || sources === null
+    ? resolved
+    : { ...resolved, settings: effective as ServerSettings, sources };
+}
+
+export function resolveProjectFileBackedSetting<K extends ProjectFileBackedSettingKey>(
+  key: K,
+  setting: ServerSettings[K],
+  projectFile: T3ProjectFile | null,
+): { value: ResolvedServerSettings[K]; source: ProjectSettingSource } {
+  if (setting !== null) {
+    return { value: setting as ResolvedServerSettings[K], source: "environment" };
+  }
+  const { field, builtIn } = PROJECT_FILE_BACKED_SETTINGS[key];
+  const fromFile = projectFile?.[field] as ResolvedServerSettings[K] | undefined;
+  return fromFile === undefined
+    ? { value: builtIn as ResolvedServerSettings[K], source: "environment" }
+    : { value: fromFile, source: "t3.json" };
+}
+
+function resolveProjectOverrides(
+  settings: ServerSettings,
+  projectId: ProjectId | null,
   project?: LegacyProjectSettingsFields | null,
 ): ResolvedProjectSettings {
   const stored = projectId === null ? undefined : settings.projectSettingsOverrides[projectId];
@@ -87,33 +139,79 @@ export function resolveProjectSettings(
   for (const key of PROJECT_SCOPED_SERVER_SETTING_KEYS) {
     if (!Object.hasOwn(overrides, key)) continue;
     const value = overrides[key];
-    // A model on a disabled provider falls back to the environment, like the
-    // environment-level guards do for these keys.
+    // A forward-compatible decode leaves an unknown value as a present
+    // undefined; that is not an override.
+    if (value === undefined) continue;
     if (
       (key === "textGenerationModelSelection" || key === "defaultModelSelection") &&
       value !== undefined &&
       value !== null &&
-      !isModelSelectionProviderEnabled(settings, value as ModelSelection)
+      !resolveProjectProviderInstanceEnabled(
+        settings,
+        projectId,
+        (value as ModelSelection).instanceId,
+      )
     ) {
       continue;
     }
     effective[key] = value;
     sources[key] = "project";
   }
+  const textGeneration = effective.textGenerationModelSelection as ModelSelection;
+  if (!resolveProjectProviderInstanceEnabled(settings, projectId, textGeneration.instanceId)) {
+    const fallback = fallbackTextGenerationModelSelection(
+      settings.providerInstances,
+      (instanceId) => resolveProjectProviderInstanceEnabled(settings, projectId, instanceId),
+      {
+        includeConfiguredInstances: true,
+        defaultModelSelection: effective.defaultModelSelection as ModelSelection | null,
+      },
+    );
+    if (fallback !== null) effective.textGenerationModelSelection = fallback;
+  }
   return { settings: effective as ServerSettings, sources, overrides };
 }
 
-/** Replace the project's entry, dropping it entirely when nothing is overridden. */
-export function withProjectSettingsOverrides(
-  settings: Pick<ServerSettings, "projectSettingsOverrides">,
-  projectId: ProjectId,
-  next: ProjectSettingsOverrides | null,
-): ServerSettings["projectSettingsOverrides"] {
-  const { [projectId]: _removed, ...rest } = settings.projectSettingsOverrides;
-  return next === null || Object.keys(next).length === 0 ? rest : { ...rest, [projectId]: next };
+/**
+ * A project the environment made from just a name (a folder directly inside
+ * `ServerConfig.newProjectsRoot`) has only its first commit, so until it has a
+ * thread, a new thread works in the project checkout even when the environment
+ * default is a new worktree.
+ */
+export function resolveNewThreadEnvMode(input: {
+  readonly projectSettings: ResolvedProjectSettings<ResolvedServerSettings>;
+  readonly workspaceRoot: string | null;
+  readonly newProjectsRoot: string | null | undefined;
+  readonly projectHasThreads: boolean;
+}): ThreadEnvMode {
+  const configured = input.projectSettings.settings.defaultThreadEnvMode;
+  if (
+    configured === "local" ||
+    input.projectHasThreads ||
+    input.projectSettings.sources.defaultThreadEnvMode !== "environment" ||
+    input.workspaceRoot === null ||
+    input.newProjectsRoot == null
+  ) {
+    return configured;
+  }
+  const root = normalizeProjectPathForComparison(input.newProjectsRoot);
+  const folder = normalizeProjectPathForComparison(input.workspaceRoot);
+  const separator = root.includes("\\") ? "\\" : "/";
+  const prefix = root.endsWith(separator) ? root : `${root}${separator}`;
+  const isNewProjectFolder =
+    folder.startsWith(prefix) &&
+    folder.length > prefix.length &&
+    !folder.slice(prefix.length).includes(separator);
+  return isNewProjectFolder ? "local" : configured;
 }
 
-/** The project's entry with `keys` removed; `null` when that leaves it empty. */
+export function resolveSendEnvMode(input: {
+  readonly requestedEnvMode: ThreadEnvMode;
+  readonly isGitRepo: boolean;
+}): ThreadEnvMode {
+  return input.isGitRepo ? input.requestedEnvMode : "local";
+}
+
 export function clearProjectSettingsOverrides(
   settings: Pick<ServerSettings, "projectSettingsOverrides">,
   projectId: ProjectId,
@@ -126,7 +224,6 @@ export function clearProjectSettingsOverrides(
   return Object.keys(next).length === 0 ? null : next;
 }
 
-/** Worktree rules are project-scoped; artifact and log retention stays environment-wide. */
 export function resolveWorktreeCleanup(
   settings: ServerSettings,
   projectId: ProjectId | null,
@@ -135,12 +232,27 @@ export function resolveWorktreeCleanup(
   if (policy?.mode === "custom") return policy.rules;
   if (policy?.mode === "off")
     return {
+      worktreeKeepWhen: settings.storageCleanup.worktreeKeepWhen,
       worktreeAfterDays: null,
+      worktreeSettledAfterDays: null,
       worktreeOnMerge: false,
       worktreeOnDelete: false,
       worktreeUnchanged: false,
     };
-  const { worktreeAfterDays, worktreeOnMerge, worktreeOnDelete, worktreeUnchanged } =
-    settings.storageCleanup;
-  return { worktreeAfterDays, worktreeOnMerge, worktreeOnDelete, worktreeUnchanged };
+  const {
+    worktreeKeepWhen,
+    worktreeAfterDays,
+    worktreeSettledAfterDays,
+    worktreeOnMerge,
+    worktreeOnDelete,
+    worktreeUnchanged,
+  } = settings.storageCleanup;
+  return {
+    worktreeKeepWhen,
+    worktreeAfterDays,
+    worktreeSettledAfterDays,
+    worktreeOnMerge,
+    worktreeOnDelete,
+    worktreeUnchanged,
+  };
 }

@@ -11,38 +11,44 @@ import {
   type DragStartEvent,
 } from "@dnd-kit/core";
 import { useNavigate, useSearch } from "@tanstack/react-router";
-import { ChevronsLeftRightIcon, EllipsisIcon, PlusIcon, SearchIcon, XIcon } from "lucide-react";
+import type { EnvironmentId } from "@t3tools/contracts";
+import { ChevronsLeftRightIcon, EllipsisIcon, XIcon } from "lucide-react";
 import { memo, useEffect, useMemo, useState } from "react";
 
 import { isElectron } from "../../env";
-import { parseBoard, type DeliveryCard, type DeliveryLane } from "../../lib/delivery";
+import {
+  deliveryEnvironmentChoice,
+  parseBoard,
+  type DeliveryCard,
+  type DeliveryLane,
+} from "../../lib/delivery";
 import {
   boardSetOf,
-  BOARD_GROUPINGS,
   filterLanes,
   FLOW_LABEL,
-  GROUPING_LABEL,
   groupCards,
   hasFilters,
-  laneAccepts,
+  moveIntent,
   type BoardGrouping,
+  type DeliveryBoardSearch,
 } from "../../lib/deliveryBoard";
 import { cn } from "../../lib/utils";
+import { useEnvironments, usePrimaryEnvironmentId } from "../../state/environments";
 import {
   useBoardStore,
+  useBoardPreferences,
+  useBoardControls,
   useDeliveryAct,
   useDeliveryEnabled,
+  useDeliveryEnvironmentId,
   usePersonName,
   useDeliveryRead,
   useMinuteClock,
   useStaleReading,
 } from "../../state/delivery";
-import { usePrimaryEnvironmentId } from "../../state/environments";
-import { Button } from "../ui/button";
-import { Input } from "../ui/input";
+import { BoardEngineNotice, BoardNotice } from "./BoardEngineNotice";
+import { BoardToolbar } from "./BoardToolbar";
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
-import { RefreshIcon } from "../ui/refresh-icon";
-import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { SidebarInset } from "../ui/sidebar";
 import { WorkspacePageHeader } from "../WorkspacePageHeader";
 import { actionLabel, useTaskActions } from "./taskActions";
@@ -58,9 +64,14 @@ import {
   WaitingOn,
 } from "./taskParts";
 import { TaskWorkspace } from "./TaskWorkspace";
-import { ActiveFilterChips, LaneFilterMenu } from "./BoardFilterControls";
+import { ActiveFilterChips } from "./BoardFilterControls";
 import { BoardDialog, BoardPicker, type PickerItem } from "./BoardPicker";
+import { BoardSeatsDialog } from "./BoardSeatsDialog";
+import { EnvironmentPicker } from "./EnvironmentPicker";
+import { parseShared } from "../../lib/deliveryShared";
+import { unifiedBoardChoices } from "../../lib/deliveryBoardSelection";
 import { HowItFits } from "./HowItFits";
+import { SharedBoard } from "./SharedBoard";
 
 const CardFace = memo(function CardFace(props: {
   readonly card: DeliveryCard;
@@ -74,17 +85,17 @@ const CardFace = memo(function CardFace(props: {
     <div
       className={cn(
         "flex flex-col gap-1.5 rounded-md border bg-card p-2 text-xs shadow-xs",
-        waitsOnPerson ? "border-amber-500/60" : "border-border",
+        waitsOnPerson ? "border-warning/60" : "border-border",
       )}
     >
       <div className="flex items-center gap-1.5">
         <PriorityPill priority={card.priority} by={card.priorityBy} />
-        <span className="font-mono text-[10px] text-muted-foreground" data-card-number>
+        <span className="font-mono text-3xs text-muted-foreground" data-card-number>
           #{card.number}
         </span>
         {card.flow !== "standard" ? (
           <span
-            className="rounded bg-muted px-1 text-[10px] text-muted-foreground"
+            className="rounded bg-muted px-1 text-3xs text-muted-foreground"
             data-card-flow={card.flow}
           >
             {FLOW_LABEL[card.flow] ?? card.flow}
@@ -95,13 +106,13 @@ const CardFace = memo(function CardFace(props: {
           {props.menu}
         </span>
       </div>
-      <p className="text-[13px] leading-snug font-medium break-words">{card.title}</p>
+      <p className="text-sm leading-snug font-medium break-words">{card.title}</p>
       <TagList tags={card.tags} onPick={props.onPickTag} />
       {card.blocker ? (
         <p
           className={cn(
-            "line-clamp-2 text-[11px]",
-            waitsOnPerson ? "text-amber-700 dark:text-amber-300" : "text-muted-foreground",
+            "line-clamp-2 text-2xs",
+            waitsOnPerson ? "text-warning-foreground" : "text-muted-foreground",
           )}
           data-card-blocker
         >
@@ -122,6 +133,8 @@ const CardFace = memo(function CardFace(props: {
 
 function DraggableCard(props: {
   readonly card: DeliveryCard;
+  /** Whether a card dropped here would be taken; the ring shows only where it would. */
+  readonly accepts: boolean;
   readonly now: number;
   readonly busy: boolean;
   readonly onOpen: (card: DeliveryCard) => void;
@@ -149,9 +162,9 @@ function DraggableCard(props: {
         if (event.key === "Enter" && event.target === event.currentTarget) props.onOpen(card);
       }}
       className={cn(
-        "cursor-pointer rounded-md outline-hidden ring-ring focus-visible:ring-2",
+        "cursor-pointer rounded-md outline-hidden ring-ring focus-visible:ring-2 focus-visible:ring-inset",
         drag.isDragging && "opacity-30",
-        drop.isOver && !drag.isDragging && "ring-2 ring-ring/60",
+        drop.isOver && !drag.isDragging && props.accepts && "ring-2 ring-ring/60",
       )}
     >
       <CardFace
@@ -211,22 +224,32 @@ function Lane(props: {
 }) {
   const { lane } = props;
   const tone = laneTone(lane.lane);
-  const drop = useDroppable({ id: `lane:${lane.lane}`, data: { lane: lane.lane, before: null } });
-  const offer = props.dragged ? laneAccepts(props.dragged, lane.lane) : null;
-  const refused = props.dragged !== null && offer === null;
+  const { isOver, setNodeRef } = useDroppable({
+    id: `lane:${lane.lane}`,
+    data: { lane: lane.lane, before: null },
+  });
+  // The same table as the drop and the task view's column choice: what this lane would do.
+  const intent = props.dragged ? moveIntent(props.dragged, lane.lane) : null;
+  const offer =
+    intent && props.dragged && intent.kind !== "refused"
+      ? intent.kind === "action"
+        ? actionLabel(intent.action, props.dragged)
+        : intent.label
+      : null;
+  const refused = intent?.kind === "refused";
   const groups = groupCards(lane.cards, props.grouping);
 
   if (props.collapsed) {
     return (
       <section
-        ref={drop.setNodeRef}
+        ref={setNodeRef}
         data-lane={lane.lane}
         data-lane-collapsed
         className={cn(
           "flex w-9 shrink-0 flex-col items-center overflow-hidden rounded-lg border border-border",
           tone.tint,
           refused && "opacity-40",
-          drop.isOver && offer && "ring-2 ring-ring",
+          isOver && offer && "ring-2 ring-ring",
         )}
       >
         <span className={cn("h-1 w-full shrink-0", tone.bar)} />
@@ -241,7 +264,7 @@ function Lane(props: {
           </span>
           <span className="[writing-mode:vertical-rl]">{lane.title}</span>
           {props.dragged && offer ? (
-            <span className="text-[10px] [writing-mode:vertical-rl]">{offer}</span>
+            <span className="text-3xs [writing-mode:vertical-rl]">{offer}</span>
           ) : null}
         </button>
       </section>
@@ -250,27 +273,27 @@ function Lane(props: {
 
   return (
     <section
-      ref={drop.setNodeRef}
+      ref={setNodeRef}
       data-lane={lane.lane}
       className={cn(
         "flex w-68 shrink-0 flex-col overflow-hidden rounded-lg border border-border",
         tone.tint,
         refused && "opacity-40",
-        drop.isOver && offer && "ring-2 ring-ring",
+        isOver && offer && "ring-2 ring-ring",
       )}
     >
       <span className={cn("h-1 w-full shrink-0", tone.bar)} />
       <h2 className="flex shrink-0 items-center gap-2 px-2.5 py-2 text-xs font-medium">
         <span className="min-w-0 truncate">{lane.title}</span>
         <span
-          className="rounded-full bg-background px-1.5 font-mono text-[10px] text-muted-foreground"
+          className="rounded-full bg-background px-1.5 font-mono text-3xs text-muted-foreground"
           data-lane-count
         >
           {lane.cards.length}
           {lane.cards.length !== props.total ? ` of ${props.total}` : ""}
         </span>
         {props.dragged && offer ? (
-          <span className="text-[10px] font-normal text-muted-foreground">{offer}</span>
+          <span className="text-3xs font-normal text-muted-foreground">{offer}</span>
         ) : null}
         <button
           type="button"
@@ -285,7 +308,7 @@ function Lane(props: {
         {groups.map((group) => (
           <div key={group.key} className="flex flex-col gap-1.5">
             {group.title ? (
-              <h3 className="px-1 pt-1 text-[10px] font-medium tracking-wide text-muted-foreground uppercase">
+              <h3 className="px-1 pt-1 text-3xs font-medium tracking-wide text-muted-foreground uppercase">
                 {group.title} <span className="font-mono">{group.cards.length}</span>
               </h3>
             ) : null}
@@ -293,6 +316,7 @@ function Lane(props: {
               <DraggableCard
                 key={card.id}
                 card={card}
+                accepts={!props.dragged || offer !== null}
                 now={props.now}
                 busy={props.busy}
                 onOpen={props.onOpen}
@@ -308,6 +332,7 @@ function Lane(props: {
 }
 
 function BoardColumns(props: {
+  readonly environmentId: EnvironmentId | null;
   readonly lanes: ReadonlyArray<DeliveryLane>;
   readonly all: ReadonlyArray<DeliveryLane>;
   readonly busy: boolean;
@@ -316,10 +341,8 @@ function BoardColumns(props: {
   readonly onMove: (card: DeliveryCard, lane: string, before: string | null) => void;
 }) {
   const now = useMinuteClock();
-  const grouping = useBoardStore((state) => state.grouping);
-  const folds = useBoardStore((state) => state.laneFolds);
-  const foldLane = useBoardStore((state) => state.foldLane);
-  const setFilters = useBoardStore((state) => state.setFilters);
+  const { grouping, laneFolds: folds } = useBoardPreferences(props.environmentId);
+  const { foldLane, setFilters } = useBoardControls(props.environmentId);
   const [dragged, setDragged] = useState<DeliveryCard | null>(null);
   // A press that does not move is a click, which opens the card.
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
@@ -365,7 +388,7 @@ function BoardColumns(props: {
             onToggle={() => foldLane(lane.lane, !isFolded(lane))}
             onOpen={props.onOpen}
             onAction={props.onAction}
-            onPickTag={(tag) => setFilters({ tag })}
+            onPickTag={(tag) => setFilters({ tags: [tag] })}
           />
         ))}
       </div>
@@ -386,22 +409,49 @@ function BoardColumns(props: {
  * lane a card reaches by passing a stage cannot be reached by dragging.
  */
 export function BoardPage() {
-  const environmentId = usePrimaryEnvironmentId();
+  const search = useSearch({ strict: false }) as DeliveryBoardSearch;
+  // The engine of the environment the work lives in: a conversation's own, when a task is made from one.
+  const environmentId = useDeliveryEnvironmentId(
+    search.new ? (search.from ?? null) : null,
+    search.environment ?? null,
+  );
+  return (
+    <EnvironmentBoardPage key={environmentId ?? "unavailable"} environmentId={environmentId} />
+  );
+}
+
+function EnvironmentBoardPage({ environmentId }: { readonly environmentId: EnvironmentId | null }) {
+  const { environments, isReady } = useEnvironments();
+  const primary = usePrimaryEnvironmentId();
+  const defaultEnvironment = deliveryEnvironmentChoice({
+    fromConversation: null,
+    chosen: null,
+    primary,
+    isReady,
+    connected: environments.map((environment) => environment.environmentId),
+  });
+  const search = useSearch({ strict: false }) as DeliveryBoardSearch;
   const enabled = useDeliveryEnabled(environmentId);
   const active = enabled ? environmentId : null;
+  const setDeliveryEnvironment = useBoardStore((state) => state.setDeliveryEnvironment);
+  useEffect(() => {
+    if (environmentId) setDeliveryEnvironment(environmentId);
+  }, [environmentId, setDeliveryEnvironment]);
   const navigate = useNavigate();
-  const search = useSearch({ strict: false }) as { task?: string; new?: boolean; from?: string };
-  const view = useBoardStore((state) => state.view);
-  const setView = useBoardStore((state) => state.setView);
-  const filters = useBoardStore((state) => state.filters);
-  const setFilters = useBoardStore((state) => state.setFilters);
-  const clearFilters = useBoardStore((state) => state.clearFilters);
-  const grouping = useBoardStore((state) => state.grouping);
-  const setGrouping = useBoardStore((state) => state.setGrouping);
+  const preferences = useBoardPreferences(environmentId);
+  const { view, filters, grouping, shared, sharedBoardSet } = preferences;
+  const {
+    setView,
+    setFilters,
+    clearFilters,
+    setGrouping,
+    setBoardSet,
+    setBoardSelection,
+    setSharedBoardSet,
+  } = useBoardControls(environmentId);
 
   const showingBoard = !search.task && !search.new;
-  const boardSet = useBoardStore((state) => boardSetOf(state.boardSet));
-  const setBoardSet = useBoardStore((state) => state.setBoardSet);
+  const boardSet = boardSetOf(preferences.boardSet);
   const person = usePersonName();
   const boardAct = useDeliveryAct(active, "board setup");
   // A board or view being made or edited, and what the engine said when it refused.
@@ -410,11 +460,18 @@ export function BoardPage() {
     readonly editing: PickerItem | null;
   } | null>(null);
   const [dialogBusy, setDialogBusy] = useState(false);
+  const [seatsFor, setSeatsFor] = useState<{ readonly id: string; readonly title: string } | null>(
+    null,
+  );
   const [dialogProblem, setDialogProblem] = useState<string | null>(null);
   const board = useDeliveryRead(active, `/api/lanes?view=${view}&set=${boardSet}`, {
-    pollMs: showingBoard ? 4_000 : 15_000,
+    pollMs: shared && showingBoard ? 0 : showingBoard ? 4_000 : 15_000,
   });
   const parsed = useMemo(() => parseBoard(board.body), [board.body]);
+  const sharedRead = useDeliveryRead(enabled ? active : null, "/api/shared", {
+    pollMs: showingBoard && !shared ? 30_000 : 0,
+  });
+  const sharedView = useMemo(() => parseShared(sharedRead.body), [sharedRead.body]);
   // The boards last read stay listed while another board is being read, one just made with them.
   type KnownBoard = NonNullable<typeof parsed>["sets"][number];
   const [knownBoards, setKnownBoards] = useState<ReadonlyArray<KnownBoard>>([]);
@@ -437,7 +494,17 @@ export function BoardPage() {
   const laneTitle = (lane: string) => laneChoices.find((item) => item.lane === lane)?.title ?? lane;
   const stale = useStaleReading(board.readAt);
   const open = (task: string | null) =>
-    void navigate({ to: "/board", search: task ? { task } : {} });
+    void navigate({
+      to: "/board",
+      search: {
+        ...(environmentId ? { environment: environmentId } : {}),
+        ...(task ? { task } : {}),
+      },
+    });
+  const chooseEnvironment = (environment: string) => {
+    setDeliveryEnvironment(environment);
+    void navigate({ to: "/board", search: { environment } });
+  };
   const actions = useTaskActions(active, { onDone: board.refresh });
   const chosenBoard = parsed?.sets.find((item) => item.id === boardSet) ?? null;
   // A board or view that was removed, here or elsewhere, gives way to what is always there.
@@ -461,6 +528,7 @@ export function BoardPage() {
     readonly description: string;
     readonly lanes?: ReadonlyArray<string>;
     readonly repository?: string;
+    readonly workspace?: string;
     readonly base?: string;
   }) => {
     if (!dialog) return;
@@ -523,7 +591,11 @@ export function BoardPage() {
         environmentId={active}
         taskId={null}
         onClose={() => open(null)}
-        onSaved={(task) => open(task)}
+        onSaved={(task) => {
+          // The task was filed in that environment: the board goes on showing it there.
+          if (environmentId) setDeliveryEnvironment(environmentId);
+          open(task);
+        }}
         from="Board"
         fromConversation={search.from ?? null}
         board={
@@ -545,115 +617,86 @@ export function BoardPage() {
   }
 
   return (
-    <SidebarInset className="isolate h-dvh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground">
+    <SidebarInset className="isolate h-dvh min-h-0 overflow-hidden overscroll-y-none">
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         <WorkspacePageHeader electron={isElectron} className="h-auto">
-          <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2 py-2">
-            <h1 className="text-sm font-medium">Board</h1>
-            <BoardPicker
-              label="Board"
-              marker="board"
-              items={
-                parsed?.sets ??
-                (knownBoards.length > 0
-                  ? knownBoards
-                  : [{ id: boardSet, title: boardSet, description: "", kind: "built-in" }])
-              }
-              value={boardSet}
-              everything={{ id: "all", label: "Show every task" }}
-              newLabel="New board…"
-              noneYet="You have no boards yet. New board… makes one to group tasks, such as Pilot work; tasks are put on it from New task or a task's page."
-              onChoose={setBoardSet}
-              onCreate={() => setDialog({ kind: "board", editing: null })}
-              onEdit={(item) => setDialog({ kind: "board", editing: item })}
-            />
-            <BoardPicker
-              label="Board view"
-              marker="view"
-              items={
-                parsed?.views ?? [{ id: view, title: view, description: "", kind: "built-in" }]
-              }
-              value={view}
-              everything={{ id: "development", label: "Show every column" }}
-              newLabel="New view…"
-              onChoose={setView}
-              onCreate={() => setDialog({ kind: "view", editing: null })}
-              onEdit={(item) => setDialog({ kind: "view", editing: item })}
-            />
-            <span className="relative flex items-center">
-              <SearchIcon className="pointer-events-none absolute left-2 z-10 size-3.5 text-muted-foreground" />
-              <Input
-                aria-label="Search tasks"
-                placeholder="Search by #number, title, tag, owner"
-                className="h-7 w-64 pl-7 text-xs"
-                value={filters.q}
-                onChange={(event) => setFilters({ q: event.target.value })}
+          <BoardToolbar
+            environmentId={active}
+            environmentPicker={
+              <EnvironmentPicker value={environmentId} onChoose={chooseEnvironment} />
+            }
+            boardPicker={
+              <BoardPicker
+                label="Board"
+                marker="board"
+                items={unifiedBoardChoices(
+                  parsed?.sets ??
+                    (knownBoards.length > 0
+                      ? knownBoards
+                      : [{ id: boardSet, title: boardSet, description: "", kind: "built-in" }]),
+                  sharedView?.boards ?? [],
+                  sharedView?.enabled === true,
+                )}
+                value={shared ? `shared:${sharedBoardSet}` : `local:${boardSet}`}
+                everything={{ id: "local:all", label: "Show every task in this environment" }}
+                newLabel="New board…"
+                noneYet="You have no boards yet. New board… makes one to group tasks, such as Pilot work; tasks are put on it from New task or a task's page."
+                onChoose={setBoardSelection}
+                onCreate={() => {
+                  setBoardSelection(`local:${boardSet}`);
+                  setDialog({ kind: "board", editing: null });
+                }}
+                onEdit={(item) =>
+                  setDialog({ kind: "board", editing: { ...item, id: item.id.slice(6) } })
+                }
               />
-            </span>
-            <Select
-              value={grouping}
-              onValueChange={(value) => setGrouping(String(value) as BoardGrouping)}
-            >
-              <SelectTrigger
-                aria-label="Group cards by"
-                size="compact"
-                variant="ghost"
-                className="w-auto min-w-0"
-              >
-                <SelectValue>
-                  {grouping === "none" ? "Group" : `By ${GROUPING_LABEL[grouping].toLowerCase()}`}
-                </SelectValue>
-              </SelectTrigger>
-              <SelectPopup alignItemWithTrigger={false}>
-                {BOARD_GROUPINGS.map((item) => (
-                  <SelectItem key={item} value={item}>
-                    {GROUPING_LABEL[item]}
-                  </SelectItem>
-                ))}
-              </SelectPopup>
-            </Select>
-            <LaneFilterMenu
-              lanes={laneChoices}
-              chosen={filters.lanes}
-              onChange={(chosen) => setFilters({ lanes: chosen })}
-            />
-            {parsed && parsed.waiting > 0 ? (
-              <Button
-                size="xs"
-                variant={filters.waiting ? "secondary" : "ghost"}
-                className="text-amber-700 dark:text-amber-300"
-                onClick={() => setFilters({ waiting: !filters.waiting })}
-                data-board-waiting
-              >
-                {parsed.waiting} waiting on you
-              </Button>
-            ) : null}
-            <div className="ml-auto flex items-center gap-1">
-              <span className="font-mono text-[10px] text-muted-foreground">
-                {board.readAt ? (stale ? "stale" : "live") : enabled ? "not read yet" : ""}
-              </span>
-              <Button
-                size="xs"
-                disabled={!enabled}
-                onClick={() => void navigate({ to: "/board", search: { new: true } })}
-                data-board-new-task
-              >
-                <PlusIcon />
-                New task
-              </Button>
-              <HowItFits />
-              <Button
-                size="icon-sm"
-                variant="ghost"
-                aria-label="Refresh board"
-                onClick={board.refresh}
-              >
-                <RefreshIcon className="size-3.5" refreshing={board.isPending} />
-              </Button>
-            </div>
-          </div>
+            }
+            viewPicker={
+              <BoardPicker
+                label="Board view"
+                marker="view"
+                items={
+                  parsed?.views ?? [{ id: view, title: view, description: "", kind: "built-in" }]
+                }
+                value={view}
+                everything={{ id: "development", label: "Show every column" }}
+                newLabel="New view…"
+                onChoose={setView}
+                onCreate={() => setDialog({ kind: "view", editing: null })}
+                onEdit={(item) => setDialog({ kind: "view", editing: item })}
+              />
+            }
+            help={<HowItFits />}
+            filters={filters}
+            grouping={grouping}
+            view={view}
+            environmentChanged={environmentId !== defaultEnvironment}
+            cards={(parsed?.lanes ?? []).flatMap((lane) => lane.cards)}
+            lanes={laneChoices}
+            waiting={parsed?.waiting ?? 0}
+            shared={shared}
+            enabled={enabled}
+            status={board.readAt ? (stale ? "stale" : "live") : enabled ? "not read yet" : ""}
+            pending={board.isPending}
+            onFilters={setFilters}
+            onGrouping={setGrouping}
+            onReset={() => {
+              clearFilters();
+              setGrouping("none");
+              setView("development");
+              if (defaultEnvironment && environmentId !== defaultEnvironment)
+                chooseEnvironment(defaultEnvironment);
+            }}
+            onNew={() =>
+              void navigate({
+                to: "/board",
+                search: { new: true, ...(environmentId ? { environment: environmentId } : {}) },
+              })
+            }
+            onRefresh={board.refresh}
+          />
         </WorkspacePageHeader>
-        {hasFilters(filters) ? (
+        {!shared && hasFilters(filters) ? (
           <ActiveFilterChips
             className="px-4 pt-2"
             filters={filters}
@@ -664,15 +707,30 @@ export function BoardPage() {
           />
         ) : null}
 
-        {!enabled ? (
+        {!environmentId ? (
+          <p className="p-6 text-sm text-muted-foreground">
+            {isReady
+              ? "This environment is unavailable. Choose an added environment or open Connections settings."
+              : "Loading environments..."}
+          </p>
+        ) : !enabled ? (
           <p className="p-6 text-sm text-muted-foreground">
             Delivery is turned off for this environment. Turn it on in the server settings to see
             the board.
           </p>
+        ) : shared ? (
+          <SharedBoard
+            environmentId={active}
+            boardId={sharedBoardSet}
+            onChooseBoard={setSharedBoardSet}
+            onOpen={open}
+          />
         ) : board.error ? (
-          <p className="p-6 text-sm text-warning">
-            Delivery engine not reachable. {board.error} Nothing shown here is current.
-          </p>
+          <BoardEngineNotice
+            className="p-6 text-sm"
+            environmentId={environmentId}
+            message={`Delivery engine not reachable. ${board.error} Nothing shown here is current.`}
+          />
         ) : (
           <>
             {actions.problem ? (
@@ -692,7 +750,10 @@ export function BoardPage() {
               </p>
             ) : null}
             {chosenBoard && chosenBoard.id !== "unsorted" && chosenBoard.description ? (
-              <p className="px-4 pt-2 text-xs text-muted-foreground" data-board-set-note>
+              <p
+                className="hidden px-4 pt-2 text-xs text-muted-foreground md:block"
+                data-board-set-note
+              >
                 {chosenBoard.title}: {chosenBoard.description}
               </p>
             ) : null}
@@ -729,23 +790,42 @@ export function BoardPage() {
                 }}
                 onSave={(input) => void saveDialog(input)}
                 onRemove={() => void removeDialog()}
+                onSeats={() => {
+                  const editing = dialog.editing;
+                  if (!editing) return;
+                  setDialog(null);
+                  setDialogProblem(null);
+                  setSeatsFor({ id: editing.id, title: editing.title });
+                }}
+              />
+            ) : null}
+            {seatsFor ? (
+              <BoardSeatsDialog
+                environmentId={active}
+                board={seatsFor}
+                onClose={() => setSeatsFor(null)}
               />
             ) : null}
             {parsed?.note ? (
-              <p className="px-4 pt-2 text-xs text-muted-foreground">{parsed.note}</p>
+              <BoardNotice summary={parsed.note}>
+                <p className="px-4 pt-2 text-xs text-muted-foreground">{parsed.note}</p>
+              </BoardNotice>
             ) : null}
             {parsed?.notices.map((notice) => (
-              <p key={notice.key} className="px-4 pt-2 text-xs text-warning">
-                {notice.text} Seen {notice.count} time{notice.count === 1 ? "" : "s"}.
-              </p>
+              <BoardNotice key={notice.key} summary={notice.text}>
+                <p className="px-4 pt-2 text-xs text-warning">
+                  {notice.text} Seen {notice.count} time{notice.count === 1 ? "" : "s"}.
+                </p>
+              </BoardNotice>
             ))}
             <BoardColumns
+              environmentId={environmentId}
               lanes={lanes}
               all={parsed?.lanes ?? []}
               busy={actions.busy}
               onOpen={(card) => open(card.id)}
               onAction={actions.run}
-              onMove={(card, lane, before) => void actions.move(card, lane, before)}
+              onMove={(card, lane, before) => actions.moveTo(card, lane, before)}
             />
           </>
         )}

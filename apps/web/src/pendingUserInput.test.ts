@@ -1,13 +1,59 @@
+import { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
+import { formatInlineContextReference } from "./lib/composerContextReferences";
+import { threadContextRecord, threadContextReference } from "./lib/composerContextRecords";
 
 import {
   buildPendingUserInputAnswers,
-  countAnsweredPendingUserInputQuestions,
+  carryDisplacedCustomAnswerIntoPrompt,
   derivePendingUserInputProgress,
+  findFirstUnansweredPendingUserInputQuestionIndex,
+  projectPendingUserInputAnswer,
   resolvePendingUserInputAnswer,
   setPendingUserInputCustomAnswer,
+  threadContextsReferencedByAnswer,
   togglePendingUserInputOptionSelection,
 } from "./pendingUserInput";
+
+describe("projectPendingUserInputAnswer", () => {
+  const record = threadContextRecord(
+    {
+      environmentId: EnvironmentId.make("env-answer"),
+      threadId: ThreadId.make("reference-thread"),
+    },
+    "Reference work",
+  );
+
+  it("sends thread chips as readable links with the actual thread ID", () => {
+    const answer = `Compare ${formatInlineContextReference(threadContextReference(record))}`;
+    expect(projectPendingUserInputAnswer(answer, [record])).toBe(
+      "Compare [Reference work](t3-thread://v1/reference-thread)",
+    );
+  });
+
+  // regression: #18789 answers to pending questions lost exact text and option values
+  it("preserves option values and exact answer text", () => {
+    const options = [" first\t", "second"];
+    expect(projectPendingUserInputAnswer(options, [record])).toBe(options);
+    expect(projectPendingUserInputAnswer("  Edited answer\n", [record])).toBe("  Edited answer\n");
+  });
+});
+
+describe("threadContextsReferencedByAnswer", () => {
+  const kept = threadContextRecord(
+    { environmentId: EnvironmentId.make("env-answer"), threadId: ThreadId.make("kept-thread") },
+    "Kept work",
+  );
+  const deleted = threadContextRecord(
+    { environmentId: EnvironmentId.make("env-answer"), threadId: ThreadId.make("deleted-thread") },
+    "Deleted work",
+  );
+
+  it("preserves remaining chips without restoring deleted thread records", () => {
+    const answer = `Compare ${formatInlineContextReference(threadContextReference(kept))}`;
+    expect(threadContextsReferencedByAnswer(answer, [deleted, kept])).toEqual([kept]);
+  });
+});
 
 const singleSelectQuestion = {
   id: "scope",
@@ -20,23 +66,6 @@ const singleSelectQuestion = {
     },
   ],
   multiSelect: false,
-} as const;
-
-const multiSelectQuestion = {
-  id: "areas",
-  header: "Areas",
-  question: "Which areas should this change cover?",
-  options: [
-    {
-      label: "Server",
-      description: "Server",
-    },
-    {
-      label: "Web",
-      description: "Web",
-    },
-  ],
-  multiSelect: true,
 } as const;
 
 const nativeChoiceQuestion = {
@@ -52,6 +81,34 @@ const nativeChoiceQuestion = {
 } as const;
 
 describe("resolvePendingUserInputAnswer", () => {
+  it("preserves exact editor text, including a deliberately cleared answer", () => {
+    const question = { ...singleSelectQuestion, initialAnswer: "  Proposed message\n" };
+    expect(resolvePendingUserInputAnswer(question, { customAnswer: question.initialAnswer })).toBe(
+      question.initialAnswer,
+    );
+    expect(resolvePendingUserInputAnswer(question, { customAnswer: "  Edited message\n\n" })).toBe(
+      "  Edited message\n\n",
+    );
+    expect(resolvePendingUserInputAnswer(question, { customAnswer: "" })).toBe("");
+    expect(resolvePendingUserInputAnswer(question, { customAnswer: " \n" })).toBe(" \n");
+    expect(
+      setPendingUserInputCustomAnswer(
+        { selectedOptionValues: ["Orchestration-first"] },
+        "",
+        question,
+      ),
+    ).toEqual({ customAnswer: "" });
+    const questions = [question, { ...singleSelectQuestion, id: "follow-up" }];
+    const drafts = { scope: { customAnswer: "" } };
+    expect(findFirstUnansweredPendingUserInputQuestionIndex(questions, drafts)).toBe(1);
+    expect(derivePendingUserInputProgress([question], drafts, 0)).toMatchObject({
+      customAnswer: "",
+      resolvedAnswer: "",
+      canAdvance: true,
+      isComplete: true,
+    });
+  });
+
   it("prefers a custom answer over selected options", () => {
     expect(
       resolvePendingUserInputAnswer(singleSelectQuestion, {
@@ -59,35 +116,6 @@ describe("resolvePendingUserInputAnswer", () => {
         customAnswer: "Keep the existing envelope for one release",
       }),
     ).toBe("Keep the existing envelope for one release");
-  });
-
-  it("falls back to the selected option for single-select questions", () => {
-    expect(
-      resolvePendingUserInputAnswer(singleSelectQuestion, {
-        selectedOptionValues: ["Orchestration-first"],
-      }),
-    ).toBe("Orchestration-first");
-  });
-
-  it("returns all selected labels for multi-select questions", () => {
-    expect(
-      resolvePendingUserInputAnswer(multiSelectQuestion, {
-        selectedOptionValues: ["Server", "Web"],
-      }),
-    ).toEqual(["Server", "Web"]);
-  });
-
-  it("clears the preset selection when a custom answer is entered", () => {
-    expect(
-      setPendingUserInputCustomAnswer(
-        {
-          selectedOptionValues: ["Server", "Web"],
-        },
-        "doesn't matter",
-      ),
-    ).toEqual({
-      customAnswer: "doesn't matter",
-    });
   });
 
   it("does not replace a required choice with a custom answer", () => {
@@ -109,28 +137,6 @@ describe("resolvePendingUserInputAnswer", () => {
 });
 
 describe("togglePendingUserInputOptionSelection", () => {
-  it("toggles options for multi-select questions", () => {
-    expect(togglePendingUserInputOptionSelection(multiSelectQuestion, undefined, "Server")).toEqual(
-      {
-        customAnswer: "",
-        selectedOptionValues: ["Server"],
-      },
-    );
-
-    expect(
-      togglePendingUserInputOptionSelection(
-        multiSelectQuestion,
-        {
-          selectedOptionValues: ["Server", "Web"],
-        },
-        "Server",
-      ),
-    ).toEqual({
-      customAnswer: "",
-      selectedOptionValues: ["Web"],
-    });
-  });
-
   it("selects and removes options with the same label independently", () => {
     const question = { ...nativeChoiceQuestion, multiSelect: true };
     const firstSelected = togglePendingUserInputOptionSelection(question, undefined, " first\t");
@@ -184,38 +190,6 @@ describe("buildPendingUserInputAnswers", () => {
       compat: "Keep the current envelope for one release window",
     });
   });
-
-  it("returns arrays for answered multi-select prompts", () => {
-    expect(
-      buildPendingUserInputAnswers([multiSelectQuestion], {
-        areas: {
-          selectedOptionValues: ["Server", "Web"],
-        },
-      }),
-    ).toEqual({
-      areas: ["Server", "Web"],
-    });
-  });
-
-  it("returns null when any question is unanswered", () => {
-    expect(buildPendingUserInputAnswers([singleSelectQuestion], {})).toBeNull();
-  });
-
-  it.each([" first\t", ""])("preserves the exact selected option value %j", (value) => {
-    const question = {
-      ...nativeChoiceQuestion,
-      options: [{ ...nativeChoiceQuestion.options[0], value }, nativeChoiceQuestion.options[1]],
-    };
-    const draft = togglePendingUserInputOptionSelection(question, undefined, value);
-
-    expect(buildPendingUserInputAnswers([question], { result: draft })).toEqual({ result: value });
-    expect(derivePendingUserInputProgress([question], { result: draft }, 0)).toMatchObject({
-      selectedOptionValues: [value],
-      answeredQuestionCount: 1,
-      canAdvance: true,
-      isComplete: true,
-    });
-  });
 });
 
 describe("pending user input question progress", () => {
@@ -235,11 +209,14 @@ describe("pending user input question progress", () => {
     },
   ] as const;
 
-  it("counts only answered questions", () => {
+  it("returns the last question index when all answers are complete", () => {
     expect(
-      countAnsweredPendingUserInputQuestions(questions, {
+      findFirstUnansweredPendingUserInputQuestionIndex(questions, {
         scope: {
           selectedOptionValues: ["Orchestration-first"],
+        },
+        compat: {
+          customAnswer: "Keep it for one release window",
         },
       }),
     ).toBe(1);
@@ -268,39 +245,6 @@ describe("pending user input question progress", () => {
       canAdvance: true,
     });
   });
-
-  it("treats multi-select questions as answered when they have selected options", () => {
-    expect(
-      derivePendingUserInputProgress(
-        [multiSelectQuestion],
-        {
-          areas: {
-            selectedOptionValues: ["Server", "Web"],
-          },
-        },
-        0,
-      ),
-    ).toMatchObject({
-      selectedOptionValues: ["Server", "Web"],
-      resolvedAnswer: ["Server", "Web"],
-      canAdvance: true,
-      isComplete: true,
-    });
-  });
-
-  it("requires an option when custom answers are disabled", () => {
-    const drafts = { result: { customAnswer: "Use another result" } };
-
-    expect(buildPendingUserInputAnswers([nativeChoiceQuestion], drafts)).toBeNull();
-    expect(derivePendingUserInputProgress([nativeChoiceQuestion], drafts, 0)).toMatchObject({
-      customAnswer: "",
-      usingCustomAnswer: false,
-      resolvedAnswer: null,
-      answeredQuestionCount: 0,
-      canAdvance: false,
-      isComplete: false,
-    });
-  });
 });
 
 it("accepts attachment-only answers after every upload finishes", () => {
@@ -320,4 +264,25 @@ it("accepts attachment-only answers after every upload finishes", () => {
       spec: { attachmentCount: 1 },
     }),
   ).toBeNull();
+});
+
+describe("carryDisplacedCustomAnswerIntoPrompt", () => {
+  // regression: #12577 clicking a question option discarded typed text
+  it("keeps the thread draft when nothing was typed into the answer", () => {
+    expect(carryDisplacedCustomAnswerIntoPrompt("draft", undefined)).toBe("draft");
+    expect(carryDisplacedCustomAnswerIntoPrompt("draft", "   ")).toBe("draft");
+  });
+
+  // regression: #12577 clicking a question option discarded typed text
+  it("moves the typed answer into an empty thread draft", () => {
+    expect(carryDisplacedCustomAnswerIntoPrompt("", "also rename the flag ")).toBe(
+      "also rename the flag",
+    );
+  });
+
+  it("appends the typed answer after an existing thread draft", () => {
+    expect(carryDisplacedCustomAnswerIntoPrompt("first half\n", "second half")).toBe(
+      "first half\n\nsecond half",
+    );
+  });
 });

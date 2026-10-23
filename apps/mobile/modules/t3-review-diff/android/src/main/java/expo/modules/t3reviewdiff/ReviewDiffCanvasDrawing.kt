@@ -9,6 +9,8 @@ import android.graphics.Path
 import android.graphics.RectF
 import android.graphics.Shader
 import android.graphics.Typeface
+import android.text.TextPaint
+import kotlin.math.ceil
 import kotlin.math.max
 import kotlin.math.min
 
@@ -177,6 +179,101 @@ internal class ReviewDiffCanvasDrawing(context: Context) {
     textPaint.isUnderlineText = fontStyle and 4 != 0
   }
 
+  var codeLayouts = CodeLayoutCache()
+
+  /** Capture paint on the UI thread; the decode worker owns the new cache until publication. */
+  fun prepareRows(
+    tokens: Map<String, List<DiffToken>>,
+    style: DiffStyle,
+    width: Int
+  ): (List<DiffRow>) -> CodeLayoutCache {
+    configureCodePaint(theme.text, 0, style)
+    val paint = TextPaint(textPaint)
+    val colors = theme
+    val cache = codeLayouts.copyForPreparation()
+    val availableWidth = (
+      width - style.changeBarWidthPx - style.gutterWidthPx -
+        style.codePaddingPx * 2f
+      ).toInt()
+    return { rows ->
+      cache.apply { layout(rows, tokens, paint, style, colors, availableWidth) }
+    }
+  }
+
+  fun codeWrapLayout(
+    rows: List<DiffRow>,
+    tokens: Map<String, List<DiffToken>>,
+    style: DiffStyle,
+    width: Int
+  ): CodeWrapLayout {
+    configureCodePaint(theme.text, 0, style)
+    val availableWidth = width - style.changeBarWidthPx - style.gutterWidthPx -
+      style.codePaddingPx * 2f
+    return codeLayouts.layout(rows, tokens, textPaint, style, theme, availableWidth.toInt())
+  }
+
+  private data class WidthEntry(val row: DiffRow, val tokens: List<DiffToken>?, val width: Float)
+  private var widthEntries = emptyMap<String, WidthEntry>()
+  private var widthRows: List<DiffRow>? = null
+  private var widthTokens: Map<String, List<DiffToken>>? = null
+  private var widthStyle: DiffStyle? = null
+  private var measuredContentWidth = 0
+
+  fun contentWidth(
+    rows: List<DiffRow>,
+    tokens: Map<String, List<DiffToken>>,
+    style: DiffStyle
+  ): Int {
+    if (style.wordWrap) {
+      widthEntries = emptyMap()
+      widthRows = null
+      widthTokens = null
+      widthStyle = null
+      return 0
+    }
+    // Comment heights and viewport resizing do not change unwrapped text widths.
+    if (widthRows !== rows || widthTokens !== tokens || widthStyle != style) {
+      if (widthStyle != style) widthEntries = emptyMap()
+      val next = HashMap<String, WidthEntry>()
+      var widest = 0f
+      for (row in rows) {
+        if (row.kind != "line" && row.kind != "hunk") continue
+        val rowTokens = if (row.kind == "line") tokens[row.id] else null
+        val cached = widthEntries[row.id]
+        val entry = if (cached?.row == row && cached.tokens == rowTokens) {
+          cached
+        } else {
+          WidthEntry(row, rowTokens, measureRowWidth(row, rowTokens, style))
+        }
+        next[row.id] = entry
+        widest = max(widest, entry.width)
+      }
+      widthEntries = next
+      widthRows = rows
+      widthTokens = tokens
+      widthStyle = style
+      measuredContentWidth = ceil(
+        style.changeBarWidthPx + style.gutterWidthPx + style.codePaddingPx * 2f + widest,
+      ).toInt()
+    }
+    return measuredContentWidth
+  }
+
+  private fun measureRowWidth(row: DiffRow, tokens: List<DiffToken>?, style: DiffStyle): Float {
+    if (row.kind == "hunk") {
+      configureMonospacePaint(theme.hunkText, style.hunkFontSizePx, style.hunkFontWeight)
+      return textPaint.measureText(row.text.ifEmpty { row.content })
+    }
+    val runs = if (tokens.isNullOrEmpty()) listOf(DiffToken(row.content, null, 0)) else tokens
+    var width = 0f
+    // Match drawCode's run boundaries and fonts, including fallback glyphs and tabs.
+    for (run in runs) {
+      configureCodePaint(run.color ?: theme.text, run.fontStyle, style)
+      width += textPaint.measureText(run.content)
+    }
+    return width
+  }
+
   fun lineNumberColor(change: String): Int = when (change) {
     "add" -> theme.addText
     "delete" -> theme.deleteText
@@ -198,13 +295,17 @@ internal class ReviewDiffCanvasDrawing(context: Context) {
     }
   }
 
+  /** Highlights word diffs; [top]..[bottom] is the row's first visual line. */
+  @Suppress("LongParameterList")
   fun drawWordDiffRanges(
     canvas: Canvas,
     row: DiffRow,
     codeX: Float,
     top: Int,
-    bottom: Int
+    bottom: Int,
+    lines: CodeLines
   ) {
+    if (lines.nativeLayout != null) return
     if (row.wordDiffRanges.isEmpty() || (row.change != "add" && row.change != "delete")) return
     val color = if (row.change == "add") theme.addBar else theme.deleteBar
     backgroundPaint.color = withAlpha(color, 71)
@@ -213,14 +314,66 @@ internal class ReviewDiffCanvasDrawing(context: Context) {
     val highlightHeight = max(4f * density, min(bottom - top - 4f * density, fontHeight))
     val highlightTop = (top + bottom - highlightHeight) / 2f
     row.wordDiffRanges.forEach { range ->
-      val left = codeX + range.start * characterWidth
-      val right = max(left + 2f * density, codeX + range.end * characterWidth)
-      canvas.drawRoundRect(
-        RectF(left, highlightTop, right, highlightTop + highlightHeight),
-        3f * density,
-        3f * density,
-        backgroundPaint,
-      )
+      // A wrapped row splits the highlight at each visual line boundary.
+      lines.starts.forEachIndexed { line, lineStart ->
+        val start = max(range.start, lineStart)
+        val end = min(range.end, lines.end(line, Int.MAX_VALUE))
+        if (end <= start) return@forEachIndexed
+        val left = codeX + (start - lineStart) * characterWidth
+        val right = max(left + 2f * density, left + (end - start) * characterWidth)
+        val lineTop = highlightTop + line * lines.height
+        canvas.drawRoundRect(
+          RectF(left, lineTop, right, lineTop + highlightHeight),
+          3f * density,
+          3f * density,
+          backgroundPaint,
+        )
+      }
+    }
+  }
+
+  /** Draws a code row's text, or its syntax [tokens] when present, one visual line per start. */
+  @Suppress("LongParameterList")
+  fun drawCode(
+    canvas: Canvas,
+    content: String,
+    tokens: List<DiffToken>?,
+    codeX: Float,
+    baseline: Float,
+    style: DiffStyle,
+    lines: CodeLines
+  ) {
+    val nativeLayout = lines.nativeLayout
+    if (nativeLayout != null) {
+      canvas.save()
+      canvas.translate(codeX, baseline - nativeLayout.getLineBaseline(0))
+      nativeLayout.draw(canvas)
+      canvas.restore()
+      return
+    }
+    val runs = if (tokens.isNullOrEmpty()) listOf(DiffToken(content, null, 0)) else tokens
+    var line = 0
+    var x = codeX
+    var column = 0
+    runs.forEach { run ->
+      configureCodePaint(run.color ?: theme.text, run.fontStyle, style)
+      var start = 0
+      while (start < run.content.length) {
+        while (line + 1 < lines.starts.size && lines.starts[line + 1] <= column + start) {
+          line += 1
+          x = codeX
+        }
+        val end = min(run.content.length, lines.end(line, Int.MAX_VALUE) - column)
+        val lineBaseline = baseline + line * lines.height
+        if (lineBaseline + textPaint.fontMetrics.descent >= canvas.clipBounds.top &&
+          lineBaseline + textPaint.fontMetrics.ascent <= canvas.clipBounds.bottom
+        ) {
+          canvas.drawText(run.content, start, end, x, lineBaseline, textPaint)
+          x += textPaint.measureText(run.content, start, end)
+        }
+        start = end
+      }
+      column += run.content.length
     }
   }
 

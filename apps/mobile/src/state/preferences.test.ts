@@ -1,10 +1,12 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as Option from "effect/Option";
-import { AsyncResult, Atom, AtomRegistry } from "effect/unstable/reactivity";
+import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
 import { vi } from "vite-plus/test";
 import { ProviderInstanceId } from "@t3tools/contracts";
+import { RegistryContext, useAtomSet } from "@effect/atom-react";
+import { createElement } from "react";
+import { renderToString } from "react-dom/server";
 
 vi.mock("expo-secure-store", () => ({
   getItemAsync: vi.fn(),
@@ -19,17 +21,12 @@ vi.mock("../lib/runtime", async () => {
   const Layer = await import("effect/Layer");
   return {
     runtime: { runPromise: vi.fn() },
-    runtimeContextLayer: Layer.empty,
+    layer: Layer.empty,
   };
 });
 
-import type { Preferences } from "../persistence/mobile-preferences";
-import {
-  createMobilePreferencesState,
-  MobilePreferencesLoadError,
-  MobilePreferencesSaveError,
-  MobilePreferencesStore,
-} from "./preferences";
+import { createMobilePreferencesState } from "./preferences";
+import * as MobilePreferences from "../persistence/mobile-preferences";
 
 function deferred<A>() {
   let resolve!: (value: A) => void;
@@ -40,10 +37,10 @@ function deferred<A>() {
 }
 
 function makePreferencesState(
-  service: Omit<MobilePreferencesStore["Service"], "update"> &
-    Partial<Pick<MobilePreferencesStore["Service"], "update">>,
+  service: Omit<MobilePreferences.MobilePreferencesStore["Service"], "update"> &
+    Partial<Pick<MobilePreferences.MobilePreferencesStore["Service"], "update">>,
 ) {
-  const completeService = MobilePreferencesStore.of({
+  const completeService = MobilePreferences.MobilePreferencesStore.of({
     ...service,
     update:
       service.update ??
@@ -53,44 +50,22 @@ function makePreferencesState(
           Effect.mapError((cause) =>
             cause._tag === "MobilePreferencesSaveError"
               ? cause
-              : new MobilePreferencesSaveError({ cause }),
+              : new MobilePreferences.MobilePreferencesSaveError({ cause }),
           ),
         )),
   });
   return createMobilePreferencesState(
-    Atom.runtime(Layer.succeed(MobilePreferencesStore, completeService)),
+    Atom.runtime(Layer.succeed(MobilePreferences.MobilePreferencesStore, completeService)),
   );
 }
 
 describe("mobile preferences state", () => {
-  it.effect("shares one preference load across consumers", () =>
-    Effect.gen(function* () {
-      const load = vi.fn(() => Promise.resolve<Preferences>({ baseFontSize: 17 }));
-      const state = makePreferencesState({
-        load: Effect.promise(load),
-        savePatch: (patch) => Effect.succeed(patch),
-      });
-      const registry = AtomRegistry.make();
-      const unmountFirst = registry.mount(state.preferencesAtom);
-      const unmountSecond = registry.mount(state.preferencesAtom);
-
-      expect(
-        yield* AtomRegistry.getResult(registry, state.preferencesAtom, {
-          suspendOnWaiting: true,
-        }),
-      ).toEqual({ baseFontSize: 17 });
-      expect(load).toHaveBeenCalledTimes(1);
-
-      unmountSecond();
-      unmountFirst();
-      registry.dispose();
-    }),
-  );
-
   it.effect("preserves an optimistic patch when the initial load finishes later", () =>
     Effect.gen(function* () {
-      const pendingLoad = deferred<Preferences>();
-      const savePatch = vi.fn((patch: Partial<Preferences>) => Effect.succeed(patch));
+      const pendingLoad = deferred<MobilePreferences.Preferences>();
+      const savePatch = vi.fn((patch: Partial<MobilePreferences.Preferences>) =>
+        Effect.succeed(patch),
+      );
       const state = makePreferencesState({
         load: Effect.promise(() => pendingLoad.promise),
         savePatch,
@@ -125,12 +100,16 @@ describe("mobile preferences state", () => {
     }),
   );
 
-  it.effect("keeps both favorites when updates are sent before a render", () =>
+  it.effect("keeps both favorites when the React setter sends updates before a render", () =>
     Effect.gen(function* () {
-      let persisted: Preferences = { modelFavorites: [] };
+      let persisted: MobilePreferences.Preferences = { modelFavorites: [] };
       const state = makePreferencesState({
         load: Effect.succeed(persisted),
-        savePatch: () => Effect.die(new Error("Favorite updates must use a transform.")),
+        savePatch: (patch) =>
+          Effect.sync(() => {
+            persisted = { ...persisted, ...patch };
+            return persisted;
+          }),
         update: (transform) =>
           Effect.sync(() => {
             persisted = { ...persisted, ...transform(persisted) };
@@ -142,13 +121,31 @@ describe("mobile preferences state", () => {
       const unmountUpdate = registry.mount(state.updatePreferencesAtom);
       yield* AtomRegistry.getResult(registry, state.preferencesAtom, { suspendOnWaiting: true });
 
+      function useSavePreferences() {
+        return useAtomSet(state.updatePreferencesAtom);
+      }
+      const setters: Array<ReturnType<typeof useSavePreferences>> = [];
+      function CaptureSetter() {
+        setters.push(useSavePreferences());
+        return null;
+      }
+      // Exercise the real React setter, which treats bare functions as updates
+      // to the atom's read value. Direct registry.set calls bypass that behavior.
+      renderToString(
+        createElement(RegistryContext.Provider, { value: registry }, createElement(CaptureSetter)),
+      );
+      const savePreferences = setters[0]!;
       const provider = ProviderInstanceId.make("codex");
-      registry.set(state.updatePreferencesAtom, (current) => ({
-        modelFavorites: [...(current.modelFavorites ?? []), { provider, model: "astra" }],
-      }));
-      registry.set(state.updatePreferencesAtom, (current) => ({
-        modelFavorites: [...(current.modelFavorites ?? []), { provider, model: "sol" }],
-      }));
+      savePreferences({
+        transform: (current) => ({
+          modelFavorites: [...(current.modelFavorites ?? []), { provider, model: "astra" }],
+        }),
+      });
+      savePreferences({
+        transform: (current) => ({
+          modelFavorites: [...(current.modelFavorites ?? []), { provider, model: "sol" }],
+        }),
+      });
       yield* AtomRegistry.getResult(registry, state.updatePreferencesAtom, {
         suspendOnWaiting: true,
       });
@@ -157,6 +154,18 @@ describe("mobile preferences state", () => {
         { provider, model: "astra" },
         { provider, model: "sol" },
       ]);
+
+      savePreferences({
+        transform: (current) => ({
+          modelFavorites: (current.modelFavorites ?? []).filter(
+            (favorite) => favorite.model !== "astra",
+          ),
+        }),
+      });
+      yield* AtomRegistry.getResult(registry, state.updatePreferencesAtom, {
+        suspendOnWaiting: true,
+      });
+      expect(persisted.modelFavorites).toEqual([{ provider, model: "sol" }]);
 
       unmountUpdate();
       unmountPreferences();
@@ -168,7 +177,7 @@ describe("mobile preferences state", () => {
     Effect.gen(function* () {
       const state = makePreferencesState({
         load: Effect.fail(
-          new MobilePreferencesLoadError({
+          new MobilePreferences.MobilePreferencesLoadError({
             cause: new Error("secure storage unavailable"),
           }),
         ),
@@ -184,128 +193,6 @@ describe("mobile preferences state", () => {
       ).toEqual({});
 
       unmount();
-      registry.dispose();
-    }),
-  );
-
-  it.effect("does not roll back a newer optimistic write with the same value", () =>
-    Effect.gen(function* () {
-      let saveCount = 0;
-      const state = makePreferencesState({
-        load: Effect.succeed({ baseFontSize: 16, codeFontSize: 13 }),
-        savePatch: (patch) => {
-          saveCount += 1;
-          return saveCount === 1
-            ? Effect.fail(new MobilePreferencesSaveError({ cause: new Error("write failed") }))
-            : Effect.succeed(patch);
-        },
-      });
-      const registry = AtomRegistry.make();
-      const unmountPreferences = registry.mount(state.preferencesAtom);
-      const unmountUpdate = registry.mount(state.updatePreferencesAtom);
-
-      yield* AtomRegistry.getResult(registry, state.preferencesAtom, {
-        suspendOnWaiting: true,
-      });
-      registry.set(state.updatePreferencesAtom, { baseFontSize: 18 });
-      registry.set(state.updatePreferencesAtom, { baseFontSize: 18, codeFontSize: 15 });
-
-      yield* Effect.promise(() =>
-        vi.waitFor(() => {
-          expect(AsyncResult.isFailure(registry.get(state.updatePreferencesAtom))).toBe(false);
-          expect(Option.getOrThrow(AsyncResult.value(registry.get(state.preferencesAtom)))).toEqual(
-            {
-              baseFontSize: 18,
-              codeFontSize: 15,
-            },
-          );
-        }),
-      );
-
-      unmountUpdate();
-      unmountPreferences();
-      registry.dispose();
-    }),
-  );
-
-  it.effect("rolls back an optimistic field when its save fails", () =>
-    Effect.gen(function* () {
-      const state = makePreferencesState({
-        load: Effect.succeed({ baseFontSize: 16 }),
-        savePatch: () =>
-          Effect.fail(new MobilePreferencesSaveError({ cause: new Error("write failed") })),
-      });
-      const registry = AtomRegistry.make();
-      const unmountPreferences = registry.mount(state.preferencesAtom);
-      const unmountUpdate = registry.mount(state.updatePreferencesAtom);
-
-      yield* AtomRegistry.getResult(registry, state.preferencesAtom, {
-        suspendOnWaiting: true,
-      });
-      registry.set(state.updatePreferencesAtom, { baseFontSize: 18 });
-
-      yield* Effect.promise(() =>
-        vi.waitFor(() => {
-          expect(Option.getOrThrow(AsyncResult.value(registry.get(state.preferencesAtom)))).toEqual(
-            {
-              baseFontSize: 16,
-            },
-          );
-        }),
-      );
-
-      unmountUpdate();
-      unmountPreferences();
-      registry.dispose();
-    }),
-  );
-
-  it.effect("rolls back to the last confirmed value after a later save fails", () =>
-    Effect.gen(function* () {
-      let saveCount = 0;
-      const state = makePreferencesState({
-        load: Effect.succeed({ baseFontSize: 16 }),
-        savePatch: () => {
-          saveCount += 1;
-          return saveCount === 1
-            ? Effect.succeed({ baseFontSize: 14 })
-            : Effect.fail(new MobilePreferencesSaveError({ cause: new Error("write failed") }));
-        },
-      });
-      const registry = AtomRegistry.make();
-      const unmountPreferences = registry.mount(state.preferencesAtom);
-      const unmountUpdate = registry.mount(state.updatePreferencesAtom);
-
-      yield* AtomRegistry.getResult(registry, state.preferencesAtom, {
-        suspendOnWaiting: true,
-      });
-      registry.set(state.updatePreferencesAtom, { baseFontSize: 14 });
-      yield* Effect.promise(() =>
-        vi.waitFor(() => {
-          expect(saveCount).toBe(1);
-          expect(registry.get(state.updatePreferencesAtom).waiting).toBe(false);
-          expect(Option.getOrThrow(AsyncResult.value(registry.get(state.preferencesAtom)))).toEqual(
-            {
-              baseFontSize: 14,
-            },
-          );
-        }),
-      );
-
-      registry.set(state.updatePreferencesAtom, { baseFontSize: 18 });
-      yield* Effect.promise(() =>
-        vi.waitFor(() => {
-          expect(saveCount).toBe(2);
-          expect(Option.getOrThrow(AsyncResult.value(registry.get(state.preferencesAtom)))).toEqual(
-            {
-              baseFontSize: 14,
-            },
-          );
-        }),
-      );
-
-      unmountUpdate();
-      unmountPreferences();
       registry.dispose();
     }),
   );

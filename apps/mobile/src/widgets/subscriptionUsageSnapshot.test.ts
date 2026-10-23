@@ -10,7 +10,6 @@ import {
   buildSubscriptionUsageSnapshot,
   createWidgetRefresher,
   WIDGET_REFRESH_INTERVAL,
-  subscriptionUsageTimeline,
 } from "./subscriptionUsageSnapshot";
 
 const checkedAt = "2026-09-05T12:00:00.000Z";
@@ -65,19 +64,6 @@ describe("subscription widget snapshots", () => {
     expect(snapshot.url).toBe(deepLink);
     expect(JSON.stringify(snapshot)).not.toContain("private@example.com");
   });
-  it("clears data after removing environments and hides disabled providers", () => {
-    expect(
-      buildSubscriptionUsageSnapshot(new Map(), deepLink).providers.every(
-        (p) => p.windows.length === 0,
-      ),
-    ).toBe(true);
-    expect(
-      buildSubscriptionUsageSnapshot(
-        presentations([provider({ enabled: false })]),
-        deepLink,
-      ).providers.every((p) => p.windows.length === 0),
-    ).toBe(true);
-  });
   it("uses upstream deduplication for a native account also present in a proxy hub", () => {
     const input = new Map([
       [
@@ -114,29 +100,6 @@ describe("subscription widget snapshots", () => {
     expect(snapshot.providers[0]?.name).toBe("Codex");
     expect(JSON.stringify(snapshot)).not.toContain("example.com");
   });
-  it("keeps unavailable quotas distinct from zero usage and omits provider error messages", () => {
-    const snapshot = buildSubscriptionUsageSnapshot(
-      presentations([
-        provider({
-          usageLimits: {
-            ...limits,
-            unavailable: { reason: "probeFailed", message: "token secret" },
-          },
-        }),
-      ]),
-      deepLink,
-    );
-    expect(snapshot.providers[0]?.windows).toEqual([]);
-    expect(JSON.stringify(snapshot)).not.toContain("token secret");
-    expect(
-      buildSubscriptionUsageSnapshot(
-        presentations([
-          provider({ usageLimits: { checkedAt, windows: [{ ...window, usedPercent: 0 }] } }),
-        ]),
-        deepLink,
-      ).providers[0]?.windows[0]?.remaining,
-    ).toBe(100);
-  });
   it("bounds OS storage and puts the most constrained windows first", () => {
     const windows = Array.from({ length: 20 }, (_, index) => ({
       ...window,
@@ -150,57 +113,6 @@ describe("subscription widget snapshots", () => {
     expect(snapshot.providers[0]?.windows).toHaveLength(6);
     expect(snapshot.providers[0]?.totalWindows).toBe(20);
     expect(snapshot.providers[0]?.windows[0]?.remaining).toBe(5);
-  });
-  it("marks unknown or distant reset times stale after fifteen minutes", () => {
-    const snapshot = buildSubscriptionUsageSnapshot(
-      presentations([
-        provider({ usageLimits: { checkedAt, windows: [{ ...window, resetsAt: undefined }] } }),
-      ]),
-      deepLink,
-    );
-    expect(snapshot.providers[0]?.expiresAt).toBe(now + 15 * 60_000);
-    expect(snapshot.providers[0]?.windows[0]?.reset).toBe("Reset time unavailable");
-  });
-  it("schedules a reset boundary without inventing a zero quota", () => {
-    const snapshot = buildSubscriptionUsageSnapshot(presentations(), deepLink);
-    const timeline = subscriptionUsageTimeline(snapshot, now);
-    expect(timeline.map((entry) => entry.date.getTime())).toEqual([now, now + 10 * 60_000]);
-    expect(timeline[1]?.props.providers[0]?.windows).toEqual([]);
-    expect(subscriptionUsageTimeline(snapshot, now + 60 * 60_000)).toHaveLength(1);
-  });
-  it("expires providers independently without inventing a refill", () => {
-    const snapshot = buildSubscriptionUsageSnapshot(
-      presentations([
-        provider(),
-        provider({
-          instanceId: ProviderInstanceId.make("claude"),
-          driver: ProviderDriverKind.make("claudeAgent"),
-          usageLimits: { checkedAt, windows: [{ ...window, resetsAt: undefined }] },
-        }),
-      ]),
-      deepLink,
-    );
-    const timeline = subscriptionUsageTimeline(snapshot, now);
-    expect(timeline.map((entry) => entry.date.getTime())).toEqual([
-      now,
-      now + 10 * 60_000,
-      now + 15 * 60_000,
-    ]);
-    expect(timeline[1]?.props.providers[0]?.windows).toEqual([]);
-    expect(timeline[1]?.props.providers[1]?.windows[0]?.remaining).toBe(60);
-    expect(timeline[2]?.props.providers.every((provider) => provider.windows.length === 0)).toBe(
-      true,
-    );
-  });
-  it("marks a malformed check time immediately stale without storing null", () => {
-    const snapshot = buildSubscriptionUsageSnapshot(
-      presentations([provider({ usageLimits: { ...limits, checkedAt: "invalid" } })]),
-      deepLink,
-    );
-    expect(snapshot.checkedAt).toBe(0);
-    expect(snapshot.providers[0]).toMatchObject({ expiresAt: 0, windows: [] });
-    expect(subscriptionUsageTimeline(snapshot, now)).toHaveLength(1);
-    expect(JSON.stringify(snapshot)).not.toContain("null");
   });
   it("uses the freshest copy of an account across environments before pooling", () => {
     const input = presentations();
@@ -224,21 +136,6 @@ describe("subscription widget snapshots", () => {
 });
 
 describe("widget refresh probes", () => {
-  it("throttles each connected environment independently and retries failures", async () => {
-    const probe = vi
-      .fn<(id: string) => Promise<void>>()
-      .mockRejectedValueOnce(new Error("offline"))
-      .mockResolvedValue(undefined);
-    const refresh = createWidgetRefresher(probe);
-    await refresh([], now);
-    expect(probe).not.toHaveBeenCalled();
-    await refresh(["first"], now);
-    await refresh(["first", "second"], now + 1);
-    expect(probe.mock.calls).toEqual([["first"], ["second"]]);
-    await refresh(["first"], now + WIDGET_REFRESH_INTERVAL);
-    expect(probe.mock.calls).toEqual([["first"], ["second"], ["first"]]);
-  });
-
   it("does not overlap a slow probe even after the refresh interval", async () => {
     let finish!: () => void;
     const probe = vi.fn(

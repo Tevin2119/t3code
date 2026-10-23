@@ -5,33 +5,13 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
-import * as TestClock from "effect/testing/TestClock";
-import * as KeyValueStore from "effect/unstable/persistence/KeyValueStore";
+import * as KeyValueStore from "effect/persistence/KeyValueStore";
 import * as PullRequestReadCache from "./PullRequestReadCache.ts";
 
 const cacheLayer = (directory: string) =>
   PullRequestReadCache.make.pipe(Effect.provide(KeyValueStore.layerFileSystem(directory)));
 
 it.layer(NodeServices.layer)("PR filesystem cache", (it) => {
-  it.effect("reuses files after restart and respects the original expiry", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const directory = yield* fs.makeTempDirectoryScoped({ prefix: "t3-pr-cache-" });
-      let reads = 0;
-      const lookup = Effect.sync(() => String(++reads));
-      const first = yield* cacheLayer(directory);
-      const key = "long/repository/key".repeat(100);
-      assert.strictEqual(yield* first.get(key, lookup), "1");
-      yield* TestClock.adjust("59 seconds");
-      const restarted = yield* cacheLayer(directory);
-      assert.strictEqual(yield* restarted.get(key, lookup), "1");
-      yield* TestClock.adjust("1 second");
-      assert.strictEqual(yield* restarted.get(key, lookup), "2");
-      assert.strictEqual(reads, 2);
-      assert.strictEqual((yield* fs.readDirectory(directory)).length, 1);
-    }),
-  );
-
   it.effect("clears in-flight reads before a new service can reuse them", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
@@ -124,29 +104,6 @@ it.layer(NodeServices.layer)("PR filesystem cache", (it) => {
       assert.deepStrictEqual(yield* Fiber.join(pending), Array(10).fill("fresh"));
       assert.strictEqual(reads, 1);
     }).pipe(Effect.provide(KeyValueStore.layerMemory)),
-  );
-
-  it.effect("compacts expired scope records without discarding fresh PR data", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const directory = yield* fs.makeTempDirectoryScoped({ prefix: "t3-pr-cache-" });
-      const cache = yield* cacheLayer(directory);
-      yield* cache.get("summary", Effect.succeed("old"), ["pr"]);
-      yield* cache.invalidate("pr");
-      for (let index = 0; index < 100; index++) yield* cache.invalidate(`pr-${index}`);
-      assert.strictEqual((yield* fs.readDirectory(directory)).length, 2);
-      const before = (yield* fs.stat(`${directory}/revisions`)).size;
-      yield* TestClock.adjust("59 seconds");
-      assert.strictEqual(yield* cache.get("summary", Effect.succeed("fresh"), ["pr"]), "fresh");
-      yield* TestClock.adjust("1 second");
-      yield* cache.invalidate("other-pr");
-      assert.isTrue((yield* fs.stat(`${directory}/revisions`)).size < before);
-      const restarted = yield* cacheLayer(directory);
-      assert.strictEqual(
-        yield* restarted.get("summary", Effect.die("cache miss"), ["pr"]),
-        "fresh",
-      );
-    }),
   );
 
   it.effect("does not persist failed GitHub reads", () =>

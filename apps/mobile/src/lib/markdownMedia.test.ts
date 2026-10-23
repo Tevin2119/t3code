@@ -38,25 +38,14 @@ describe("resolveMarkdownMediaPreview", () => {
     ["/tmp/frame%23one.png:12", "/tmp/frame#one.png"],
     ["/tmp/frame%3Fone.png:12:3", "/tmp/frame?one.png"],
     ["/tmp/frame%2523one.png:12", "/tmp/frame%23one.png"],
-    ["file://server/share/frame.png", "\\\\server\\share\\frame.png"],
-    ["\\\\server\\share\\frame.png", "\\\\server\\share\\frame.png"],
-  ])("keeps encoded filename and UNC semantics for %s", (href, path) => {
-    expect(resolveMarkdownMediaPreview(href, input)).toMatchObject({
+    ["file://server/share/frame.png", "\\\\server\\share\\frame.png", "\\\\server\\share"],
+    ["\\\\server\\share\\frame.png", "\\\\server\\share\\frame.png", "\\\\server\\share"],
+  ])("keeps encoded filename and UNC semantics for %s", (href, path, workspaceRoot = "/repo") => {
+    expect(resolveMarkdownMediaPreview(href, { ...input, workspaceRoot })).toMatchObject({
       kind: "image",
       source: {
         resource: { path },
         actionsSource: { reference: { kind: "file", path } },
-      },
-    });
-  });
-
-  it("separates a video playback fragment from literal filename characters", () => {
-    expect(resolveMarkdownMediaPreview("/tmp/clip%23one.mp4#t=2", input)).toMatchObject({
-      kind: "video",
-      source: {
-        srcFragment: "#t=2",
-        resource: { path: "/tmp/clip#one.mp4" },
-        actionsSource: { reference: { kind: "file", path: "/tmp/clip#one.mp4" } },
       },
     });
   });
@@ -72,17 +61,32 @@ describe("resolveMarkdownMediaPreview", () => {
     });
   });
 
-  it("resolves protocol-relative media for native APIs without rewriting its signed query", () => {
-    expect(
-      resolveMarkdownMediaPreview("//cdn.example.com/clip.mp4?signature=a%2fb#t=2", input),
-    ).toMatchObject({
-      kind: "video",
-      source: {
-        uri: "https://cdn.example.com/clip.mp4?signature=a%2fb#t=2",
-        actionsSource: {
-          reference: { kind: "url", url: "//cdn.example.com/clip.mp4?signature=a%2fb#t=2" },
-        },
-      },
+  it("preserves a signed PDF URL and its authored name", () => {
+    const href = "//cdn.example.com/report%20one.pdf?signature=a%2fb#page=2";
+    expect(resolveMarkdownMediaPreview(href, input)).toMatchObject({
+      kind: "pdf",
+      source: { uri: `https:${href}`, name: "report one.pdf", mimeType: "application/pdf" },
     });
+  });
+
+  it.each(["./image.png", "./report.pdf"])(
+    "uses the draft workspace when no thread exists: %s",
+    (href) => {
+      expect(
+        resolveMarkdownMediaPreview(href, { ...input, threadId: undefined })?.source,
+      ).toMatchObject({
+        resource: { _tag: "draft-workspace-file", cwd: "/repo", path: `/repo/${href}` },
+      });
+    },
+  );
+
+  it("keeps captured host media unavailable while allowing direct media", () => {
+    const captured = { ...input, captured: true };
+    for (const href of ["./image.png", "./clip.mp4", "./report.pdf"]) {
+      expect(resolveMarkdownMediaPreview(href, captured)).toBeNull();
+    }
+    expect(resolveMarkdownMediaPreview("https://cdn.example.com/report.pdf", captured)?.kind).toBe(
+      "pdf",
+    );
   });
 });

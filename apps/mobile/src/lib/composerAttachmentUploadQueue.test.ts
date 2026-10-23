@@ -105,6 +105,31 @@ describe("composer attachment upload queue", () => {
     queue.dispose();
   });
 
+  it("retries a failed attachment when the worker restores requests after reconnect", async () => {
+    let states: Readonly<Record<string, ComposerAttachmentUploadState>> = {};
+    const upload = vi.fn().mockRejectedValueOnce(new Error("Disconnected")).mockResolvedValue(true);
+    const queue = createComposerAttachmentUploadQueue({
+      upload,
+      onChange: (next) => {
+        states = next;
+      },
+    });
+    const local = request("failed-upload");
+    const key = composerAttachmentUploadKey(environmentId, local.attachment.id);
+    queue.sync([local]);
+    await queue.settled();
+    expect(states[key]?.status).toBe("failed");
+    queue.sync([local]);
+    await queue.settled();
+    expect(upload).toHaveBeenCalledTimes(1);
+    queue.sync([]);
+    queue.sync([local]);
+    await queue.settled();
+    expect(upload).toHaveBeenCalledTimes(2);
+    expect(states[key]?.status).toBe("ready");
+    queue.dispose();
+  });
+
   it("ignores a late completion after removal or environment switch", async () => {
     const gate = Promise.withResolvers<boolean>();
     const started = Promise.withResolvers<void>();
@@ -265,10 +290,7 @@ describe("draft upload scope and offline submission", () => {
       },
     };
     expect(composerDraftEnvironmentId("new-task:abc123-def456", [], stamped)).toBe(environmentId);
-    // An id-keyed draft that lost its stamp belongs to nobody: uploads must
-    // not start and sign-out must not sweep it into some other environment.
     expect(composerDraftEnvironmentId("new-task:abc123-def456", [])).toBeNull();
-    // The stamp wins over a legacy-looking key when both are present.
     expect(composerDraftEnvironmentId("new-task:environment-2:project", [], stamped)).toBe(
       environmentId,
     );
@@ -287,8 +309,6 @@ describe("draft upload scope and offline submission", () => {
       },
       states: {},
     };
-    // Not started yet and mid-transfer both let the send through as a queued
-    // message; the outbox drain finishes (or redoes) the upload.
     expect(composerAttachmentUploadBlockReason(input)).toBeNull();
     expect(composerAttachmentsStillUploading(input)).toBe(true);
     expect(
@@ -316,7 +336,6 @@ describe("draft upload scope and offline submission", () => {
     expect(
       composerAttachmentsStillUploading({ ...input, states: { [key]: { status: "ready" } } }),
     ).toBe(false);
-    // Attachments the environment cannot accept never count as uploading.
     expect(composerAttachmentsStillUploading({ ...input, serverConfig: null })).toBe(false);
   });
 });

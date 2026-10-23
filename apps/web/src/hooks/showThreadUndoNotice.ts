@@ -1,0 +1,123 @@
+import {
+  type AtomCommandResult,
+  isAtomCommandInterrupted,
+  squashAtomCommandFailure,
+} from "@t3tools/client-runtime/state/runtime";
+import { create } from "zustand";
+
+import { stackedThreadToast, toastManager } from "../components/ui/toast";
+import * as ThreadUndo from "./threadUndo";
+
+type UndoOptions = {
+  action: "Settled" | "Snoozed" | "Unpinned" | "Archived" | "Discarded";
+  undo: () => Promise<AtomCommandResult<unknown, unknown>>;
+  failureTitle: string;
+  claim: ReturnType<typeof ThreadUndo.begin>;
+  commit?: () => void;
+};
+
+type UndoNotice = {
+  action: UndoOptions["action"];
+  count: number;
+  undo: () => Promise<void>;
+};
+
+export const useThreadUndoNotice = create<{ notice: UndoNotice | null }>(() => ({ notice: null }));
+
+let liveUndos: UndoOptions[] = [];
+let expiry: ReturnType<typeof setTimeout> | undefined;
+// A new notice owns mod+z even inside a text field, until the user presses
+// another key or edits text. After that, mod+z is the field's own undo again.
+let shortcutClaimed = false;
+
+function refreshNotice() {
+  const stale = liveUndos.filter(({ claim }) => !claim.isCurrent());
+  liveUndos = liveUndos.filter((entry) => !stale.includes(entry));
+  for (const entry of stale) entry.commit?.();
+  const latest = liveUndos.at(-1);
+  if (!latest) {
+    clearTimeout(expiry);
+    useThreadUndoNotice.setState({ notice: null });
+    return;
+  }
+  const group: UndoOptions[] = [];
+  for (let index = liveUndos.length - 1; index >= 0; index--) {
+    const entry = liveUndos[index]!;
+    if (entry.action !== latest.action) break;
+    group.push(entry);
+  }
+  useThreadUndoNotice.setState({
+    notice: {
+      action: latest.action,
+      count: group.length,
+      undo: async () => {
+        const current = group.filter(
+          (entry) => liveUndos.includes(entry) && entry.claim.isCurrent(),
+        );
+        liveUndos = liveUndos.filter((entry) => !group.includes(entry));
+        // Consume every claim before awaiting, so repeated clicks or shortcuts
+        // cannot restore the same group twice.
+        for (const entry of current) entry.claim.finish();
+        refreshNotice();
+        await Promise.all(
+          current.map(async ({ undo, failureTitle }) => {
+            const reportFailure = (error: unknown) => {
+              toastManager.add(
+                stackedThreadToast({
+                  type: "error",
+                  title: failureTitle,
+                  description: error instanceof Error ? error.message : "An error occurred.",
+                }),
+              );
+            };
+            try {
+              const result = await undo();
+              if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+                reportFailure(squashAtomCommandFailure(result));
+              }
+            } catch (error) {
+              reportFailure(error);
+            }
+          }),
+        );
+      },
+    },
+  });
+}
+
+ThreadUndo.subscribe(refreshNotice);
+
+export function undoLatestThreadAction(): boolean {
+  const notice = useThreadUndoNotice.getState().notice;
+  if (!notice) return false;
+  void notice.undo();
+  return true;
+}
+
+/** Whether mod+z should undo the notice's actions even while a text field is focused. */
+export function threadUndoClaimsShortcut(): boolean {
+  return shortcutClaimed && useThreadUndoNotice.getState().notice !== null;
+}
+
+/** Called on any other keypress or text edit; hands mod+z back to text fields. */
+export function releaseThreadUndoShortcut() {
+  shortcutClaimed = false;
+}
+
+/** Shows one compact confirmation for the currently undoable thread actions. */
+export function showThreadUndoNotice(options: UndoOptions) {
+  if (!options.claim.isCurrent()) return;
+  liveUndos.push(options);
+  shortcutClaimed = true;
+  refreshNotice();
+  clearTimeout(expiry);
+  expiry = setTimeout(() => {
+    const expired = liveUndos;
+    liveUndos = [];
+    for (const { claim, commit } of expired) {
+      claim.finish();
+      commit?.();
+    }
+    refreshNotice();
+  }, 5_000);
+}

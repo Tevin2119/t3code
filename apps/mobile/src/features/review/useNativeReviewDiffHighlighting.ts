@@ -1,4 +1,6 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { settlePromise, squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
+import { AsyncResult } from "effect/reactivity";
+import { useEffect, useRef, useState } from "react";
 
 import {
   highlightNativeReviewDiffVisibleRows,
@@ -8,10 +10,10 @@ import {
 import type { NativeReviewDiffRow } from "../diffs/nativeReviewDiffSurface";
 import type { NativeReviewDiffFile } from "../diffs/nativeReviewDiffTypes";
 
-interface NativeReviewVisibleRange {
-  readonly firstRowIndex: number;
-  readonly lastRowIndex: number;
-}
+import {
+  createReviewDiffHighlightScheduler,
+  type NativeReviewVisibleRange,
+} from "./reviewDiffHighlightScheduler";
 
 function createEmptyTokenPatch(resetKey: string): string {
   return JSON.stringify({ resetKey, tokensByRowId: {} });
@@ -43,23 +45,22 @@ export function useNativeReviewDiffHighlighting(input: {
 }) {
   const { enabled, files, resetKey, rows, scheme } = input;
   const highlightedRowIdsRef = useRef<Set<string>>(new Set());
-  const visibleRangeRef = useRef<NativeReviewVisibleRange>({
+  const [visibleRange, setVisibleRange] = useState<NativeReviewVisibleRange>({
     firstRowIndex: 0,
     lastRowIndex: 80,
   });
   const visibleChunkIndexRef = useRef(0);
   const [tokensPatchJson, setTokensPatchJson] = useState(() => createEmptyTokenPatch(resetKey));
-  const [visibleHighlightRequest, setVisibleHighlightRequest] = useState(0);
+  const [scheduler] = useState(() => createReviewDiffHighlightScheduler(setVisibleRange));
 
   useEffect(() => {
+    scheduler.reset();
     highlightedRowIdsRef.current = new Set();
     visibleChunkIndexRef.current = 0;
-    visibleRangeRef.current = { firstRowIndex: 0, lastRowIndex: 80 };
+    setVisibleRange({ firstRowIndex: 0, lastRowIndex: 80 });
     setTokensPatchJson(createEmptyTokenPatch(resetKey));
-    if (enabled && rows.length > 0) {
-      setVisibleHighlightRequest((request) => request + 1);
-    }
-  }, [enabled, resetKey, rows.length]);
+    return () => scheduler.cancel();
+  }, [enabled, resetKey, rows.length, scheduler]);
 
   useEffect(() => {
     if (!enabled || rows.length === 0) {
@@ -67,12 +68,12 @@ export function useNativeReviewDiffHighlighting(input: {
     }
 
     const abortController = new AbortController();
-    const requestRange = visibleRangeRef.current;
+    const requestRange = visibleRange;
     const engine: NativeReviewDiffHighlightEngine = "native";
 
     void (async () => {
-      try {
-        const result = await highlightNativeReviewDiffVisibleRows({
+      const settled = await settlePromise(() =>
+        highlightNativeReviewDiffVisibleRows({
           files,
           rows,
           scheme,
@@ -81,60 +82,47 @@ export function useNativeReviewDiffHighlighting(input: {
           lastRowIndex: requestRange.lastRowIndex,
           alreadyHighlightedRowIds: highlightedRowIdsRef.current,
           signal: abortController.signal,
+        }),
+      );
+      if (abortController.signal.aborted) return;
+      if (AsyncResult.isFailure(settled)) {
+        logReviewDiffDiagnostic("native visible highlight failed", {
+          error: squashAtomCommandFailure(settled),
+          resetKey,
+          scheme,
+          firstRowIndex: requestRange.firstRowIndex,
+          lastRowIndex: requestRange.lastRowIndex,
         });
-
-        if (abortController.signal.aborted || result.rowCount === 0) {
-          return;
-        }
-
-        for (const rowId of Object.keys(result.tokensByRowId)) {
-          highlightedRowIdsRef.current.add(rowId);
-        }
-
-        const chunkIndex = visibleChunkIndexRef.current;
-        visibleChunkIndexRef.current += 1;
-        setTokensPatchJson(
-          JSON.stringify({
-            resetKey,
-            chunkIndex,
-            fileId: "visible",
-            filePath: "visible rows",
-            language: "diff",
-            lineCount: result.rowCount,
-            durationMs: result.durationMs,
-            tokensByRowId: result.tokensByRowId,
-          }),
-        );
-      } catch (error) {
-        if (!abortController.signal.aborted) {
-          logReviewDiffDiagnostic("native visible highlight failed", {
-            error,
-            resetKey,
-            scheme,
-            firstRowIndex: requestRange.firstRowIndex,
-            lastRowIndex: requestRange.lastRowIndex,
-          });
-        }
+        return;
       }
+      const result = settled.value;
+      if (result.rowCount === 0) return;
+
+      for (const rowId of Object.keys(result.tokensByRowId)) {
+        highlightedRowIdsRef.current.add(rowId);
+      }
+
+      const chunkIndex = visibleChunkIndexRef.current;
+      visibleChunkIndexRef.current += 1;
+      setTokensPatchJson(
+        JSON.stringify({
+          resetKey,
+          chunkIndex,
+          fileId: "visible",
+          filePath: "visible rows",
+          language: "diff",
+          lineCount: result.rowCount,
+          durationMs: result.durationMs,
+          tokensByRowId: result.tokensByRowId,
+        }),
+      );
     })();
 
     return () => abortController.abort();
-  }, [enabled, files, resetKey, rows, scheme, visibleHighlightRequest]);
-
-  const updateVisibleRange = useCallback((nextRange: NativeReviewVisibleRange) => {
-    const previousRange = visibleRangeRef.current;
-    const movedRows =
-      Math.abs(nextRange.firstRowIndex - previousRange.firstRowIndex) +
-      Math.abs(nextRange.lastRowIndex - previousRange.lastRowIndex);
-
-    visibleRangeRef.current = nextRange;
-    if (movedRows >= 20) {
-      setVisibleHighlightRequest((request) => request + 1);
-    }
-  }, []);
+  }, [enabled, files, resetKey, rows, scheme, visibleRange]);
 
   return {
     tokensPatchJson,
-    updateVisibleRange,
+    updateVisibleRange: scheduler.update,
   };
 }

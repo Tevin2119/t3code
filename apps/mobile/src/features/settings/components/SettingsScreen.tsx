@@ -1,38 +1,38 @@
-import { useNavigation } from "@react-navigation/native";
-import type { ComponentProps, ReactNode } from "react";
+import { useNavigation, useNavigationState, useRoute } from "@react-navigation/native";
+import type { ReactNode } from "react";
 import { Platform, View } from "react-native";
 
-import { AndroidScreenHeader } from "../../../components/AndroidScreenHeader";
-import { MaterialScreenContent as SettingsScreenContent } from "../../../components/MaterialScreenContent";
-import { NativeStackScreenOptions } from "../../../native/StackHeader";
-import { AndroidWorkspaceSidebarButton } from "../../layout/workspace-sidebar-toolbar";
+import type { AppBarProps } from "../../../components/ui/AppBar.types";
+import { AppBar } from "../../../components/ui/AppBar";
+import { ScreenContent as SettingsScreenContent } from "../../../components/ui/ScreenContent";
+import { useWorkspaceTabs } from "../../workspace/WorkspaceTabsContext";
 
 export { SettingsScreenContent };
 
 export function SettingsScreen(
-  props: Pick<ComponentProps<typeof AndroidScreenHeader>, "title" | "actions" | "trailing"> & {
+  props: Pick<AppBarProps, "title" | "actions" | "trailing"> & {
     readonly children: ReactNode;
-    /** A native form sheet already owns its rounded outer frame. */
     readonly formSheet?: boolean;
   },
 ) {
   const navigation = useNavigation();
+  const route = useRoute();
+  const index = useNavigationState((state) => state.index);
+  const workspace = useWorkspaceTabs();
+  // Android opens Settings as a workspace tab; its root page has nothing to go back to.
+  const workspaceRoot =
+    Platform.OS === "android" && workspace !== null && index === 0 && route.name === "Settings";
 
   return (
     <View collapsable={false} className="flex-1 bg-sheet">
-      {Platform.OS === "android" ? (
-        <>
-          <NativeStackScreenOptions options={{ headerShown: false }} />
-          <AndroidScreenHeader
-            title={props.title}
-            leading={props.formSheet ? undefined : <AndroidWorkspaceSidebarButton />}
-            actions={props.actions}
-            trailing={props.trailing}
-            onBack={() => navigation.goBack()}
-            hideBottomBorder={!props.formSheet}
-          />
-        </>
-      ) : null}
+      <AppBar
+        title={props.title}
+        actions={props.actions}
+        trailing={Platform.OS === "android" ? props.trailing : undefined}
+        sidebar={false}
+        onBack={workspaceRoot ? undefined : () => navigation.goBack()}
+        hideBottomBorder={!props.formSheet}
+      />
       {props.formSheet ? (
         props.children
       ) : (

@@ -25,7 +25,6 @@ interface AccessibilityTreeNode {
 const MAX_ACCESSIBILITY_TREE_NODES = 10_000;
 const WINDOW_BLUR_TIMEOUT_MS = 1_000;
 
-/** Win32 virtual-key codes for the left and right key of each modifier pair. */
 export const WINDOWS_MODIFIER_PAIR_VIRTUAL_KEYS: Record<
   SnapShotModifier,
   readonly [number, number]
@@ -169,7 +168,7 @@ export function boundedSnapShotString(
   return candidate.slice(0, end).trimEnd();
 }
 
-export function capturedImageBounds(
+function capturedImageBounds(
   bounds: WindowBounds | null | undefined,
   sourceBounds: WindowBounds,
   imageSize: CapturedImageSize,
@@ -478,8 +477,11 @@ export function findAccessibleWindow<
     readonly sourceTitle?: string;
     readonly bounds: WindowBounds;
     readonly clientBounds?: WindowBounds | undefined;
+    readonly platform?: NodeJS.Platform;
+    readonly bundleId?: string | undefined;
   },
   matchMode: "screen-bounds" | "wayland" = "screen-bounds",
+  options: { readonly allowUntitledUniqueBounds?: boolean } = {},
 ): T | undefined {
   const normalizeTitle = (value: string) => {
     const title = value.trim();
@@ -489,7 +491,6 @@ export function findAccessibleWindow<
   const titles = new Set(
     [captured.title, captured.sourceTitle ?? ""].map(normalizeTitle).filter(Boolean),
   );
-  if (titles.size === 0) return undefined;
   // Wayland accessibility providers can expose window size without a screen position.
   const boundsKeys =
     matchMode === "wayland"
@@ -499,19 +500,64 @@ export function findAccessibleWindow<
     matchMode === "wayland" && captured.clientBounds
       ? [captured.bounds, captured.clientBounds]
       : [captured.bounds];
-  const matches = windows.filter((window) => {
+  const matchesBounds = (window: T) => {
     const bounds = window.bounds;
     return (
-      titles.has(normalizeTitle(window.name ?? "")) &&
       bounds !== null &&
       candidateBounds.some((candidate) =>
         boundsKeys.every((key) => Math.abs(bounds[key] - candidate[key]) <= 2),
       )
     );
+  };
+  if (titles.size > 0) {
+    const matches = windows.filter(
+      (window) => titles.has(normalizeTitle(window.name ?? "")) && matchesBounds(window),
+    );
+    if (matches.length === 1) return matches[0];
+    const activeMatches = matches.filter((window) => safeProperty(() => window.active) === true);
+    if (activeMatches.length === 1) return activeMatches[0];
+    if (matches.length > 1) return undefined;
+    const browserMatch = findBrowserTitleMatch(windows, titles, captured, matchMode, matchesBounds);
+    if (browserMatch) return browserMatch;
+  }
+  // GTK4/libadwaita often exposes the frame as an unnamed group. A PID-scoped
+  // lookup can accept the one window whose bounds match; size-only guesses cannot.
+  if (!options.allowUntitledUniqueBounds) return undefined;
+  const boundsMatches = windows.filter(
+    (window) => normalizeTitle(window.name ?? "") === "" && matchesBounds(window),
+  );
+  return boundsMatches.length === 1 ? boundsMatches[0] : undefined;
+}
+
+// Chrome's macOS AX title can append the browser and profile to the captured page title.
+function findBrowserTitleMatch<T extends { readonly name?: string | null }>(
+  windows: readonly T[],
+  titles: ReadonlySet<string>,
+  captured: { readonly platform?: NodeJS.Platform; readonly bundleId?: string | undefined },
+  matchMode: "screen-bounds" | "wayland",
+  matchesBounds: (window: T) => boolean,
+): T | undefined {
+  if (captured.platform !== "darwin" || matchMode !== "screen-bounds") return undefined;
+  const browserName = /^com\.google\.Chrome(?:\.(?:beta|dev|canary))?$/.test(
+    captured.bundleId ?? "",
+  )
+    ? "Google Chrome"
+    : captured.bundleId === "org.chromium.Chromium"
+      ? "Chromium"
+      : undefined;
+  if (!browserName) return undefined;
+  const browserMatches = windows.filter((window) => {
+    if (!matchesBounds(window)) return false;
+    const name = window.name?.trim() ?? "";
+    return [...titles].some((title) => {
+      const prefix = `${title} - ${browserName}`;
+      return (
+        name === prefix ||
+        (name.startsWith(prefix) && /^ [–—-] \S.*$/u.test(name.slice(prefix.length)))
+      );
+    });
   });
-  if (matches.length === 1) return matches[0];
-  const activeMatches = matches.filter((window) => safeProperty(() => window.active) === true);
-  return activeMatches.length === 1 ? activeMatches[0] : undefined;
+  return browserMatches.length === 1 ? browserMatches[0] : undefined;
 }
 
 const ELECTRON_KEY_NAMES: Readonly<Record<string, string>> = {
@@ -524,7 +570,6 @@ const ELECTRON_KEY_NAMES: Readonly<Record<string, string>> = {
   Escape: "Esc",
 };
 
-/** Two shortcuts are the same when they would register the same listener. */
 export function sameSnapShotShortcut(left: SnapShotShortcut, right: SnapShotShortcut): boolean {
   if (isModifierPairShortcut(left) || isModifierPairShortcut(right)) {
     return (

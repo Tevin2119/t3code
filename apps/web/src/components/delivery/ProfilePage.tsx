@@ -1,7 +1,18 @@
 import type { EnvironmentId } from "@t3tools/contracts";
 import { useNavigate, useSearch } from "@tanstack/react-router";
-import { ArrowLeftIcon, CopyIcon, PlusIcon, RefreshCwIcon, Trash2Icon, XIcon } from "lucide-react";
-import { useMemo, useRef, useState } from "react";
+import {
+  ArrowLeftIcon,
+  CopyIcon,
+  FileSearchIcon,
+  FolderOpenIcon,
+  HistoryIcon,
+  PlusIcon,
+  RefreshCwIcon,
+  SlidersHorizontalIcon,
+  Trash2Icon,
+  XIcon,
+} from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { isElectron } from "../../env";
 import {
@@ -15,6 +26,7 @@ import {
   type ProfileSummary,
   type ProfileView,
 } from "../../lib/delivery";
+import { addReference } from "../../lib/deliveryReferences";
 import { entryForHarness, harnessLabel, harnessOfDriver } from "../../lib/deliverySeats";
 import { cn } from "../../lib/utils";
 import {
@@ -23,11 +35,20 @@ import {
   useDeliveryRead,
   usePersonName,
 } from "../../state/delivery";
-import { usePrimaryEnvironmentId } from "../../state/environments";
+import { useDeliveryEnvironmentId } from "../../state/delivery";
 import { ProviderModelPicker } from "../chat/ProviderModelPicker";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Checkbox } from "../ui/checkbox";
+import {
+  Dialog,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogPanel,
+  DialogPopup,
+  DialogTitle,
+} from "../ui/dialog";
 import { Input } from "../ui/input";
 import { ScrollArea } from "../ui/scroll-area";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
@@ -36,11 +57,15 @@ import { Switch } from "../ui/switch";
 import { Textarea } from "../ui/textarea";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { WorkspacePageHeader } from "../WorkspacePageHeader";
+import { ReferenceFilePicker } from "./ReferenceFilePicker";
 import { useSeatCatalog } from "./SeatSettingsPanel";
 import { SetupPanel } from "./SetupPanel";
+import { TeamDefaultsDialog } from "./TeamDefaultsDialog";
+import { TrackRecord } from "./TrackRecord";
 
 const NONE = "__none__";
 const FLOW_TITLE: Readonly<Record<string, string>> = {
+  "non-code": "Non-code delivery",
   chat: "Team chat",
   plan: "Plan",
   review: "Review",
@@ -56,7 +81,7 @@ function Field(props: {
     <label className="flex flex-col gap-1">
       <span className="text-xs font-medium">{props.label}</span>
       {props.children}
-      {props.hint ? <span className="text-[11px] text-muted-foreground">{props.hint}</span> : null}
+      {props.hint ? <span className="text-2xs text-muted-foreground">{props.hint}</span> : null}
     </label>
   );
 }
@@ -111,7 +136,7 @@ function SeatEditor(props: {
         <Input
           aria-label="Name of the seat"
           placeholder="Name of the seat"
-          className="h-7 w-48 text-xs"
+          className="h-7 w-48 "
           value={seat.title}
           disabled={locked}
           onChange={(event) => set({ title: event.target.value })}
@@ -122,13 +147,13 @@ function SeatEditor(props: {
           </span>
         ) : entry ? (
           <ProviderModelPicker
+            environmentId={props.environmentId}
             activeInstanceId={entry.instanceId}
             model={seat.model ?? ""}
             lockedProvider={null}
             instanceEntries={catalog.entries}
             modelOptionsByInstance={catalog.options}
             size="xs"
-            triggerVariant="outline"
             triggerAriaLabel={`Harness and model for ${name}`}
             {...(takes.model
               ? {}
@@ -258,7 +283,7 @@ function SeatEditor(props: {
       <Textarea
         aria-label={`Instructions for ${name}`}
         placeholder="What this seat is there for, in the words it is to be given"
-        className="min-h-20 text-xs"
+        className="min-h-20 "
         value={seat.instructions}
         disabled={locked}
         onChange={(event) => set({ instructions: event.target.value })}
@@ -267,21 +292,93 @@ function SeatEditor(props: {
   );
 }
 
+/** Asks before removing a profile of one's own, and says what becomes of it. */
+function RemoveProfileDialog(props: {
+  readonly environmentId: EnvironmentId | null;
+  readonly profile: string;
+  readonly onClose: () => void;
+  readonly onRemoved: () => void;
+}) {
+  const person = usePersonName();
+  const act = useDeliveryAct(props.environmentId, "remove profile");
+  const [busy, setBusy] = useState(false);
+  const [problem, setProblem] = useState<string | null>(null);
+  const remove = async () => {
+    setBusy(true);
+    setProblem(null);
+    const result = await act(`/api/profiles/${props.profile}/remove`, { by: person });
+    setBusy(false);
+    if (!result.ok) {
+      setProblem(result.why);
+      return;
+    }
+    props.onRemoved();
+  };
+  return (
+    <Dialog open onOpenChange={(open) => !open && !busy && props.onClose()}>
+      <DialogPopup className="max-w-md" data-profile-remove-confirm>
+        <DialogHeader>
+          <DialogTitle>Remove {props.profile}?</DialogTitle>
+          <DialogDescription>
+            It can no longer be chosen for a task or a conversation. Its files are moved to the
+            engine's history, not deleted. A profile with work under way or tasks still open is not
+            removed; the engine says which.
+          </DialogDescription>
+        </DialogHeader>
+        {problem ? (
+          <DialogPanel>
+            <p className="text-xs text-warning" data-delivery-problem>
+              {problem}
+            </p>
+          </DialogPanel>
+        ) : null}
+        <DialogFooter>
+          <Button variant="outline" disabled={busy} onClick={props.onClose}>
+            Keep it
+          </Button>
+          <Button variant="destructive" disabled={busy} onClick={() => void remove()}>
+            {busy ? "Removing" : "Remove the profile"}
+          </Button>
+        </DialogFooter>
+      </DialogPopup>
+    </Dialog>
+  );
+}
+
 function ProfileList(props: {
   readonly profiles: ReadonlyArray<ProfileSummary>;
   readonly onOpen: (name: string) => void;
+  readonly onRemove: (name: string) => void;
 }) {
   return (
     <ul className="grid gap-2 p-5 md:grid-cols-2 xl:grid-cols-3" data-profile-list>
       {props.profiles.map((item) => (
-        <li key={item.profile}>
+        <li key={item.profile} className="relative">
+          {item.source === "custom" ? (
+            <Button
+              size="icon-xs"
+              variant="ghost"
+              className="absolute top-2 right-2 z-10"
+              aria-label={`Remove ${item.profile}`}
+              onClick={() => props.onRemove(item.profile)}
+              data-profile-card-remove={item.profile}
+            >
+              <Trash2Icon />
+            </Button>
+          ) : null}
           <button
             type="button"
             onClick={() => props.onOpen(item.profile)}
             data-profile-card={item.profile}
             className="flex h-full w-full cursor-pointer flex-col gap-1 rounded-lg border border-border p-3 text-left text-xs hover:bg-accent"
           >
-            <span className="flex items-center gap-1.5 text-sm font-medium">
+            <span
+              className={cn(
+                "flex min-w-0 flex-wrap items-center gap-1.5 text-sm font-medium break-all",
+                // Room for the bin beside it, so a long name is never under it.
+                item.source === "custom" && "pr-7",
+              )}
+            >
               {item.profile}
               <Badge size="sm" variant={item.source === "custom" ? "secondary" : "outline"}>
                 {item.source === "custom" ? "yours" : "comes with the engine"}
@@ -290,7 +387,7 @@ function ProfileList(props: {
             <span className="text-muted-foreground">
               {item.purpose || "No purpose written yet."}
             </span>
-            <span className="text-[11px] text-muted-foreground">
+            <span className="text-2xs text-muted-foreground">
               {item.seatsOn} of {item.seats} seats on. Flows:{" "}
               {item.flows.map((flow) => FLOW_TITLE[flow] ?? flow).join(", ") || "none"}. Revision{" "}
               {item.revision}.
@@ -380,13 +477,27 @@ function ProfileEditor(props: {
     setForm(view.form);
   }
   const [note, setNote] = useState("");
-  const [reference, setReference] = useState("");
   const [busy, setBusy] = useState(false);
   const working = useRef(false);
   const [problems, setProblems] = useState<ReadonlyArray<string>>([]);
   const [said, setSaid] = useState<string | null>(null);
   const [section, setSection] = useState<"profile" | "setup">("profile");
+  const [removing, setRemoving] = useState(false);
   const locked = !view.editable;
+  // A picker is for the profile and engine it was opened on; another one closes it.
+  const pickContext = `${props.environmentId ?? ""}|${view.profile}`;
+  const [picking, setPicking] = useState<{
+    readonly route: "project" | "browse";
+    readonly context: string;
+  } | null>(null);
+  const pickedFor = useRef(pickContext);
+  useEffect(() => {
+    pickedFor.current = pickContext;
+  }, [pickContext]);
+  const addPicked = (context: string, path: string) => {
+    if (locked || pickedFor.current !== context) return;
+    setForm((current) => ({ ...current, references: addReference(current.references, path) }));
+  };
   const changed = JSON.stringify(form) !== JSON.stringify(view.form);
   const set = (patch: Partial<ProfileForm>) => setForm((current) => ({ ...current, ...patch }));
   const setSeat = (index: number, seat: ProfileSeat) =>
@@ -394,9 +505,11 @@ function ProfileEditor(props: {
   const flows = useMemo(
     () =>
       parseFlows(
-        ["chat", "plan", "review", "standard"].map((id) => ({ id, title: FLOW_TITLE[id] })),
+        ["chat", "plan", "review", "standard", ...(form.nonCode?.enabled ? ["non-code"] : [])].map(
+          (id) => ({ id, title: FLOW_TITLE[id] }),
+        ),
       ),
-    [],
+    [form.nonCode?.enabled],
   );
 
   const save = async () => {
@@ -416,7 +529,7 @@ function ProfileEditor(props: {
       setProblems(result.problems.length > 0 ? result.problems : [result.why]);
       return;
     }
-    setSaid(parseProfile(result.body)?.note ?? "Saved.");
+    setSaid(parseProfile(result.body)?.note || "Saved.");
     setNote("");
     props.onSaved();
   };
@@ -431,7 +544,7 @@ function ProfileEditor(props: {
         <Badge size="sm" variant={locked ? "outline" : "secondary"}>
           {locked ? "comes with the engine" : "yours"}
         </Badge>
-        <span className="font-mono text-[10px] text-muted-foreground">{view.configuration}</span>
+        <span className="font-mono text-3xs text-muted-foreground">{view.configuration}</span>
         <div className="ml-auto flex items-center gap-1">
           <Button
             size="xs"
@@ -452,8 +565,31 @@ function ProfileEditor(props: {
             <CopyIcon />
             Duplicate
           </Button>
+          {locked ? null : (
+            <Button
+              size="xs"
+              variant="ghost"
+              disabled={busy}
+              onClick={() => setRemoving(true)}
+              data-profile-remove
+            >
+              <Trash2Icon />
+              Remove
+            </Button>
+          )}
         </div>
       </div>
+      {removing ? (
+        <RemoveProfileDialog
+          environmentId={props.environmentId}
+          profile={view.profile}
+          onClose={() => setRemoving(false)}
+          onRemoved={() => {
+            setRemoving(false);
+            props.onRemoved();
+          }}
+        />
+      ) : null}
       {locked ? (
         <p className="text-xs text-muted-foreground" data-profile-locked>
           This team comes with the engine and is changed in the repository. Duplicate it to have one
@@ -487,7 +623,7 @@ function ProfileEditor(props: {
               >
                 <Textarea
                   aria-label="Core prompt"
-                  className="min-h-48 font-mono text-xs"
+                  className="min-h-48  "
                   value={form.corePrompt}
                   disabled={locked}
                   onChange={(event) => set({ corePrompt: event.target.value })}
@@ -495,6 +631,157 @@ function ProfileEditor(props: {
               </Field>
             </div>
             <aside className="flex min-w-0 flex-col gap-4">
+              <Field
+                label="Non-code delivery"
+                hint="Stories, reports and assignments. Sources stay read-only; returned artifacts are validated and reviewed before acceptance. Review-duty seats provide the final review."
+              >
+                <Checkbox
+                  checked={form.nonCode?.enabled ?? false}
+                  disabled={locked}
+                  onCheckedChange={(enabled) => {
+                    const producer =
+                      form.nonCode?.producer ||
+                      form.seats.find((seat) => seat.id === "writing-coach")?.id ||
+                      form.seats.find((seat) => seat.duties.includes("build"))?.id ||
+                      form.seats[0]?.id ||
+                      "";
+                    set({
+                      nonCode: {
+                        enabled: enabled === true,
+                        producer,
+                        researcher: form.nonCode?.researcher || form.lead,
+                        referenceVerifier: form.nonCode?.referenceVerifier || form.lead,
+                        validators:
+                          form.nonCode?.validators ??
+                          form.seats
+                            .filter((seat) => seat.id !== producer && seat.duties.includes("plan"))
+                            .map((seat) => seat.id),
+                        citations: form.nonCode?.citations ?? "when-cited",
+                        minimumIndependentProviders: form.nonCode?.minimumIndependentProviders ?? 2,
+                        distinctVariations: form.nonCode?.distinctVariations ?? false,
+                      },
+                    });
+                  }}
+                  aria-label="Enable non-code delivery"
+                />
+                {form.nonCode?.enabled ? (
+                  <>
+                    <Select
+                      value={form.nonCode.producer}
+                      items={form.seats.map((seat) => ({ value: seat.id, label: seat.title }))}
+                      disabled={locked}
+                      onValueChange={(producer) => {
+                        if (!producer || !form.nonCode) return;
+                        set({
+                          nonCode: {
+                            ...form.nonCode,
+                            producer: String(producer),
+                            validators: form.nonCode.validators.filter((id) => id !== producer),
+                          },
+                        });
+                      }}
+                    >
+                      <SelectTrigger aria-label="Deliverable producer">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectPopup>
+                        {form.seats.map((seat) => (
+                          <SelectItem key={seat.id} value={seat.id}>
+                            {seat.title}
+                          </SelectItem>
+                        ))}
+                      </SelectPopup>
+                    </Select>
+                    {(["researcher", "referenceVerifier"] as const).map((role) => (
+                      <Select
+                        key={role}
+                        value={form.nonCode?.[role]}
+                        items={form.seats.map((seat) => ({ value: seat.id, label: seat.title }))}
+                        disabled={locked}
+                        onValueChange={(seat) => {
+                          if (seat && form.nonCode)
+                            set({ nonCode: { ...form.nonCode, [role]: String(seat) } });
+                        }}
+                      >
+                        <SelectTrigger
+                          aria-label={
+                            role === "researcher" ? "Evidence researcher" : "Reference verifier"
+                          }
+                        >
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectPopup>
+                          {form.seats.map((seat) => (
+                            <SelectItem key={seat.id} value={seat.id}>
+                              {seat.title}
+                            </SelectItem>
+                          ))}
+                        </SelectPopup>
+                      </Select>
+                    ))}
+                    <div className="flex flex-col gap-2">
+                      <span className="text-sm">Validation seats</span>
+                      {form.seats
+                        .filter((seat) => seat.id !== form.nonCode?.producer)
+                        .map((seat) => (
+                          <label key={seat.id} className="flex items-center gap-2 text-sm">
+                            <Checkbox
+                              disabled={locked}
+                              checked={form.nonCode?.validators.includes(seat.id) ?? false}
+                              onCheckedChange={(checked) => {
+                                if (!form.nonCode) return;
+                                set({
+                                  nonCode: {
+                                    ...form.nonCode,
+                                    validators: checked
+                                      ? [...form.nonCode.validators, seat.id]
+                                      : form.nonCode.validators.filter((id) => id !== seat.id),
+                                  },
+                                });
+                              }}
+                            />
+                            {seat.title}
+                          </label>
+                        ))}
+                    </div>
+                    <label className="flex items-center gap-2 text-sm">
+                      <Checkbox
+                        disabled={locked}
+                        checked={form.nonCode.distinctVariations}
+                        onCheckedChange={(checked) => {
+                          if (form.nonCode)
+                            set({
+                              nonCode: { ...form.nonCode, distinctVariations: checked === true },
+                            });
+                        }}
+                      />
+                      Require distinct, complete variations
+                    </label>
+                    <Select
+                      value={form.nonCode.citations}
+                      disabled={locked}
+                      items={[
+                        { value: "when-cited", label: "Check references when cited" },
+                        { value: "required", label: "Evidence and references required" },
+                        { value: "none", label: "Creative work without references" },
+                      ]}
+                      onValueChange={(citations) => {
+                        if (citations && form.nonCode)
+                          set({ nonCode: { ...form.nonCode, citations: String(citations) } });
+                      }}
+                    >
+                      <SelectTrigger aria-label="Reference verification policy">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectPopup>
+                        <SelectItem value="when-cited">Check references when cited</SelectItem>
+                        <SelectItem value="required">Evidence and references required</SelectItem>
+                        <SelectItem value="none">Creative work without references</SelectItem>
+                      </SelectPopup>
+                    </Select>
+                  </>
+                ) : null}
+              </Field>
               <Field label="Default flow" hint="What this team does when no flow is chosen.">
                 <Select
                   value={form.defaultFlow}
@@ -541,7 +828,7 @@ function ProfileEditor(props: {
                 >
                   <Textarea
                     aria-label="Notes of the profile"
-                    className="min-h-24 text-xs"
+                    className="min-h-24 "
                     value={form.memory.notes}
                     disabled={locked}
                     onChange={(event) =>
@@ -567,14 +854,14 @@ function ProfileEditor(props: {
                     />
                     <span>
                       {tool.server}
-                      <span className="block text-[11px] text-muted-foreground">
+                      <span className="block text-2xs text-muted-foreground">
                         {tool.offers.join(", ")}
                         {tool.onlyFor ? `. Only for ${tool.onlyFor}` : ""}
                       </span>
                     </span>
                   </label>
                 ))}
-                <p className="text-[11px] text-muted-foreground">
+                <p className="text-2xs text-muted-foreground">
                   Whether a tool works for a seat is shown under "What each seat is given", after it
                   was checked.
                 </p>
@@ -585,7 +872,7 @@ function ProfileEditor(props: {
           <section className="flex flex-col gap-2" data-profile-seats>
             <div className="flex items-center gap-2">
               <h3 className="text-sm font-medium">Seats</h3>
-              <span className="text-[11px] text-muted-foreground">
+              <span className="text-2xs text-muted-foreground">
                 {form.seats.filter((seat) => seat.active).length} of {form.seats.length} switched on
               </span>
               {locked ? null : (
@@ -619,7 +906,7 @@ function ProfileEditor(props: {
                 }
               />
             ))}
-            <p className="text-[11px] text-muted-foreground">
+            <p className="text-2xs text-muted-foreground">
               A delivery needs a seat that leads, one that builds, one that reviews, and seats that
               test on {form.qaMinimum} providers that did not build. A chat, a plan and a review
               need less. The engine says what is missing when a flow cannot run.
@@ -654,7 +941,7 @@ function ProfileEditor(props: {
                   <Input
                     aria-label="Name of the specialist"
                     placeholder="Name"
-                    className="h-7 w-56 text-xs"
+                    className="h-7 w-56 "
                     value={item.name}
                     disabled={locked}
                     onChange={(event) =>
@@ -681,7 +968,7 @@ function ProfileEditor(props: {
                 </div>
                 <Textarea
                   aria-label={`Instructions for the specialist ${item.name}`}
-                  className="min-h-20 font-mono text-xs"
+                  className="min-h-20  "
                   value={item.text}
                   disabled={locked}
                   onChange={(event) =>
@@ -701,7 +988,7 @@ function ProfileEditor(props: {
             <ul className="flex flex-col gap-0.5 text-xs">
               {form.references.map((file) => (
                 <li key={file} className="flex items-center gap-1">
-                  <span className="min-w-0 flex-1 truncate font-mono text-[11px]">{file}</span>
+                  <span className="min-w-0 flex-1 font-mono text-2xs break-all">{file}</span>
                   {locked ? null : (
                     <button
                       type="button"
@@ -718,25 +1005,44 @@ function ProfileEditor(props: {
               ))}
             </ul>
             {locked ? null : (
-              <Input
-                aria-label="Add a reference file"
-                placeholder="Full path of a file on the engine's host, then Enter"
-                className="h-7 font-mono text-xs"
-                value={reference}
-                onChange={(event) => setReference(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key !== "Enter" || !reference.trim()) return;
-                  set({
-                    references: [
-                      ...form.references.filter((item) => item !== reference.trim()),
-                      reference.trim(),
-                    ],
-                  });
-                  setReference("");
-                }}
-              />
+              <div className="flex flex-wrap items-center gap-1">
+                <Button
+                  size="xs"
+                  variant="outline"
+                  disabled={!props.environmentId}
+                  onClick={() => setPicking({ route: "project", context: pickContext })}
+                  data-profile-reference-project
+                >
+                  <FileSearchIcon />
+                  Add from a project
+                </Button>
+                <Button
+                  size="xs"
+                  variant="outline"
+                  disabled={!props.environmentId}
+                  onClick={() => setPicking({ route: "browse", context: pickContext })}
+                  data-profile-reference-browse
+                >
+                  <FolderOpenIcon />
+                  Browse files
+                </Button>
+                {props.environmentId ? null : (
+                  <span className="text-2xs text-muted-foreground">
+                    Files are picked on the engine's environment, and none is connected.
+                  </span>
+                )}
+              </div>
             )}
-            <p className="text-[11px] text-muted-foreground">
+            {!locked && props.environmentId && picking?.context === pickContext ? (
+              <ReferenceFilePicker
+                key={pickContext}
+                environmentId={props.environmentId}
+                route={picking.route}
+                onClose={() => setPicking(null)}
+                onPick={(path) => addPicked(picking.context, path)}
+              />
+            ) : null}
+            <p className="text-2xs text-muted-foreground">
               Every seat is told where these files are, and is given the short ones in full.
             </p>
           </section>
@@ -759,35 +1065,22 @@ function ProfileEditor(props: {
               <Input
                 aria-label="Why the profile is changed"
                 placeholder="Why it is changed (kept with the revision)"
-                className="h-8 max-w-md text-xs"
+                className="h-8 max-w-md "
                 value={note}
                 onChange={(event) => setNote(event.target.value)}
               />
               <Button disabled={busy || !changed} onClick={() => void save()} data-profile-save>
                 {busy ? "Saving" : changed ? `Save as revision ${view.revision + 1}` : "Saved"}
               </Button>
-              <Button
-                variant="ghost"
-                className="ml-auto"
-                disabled={busy}
-                onClick={() =>
-                  void act(`/api/profiles/${view.profile}/remove`, { by: person }).then((result) =>
-                    result.ok ? props.onRemoved() : setProblems([result.why]),
-                  )
-                }
-              >
-                <Trash2Icon />
-                Remove the profile
-              </Button>
             </div>
           )}
 
           <section className="flex flex-col gap-1 text-xs">
             <h3 className="font-medium text-muted-foreground">Files and revisions</h3>
-            <p className="font-mono text-[11px] break-all" data-profile-folder>
+            <p className="font-mono text-2xs break-all" data-profile-folder>
               {view.folder}
             </p>
-            <p className="text-[11px] text-muted-foreground">
+            <p className="text-2xs text-muted-foreground">
               These are the files the form writes: team.json, TEAM.md for the core prompt, a file
               for each role under roles, and the tools under tools.{" "}
               {locked
@@ -796,7 +1089,7 @@ function ProfileEditor(props: {
             </p>
             <ul className="flex flex-col gap-0.5">
               {view.history.map((entry) => (
-                <li key={entry.revision} className="font-mono text-[10px] text-muted-foreground">
+                <li key={entry.revision} className="font-mono text-3xs text-muted-foreground">
                   r{entry.revision}, {entry.by}, {entry.at}
                   {entry.note ? `: ${entry.note}` : ""}
                 </li>
@@ -815,7 +1108,7 @@ function ProfileEditor(props: {
  * seats and what they run on, its tools, and the flow it runs by default.
  */
 export function ProfilePage() {
-  const environmentId = usePrimaryEnvironmentId();
+  const environmentId = useDeliveryEnvironmentId();
   const enabled = useDeliveryEnabled(environmentId);
   const active = enabled ? environmentId : null;
   const navigate = useNavigate();
@@ -826,6 +1119,8 @@ export function ProfilePage() {
   const oneRead = useDeliveryRead(active, search.name ? `/api/profiles/${search.name}` : null);
   const view = useMemo(() => parseProfile(oneRead.body), [oneRead.body]);
   const [reloaded, setReloaded] = useState<string | null>(null);
+  const [opened, setOpened] = useState<"triage" | "record" | null>(null);
+  const [removing, setRemoving] = useState<string | null>(null);
   const go = (next: { name?: string; new?: boolean; from?: string }) =>
     void navigate({ to: "/profiles", search: next });
 
@@ -853,7 +1148,7 @@ export function ProfilePage() {
   };
 
   return (
-    <SidebarInset className="isolate h-dvh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground">
+    <SidebarInset className="isolate h-dvh min-h-0 overflow-hidden overscroll-y-none  ">
       <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-profile-page>
         <WorkspacePageHeader electron={isElectron} className="h-auto">
           <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2 py-2">
@@ -865,7 +1160,45 @@ export function ProfilePage() {
             ) : (
               <h1 className="text-sm font-medium">Profiles</h1>
             )}
-            <div className="ml-auto flex items-center gap-1">
+            <div className="ml-auto flex flex-wrap items-center gap-1">
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <Button
+                      size="xs"
+                      variant="ghost"
+                      disabled={!enabled}
+                      onClick={() => setOpened("triage")}
+                      data-profile-triage
+                    />
+                  }
+                >
+                  <SlidersHorizontalIcon />
+                  Triage
+                </TooltipTrigger>
+                <TooltipPopup side="bottom">
+                  What triage runs on: the seats that sort each new task before a team takes it.
+                </TooltipPopup>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <Button
+                      size="xs"
+                      variant="ghost"
+                      disabled={!enabled}
+                      onClick={() => setOpened("record")}
+                      data-profile-record
+                    />
+                  }
+                >
+                  <HistoryIcon />
+                  Track record
+                </TooltipTrigger>
+                <TooltipPopup side="bottom">
+                  How each harness and model has done in each team and stage on this host.
+                </TooltipPopup>
+              </Tooltip>
               <Tooltip>
                 <TooltipTrigger
                   render={
@@ -944,11 +1277,50 @@ export function ProfilePage() {
                 </p>
               )
             ) : (
-              <ProfileList profiles={profiles} onOpen={(name) => go({ name })} />
+              <ProfileList
+                profiles={profiles}
+                onOpen={(name) => go({ name })}
+                onRemove={setRemoving}
+              />
             )}
           </ScrollArea>
         )}
       </div>
+      {removing ? (
+        <RemoveProfileDialog
+          environmentId={active}
+          profile={removing}
+          onClose={() => setRemoving(null)}
+          onRemoved={() => {
+            setRemoving(null);
+            listRead.refresh();
+          }}
+        />
+      ) : null}
+      {opened === "triage" ? (
+        <TeamDefaultsDialog environmentId={active} team="triage" onClose={() => setOpened(null)} />
+      ) : null}
+      {opened === "record" ? (
+        <Dialog open onOpenChange={(open) => !open && setOpened(null)}>
+          <DialogPopup className="max-w-4xl" data-track-record-dialog>
+            <DialogHeader>
+              <DialogTitle>Track record</DialogTitle>
+              <DialogDescription>
+                How often each harness and model was asked and answered, why it did not, how long it
+                took, and what it decided, for every team and stage.
+              </DialogDescription>
+            </DialogHeader>
+            <DialogPanel>
+              <TrackRecord environmentId={active} />
+            </DialogPanel>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setOpened(null)}>
+                Close
+              </Button>
+            </DialogFooter>
+          </DialogPopup>
+        </Dialog>
+      ) : null}
     </SidebarInset>
   );
 }

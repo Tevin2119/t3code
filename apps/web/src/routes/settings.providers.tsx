@@ -4,11 +4,6 @@ import { EnvironmentId, ProviderInstanceId } from "@t3tools/contracts";
 import { ProviderSettingsPanel } from "../components/settings/ProviderSettingsPanel";
 import { useSettingsScope } from "../components/settings/SettingsScopeContext";
 
-/**
- * Providers are machine state, so the page shows one environment at a time:
- * the chosen one, or the representative of the selection. A project crumb
- * narrows the candidates to the environments that project is registered on.
- */
 function SettingsProvidersRoute() {
   const target = Route.useSearch();
   const { environment, scope } = useSettingsScope();
@@ -25,6 +20,13 @@ function SettingsProvidersRoute() {
     <ProviderSettingsPanel
       environmentId={environment.environmentId}
       {...(target.instanceId ? { instanceId: target.instanceId } : {})}
+      projectIds={
+        scope.kind === "project" || scope.kind === "checkout"
+          ? scope.members
+              .filter((member) => member.environmentId === environment.environmentId)
+              .map((member) => member.id)
+          : []
+      }
       scoped
     />
   );

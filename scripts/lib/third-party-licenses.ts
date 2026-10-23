@@ -45,13 +45,23 @@ interface GeneratedNoticeConfigEntry {
 }
 
 interface PackageJson {
+  readonly bin?: unknown;
+  readonly browser?: unknown;
   readonly dependencies?: Readonly<Record<string, string>>;
+  readonly exports?: unknown;
   readonly homepage?: unknown;
   readonly license?: unknown;
   readonly licenses?: unknown;
+  readonly main?: unknown;
+  readonly module?: unknown;
   readonly name?: unknown;
   readonly optionalDependencies?: Readonly<Record<string, string>>;
+  readonly "react-native"?: unknown;
   readonly repository?: unknown;
+  readonly sass?: unknown;
+  readonly style?: unknown;
+  readonly types?: unknown;
+  readonly typings?: unknown;
   readonly version?: unknown;
 }
 
@@ -67,7 +77,7 @@ interface CustomNoticeConfigEntry {
 }
 
 interface PackageNoticeOverrideConfigEntry {
-  readonly generatedNotice?: GeneratedNoticeConfigEntry;
+  readonly generatedNotices?: ReadonlyArray<GeneratedNoticeConfigEntry>;
   readonly license?: string;
   readonly name?: string;
   readonly noticeFile?: string;
@@ -257,8 +267,16 @@ function decodePackageOverrides(value: unknown): ReadonlyArray<PackageNoticeOver
       entry.generatedNotice === undefined
         ? undefined
         : decodeGeneratedNotice(entry.generatedNotice, `${context} generated notice`);
-    if (noticeFile !== undefined && generatedNotice !== undefined) {
-      throw new Error(`${context} cannot define both "noticeFile" and "generatedNotice".`);
+    const generatedNotices = decodeGeneratedNotices(entry.generatedNotices, context);
+    if (
+      Number(noticeFile !== undefined) +
+        Number(generatedNotice !== undefined) +
+        Number(generatedNotices !== undefined) >
+      1
+    ) {
+      throw new Error(
+        `${context} can define only one of "noticeFile", "generatedNotice", or "generatedNotices".`,
+      );
     }
     const sourceUrl = readOptionalString(entry, "sourceUrl", context);
     return {
@@ -267,7 +285,8 @@ function decodePackageOverrides(value: unknown): ReadonlyArray<PackageNoticeOver
       ...(version !== undefined ? { version } : {}),
       ...(license !== undefined ? { license } : {}),
       ...(noticeFile !== undefined ? { noticeFile } : {}),
-      ...(generatedNotice !== undefined ? { generatedNotice } : {}),
+      ...(generatedNotice !== undefined ? { generatedNotices: [generatedNotice] } : {}),
+      ...(generatedNotices !== undefined ? { generatedNotices } : {}),
       ...(sourceUrl !== undefined ? { sourceUrl } : {}),
     };
   });
@@ -396,9 +415,7 @@ function configuredGeneratedNotices(
 ): ReadonlyArray<GeneratedNoticeConfigEntry> {
   return [
     ...config.customNotices.flatMap((notice) => notice.generatedNotices ?? []),
-    ...config.packageOverrides.flatMap((override) =>
-      override.generatedNotice ? [override.generatedNotice] : [],
-    ),
+    ...config.packageOverrides.flatMap((override) => override.generatedNotices ?? []),
   ];
 }
 
@@ -503,6 +520,76 @@ function dependencyNames(packageJson: PackageJson): ReadonlyArray<string> {
   ].sort((left, right) => left.localeCompare(right));
 }
 
+interface ExportTarget {
+  readonly path: string;
+  readonly underTypesCondition: boolean;
+}
+
+function exportTargets(value: unknown, underTypesCondition = false): ReadonlyArray<ExportTarget> {
+  if (typeof value === "string") return [{ path: value, underTypesCondition }];
+  if (Array.isArray(value))
+    return value.flatMap((item) => exportTargets(item, underTypesCondition));
+  if (value === null || typeof value !== "object") return [];
+  return Object.entries(value).flatMap(([key, item]) =>
+    exportTargets(item, underTypesCondition || key.startsWith("types") || key === "typings"),
+  );
+}
+
+/** Declarations, or the package's own manifest that many packages also export. Neither is code. */
+function isTypeDeclaration(target: ExportTarget): boolean {
+  return (
+    target.underTypesCondition ||
+    /\.d\.[cm]?ts$/u.test(target.path) ||
+    target.path === "./package.json"
+  );
+}
+
+function isDeclared(value: unknown): boolean {
+  if (typeof value === "string") return value.trim() !== "";
+  return value !== null && typeof value === "object" && Object.keys(value).length > 0;
+}
+
+async function fileExists(path: string): Promise<boolean> {
+  try {
+    await NodeFSP.access(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * A package that only describes types (DefinitelyTyped, csstype, undici-types): it declares types
+ * and has no JS entry, so nothing of it ships. A types condition or a name with "types" in it is not
+ * enough on its own: `@shikijs/types` exports real code next to its declarations.
+ */
+async function isTypeOnlyPackage(packageJson: PackageJson, packageRoot: string): Promise<boolean> {
+  const targets = exportTargets(packageJson.exports);
+  const declaresTypes =
+    isDeclared(packageJson.types) ||
+    isDeclared(packageJson.typings) ||
+    targets.some(isTypeDeclaration);
+  if (!declaresTypes) return false;
+  const entries = [
+    packageJson.main,
+    packageJson.module,
+    packageJson.browser,
+    packageJson["react-native"],
+    packageJson.bin,
+    packageJson.style,
+    packageJson.sass,
+  ];
+  if (entries.some(isDeclared) || targets.some((target) => !isTypeDeclaration(target))) {
+    return false;
+  }
+  // Without `exports`, Node still loads the package's index file, an empty `main` included.
+  if (packageJson.exports !== undefined && packageJson.exports !== null) return true;
+  for (const indexFile of ["index.js", "index.json", "index.node"]) {
+    if (await fileExists(NodePath.join(packageRoot, indexFile))) return false;
+  }
+  return true;
+}
+
 async function collectProductionDependencyPackages(
   packageManifests: ReadonlyArray<ThirdPartyLicensePackageManifest>,
 ): Promise<PackageCollection> {
@@ -523,7 +610,11 @@ async function collectProductionDependencyPackages(
       const dependencyPackageJsonPath = NodePath.join(resolved.packageRoot, "package.json");
       const name =
         typeof resolved.packageJson.name === "string" ? resolved.packageJson.name : dependencyName;
-      if (!name.startsWith(FIRST_PARTY_PACKAGE_PREFIX)) {
+      // Type-only packages ship nothing, but what they depend on may, so the walk goes on below.
+      if (
+        !name.startsWith(FIRST_PARTY_PACKAGE_PREFIX) &&
+        !(await isTypeOnlyPackage(resolved.packageJson, resolved.packageRoot))
+      ) {
         const identity = packageIdentity(resolved.packageJson, resolved.packageRoot);
         const existing = collection.byIdentity.get(identity);
         if (existing) {
@@ -780,9 +871,9 @@ async function packageEntry(
   }
 
   const repositoryKey = repositoryNoticeKey(collected.packageJson, license);
-  const noticeText = override?.generatedNotice
+  const noticeText = override?.generatedNotices
     ? await generatedNoticeText(
-        [override.generatedNotice],
+        override.generatedNotices,
         configDirectory,
         allowMissingGeneratedNotices,
       )
@@ -793,7 +884,7 @@ async function packageEntry(
       : ((await packageNoticeText(collected.packageRoot, packageNotices)) ??
         (repositoryKey ? repositoryNotices.get(repositoryKey) : undefined));
   if (!noticeText) {
-    if (override?.generatedNotice && allowMissingGeneratedNotices) return null;
+    if (override?.generatedNotices && allowMissingGeneratedNotices) return null;
     throw new Error(
       `${name}@${version} does not include a license or notice file. Add a package override with "noticeFile" or "generatedNotice" in the third-party license config.`,
     );
@@ -816,6 +907,13 @@ async function customEntries(
   includedBundles: ReadonlySet<string>,
   allowMissingGeneratedNotices: boolean,
 ): Promise<ReadonlyArray<ThirdPartyLicenseEntry>> {
+  const deviceToolVersions: unknown = JSON.parse(
+    await NodeFSP.readFile(
+      new URL("../../apps/server/src/device/deviceToolVersions.json", import.meta.url),
+      "utf8",
+    ),
+  );
+  if (!isRecord(deviceToolVersions)) throw new Error("Device tool versions must be an object.");
   const entries = await Promise.all(
     config.customNotices
       .filter(
@@ -861,7 +959,10 @@ async function customEntries(
           name: notice.name,
           noticeText,
           sourceUrl: notice.sourceUrl ?? null,
-          version: notice.version ?? null,
+          version:
+            readOptionalString(deviceToolVersions, notice.name, "Device tool versions") ??
+            notice.version ??
+            null,
         };
       }),
   );

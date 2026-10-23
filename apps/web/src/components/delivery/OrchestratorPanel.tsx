@@ -6,7 +6,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   flowFor,
   parseSeatSetup,
-  parseTeams,
+  selectableTeams,
   seatSettingsToSend,
   teamTaskBlock,
   type DeliveryFlow,
@@ -92,7 +92,7 @@ export function FlowChoice(props: {
                 </Badge>
               ) : null}
             </span>
-            <span className="text-[11px] text-muted-foreground">
+            <span className="text-2xs text-muted-foreground">
               {flow.stages.join(", ")}. Stops at: {flow.stop}.
             </span>
           </button>
@@ -124,12 +124,10 @@ export function OrchestratorPanel(props: {
   const navigate = useNavigate();
   const draft = useOrchestratorDraft(props.threadId);
   const update = useOrchestratorDraftStore((state) => state.update);
+  const chooseTeam = useOrchestratorDraftStore((state) => state.chooseTeam);
   const setSeat = useOrchestratorDraftStore((state) => state.setSeat);
   const teamsRead = useDeliveryRead(props.environmentId, "/api/teams");
-  const teams = useMemo(
-    () => parseTeams(teamsRead.body).filter((team) => team.team !== "triage"),
-    [teamsRead.body],
-  );
+  const teams = useMemo(() => selectableTeams(teamsRead.body), [teamsRead.body]);
   const [showing, setShowing] = useState<"seats" | "setup">("seats");
   const [editingDefaults, setEditingDefaults] = useState(false);
 
@@ -163,14 +161,16 @@ export function OrchestratorPanel(props: {
       <header className="flex flex-col gap-1.5 border-b border-border/70 px-3 py-2">
         <div className="flex items-center gap-1.5">
           <h3 className="text-sm font-medium">Orchestrator</h3>
-          <span className="truncate text-[11px] text-muted-foreground">
+          <span className="truncate text-2xs text-muted-foreground">
             A team in place of one model. Nothing runs until you start it.
           </span>
         </div>
         <div className="flex flex-wrap items-center gap-1">
           <Select
             value={draft.team}
-            onValueChange={(value) => update(props.threadId, { team: String(value) })}
+            onValueChange={(value) =>
+              chooseTeam(props.threadId, props.environmentId, String(value))
+            }
           >
             <SelectTrigger aria-label="Profile" size="compact" className="w-auto min-w-44">
               <SelectValue>{draft.team}</SelectValue>
@@ -249,7 +249,7 @@ export function OrchestratorPanel(props: {
             onChange={(next) => update(props.threadId, { workflow: next })}
           />
           {chosen && chosen.problems.length > 0 ? (
-            <ul className="list-disc pl-5 text-[11px] text-warning" data-flow-problems>
+            <ul className="list-disc pl-5 text-2xs text-warning" data-flow-problems>
               {chosen.problems.map((item) => (
                 <li key={item}>{item}</li>
               ))}
@@ -304,10 +304,7 @@ export function OrchestratorPanel(props: {
       </div>
 
       <footer className="flex items-center justify-between gap-2 border-t border-border/70 px-3 py-1.5">
-        <span
-          className="min-w-0 truncate text-[11px] text-muted-foreground"
-          data-orchestrator-summary
-        >
+        <span className="min-w-0 truncate text-2xs text-muted-foreground" data-orchestrator-summary>
           {chosen
             ? `${chosen.title} with ${chosen.seats.length} seat${chosen.seats.length === 1 ? "" : "s"}: ${chosen.seats.join(", ")}`
             : "Choose a profile and a flow."}

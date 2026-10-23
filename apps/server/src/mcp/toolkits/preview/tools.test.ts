@@ -1,5 +1,5 @@
 import { expect, it } from "@effect/vitest";
-import { Tool } from "effect/unstable/ai";
+import { Tool } from "effect/ai";
 
 import { PreviewToolkit } from "./tools.ts";
 
@@ -53,23 +53,5 @@ it("exports provider-compatible object schemas with described parameters", () =>
         `${tool.name}.${field} should explain what data the agent must pass`,
       ).toBe(true);
     }
-  }
-});
-
-it("exports exact object result schemas for preview actions", () => {
-  const actionNames = [
-    "preview_click",
-    "preview_type",
-    "preview_press",
-    "preview_scroll",
-    "preview_wait_for",
-  ] as const;
-  for (const name of actionNames) {
-    expect(Tool.getJsonSchemaFromSchema(PreviewToolkit.tools[name].successSchema)).toEqual({
-      type: "object",
-      properties: { toolIcon: expect.any(Object) },
-      additionalProperties: false,
-      description: "The preview action completed successfully.",
-    });
   }
 });

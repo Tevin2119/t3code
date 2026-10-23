@@ -1,6 +1,6 @@
 import { useAuth, useClerk } from "@clerk/react";
 import { readConnectAuthorizeRequest } from "@t3tools/shared/connectAuth";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useEffectEvent, useRef, useState } from "react";
 
 import {
   buildConnectCliClerkAuthorizeUrl,
@@ -23,9 +23,7 @@ function ConnectCliAuthMessage({
   return (
     <>
       {eyebrow ? (
-        <p className="text-[10px] font-semibold tracking-[0.18em] text-blue-600 uppercase dark:text-blue-400">
-          {eyebrow}
-        </p>
+        <p className="text-3xs font-semibold tracking-widest text-primary uppercase">{eyebrow}</p>
       ) : null}
       <h1 className="mt-2 text-2xl font-semibold tracking-tight sm:text-3xl">{title}</h1>
       <p className="mt-2 text-sm leading-relaxed text-muted-foreground">{description}</p>
@@ -40,12 +38,6 @@ const invalidLinkMessage = {
     "The link is missing its authorization request. Re-run `t3 connect` in your terminal and open the freshly printed URL.",
 } as const;
 
-/**
- * /connect: the URL the CLI prints for the loopback flow. Waits for a Clerk
- * session, then forwards the CLI's PKCE request to Clerk's authorize endpoint
- * with the loopback redirect URI so the code returns straight to the waiting
- * CLI. Headless hosts use Clerk's device authorization page instead.
- */
 export function ConnectCliAuthorizeSurface() {
   const [request] = useState(() => readConnectAuthorizeRequest(new URL(window.location.href)));
   const clerk = useClerk();
@@ -53,7 +45,7 @@ export function ConnectCliAuthorizeSurface() {
   const signInOpened = useRef(false);
   const redirecting = useRef(false);
 
-  const openSignIn = useCallback(() => {
+  const openSignIn = () => {
     if (!request) {
       return;
     }
@@ -63,7 +55,8 @@ export function ConnectCliAuthorizeSurface() {
         isElectron,
       ),
     );
-  }, [clerk, request]);
+  };
+  const openSignInOnLoad = useEffectEvent(openSignIn);
 
   useEffect(() => {
     if (!request || !isLoaded || redirecting.current) {
@@ -72,7 +65,7 @@ export function ConnectCliAuthorizeSurface() {
     if (!isSignedIn) {
       if (!signInOpened.current) {
         signInOpened.current = true;
-        openSignIn();
+        openSignInOnLoad();
       }
       return;
     }
@@ -82,7 +75,7 @@ export function ConnectCliAuthorizeSurface() {
     }
     redirecting.current = true;
     window.location.assign(authorizeUrl);
-  }, [isLoaded, isSignedIn, openSignIn, request]);
+  }, [isLoaded, isSignedIn, request]);
 
   if (!request) {
     return (

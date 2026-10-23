@@ -1,6 +1,14 @@
+import { DeliveryActInput } from "@t3tools/contracts";
+import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  fullAutoAttribution,
+  deliveryRequestBody,
+  parseSeatLive,
+  waitingWords,
+  chosenTeamUnavailable,
+  deliveryEnvironmentChoice,
   decideTeamForSend,
   deliveryFailureText,
   describeBinding,
@@ -8,17 +16,30 @@ import {
   deliveryFailureProblems,
   moveSeat,
   parseBoard,
+  draftAgainstRead,
+  crewLine,
+  nowLine,
+  parseBoardSeats,
+  parseBriefing,
+  repeatKeys,
   parseCards,
   parseSeatSettings,
   parseTask,
   parseTeamDefaults,
   parseTeamProfile,
   parseTeams,
+  parseTrackRecord,
+  resolveDraftTeam,
+  resolveInheritedTeam,
   resolveTeamChoice,
   rolesForHarness,
   seatOfferFor,
   seatSettingsToSend,
+  seatSources,
+  selectableTeams,
+  teamListStatus,
   teamTaskBlock,
+  withFallbacks,
 } from "./delivery";
 
 const seat = (overrides: Record<string, unknown>) => ({
@@ -175,7 +196,132 @@ describe("resolveTeamChoice", () => {
     );
     expect(
       resolveTeamChoice({ teams, team: "sales", role: null, driver: "claudeAgent" }),
-    ).toMatchObject({ state: "blocked", why: "This team is not set up." });
+    ).toMatchObject({
+      state: "blocked",
+      why: "This team is not set up. Choose another team, or No team.",
+    });
+  });
+});
+
+describe("settled team availability", () => {
+  it.each([
+    { name: "retained offered team", body: [{ team: "rnd" }], unavailable: false },
+    { name: "retained missing team", body: [{ team: "alpha" }], unavailable: true },
+    { name: "retained empty list", body: [], unavailable: true },
+    { name: "retained malformed body", body: {}, unavailable: true },
+    { name: "no body", body: null, unavailable: false },
+    { name: "undefined body", body: undefined, unavailable: false },
+  ])("uses $name after a failed reading", ({ body, unavailable }) => {
+    expect(chosenTeamUnavailable({ body, error: "offline" }, { team: "rnd" })).toBe(unavailable);
+  });
+
+  it("does not rule out a choice still awaiting teams", () => {
+    expect(
+      chosenTeamUnavailable(
+        { body: [{ team: "alpha" }], error: "offline" },
+        { team: "rnd", awaitingTeams: true },
+      ),
+    ).toBe(false);
+  });
+
+  it("clears unavailability when a successful reading offers the choice again", () => {
+    const draft = { team: "rnd" };
+    expect(chosenTeamUnavailable({ body: [], error: "offline" }, draft)).toBe(true);
+    expect(chosenTeamUnavailable({ body: [{ team: "rnd" }], error: null }, draft)).toBe(false);
+  });
+});
+
+describe("the team a draft starts from", () => {
+  const offered = selectableTeams([
+    { team: "development", seats: [seat({})] },
+    { team: "rnd", seats: [seat({ seat: "scout", role: "scout", harness: "kimi" })] },
+    { team: "triage", seats: [seat({})] },
+  ]);
+  const inherited = (team: string | null) => ({ team, role: null });
+
+  it("offers every team but triage", () => {
+    expect(offered.map((team) => team.team)).toEqual(["development", "rnd"]);
+    expect(selectableTeams(null)).toEqual([]);
+  });
+
+  it("tells teams not read yet from a reading that failed and from a list, even an empty one", () => {
+    expect(teamListStatus({ body: null, error: null })).toBe("pending");
+    expect(teamListStatus({ body: null, error: "No answer." })).toBe("failed");
+    expect(teamListStatus({ body: [{ team: "rnd" }], error: "No answer." })).toBe("failed");
+    expect(teamListStatus({ body: [], error: null })).toBe("loaded");
+  });
+
+  it("falls back to No team for a thread and to development for Orchestrator mode", () => {
+    const start = (remembered: string | null | undefined, mode: "plain" | "orchestrator") =>
+      resolveInheritedTeam({ remembered, teams: offered, status: "loaded", mode });
+    // Nothing remembered: the two fallbacks, apart.
+    expect(start(undefined, "plain")).toBeNull();
+    expect(start(undefined, "orchestrator")).toBe("development");
+    // No team remembered.
+    expect(start(null, "plain")).toBeNull();
+    expect(start(null, "orchestrator")).toBe("development");
+    // A team that is offered.
+    expect(start("rnd", "plain")).toBe("rnd");
+    expect(start("rnd", "orchestrator")).toBe("rnd");
+    expect(start("development", "plain")).toBe("development");
+    // A team no longer offered, triage among them.
+    expect(start("old", "plain")).toBeNull();
+    expect(start("old", "orchestrator")).toBe("development");
+    expect(start("triage", "plain")).toBeNull();
+    expect(start("triage", "orchestrator")).toBe("development");
+  });
+
+  it("gives a remembered team up only when the teams were read", () => {
+    for (const mode of ["plain", "orchestrator"] as const) {
+      for (const status of ["pending", "failed"] as const) {
+        expect(resolveInheritedTeam({ remembered: "old", teams: [], status, mode })).toBe("old");
+      }
+    }
+    expect(
+      resolveInheritedTeam({ remembered: "rnd", teams: [], status: "loaded", mode: "plain" }),
+    ).toBeNull();
+    expect(
+      resolveInheritedTeam({
+        remembered: "rnd",
+        teams: [],
+        status: "loaded",
+        mode: "orchestrator",
+      }),
+    ).toBe("development");
+  });
+
+  it("shows and sends a remembered team that is gone as No team, and keeps a person's choice", () => {
+    const stale = resolveDraftTeam({
+      draft: inherited("old"),
+      explicit: false,
+      teams: offered,
+      status: "loaded",
+    });
+    expect(stale).toEqual({ team: null, role: null });
+    // The picker says nothing is wrong, and the send starts an ordinary thread.
+    expect(resolveTeamChoice({ teams: offered, ...stale, driver: "claudeAgent" })).toEqual({
+      state: "manual",
+    });
+
+    const listed = inherited("rnd");
+    expect(
+      resolveDraftTeam({ draft: listed, explicit: false, teams: offered, status: "loaded" }),
+    ).toBe(listed);
+    const waiting = inherited("old");
+    for (const status of ["pending", "failed"] as const) {
+      expect(resolveDraftTeam({ draft: waiting, explicit: false, teams: [], status })).toBe(
+        waiting,
+      );
+    }
+    // What the person chose for the thread is not replaced without a word.
+    const chosen = { team: "old", role: "scout" };
+    expect(
+      resolveDraftTeam({ draft: chosen, explicit: true, teams: offered, status: "loaded" }),
+    ).toBe(chosen);
+    const none = inherited(null);
+    expect(
+      resolveDraftTeam({ draft: none, explicit: true, teams: offered, status: "loaded" }),
+    ).toBe(none);
   });
 });
 
@@ -229,7 +375,16 @@ const card = (overrides: Record<string, unknown> = {}) => ({
   partsDelivered: 1,
   run: { id: "run-1", state: "running", stage: "qa", candidate: "abc", configuration: "c" },
   stage: "qa",
-  workers: [{ seat: "qa-attack", harness: "opencode", role: "qa-attack", stage: "qa" }],
+  workers: [
+    { seat: "qa-attack", harness: "opencode", role: "qa-attack", stage: "qa" },
+    {
+      seat: "qa-validate",
+      harness: "kimi",
+      role: "qa-validate",
+      stage: "qa",
+      waiting: "memory headroom",
+    },
+  ],
   paused: null,
   qa: { votes: [{ seat: "qa-third", provider: "deepseek", verdict: "pass" }], needed: 2 },
   findings: { open: 1, all: 3 },
@@ -284,6 +439,19 @@ describe("parseBoard", () => {
         stage: "qa",
         specialist: null,
         since: null,
+        waiting: null,
+        waitingWhy: null,
+      },
+      // One the engine holds is read as waiting, with what for.
+      {
+        seat: "qa-validate",
+        harness: "kimi",
+        role: "qa-validate",
+        stage: "qa",
+        specialist: null,
+        since: null,
+        waiting: "memory headroom",
+        waitingWhy: null,
       },
     ]);
     expect([read?.questions, read?.unread, read?.unanswered, read?.files]).toEqual([1, 2, 1, 3]);
@@ -773,12 +941,113 @@ describe("decideTeamForSend", () => {
     bound: false,
     held: null,
     stateError: null,
+    // The person chose development for this thread.
     draft: { team: "development", role: null },
-    draftIsExplicit: false,
+    draftIsExplicit: true,
     teams,
     teamsError: null,
     driver: "claudeAgent",
   };
+  /** The send's own input: what is stored for the thread, held against the teams. */
+  const sendOf = (
+    stored: { team: string | null; role: string | null },
+    explicit: boolean,
+    status: "pending" | "failed" | "loaded" = "loaded",
+  ) => ({
+    ...base,
+    teams: status === "loaded" ? teams : [],
+    teamsError: status === "failed" ? "No answer." : null,
+    teamsPending: status === "pending",
+    draft: resolveDraftTeam({
+      draft: stored,
+      explicit,
+      teams: status === "loaded" ? teams : [],
+      status,
+    }),
+    draftIsExplicit: explicit,
+  });
+
+  it("starts an ordinary thread when no team was chosen or remembered", () => {
+    expect(decideTeamForSend(sendOf({ team: null, role: null }, false))).toEqual({
+      action: "none",
+    });
+    expect(decideTeamForSend(sendOf({ team: null, role: null }, true))).toEqual({
+      action: "none",
+    });
+    // Whatever the teams' reading has come to: No team needs no team.
+    expect(decideTeamForSend(sendOf({ team: null, role: null }, false, "pending"))).toEqual({
+      action: "none",
+    });
+    expect(decideTeamForSend(sendOf({ team: null, role: null }, false, "failed"))).toEqual({
+      action: "none",
+    });
+  });
+
+  it("starts an ordinary thread when the remembered team is gone, and binds to one that is there", () => {
+    expect(decideTeamForSend(sendOf({ team: "sales", role: null }, false))).toEqual({
+      action: "none",
+    });
+    expect(decideTeamForSend(sendOf({ team: "development", role: null }, false))).toEqual({
+      action: "bind",
+      team: "development",
+      role: "lead-developer",
+    });
+    // A team the person chose for the thread, and that is gone, stops the send.
+    expect(decideTeamForSend(sendOf({ team: "sales", role: null }, true))).toEqual({
+      action: "blocked",
+      why: "This team is not set up. Choose another team, or No team.",
+    });
+  });
+
+  it("stops the send, with a reason, while a remembered team cannot be held against the teams", () => {
+    const pending = decideTeamForSend(
+      sendOf({ team: "development", role: null }, false, "pending"),
+    );
+    expect(pending).toMatchObject({ action: "blocked" });
+    expect(pending).toHaveProperty("why", expect.stringContaining("still loading"));
+    const failed = decideTeamForSend(sendOf({ team: "development", role: null }, false, "failed"));
+    expect(failed).toHaveProperty("why", expect.stringContaining("not reachable"));
+  });
+
+  it("stops the send, with a reason, when the harness has no seat in the remembered team", () => {
+    const noSeat = decideTeamForSend({
+      ...sendOf({ team: "development", role: null }, false),
+      driver: "cursor",
+    });
+    expect(noSeat).toEqual({
+      action: "blocked",
+      why: "Teams are not set up for this harness. Choose another harness, or No team.",
+    });
+    const noRole = decideTeamForSend({
+      ...sendOf({ team: "rnd", role: null }, false),
+      driver: "claudeAgent",
+    });
+    expect(noRole).toEqual({
+      action: "blocked",
+      why: "Choose a role in team rnd: challenger, scout.",
+    });
+  });
+
+  it("retries a held team before a remembered one, and before a remembered No team", () => {
+    const held = { team: "rnd", role: "scout" };
+    expect(
+      decideTeamForSend({
+        ...sendOf({ team: "development", role: null }, false),
+        held,
+        driver: "kimi",
+      }),
+    ).toEqual({ action: "bind", team: "rnd", role: "scout" });
+    expect(
+      decideTeamForSend({ ...sendOf({ team: null, role: null }, false), held, driver: "kimi" }),
+    ).toEqual({ action: "bind", team: "rnd", role: "scout" });
+    // The person chose again, in the picker or with the footer's way out.
+    expect(
+      decideTeamForSend({ ...sendOf({ team: null, role: null }, true), held, driver: "kimi" }),
+    ).toEqual({ action: "release" });
+    expect(
+      decideTeamForSend({ ...sendOf({ team: "development", role: null }, true), held }),
+    ).toEqual({ action: "bind", team: "development", role: "lead-developer" });
+  });
 
   it("binds a new thread to its team before the first turn", () => {
     expect(decideTeamForSend(base)).toEqual({
@@ -802,7 +1071,7 @@ describe("decideTeamForSend", () => {
   it("sets the team up again when the first send failed, draft or not", () => {
     const held = { team: "rnd", role: "scout" };
     // The thread was never created: still a draft, and the choice is still there.
-    expect(decideTeamForSend({ ...base, held, driver: "kimi" })).toEqual({
+    expect(decideTeamForSend({ ...base, draftIsExplicit: false, held, driver: "kimi" })).toEqual({
       action: "bind",
       team: "rnd",
       role: "scout",
@@ -815,6 +1084,7 @@ describe("decideTeamForSend", () => {
         isServerThread: true,
         held,
         draft: { team: "development", role: null },
+        draftIsExplicit: false,
         driver: "kimi",
       }),
     ).toEqual({ action: "bind", team: "rnd", role: "scout" });
@@ -832,14 +1102,20 @@ describe("decideTeamForSend", () => {
     ).toEqual({ action: "release" });
     // A draft store that merely has no entry is not a choice of "No team".
     expect(
-      decideTeamForSend({ ...base, held, draft: { team: null, role: null }, driver: "kimi" })
-        .action,
+      decideTeamForSend({
+        ...base,
+        held,
+        draft: { team: null, role: null },
+        draftIsExplicit: false,
+        driver: "kimi",
+      }).action,
     ).toBe("blocked");
     expect(
       decideTeamForSend({
         ...base,
         held: { team: "rnd", role: "scout" },
         draft: { team: null, role: null },
+        draftIsExplicit: false,
         driver: "kimi",
       }),
     ).toEqual({ action: "bind", team: "rnd", role: "scout" });
@@ -861,4 +1137,416 @@ describe("decideTeamForSend", () => {
       decideTeamForSend({ ...base, draft: { team: "rnd", role: null }, driver: "kimi" }),
     ).toEqual({ action: "blocked", why: "Choose a role in team rnd: challenger, scout." });
   });
+});
+
+describe("seat layers and fallbacks", () => {
+  it("names the layers a seat's default comes from, other than its definition", () => {
+    const item = parseSeatSettings(
+      seatSetting({
+        source: { harness: "team definition", model: "board Pilot", access: "team defaults" },
+      }),
+    );
+    expect(seatSources(item)).toEqual(["board Pilot", "team defaults"]);
+    expect(seatSources(parseSeatSettings(seatSetting()))).toEqual([]);
+  });
+
+  it("tells fallbacks a layer names apart from none named", () => {
+    const named = parseSeatSettings(
+      seatSetting({
+        saved: {
+          model: "gpt-6-sol",
+          fallbacks: [{ harness: "kimi" }, { harness: "claude", model: "claude-opus-5-5" }],
+        },
+        board: {},
+        fallbacks: [{ harness: "kimi" }],
+        fallbacksAllowed: true,
+      }),
+    );
+    expect(named.saved).toEqual({ model: "gpt-6-sol" });
+    expect(named.savedFallbacks).toEqual([
+      { harness: "kimi", model: null },
+      { harness: "claude", model: "claude-opus-5-5" },
+    ]);
+    expect(named.boardFallbacks).toBeNull();
+    expect(named.fallbacksAllowed).toBe(true);
+  });
+
+  it("sends fallbacks for the seats that name some or none, with a model only where one is given", () => {
+    expect(
+      withFallbacks(
+        { lead: { model: "gpt-6-sol" } },
+        {
+          lead: [{ harness: "kimi", model: null }],
+          reviewer: null,
+          tester: [],
+        },
+      ),
+    ).toEqual({
+      lead: { model: "gpt-6-sol", fallbacks: [{ harness: "kimi" }] },
+      tester: { fallbacks: [] },
+    });
+  });
+
+  it("reads a board's seats as the engine lists them and as it answers a saving", () => {
+    const listed = [
+      { team: "development", seats: [seatSetting({ board: { model: "gpt-6-sol" } })] },
+    ];
+    expect(parseBoardSeats(listed)[0]?.settings[0]?.board).toEqual({ model: "gpt-6-sol" });
+    expect(parseBoardSeats({ teams: listed, note: "Saved." })).toHaveLength(1);
+  });
+
+  it("reads the track record and drops counts that are not numbers", () => {
+    const [row] = parseTrackRecord({
+      since: null,
+      rows: [
+        {
+          team: "triage",
+          stage: "triage",
+          harness: "kimi",
+          model: null,
+          attempts: 4,
+          answered: 3,
+          answeredShare: 75,
+          medianSeconds: 41,
+          notAnswered: { "rate-limit": 1, odd: "x" },
+          decisions: { build: 2, decide: 1 },
+          verdicts: {},
+          steppedIn: 1,
+        },
+      ],
+    });
+    expect(row).toMatchObject({
+      harness: "kimi",
+      model: null,
+      answered: 3,
+      answeredShare: 75,
+      notAnswered: { "rate-limit": 1 },
+      decisions: { build: 2, decide: 1 },
+      steppedIn: 1,
+    });
+    expect(parseTrackRecord(null)).toEqual([]);
+  });
+});
+
+describe("seats at work and seats held", () => {
+  const worker = (seat: string, waiting: string | null = null) => ({
+    seat,
+    harness: null,
+    role: null,
+    stage: "qa",
+    specialist: null,
+    since: null,
+    waiting,
+    waitingWhy: null,
+  });
+  it("says working while any seat works, and waiting, for what, while every seat is held", () => {
+    expect(
+      nowLine({
+        workers: [worker("qa-attack"), worker("qa-validate", "memory headroom")],
+        stage: "qa",
+      }),
+    ).toBe("Working: qa");
+    expect(nowLine({ workers: [worker("qa-validate", "memory headroom")], stage: "qa" })).toBe(
+      "Waits for memory: qa",
+    );
+    expect(
+      nowLine({
+        workers: [worker("a", "memory headroom"), worker("b", "a free slot")],
+        stage: "qa",
+      }),
+    ).toBe("Waiting: qa");
+    expect(nowLine({ workers: [], stage: "qa" })).toBeNull();
+  });
+  it("names every seat once, each held one with its own reason", () => {
+    expect(
+      crewLine({
+        workers: [
+          worker("qa-attack"),
+          worker("qa-validate", "memory headroom"),
+          worker("qa-third", "a free slot"),
+        ],
+      }),
+    ).toBe("qa-attack working; qa-validate waits for memory; qa-third waits for a free slot");
+  });
+  it("reads a board's seats revision, and the defined chain falls back for an older engine", () => {
+    expect(parseBoardSeats([{ team: "development", revision: 3, seats: [] }])[0]?.revision).toBe(3);
+    const older = parseSeatSettings(
+      seatSetting({ fallbackChain: [{ harness: "claude", model: "claude-opus-5-5" }] }),
+    );
+    expect(older.definedFallbackChain).toEqual([{ harness: "claude", model: "claude-opus-5-5" }]);
+  });
+});
+
+describe("draftAgainstRead", () => {
+  it("lets an older reading pass, and takes a reading only over the form's own saved answer", () => {
+    expect(draftAgainstRead({ base: null, readRevision: 4, asSaved: false })).toBe("none");
+    expect(draftAgainstRead({ base: 3, readRevision: 2, asSaved: true })).toBe("keep");
+    expect(draftAgainstRead({ base: 3, readRevision: 3, asSaved: true })).toBe("take-read");
+    expect(draftAgainstRead({ base: 3, readRevision: 4, asSaved: true })).toBe("take-read");
+  });
+  it("keeps a change with the revision it was made against, through every reading after", () => {
+    // Saved as revision 3 while the person went on changing: the reading of 3 keeps the change...
+    expect(draftAgainstRead({ base: 3, readRevision: 3, asSaved: false })).toBe("keep");
+    // ...and when another window saves 4, the change is behind: saving it would be refused.
+    expect(draftAgainstRead({ base: 3, readRevision: 4, asSaved: false })).toBe("behind");
+    // A change begun on a reading, with no save of the form's own, is behind a newer one too.
+    expect(draftAgainstRead({ base: 7, readRevision: 8, asSaved: false })).toBe("behind");
+  });
+  it("says no stage when none is known", () => {
+    const worker = {
+      seat: "a",
+      harness: null,
+      role: null,
+      stage: "",
+      specialist: null,
+      since: null,
+      waiting: "memory headroom",
+      waitingWhy: null,
+    };
+    expect(nowLine({ workers: [worker], stage: null })).toBe("Waits for memory");
+  });
+});
+
+describe("parseBriefing", () => {
+  it("reads a brief, and none when there is no headline", () => {
+    const brief = parseBriefing({
+      headline:
+        "The reviewer turned the build down 3 times, so the engine stopped and waits for your call.",
+      what: "Keep the base branch fresh. Fetch it before a run.",
+      happened: [
+        "Built by developer (Kimi); checks: 3 of 3 passed.",
+        "Round 1, lead (Claude) asked for changes: never force.",
+      ],
+      why: "The engine allows 3 build rounds, and none was approved.",
+      options: [
+        {
+          action: "retry",
+          label: "Try again",
+          does: "The stopped step runs again as it is.",
+          recommended: true,
+        },
+        { action: "close", label: "Close", does: "Nothing more is done." },
+      ],
+      reply: "Or write to the team.",
+      where: "board Engine self-fix",
+      since: "2026-10-02T02:40:56.193Z",
+    });
+    expect(brief?.options.map((option) => [option.action, option.recommended])).toEqual([
+      ["retry", true],
+      ["close", false],
+    ]);
+    expect(brief?.happened).toHaveLength(2);
+    expect(parseBriefing({ what: "no headline" })).toBeNull();
+    expect(parseBriefing(null)).toBeNull();
+  });
+});
+
+describe("repeatKeys", () => {
+  it("gives every value its own key, even one that looks like a repeat of another", () => {
+    const keys = repeatKeys(["x", "x", "x#2", "2:x", ""]);
+    expect(new Set(keys).size).toBe(5);
+    expect(keys).toEqual(["1:x", "2:x", "1:x#2", "1:2:x", "1:"]);
+  });
+});
+
+describe("deliveryRequestBody", () => {
+  // What the request becomes on the wire, or the error that stops it being sent.
+  const send = Schema.encodeUnknownSync(Schema.toCodecJson(DeliveryActInput));
+
+  it("lets an engine request with an option nobody chose be sent", () => {
+    const body = { key: "secret phrase", commit: "e9408df", channel: undefined };
+    expect(() => send({ path: "/api/engine/update", body })).toThrow(/Expected JSON value/);
+    expect(send({ path: "/api/engine/update", body: deliveryRequestBody(body) })).toEqual({
+      path: "/api/engine/update",
+      body: { key: "secret phrase", commit: "e9408df" },
+    });
+  });
+
+  it("keeps every value that was given, nested ones and empty ones included", () => {
+    const body = { note: "", count: 0, held: false, by: null, parts: [{ id: 1, skip: undefined }] };
+    expect(deliveryRequestBody(body)).toEqual({
+      note: "",
+      count: 0,
+      held: false,
+      by: null,
+      parts: [{ id: 1 }],
+    });
+    expect(deliveryRequestBody(undefined)).toBeUndefined();
+  });
+});
+
+describe("deliveryEnvironmentChoice", () => {
+  it("waits for Connections before falling back from a remembered environment", () => {
+    const selection = {
+      fromConversation: null,
+      chosen: "windows",
+      primary: "mac",
+    };
+    expect(deliveryEnvironmentChoice({ ...selection, connected: [], isReady: false })).toBeNull();
+    expect(
+      deliveryEnvironmentChoice({ ...selection, connected: ["mac", "windows"], isReady: true }),
+    ).toBe("windows");
+  });
+  const connected = ["mac", "windows"] as const;
+  it("takes the conversation's environment for a task made from it, even when the window's own is another", () => {
+    expect(
+      deliveryEnvironmentChoice({
+        fromConversation: "windows/thread-1",
+        chosen: null,
+        connected,
+        primary: "mac",
+      }),
+    ).toBe("windows");
+  });
+  it("keeps the person's choice and uses the window's environment when the choice was removed", () => {
+    expect(
+      deliveryEnvironmentChoice({
+        fromConversation: null,
+        chosen: "windows",
+        connected,
+        primary: "mac",
+      }),
+    ).toBe("windows");
+    expect(
+      deliveryEnvironmentChoice({
+        fromConversation: null,
+        chosen: "windows",
+        connected,
+        primary: "mac",
+      }),
+    ).toBe("windows");
+    expect(
+      deliveryEnvironmentChoice({
+        fromConversation: null,
+        chosen: "gone",
+        connected,
+        primary: "mac",
+      }),
+    ).toBe("mac");
+  });
+  it("keeps a conversation pinned to its own environment", () => {
+    expect(
+      deliveryEnvironmentChoice({
+        fromConversation: "windows/t",
+        chosen: null,
+        connected,
+        primary: "mac",
+      }),
+    ).toBe("windows");
+  });
+  it("pins task URLs to their named environment instead of the remembered selection", () => {
+    expect(
+      deliveryEnvironmentChoice({
+        fromConversation: null,
+        requested: "windows",
+        chosen: "mac",
+        connected,
+        primary: "mac",
+      }),
+    ).toBe("windows");
+  });
+  it("does not open local tasks when the environment of a URL or conversation is missing", () => {
+    expect(
+      deliveryEnvironmentChoice({
+        fromConversation: null,
+        requested: "removed",
+        chosen: "mac",
+        connected,
+        primary: "mac",
+      }),
+    ).toBeNull();
+    expect(
+      deliveryEnvironmentChoice({
+        fromConversation: "removed/thread",
+        chosen: "mac",
+        connected,
+        primary: "mac",
+      }),
+    ).toBeNull();
+  });
+  it("uses the conversation's environment when creating its task", () => {
+    expect(
+      deliveryEnvironmentChoice({
+        fromConversation: "windows/thread",
+        requested: "mac",
+        chosen: "mac",
+        connected,
+        primary: "mac",
+      }),
+    ).toBe("windows");
+  });
+});
+
+describe("the run panel's readings", () => {
+  it("reads what a seat at work last did, and nothing that is not tool, said or log", () => {
+    expect(
+      parseSeatLive({
+        started: "2026-10-04T09:00:00Z",
+        updated: "2026-10-04T09:01:00Z",
+        items: [
+          { kind: "tool", text: "Read: src/calc.mjs" },
+          { kind: "said", text: "Reading the calculator." },
+          { kind: "other", text: "x" },
+        ],
+      }),
+    ).toEqual({
+      started: "2026-10-04T09:00:00Z",
+      updated: "2026-10-04T09:01:00Z",
+      items: [
+        { kind: "tool", text: "Read: src/calc.mjs" },
+        { kind: "said", text: "Reading the calculator." },
+      ],
+    });
+    expect(parseSeatLive(null)).toBeNull();
+  });
+  it("keeps only the last few short lines of a large reading", () => {
+    const live = parseSeatLive({
+      items: Array.from({ length: 500 }, (_, index) => ({
+        kind: "log",
+        text: `${index} ${"x".repeat(1000)}`,
+      })),
+    });
+    expect(live?.items).toHaveLength(8);
+    expect(live?.items[0]?.text.startsWith("492 ")).toBe(true);
+    expect(live?.items.every((item) => item.text.length <= 300)).toBe(true);
+  });
+  it("says a wait for a slot plainly", () => {
+    expect(waitingWords("global limit")).toBe("waits for a free slot");
+    expect(waitingWords("memory headroom")).toBe("waits for memory");
+  });
+});
+
+it("reads full auto history attribution without inventing it from grantedBy", () => {
+  const task = parseTask({
+    id: "auto-task",
+    card: card({}),
+    timeline: [
+      { by: "full auto", fullAuto: { by: "Sam", since: "2026-10-19T10:00:00Z" } },
+      { by: "full auto", grantedBy: "Not attribution" },
+      { by: "Sam", fullAuto: { by: 42, since: null } },
+    ],
+  });
+  expect(task?.timeline.map((entry) => entry.fullAuto)).toEqual([
+    { by: "Sam", since: "2026-10-19T10:00:00Z" },
+    null,
+    null,
+  ]);
+});
+
+it("attributes the engine actor string and prefers structured full auto data", () => {
+  const by = "full auto, turned on by Alex at 2026-10-19T10:00:00Z";
+  expect(fullAutoAttribution({ by, fullAuto: null })).toEqual({
+    by: "Alex",
+    since: "2026-10-19T10:00:00Z",
+  });
+  const fullAuto = { by: "Sam", since: "2026-10-19T11:00:00Z" };
+  expect(fullAutoAttribution({ by, fullAuto })).toEqual(fullAuto);
+  expect(
+    fullAutoAttribution({ by: "full auto, turned on by Alex at oops", fullAuto: null }),
+  ).toEqual({ by: "Alex", since: null });
+  expect(fullAutoAttribution({ by: "full auto", fullAuto: null })).toEqual({
+    by: null,
+    since: null,
+  });
+  expect(fullAutoAttribution({ by: "Sam", fullAuto: null })).toBeNull();
 });

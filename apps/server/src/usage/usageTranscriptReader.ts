@@ -1,37 +1,22 @@
 // @effect-diagnostics nodeBuiltinImport:off
 /**
- * Raw filesystem access for transcript scanning.
- *
- * Isolated here so the rest of the usage code stays on Effect's `FileSystem`.
  * The direct `node:fs` streaming is deliberate: a cold 30-day window is ~1.4 GB
  * across ~1,500 files, and buffer-level streaming is roughly an order of
- * magnitude cheaper than materialising each file. The equivalent Effect stream
- * pipeline is idiomatic but not fast enough to sit behind a page load.
- *
- * Transcripts are append-only, so a parse also reports the byte position it
- * stopped at. A later scan of the same file resumes from that position and
- * parses only the appended bytes, which is what keeps a warm scan cheap while a
- * session is actively writing a multi-hundred-megabyte rollout.
- *
- * @module usageTranscriptReader
+ * magnitude cheaper than materialising each file.
  */
 import * as NodeFSP from "node:fs/promises";
 import * as NodePath from "node:path";
+import * as NodeStringDecoder from "node:string_decoder";
 
-import type { UsageProviderKind } from "@t3tools/contracts";
+import type {
+  SelectedFields,
+  TranscriptUsageFormat,
+  UsageRecord,
+} from "@t3tools/provider-core/server/usage";
+import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 
-import {
-  parseDeepSeekSession,
-  initialCodexScanState,
-  mightCarryUsage,
-  parseClaudeLine,
-  parseCodexLine,
-  parseGrokLine,
-  parseKimiLine,
-  parsePiLine,
-  type CodexScanState,
-  type UsageRecord,
-} from "./usageTranscripts.ts";
+import { createTranscriptJsonReader } from "../project/AgentSessionJson.ts";
 
 export interface TranscriptFile {
   readonly path: string;
@@ -40,29 +25,19 @@ export interface TranscriptFile {
 }
 
 /**
- * Where a parse stopped, with enough state to continue from there.
- *
  * The guard hash fingerprints the bytes immediately before `resumeOffset`. A
  * resume only proceeds when those bytes still match: transcripts are
  * append-only by design, but a rotated or rewritten file silently mis-parsed
- * from the middle would corrupt usage totals. The window is a cheap tripwire
- * for those realistic failure shapes, all of which disturb the file's tail at
- * that exact offset; it deliberately does not hash the whole prefix, which
- * would cost the full re-read the resume exists to avoid.
+ * from the middle would corrupt usage totals.
  */
 export interface TranscriptParsePosition {
-  /** Byte offset just past the last newline-terminated line consumed. */
   readonly resumeOffset: number;
-  /** Length of the fingerprinted window ending at `resumeOffset`. */
   readonly guardLength: number;
-  /** FNV-1a hash of that window. */
   readonly guardHash: number;
-  /** Codex reducer state as of `resumeOffset`; `null` for stateless providers. */
-  readonly codexState: CodexScanState | null;
+  readonly state: unknown;
 }
 
 export interface TranscriptParseResult {
-  /** Records from newline-terminated lines at or after the parse start. */
   readonly records: readonly UsageRecord[];
   /**
    * Records from a trailing segment the writer has not newline-terminated yet.
@@ -70,15 +45,29 @@ export interface TranscriptParseResult {
    * segment: the next scan re-reads it once the writer finishes the line.
    */
   readonly tailRecords: readonly UsageRecord[];
+  /** Includes tentative tail diagnostics; position.state only includes committed lines. */
+  readonly malformedRecords: number;
   readonly position: TranscriptParsePosition;
-  /** Whether the parse continued from `resumeFrom` rather than byte 0. */
   readonly resumed: boolean;
 }
 
-/** 64 bytes of JSONL tail is ample to distinguish a replaced file. */
 export const GUARD_LENGTH = 64;
+const STREAMING_THRESHOLD_BYTES = 8 * 1024 * 1024;
 const NEWLINE = 0x0a;
+const STAT_CONCURRENCY = 32;
 const CARRIAGE_RETURN = 0x0d;
+
+function selectUsageFields(fields: SelectedFields) {
+  return (path: ReadonlyArray<string | number | null>): boolean => {
+    let selected: true | SelectedFields = fields;
+    for (const key of path) {
+      if (selected === true) return true;
+      if (typeof key !== "string" || !Object.hasOwn(selected, key)) return false;
+      selected = selected[key]!;
+    }
+    return true;
+  };
+}
 
 function fnv1a(buffer: Buffer): number {
   let hash = 0x811c9dc5;
@@ -90,107 +79,59 @@ function fnv1a(buffer: Buffer): number {
 }
 
 /**
- * Lists `.jsonl` transcripts under `root` last modified at or after `sinceMs`.
- *
- * Errors on individual entries are swallowed: session files rotate and get
- * removed while the walk is in flight, and a partial listing is far better than
- * failing the page.
- *
- * `fileName` restricts the walk to a single basename (Grok's `updates.jsonl`).
  * Grok sessions also ship multi-megabyte `chat_history` and `events` logs that
  * never carry usage, so the basename filter keeps a cold scan off those files.
+ * Results keep `readdir` order, which the aggregator's first-seen dedupe relies
+ * on.
  */
-async function readDeepSeekSessionFile(filePath: string): Promise<TranscriptParseResult | null> {
-  try {
-    const [text, stats] = await Promise.all([
-      NodeFSP.readFile(filePath, "utf8"),
-      NodeFSP.stat(filePath),
-    ]);
-    const record = parseDeepSeekSession(text, NodePath.basename(filePath, ".json"), stats.mtimeMs);
-    return {
-      records: record ? [record] : [],
-      tailRecords: [],
-      position: { resumeOffset: 0, guardLength: 0, guardHash: 0, codexState: null },
-      resumed: false,
-    };
-  } catch {
-    return null;
-  }
-}
-
 export async function listTranscriptFiles(
   root: string,
   sinceMs: number,
-  options?: {
-    readonly fileName?: string;
-    readonly extension?: string;
-    /** Only files directly inside a folder of this name (the engine's `pi-session`). */
-    readonly parentName?: string;
-  },
-): Promise<readonly TranscriptFile[]> {
-  const found: TranscriptFile[] = [];
+  options?: { readonly fileName?: string },
+): Promise<{ readonly files: readonly TranscriptFile[]; readonly failedPaths: number }> {
   const fileName = options?.fileName;
-  const extension = options?.extension ?? ".jsonl";
-  const parentName = options?.parentName;
-
+  const candidates: string[] = [];
+  let failedPaths = 0;
   const walk = async (dir: string): Promise<void> => {
     let entries;
     try {
       entries = await NodeFSP.readdir(dir, { withFileTypes: true });
     } catch {
+      failedPaths += 1;
       return;
     }
     for (const entry of entries) {
       const child = NodePath.join(dir, entry.name);
-      if (entry.isDirectory()) {
-        await walk(child);
-        continue;
-      }
-      if (fileName !== undefined) {
-        if (entry.name !== fileName) continue;
-      } else if (!entry.name.endsWith(extension)) {
-        continue;
-      }
-      if (parentName !== undefined && NodePath.basename(dir) !== parentName) continue;
-      try {
-        const stats = await NodeFSP.stat(child);
-        if (stats.mtimeMs >= sinceMs) {
-          found.push({ path: child, size: stats.size, mtimeMs: stats.mtimeMs });
-        }
-      } catch {
-        // Vanished between readdir and stat.
+      if (entry.isDirectory()) await walk(child);
+      else if (fileName !== undefined ? entry.name === fileName : entry.name.endsWith(".jsonl")) {
+        candidates.push(child);
       }
     }
   };
-
   await walk(root);
-  return found;
+
+  const found: Array<TranscriptFile | undefined> = Array.from({ length: candidates.length });
+  const queue = candidates.entries();
+  const statQueued = async (): Promise<void> => {
+    for (const [index, path] of queue) {
+      try {
+        const stats = await NodeFSP.stat(path);
+        if (stats.mtimeMs >= sinceMs) {
+          found[index] = { path, size: stats.size, mtimeMs: stats.mtimeMs };
+        }
+      } catch (error) {
+        if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) {
+          failedPaths += 1;
+        }
+      }
+    }
+  };
+  await Promise.all(
+    Array.from({ length: Math.min(STAT_CONCURRENCY, candidates.length) }, statQueued),
+  );
+  return { files: found.filter((file) => file !== undefined), failedPaths };
 }
 
-/**
- * The session a line-per-call record belongs to, from where the harness keeps it.
- * pi names its file `<time>_<session id>.jsonl`; Kimi keeps a `wire.jsonl` for each
- * agent of a session, in `session_<id>/agents/<agent>/`.
- */
-export function sessionIdFromPath(filePath: string, provider: UsageProviderKind): string {
-  if (provider === "kimi") {
-    // Split by hand: a path written on Windows keeps its backslashes on any host.
-    const folders = filePath.split(/[\\/]/).slice(0, -1);
-    const session = folders.findLast((folder) => folder.startsWith("session_"));
-    return session ?? folders.at(-1) ?? "";
-  }
-  const name = NodePath.basename(filePath, ".jsonl");
-  const underscore = name.lastIndexOf("_");
-  return underscore >= 0 ? name.slice(underscore + 1) : name;
-}
-
-/**
- * Filesystem identity of a directory, as `device:inode`.
- *
- * Used to tell "two servers reading the same transcript directory" apart from
- * "two machines whose hostname and home path happen to match". Returns an empty
- * string when the directory cannot be stat'd.
- */
 export async function readDirectoryVolumeId(path: string): Promise<string> {
   try {
     const stats = await NodeFSP.stat(path);
@@ -220,6 +161,23 @@ async function guardMatches(
 }
 
 /**
+ * Several would be one pass over the line each, so they are matched together as
+ * one alternation over the line's latin1 view instead: latin1 maps every byte
+ * to one character without validating it, so an ASCII marker matches exactly
+ * where its bytes do.
+ */
+export function transcriptLineGate(markers: readonly [string, ...string[]]) {
+  if (markers.length === 1) {
+    const marker = Buffer.from(markers[0]);
+    return (line: Buffer) => line.includes(marker);
+  }
+  const pattern = new RegExp(
+    markers.map((marker) => marker.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|"),
+  );
+  return (line: Buffer) => pattern.test(line.toString("latin1"));
+}
+
+/**
  * Streams one transcript and returns the usage records it contains, or `null`
  * when the file could not be read.
  *
@@ -227,22 +185,14 @@ async function guardMatches(
  * is a stable fact worth memoising, while a transient read failure memoised
  * under the same `(size, mtime)` key would silently drop that file's usage
  * until the file next changes.
- *
- * With `resumeFrom`, parsing continues from that position when its guard bytes
- * still match, so only appended lines are read; otherwise the whole file is
- * re-parsed from the start and `resumed` reports `false`.
- *
- * Codex carries the active model on `turn_context` lines that hold no usage of
- * their own, so those still have to pass through the reducer to keep model
- * attribution correct.
  */
-export async function readTranscriptRecords(
+export async function readTranscriptRecords<State>(
   filePath: string,
-  provider: UsageProviderKind,
+  format: TranscriptUsageFormat<State>,
   resumeFrom?: TranscriptParsePosition,
+  options?: { readonly streamingThresholdBytes?: number },
 ): Promise<TranscriptParseResult | null> {
-  // A DeepSeek session is one document the harness writes again whole. It is read whole.
-  if (provider === "deepseek") return readDeepSeekSessionFile(filePath);
+  const streamingThresholdBytes = options?.streamingThresholdBytes ?? STREAMING_THRESHOLD_BYTES;
   let handle: NodeFSP.FileHandle;
   try {
     handle = await NodeFSP.open(filePath, "r");
@@ -251,48 +201,26 @@ export async function readTranscriptRecords(
   }
 
   try {
-    let codexState = initialCodexScanState();
+    const codec = format.state;
+    const decodeState = codec === undefined ? undefined : Schema.decodeUnknownOption(codec.schema);
+    const encodeState = codec === undefined ? undefined : Schema.encodeSync(codec.schema);
+    let state = codec === undefined ? (undefined as State) : codec.initial();
     let resumed = false;
     let start = 0;
+    const savedState =
+      resumeFrom === undefined || decodeState === undefined || resumeFrom.state === null
+        ? Option.none()
+        : decodeState(resumeFrom.state);
     if (
       resumeFrom !== undefined &&
       resumeFrom.resumeOffset > 0 &&
-      (provider !== "codex" || resumeFrom.codexState !== null) &&
+      (codec === undefined || Option.isSome(savedState)) &&
       (await guardMatches(handle, resumeFrom))
     ) {
-      if (resumeFrom.codexState !== null) codexState = { ...resumeFrom.codexState };
+      if (Option.isSome(savedState)) state = savedState.value;
       start = resumeFrom.resumeOffset;
       resumed = true;
     }
-
-    const sessionId = sessionIdFromPath(filePath, provider);
-    const parseLine = (line: string, state: CodexScanState, out: UsageRecord[]): void => {
-      if (provider === "codex") {
-        if (
-          !mightCarryUsage(line, provider) &&
-          !line.includes('"turn_context"') &&
-          !line.includes('"session_meta"')
-        ) {
-          return;
-        }
-        const record = parseCodexLine(line, state);
-        if (record !== null) out.push(record);
-        return;
-      }
-      if (!mightCarryUsage(line, provider)) return;
-      if (provider === "pi" || provider === "kimi") {
-        const record =
-          provider === "pi" ? parsePiLine(line, sessionId) : parseKimiLine(line, sessionId);
-        if (record !== null) out.push(record);
-        return;
-      }
-      if (provider === "grok") {
-        for (const grokRecord of parseGrokLine(line)) out.push(grokRecord);
-        return;
-      }
-      const record = parseClaudeLine(line);
-      if (record !== null) out.push(record);
-    };
 
     const toLineString = (lineBuffer: Buffer): string => {
       const content =
@@ -302,44 +230,87 @@ export async function readTranscriptRecords(
       return content.toString("utf8");
     };
 
+    const mightCarryUsage = transcriptLineGate(format.usageMarkers);
+    const parseLine = (lineBuffer: Buffer, lineState: State, out: UsageRecord[]): void => {
+      if (!mightCarryUsage(lineBuffer)) return;
+      for (const record of format.parseLine(toLineString(lineBuffer), lineState)) out.push(record);
+    };
+
     const records: UsageRecord[] = [];
-    // Buffer-level line splitting rather than `readline`, because resuming
-    // needs byte-exact offsets and decoded strings cannot provide them.
-    // Newline-free chunks are collected rather than concatenated as they
-    // arrive, so a single huge line costs one copy instead of one per chunk.
     let resumeOffset = start;
+    let scanOffset = start;
     let pendingChunks: Buffer[] = [];
+    let pendingBytes = 0;
+    let streaming: ReturnType<typeof createTranscriptJsonReader> | undefined;
+    let decoder: NodeStringDecoder.StringDecoder | undefined;
+    const selectPath = selectUsageFields(format.selectFields);
+
+    const append = (segment: Buffer) => {
+      if (!streaming && pendingBytes + segment.length <= streamingThresholdBytes) {
+        if (segment.length > 0) pendingChunks.push(segment);
+        pendingBytes += segment.length;
+        return;
+      }
+      if (!streaming) {
+        // Usage has no import-history budget: retain all selected usage fields,
+        // regardless of the size of the surrounding unselected tool content.
+        streaming = createTranscriptJsonReader(() => {}, selectPath, { maxDepth: Infinity });
+        decoder = new NodeStringDecoder.StringDecoder("utf8");
+        for (const pending of pendingChunks) streaming.write(decoder.write(pending));
+        pendingChunks = [];
+        pendingBytes = 0;
+      }
+      streaming.write(decoder!.write(segment));
+    };
+    const finish = (lineState: State, out: UsageRecord[]) => {
+      if (streaming) {
+        streaming.write(decoder!.end());
+        const projected = streaming.finish();
+        for (const record of format.parseProjected(projected, lineState)) out.push(record);
+      } else if (pendingBytes > 0) {
+        const line =
+          pendingChunks.length === 1
+            ? pendingChunks[0]!
+            : Buffer.concat(pendingChunks, pendingBytes);
+        parseLine(line, lineState, out);
+      }
+      pendingChunks = [];
+      pendingBytes = 0;
+      streaming = undefined;
+      decoder = undefined;
+    };
     const stream = handle.createReadStream({
       start,
       autoClose: false,
+      highWaterMark: 256 * 1024,
     }) as AsyncIterable<Buffer>;
     for await (const chunk of stream) {
-      if (!chunk.includes(NEWLINE)) {
-        pendingChunks.push(chunk);
-        continue;
-      }
-      const buffer: Buffer =
-        pendingChunks.length === 0 ? chunk : Buffer.concat([...pendingChunks, chunk]);
-      pendingChunks = [];
       let lineStart = 0;
-      for (;;) {
-        const newlineIndex = buffer.indexOf(NEWLINE, lineStart);
-        if (newlineIndex === -1) break;
-        parseLine(toLineString(buffer.subarray(lineStart, newlineIndex)), codexState, records);
+      while (lineStart < chunk.length) {
+        const newlineIndex = chunk.indexOf(NEWLINE, lineStart);
+        if (newlineIndex === -1) {
+          append(chunk.subarray(lineStart));
+          break;
+        }
+        if (!streaming && pendingBytes === 0) {
+          parseLine(chunk.subarray(lineStart, newlineIndex), state, records);
+        } else {
+          append(chunk.subarray(lineStart, newlineIndex));
+          finish(state, records);
+        }
         lineStart = newlineIndex + 1;
+        resumeOffset = scanOffset + lineStart;
       }
-      resumeOffset += lineStart;
-      if (lineStart < buffer.length) pendingChunks.push(buffer.subarray(lineStart));
+      scanOffset += chunk.length;
     }
 
-    // A trailing segment without its newline is parsed for this result but not
-    // consumed: a writer may still be appending to it, and counting a half
-    // record now and its full form later would double count.
+    // The unfinished tail parses against a copy, so the saved state stays at
+    // `resumeOffset` and the next scan replays the tail from it.
+    const encodedState = encodeState === undefined ? null : encodeState(state);
     const tailRecords: UsageRecord[] = [];
-    if (pendingChunks.length > 0) {
-      const pending = pendingChunks.length === 1 ? pendingChunks[0]! : Buffer.concat(pendingChunks);
-      if (pending.length > 0) parseLine(toLineString(pending), { ...codexState }, tailRecords);
-    }
+    const tailState =
+      decodeState === undefined ? state : Option.getOrThrow(decodeState(encodedState));
+    finish(tailState, tailRecords);
 
     const guardLength = Math.min(GUARD_LENGTH, resumeOffset);
     let guardHash = 0;
@@ -352,11 +323,12 @@ export async function readTranscriptRecords(
     return {
       records,
       tailRecords,
+      malformedRecords: format.readMalformedRecords?.(tailState) ?? 0,
       position: {
         resumeOffset,
         guardLength,
         guardHash,
-        codexState: provider === "codex" ? codexState : null,
+        state: encodedState,
       },
       resumed,
     };

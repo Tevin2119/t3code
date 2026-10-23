@@ -1,7 +1,10 @@
+import { Button } from "../../components/ui/Button";
+import { AppActivityIndicator } from "../../components/ui/AppActivityIndicator";
+import { ConnectionTraceId } from "./ConnectionTraceId";
 import { useAuth } from "@clerk/expo";
-import { SymbolView } from "../../components/AppSymbol";
+import { SymbolView } from "../../components/ui/AppSymbol";
 import {
-  connectionStatusText,
+  hasSavedBearerRoute,
   type EnvironmentConnectionPhase,
 } from "@t3tools/client-runtime/connection";
 import {
@@ -12,52 +15,33 @@ import {
 } from "@t3tools/contracts";
 import { useAtomValue } from "@effect/atom-react";
 import { useCallback, useState } from "react";
-import {
-  ActivityIndicator,
-  Pressable,
-  type NativeSyntheticEvent,
-  type TextLayoutEventData,
-  View,
-} from "react-native";
+import { Pressable, type TextLayoutEvent, View } from "react-native";
 
-import { AppText as Text } from "../../components/AppText";
+import { AppText as Text } from "../../components/ui/AppText";
 import { EnvironmentMachineSymbol } from "../../components/EnvironmentMachineSymbol";
-import { ThemedSwitch } from "../../components/ThemedSwitch";
+import { ThemedSwitch } from "../../components/ui/ThemedSwitch";
 import { cn } from "../../lib/cn";
 import { copyTextWithHaptic } from "../../lib/copyTextWithHaptic";
 import type { ConnectedEnvironmentSummary } from "../../state/remote-runtime-types";
 import { serverEnvironment } from "../../state/server";
+import { environmentPresentations } from "../../state/presentation";
 import { availableCloudEnvironmentPresentation } from "../cloud/cloudEnvironmentPresentation";
 import { hasCloudPublicConfig } from "../cloud/publicConfig";
 import { ConnectionStatusDot } from "./ConnectionStatusDot";
+import { useConnectionDiagnosis } from "./ConnectionDiagnosisDetails";
+import { environmentStatusText } from "./environmentStatusText";
 import { type RelayEnvironmentView, useConnectionController } from "./useConnectionController";
 
 interface CloudEnvironmentRowsProps {
   readonly connectedCloudEnvironments: ReadonlyArray<ConnectedEnvironmentSummary>;
+  readonly onOpenEnvironment?: (environmentId: EnvironmentId) => void;
   readonly onSetEnvironmentEnabled: (environmentId: EnvironmentId, enabled: boolean) => void;
-  /** Long-press on a saved row. The callback owns the confirm. */
   readonly onRemoveEnvironment: (environmentId: EnvironmentId) => void;
   readonly showcaseAvailableEnvironments?: ReadonlyArray<RelayEnvironmentView>;
   readonly showcaseSignedIn?: boolean;
-  /**
-   * Hide the "T3 Connect" section title + refresh button for hosts that
-   * provide their own chrome (the onboarding sheet's native header and
-   * pull-to-refresh).
-   */
   readonly showHeader?: boolean;
 }
 
-/**
- * "T3 Connect" section: every environment published to the signed-in account,
- * with connect switches, availability status, refresh, and loading/error
- * states. Shared between the Settings environments screen and the T3 Connect
- * onboarding sheet.
- *
- * Already-connected relay environments render even without cloud config or a
- * signed-in account — they are registered on this device and must stay
- * reachable and removable. Only discovery (the available list, refresh, and
- * its errors) requires a signed-in session.
- */
 export function CloudEnvironmentRows(props: CloudEnvironmentRowsProps) {
   // Showcase captures run without a Clerk publishable key, so `ClerkProvider`
   // is never mounted and any `useAuth` call throws — the fixture states whether
@@ -100,8 +84,6 @@ function CloudEnvironmentRowsContent(
     [controller],
   );
 
-  // The relay's health probe carries each server's descriptor, so a machine
-  // can wear its detected glyph before this device ever connects to it.
   const discoveredDescriptors = new Map(
     controller.relayEnvironments.flatMap((entry) =>
       entry.status?.descriptor === undefined
@@ -119,53 +101,36 @@ function CloudEnvironmentRowsContent(
   return (
     <View collapsable={false} className={cn("gap-3", showHeader && "mt-5")}>
       {showHeader ? (
-        <View className="flex-row items-center justify-between px-1">
+        <View className="px-1">
           <Text className="text-sm font-t3-bold uppercase text-foreground-muted">T3 Connect</Text>
-          {discoveryAvailable ? (
-            <Pressable
-              accessibilityRole="button"
-              disabled={controller.relayDiscovery.isRefreshing}
-              onPress={() => {
-                void controller.refreshRelayEnvironments();
-              }}
-              className="h-9 w-9 items-center justify-center rounded-full bg-subtle active:opacity-70 disabled:opacity-50"
-            >
-              {controller.relayDiscovery.isRefreshing ? (
-                <ActivityIndicator colorClassName={"accent-icon"} size="small" />
-              ) : (
-                <SymbolView
-                  name="arrow.clockwise"
-                  size={14}
-                  tintColorClassName={"accent-icon"}
-                  type="monochrome"
-                />
-              )}
-            </Pressable>
-          ) : null}
         </View>
       ) : null}
 
       {hasCloudRows ? (
-        <View collapsable={false} className="overflow-hidden rounded-[24px] bg-card">
-          {props.connectedCloudEnvironments.map((environment, index) => (
+        <View collapsable={false} className="overflow-hidden rounded-[24px] bg-grouped-card">
+          {props.connectedCloudEnvironments.map((environment) => (
             <ConnectedCloudEnvironmentRow
               key={environment.environmentId}
               environment={environment}
               descriptor={discoveredDescriptors.get(environment.environmentId)}
-              borderTop={index !== 0}
               onSetEnabled={(enabled) =>
                 props.onSetEnvironmentEnabled(environment.environmentId, enabled)
               }
               onRemove={() => props.onRemoveEnvironment(environment.environmentId)}
+              onOpen={
+                props.onOpenEnvironment
+                  ? () => props.onOpenEnvironment?.(environment.environmentId)
+                  : undefined
+              }
               errorExpanded={expandedErrorId === environment.environmentId}
               onToggleError={() => handleToggleCloudError(environment.environmentId)}
             />
           ))}
-          {availableCloudEnvironments.map((environment, index) => (
+          {availableCloudEnvironments.map((environment) => (
             <CloudEnvironmentRow
               key={environment.environment.environmentId}
               environment={environment}
-              borderTop={props.connectedCloudEnvironments.length > 0 || index !== 0}
+              showChevron={props.onOpenEnvironment !== undefined}
               onConnect={() => handleConnectCloudEnvironment(environment)}
               errorExpanded={expandedErrorId === environment.environment.environmentId}
               onToggleError={() => handleToggleCloudError(environment.environment.environmentId)}
@@ -173,26 +138,24 @@ function CloudEnvironmentRowsContent(
           ))}
         </View>
       ) : controller.relayDiscovery.isRefreshing ? (
-        <View collapsable={false} className="items-center gap-3 rounded-[24px] bg-card p-6">
-          <ActivityIndicator colorClassName={"accent-icon"} />
+        <View collapsable={false} className="items-center gap-3 rounded-[24px] bg-grouped-card p-6">
+          <AppActivityIndicator colorClassName={"accent-icon"} />
           <Text className="text-center text-sm leading-normal text-foreground-muted">
             Loading linked cloud environments.
           </Text>
         </View>
       ) : controller.relayDiscovery.error ? null : (
-        <View collapsable={false} className="rounded-[24px] bg-card p-5">
+        <View collapsable={false} className="rounded-[24px] bg-grouped-card p-5">
           <Text className="text-sm leading-normal text-foreground-muted">
             No additional linked cloud environments.
           </Text>
         </View>
       )}
 
-      {/* Rendered alongside any connected rows — a failed discovery must not
-          hide behind an otherwise-healthy list. */}
       {discoveryAvailable &&
       controller.relayDiscovery.error &&
       !controller.relayDiscovery.isRefreshing ? (
-        <View collapsable={false} className="gap-3 rounded-[24px] bg-card p-5">
+        <View collapsable={false} className="gap-3 rounded-[24px] bg-grouped-card p-5">
           <Text className="text-base font-t3-bold text-foreground">
             Could not load T3 Connect environments
           </Text>
@@ -200,75 +163,71 @@ function CloudEnvironmentRowsContent(
           {controller.relayDiscovery.errorTraceId ? (
             <CopyTraceIdButton traceId={controller.relayDiscovery.errorTraceId} />
           ) : null}
-          <Pressable
-            accessibilityRole="button"
+          <Button
+            label="Try again"
+            tone="secondary"
             onPress={() => {
               void controller.refreshRelayEnvironments();
             }}
-            className="self-start rounded-full bg-subtle px-3.5 py-2 active:opacity-70"
-          >
-            <Text className="text-xs font-t3-bold text-foreground">Try again</Text>
-          </Pressable>
+          />
         </View>
       ) : null}
     </View>
   );
 }
 
-/**
- * A saved T3 Connect environment. The switch turns it on or off; off keeps the
- * registration and cache but drops the connection and hides its errors.
- * Long-press removes it from this device.
- */
 function ConnectedCloudEnvironmentRow(props: {
   readonly environment: ConnectedEnvironmentSummary;
-  /** Discovery's view of the server, for the glyph before the first connection. */
   readonly descriptor: ExecutionEnvironmentDescriptor | undefined;
-  readonly borderTop: boolean;
   readonly errorExpanded: boolean;
   readonly onSetEnabled: (enabled: boolean) => void;
   readonly onRemove: () => void;
+  readonly onOpen?: (() => void) | undefined;
   readonly onToggleError: () => void;
 }) {
   const serverConfig = useAtomValue(
     serverEnvironment.configValueAtom(props.environment.environmentId),
   );
   const unsupported = props.environment.connectionState === "unsupported";
+  const presentation = useAtomValue(
+    environmentPresentations.presentationAtom(props.environment.environmentId),
+  );
+  const canRetry = presentation !== null && hasSavedBearerRoute(presentation.entry);
   const enabled = props.environment.isEnabled && !unsupported;
-  // Discovery empties its map on every refresh; hold the last descriptor seen
-  // so the glyph does not blink back to the generic one each time.
+  const { diagnosis } = useConnectionDiagnosis(props.environment.environmentId, presentation);
   const [lastDescriptor, setLastDescriptor] = useState(props.descriptor);
   if (props.descriptor !== undefined && props.descriptor !== lastDescriptor) {
     setLastDescriptor(props.descriptor);
   }
   return (
-    <Pressable
-      accessibilityHint="Long press to remove from this device"
-      onLongPress={props.onRemove}
-    >
-      <CloudEnvironmentRowShell
-        borderTop={props.borderTop}
-        connectionError={enabled || unsupported ? props.environment.connectionError : null}
-        connectionErrorTraceId={enabled ? props.environment.connectionErrorTraceId : null}
-        connectionState={enabled || unsupported ? props.environment.connectionState : "available"}
-        errorExpanded={props.errorExpanded}
-        label={props.environment.environmentLabel}
-        machine={resolveEnvironmentMachineKind(
-          serverConfig ?? (lastDescriptor === undefined ? null : { environment: lastDescriptor }),
-        )}
-        onValueChange={props.onSetEnabled}
-        onToggleError={props.onToggleError}
-        disabled={unsupported}
-        {...(enabled || unsupported ? {} : { statusText: "Off" })}
-        value={enabled}
-      />
-    </Pressable>
+    <CloudEnvironmentRowShell
+      opensDetails={props.onOpen !== undefined}
+      onOpen={props.onOpen}
+      onRemove={props.onRemove}
+      connectionError={enabled || unsupported ? props.environment.connectionError : null}
+      connectionErrorTraceId={enabled ? props.environment.connectionErrorTraceId : null}
+      connectionState={enabled || unsupported ? props.environment.connectionState : "available"}
+      errorExpanded={props.errorExpanded}
+      label={props.environment.environmentLabel}
+      machine={resolveEnvironmentMachineKind(
+        serverConfig ?? (lastDescriptor === undefined ? null : { environment: lastDescriptor }),
+      )}
+      onValueChange={props.onSetEnabled}
+      onToggleError={props.onToggleError}
+      disabled={unsupported && !canRetry}
+      {...(enabled || unsupported
+        ? diagnosis
+          ? { statusText: diagnosis.headline }
+          : {}
+        : { statusText: "Off" })}
+      value={enabled}
+    />
   );
 }
 
 function CloudEnvironmentRow(props: {
   readonly environment: RelayEnvironmentView;
-  readonly borderTop: boolean;
+  readonly showChevron: boolean;
   readonly errorExpanded: boolean;
   readonly onConnect: () => void;
   readonly onToggleError: () => void;
@@ -282,7 +241,7 @@ function CloudEnvironmentRow(props: {
 
   return (
     <CloudEnvironmentRowShell
-      borderTop={props.borderTop}
+      showChevron={props.showChevron}
       connectionError={presentation.connectionError}
       connectionErrorTraceId={presentation.connectionErrorTraceId}
       connectionState={presentation.connectionState}
@@ -307,7 +266,10 @@ function CloudEnvironmentRow(props: {
 }
 
 function CloudEnvironmentRowShell(props: {
-  readonly borderTop: boolean;
+  readonly showChevron?: boolean;
+  readonly opensDetails?: boolean;
+  readonly onOpen?: (() => void) | undefined;
+  readonly onRemove?: (() => void) | undefined;
   readonly connectionError: string | null;
   readonly connectionErrorTraceId: string | null;
   readonly connectionState: EnvironmentConnectionPhase;
@@ -325,12 +287,11 @@ function CloudEnvironmentRowShell(props: {
   const shouldPulse = isRetrying;
   const statusText =
     props.statusText ??
-    connectionStatusText({
+    environmentStatusText({
       phase: props.connectionState,
       error: props.connectionError,
       traceId: props.connectionErrorTraceId,
     });
-  // Unsupported is a compatibility note, not a failure, so it stays muted.
   const statusClassName =
     props.connectionError && props.connectionState !== "unsupported"
       ? "text-danger-foreground"
@@ -346,8 +307,10 @@ function CloudEnvironmentRowShell(props: {
   const errorCanExpand = props.connectionError !== null && errorLineCount > 1;
   const isErrorExpanded = errorCanExpand && props.errorExpanded;
   const StatusContainer = errorCanExpand ? Pressable : View;
+  const ContentContainer = props.onOpen || props.onRemove ? Pressable : View;
+  const ChevronContainer = props.onOpen || props.onRemove ? Pressable : View;
   const onMeasuredErrorTextLayout = useCallback(
-    (event: NativeSyntheticEvent<TextLayoutEventData>) => {
+    (event: TextLayoutEvent) => {
       if (!props.connectionError) {
         return;
       }
@@ -362,14 +325,21 @@ function CloudEnvironmentRowShell(props: {
     [measuredErrorText, props.connectionError],
   );
   return (
-    <View
-      collapsable={false}
-      className={cn(
-        "flex-row items-center gap-3 bg-card px-4 py-3.5",
-        props.borderTop && "border-t border-border",
-      )}
-    >
-      <View className="min-w-0 flex-1 gap-0.5">
+    <View collapsable={false} className="flex-row items-center gap-3 bg-grouped-card px-4 py-3.5">
+      <ContentContainer
+        className="min-w-0 flex-1 gap-0.5"
+        accessibilityHint={props.onRemove ? "Long press to remove from this device" : undefined}
+        accessibilityRole={props.onOpen ? "button" : undefined}
+        accessibilityLabel={
+          props.onOpen
+            ? `Manage ${props.label}`
+            : props.onRemove
+              ? `Remove ${props.label} from this device`
+              : undefined
+        }
+        onPress={props.onOpen}
+        onLongPress={props.onRemove}
+      >
         <View className="min-w-0 flex-row items-center gap-2">
           <ConnectionStatusDot state={props.connectionState} pulse={shouldPulse} size={7} />
           <EnvironmentMachineSymbol
@@ -405,23 +375,15 @@ function CloudEnvironmentRowShell(props: {
           >
             {statusText}
             {errorTraceId ? (
-              <>
-                {" Trace ID: "}
-                <Text
-                  accessibilityHint="Copies the trace ID"
-                  accessibilityRole="button"
-                  className={cn("text-xs underline decoration-dotted", statusClassName)}
-                  onLongPress={(event) => {
-                    event.stopPropagation();
-                    copyTextWithHaptic(errorTraceId, { target: "connection-trace-id" });
-                  }}
-                  onPress={(event) => {
-                    event.stopPropagation();
-                  }}
-                >
-                  {errorTraceId}
-                </Text>
-              </>
+              <ConnectionTraceId
+                traceId={errorTraceId}
+                tone={
+                  props.connectionError && props.connectionState !== "unsupported"
+                    ? "danger"
+                    : "muted"
+                }
+                activation="longPress"
+              />
             ) : null}
           </Text>
           {errorCanExpand ? (
@@ -437,32 +399,51 @@ function CloudEnvironmentRowShell(props: {
             />
           ) : null}
         </StatusContainer>
-      </View>
+      </ContentContainer>
       <ThemedSwitch
+        accessibilityLabel={`Enable ${props.label}`}
+        style={{ alignSelf: "center" }}
         disabled={props.disabled}
         onValueChange={props.onValueChange}
         value={props.value}
       />
+      {props.opensDetails || props.showChevron ? (
+        <ChevronContainer
+          accessibilityRole={props.onOpen ? "button" : undefined}
+          accessibilityLabel={
+            props.onOpen
+              ? `Manage ${props.label}`
+              : props.onRemove
+                ? `Remove ${props.label} from this device`
+                : undefined
+          }
+          accessibilityHint={props.onRemove ? "Long press to remove from this device" : undefined}
+          onPress={props.onOpen}
+          onLongPress={props.onRemove}
+          style={{
+            opacity: props.opensDetails ? 1 : 0.4,
+            minWidth: 44,
+            minHeight: 44,
+            alignItems: "center",
+            justifyContent: "center",
+          }}
+        >
+          <SymbolView name="chevron.right" size={12} tintColorClassName="accent-icon-subtle" />
+        </ChevronContainer>
+      ) : null}
     </View>
   );
 }
 
 function CopyTraceIdButton(props: { readonly traceId: string }) {
   return (
-    <Pressable
-      accessibilityRole="button"
+    <Button
+      label="Copy trace ID"
+      tone="secondary"
       onPress={() => {
         copyTextWithHaptic(props.traceId, { target: "connection-trace-id" });
       }}
-      className="self-start flex-row items-center gap-1.5 rounded-full bg-subtle px-3 py-2 active:opacity-70"
-    >
-      <SymbolView
-        name="doc.on.doc"
-        size={12}
-        tintColorClassName={"accent-icon"}
-        type="monochrome"
-      />
-      <Text className="text-xs font-t3-bold text-foreground">Copy trace ID</Text>
-    </Pressable>
+      icon="doc.on.doc"
+    />
   );
 }

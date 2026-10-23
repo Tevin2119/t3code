@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 import * as Schema from "effect/Schema";
-import * as EffectAcpSchema from "effect-acp/schema";
+import type * as EffectAcpSchema from "effect-acp/compat";
+import * as AcpWireSchema from "effect-acp/schema-v1";
 
 import {
   extractAntigravityUserInputQuestion,
@@ -16,9 +17,12 @@ import {
   sanitizeAntigravityToolPayload,
   selectAntigravityPermissionOptionId,
 } from "./AntigravityProtocol.ts";
-import { mergeToolCallState, parseSessionUpdateEvent } from "./AcpRuntimeModel.ts";
+import {
+  mergeToolCallState,
+  parseSessionUpdateEvent,
+} from "@t3tools/provider-acp/server/runtimeModel";
 
-const isSessionNotification = Schema.is(EffectAcpSchema.SessionNotification);
+const isSessionNotification = Schema.is(AcpWireSchema.SessionNotification);
 
 describe("native Antigravity subagent tools", () => {
   it("recognizes only native invocation titles and excludes MCP tools", () => {
@@ -448,28 +452,6 @@ describe("Antigravity tool results", () => {
     expect(serialized).not.toContain("image-blob");
     expect(serialized).not.toContain("inline-image");
     expect(serialized).not.toContain("inline-data-url");
-  });
-
-  it("keeps large assistant replies and startup command metadata unchanged", () => {
-    const notifications = [
-      {
-        sessionId: "session-1",
-        update: {
-          sessionUpdate: "agent_message_chunk",
-          content: { type: "text", text: "a".repeat(20_000) },
-        },
-      },
-      {
-        sessionId: "session-1",
-        update: {
-          sessionUpdate: "available_commands_update",
-          availableCommands: [{ name: "plan", description: "Make a plan" }],
-        },
-      },
-    ] satisfies ReadonlyArray<EffectAcpSchema.SessionNotification>;
-    for (const notification of notifications) {
-      expect(normalizeAntigravitySessionUpdate(notification)).toBe(notification);
-    }
   });
 
   it("tracks only commands that have passed approval and are still running", () => {

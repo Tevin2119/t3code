@@ -5,10 +5,12 @@
  * newer or older than this client degrades to missing detail, not a crash.
  */
 import {
+  DELIVERY_DEFAULT_TEAM,
   DELIVERY_HARNESS_BY_DRIVER,
   type DeliveryThreadBinding,
   type ThreadId,
 } from "@t3tools/contracts";
+import { parseSuggestedBoard, type SuggestedBoard } from "./deliveryMove";
 
 type Json = Record<string, unknown>;
 const isRecord = (value: unknown): value is Json =>
@@ -110,6 +112,7 @@ export interface DeliveryFlow extends DeliveryWorkflow {
 }
 
 export const FLOW_START_LABEL: Readonly<Record<string, string>> = {
+  "non-code": "Start non-code delivery",
   chat: "Start team chat",
   plan: "Start plan",
   review: "Start review",
@@ -180,7 +183,38 @@ export interface SeatSettings {
   readonly why: SeatSettingValues;
   readonly set: SeatChoice;
   readonly effective: SeatSettingValues;
+  /** Which layer gave each value of `now`: the team definition, the team defaults, or a board. */
+  readonly source: Readonly<Partial<Record<SeatSettingKey | "fallbacks", string>>>;
+  /** The fallbacks set for the seat by the layers, empty when none are set. */
+  readonly fallbacks: ReadonlyArray<SeatFallback>;
+  /** Who will actually take the seat's place, in order: what is set, else the team's own pair. */
+  readonly fallbackChain: ReadonlyArray<SeatFallback>;
+  /** What the team's definition alone would use. */
+  readonly definedFallbackChain: ReadonlyArray<SeatFallback>;
+  readonly fallbacksAllowed: boolean;
+  /** The fallbacks the saved defaults name, or null when they name none. */
+  readonly savedFallbacks: ReadonlyArray<SeatFallback> | null;
+  /** What a board sets for this seat, when read for a board. */
+  readonly board: SeatChoice;
+  readonly boardFallbacks: ReadonlyArray<SeatFallback> | null;
 }
+
+/** A harness, with a model where it takes one, that stands in for a seat. */
+export interface SeatFallback {
+  readonly harness: string;
+  readonly model: string | null;
+}
+
+/** At most this many fallbacks for one seat; the engine holds the same limit. */
+export const MOST_FALLBACKS = 3;
+
+const parseFallbacks = (value: unknown): ReadonlyArray<SeatFallback> =>
+  records(value)
+    .filter((item) => text(item.harness).length > 0)
+    .map((item) => ({ harness: text(item.harness), model: textOrNull(item.model) }));
+
+const fallbacksOrNull = (value: unknown): ReadonlyArray<SeatFallback> | null =>
+  isRecord(value) && Array.isArray(value.fallbacks) ? parseFallbacks(value.fallbacks) : null;
 
 const parseValues = (value: unknown, harness: string | null = null): SeatSettingValues => {
   const from = isRecord(value) ? value : {};
@@ -234,8 +268,130 @@ export const parseSeatSettings = (value: Json): SeatSettings => {
     why: parseValues(value.why),
     set: parseChoice(value.set),
     effective: value.effective === undefined ? now : parseValues(value.effective, harness),
+    source: Object.fromEntries(
+      Object.entries(isRecord(value.source) ? value.source : {}).filter(
+        (entry): entry is [string, string] => typeof entry[1] === "string",
+      ),
+    ),
+    fallbacks: parseFallbacks(value.fallbacks),
+    fallbackChain: parseFallbacks(value.fallbackChain ?? value.fallbacks),
+    // An engine that does not say what the definition alone would use: the chain in use stands in.
+    definedFallbackChain: parseFallbacks(
+      value.definedFallbackChain ?? value.fallbackChain ?? value.fallbacks,
+    ),
+    fallbacksAllowed: flag(value.fallbacksAllowed),
+    savedFallbacks: fallbacksOrNull(value.saved),
+    board: parseChoice(value.board),
+    boardFallbacks: fallbacksOrNull(value.board),
   };
 };
+
+/**
+ * The layers that set what a seat runs on, other than the team's definition,
+ * in words: "team defaults r3", "board Pilot". Empty when it runs as defined.
+ */
+export function seatSources(item: SeatSettings): ReadonlyArray<string> {
+  return [
+    ...new Set(
+      Object.values(item.source).filter(
+        (source): source is string => Boolean(source) && source !== "team definition",
+      ),
+    ),
+  ];
+}
+
+/**
+ * The fallbacks to send for one seat, or null when they are left as they are. An empty list is
+ * sent: it says "none", where leaving them out inherits.
+ */
+export function fallbacksToSend(
+  wanted: ReadonlyArray<SeatFallback> | null | undefined,
+): ReadonlyArray<{ harness: string; model?: string }> | null {
+  if (!wanted) return null;
+  return wanted
+    .filter((item) => item.harness)
+    .map((item) =>
+      item.model ? { harness: item.harness, model: item.model } : { harness: item.harness },
+    );
+}
+
+/** Seat settings with each seat's fallbacks added where they are named. */
+export function withFallbacks(
+  seats: Record<string, Record<string, unknown>>,
+  fallbacks: Readonly<Record<string, ReadonlyArray<SeatFallback> | null>>,
+): Record<string, Record<string, unknown>> {
+  const out: Record<string, Record<string, unknown>> = { ...seats };
+  for (const [seat, wanted] of Object.entries(fallbacks)) {
+    const sent = fallbacksToSend(wanted);
+    if (sent) out[seat] = { ...out[seat], fallbacks: sent };
+  }
+  return out;
+}
+
+/** What a board sets for the seats of each team. */
+export interface BoardSeats {
+  readonly team: string;
+  /** The revision of the board's seats this reading is of; a save names it. */
+  readonly revision: number;
+  readonly settings: ReadonlyArray<SeatSettings>;
+}
+
+export function parseBoardSeats(body: unknown): ReadonlyArray<BoardSeats> {
+  const rows = isRecord(body) && Array.isArray(body.teams) ? body.teams : body;
+  return records(rows)
+    .filter((row) => text(row.team).length > 0)
+    .map((row) => ({
+      team: text(row.team),
+      revision: count(row.revision),
+      settings: records(row.seats).map(parseSeatSettings),
+    }));
+}
+
+/** How one harness and model has done in one stage of one team, on this host. */
+export interface TrackRecordRow {
+  readonly team: string;
+  readonly stage: string;
+  readonly harness: string;
+  readonly model: string | null;
+  readonly attempts: number;
+  readonly answered: number;
+  readonly answeredShare: number | null;
+  readonly medianSeconds: number | null;
+  readonly lastAt: string | null;
+  /** Why it did not answer, by kind: rate-limit, sign-in, timeout and the like. */
+  readonly notAnswered: Readonly<Record<string, number>>;
+  /** What triage decided, by bucket. */
+  readonly decisions: Readonly<Record<string, number>>;
+  /** What QA concluded, by verdict. */
+  readonly verdicts: Readonly<Record<string, number>>;
+  /** How often it took a seat's place after the seat could not answer. */
+  readonly steppedIn: number;
+}
+
+const tally = (value: unknown): Record<string, number> =>
+  Object.fromEntries(
+    Object.entries(isRecord(value) ? value : {}).filter(
+      (entry): entry is [string, number] => typeof entry[1] === "number" && entry[1] > 0,
+    ),
+  );
+
+export function parseTrackRecord(body: unknown): ReadonlyArray<TrackRecordRow> {
+  return records(isRecord(body) ? body.rows : null).map((row) => ({
+    team: text(row.team),
+    stage: text(row.stage),
+    harness: text(row.harness, "unknown"),
+    model: textOrNull(row.model),
+    attempts: count(row.attempts),
+    answered: count(row.answered),
+    answeredShare: typeof row.answeredShare === "number" ? row.answeredShare : null,
+    medianSeconds: typeof row.medianSeconds === "number" ? row.medianSeconds : null,
+    lastAt: textOrNull(row.lastAt),
+    notAnswered: tally(row.notAnswered),
+    decisions: tally(row.decisions),
+    verdicts: tally(row.verdicts),
+    steppedIn: count(row.steppedIn),
+  }));
+}
 
 /** Whether a seat is on, with what is chosen for it laid over what it is set to. */
 export const seatIsOn = (item: SeatSettings, choice: SeatChoice, over: "now" | "defined" = "now") =>
@@ -345,6 +501,84 @@ export function parseTeams(body: unknown): ReadonlyArray<DeliveryTeam> {
     .map(parseTeam);
 }
 
+/** The teams a thread or a workflow can be given: every team but triage, which sorts what comes in. */
+export function selectableTeams(body: unknown): ReadonlyArray<DeliveryTeam> {
+  return parseTeams(body).filter((team) => team.team !== "triage");
+}
+
+/**
+ * How far the reading of the teams has come. `loaded` means a successful reading
+ * for reconciliation. Failed readings may retain a body that still determines
+ * whether a settled choice is offered.
+ */
+export type TeamListStatus = "pending" | "failed" | "loaded";
+
+export function teamListStatus(read: {
+  readonly body: unknown;
+  readonly error: string | null;
+}): TeamListStatus {
+  return read.error ? "failed" : read.body == null ? "pending" : "loaded";
+}
+
+/** A retained list can rule out a settled choice even when the latest reading failed. */
+export function chosenTeamUnavailable(
+  read: { readonly body: unknown; readonly error: string | null },
+  draft: { readonly team: string; readonly awaitingTeams?: boolean } | null,
+): boolean {
+  return (
+    read.body != null &&
+    draft !== null &&
+    !draft.awaitingTeams &&
+    !selectableTeams(read.body).some((team) => team.team === draft.team)
+  );
+}
+
+/**
+ * The team a new draft starts from, given the one remembered for its
+ * environment. An ordinary thread starts with no team; Orchestrator mode
+ * needs one, and falls back to the default team. A remembered team is given
+ * up only when the list was read and does not have it.
+ */
+export function resolveInheritedTeam(input: {
+  readonly remembered: string | null | undefined;
+  readonly teams: ReadonlyArray<DeliveryTeam>;
+  readonly status: TeamListStatus;
+  readonly mode: "plain" | "orchestrator";
+}): string | null {
+  const fallback = input.mode === "orchestrator" ? DELIVERY_DEFAULT_TEAM : null;
+  if (!input.remembered) return fallback;
+  const gone =
+    input.status === "loaded" && !input.teams.some((team) => team.team === input.remembered);
+  return gone ? fallback : input.remembered;
+}
+
+const NO_TEAM_CHOICE = { team: null, role: null } as const;
+
+/**
+ * The team choice of a draft thread, as the picker shows it, the footer names
+ * it and the send takes it. What the person chose for the thread stands as it
+ * is. A choice that only stands in from the environment's remembered team
+ * becomes "No team" once that team is known to be gone.
+ */
+export function resolveDraftTeam<
+  Choice extends { readonly team: string | null; readonly role: string | null },
+>(input: {
+  readonly draft: Choice;
+  /** Whether the person chose for this thread, as opposed to the remembered team standing in. */
+  readonly explicit: boolean;
+  readonly teams: ReadonlyArray<DeliveryTeam>;
+  readonly status: TeamListStatus;
+}): Choice | typeof NO_TEAM_CHOICE {
+  if (input.explicit || input.draft.team === null) return input.draft;
+  const team = resolveInheritedTeam({
+    remembered: input.draft.team,
+    teams: input.teams,
+    status: input.status,
+    mode: "plain",
+  });
+  return team === null ? NO_TEAM_CHOICE : input.draft;
+}
+
 export interface TeamDefaults {
   readonly team: DeliveryTeam;
   /** Every saving, newest first. */
@@ -428,7 +662,13 @@ export function resolveTeamChoice(input: {
 }): TeamChoice {
   if (!input.team) return { state: "manual" };
   const team = input.teams.find((candidate) => candidate.team === input.team);
-  if (!team) return { state: "blocked", team: input.team, why: "This team is not set up." };
+  if (!team) {
+    return {
+      state: "blocked",
+      team: input.team,
+      why: "This team is not set up. Choose another team, or No team.",
+    };
+  }
   const harness = input.driver ? DELIVERY_HARNESS_BY_DRIVER[input.driver] : undefined;
   if (!harness) {
     return {
@@ -627,7 +867,71 @@ export interface DeliveryWorker {
   readonly stage: string;
   readonly specialist: string | null;
   readonly since: string | null;
+  /** Why it has not started yet, when the engine holds it (for memory, or a free slot); null at work. */
+  readonly waiting: string | null;
+  /** The same, in words a person can act on: who holds the slots, or the memory it waits for. */
+  readonly waitingWhy: string | null;
 }
+
+/** The seats at work on a card, as opposed to those the engine holds before they start. */
+export const seatsAtWork = (card: Pick<DeliveryCard, "workers">) =>
+  card.workers.filter((worker) => !worker.waiting);
+
+/**
+ * The card's "now" in a few words: working on a stage while any seat works, waiting (and for
+ * what, when every held seat waits for the same) while every seat is held.
+ */
+export function nowLine(card: Pick<DeliveryCard, "workers" | "stage">): string | null {
+  if (card.workers.length === 0) return null;
+  const stage = card.stage || card.workers[0]!.stage;
+  const on = stage ? `: ${stage}` : "";
+  if (seatsAtWork(card).length > 0) return `Working${on}`;
+  const reasons = [...new Set(card.workers.map((worker) => waitingWords(worker.waiting)))];
+  return reasons.length === 1
+    ? `${reasons[0]![0]!.toUpperCase()}${reasons[0]!.slice(1)}${on}`
+    : `Waiting${on}`;
+}
+
+/** Who is on a card, each seat said once: those working, then each held seat with its own reason. */
+export function crewLine(card: Pick<DeliveryCard, "workers">): string {
+  const working = seatsAtWork(card).map((worker) => worker.seat);
+  const held = card.workers
+    .filter((worker) => worker.waiting)
+    .map((worker) => `${worker.seat} ${waitingWords(worker.waiting)}`);
+  return [working.length ? `${working.join(", ")} working` : null, ...held]
+    .filter(Boolean)
+    .join("; ");
+}
+
+/**
+ * Where a settings form stands with a reading. A draft is what the person changed, kept with the
+ * revision it was made against (`base`) for as long as it is kept. It gives way to a reading only
+ * when it is still what the form's own save answered and the reading is at least that save: then
+ * nothing of the person's is lost. A draft made against an older revision than the reading's is
+ * behind: saving it would be refused, and the form says so rather than saving over a reading the
+ * person has not seen.
+ */
+export function draftAgainstRead(input: {
+  /** The revision the draft was made against; null when there is no draft. */
+  readonly base: number | null;
+  readonly readRevision: number;
+  /** The draft is still exactly what the form's own last save answered. */
+  readonly asSaved: boolean;
+}): "none" | "take-read" | "keep" | "behind" {
+  if (input.base === null) return "none";
+  if (input.asSaved && input.readRevision >= input.base) return "take-read";
+  return input.readRevision > input.base ? "behind" : "keep";
+}
+
+/** What a held seat waits for, in words. */
+export const waitingWords = (reason: string | null): string =>
+  reason === "memory headroom" || reason === "host under memory pressure"
+    ? "waits for memory"
+    : reason === "global limit"
+      ? "waits for a free slot"
+      : reason
+        ? `waits for ${reason}`
+        : "is working";
 
 export interface DeliveryCard {
   readonly id: string;
@@ -651,6 +955,10 @@ export interface DeliveryCard {
   readonly updated: string;
   readonly submitted: string | null;
   readonly held: boolean;
+  /** For a card a person paused: the column it goes on in when resumed. */
+  readonly resumesIn: string | null;
+  /** In Paused because the engine holds it after a failure, not because a person paused it. */
+  readonly recovering: boolean;
   readonly parts: ReadonlyArray<TaskBrief>;
   readonly partsDelivered: number;
   readonly followUps: ReadonlyArray<TaskBrief>;
@@ -716,6 +1024,10 @@ export interface DeliveryCard {
   /** What became of the approved change: pushed, a pull request, merged, or a failed attempt. */
   readonly publication: DeliveryPublication | null;
   readonly actions: ReadonlyArray<string>;
+  /** Put first by a person for the next free slots (Do next). */
+  readonly first: boolean;
+  /** The board triage thinks it belongs on; it waits on a person to move it. Older engines omit it. */
+  readonly suggestedBoard?: SuggestedBoard | null;
 }
 
 /**
@@ -812,6 +1124,8 @@ export const parseCard = (value: Json): DeliveryCard => {
     updated: text(value.updated),
     submitted: textOrNull(value.submitted),
     held: flag(value.held),
+    resumesIn: textOrNull(value.resumesIn),
+    recovering: flag(value.recovering),
     parts: records(value.parts).map(parseBrief),
     partsDelivered: count(value.partsDelivered),
     followUps: records(value.followUps).map(parseBrief),
@@ -832,6 +1146,8 @@ export const parseCard = (value: Json): DeliveryCard => {
       stage: text(worker.stage),
       specialist: textOrNull(worker.specialist),
       since: textOrNull(worker.since),
+      waiting: textOrNull(worker.waiting),
+      waitingWhy: textOrNull(worker.waitingWhy),
     })),
     paused: paused
       ? {
@@ -887,6 +1203,8 @@ export const parseCard = (value: Json): DeliveryCard => {
     set: textOrNull(value.set),
     publication: parsePublication(value.publication),
     actions: strings(value.actions),
+    first: flag(value.first),
+    suggestedBoard: parseSuggestedBoard(value.suggestedBoard),
   };
 };
 
@@ -946,9 +1264,28 @@ export interface CouncilSeat {
   readonly access: string | null;
   readonly activity: string;
   readonly blockedBy: string | null;
+  /** Why it waits, in words a person can act on. */
+  readonly waitingWhy: string | null;
   readonly stage: string | null;
   readonly verdict: string | null;
   readonly attempts: number;
+  /** What it is doing now, from its own output, while it works; null otherwise. */
+  readonly live: SeatLive | null;
+}
+
+/** What a seat at work last did: the tools it called and what it said, newest last. */
+export interface SeatLive {
+  readonly started: string | null;
+  readonly updated: string | null;
+  readonly items: ReadonlyArray<{ readonly kind: "tool" | "said" | "log"; readonly text: string }>;
+}
+
+/** An instruction a person gave a run while it was under way. */
+export interface RunSteer {
+  readonly at: string;
+  readonly by: string;
+  readonly seat: string | null;
+  readonly text: string;
 }
 
 export interface TaskCouncil {
@@ -960,6 +1297,11 @@ export interface TaskCouncil {
   readonly evidence: string | null;
   readonly decision: string | null;
   readonly seats: ReadonlyArray<CouncilSeat>;
+  /** What the run wrote for a person to read: PLAN.md, REVIEW.md, PACK.md. */
+  readonly documents: ReadonlyArray<string>;
+  readonly steers: ReadonlyArray<RunSteer>;
+  /** Whether a person put the task first for the next free slots. */
+  readonly first: boolean;
   readonly votes: ReadonlyArray<{
     readonly seat: string;
     readonly provider: string;
@@ -1006,6 +1348,7 @@ export const parseTaskFile = (value: Json): TaskFile => ({
 
 /** One line of a task's history: something said, or something that happened. */
 export interface TimelineEntry {
+  readonly fullAuto: { readonly by: string; readonly since: string } | null;
   readonly id: string;
   readonly at: string;
   readonly source: "message" | "event";
@@ -1030,10 +1373,30 @@ export interface TimelineEntry {
   readonly evidence: string | null;
 }
 
+export function fullAutoAttribution(entry: Pick<TimelineEntry, "by" | "fullAuto">) {
+  if (entry.fullAuto) return entry.fullAuto;
+  const match = /^full auto, turned on by (.+) at (.+)$/.exec(entry.by);
+  if (match) {
+    return {
+      by: match[1]!.trim() || null,
+      since: Number.isFinite(Date.parse(match[2]!)) ? match[2]! : null,
+    };
+  }
+  return entry.by === "full auto" ? { by: null, since: null } : null;
+}
+
 const parseTimeline = (value: unknown): ReadonlyArray<TimelineEntry> =>
   records(value).map((entry) => {
     const change = entry.change;
+    const auto = entry.fullAuto;
     return {
+      fullAuto:
+        isRecord(auto) &&
+        typeof auto.by === "string" &&
+        typeof auto.since === "string" &&
+        Number.isFinite(Date.parse(auto.since))
+          ? { by: auto.by, since: auto.since }
+          : null,
       id: text(entry.id),
       at: text(entry.at),
       source: text(entry.source) === "message" ? "message" : "event",
@@ -1065,8 +1428,62 @@ export interface TaskLink extends TaskBrief {
   readonly direction: string;
 }
 
+/**
+ * What is needed of a person, in plain words, when a task waits on one: the bottom line first,
+ * then what the task is, what happened, why it stopped, each choice, where and since when.
+ */
+export interface TaskBriefing {
+  readonly headline: string;
+  readonly what: string;
+  readonly happened: ReadonlyArray<string>;
+  readonly why: string | null;
+  readonly options: ReadonlyArray<{
+    readonly action: string;
+    readonly label: string;
+    readonly does: string;
+    readonly recommended: boolean;
+  }>;
+  readonly reply: string | null;
+  readonly where: string | null;
+  readonly since: string | null;
+}
+
+/**
+ * A key for each value: which repeat of it this is, then the value. The count leads up to the
+ * first colon, so no two values give the same key.
+ */
+export function repeatKeys(values: ReadonlyArray<string>): ReadonlyArray<string> {
+  const seen = new Map<string, number>();
+  return values.map((value) => {
+    const count = (seen.get(value) ?? 0) + 1;
+    seen.set(value, count);
+    return `${count}:${value}`;
+  });
+}
+
+export function parseBriefing(value: unknown): TaskBriefing | null {
+  if (!isRecord(value) || text(value.headline).length === 0) return null;
+  return {
+    headline: text(value.headline),
+    what: text(value.what),
+    happened: strings(value.happened),
+    why: textOrNull(value.why),
+    options: records(value.options).map((option) => ({
+      action: text(option.action),
+      label: text(option.label, text(option.action)),
+      does: text(option.does),
+      recommended: flag(option.recommended),
+    })),
+    reply: textOrNull(value.reply),
+    where: textOrNull(value.where),
+    since: textOrNull(value.since),
+  };
+}
+
 /** A task as its workspace shows it. Board and Orchestrator read the same one. */
 export interface TaskView {
+  /** Null unless the task waits on a person. */
+  readonly brief: TaskBriefing | null;
   readonly id: string;
   readonly number: number;
   readonly title: string;
@@ -1188,12 +1605,31 @@ export interface TaskView {
   };
   /** Where its work is done. */
   readonly target: DeliveryTarget | null;
+  /** The board triage thinks it belongs on, as on its card. Older engines omit it. */
+  readonly suggestedBoard?: SuggestedBoard | null;
   /** The conversation this task was made from: `<environment>/<thread>`. */
   readonly source: {
     readonly kind: "thread";
     readonly environmentId: string;
     readonly threadId: string;
   } | null;
+}
+
+export function parseSeatLive(value: unknown): SeatLive | null {
+  if (!isRecord(value)) return null;
+  return {
+    started: textOrNull(value.started),
+    updated: textOrNull(value.updated),
+    // The engine sends a few short lines; a larger reading is cut to the same.
+    items: records(value.items)
+      .flatMap((item): Array<SeatLive["items"][number]> => {
+        const kind = text(item.kind);
+        return kind === "tool" || kind === "said" || kind === "log"
+          ? [{ kind, text: text(item.text).slice(0, 300) }]
+          : [];
+      })
+      .slice(-8),
+  };
 }
 
 const parseCouncil = (council: Json): TaskCouncil => {
@@ -1218,10 +1654,20 @@ const parseCouncil = (council: Json): TaskCouncil => {
       access: textOrNull(seat.access),
       activity: text(seat.activity, "waiting"),
       blockedBy: textOrNull(seat.blockedBy),
+      waitingWhy: textOrNull(seat.waitingWhy),
       stage: textOrNull(seat.stage),
       verdict: textOrNull(seat.verdict),
       attempts: list(seat.attempts).length,
+      live: parseSeatLive(seat.live),
     })),
+    documents: [...new Set(strings(council.documents))],
+    steers: records(council.steers).map((steer) => ({
+      at: text(steer.at),
+      by: text(steer.by),
+      seat: textOrNull(steer.seat),
+      text: text(steer.text),
+    })),
+    first: flag(council.first),
     votes: records(council.votes).map((vote) => ({
       seat: text(vote.seat),
       provider: text(vote.provider),
@@ -1273,6 +1719,7 @@ export function parseTask(body: unknown): TaskView | null {
     parent: parent ? parseBrief(parent) : null,
     card: parseCard(body.card),
     actions: strings(body.actions),
+    brief: parseBriefing(body.brief),
     timeline: parseTimeline(body.timeline),
     questions: records(body.questions).map((question) => ({
       seq: count(question.seq),
@@ -1378,6 +1825,7 @@ export function parseTask(body: unknown): TaskView | null {
       };
     })(),
     target: parseTarget(body.target),
+    suggestedBoard: parseSuggestedBoard(body.suggestedBoard),
     source: (() => {
       const source = isRecord(body.source) ? body.source : null;
       const ref = source ? text(source.ref) : "";
@@ -1417,6 +1865,10 @@ export function parseTarget(value: unknown): DeliveryTarget | null {
 
 /** A target in one line: "PolyMania · main", or why work cannot be done there. */
 export function targetLine(target: DeliveryTarget | null): string {
+  if (target?.path && !target.repository)
+    return target.ok
+      ? `${target.title ?? target.path} · project folder`
+      : `${target.title ?? target.path}: ${target.problem ?? "cannot be read"}`;
   if (!target?.repository) return "Repository not configured";
   const name = target.title ?? target.repository;
   if (!target.ok) return `${name}: ${target.problem ?? "cannot be worked on"}`;
@@ -1510,6 +1962,8 @@ export function decideTeamForSend(input: {
   readonly draftIsExplicit: boolean;
   readonly teams: ReadonlyArray<DeliveryTeam>;
   readonly teamsError: string | null;
+  /** Set while the teams are still being read, when no team can be set up yet. */
+  readonly teamsPending?: boolean;
   readonly driver: string | null;
 }): TeamSendDecision {
   if (!input.enabled) return { action: "none" };
@@ -1532,6 +1986,12 @@ export function decideTeamForSend(input: {
     return {
       action: "blocked",
       why: `Delivery engine not reachable, so team ${choice.team} cannot be loaded. Choose "No team" to start an ordinary thread.`,
+    };
+  }
+  if (input.teamsPending) {
+    return {
+      action: "blocked",
+      why: `Teams are still loading, so team ${choice.team} cannot be set up yet. Send again in a moment, or choose "No team" to start an ordinary thread.`,
     };
   }
   const resolved = resolveTeamChoice({
@@ -1614,6 +2074,16 @@ export interface ProfileSeat {
 
 /** A profile as it is edited: everything that can be set, in the words it was written in. */
 export interface ProfileForm {
+  readonly nonCode?: {
+    readonly enabled: boolean;
+    readonly producer: string;
+    readonly researcher: string;
+    readonly referenceVerifier: string;
+    readonly validators: ReadonlyArray<string>;
+    readonly citations: string;
+    readonly minimumIndependentProviders: number;
+    readonly distinctVariations: boolean;
+  } | null;
   readonly name: string;
   readonly purpose: string;
   readonly corePrompt: string;
@@ -1658,6 +2128,18 @@ export function parseProfile(body: unknown): ProfileView | null {
       purpose: text(body.purpose),
       corePrompt: text(body.corePrompt),
       defaultFlow: text(body.defaultFlow, "chat"),
+      nonCode: isRecord(body.nonCode)
+        ? {
+            enabled: flag(body.nonCode.enabled),
+            producer: text(body.nonCode.producer),
+            researcher: text(body.nonCode.researcher),
+            referenceVerifier: text(body.nonCode.referenceVerifier),
+            validators: strings(body.nonCode.validators),
+            citations: text(body.nonCode.citations, "when-cited"),
+            minimumIndependentProviders: count(body.nonCode.minimumIndependentProviders) || 2,
+            distinctVariations: flag(body.nonCode.distinctVariations),
+          }
+        : null,
       memory: { scope: text(memory.scope, "conversation"), notes: text(memory.notes) },
       references: strings(body.references),
       lead: text(body.lead),
@@ -1900,4 +2382,35 @@ export function parseSeatSetup(body: unknown): SeatSetup | null {
       };
     }),
   };
+}
+
+/**
+ * Which environment's engine the delivery screens talk to: the environment of the conversation a
+ * task is made from, else the one the person chose, else the window's own; each only while still
+ * available. An explicit choice never silently opens another environment's tasks.
+ */
+export function deliveryEnvironmentChoice<Id extends string>(input: {
+  readonly fromConversation: string | null;
+  readonly chosen: string | null;
+  readonly requested?: string | null;
+  readonly isReady?: boolean;
+  readonly connected: ReadonlyArray<Id>;
+  readonly primary: Id | null;
+}): Id | null {
+  if (input.isReady === false) return null;
+  const known = (id: string | null | undefined): Id | null =>
+    id ? (input.connected.find((environment) => environment === id) ?? null) : null;
+  if (input.fromConversation) return known(input.fromConversation.split("/")[0]);
+  if (input.requested) return known(input.requested);
+  return known(input.chosen) ?? input.primary;
+}
+
+/**
+ * The body of a request to the engine, as it travels: JSON. A field left `undefined`, such as an
+ * optional choice nobody made, is not JSON, and the whole request would be refused before it is
+ * sent ("Expected JSON value at body"). Such fields are dropped, as the engine would never see them.
+ */
+export function deliveryRequestBody(body: unknown): unknown {
+  const text = JSON.stringify(body);
+  return text === undefined ? undefined : (JSON.parse(text) as unknown);
 }

@@ -1,7 +1,14 @@
 import type { EnvironmentId } from "@t3tools/contracts";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
-import { parseTeamDefaults, seatSettingsToSend, type SeatChoice } from "../../lib/delivery";
+import {
+  draftAgainstRead,
+  parseTeamDefaults,
+  seatSettingsToSend,
+  withFallbacks,
+  type SeatChoice,
+  type SeatFallback,
+} from "../../lib/delivery";
 import { describeSeatValues, seatValues, sharePercentages } from "../../lib/deliverySeats";
 import {
   useDeliveryAct,
@@ -19,7 +26,10 @@ import {
   DialogTitle,
 } from "../ui/dialog";
 import { Input } from "../ui/input";
+import { Behind } from "./Behind";
+import { FallbacksEditor } from "./FallbacksEditor";
 import { SeatSettingsPanel } from "./SeatSettingsPanel";
+import { TrackRecord } from "./TrackRecord";
 
 /**
  * The defaults of a team: what each seat runs on unless a task says
@@ -39,6 +49,33 @@ export function TeamDefaultsDialog(props: {
   const act = useDeliveryAct(props.environmentId, "team defaults");
   const [seats, setSeats] = useState<Record<string, SeatChoice> | null>(null);
   const [shares, setShares] = useState<Record<string, string> | null>(null);
+  const [fallbacks, setFallbacks] = useState<Record<
+    string,
+    ReadonlyArray<SeatFallback> | null
+  > | null>(null);
+  const [showRecord, setShowRecord] = useState(false);
+  // The revision the person's changes were made against, kept as long as the changes are.
+  const [base, setBase] = useState<number | null>(null);
+  // The form as the engine answered the last save, while the form still shows it.
+  const [answered, setAnswered] = useState<string | null>(null);
+  // The form as it stands, for a save's answer to tell whether the person changed it meanwhile.
+  const snapshot = JSON.stringify([seats, shares, fallbacks]);
+  const now = useRef(snapshot);
+  useEffect(() => {
+    now.current = snapshot;
+  }, [snapshot]);
+  const readRevision = current?.team.defaults.revision ?? 0;
+  const standing = draftAgainstRead({ base, readRevision, asSaved: snapshot === answered });
+  const showRead = () => {
+    setBase(null);
+    setAnswered(null);
+    setSeats(null);
+    setShares(null);
+    setFallbacks(null);
+  };
+  if (standing === "take-read") showRead();
+  // A first change is made against the reading on screen.
+  const pin = () => setBase((was) => was ?? readRevision);
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
   const [problems, setProblems] = useState<ReadonlyArray<string>>([]);
@@ -48,6 +85,9 @@ export function TeamDefaultsDialog(props: {
   // What is saved is what the form starts from, until the person changes something.
   const chosen =
     seats ?? Object.fromEntries((team?.settings ?? []).map((item) => [item.seat, item.saved]));
+  const named =
+    fallbacks ??
+    Object.fromEntries((team?.settings ?? []).map((item) => [item.seat, item.savedFallbacks]));
   const weights =
     shares ??
     Object.fromEntries(
@@ -66,8 +106,12 @@ export function TeamDefaultsDialog(props: {
     setBusy(true);
     setProblems([]);
     setSaid(null);
+    const pressed = now.current;
+    const sentNote = note;
+    // The note goes with this save; one written while it was out is the person's next.
+    const clearNote = () => setNote((was) => (was === sentNote ? "" : was));
     const result = await act(`/api/teams/${props.team}/defaults`, {
-      seats: seatSettingsToSend(team.settings, chosen, "defined"),
+      seats: withFallbacks(seatSettingsToSend(team.settings, chosen, "defined"), named),
       // Shares that are what the team defines are not saved over it.
       workload: Object.entries(numbers).some(
         ([seat, share]) => share !== team.workload.defined[seat],
@@ -76,16 +120,47 @@ export function TeamDefaultsDialog(props: {
         : {},
       by: person,
       note: note.trim() || null,
+      // Saved over the revision the changes were made against: if another window saved since,
+      // the engine refuses this one.
+      revision: base ?? readRevision,
     });
     setBusy(false);
     if (!result.ok) {
+      // Refused: the changes stay, with their revision, to be put right or set aside. A newer
+      // reading shows as one the changes are behind.
       setProblems(result.problems.length > 0 ? result.problems : [result.why]);
+      read.refresh();
       return;
     }
-    setSaid(parseTeamDefaults(result.body)?.note ?? "Saved.");
-    setSeats(null);
-    setShares(null);
-    setNote("");
+    const saved = parseTeamDefaults(result.body);
+    setSaid(saved?.note || "Saved.");
+    clearNote();
+    // The form shows what was saved, from the answer, until the next read: never the read from
+    // before. An answer that cannot be read leaves the form to the next read, never empty; a
+    // change made meanwhile stays, against the revision it was made on.
+    if (!saved) {
+      if (now.current === pressed) showRead();
+      read.refresh();
+      props.onSaved?.();
+      return;
+    }
+    const settings = saved.team.settings;
+    const nextSeats = Object.fromEntries(settings.map((item) => [item.seat, item.saved]));
+    const nextFallbacks = Object.fromEntries(
+      settings.map((item) => [item.seat, item.savedFallbacks]),
+    );
+    const nextShares = Object.fromEntries(
+      Object.entries(saved.team.workload.build).map(([seat, share]) => [seat, String(share)]),
+    );
+    // A change made while the save was out is the person's, and is kept over the save's answer.
+    // Either way the form now stands on the saved revision.
+    if (now.current === pressed) {
+      setSeats(nextSeats);
+      setFallbacks(nextFallbacks);
+      setShares(nextShares);
+      setAnswered(JSON.stringify([nextSeats, nextShares, nextFallbacks]));
+    } else setAnswered(null);
+    setBase(saved.team.defaults.revision);
     read.refresh();
     props.onSaved?.();
   };
@@ -96,136 +171,180 @@ export function TeamDefaultsDialog(props: {
         <DialogHeader>
           <DialogTitle>Defaults of team {props.team}</DialogTitle>
         </DialogHeader>
-        <DialogPanel className="flex max-h-[70vh] flex-col gap-4 overflow-y-auto text-sm">
-          <p className="text-xs text-muted-foreground">
-            What each seat runs on unless a task sets its own. A seat keeps its role and its rules;
-            the harness and the model it runs on are chosen here. The QA gate has to keep{" "}
-            {team?.qaGate?.minimum ?? 2} providers that did not build the change, and the engine
-            refuses defaults that would leave it with fewer.
-          </p>
-          {read.error ? (
-            <p className="text-warning">Delivery engine not reachable. {read.error}</p>
-          ) : null}
-          {team ? (
-            <>
-              <section>
-                <h3 className="pb-1 text-xs font-medium text-muted-foreground">Seats</h3>
-                <SeatSettingsPanel
-                  environmentId={props.environmentId}
-                  settings={team.settings}
-                  chosen={chosen}
-                  over="defaults"
-                  shares={percentages}
-                  onChange={(seat, choice) => setSeats(withSeatChoice(chosen, seat, choice))}
-                />
-              </section>
-
-              {Object.keys(weights).length > 1 ? (
-                <section data-delivery-workload>
-                  <h3 className="pb-1 text-xs font-medium text-muted-foreground">
-                    Who builds, and how much
-                  </h3>
-                  <p className="pb-2 text-xs text-muted-foreground">
-                    Each run is built by one of these seats. The shares are weights: the seat
-                    furthest behind its share builds next. A seat that is waiting after a rate
-                    limit, is not installed, or may only read is passed over, and the others build
-                    in its place.
-                  </p>
-                  <div className="flex flex-wrap gap-3">
-                    {Object.entries(weights).map(([seat, share]) => {
-                      const item = team.settings.find((candidate) => candidate.seat === seat);
-                      return (
-                        <label key={seat} className="flex items-center gap-2 text-xs">
-                          <span>{item?.title ?? seat}</span>
-                          <Input
-                            aria-label={`Share of the builds for ${item?.title ?? seat}`}
-                            className="h-7 w-16"
-                            inputMode="decimal"
-                            value={share}
-                            onChange={(event) =>
-                              setShares({ ...weights, [seat]: event.target.value })
-                            }
-                          />
-                          <span className="text-muted-foreground">{percentages[seat] ?? 0}%</span>
-                        </label>
-                      );
-                    })}
-                  </div>
+        <DialogPanel>
+          <div className="flex flex-col gap-4 text-sm">
+            <p className="text-xs text-muted-foreground">
+              What each seat runs on unless a board or a task sets its own. A seat keeps its role
+              and its rules; the harness and the model it runs on are chosen here, and who takes its
+              place when it cannot answer.
+              {team?.qaGate
+                ? ` The QA gate has to keep ${team.qaGate.minimum} providers that did not build the change, and the engine refuses defaults that would leave it with fewer.`
+                : ""}
+            </p>
+            {read.error ? (
+              <p className="text-warning">Delivery engine not reachable. {read.error}</p>
+            ) : null}
+            {team ? (
+              <>
+                <section>
+                  <h3 className="pb-1 text-xs font-medium text-muted-foreground">Seats</h3>
+                  <SeatSettingsPanel
+                    environmentId={props.environmentId}
+                    settings={team.settings}
+                    chosen={chosen}
+                    over="defaults"
+                    shares={percentages}
+                    onChange={(seat, choice) => {
+                      pin();
+                      setSeats(withSeatChoice(chosen, seat, choice));
+                    }}
+                    renderExtra={(item) => (
+                      <FallbacksEditor
+                        environmentId={props.environmentId}
+                        item={item}
+                        value={named[item.seat] ?? null}
+                        inherited={item.definedFallbackChain}
+                        inheritedLabel="As defined"
+                        onChange={(next) => {
+                          pin();
+                          setFallbacks({ ...named, [item.seat]: next });
+                        }}
+                      />
+                    )}
+                  />
                 </section>
-              ) : null}
 
-              <Input
-                aria-label="Why the defaults are changed"
-                placeholder="Why the defaults are changed (kept with the saving)"
-                value={note}
-                onChange={(event) => setNote(event.target.value)}
-              />
+                <section className="flex flex-col gap-1">
+                  <Button
+                    size="xs"
+                    variant="ghost"
+                    className="self-start"
+                    onClick={() => setShowRecord((open) => !open)}
+                    data-team-defaults-record
+                  >
+                    {showRecord ? "Hide the track record" : "Track record: how each has done here"}
+                  </Button>
+                  {showRecord ? (
+                    <TrackRecord environmentId={props.environmentId} team={props.team} />
+                  ) : null}
+                </section>
 
-              {problems.length > 0 ? (
-                <ul className="list-disc pl-5 text-xs text-warning" data-delivery-problem>
-                  {problems.map((problem) => (
-                    <li key={problem}>{problem}</li>
-                  ))}
-                </ul>
-              ) : null}
-              {said ? <p className="text-xs text-muted-foreground">{said}</p> : null}
+                {Object.keys(weights).length > 1 ? (
+                  <section data-delivery-workload>
+                    <h3 className="pb-1 text-xs font-medium text-muted-foreground">
+                      Who builds, and how much
+                    </h3>
+                    <p className="pb-2 text-xs text-muted-foreground">
+                      Each run is built by one of these seats. The shares are weights: the seat
+                      furthest behind its share builds next. A seat that is waiting after a rate
+                      limit, is not installed, or may only read is passed over, and the others build
+                      in its place.
+                    </p>
+                    <div className="flex flex-wrap gap-3">
+                      {Object.entries(weights).map(([seat, share]) => {
+                        const item = team.settings.find((candidate) => candidate.seat === seat);
+                        return (
+                          <label key={seat} className="flex items-center gap-2 text-xs">
+                            <span>{item?.title ?? seat}</span>
+                            <Input
+                              aria-label={`Share of the builds for ${item?.title ?? seat}`}
+                              className="h-7 w-16"
+                              inputMode="decimal"
+                              value={share}
+                              onChange={(event) => {
+                                pin();
+                                setShares({ ...weights, [seat]: event.target.value });
+                              }}
+                            />
+                            <span className="text-muted-foreground">{percentages[seat] ?? 0}%</span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  </section>
+                ) : null}
 
-              <section>
-                <h3 className="pb-1 text-xs font-medium text-muted-foreground">
-                  Saved before
-                  {team.defaults.revision > 0
-                    ? `, now at revision ${team.defaults.revision}`
-                    : ": never. The team runs as it is defined."}
-                </h3>
-                <ul className="flex flex-col gap-1 text-xs">
-                  {current?.history.map((row) => (
-                    <li key={row.revision} className="rounded border border-border px-2 py-1">
-                      <span className="font-mono text-[10px] text-muted-foreground">
-                        r{row.revision}, {row.by}, {row.at}
-                      </span>
-                      {row.note ? <span className="block">{row.note}</span> : null}
-                      <span className="block text-muted-foreground">
-                        {Object.entries(row.seats)
-                          .map(([seat, choice]) => {
-                            const item = team.settings.find((candidate) => candidate.seat === seat);
-                            return `${item?.title ?? seat}: ${describeSeatValues(
-                              seatValues(
-                                item?.defined ?? {
-                                  active: null,
-                                  harness: null,
-                                  model: null,
-                                  reasoning: null,
-                                  access: null,
-                                },
-                                choice,
-                              ),
-                            )}`;
-                          })
-                          .concat(
-                            Object.keys(row.workload).length > 0
-                              ? [
-                                  `builds shared ${Object.entries(row.workload)
-                                    .map(([seat, share]) => `${seat} ${share}`)
-                                    .join(", ")}`,
-                                ]
-                              : [],
-                          )
-                          .join("; ") || "Back to what the team defines."}
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              </section>
-            </>
-          ) : read.error ? null : (
-            <p className="text-xs text-muted-foreground">Reading the team.</p>
-          )}
+                <Input
+                  aria-label="Why the defaults are changed"
+                  placeholder="Why the defaults are changed (kept with the saving)"
+                  value={note}
+                  onChange={(event) => setNote(event.target.value)}
+                />
+
+                {problems.length > 0 ? (
+                  <ul className="list-disc pl-5 text-xs text-warning" data-delivery-problem>
+                    {problems.map((problem) => (
+                      <li key={problem}>{problem}</li>
+                    ))}
+                  </ul>
+                ) : null}
+                {said ? <p className="text-xs text-muted-foreground">{said}</p> : null}
+                {standing === "behind" ? (
+                  <Behind revision={readRevision} base={base ?? 0} onShowRead={showRead} />
+                ) : null}
+
+                <section>
+                  <h3 className="pb-1 text-xs font-medium text-muted-foreground">
+                    Saved before
+                    {team.defaults.revision > 0
+                      ? `, now at revision ${team.defaults.revision}`
+                      : ": never. The team runs as it is defined."}
+                  </h3>
+                  <ul className="flex flex-col gap-1 text-xs">
+                    {current?.history.map((row) => (
+                      <li key={row.revision} className="rounded border border-border px-2 py-1">
+                        <span className="font-mono text-3xs text-muted-foreground">
+                          r{row.revision}, {row.by}, {row.at}
+                        </span>
+                        {row.note ? <span className="block">{row.note}</span> : null}
+                        <span className="block text-muted-foreground">
+                          {Object.entries(row.seats)
+                            .map(([seat, choice]) => {
+                              const item = team.settings.find(
+                                (candidate) => candidate.seat === seat,
+                              );
+                              return `${item?.title ?? seat}: ${describeSeatValues(
+                                seatValues(
+                                  item?.defined ?? {
+                                    active: null,
+                                    harness: null,
+                                    model: null,
+                                    reasoning: null,
+                                    access: null,
+                                  },
+                                  choice,
+                                ),
+                              )}`;
+                            })
+                            .concat(
+                              Object.keys(row.workload).length > 0
+                                ? [
+                                    `builds shared ${Object.entries(row.workload)
+                                      .map(([seat, share]) => `${seat} ${share}`)
+                                      .join(", ")}`,
+                                  ]
+                                : [],
+                            )
+                            .join("; ") || "Back to what the team defines."}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                </section>
+              </>
+            ) : read.error ? null : (
+              <p className="text-xs text-muted-foreground">Reading the team.</p>
+            )}
+          </div>
         </DialogPanel>
         <DialogFooter>
           <Button variant="outline" onClick={props.onClose}>
             Close
           </Button>
-          <Button disabled={busy || !team || !sharesAreNumbers} onClick={() => void save()}>
+          <Button
+            disabled={busy || !team || !sharesAreNumbers || standing === "behind"}
+            onClick={() => void save()}
+          >
             {busy ? "Saving" : "Save defaults"}
           </Button>
         </DialogFooter>

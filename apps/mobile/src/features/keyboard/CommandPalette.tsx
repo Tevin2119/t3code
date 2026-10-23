@@ -1,3 +1,4 @@
+import { uuidv4 } from "../../lib/uuid";
 import { useNavigation } from "@react-navigation/native";
 import type { EnvironmentThreadSearchMatch } from "@t3tools/client-runtime/state/thread-search";
 import { THREAD_JUMP_KEYBINDING_COMMANDS } from "@t3tools/contracts";
@@ -12,21 +13,26 @@ import {
   TextInput,
   useWindowDimensions,
   View,
+  type TextInputInstance,
 } from "react-native";
 
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 
-import { GlassSurface } from "../../components/GlassSurface";
-import { RowPressable } from "../../components/RowPressable";
-import { AppText as Text } from "../../components/AppText";
-import { SymbolView, type AppSymbolName } from "../../components/AppSymbol";
+import { GlassSurface } from "../../components/ui/GlassSurface";
+import { RowPressable } from "../../components/ui/RowPressable";
+import { AppText as Text } from "../../components/ui/AppText";
+import { SymbolView, type AppSymbolName } from "../../components/ui/AppSymbol";
+import { cn } from "../../lib/cn";
+import { deriveBottomControlInsets } from "../../lib/reserved-regions";
 import { scopedProjectKey, scopedThreadKey } from "../../lib/scopedEntities";
+import { useNativeLayoutMetrics } from "../../native/native-layout-metrics";
 import { T3KeyboardCommands } from "../../native/T3KeyboardCommands";
 import { useProjects, useThreadShell, useThreadShells } from "../../state/entities";
 import { useThreadSearch } from "../../state/queries";
-import { useWorkspaceState } from "../../state/workspace";
+import { useWorkspaceEnvironments } from "../../state/workspace";
 import { useSavedRemoteConnections } from "../../state/use-remote-environment-registry";
 import { useAdaptiveWorkspaceLayout } from "../layout/AdaptiveWorkspaceLayout";
+import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 import { ThreadSearchMatchExcerpt } from "../threads/thread-search-match";
 import {
   filterCommandPaletteItems,
@@ -35,6 +41,7 @@ import {
 } from "./commandPaletteItems";
 import { parseActiveThreadPath, type HardwareKeyboardCommand } from "./hardwareKeyboardCommands";
 import { threadJumpIndex } from "./threadKeyboardShortcuts";
+import { PullRequestGlyph } from "../pull-requests/pullRequestGlyphs";
 
 const PALETTE_COMMANDS: ReadonlyArray<HardwareKeyboardCommand> = [
   "commandPalette",
@@ -56,7 +63,7 @@ const ACTION_ICONS: Record<string, AppSymbolName> = {
   archive: "archivebox",
   files: "doc.text",
   terminal: "terminal",
-  review: "arrow.triangle.pull",
+  review: PullRequestGlyph.pullRequest,
   copyThreadReference: "link",
 };
 
@@ -74,35 +81,53 @@ function PaletteRow(props: {
   readonly searchQuery: string;
   readonly onSelect: () => void;
 }) {
+  const foregroundClassName = props.selected
+    ? "text-thread-selected-foreground"
+    : "text-foreground";
+  const mutedForegroundClassName = props.selected
+    ? "text-thread-selected-foreground-muted"
+    : "text-foreground-muted";
   return (
     <RowPressable
       accessibilityRole="button"
+      interactionOpacity={props.selected ? 0 : 1}
       accessibilityState={{ selected: props.selected }}
       onPress={props.onSelect}
       className={
         props.selected
-          ? "mx-2 flex-row items-center gap-3 rounded-xl bg-primary/10 px-3"
+          ? "mx-2 flex-row items-center gap-3 rounded-xl bg-thread-selected px-3"
           : "mx-2 flex-row items-center gap-3 rounded-xl px-3"
       }
       style={{ height: ROW_HEIGHT }}
     >
       <View className="w-7 items-center">
-        <SymbolView name={itemIcon(props.item)} size={20} tintColorClassName="accent-icon" />
+        <SymbolView
+          name={itemIcon(props.item)}
+          size={20}
+          tintColorClassName={props.selected ? "accent-thread-selected-foreground" : "accent-icon"}
+        />
       </View>
       <View className="flex-1">
-        <Text numberOfLines={1} className="text-base">
+        <Text numberOfLines={1} className={cn("text-base", foregroundClassName)}>
           {props.item.title}
         </Text>
         {props.searchMatch ? (
-          <ThreadSearchMatchExcerpt match={props.searchMatch} query={props.searchQuery} compact />
+          <ThreadSearchMatchExcerpt
+            match={props.searchMatch}
+            query={props.searchQuery}
+            selected={props.selected}
+            compact
+          />
         ) : props.item.detail ? (
-          <Text numberOfLines={1} className="text-sm text-foreground-muted">
+          <Text numberOfLines={1} className={cn("text-sm", mutedForegroundClassName)}>
             {props.item.detail}
           </Text>
         ) : null}
       </View>
       {props.index < 9 ? (
-        <NativeText className="w-8 shrink-0 text-right text-sm tabular-nums text-foreground-muted">
+        <NativeText
+          className={cn("w-8 shrink-0 text-right text-sm tabular-nums", mutedForegroundClassName)}
+        >
           ⌘{props.index + 1}
         </NativeText>
       ) : null}
@@ -117,22 +142,26 @@ export function CommandPalette(props: {
   readonly onCommand: (command: HardwareKeyboardCommand) => void;
 }) {
   const navigation = useNavigation();
-  const { selectThread } = useAdaptiveWorkspaceLayout();
+  const { themeVariables } = useAppearancePreferences();
+  const { selectThread, selectThreadRoute } = useAdaptiveWorkspaceLayout();
   const runCommand = props.onCommand;
   const projects = useProjects();
   const threads = useThreadShells();
   const activeThreadRef = useMemo(() => parseActiveThreadPath(props.pathname), [props.pathname]);
   const activeThread = useThreadShell(activeThreadRef);
-  const { environments } = useWorkspaceState();
+  const environments = useWorkspaceEnvironments();
   const { savedConnectionsById } = useSavedRemoteConnections();
   const [query, setQuery] = useState("");
   const [selection, setSelection] = useState<string | null>(null);
   const [visible, setVisible] = useState(true);
   const pendingAction = useRef<(() => void) | null>(null);
   const closing = useRef(false);
-  const inputRef = useRef<TextInput>(null);
+  const inputRef = useRef<TextInputInstance>(null);
   const listRef = useRef<FlatList<CommandPaletteItem>>(null);
   const { width, height } = useWindowDimensions();
+  // The palette floats above every column, so it keeps itself inside the window's side insets
+  // and to one side of a book fold.
+  const bounds = deriveBottomControlInsets(useNativeLayoutMetrics());
   const searchEnvironmentIds = useMemo(
     () =>
       environments
@@ -162,14 +191,14 @@ export function CommandPalette(props: {
         kind: "action",
         title: "New thread in…",
         searchTerms: ["new task", "chat", "create", "project"],
-        run: () => navigation.navigate("NewTaskSheet", { screen: "NewTask" }),
+        run: () => runCommand("newTask"),
       },
       {
         key: "addProject",
         kind: "action",
         title: "Add project",
         searchTerms: ["folder", "clone", "repository", "git"],
-        run: () => navigation.navigate("NewTaskSheet", { screen: "AddProject" }),
+        run: () => navigation.navigate("AddProject"),
       },
       {
         key: "settings",
@@ -202,6 +231,17 @@ export function CommandPalette(props: {
           navigation.navigate("SettingsSheet", {
             screen: "SettingsContent",
             params: { screen: "SettingsEnvironments" },
+          }),
+      },
+      {
+        key: "scheduledTasks",
+        kind: "action",
+        title: "Scheduled tasks",
+        searchTerms: ["schedule", "automations", "recurring"],
+        run: () =>
+          navigation.navigate("SettingsSheet", {
+            screen: "SettingsContent",
+            params: { screen: "SettingsScheduledTasks" },
           }),
       },
       {
@@ -240,9 +280,9 @@ export function CommandPalette(props: {
         title: `New thread in ${activeProject.title}`,
         searchTerms: ["new task", "chat", "create"],
         run: () =>
-          navigation.navigate("NewTaskSheet", {
-            screen: "NewTaskDraft",
-            params: {
+          selectThreadRoute({
+            draft: {
+              requestId: uuidv4(),
               environmentId: activeProject.environmentId,
               projectId: activeProject.id,
               title: activeProject.title,
@@ -274,9 +314,9 @@ export function CommandPalette(props: {
       detail: `New thread · ${savedConnectionsById[project.environmentId]?.environmentLabel ?? project.environmentId}`,
       searchTerms: [project.workspaceRoot, "new thread", "project"],
       run: () =>
-        navigation.navigate("NewTaskSheet", {
-          screen: "NewTaskDraft",
-          params: {
+        selectThreadRoute({
+          draft: {
+            requestId: uuidv4(),
             environmentId: project.environmentId,
             projectId: project.id,
             title: project.title,
@@ -317,6 +357,7 @@ export function CommandPalette(props: {
     runCommand,
     savedConnectionsById,
     selectThread,
+    selectThreadRoute,
     threads,
   ]);
   const results = useMemo(
@@ -389,19 +430,21 @@ export function CommandPalette(props: {
         <T3KeyboardCommands enabledCommands={PALETTE_COMMANDS} onCommand={onCommand}>
           <KeyboardAvoidingView
             behavior="padding"
-            className="flex-1 items-center justify-center p-4"
+            className="flex-1 items-center justify-center py-4"
+            style={{ paddingLeft: 16 + bounds.left, paddingRight: 16 + bounds.right }}
           >
             <Pressable
-              className="absolute inset-0 bg-black/15"
+              className="absolute inset-0 bg-backdrop"
               accessibilityLabel="Close command palette"
               onPress={() => close()}
             />
             <GlassSurface
               accessibilityViewIsModal
-              className="bg-sheet/70"
+              className="bg-sheet"
               tintColorClassName="accent-sheet/20"
+              fallbackColor={themeVariables["--color-sheet"]}
               style={{
-                width: Math.min(600, width - 32),
+                width: Math.min(600, width - 32 - bounds.left - bounds.right),
                 height: Math.min(520, height - 80),
                 borderRadius: 20,
               }}

@@ -1,10 +1,13 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import { parseCard } from "./delivery";
+import type { BoardFilters } from "./deliveryBoard";
 import {
+  sectionOf,
   isConversationRef,
   taskFromConversation,
   activeFilters,
+  boardAttentionCount,
   ageLabel,
   fileKindOf,
   filterLanes,
@@ -13,15 +16,20 @@ import {
   initialsOf,
   isSendKey,
   isTaskId,
-  laneAccepts,
   linesFromText,
   matchesCard,
   messageStateLabel,
   NO_FILTERS,
+  sidebarCandidates,
+  tagChoices,
+  tagFilterLabel,
+  tagsMatching,
   pastedFileName,
   piecesOf,
   queryValue,
   tagsFromText,
+  moveIntent,
+  parseBoardSearch,
 } from "./deliveryBoard";
 
 const card = (overrides: Record<string, unknown> = {}) =>
@@ -41,6 +49,33 @@ const card = (overrides: Record<string, unknown> = {}) =>
     waitingOn: "team",
     ...overrides,
   });
+
+describe("environment-scoped board links", () => {
+  it("keeps the environment when opening a task, the board, or a new draft", () => {
+    expect(parseBoardSearch({ environment: "windows", task: "task-0a1b2c3d4e" })).toEqual({
+      environment: "windows",
+      task: "task-0a1b2c3d4e",
+    });
+    expect(parseBoardSearch({ environment: "windows" })).toEqual({ environment: "windows" });
+    expect(parseBoardSearch({ environment: "mac", new: true, from: "mac/thread" })).toEqual({
+      environment: "mac",
+      new: true,
+      from: "mac/thread",
+    });
+  });
+  it("discards invalid task and conversation inputs without dropping a valid environment", () => {
+    expect(parseBoardSearch({ environment: "mac", task: "../outside" })).toEqual({
+      environment: "mac",
+    });
+    expect(parseBoardSearch({ environment: "mac", new: true, from: "invalid" })).toEqual({
+      environment: "mac",
+      new: true,
+    });
+    expect(parseBoardSearch({ environment: {}, task: "task-0a1b2c3d4e" })).toEqual({
+      task: "task-0a1b2c3d4e",
+    });
+  });
+});
 
 describe("matchesCard", () => {
   it("finds a task by its number, with or without the sign", () => {
@@ -62,8 +97,8 @@ describe("matchesCard", () => {
   it("keeps to the filters set beside the search", () => {
     expect(matchesCard(card(), { ...NO_FILTERS, priority: "high" })).toBe(true);
     expect(matchesCard(card(), { ...NO_FILTERS, priority: "low" })).toBe(false);
-    expect(matchesCard(card(), { ...NO_FILTERS, tag: "cli", team: "development" })).toBe(true);
-    expect(matchesCard(card(), { ...NO_FILTERS, tag: "cli", team: "rnd" })).toBe(false);
+    expect(matchesCard(card(), { ...NO_FILTERS, tags: ["cli"], team: "development" })).toBe(true);
+    expect(matchesCard(card(), { ...NO_FILTERS, tags: ["cli"], team: "rnd" })).toBe(false);
     expect(matchesCard(card(), { ...NO_FILTERS, owner: "sam field" })).toBe(true);
     expect(matchesCard(card(), { ...NO_FILTERS, waiting: true })).toBe(false);
     expect(matchesCard(card({ waitingOn: "person" }), { ...NO_FILTERS, waiting: true })).toBe(true);
@@ -95,31 +130,6 @@ describe("groupCards", () => {
   it("groups by the first tag, and says so where there is none", () => {
     expect(groupCards(cards, "tag").map((group) => group.key)).toEqual(["cli", "docs", "untagged"]);
     expect(groupCards(cards, "none")).toEqual([{ key: "all", title: null, cards }]);
-  });
-});
-
-describe("laneAccepts", () => {
-  it("offers what the engine would do, and nothing where the engine refuses", () => {
-    const draft = card({ lane: "draft", state: "draft", submitted: null });
-    expect(laneAccepts(draft, "triage")).toBe("Submit");
-    expect(laneAccepts(draft, "implementation")).toBeNull();
-    expect(laneAccepts(draft, "paused")).toBeNull();
-
-    const building = card();
-    expect(laneAccepts(building, "paused")).toBe("Pause");
-    expect(laneAccepts(building, "triage")).toBe("Send to triage again");
-    expect(laneAccepts(building, "implementation")).toBe("Reorder");
-    expect(laneAccepts(building, "human-review")).toBeNull();
-    expect(laneAccepts(building, "completed")).toBeNull();
-    expect(laneAccepts(building, "draft")).toBeNull();
-
-    expect(laneAccepts(card({ lane: "paused", held: true }), "ready")).toBe("Resume");
-    expect(laneAccepts(card({ lane: "intake", submitted: null }), "triage")).toBe("Submit");
-    expect(laneAccepts(card({ lane: "completed", state: "approved" }), "triage")).toBeNull();
-    // What is not a delivery is not moved through the lanes of one.
-    expect(laneAccepts(card({ lane: "chat", state: "chat" }), "paused")).toBeNull();
-    expect(laneAccepts(building, "chat")).toBeNull();
-    expect(laneAccepts(card({ lane: "human-review", state: "planned" }), "triage")).toBeNull();
   });
 });
 
@@ -278,6 +288,105 @@ describe("filtering by column", () => {
   });
 });
 
+describe("filtering by tag", () => {
+  const chosen = { ...NO_FILTERS, tags: ["cli", "docs"] };
+
+  it("keeps a card that carries any one of the chosen tags", () => {
+    expect(matchesCard(card({ tags: ["cli"] }), chosen)).toBe(true);
+    expect(matchesCard(card({ tags: ["docs"] }), chosen)).toBe(true);
+    expect(matchesCard(card({ tags: ["cli", "docs"] }), chosen)).toBe(true);
+    expect(matchesCard(card({ tags: ["windows"] }), chosen)).toBe(false);
+    expect(matchesCard(card({ tags: [] }), chosen)).toBe(false);
+  });
+
+  it("keeps every card when no tag is chosen, and still keeps to the other filters", () => {
+    expect(matchesCard(card({ tags: ["cli"] }), NO_FILTERS)).toBe(true);
+    expect(matchesCard(card({ tags: [] }), NO_FILTERS)).toBe(true);
+    expect(matchesCard(card({ tags: ["cli"] }), { ...chosen, team: "rnd" })).toBe(false);
+    expect(matchesCard(card({ tags: ["cli"] }), { ...chosen, team: "development" })).toBe(true);
+  });
+
+  it("gives each chosen tag a chip of its own, which takes only that tag away", () => {
+    let filters: BoardFilters = { ...NO_FILTERS, q: "flag", tags: ["cli", "docs", "windows"] };
+    const chips = () => activeFilters(filters, (lane) => lane).filter((item) => item.key !== "q");
+    expect(chips().map((item) => item.key)).toEqual(["tag:cli", "tag:docs", "tag:windows"]);
+    expect(chips().map((item) => item.label)).toEqual(["#cli", "#docs", "#windows"]);
+    // As the store does it: the patch is laid over the filters as they are.
+    const remove = (tag: string) => {
+      filters = { ...filters, ...chips().find((item) => item.key === `tag:${tag}`)!.clear };
+    };
+    remove("docs");
+    expect(filters.tags).toEqual(["cli", "windows"]);
+    remove("cli");
+    expect(filters.tags).toEqual(["windows"]);
+    expect(filters.q).toBe("flag");
+    remove("windows");
+    expect(chips()).toEqual([]);
+  });
+
+  it("offers every tag of every reading and every chosen one, each once, in order", () => {
+    const names = Array.from(
+      { length: 45 },
+      (_, index) => `tag-${String(index + 1).padStart(2, "0")}`,
+    );
+    const onBoard = names.map((tag, index) => card({ id: `b${index}`, tags: [tag, "shared"] }));
+    const listed = [card({ id: "t1", tags: ["only-listed", "shared"] })];
+    const choices = tagChoices([onBoard, listed], ["gone", "shared"]);
+    expect(choices).toHaveLength(48);
+    expect(choices).toContain("tag-45");
+    expect(choices).toContain("only-listed");
+    expect(choices).toContain("gone");
+    expect(choices.filter((tag) => tag === "shared")).toHaveLength(1);
+    expect(choices).toEqual([...choices].sort());
+    expect(tagChoices([[], []], [])).toEqual([]);
+  });
+
+  it("narrows the tags to those that contain what was typed", () => {
+    const tags = ["cli", "docs", "found-in-1038", "windows"];
+    expect(tagsMatching(tags, "O")).toEqual(["docs", "found-in-1038", "windows"]);
+    expect(tagsMatching(tags, "  1038 ")).toEqual(["found-in-1038"]);
+    expect(tagsMatching(tags, "#cli")).toEqual(["cli"]);
+    expect(tagsMatching(tags, "")).toEqual(tags);
+    expect(tagsMatching(tags, "   ")).toEqual(tags);
+    expect(tagsMatching(tags, "zzz")).toEqual([]);
+  });
+
+  it("reads Tag when closed with none chosen, the tag for one, and how many for several", () => {
+    expect(tagFilterLabel([])).toBe("Tag");
+    expect(tagFilterLabel(["cli"])).toBe("#cli");
+    expect(tagFilterLabel(["cli", "docs", "windows"])).toBe("3 tags");
+  });
+});
+
+describe("the cards the sidebar filters", () => {
+  const listed = Array.from({ length: 200 }, (_, index) =>
+    card({ id: `task-${index}`, number: index, tags: ["cli"], lane: "ready" }),
+  );
+
+  it("adds a card of the board that the list of tasks left out", () => {
+    const beyond = card({ id: "task-beyond", number: 999, tags: ["docs"] });
+    const all = sidebarCandidates(listed, [beyond], "");
+    expect(all).toHaveLength(201);
+    expect(all.filter((item) => matchesCard(item, { ...NO_FILTERS, tags: ["docs"] }))).toEqual([
+      beyond,
+    ]);
+  });
+
+  it("takes a card on both from the board, in the order of the list", () => {
+    const moved = card({ id: "task-1", number: 1, tags: ["cli"], lane: "validation" });
+    const extra = card({ id: "task-extra", number: 998 });
+    const all = sidebarCandidates(listed, [extra, moved], "");
+    expect(all.map((item) => item.id)).toEqual([...listed.map((item) => item.id), "task-extra"]);
+    expect(all[1]?.lane).toBe("validation");
+  });
+
+  it("leaves the engine's answer alone when something is searched for", () => {
+    const beyond = card({ id: "task-beyond", number: 999 });
+    expect(sidebarCandidates(listed, [beyond], "flag")).toBe(listed);
+    expect(sidebarCandidates(listed, [], "")).toBe(listed);
+  });
+});
+
 describe("a task made from a conversation", () => {
   it("names the conversation, and keeps the first request, the later ones and the last answer", () => {
     const made = taskFromConversation({
@@ -303,5 +412,330 @@ describe("a task made from a conversation", () => {
     expect(isConversationRef("env-1/thread-9")).toBe(true);
     expect(isConversationRef("../etc")).toBe(false);
     expect(isConversationRef("a/b/c")).toBe(false);
+  });
+});
+
+describe("moveIntent", () => {
+  it("does not let a person fabricate a child-work wait by moving a task", () => {
+    expect(moveIntent({ lane: "ready", actions: [] }, "child-work")).toMatchObject({
+      kind: "refused",
+    });
+    expect(moveIntent({ lane: "child-work", actions: [] }, "child-work")).toEqual({
+      kind: "move",
+      label: "Reorder",
+    });
+  });
+  const card = (
+    lane: string,
+    actions: ReadonlyArray<string> = [],
+    more: { resumesIn?: string | null; recovering?: boolean } = {},
+  ) => ({ lane, actions, ...more });
+
+  it("takes a column a decision leads to by that decision, named as its button is", () => {
+    expect(moveIntent(card("human-review", ["approve", "reject"]), "approved")).toEqual({
+      kind: "action",
+      action: "approve",
+      label: "Approve",
+    });
+    expect(moveIntent(card("human-review", ["approve", "reject"]), "rework")).toMatchObject({
+      action: "reject",
+    });
+    expect(moveIntent(card("approved", ["publish"]), "pull-request")).toMatchObject({
+      action: "publish",
+    });
+    expect(moveIntent(card("chat", ["close"]), "completed")).toMatchObject({ action: "close" });
+    expect(moveIntent(card("human-review", ["approve", "retriage"]), "triage")).toMatchObject({
+      action: "retriage",
+    });
+  });
+
+  it("starts a plan's delivery only from Ready, where the engine puts it", () => {
+    expect(moveIntent(card("human-review", ["deliver", "close"]), "ready")).toMatchObject({
+      action: "deliver",
+    });
+    expect(moveIntent(card("human-review", ["deliver", "close"]), "implementation").kind).toBe(
+      "refused",
+    );
+  });
+
+  it("lets a paused card go on only where it stood, and leaves a recovering one alone", () => {
+    const paused = card("paused", ["resume", "approve"], { resumesIn: "human-review" });
+    expect(moveIntent(paused, "human-review")).toEqual({ kind: "move", label: "Resume" });
+    for (const lane of ["approved", "completed", "implementation", "triage"]) {
+      const intent = moveIntent(paused, lane);
+      expect(intent.kind).toBe("refused");
+      expect(intent.kind === "refused" && intent.why).toMatch(
+        /goes on where it stood, in Your sign-off/,
+      );
+    }
+    const recovering = card("paused", ["retry"], { recovering: true, resumesIn: null });
+    expect(moveIntent(recovering, "implementation").kind).toBe("refused");
+  });
+
+  it("names the engine's own moves, and refuses what no step leads to", () => {
+    expect(moveIntent(card("triage"), "triage")).toEqual({ kind: "move", label: "Reorder" });
+    expect(moveIntent(card("implementation", ["pause"]), "paused")).toEqual({
+      kind: "move",
+      label: "Pause",
+    });
+    expect(moveIntent(card("chat", ["close"]), "paused").kind).toBe("refused");
+    expect(moveIntent(card("draft", ["submit"]), "triage")).toEqual({
+      kind: "move",
+      label: "Submit",
+    });
+    expect(moveIntent(card("intake", ["submit"]), "triage")).toEqual({
+      kind: "move",
+      label: "Submit",
+    });
+    expect(moveIntent(card("draft", ["submit"]), "completed").kind).toBe("refused");
+    expect(moveIntent(card("implementation", ["pause"]), "approved").kind).toBe("refused");
+    expect(moveIntent(card("completed"), "triage").kind).toBe("refused");
+    expect(moveIntent(card("triage"), "validation").kind).toBe("refused");
+  });
+});
+
+describe("moveIntent while a seat works", () => {
+  it("refuses Triage with that reason, and still submits a card not yet submitted", () => {
+    const working = moveIntent({ lane: "implementation", actions: ["pause", "stop"] }, "triage");
+    expect(working.kind).toBe("refused");
+    expect(working.kind === "refused" && working.why).toMatch(/A seat is working on it/);
+    expect(moveIntent({ lane: "intake", actions: ["submit", "stop"] }, "triage")).toEqual({
+      kind: "move",
+      label: "Submit",
+    });
+  });
+});
+
+describe("moveIntent while every seat waits", () => {
+  it("says a seat is about to start, not that it works", () => {
+    const held = moveIntent(
+      {
+        lane: "implementation",
+        actions: ["pause", "stop"],
+        workers: [
+          {
+            seat: "developer",
+            harness: null,
+            role: null,
+            stage: "build",
+            specialist: null,
+            since: null,
+            waiting: "memory headroom",
+            waitingWhy: null,
+          },
+        ],
+      },
+      "triage",
+    );
+    expect(held.kind === "refused" && held.why).toMatch(/about to start on it, waiting for room/);
+  });
+});
+
+describe("sectionOf", () => {
+  it("points a history line at the checklist or the plan it speaks of", () => {
+    expect(
+      sectionOf({
+        kind: "note",
+        text: "Triage: ready, with 7 item(s) on the acceptance checklist.",
+      }),
+    ).toBe("acceptance");
+    expect(
+      sectionOf({
+        kind: "task.revised",
+        text: "Revision 2: Triage wrote the acceptance checklist.",
+      }),
+    ).toBe("acceptance");
+    expect(sectionOf({ kind: "note", text: "Triage updated the acceptance checklist." })).toBe(
+      "acceptance",
+    );
+    // An empty checklist has nothing to show.
+    expect(
+      sectionOf({
+        kind: "note",
+        text: "Triage: ready, with 0 item(s) on the acceptance checklist.",
+      }),
+    ).toBeNull();
+    expect(sectionOf({ kind: "run.planned", text: "Planned." })).toBe("plan");
+    expect(sectionOf({ kind: "note", text: "Run run-1 started." })).toBeNull();
+  });
+});
+
+describe("boardAttentionCount", () => {
+  // The shape of a reading of /api/lanes?view=development&set=all, as the engine answers it.
+  const lane = (id: string, cards: ReadonlyArray<Record<string, unknown>> = []) => ({
+    lane: id,
+    title: id,
+    cards,
+  });
+  const task = (id: string, laneId: string, waitingOn: string | null = null) => ({
+    id,
+    number: 1,
+    title: id,
+    lane: laneId,
+    waitingOn,
+    set: "unsorted",
+  });
+  const reading = (lanes: ReadonlyArray<unknown>, overrides: Record<string, unknown> = {}) => ({
+    view: "development",
+    set: "all",
+    lanes,
+    closed: [],
+    waiting: 0,
+    ...overrides,
+  });
+
+  it("counts the tasks waiting on you", () => {
+    expect(
+      boardAttentionCount(
+        reading([
+          lane("needs-decision", [task("a", "needs-decision"), task("b", "needs-decision")]),
+          lane("human-review"),
+        ]),
+      ),
+    ).toBe(2);
+  });
+
+  it("keeps a parent's child decision visible without counting autonomous child work as a human stop", () => {
+    expect(
+      boardAttentionCount(
+        reading([
+          lane("needs-decision"),
+          lane("human-review"),
+          lane("child-work", [
+            task("parent-needs-person", "child-work", "person"),
+            task("parent-working", "child-work", "team"),
+          ]),
+        ]),
+      ),
+    ).toBe(1);
+  });
+
+  it("counts the tasks waiting for your sign-off", () => {
+    expect(
+      boardAttentionCount(
+        reading([lane("needs-decision"), lane("human-review", [task("a", "human-review")])]),
+      ),
+    ).toBe(1);
+  });
+
+  it("adds the two lanes together", () => {
+    expect(
+      boardAttentionCount(
+        reading([
+          lane("needs-decision", [
+            task("a", "needs-decision", "person"),
+            task("b", "needs-decision", "person"),
+          ]),
+          lane("human-review", [task("c", "human-review")]),
+        ]),
+      ),
+    ).toBe(3);
+  });
+
+  it("is zero when both lanes are there and empty", () => {
+    expect(boardAttentionCount(reading([lane("needs-decision"), lane("human-review")]))).toBe(0);
+  });
+
+  it("leaves out a draft and every other lane, even where a card waits on a person", () => {
+    expect(
+      boardAttentionCount(
+        reading(
+          [
+            lane("draft", [task("a", "draft", "person"), task("b", "draft", "person")]),
+            lane("needs-decision", [task("c", "needs-decision", "person")]),
+            lane("ready", [task("d", "ready", "person")]),
+            lane("implementation", [task("e", "implementation", "team")]),
+            lane("human-review"),
+            lane("completed", [task("f", "completed")]),
+          ],
+          { waiting: 4 },
+        ),
+      ),
+    ).toBe(1);
+  });
+
+  it("does not take a reading it cannot trust for none", () => {
+    const good = [lane("needs-decision", [task("a", "needs-decision")]), lane("human-review")];
+    expect(boardAttentionCount(null)).toBeNull();
+    expect(boardAttentionCount({ view: "development", set: "all" })).toBeNull();
+    expect(boardAttentionCount(reading("oops" as never))).toBeNull();
+    // A lane without its cards, or with cards that are not a list.
+    expect(
+      boardAttentionCount(reading([{ lane: "needs-decision" }, lane("human-review")])),
+    ).toBeNull();
+    expect(
+      boardAttentionCount(
+        reading([{ lane: "needs-decision", cards: "oops" }, lane("human-review")]),
+      ),
+    ).toBeNull();
+    expect(boardAttentionCount(reading([...good, "oops"]))).toBeNull();
+    // A card that is not one, alone or among good ones, in a lane that counts or one that does not.
+    expect(
+      boardAttentionCount(
+        reading([{ lane: "needs-decision", cards: [null] }, lane("human-review")]),
+      ),
+    ).toBeNull();
+    expect(
+      boardAttentionCount(
+        reading([
+          lane("needs-decision"),
+          {
+            lane: "human-review",
+            cards: [task("a", "human-review"), "oops", task("b", "human-review")],
+          },
+        ]),
+      ),
+    ).toBeNull();
+    expect(boardAttentionCount(reading([...good, { lane: "draft", cards: [[]] }]))).toBeNull();
+    // The engine lists every lane, so one that is missing was not read.
+    expect(boardAttentionCount(reading([good[0]]))).toBeNull();
+    expect(boardAttentionCount(reading([lane("human-review")]))).toBeNull();
+    // Another board or view holds fewer tasks than there are.
+    expect(boardAttentionCount(reading(good, { set: "unsorted" }))).toBeNull();
+    expect(boardAttentionCount(reading(good, { set: undefined }))).toBeNull();
+    expect(boardAttentionCount(reading(good, { view: "testing" }))).toBeNull();
+  });
+
+  it("does not add up a lane that counts when it is listed twice", () => {
+    const waiting = lane("needs-decision", [
+      task("a", "needs-decision"),
+      task("b", "needs-decision"),
+    ]);
+    expect(boardAttentionCount(reading([waiting, waiting, lane("human-review")]))).toBeNull();
+    expect(
+      boardAttentionCount(
+        reading([
+          lane("needs-decision", [task("a", "needs-decision")]),
+          lane("human-review"),
+          lane("human-review"),
+        ]),
+      ),
+    ).toBeNull();
+    // Twice and empty both times is no more to be trusted.
+    expect(
+      boardAttentionCount(
+        reading([lane("needs-decision"), lane("needs-decision"), lane("human-review")]),
+      ),
+    ).toBeNull();
+    expect(
+      boardAttentionCount(
+        reading([lane("needs-decision"), lane("human-review"), lane("human-review")]),
+      ),
+    ).toBeNull();
+    // Twice with another lane between the two.
+    expect(boardAttentionCount(reading([waiting, lane("human-review"), waiting]))).toBeNull();
+  });
+
+  it("still counts when a lane that does not count is listed twice", () => {
+    expect(
+      boardAttentionCount(
+        reading([
+          lane("draft", [task("a", "draft")]),
+          lane("needs-decision", [task("b", "needs-decision"), task("c", "needs-decision")]),
+          lane("draft"),
+          lane("human-review", [task("d", "human-review")]),
+        ]),
+      ),
+    ).toBe(3);
   });
 });

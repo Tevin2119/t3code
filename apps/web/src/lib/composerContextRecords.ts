@@ -14,7 +14,9 @@ import type {
   PreviewAnnotationContextRecord,
   PreviewAnnotationPayload,
   ReviewCommentContextRecord,
+  ScopedThreadRef,
   TerminalContextRecord,
+  ThreadContextRecord,
   ThreadId,
 } from "@t3tools/contracts";
 import { upgradeLegacyContextMessage } from "@t3tools/shared/composerContextLegacy";
@@ -22,12 +24,12 @@ import { encodeComposerContextFragment } from "@t3tools/shared/composerContextCl
 import {
   collectComposerContextReferences,
   sanitizeComposerContextLabel,
+  toKindScopedComposerContextId,
 } from "@t3tools/shared/composerContextReferences";
 
 import {
   type ComposerContextReference,
   producerIdFromComposerContextId,
-  toKindScopedComposerContextId,
 } from "./composerContextReferences";
 import type { ComposerFileAttachment, ComposerImageAttachment } from "~/composerDraftStore";
 import type { AttachmentUploadState } from "./attachmentUploadState";
@@ -38,11 +40,6 @@ import {
   type TerminalContextDraft,
 } from "./terminalContext";
 import type { ReviewCommentContext } from "~/reviewCommentContext";
-
-/**
- * Builds the wire records behind a draft's inline references, and the reverse for reading a
- * message. Draft shapes stay what the producing panels emit; only the send boundary converts.
- */
 
 const PREVIEW_LABEL_MAX_CHARS = 48;
 
@@ -125,12 +122,10 @@ export function terminalContextReference(context: TerminalContextDraft): Compose
   };
 }
 
-/** Review producers mint ids in their own grammars; the context id is a folded form of them. */
 export function reviewCommentContextId(commentId: string): ComposerContextId {
   return toKindScopedComposerContextId("review-comment", commentId);
 }
 
-/** Distinct from the screenshot image, which reuses the annotation id as its attachment id. */
 export function previewAnnotationContextId(annotationId: string): ComposerContextId {
   return toKindScopedComposerContextId("preview-annotation", annotationId);
 }
@@ -152,6 +147,27 @@ export function previewAnnotationContextReference(
     kind: "preview-annotation",
     contextId: previewAnnotationContextId(annotation.id),
     label: previewAnnotationContextLabel(annotation),
+  };
+}
+
+function threadContextId(threadId: ThreadId): ComposerContextId {
+  return toKindScopedComposerContextId("thread", threadId);
+}
+
+export function threadContextReference(record: ThreadContextRecord): ComposerContextReference {
+  return { kind: "thread", contextId: record.contextId, label: record.label };
+}
+
+export function threadContextRecord(ref: ScopedThreadRef, title: string): ThreadContextRecord {
+  const label = sanitizeComposerContextLabel(title, "thread");
+  return {
+    version: 1,
+    kind: "thread",
+    contextId: threadContextId(ref.threadId),
+    label,
+    environmentId: ref.environmentId,
+    threadId: ref.threadId,
+    title: label,
   };
 }
 
@@ -255,13 +271,12 @@ export function fileContextReference(file: ComposerFileAttachment): ComposerCont
   };
 }
 
-/** Binds a draft attachment to the id the receiving side will know it by. */
 export interface BoundComposerAttachment {
   attachment: ComposerImageAttachment | ComposerFileAttachment;
   attachmentId: string;
 }
 
-/** Clipboard payloads may only point at attachments that already exist on the server. */
+/** Returns null until the attachment has a server id. */
 export function uploadedAttachmentContextRecord(
   attachment: ComposerImageAttachment | ComposerFileAttachment,
   upload: AttachmentUploadState | undefined,
@@ -295,9 +310,9 @@ export function buildMessageContext(input: {
   terminalContexts: ReadonlyArray<TerminalContextDraft>;
   reviewComments: ReadonlyArray<ReviewCommentContext>;
   previewAnnotations: ReadonlyArray<PreviewAnnotationPayload>;
+  threadContexts?: ReadonlyArray<ThreadContextRecord>;
   attachments?: ReadonlyArray<BoundComposerAttachment>;
 }): OrchestrationMessageContext | undefined {
-  // An annotation's screenshot travels as the image attachment that reuses its id.
   const screenshotAttachmentIds = new Set(
     (input.attachments ?? []).flatMap(({ attachment }) =>
       attachment.type === "image" ? [attachment.id] : [],
@@ -306,6 +321,7 @@ export function buildMessageContext(input: {
   const records: ComposerContextRecord[] = [
     ...input.terminalContexts.map(terminalContextRecord),
     ...input.reviewComments.map(reviewCommentContextRecord),
+    ...(input.threadContexts ?? []),
     ...input.previewAnnotations.map((annotation) =>
       previewAnnotationContextRecord(annotation, {
         screenshotContextId: screenshotAttachmentIds.has(annotation.id) ? annotation.id : undefined,
@@ -316,10 +332,6 @@ export function buildMessageContext(input: {
   return records.length === 0 ? undefined : { version: 1, records };
 }
 
-/**
- * Narrows away the unknown-kind member. Its `kind` is an open string, so a plain
- * `record.kind === "terminal"` check cannot discriminate the union on its own.
- */
 export function asKnownContextRecord(
   record: ComposerContextRecord | undefined,
 ): KnownComposerContextRecord | undefined {
@@ -327,7 +339,6 @@ export function asKnownContextRecord(
   return record as KnownComposerContextRecord;
 }
 
-/** Candidate keys for finding the draft record an imported wire record would reconstruct. */
 export function composerContextImportLookupIds(
   record: KnownComposerContextRecord,
 ): ReadonlyArray<ComposerContextId> {
@@ -346,12 +357,6 @@ export interface ResolvedUserMessageContext {
   recordsById: ReadonlyMap<string, ComposerContextRecord>;
 }
 
-/**
- * The clipboard fragment behind a timeline message selection: only records for
- * chips actually inside the selection travel, so copying prose next to an
- * image never starts importing that image somewhere else. Returns null when no
- * selected chip has backing records.
- */
 export function selectedMessageContextFragment(input: {
   readonly markdown: string;
   readonly records: ReadonlyArray<ComposerContextRecord>;
@@ -375,7 +380,6 @@ export function selectedMessageContextFragment(input: {
   });
 }
 
-/** A message's canonical text plus records; old messages are upgraded in memory on read. */
 export function resolveUserMessageContext(message: {
   text: string;
   context?: OrchestrationMessageContext | undefined;
@@ -389,10 +393,6 @@ export function resolveUserMessageContext(message: {
     recordsById: new Map(resolved.records.map((record) => [record.contextId, record])),
   };
 }
-
-// ---------------------------------------------------------------------------
-// Records back into draft shapes (paste)
-// ---------------------------------------------------------------------------
 
 export function terminalContextDraftFromRecord(
   record: TerminalContextRecord,
@@ -426,7 +426,6 @@ export function reviewCommentFromRecord(record: ReviewCommentContextRecord): Rev
   };
 }
 
-/** Lossy on purpose: geometry and screenshot do not travel; the agent-facing detail does. */
 export function previewAnnotationFromRecord(
   record: PreviewAnnotationContextRecord,
 ): PreviewAnnotationPayload {
@@ -442,8 +441,6 @@ export function previewAnnotationFromRecord(
       rect: { x: 0, y: 0, width: 0, height: 0 },
       element: { ...element, stack: [], pickedAt: new Date().toISOString() },
     })),
-    // Geometry does not travel, but the counts do, so the rebuilt summary still reports
-    // what the annotation marked.
     regions: Array.from({ length: record.regionCount ?? 0 }, (_unused, index) => ({
       id: `${record.contextId}-region-${index + 1}`,
       rect: { x: 0, y: 0, width: 0, height: 0 },
@@ -486,9 +483,6 @@ export function isSameComposerContextPayload(
 ): boolean {
   if (left.kind !== right.kind) return false;
   const stableKey = (record: ComposerContextRecord) => {
-    // Labels are display text and context ids are folded producer ids: neither
-    // distinguishes excerpts, so an imported legacy id must still match the
-    // canonical id reconstructed for the same payload instead of duplicating it.
     const { label: _label, contextId: _contextId, ...rest } = record;
     const sortDeep = (value: unknown): unknown => {
       if (Array.isArray(value)) return value.map(sortDeep);

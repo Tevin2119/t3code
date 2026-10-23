@@ -164,10 +164,6 @@ export type DesktopSshPasswordPromptResolveError =
   | DesktopSshPromptInvalidRequestIdError
   | DesktopSshPromptExpiredError;
 
-export type DesktopSshPasswordPromptError =
-  | DesktopSshPasswordPromptRequestError
-  | DesktopSshPasswordPromptResolveError;
-
 export const DesktopSshPasswordPromptCancellation = Schema.Union([
   DesktopSshPromptCancelledError,
   DesktopSshPromptWindowClosedError,
@@ -311,7 +307,7 @@ export const make = Effect.fn("desktop.sshPasswordPrompts.make")(function* (
       });
     }
 
-    const requestId = yield* crypto.randomUUIDv4.pipe(
+    const requestId = yield* crypto.randomUUIDv4().pipe(
       Effect.mapError(
         (cause) =>
           new DesktopSshPromptRequestIdGenerationError({

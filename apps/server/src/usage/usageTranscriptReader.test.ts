@@ -6,8 +6,11 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
 import { afterEach, assert, beforeEach, describe, it } from "@effect/vitest";
+import type { TranscriptUsageFormat } from "@t3tools/provider-core/server/usage";
+import * as Schema from "effect/Schema";
 
-import { readTranscriptRecords } from "./usageTranscriptReader.ts";
+import { TEST_FORMATS } from "./usageTestFormats.ts";
+import { readTranscriptRecords, transcriptLineGate } from "./usageTranscriptReader.ts";
 
 let dir: string;
 
@@ -49,6 +52,14 @@ function codexModelLine(model: string): string {
   })}\n`;
 }
 
+function codexTierLine(serviceTier: string): string {
+  return `${JSON.stringify({
+    type: "event_msg",
+    timestamp: "2026-08-01T10:00:01Z",
+    payload: { type: "thread_settings_applied", thread_settings: { service_tier: serviceTier } },
+  })}\n`;
+}
+
 function codexUsageLine(outputTokens: number, secondsOffset: number): string {
   return `${JSON.stringify({
     type: "event_msg",
@@ -61,42 +72,109 @@ function codexUsageLine(outputTokens: number, secondsOffset: number): string {
 }
 
 describe("readTranscriptRecords resume", () => {
+  it.each([
+    { mode: "buffered", streamingThresholdBytes: Infinity },
+    { mode: "streaming", streamingThresholdBytes: 0 },
+  ])("counts malformed tails once across $mode reads and resume", async (options) => {
+    const format: TranscriptUsageFormat<{ errors: number }> = {
+      ...TEST_FORMATS.claude,
+      selectFields: { ...TEST_FORMATS.claude.selectFields, usage: true },
+      state: {
+        initial: () => ({ errors: 0 }),
+        schema: Schema.Struct({ errors: Schema.Number }),
+      },
+      parseLine(line, state) {
+        return this.parseProjected(JSON.parse(line), state);
+      },
+      parseProjected(value, state) {
+        if (
+          typeof value === "object" &&
+          value !== null &&
+          "usage" in value &&
+          value.usage === "malformed"
+        ) {
+          state.errors += 1;
+          return [];
+        }
+        return TEST_FORMATS.claude.parseProjected(value, undefined);
+      },
+      readMalformedRecords: (state: { errors: number }) => state.errors,
+    };
+    const path = NodePath.join(dir, "diagnostics.jsonl");
+    const malformed = JSON.stringify({ usage: "malformed" });
+    // Completed lines enter the projected parser only when they cross a stream chunk.
+    const committed = `${JSON.stringify({ usage: "malformed", padding: "x".repeat(256 * 1024) })}\n${claudeLine(1, 5)}`;
+    await NodeFSP.writeFile(path, committed + malformed);
+
+    const first = await readTranscriptRecords(path, format, undefined, options);
+    assert.isNotNull(first);
+    assert.deepStrictEqual(
+      first.records.map((record) => record.totals.outputTokens),
+      [5],
+    );
+    assert.deepStrictEqual(first.tailRecords, []);
+    assert.strictEqual(first.position.resumeOffset, Buffer.byteLength(committed));
+    assert.deepStrictEqual(first.position.state, { errors: 1 });
+    assert.strictEqual(first.malformedRecords, 2);
+
+    const savedPosition = JSON.parse(JSON.stringify(first.position));
+    await NodeFSP.appendFile(path, `\n${claudeLine(2, 7)}${malformed}\n`);
+    const resumed = await readTranscriptRecords(path, format, savedPosition, options);
+    assert.isNotNull(resumed);
+    assert.isTrue(resumed.resumed);
+    assert.deepStrictEqual(
+      resumed.records.map((record) => record.totals.outputTokens),
+      [7],
+    );
+    assert.deepStrictEqual(resumed.position.state, { errors: 3 });
+    assert.strictEqual(resumed.malformedRecords, 3);
+
+    const full = await readTranscriptRecords(path, format, undefined, options);
+    assert.isNotNull(full);
+    assert.deepStrictEqual([...first.records, ...resumed.records], full.records);
+    assert.deepStrictEqual(resumed.tailRecords, full.tailRecords);
+    assert.deepStrictEqual(resumed.position, full.position);
+    assert.strictEqual(resumed.malformedRecords, full.malformedRecords);
+  });
+
   it("parses only appended lines when resuming a grown file", async () => {
     const path = NodePath.join(dir, "claude.jsonl");
     await NodeFSP.writeFile(path, claudeLine(1, 5) + claudeLine(2, 7));
-    const first = await readTranscriptRecords(path, "claude");
+    const first = await readTranscriptRecords(path, TEST_FORMATS.claude);
     assert.isNotNull(first);
     assert.strictEqual(first.records.length, 2);
     assert.isFalse(first.resumed);
+    assert.strictEqual(first.malformedRecords, 0);
 
     await NodeFSP.appendFile(path, claudeLine(3, 11));
-    const second = await readTranscriptRecords(path, "claude", first.position);
+    const second = await readTranscriptRecords(path, TEST_FORMATS.claude, first.position);
     assert.isNotNull(second);
     assert.isTrue(second.resumed);
     assert.strictEqual(second.records.length, 1);
     assert.strictEqual(second.records[0]?.totals.outputTokens, 11);
 
-    // The stitched result matches a from-scratch parse of the whole file.
-    const full = await readTranscriptRecords(path, "claude");
+    const full = await readTranscriptRecords(path, TEST_FORMATS.claude);
     assert.isNotNull(full);
     assert.deepStrictEqual([...first.records, ...second.records], [...full.records]);
   });
 
   it("carries the Codex reducer state across the resume boundary", async () => {
     const path = NodePath.join(dir, "rollout.jsonl");
-    await NodeFSP.writeFile(path, codexMetaLine() + codexModelLine("gpt-5.2-codex"));
-    const first = await readTranscriptRecords(path, "codex");
+    await NodeFSP.writeFile(
+      path,
+      codexMetaLine() + codexModelLine("gpt-5.2-codex") + codexTierLine("ultrafast"),
+    );
+    const first = await readTranscriptRecords(path, TEST_FORMATS.codex);
     assert.isNotNull(first);
     assert.strictEqual(first.records.length, 0);
 
-    // The appended usage event has no turn_context or session_meta of its own;
-    // model and session must come from the state captured before the boundary.
     await NodeFSP.appendFile(path, codexUsageLine(9, 5));
-    const second = await readTranscriptRecords(path, "codex", first.position);
+    const second = await readTranscriptRecords(path, TEST_FORMATS.codex, first.position);
     assert.isNotNull(second);
     assert.isTrue(second.resumed);
     assert.strictEqual(second.records.length, 1);
     assert.strictEqual(second.records[0]?.model, "gpt-5.2-codex");
+    assert.strictEqual(second.records[0]?.speed, "ultrafast");
     assert.strictEqual(second.records[0]?.sessionId, "codex-session-1");
   });
 
@@ -106,14 +184,14 @@ describe("readTranscriptRecords resume", () => {
       path,
       codexMetaLine() + codexModelLine("gpt-5.2-codex") + codexUsageLine(9, 5),
     );
-    const first = await readTranscriptRecords(path, "codex");
+    const first = await readTranscriptRecords(path, TEST_FORMATS.codex);
     assert.isNotNull(first);
     assert.strictEqual(first.records.length, 1);
 
     // Codex re-emits an unchanged token_count on stream boundaries; the copy
     // lands after the resume point and must still be dropped.
     await NodeFSP.appendFile(path, codexUsageLine(9, 5) + codexUsageLine(21, 8));
-    const second = await readTranscriptRecords(path, "codex", first.position);
+    const second = await readTranscriptRecords(path, TEST_FORMATS.codex, first.position);
     assert.isNotNull(second);
     assert.isTrue(second.resumed);
     assert.deepStrictEqual(
@@ -126,16 +204,14 @@ describe("readTranscriptRecords resume", () => {
     const path = NodePath.join(dir, "claude.jsonl");
     const unterminated = claudeLine(2, 7).trimEnd();
     await NodeFSP.writeFile(path, claudeLine(1, 5) + unterminated);
-    const first = await readTranscriptRecords(path, "claude");
+    const first = await readTranscriptRecords(path, TEST_FORMATS.claude);
     assert.isNotNull(first);
     assert.strictEqual(first.records.length, 1);
     assert.strictEqual(first.tailRecords.length, 1);
     assert.strictEqual(first.tailRecords[0]?.totals.outputTokens, 7);
 
-    // Completing the line and appending another re-reads from the resume
-    // point, so the once-tail record arrives exactly once as a line record.
     await NodeFSP.appendFile(path, `\n${claudeLine(3, 11)}`);
-    const second = await readTranscriptRecords(path, "claude", first.position);
+    const second = await readTranscriptRecords(path, TEST_FORMATS.claude, first.position);
     assert.isNotNull(second);
     assert.isTrue(second.resumed);
     assert.deepStrictEqual(
@@ -148,12 +224,11 @@ describe("readTranscriptRecords resume", () => {
   it("re-parses from the start when the guard bytes no longer match", async () => {
     const path = NodePath.join(dir, "claude.jsonl");
     await NodeFSP.writeFile(path, claudeLine(1, 5));
-    const first = await readTranscriptRecords(path, "claude");
+    const first = await readTranscriptRecords(path, TEST_FORMATS.claude);
     assert.isNotNull(first);
 
-    // Same path, larger size, different content: a replaced file, not growth.
     await NodeFSP.writeFile(path, claudeLine(4, 13) + claudeLine(5, 17));
-    const second = await readTranscriptRecords(path, "claude", first.position);
+    const second = await readTranscriptRecords(path, TEST_FORMATS.claude, first.position);
     assert.isNotNull(second);
     assert.isFalse(second.resumed);
     assert.deepStrictEqual(
@@ -165,11 +240,11 @@ describe("readTranscriptRecords resume", () => {
   it("re-parses from the start when the file shrank below the resume point", async () => {
     const path = NodePath.join(dir, "claude.jsonl");
     await NodeFSP.writeFile(path, claudeLine(1, 5) + claudeLine(2, 7));
-    const first = await readTranscriptRecords(path, "claude");
+    const first = await readTranscriptRecords(path, TEST_FORMATS.claude);
     assert.isNotNull(first);
 
     await NodeFSP.writeFile(path, claudeLine(3, 11));
-    const second = await readTranscriptRecords(path, "claude", first.position);
+    const second = await readTranscriptRecords(path, TEST_FORMATS.claude, first.position);
     assert.isNotNull(second);
     assert.isFalse(second.resumed);
     assert.deepStrictEqual(
@@ -179,8 +254,6 @@ describe("readTranscriptRecords resume", () => {
   });
 
   it("parses a line larger than one stream chunk", async () => {
-    // Tool-heavy transcripts carry multi-megabyte single lines; they arrive
-    // split across many chunks and must reassemble into one record.
     const path = NodePath.join(dir, "claude.jsonl");
     const bigLine = `${JSON.stringify({
       type: "assistant",
@@ -196,7 +269,7 @@ describe("readTranscriptRecords resume", () => {
     })}\n`;
     await NodeFSP.writeFile(path, bigLine + claudeLine(2, 7));
 
-    const parsed = await readTranscriptRecords(path, "claude");
+    const parsed = await readTranscriptRecords(path, TEST_FORMATS.claude);
     assert.isNotNull(parsed);
     assert.deepStrictEqual(
       parsed.records.map((record) => record.totals.outputTokens),
@@ -204,7 +277,43 @@ describe("readTranscriptRecords resume", () => {
     );
   });
 
-  it("returns null for an unreadable file", async () => {
-    assert.isNull(await readTranscriptRecords(NodePath.join(dir, "missing.jsonl"), "claude"));
+  it("keeps a CRLF Codex reducer line whose marker straddles a stream chunk", async () => {
+    const path = NodePath.join(dir, "rollout.jsonl");
+    const crlf = (line: string) => line.replace("\n", "\r\n");
+    const modelLine = crlf(codexModelLine("gpt-5.2-codex"));
+    const head = crlf(codexMetaLine());
+    const fillerBytes =
+      256 * 1024 - Buffer.byteLength(head) - modelLine.indexOf("turn_context") - 4;
+    const fillerEnvelope = crlf(`${JSON.stringify({ type: "response_item", output: "" })}\n`);
+    const padding = "é".repeat((fillerBytes - Buffer.byteLength(fillerEnvelope)) / 2);
+    const filler = crlf(`${JSON.stringify({ type: "response_item", output: padding })}\n`);
+    const content = head + filler + modelLine + crlf(codexUsageLine(40, 2));
+    await NodeFSP.writeFile(path, content);
+
+    const result = await readTranscriptRecords(path, TEST_FORMATS.codex);
+    assert.isNotNull(result);
+    assert.strictEqual(result.records.length, 1);
+    assert.strictEqual(result.records[0]?.model, "gpt-5.2-codex");
+    assert.strictEqual(result.records[0]?.sessionId, "codex-session-1");
+    assert.strictEqual(result.position.resumeOffset, Buffer.byteLength(content));
+  });
+});
+
+describe("transcriptLineGate", () => {
+  const gates = {
+    one: transcriptLineGate(['"usage"']),
+    several: transcriptLineGate(['"token_count"', '"session_meta"', '"a.b(c)"']),
+  };
+  const markers = { one: ['"usage"'], several: ['"token_count"', '"session_meta"', '"a.b(c)"'] };
+
+  it("matches markers beside multi-byte and malformed UTF-8", () => {
+    const invalid = Buffer.from([0xff, 0xc3]);
+    for (const kind of ["one", "several"] as const) {
+      for (const marker of markers[kind]) {
+        assert.isTrue(gates[kind](Buffer.from(`{"text":"日本語 é",${marker}:1}`)));
+        assert.isTrue(gates[kind](Buffer.concat([invalid, Buffer.from(marker), invalid])));
+        assert.isFalse(gates[kind](Buffer.from(`{"text":"日本語 é ${marker.slice(1, -1)}"}`)));
+      }
+    }
   });
 });

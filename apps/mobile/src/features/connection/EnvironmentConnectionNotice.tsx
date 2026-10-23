@@ -1,12 +1,14 @@
+import { Button } from "../../components/ui/Button";
+import { AppActivityIndicator } from "../../components/ui/AppActivityIndicator";
+import { ConnectionTraceId } from "./ConnectionTraceId";
 import {
   type EnvironmentConnectionPhase,
   type EnvironmentConnectionPresentation,
 } from "@t3tools/client-runtime/connection";
-import { SymbolView } from "../../components/AppSymbol";
-import { ActivityIndicator, Pressable, View } from "react-native";
+import { SymbolView } from "../../components/ui/AppSymbol";
+import { View } from "react-native";
 
-import { AppText as Text } from "../../components/AppText";
-import { copyTextWithHaptic } from "../../lib/copyTextWithHaptic";
+import { AppText as Text } from "../../components/ui/AppText";
 
 function noticeTitle(phase: EnvironmentConnectionPhase, environmentLabel: string): string {
   switch (phase) {
@@ -65,7 +67,7 @@ export function EnvironmentConnectionNotice(props: {
     <View className="flex-1 items-center justify-center px-8">
       <View className="max-w-[320px] items-center gap-3">
         {isRetrying ? (
-          <ActivityIndicator size="small" colorClassName={"accent-icon-muted"} />
+          <AppActivityIndicator size="small" colorClassName={"accent-icon-muted"} />
         ) : (
           <SymbolView
             name={props.connection.phase === "offline" ? "wifi.slash" : "bolt.horizontal.circle"}
@@ -81,32 +83,14 @@ export function EnvironmentConnectionNotice(props: {
         <Text className="text-center text-sm leading-normal text-foreground-muted">
           {noticeDetail(props.connection.phase, props.resourceName, props.connection.error)}
           {props.connection.traceId ? (
-            <>
-              {" Trace ID: "}
-              <Text
-                accessibilityHint="Copies the trace ID"
-                accessibilityRole="button"
-                className="underline decoration-dotted"
-                onPress={() =>
-                  copyTextWithHaptic(props.connection.traceId!, {
-                    target: "connection-trace-id",
-                  })
-                }
-              >
-                {props.connection.traceId}
-              </Text>
-            </>
+            <ConnectionTraceId traceId={props.connection.traceId} />
           ) : null}
         </Text>
 
         {props.connection.phase !== "offline" && props.connection.phase !== "unsupported" ? (
-          <Pressable
-            accessibilityRole="button"
-            className="mt-1 rounded-full bg-subtle px-4 py-2.5 active:opacity-70"
-            onPress={props.onRetry}
-          >
-            <Text className="text-sm font-t3-bold text-foreground">Retry now</Text>
-          </Pressable>
+          <View className="mt-1">
+            <Button label="Retry now" tone="secondary" onPress={props.onRetry} />
+          </View>
         ) : null}
       </View>
     </View>

@@ -1,9 +1,25 @@
 import { ChevronDownIcon, LayersIcon, PencilIcon, PlusIcon, SearchIcon, XIcon } from "lucide-react";
 import type { EnvironmentId } from "@t3tools/contracts";
-import { useMemo, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
-import { parseRepositories, targetLine, type DeliveryTarget } from "../../lib/delivery";
+import {
+  parseRepositories,
+  targetLine,
+  type DeliveryRepository,
+  type DeliveryTarget,
+} from "../../lib/delivery";
 import { useDeliveryAct, useDeliveryRead } from "../../state/delivery";
+import { useProjects } from "../../state/entities";
+import {
+  PROJECT_CHOICE_PREFIX,
+  addedRepository,
+  knownRepositories,
+  repositoryChoices,
+  repositoryInFolder,
+  type RepositoryChoice,
+} from "./BoardPicker.repositories";
+import { RepositoryBrowse } from "./BoardPicker.browse";
+import { BaseBranchPicker } from "./BoardPicker.branches";
 
 import { Button } from "../ui/button";
 import { Checkbox } from "../ui/checkbox";
@@ -17,14 +33,17 @@ import {
   DialogTitle,
 } from "../ui/dialog";
 import { Input } from "../ui/input";
+import { InputGroup, InputGroupAddon, InputGroupInput } from "../ui/input-group";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import {
   Select,
+  SelectGroup,
+  SelectGroupLabel,
   SelectItem,
   SelectPopup,
   SelectTrigger,
   SelectValue,
-  selectTriggerVariants,
+  SelectButton,
 } from "../ui/select";
 import { Textarea } from "../ui/textarea";
 
@@ -34,6 +53,7 @@ export interface PickerItem {
   readonly description: string;
   /** "own" for one a person made, which can be renamed or removed. */
   readonly kind: string;
+  readonly scope?: "local" | "shared";
   readonly count?: number | null;
   /** For a board: the repository and base branch its tasks are done in. */
   readonly target?: DeliveryTarget | null;
@@ -78,10 +98,9 @@ export function BoardPicker(props: {
       <PopoverTrigger
         render={
           props.look === "field" ? (
-            <button
-              type="button"
+            <SelectButton
               aria-label={props.label}
-              className={selectTriggerVariants({ size: "compact" })}
+              size="compact"
               data-board-picker={props.marker}
               data-board-picker-value={props.value}
             />
@@ -90,7 +109,7 @@ export function BoardPicker(props: {
               size="xs"
               variant="ghost"
               aria-label={props.label}
-              className="max-w-48 min-w-0"
+              className="max-w-48 min-w-0 max-md:max-w-full"
               data-board-picker={props.marker}
               data-board-picker-value={props.value}
             />
@@ -105,19 +124,21 @@ export function BoardPicker(props: {
           aria-hidden
         />
       </PopoverTrigger>
-      <PopoverPopup align="start" className="w-80 max-w-[calc(100vw-2rem)] p-0">
+      <PopoverPopup padding="none" align="start" className="w-80 max-w-[calc(100vw-2rem)] ">
         <div className="flex items-center gap-1 border-b border-border p-2">
-          <span className="relative flex min-w-0 flex-1 items-center">
-            <SearchIcon className="pointer-events-none absolute left-2 z-10 size-3.5 text-muted-foreground" />
-            <Input
+          <InputGroup>
+            <InputGroupAddon>
+              <SearchIcon />
+            </InputGroupAddon>
+            <InputGroupInput
               aria-label={`Search ${props.label.toLowerCase()}`}
               placeholder="Search"
-              className="h-7 pl-7 text-xs"
+              size="sm"
               value={query}
               onChange={(event) => setQuery(event.target.value)}
               data-board-picker-search
             />
-          </span>
+          </InputGroup>
           {query ? (
             <Button
               size="icon-xs"
@@ -191,8 +212,10 @@ export function BoardPicker(props: {
                   {item.count !== undefined && item.count !== null ? (
                     <span className="text-xs text-muted-foreground tabular-nums">{item.count}</span>
                   ) : null}
-                  {item.kind === "own" ? (
-                    <span className="ml-auto text-[10px] text-muted-foreground">yours</span>
+                  {item.scope || item.kind === "own" ? (
+                    <span className="ml-auto text-3xs text-muted-foreground">
+                      {item.scope ?? "yours"}
+                    </span>
                   ) : null}
                 </span>
                 {item.description ? (
@@ -202,7 +225,7 @@ export function BoardPicker(props: {
                 ) : null}
                 {item.kind === "own" && item.target !== undefined ? (
                   <span
-                    className={`truncate text-[11px] ${item.target?.ok ? "text-muted-foreground" : "text-warning"}`}
+                    className={`truncate text-2xs ${item.target?.ok ? "text-muted-foreground" : "text-warning"}`}
                     data-board-picker-target={item.target?.ok ? "ok" : "none"}
                   >
                     {targetLine(item.target ?? null)}
@@ -253,6 +276,7 @@ export function BoardDialog(props: {
   /** For a board: where the repositories are read and added. */
   readonly environmentId?: EnvironmentId | null;
   readonly by?: string;
+  readonly workspace?: string | null;
   /** For a view: every column, and the ones already chosen. */
   readonly columns?: ReadonlyArray<{ readonly lane: string; readonly title: string }>;
   readonly chosenColumns?: ReadonlyArray<string>;
@@ -265,8 +289,11 @@ export function BoardDialog(props: {
     readonly lanes?: ReadonlyArray<string>;
     readonly repository?: string;
     readonly base?: string;
+    readonly workspace?: string;
   }) => void;
   readonly onRemove?: () => void;
+  /** For a board being edited: opens what its seats run on. */
+  readonly onSeats?: () => void;
 }) {
   const [title, setTitle] = useState(props.editing?.title ?? "");
   const [description, setDescription] = useState(props.editing?.description ?? "");
@@ -279,51 +306,191 @@ export function BoardDialog(props: {
     isBoard ? (props.environmentId ?? null) : null,
     "/api/repositories",
   );
-  const repositories = useMemo(
-    () => parseRepositories(reposRead.body).filter((item) => item.kind !== "qualification"),
-    [reposRead.body],
-  );
+  // Repositories the engine has added here and not yet listed, so they can be chosen at once.
+  const [added, setAdded] = useState<ReadonlyArray<DeliveryRepository>>([]);
+  const known = knownRepositories(parseRepositories(reposRead.body), added);
+  const repositories = known.filter((item) => item.kind !== "qualification");
+  // T3's own projects in this environment are offered too, and added to the engine when chosen.
+  const projects = useProjects();
+  const choices = isBoard
+    ? repositoryChoices({ repositories: known, projects, environmentId: props.environmentId })
+    : [];
+  const projectChoices = choices.filter((choice) => choice.kind === "project");
+  // A project is added only once the engine's list is read, so one it has is never added again.
+  const projectBlocked = reposRead.error
+    ? "The engine's repositories could not be read, so this cannot be added."
+    : reposRead.body === null && reposRead.isPending
+      ? "Reading the engine's repositories…"
+      : null;
   const addAct = useDeliveryAct(props.environmentId ?? null, "add repository");
   const [repository, setRepository] = useState(props.editing?.target?.repository ?? "");
   const [base, setBase] = useState(props.editing?.target?.base ?? "");
   const [adding, setAdding] = useState(false);
-  const [folder, setFolder] = useState("");
-  const [repoName, setRepoName] = useState("");
-  const folderName =
-    folder
-      .trim()
-      .replace(/[\\/]+$/, "")
-      .split(/[\\/]/)
-      .pop() ?? "";
+  // The name of the repository being added; nothing else is chosen meanwhile.
+  const [registering, setRegistering] = useState<string | null>(null);
+  const registeringRef = useRef(false);
+  const [chooseProblem, setChooseProblem] = useState<string | null>(null);
+  // An add that ends after the dialog closed or its environment changed is let go.
+  const generation = useRef(0);
+  useEffect(
+    () => () => {
+      generation.current += 1;
+      registeringRef.current = false;
+      setRegistering(null);
+      setAdded([]);
+    },
+    // oxlint-disable-next-line react/exhaustive-effect-dependencies -- Resets when the environment changes.
+    [props.environmentId],
+  );
+  // A board can instead be bound to a T3 project folder that is not a repository: chat and
+  // non-code work, which the engine runs in that folder without Git.
+  const initialWorkspace = props.editing
+    ? props.editing.target?.repository
+      ? ""
+      : (props.editing.target?.path ?? "")
+    : (props.workspace ?? "");
+  const [binding, setBinding] = useState(initialWorkspace ? "workspace" : "repository");
+  const [workspace, setWorkspace] = useState(initialWorkspace);
+  const projectFolders = [
+    ...new Map([
+      ...projects
+        .filter((project) => project.environmentId === props.environmentId)
+        .map((project) => [project.workspaceRoot, project.title] as const),
+      ...(initialWorkspace
+        ? [[initialWorkspace, initialWorkspace.split(/[\\/]/).pop() ?? initialWorkspace] as const]
+        : []),
+    ]).entries(),
+  ];
   const [addProblem, setAddProblem] = useState<string | null>(null);
   const chosen = repositories.find((item) => item.id === repository) ?? null;
-  const name = title.trim() || (isBoard && !props.editing ? (chosen?.title ?? "") : "");
+  const name =
+    title.trim() ||
+    (isBoard && !props.editing
+      ? binding === "workspace"
+        ? (projectFolders.find(([folder]) => folder === workspace)?.[1] ?? "")
+        : (chosen?.title ?? "")
+      : "");
   const wasBound = Boolean(props.editing?.target?.repository);
   const bindingChanged =
+    binding !==
+      (props.editing?.target?.path && !props.editing.target.repository
+        ? "workspace"
+        : "repository") ||
+    workspace !== (props.editing?.target?.repository ? "" : (props.editing?.target?.path ?? "")) ||
     repository !== (props.editing?.target?.repository ?? "") ||
     base !== (props.editing?.target?.base ?? "");
   const needsBinding = isBoard && (!props.editing || wasBound || bindingChanged);
-  const bindingReady = !needsBinding || (Boolean(repository) && Boolean(base));
-  const addRepository = async () => {
-    setAddProblem(null);
+  const bindingReady =
+    binding === "workspace"
+      ? Boolean(workspace)
+      : !needsBinding || (Boolean(repository) && Boolean(base));
+  const select = (item: DeliveryRepository) => {
+    setRepository(item.id);
+    setBase(item.defaultBase ?? "");
+  };
+  /** Adds a folder to the engine; null when the answer came too late to be used. */
+  const register = async (
+    path: string,
+    repositoryTitle: string,
+  ): Promise<
+    | { readonly ok: true; readonly repository: DeliveryRepository }
+    | { readonly ok: false; readonly why: string }
+    | null
+  > => {
+    const at = generation.current;
+    registeringRef.current = true;
+    setRegistering(repositoryTitle);
+    // The engine request settles into a result, so release can follow the await.
     const result = await addAct("/api/repositories", {
-      path: folder.trim(),
-      title: repoName.trim() || folderName,
+      path,
+      title: repositoryTitle,
       by: props.by,
     });
-    if (!result.ok) {
-      setAddProblem(result.why);
+    if (at !== generation.current) return null;
+    registeringRef.current = false;
+    setRegistering(null);
+    if (!result.ok) return { ok: false, why: result.why };
+    reposRead.refresh();
+    const made = addedRepository(result.body, { path, title: repositoryTitle });
+    if (!made) {
+      return {
+        ok: false,
+        why: `${repositoryTitle} was added, but the engine did not say which repository it is. Choose it once the list is read again.`,
+      };
+    }
+    setAdded((current) => [...current.filter((item) => item.id !== made.id), made]);
+    return { ok: true, repository: made };
+  };
+  const repositoryTrigger = useRef<HTMLButtonElement>(null);
+  const baseTrigger = useRef<HTMLButtonElement>(null);
+  // Where focus goes once the add form closes: back to the list, or on to the added one's branch.
+  const focusAfterAdd = useRef<"repository" | "base" | null>(null);
+  useEffect(() => {
+    if (adding || !focusAfterAdd.current) return;
+    (focusAfterAdd.current === "base" ? baseTrigger : repositoryTrigger).current?.focus();
+    focusAfterAdd.current = null;
+  }, [adding]);
+  const addRepository = async (path: string, repositoryTitle: string) => {
+    if (registeringRef.current || !path || !repositoryTitle.trim()) return;
+    setAddProblem(null);
+    setChooseProblem(null);
+    const outcome = await register(path, repositoryTitle.trim());
+    if (!outcome) return;
+    if (!outcome.ok) {
+      setAddProblem(outcome.why);
       return;
     }
-    const made = result.body as { readonly id?: string; readonly defaultBase?: string } | null;
-    reposRead.refresh();
-    if (made?.id) {
-      setRepository(made.id);
-      setBase(made.defaultBase ?? "");
-    }
+    select(outcome.repository);
+    focusAfterAdd.current = "base";
     setAdding(false);
-    setFolder("");
-    setRepoName("");
+  };
+  /** Closes the add form. An add still going is let go here, though the engine may finish it. */
+  const cancelAdd = () => {
+    generation.current += 1;
+    registeringRef.current = false;
+    setRegistering(null);
+    setAddProblem(null);
+    focusAfterAdd.current = "repository";
+    setAdding(false);
+  };
+  const choiceFor = (value: string): RepositoryChoice | null => {
+    const listed = choices.find((choice) => choice.value === value);
+    if (listed) return listed;
+    // A project row chosen again after its add: the engine has its folder now.
+    const project = value.startsWith(PROJECT_CHOICE_PREFIX)
+      ? projects.find((item) => `${PROJECT_CHOICE_PREFIX}${item.id}` === value)
+      : undefined;
+    const same = project ? repositoryInFolder(known, project.workspaceRoot) : null;
+    return same ? { kind: "engine", value: same.id, repository: same } : null;
+  };
+  const chooseRepository = async (value: string) => {
+    if (registeringRef.current) return;
+    setChooseProblem(null);
+    if (value === ADD_REPOSITORY) {
+      setAddProblem(null);
+      setAdding(true);
+      return;
+    }
+    const choice = choiceFor(value);
+    if (!choice) return;
+    if (choice.kind === "engine") {
+      select(choice.repository);
+      return;
+    }
+    if (projectBlocked) {
+      setChooseProblem(projectBlocked);
+      return;
+    }
+    setRepository("");
+    setBase("");
+    setAddProblem(null);
+    const outcome = await register(choice.folder, choice.name);
+    if (!outcome) return;
+    if (!outcome.ok) {
+      setChooseProblem(outcome.why);
+      return;
+    }
+    select(outcome.repository);
   };
   return (
     <Dialog open onOpenChange={(open) => (!open && !props.busy ? props.onClose() : undefined)}>
@@ -336,119 +503,162 @@ export function BoardDialog(props: {
               : "A view shows the board's columns you choose, for whichever board is chosen."}
           </DialogDescription>
         </DialogHeader>
-        <DialogPanel className="flex flex-col gap-3">
+        <DialogPanel className="flex flex-col ">
           {isBoard ? (
             <div className="flex flex-col gap-2" data-board-dialog-binding>
-              {props.editing && !wasBound ? (
-                <p className="text-xs text-warning" data-board-dialog-unbound>
-                  Repository not configured. Choose one: tasks filed on this board from now on are
-                  done there. Tasks already on it keep what they have.
-                </p>
-              ) : null}
-              <label className="flex flex-col gap-1">
-                <span className="text-xs font-medium">Repository</span>
-                <Select
-                  value={repository || null}
-                  onValueChange={(value) => {
-                    if (value === ADD_REPOSITORY) {
-                      setAdding(true);
-                      return;
-                    }
-                    const next = repositories.find((item) => item.id === value);
-                    setRepository(String(value ?? ""));
-                    setBase(next?.defaultBase ?? "");
-                  }}
-                >
-                  <SelectTrigger
-                    aria-label="Repository"
-                    size="compact"
-                    data-board-dialog-repository
+              <label className="flex items-center gap-2 text-xs" data-board-dialog-workspace-mode>
+                <Checkbox
+                  checked={binding === "workspace"}
+                  onCheckedChange={(on) => setBinding(on ? "workspace" : "repository")}
+                />
+                Chat and non-code work in a project folder, with no repository
+              </label>
+              {binding === "workspace" ? (
+                <label className="flex flex-col gap-1">
+                  <span className="text-xs font-medium">Project folder</span>
+                  <Select
+                    value={workspace || null}
+                    onValueChange={(value) => setWorkspace(String(value ?? ""))}
                   >
-                    <SelectValue placeholder="Choose the repository its tasks are done in">
-                      {chosen ? chosen.title : undefined}
-                    </SelectValue>
-                  </SelectTrigger>
-                  <SelectPopup alignItemWithTrigger={false}>
-                    <SelectItem value={ADD_REPOSITORY}>
-                      <PlusIcon className="size-3.5" />
-                      Add a repository by its folder…
-                    </SelectItem>
-                    {repositories.map((item) => (
-                      <SelectItem key={item.id} value={item.id} disabled={!item.ok}>
-                        <span className="flex min-w-0 flex-col">
-                          <span className="truncate">{item.title}</span>
-                          <span className="truncate text-[11px] text-muted-foreground">
-                            {item.ok ? item.path : item.problem}
-                          </span>
-                        </span>
-                      </SelectItem>
-                    ))}
-                  </SelectPopup>
-                </Select>
-              </label>
-              {adding ? (
-                <div className="flex flex-col gap-1 rounded-md border border-border p-2">
-                  <Input
-                    aria-label="Folder of the repository"
-                    placeholder="C:/path/to/the/repository"
-                    value={folder}
-                    onChange={(event) => setFolder(event.target.value)}
-                    data-board-dialog-folder
-                  />
-                  <Input
-                    aria-label="Name of the repository"
-                    placeholder={folderName ? `Name (${folderName})` : "Name of the repository"}
-                    value={repoName}
-                    onChange={(event) => setRepoName(event.target.value)}
-                    data-board-dialog-repository-name
-                  />
-                  <span className="text-[11px] text-muted-foreground">
-                    The folder is read, not changed. Work is done in worktrees made beside it.
+                    <SelectTrigger aria-label="Board project folder" size="compact">
+                      <SelectValue placeholder="Choose a T3 project">
+                        {projectFolders.find(([folder]) => folder === workspace)?.[1]}
+                      </SelectValue>
+                    </SelectTrigger>
+                    <SelectPopup alignItemWithTrigger={false}>
+                      {projectFolders.map(([folder, name]) => (
+                        <SelectItem key={folder} value={folder}>
+                          {name}
+                        </SelectItem>
+                      ))}
+                    </SelectPopup>
+                  </Select>
+                  <span className="text-2xs text-muted-foreground">
+                    {workspace || "Add a project using T3's project picker first."} No Git
+                    repository is created. Submitted tasks keep their existing work folder.
                   </span>
-                  {addProblem ? <span className="text-xs text-warning">{addProblem}</span> : null}
-                  <span className="flex justify-end gap-2">
-                    <Button size="xs" variant="ghost" onClick={() => setAdding(false)}>
-                      Cancel
-                    </Button>
-                    <Button
-                      size="xs"
-                      disabled={!folder.trim()}
-                      onClick={() => void addRepository()}
-                      data-board-dialog-add-repository
+                </label>
+              ) : (
+                <>
+                  {props.editing && !wasBound ? (
+                    <p className="text-xs text-warning" data-board-dialog-unbound>
+                      Repository not configured. Choose one: tasks filed on this board from now on
+                      are done there. Tasks already on it keep what they have.
+                    </p>
+                  ) : null}
+                  <label className="flex flex-col gap-1">
+                    <span className="text-xs font-medium">Repository</span>
+                    <Select
+                      value={repository || null}
+                      onValueChange={(value) => void chooseRepository(String(value ?? ""))}
+                      disabled={registering !== null}
                     >
-                      Add repository
-                    </Button>
-                  </span>
-                </div>
-              ) : null}
-              <label className="flex flex-col gap-1">
-                <span className="text-xs font-medium">Base branch</span>
-                <Select
-                  value={base || null}
-                  onValueChange={(value) => setBase(String(value ?? ""))}
-                  disabled={!chosen}
-                >
-                  <SelectTrigger aria-label="Base branch" size="compact" data-board-dialog-base>
-                    <SelectValue placeholder="Choose a repository first">
-                      {base || undefined}
-                    </SelectValue>
-                  </SelectTrigger>
-                  <SelectPopup alignItemWithTrigger={false}>
-                    {(chosen?.branches ?? []).map((branch) => (
-                      <SelectItem key={branch} value={branch}>
-                        {branch}
-                        {branch === chosen?.defaultBase ? (
-                          <span className="text-[11px] text-muted-foreground"> (default)</span>
+                      <SelectTrigger
+                        ref={repositoryTrigger}
+                        aria-label="Repository"
+                        size="compact"
+                        data-board-dialog-repository
+                      >
+                        <SelectValue placeholder="Choose the repository its tasks are done in">
+                          {chosen ? chosen.title : (registering ?? undefined)}
+                        </SelectValue>
+                      </SelectTrigger>
+                      <SelectPopup alignItemWithTrigger={false}>
+                        <SelectItem value={ADD_REPOSITORY}>
+                          <PlusIcon className="size-3.5" />
+                          Add a repository by its folder…
+                        </SelectItem>
+                        {repositories.map((item) => (
+                          <SelectItem
+                            key={item.id}
+                            value={item.id}
+                            label={item.title}
+                            disabled={!item.ok}
+                          >
+                            <span className="flex min-w-0 flex-col">
+                              <span className="truncate">{item.title}</span>
+                              <span className="truncate text-2xs text-muted-foreground">
+                                {item.path}
+                              </span>
+                              {item.ok ? null : (
+                                <span className="truncate text-2xs text-warning">
+                                  {item.problem ?? "It cannot be read."}
+                                </span>
+                              )}
+                            </span>
+                          </SelectItem>
+                        ))}
+                        {projectChoices.length > 0 ? (
+                          <SelectGroup>
+                            <SelectGroupLabel>
+                              T3 projects, added to the engine when chosen
+                            </SelectGroupLabel>
+                            {projectChoices.map((choice) =>
+                              choice.kind === "project" ? (
+                                <SelectItem
+                                  key={choice.value}
+                                  value={choice.value}
+                                  label={choice.name}
+                                  disabled={projectBlocked !== null}
+                                  data-board-dialog-project={choice.folder}
+                                >
+                                  <span className="flex min-w-0 flex-col">
+                                    <span className="truncate">{choice.name}</span>
+                                    <span className="truncate text-2xs text-muted-foreground">
+                                      {choice.folder}
+                                    </span>
+                                    {projectBlocked ? (
+                                      <span className="truncate text-2xs text-muted-foreground">
+                                        {projectBlocked}
+                                      </span>
+                                    ) : null}
+                                  </span>
+                                </SelectItem>
+                              ) : null,
+                            )}
+                          </SelectGroup>
                         ) : null}
-                      </SelectItem>
-                    ))}
-                  </SelectPopup>
-                </Select>
-                <span className="text-[11px] text-muted-foreground">
-                  Work on a task starts from this branch. The team works in a worktree of its own;
-                  the branch itself is not changed.
-                </span>
-              </label>
+                      </SelectPopup>
+                    </Select>
+                  </label>
+                  <p
+                    role="alert"
+                    aria-live="polite"
+                    className="text-xs text-warning empty:hidden"
+                    data-board-dialog-repository-problem
+                  >
+                    {chooseProblem}
+                  </p>
+                  {adding && props.environmentId ? (
+                    <RepositoryBrowse
+                      key={props.environmentId}
+                      environmentId={props.environmentId}
+                      projects={projects}
+                      registering={registering !== null}
+                      problem={addProblem}
+                      onCancel={cancelAdd}
+                      onAdd={(path, repositoryTitle) => void addRepository(path, repositoryTitle)}
+                    />
+                  ) : null}
+                  <label className="flex flex-col gap-1">
+                    <span className="text-xs font-medium">Base branch</span>
+                    <BaseBranchPicker
+                      key={`${props.environmentId ?? ""}:${chosen?.id ?? ""}`}
+                      environmentId={props.environmentId ?? null}
+                      cwd={chosen?.path ?? null}
+                      defaultBase={chosen?.defaultBase ?? null}
+                      value={base}
+                      onChange={setBase}
+                      disabled={!chosen || registering !== null}
+                      ref={baseTrigger}
+                    />
+                    <span className="text-2xs text-muted-foreground">
+                      Work on a task starts from this branch. The team works in a worktree of its
+                      own; the branch itself is not changed.
+                    </span>
+                  </label>
+                </>
+              )}
             </div>
           ) : null}
           <Input
@@ -482,14 +692,14 @@ export function BoardDialog(props: {
               ))}
             </div>
           ) : null}
-          {isBoard && !bindingReady ? (
+          {isBoard && (registering !== null || !bindingReady) ? (
             <p className="text-xs text-muted-foreground" data-board-dialog-why>
-              {!repository
-                ? "Choose the repository its tasks are done in."
-                : chosen && !chosen.ok
-                  ? `${chosen.title}: ${chosen.problem ?? "it cannot be read"}.`
-                  : chosen && chosen.branches.length === 0
-                    ? `${chosen.title} has no branch to start work from.`
+              {registering !== null
+                ? `Adding ${registering}…`
+                : !repository
+                  ? "Choose the repository its tasks are done in."
+                  : chosen && !chosen.ok
+                    ? `${chosen.title}: ${chosen.problem ?? "it cannot be read"}.`
                     : "Choose the branch work starts from."}
             </p>
           ) : null}
@@ -504,6 +714,37 @@ export function BoardDialog(props: {
               {!name ? "Give the view a name." : "Choose at least one column."}
             </p>
           ) : null}
+          {isBoard && props.editing && props.onSeats
+            ? (() => {
+                // Opening the seats closes this dialog: what was changed here is saved or let go first.
+                const unsaved =
+                  title !== (props.editing.title ?? "") ||
+                  description !== (props.editing.description ?? "") ||
+                  bindingChanged;
+                return (
+                  <div className="flex items-center justify-between gap-2 rounded-md border border-border p-2">
+                    <span className="text-xs text-muted-foreground">
+                      What the seats of each team run on for this board's tasks, and who stands in
+                      for them.
+                    </span>
+                    <Button
+                      size="xs"
+                      variant="outline"
+                      disabled={props.busy || unsaved}
+                      onClick={props.onSeats}
+                      data-board-dialog-seats
+                    >
+                      Seats…
+                    </Button>
+                    {unsaved ? (
+                      <span className="text-2xs text-muted-foreground" data-board-dialog-seats-why>
+                        Save or cancel the changes here first.
+                      </span>
+                    ) : null}
+                  </div>
+                );
+              })()
+            : null}
           {props.problem ? <p className="text-xs text-warning">{props.problem}</p> : null}
           {confirming ? (
             <p className="rounded-md border border-border bg-muted/40 p-2 text-xs">
@@ -533,6 +774,7 @@ export function BoardDialog(props: {
             <Button
               disabled={
                 props.busy ||
+                registering !== null ||
                 !name ||
                 (props.kind === "view" && lanes.length === 0) ||
                 !bindingReady
@@ -542,7 +784,12 @@ export function BoardDialog(props: {
                   title: name,
                   description: description.trim(),
                   ...(props.kind === "view" ? { lanes } : {}),
-                  ...(isBoard && repository && base && (!props.editing || bindingChanged)
+                  ...(isBoard && binding === "workspace" ? { workspace } : {}),
+                  ...(isBoard &&
+                  binding === "repository" &&
+                  repository &&
+                  base &&
+                  (!props.editing || bindingChanged)
                     ? { repository, base }
                     : {}),
                 })

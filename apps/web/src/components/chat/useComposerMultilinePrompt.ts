@@ -1,6 +1,7 @@
 import { useLayoutEffect, useState } from "react";
+import { observeResize } from "../../lib/observeResize";
 
-export function measureComposerMultilinePrompt(body: HTMLElement): boolean | null {
+function measureComposerMultilinePrompt(body: HTMLElement): boolean | null {
   const editor = body.querySelector<HTMLElement>('[data-testid="composer-editor"]');
   if (!editor || editor.clientWidth === 0) return null;
 
@@ -30,14 +31,12 @@ export function useComposerMultilinePrompt(body: HTMLElement | null): boolean {
       if (next !== null) setIsMultiline(next);
     };
     measure();
-    const resizeObserver = new ResizeObserver(measure);
-    resizeObserver.observe(body);
     const editor = body.querySelector<HTMLElement>('[data-testid="composer-editor"]');
-    if (editor) resizeObserver.observe(editor);
+    const stopObserving = observeResize(editor ? [body, editor] : body, measure);
     const mutationObserver = new MutationObserver(measure);
     mutationObserver.observe(body, { childList: true, characterData: true, subtree: true });
     return () => {
-      resizeObserver.disconnect();
+      stopObserving();
       mutationObserver.disconnect();
     };
   }, [body]);

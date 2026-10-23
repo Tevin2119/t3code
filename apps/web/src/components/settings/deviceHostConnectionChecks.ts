@@ -14,7 +14,11 @@ export interface DeviceHostCheckTarget {
 export type DeviceHostCheck =
   | { status: "pending" }
   | { status: "local" }
-  | { status: "connected"; platforms: ReadonlyArray<DevicePlatformAvailability> }
+  | {
+      status: "connected";
+      platforms: ReadonlyArray<DevicePlatformAvailability>;
+      tools?: DeviceHostSummary["tools"];
+    }
   | { status: "failed"; error: string };
 
 const decodeDeviceHostDraft = Schema.decodeUnknownOption(SshDeviceHostConfig);
@@ -31,7 +35,6 @@ export function deviceHostConnectionKey(host: SshDeviceHostConfig) {
   return JSON.stringify([host.target.trim(), host.port, host.identityFile?.trim() || undefined]);
 }
 
-/** Each environment settles independently so one failure cannot hide the other results. */
 export async function checkDeviceHostConnections(
   targets: ReadonlyArray<DeviceHostCheckTarget>,
   host: SshDeviceHostConfig,
@@ -48,7 +51,11 @@ export async function checkDeviceHostConnections(
           target.environmentId,
           result.kind === "local"
             ? { status: "local" }
-            : { status: "connected", platforms: result.platforms },
+            : {
+                status: "connected",
+                platforms: result.platforms,
+                ...(result.tools ? { tools: result.tools } : {}),
+              },
         );
       } catch (error) {
         report(target.environmentId, {

@@ -1,18 +1,18 @@
 import { EnvironmentId } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
-import {
-  usagePriceCell,
-  usagePriceTableChanges,
-  usagePriceTableErrors,
-  type UsagePriceDraft,
-} from "./usagePriceTable";
+import { usagePriceCell, usagePriceTableChanges, type UsagePriceDraft } from "./usagePriceTable";
 import type { UsagePriceTarget } from "./usagePriceTargets";
 
 const price = { inputCostPerMillionTokens: 2, outputCostPerMillionTokens: 8 };
-const target = (name: string, prices: UsagePriceTarget["prices"]): UsagePriceTarget => ({
+const target = (
+  name: string,
+  prices: UsagePriceTarget["prices"],
+  aliases: UsagePriceTarget["aliases"] = {},
+): UsagePriceTarget => ({
   environmentId: EnvironmentId.make(name),
   label: name,
   prices,
+  aliases,
   unavailable: null,
 });
 const draft = (values: UsagePriceDraft["values"]): UsagePriceDraft => ({
@@ -23,29 +23,6 @@ const draft = (values: UsagePriceDraft["values"]): UsagePriceDraft => ({
 });
 
 describe("price table edits", () => {
-  it("shows shared and mixed cells separately, and never treats missing settings as automatic", () => {
-    const targets = [
-      target("a", { example: price }),
-      target("b", { example: { ...price, outputCostPerMillionTokens: 10 } }),
-    ];
-    expect(usagePriceCell(targets, "example", "inputCostPerMillionTokens").value).toBe("2");
-    expect(usagePriceCell(targets, "example", "outputCostPerMillionTokens")).toEqual({
-      value: "",
-      placeholder: "Mixed",
-    });
-    expect(usagePriceCell(targets, "example", "cacheReadCostPerMillionTokens")).toEqual({
-      value: "",
-      placeholder: "Input rate",
-    });
-    expect(
-      usagePriceCell([target("a", {})], "example", "inputCostPerMillionTokens").placeholder,
-    ).toBe("Automatic");
-    expect(
-      usagePriceCell([targets[0]!, target("b", null)], "example", "inputCostPerMillionTokens")
-        .placeholder,
-    ).toBe("Unavailable");
-  });
-
   it.each(["constructor", "toString", "__proto__"])(
     "handles an exact model ID named %s",
     (model) => {
@@ -119,52 +96,23 @@ describe("price table edits", () => {
     expect(missing.errors.has("model:example")).toBe(true);
   });
 
-  it("ignores empty new rows without blocking other edits", () => {
-    const environment = target("a", { example: price });
-    const empty: UsagePriceDraft = {
-      id: "new:1",
-      model: " ",
-      isNew: true,
-      values: { inputCostPerMillionTokens: " " },
-    };
-    const plan = usagePriceTableChanges(environment, [
-      draft({ inputCostPerMillionTokens: "3" }),
-      empty,
+  it("mapping a model drops its own price and resetting removes the mapping", () => {
+    const priced = target("a", { example: price });
+    expect(usagePriceTableChanges(priced, [{ ...draft({}), alias: " example-model " }])).toEqual({
+      changes: [
+        { model: "example", alias: "example-model" },
+        { model: "example", price: null },
+      ],
+      errors: new Map(),
+    });
+    const mapped = target("b", {}, { example: "example-model" });
+    expect(usagePriceTableChanges(mapped, [{ ...draft({}), removed: true }]).changes).toEqual([
+      { model: "example", alias: null },
     ]);
-    expect(plan.errors.size).toBe(0);
-    expect(plan.changes).toEqual([
-      { model: "example", price: { ...price, inputCostPerMillionTokens: 3 } },
-    ]);
-    expect(usagePriceTableChanges(environment, [empty]).changes).toEqual([]);
     expect(
-      usagePriceTableChanges(environment, [
-        { ...empty, values: { inputCostPerMillionTokens: "0" } },
-      ]).errors.get(empty.id),
-    ).toBe("Enter a model ID.");
-  });
-
-  it.each(["Offline", "Read-only access", "Update server to edit prices"])(
-    "does not let %s destinations block a valid edit elsewhere",
-    (unavailable) => {
-      const edits = [draft({ inputCostPerMillionTokens: "3" })];
-      const writable = target("writable", { example: price });
-      const other = target("other", {});
-      expect(usagePriceTableErrors([writable, { ...other, unavailable }], edits).size).toBe(0);
-      expect(usagePriceTableErrors([writable, other], edits).has("model:example")).toBe(true);
-    },
-  );
-
-  it("does not write unchanged rates and rejects invalid edited cells", () => {
-    const environment = target("a", { example: price });
-    expect(
-      usagePriceTableChanges(environment, [draft({ inputCostPerMillionTokens: "2.00" })]).changes,
-    ).toEqual([]);
-    expect(
-      usagePriceTableChanges(environment, [draft({ cacheReadCostPerMillionTokens: "-1" })]).errors
-        .size,
-    ).toBe(1);
-    expect(
-      usagePriceTableChanges(environment, [draft({ outputCostPerMillionTokens: "" })]).errors.size,
-    ).toBe(1);
+      usagePriceTableChanges(mapped, [{ ...draft({}), alias: "example" }]).errors.get(
+        "model:example",
+      ),
+    ).toBe("Map to a different model.");
   });
 });

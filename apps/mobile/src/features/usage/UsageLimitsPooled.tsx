@@ -3,28 +3,35 @@ import { useNavigation, type StaticScreenProps } from "@react-navigation/native"
 import { EnvironmentId } from "@t3tools/contracts";
 import {
   collectLimitAccounts,
+  collectExternalUsageLinks,
   collectLimitNotices,
   collectLimitPools,
-  formatDuration,
+  cursorUsageWindowDetails,
+  displayLimitWindows,
   formatResetsIn,
+  paceRemainingPercent,
   remainingPercent,
   type LimitAccount,
   type LimitPoolWindow,
 } from "@t3tools/shared/usageLimits";
-import { useId, useState } from "react";
-import { Pressable, ScrollView, View } from "react-native";
+import { Fragment, type ReactNode, useId, useState } from "react";
+import { Linking, Pressable, ScrollView, View } from "react-native";
 import { Defs, Path, Pattern, Rect, Svg } from "react-native-svg";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-import { SymbolView } from "../../components/AppSymbol";
-import { AppText as Text } from "../../components/AppText";
+import { SymbolView } from "../../components/ui/AppSymbol";
+import { AppText as Text } from "../../components/ui/AppText";
 import { ProviderIcon } from "../../components/ProviderIcon";
 import { SettingsScreen } from "../settings/components/SettingsScreen";
 import { environmentPresentations } from "../../state/presentation";
 import { ResetCredits } from "./UsageLimitsSection";
-import { useProviderColors } from "./usageProviders";
+import { usageProviderKind, useProviderColors } from "./usageProviders";
 
-const DRIVER_LABEL: Partial<Record<string, string>> = { codex: "Codex", claudeAgent: "Claude" };
+const DRIVER_LABEL: Partial<Record<string, string>> = {
+  codex: "Codex",
+  claudeAgent: "Claude",
+  antigravity: "Antigravity",
+};
 const PACE_LABEL = { ahead: "Ahead of pace", on: "On pace", under: "Under pace" } as const;
 
 function accountName(account: LimitAccount) {
@@ -34,34 +41,95 @@ function accountName(account: LimitAccount) {
   return `${local[0] ?? ""}${domain[0] ?? ""}`.toUpperCase() || "Account";
 }
 
-/** The spent share comes back at reset. SVG keeps the hatching static on both platforms. */
+// Same gap-and-tick as the Limits rows: two clipped copies of the segment leave a see-through gap.
+function PaceGap({
+  timeLeft,
+  children,
+}: {
+  readonly timeLeft: number | null;
+  readonly children: ReactNode;
+}) {
+  const [width, setWidth] = useState(0);
+  const tickX =
+    timeLeft === null || width < 6
+      ? null
+      : Math.min(Math.max((width * timeLeft) / 100, 3), width - 3);
+  return (
+    <View
+      pointerEvents="none"
+      className="absolute inset-0"
+      onLayout={(event) => setWidth(event.nativeEvent.layout.width)}
+    >
+      {tickX === null
+        ? children
+        : (
+            [
+              [0, tickX - 3],
+              [tickX + 3, width],
+            ] as const
+          ).map(([start, end]) => (
+            <View
+              key={start}
+              className="absolute top-0 bottom-0 overflow-hidden"
+              style={{ left: start, width: end - start }}
+            >
+              <View className="absolute top-0 bottom-0" style={{ left: -start, width }}>
+                {children}
+              </View>
+            </View>
+          ))}
+      {tickX !== null ? (
+        <View
+          className="absolute top-0.5 bottom-0.5 w-0.5 rounded-full bg-foreground"
+          style={{ left: tickX - 1 }}
+        />
+      ) : null}
+    </View>
+  );
+}
+
 function AccountSegment({
   remaining,
   color,
-  pending,
+  refillPercent,
 }: {
   readonly remaining: number;
   readonly color: string;
-  readonly pending: boolean;
+  readonly refillPercent: number;
 }) {
   const patternId = useId().replace(/:/g, "");
+  const [size, setSize] = useState({ width: 0, height: 0 });
   return (
-    <Svg width="100%" height="100%" accessible={false}>
-      <Defs>
-        <Pattern id={patternId} width={6} height={6} patternUnits="userSpaceOnUse">
-          <Path d="M-1 1L1 -1M0 6L6 0M5 7L7 5" stroke={color} strokeWidth={1} opacity={0.22} />
-        </Pattern>
-      </Defs>
-      {pending ? (
-        <Rect
-          x={`${remaining}%`}
-          width={`${100 - remaining}%`}
-          height="100%"
-          fill={`url(#${patternId})`}
-        />
+    <View
+      pointerEvents="none"
+      className="absolute inset-0"
+      onLayout={(event) => {
+        const { width, height } = event.nativeEvent.layout;
+        setSize((previous) =>
+          previous.width === width && previous.height === height ? previous : { width, height },
+        );
+      }}
+    >
+      {size.width > 0 && size.height > 0 ? (
+        // Numeric canvas dimensions clear Android SVG geometry cached before a segment resized.
+        <Svg width={size.width} height={size.height} accessible={false}>
+          <Defs>
+            <Pattern id={patternId} width={6} height={6} patternUnits="userSpaceOnUse">
+              <Path d="M-1 1L1 -1M0 6L6 0M5 7L7 5" stroke={color} strokeWidth={1} opacity={0.22} />
+            </Pattern>
+          </Defs>
+          {refillPercent > 0 ? (
+            <Rect
+              x={`${100 - Math.min(100 - remaining, refillPercent)}%`}
+              width={`${Math.min(100 - remaining, refillPercent)}%`}
+              height="100%"
+              fill={`url(#${patternId})`}
+            />
+          ) : null}
+          <Rect width={`${remaining}%`} height="100%" fill={color} opacity={0.35} />
+        </Svg>
       ) : null}
-      <Rect width={`${remaining}%`} height="100%" fill={color} opacity={0.35} />
-    </Svg>
+    </View>
   );
 }
 
@@ -70,11 +138,15 @@ function PoolWindowCard({
   color,
   now,
   environmentIds,
+  label,
+  description,
 }: {
   readonly pool: LimitPoolWindow;
   readonly color: string;
   readonly now: number;
   readonly environmentIds: readonly string[] | null;
+  readonly label?: string;
+  readonly description?: string;
 }) {
   const navigation = useNavigation();
   const nextRefill = pool.resets.find((reset) => reset.restoresPercent > 0);
@@ -93,10 +165,10 @@ function PoolWindowCard({
       },
     });
   return (
-    <View className="gap-3 rounded-[24px] border-continuous bg-card p-4">
+    <View className="gap-3 rounded-[24px] border-continuous bg-grouped-card p-4">
       <View className="flex-row items-start justify-between gap-3">
         <View className="gap-1">
-          <Text className="text-sm font-t3-medium text-foreground">{pool.label}</Text>
+          <Text className="text-sm font-t3-medium text-foreground">{label ?? pool.label}</Text>
           <View className="flex-row items-baseline gap-1.5">
             <Text className="text-3xl font-t3-bold tabular-nums text-foreground">
               {pool.remainingPercent}%
@@ -108,31 +180,48 @@ function PoolWindowCard({
           <Text className="text-xs text-foreground-tertiary">{PACE_LABEL[pool.pace]}</Text>
         ) : null}
       </View>
+      {description ? <Text className="text-xs text-foreground-muted">{description}</Text> : null}
       {nextRefill ? (
         <Text className="text-xs tabular-nums text-foreground-muted">
           ↻ +{nextRefill.restoresPercent}%{" "}
-          {nextRefill.at <= now ? "now" : `in ${formatDuration(nextRefill.at - now)}`}
+          {formatResetsIn(nextRefill.member.window, now)
+            ?.replace("resets in ", "in ")
+            .replace("resets now", "now")}
         </Text>
       ) : null}
       <View className="flex-row gap-1">
-        {pool.columns.map(({ account, window }, index) => {
-          if (!window) return <View key={account.key} className="h-7 min-w-0 flex-1" />;
+        {pool.columns.map((member, index) => {
+          if (!member.window)
+            return <View key={member.account.key} className="h-7 min-w-0 flex-1" />;
+          const { account, window } = member;
+          const timeLeft = paceRemainingPercent(window, now);
           return (
             <Pressable
               key={account.key}
               accessibilityRole="button"
-              accessibilityLabel={`Segment ${index + 1}, ${accountName(account)}, ${remainingPercent(window)}% left`}
+              accessibilityLabel={`Segment ${index + 1}, ${accountName(account)}, ${remainingPercent(window)}% left${timeLeft === null ? "" : `, ${timeLeft}% of the window left`}`}
               accessibilityHint="Show account details"
               onPress={() => openAccount(account)}
-              className="h-7 min-w-0 flex-1 overflow-hidden rounded-md bg-subtle"
+              className="h-7 min-w-0 flex-1 rounded-md"
             >
-              <AccountSegment
-                remaining={remainingPercent(window)}
-                color={color}
-                pending={Boolean(window.resetsAt)}
-              />
-              <View pointerEvents="none" className="absolute inset-0 items-center justify-center">
-                <Text className="text-xs font-t3-medium tabular-nums text-foreground">
+              <PaceGap timeLeft={timeLeft}>
+                <View className="absolute inset-0 rounded-md bg-subtle" />
+                <View className="absolute inset-0 overflow-hidden rounded-md">
+                  <AccountSegment
+                    remaining={remainingPercent(window)}
+                    color={color}
+                    refillPercent={window.resetsAt ? member.refillPercent : 0}
+                  />
+                </View>
+              </PaceGap>
+              <View
+                pointerEvents="none"
+                className="absolute inset-0 items-center justify-center overflow-hidden rounded-md"
+              >
+                <Text
+                  numberOfLines={1}
+                  className="max-w-full shrink text-xs font-t3-medium tabular-nums text-foreground"
+                >
                   {index + 1}
                 </Text>
               </View>
@@ -170,9 +259,16 @@ function PoolWindowCard({
               </Text>
               <View className="flex-row items-center gap-1">
                 {resetsIn ? (
-                  <Text className="text-xs tabular-nums text-foreground-muted">
-                    {resetsIn.replace("resets in ", "↻ ")}
-                  </Text>
+                  <>
+                    <SymbolView
+                      name="arrow.clockwise"
+                      size={12}
+                      tintColorClassName="accent-foreground-muted"
+                    />
+                    <Text className="text-xs tabular-nums text-foreground-muted">
+                      {resetsIn.replace("resets in ", "")}
+                    </Text>
+                  </>
                 ) : null}
                 {credits ? (
                   <>
@@ -196,45 +292,88 @@ export function UsageLimitsSection({
   now,
   failedLabels,
   selectedEnvironmentIds,
+  cursorPrompt,
 }: {
   readonly now: number;
   readonly failedLabels: readonly string[];
   readonly selectedEnvironmentIds: ReadonlySet<EnvironmentId> | null;
+  readonly cursorPrompt?: ReactNode;
 }) {
-  const presentations = useAtomValue(environmentPresentations.presentationsAtom);
+  const presentations = useAtomValue(environmentPresentations.presentationsWithProvidersAtom);
   const selected =
     selectedEnvironmentIds === null
       ? presentations
       : new Map([...presentations].filter(([id]) => selectedEnvironmentIds.has(id)));
   const pools = collectLimitPools(collectLimitAccounts(selected), now);
   const notices = collectLimitNotices(selected);
+  const externalLinks = collectExternalUsageLinks(selected);
   const colors = useProviderColors();
+  const cursorPromptAt =
+    Math.max(
+      pools.findIndex((pool) => pool.driver === "codex"),
+      pools.findIndex((pool) => pool.driver === "claudeAgent"),
+    ) + 1;
   return (
     <View className="gap-6">
-      {pools.length === 0 && notices.length === 0 && failedLabels.length === 0 ? (
+      {pools.length === 0 &&
+      notices.length === 0 &&
+      failedLabels.length === 0 &&
+      !cursorPrompt &&
+      externalLinks.length === 0 ? (
         <Text className="py-12 text-center text-base text-foreground-muted">
           {selected.size === 0
             ? "Select an environment to see limits."
             : "No provider on the selected environments reports subscription limits."}
         </Text>
       ) : null}
-      {pools.map((pool) => (
-        <View key={pool.driver} className="gap-3">
-          <View className="flex-row items-center gap-2 px-1">
-            <ProviderIcon provider={pool.driver} size={18} />
-            <Text className="text-base font-t3-medium text-foreground">
-              {DRIVER_LABEL[pool.driver] ?? pool.driver}
-            </Text>
-          </View>
-          {pool.windows.map((window) => (
-            <PoolWindowCard
-              key={`${window.kind}:${window.id}`}
-              pool={window}
-              color={pool.driver === "claudeAgent" ? colors.claude : colors.codex}
-              now={now}
-              environmentIds={selectedEnvironmentIds === null ? null : [...selectedEnvironmentIds]}
-            />
-          ))}
+      {pools.map((pool, index) => {
+        const windows = displayLimitWindows(pool);
+        return (
+          <Fragment key={pool.driver}>
+            {index === cursorPromptAt ? cursorPrompt : null}
+            <View className="gap-3">
+              <View className="flex-row items-center gap-2 px-1">
+                <ProviderIcon provider={pool.driver} size={18} />
+                <Text className="text-base font-t3-medium text-foreground">
+                  {DRIVER_LABEL[pool.driver] ?? pool.driver}
+                </Text>
+              </View>
+              {windows.map((window) => {
+                const details =
+                  pool.driver === "cursor" ? cursorUsageWindowDetails(window.id) : undefined;
+                return (
+                  <PoolWindowCard
+                    key={`${window.kind}:${window.id}`}
+                    pool={window}
+                    color={colors[usageProviderKind(pool.driver) ?? "codex"]}
+                    now={now}
+                    environmentIds={
+                      selectedEnvironmentIds === null ? null : [...selectedEnvironmentIds]
+                    }
+                    label={details?.label}
+                    description={details?.description}
+                  />
+                );
+              })}
+            </View>
+          </Fragment>
+        );
+      })}
+      {cursorPromptAt === pools.length ? cursorPrompt : null}
+      {externalLinks.map((link) => (
+        <View key={link.url} className="gap-3 rounded-xl border border-border-subtle p-4">
+          <Text className="text-base font-t3-medium text-foreground">{link.label}</Text>
+          <Text className="text-xs text-foreground-muted">{link.accounts.join(", ")}</Text>
+          {link.message ? (
+            <Text className="text-sm text-foreground-muted">{link.message}</Text>
+          ) : null}
+          <Pressable
+            accessibilityRole="link"
+            className="min-h-11 justify-center"
+            onPress={() => void Linking.openURL(link.url).catch(() => undefined)}
+          >
+            <Text className="text-sm font-t3-medium text-primary">Manage usage</Text>
+          </Pressable>
         </View>
       ))}
       {notices.length > 0 || failedLabels.length > 0 ? (
@@ -275,10 +414,9 @@ type AccountScreenProps = StaticScreenProps<{
   now: number;
 }>;
 
-/** Resolve the account again so live quota and credit updates reach the open detail screen. */
 export function UsageLimitAccountScreen({ route }: AccountScreenProps) {
   const insets = useSafeAreaInsets();
-  const presentations = useAtomValue(environmentPresentations.presentationsAtom);
+  const presentations = useAtomValue(environmentPresentations.presentationsWithProvidersAtom);
   const { accountKey, windowId, windowKind, environmentIds, now } = route.params;
   const selectedIds =
     environmentIds === null ? null : new Set(environmentIds.map((id) => EnvironmentId.make(id)));
@@ -292,6 +430,7 @@ export function UsageLimitAccountScreen({ route }: AccountScreenProps) {
     .find((candidate) => candidate.driver === account?.driver)
     ?.windows.find((candidate) => candidate.id === windowId && candidate.kind === windowKind);
   const window = pool?.members.find((member) => member.account.key === accountKey)?.window;
+  const evenPace = window ? paceRemainingPercent(window, now) : null;
   const reset = pool?.resets.find((candidate) => candidate.member.account.key === accountKey);
   const [revealed, setRevealed] = useState(false);
   return (
@@ -332,7 +471,7 @@ export function UsageLimitAccountScreen({ route }: AccountScreenProps) {
                 </Text>
               ) : null}
             </View>
-            <View className="gap-3 rounded-[24px] border-continuous bg-card p-4">
+            <View className="gap-3 rounded-[24px] border-continuous bg-grouped-card p-4">
               <Text className="text-sm font-t3-medium text-foreground">{window.label}</Text>
               <Text className="text-3xl font-t3-bold tabular-nums text-foreground">
                 {remainingPercent(window)}% left
@@ -346,13 +485,18 @@ export function UsageLimitAccountScreen({ route }: AccountScreenProps) {
                   })}
                 </Text>
               ) : null}
+              {evenPace !== null ? (
+                <Text className="text-sm text-foreground-muted">
+                  Even pace: {evenPace}% left by now
+                </Text>
+              ) : null}
               {reset && reset.restoresPercent > 0 ? (
                 <Text className="text-sm text-foreground-muted">
                   Restores {reset.restoresPercent}% of the pool
                 </Text>
               ) : null}
             </View>
-            <View className="gap-2 rounded-[24px] border-continuous bg-card p-4">
+            <View className="gap-2 rounded-[24px] border-continuous bg-grouped-card p-4">
               <Text className="text-sm font-t3-medium text-foreground">
                 {account.environments.length ? "Signed in" : "Source"}
               </Text>
@@ -367,7 +511,7 @@ export function UsageLimitAccountScreen({ route }: AccountScreenProps) {
               )}
             </View>
             {account.redeem && account.limits.resetCredits ? (
-              <View className="gap-3 rounded-[24px] border-continuous bg-card p-4">
+              <View className="gap-3 rounded-[24px] border-continuous bg-grouped-card p-4">
                 <Text className="text-sm font-t3-medium text-foreground">Reset credits</Text>
                 <ResetCredits
                   key={account.key}

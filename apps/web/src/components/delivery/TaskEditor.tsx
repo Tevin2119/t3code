@@ -12,7 +12,7 @@ import {
 import { useMemo, useRef, useState } from "react";
 
 import { isElectron } from "../../env";
-import { useThread } from "../../state/entities";
+import { useThreadShell, useThreadProjection } from "../../state/entities";
 import {
   parseCards,
   parseTarget,
@@ -121,7 +121,7 @@ function Field(props: {
     <label className="flex flex-col gap-1">
       <span className="text-xs font-medium">{props.label}</span>
       {props.children}
-      {props.hint ? <span className="text-[11px] text-muted-foreground">{props.hint}</span> : null}
+      {props.hint ? <span className="text-2xs text-muted-foreground">{props.hint}</span> : null}
     </label>
   );
 }
@@ -156,7 +156,12 @@ export function TaskEditor(props: {
       ? scopeThreadRef(EnvironmentId.make(environmentId), ThreadId.make(threadId))
       : null;
   }, [props.fromConversation, props.taskId]);
-  const conversation = useThread(conversationRef);
+  const conversationShell = useThreadShell(conversationRef);
+  const conversationDetail = useThreadProjection(conversationRef);
+  const conversation =
+    conversationShell && conversationDetail
+      ? { title: conversationShell.title, messages: conversationDetail.projection.messages }
+      : null;
   const act = useDeliveryAct(props.environmentId, "task draft");
   const teamsRead = useDeliveryRead(props.environmentId, "/api/teams");
   const teams = useMemo(
@@ -245,6 +250,7 @@ export function TaskEditor(props: {
     readonly description: string;
     readonly repository?: string;
     readonly base?: string;
+    readonly workspace?: string;
   }) => {
     setBoardBusy(true);
     setBoardProblem(null);
@@ -327,6 +333,12 @@ export function TaskEditor(props: {
     // Where it came from goes with it, so the task and the conversation lead to each other.
     ...(conversationRef && !props.taskId ? { origin: `thread:${props.fromConversation}` } : {}),
     ...(!props.taskId && boardNow ? { board: boardNow } : {}),
+    ...(!props.taskId &&
+    ["chat", "non-code"].includes(flow) &&
+    chosenBoardTarget?.path &&
+    !chosenBoardTarget.repository
+      ? { workspace: chosenBoardTarget.path }
+      : {}),
   });
 
   /** Saves the draft and answers with its id, or null when the engine refused. */
@@ -368,12 +380,10 @@ export function TaskEditor(props: {
     if (working.current) return;
     working.current = true;
     setBusy(kind);
-    try {
-      await work();
-    } finally {
+    await work().finally(() => {
       working.current = false;
       setBusy(null);
-    }
+    });
   };
 
   const onSave = () =>
@@ -449,7 +459,8 @@ export function TaskEditor(props: {
   // Nothing is submitted without a repository it can be done in: there is no fallback.
   // Both the flag and the repository: a target is usable only when it names one and it works.
   const targetBlock =
-    taskTarget?.ok && taskTarget.repository
+    taskTarget?.ok &&
+    (taskTarget.repository || (["chat", "non-code"].includes(flow) && taskTarget.path))
       ? null
       : saved && taskTarget?.repository
         ? `${targetLine(taskTarget)}. The task keeps this target: put it on a board whose repository works and press Use, or fix the repository.`
@@ -465,7 +476,7 @@ export function TaskEditor(props: {
   const state = !props.taskId ? "Not saved yet" : changed ? "Changed since it was saved" : "Saved";
 
   return (
-    <SidebarInset className="isolate h-dvh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground">
+    <SidebarInset className="isolate h-dvh min-h-0 overflow-hidden overscroll-y-none  ">
       <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-task-editor {...intake.handlers}>
         <WorkspacePageHeader electron={isElectron} className="h-auto">
           <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2 py-2">
@@ -660,7 +671,7 @@ export function TaskEditor(props: {
                 />
                 <FilesInTransit transit={uploads.transit} onDismiss={uploads.dismiss} />
                 {(saved?.files.length ?? 0) === 0 && uploads.transit.length === 0 ? (
-                  <p className="text-[11px] text-muted-foreground">
+                  <p className="text-2xs text-muted-foreground">
                     None yet. The team is pointed at every file attached here.
                   </p>
                 ) : null}
@@ -705,7 +716,7 @@ export function TaskEditor(props: {
                     onCreate={() => setBoardDialog({ editing: null })}
                     onEdit={(item) => setBoardDialog({ editing: item })}
                   />
-                  <span className="text-[11px] text-muted-foreground">
+                  <span className="text-2xs text-muted-foreground">
                     Where the task will show once saved or submitted. It can be moved later.
                   </span>
                   {/* Where the work is done: taken from the board when the task is made, and kept. */}
@@ -713,7 +724,7 @@ export function TaskEditor(props: {
                     className="flex flex-col gap-1 rounded-md border border-border px-2 py-1.5"
                     data-task-editor-target={taskTarget?.ok ? "ok" : "none"}
                   >
-                    <span className="text-xs font-medium">Repository · base branch</span>
+                    <span className="text-xs font-medium">Work folder or repository</span>
                     <span
                       className={`text-xs ${taskTarget?.ok ? "" : "text-warning"}`}
                       data-task-editor-target-line
@@ -721,16 +732,18 @@ export function TaskEditor(props: {
                       {targetLine(taskTarget)}
                     </span>
                     {taskTarget?.ok && taskTarget.path ? (
-                      <span className="truncate font-mono text-[11px] text-muted-foreground">
+                      <span className="truncate font-mono text-2xs text-muted-foreground">
                         {taskTarget.path}
                       </span>
                     ) : null}
-                    <span className="text-[11px] text-muted-foreground">
+                    <span className="text-2xs text-muted-foreground">
                       {saved
                         ? "Kept by the task. Moving it to another board does not change it."
-                        : taskTarget?.repository
-                          ? "Taken from the board. The team works in a worktree of its own from this branch."
-                          : "Choose a board bound to a repository. A task is not submitted without one."}
+                        : taskTarget?.path && !taskTarget.repository
+                          ? "Taken from the project board. Available for team chat and non-code work."
+                          : taskTarget?.repository
+                            ? "Taken from the board. The team works in a worktree of its own from this branch."
+                            : "Choose a board bound to a repository. A task is not submitted without one."}
                     </span>
                     {retargetTo ? (
                       <Button
@@ -796,7 +809,7 @@ export function TaskEditor(props: {
                 <h2 className="text-xs font-medium">Flow</h2>
                 <FlowChoice flows={flows} value={flow} onChange={(next) => set({ flow: next })} />
                 {chosenFlow && chosenFlow.problems.length > 0 ? (
-                  <ul className="list-disc pl-5 text-[11px] text-warning" data-flow-problems>
+                  <ul className="list-disc pl-5 text-2xs text-warning" data-flow-problems>
                     {chosenFlow.problems.map((item) => (
                       <li key={item}>{item}</li>
                     ))}
@@ -852,7 +865,7 @@ export function TaskEditor(props: {
                 <ul className="flex flex-col gap-1 text-xs">
                   {links.map((item) => (
                     <li key={item.id} className="flex items-center gap-1">
-                      <span className="font-mono text-[10px] text-muted-foreground">
+                      <span className="font-mono text-3xs text-muted-foreground">
                         #{item.number}
                       </span>
                       <span className="min-w-0 flex-1 truncate">{item.title}</span>
@@ -885,7 +898,7 @@ export function TaskEditor(props: {
                             className="flex w-full cursor-pointer items-center gap-1 px-2 py-1 text-left hover:bg-accent"
                             onClick={() => void link(card)}
                           >
-                            <span className="font-mono text-[10px] text-muted-foreground">
+                            <span className="font-mono text-3xs text-muted-foreground">
                               #{card.number}
                             </span>
                             <span className="min-w-0 flex-1 truncate">{card.title}</span>

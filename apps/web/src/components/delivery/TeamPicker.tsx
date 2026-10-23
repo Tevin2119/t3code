@@ -1,28 +1,15 @@
-import { DELIVERY_HARNESS_BY_DRIVER, type EnvironmentId } from "@t3tools/contracts";
+import type { EnvironmentId } from "@t3tools/contracts";
 import { InfoIcon, UsersIcon } from "lucide-react";
-import { useEffect, useMemo } from "react";
+import { useId } from "react";
 
-import { parseTeams, resolveTeamChoice, rolesForHarness } from "../../lib/delivery";
-import {
-  seatForThread,
-  seatKey,
-  seatOverrides,
-  takeOverFor,
-  type SeatForThread,
-} from "../../lib/deliverySeats";
-import {
-  SEAT_TAKEOVER_OVER,
-  useDeliveryDraftStore,
-  useDeliveryEnabled,
-  useDeliveryRead,
-  useDraftTeamChoice,
-} from "../../state/delivery";
+import { seatOverrides, type SeatForThread } from "../../lib/deliverySeats";
 import { Button } from "../ui/button";
 import { Popover, PopoverPopup, PopoverTitle, PopoverTrigger } from "../ui/popover";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { SetupPanel } from "./SetupPanel";
 import { TeamProfilePanel } from "./TeamProfilePanel";
+import { useDraftTeamPicker } from "./useDraftTeamPicker";
 
 const NO_TEAM = "__none__";
 
@@ -51,86 +38,67 @@ export function TeamPicker(props: {
    */
   readonly onSeat: (seat: SeatForThread, how: "inherit" | "inherit-level" | "reset") => void;
 }) {
-  const enabled = useDeliveryEnabled(props.environmentId);
-  const choice = useDraftTeamChoice(props.threadId);
-  const setChoice = useDeliveryDraftStore((state) => state.setChoice);
-  const markInherited = useDeliveryDraftStore((state) => state.markInherited);
-  const inheritedFor = useDeliveryDraftStore((state) => state.inherited[props.threadId] ?? null);
-  const teamsRead = useDeliveryRead(enabled ? props.environmentId : null, "/api/teams");
-  const teams = useMemo(
-    () => parseTeams(teamsRead.body).filter((team) => team.team !== "triage"),
-    [teamsRead.body],
-  );
-  const harness = props.driver ? (DELIVERY_HARNESS_BY_DRIVER[props.driver] ?? null) : null;
-  const team = teams.find((candidate) => candidate.team === choice.team) ?? null;
-  const offered = team && harness ? rolesForHarness(team, harness) : null;
-  const resolved = resolveTeamChoice({
-    teams,
-    team: choice.team,
-    role: choice.role,
+  const { onSeat, chosen } = props;
+  const picker = useDraftTeamPicker({
+    environmentId: props.environmentId,
+    threadId: props.threadId,
     driver: props.driver,
+    onSeat,
   });
+  const warningId = useId();
+  const { choice, teams, team, harness, offered, resolved, role, threadSeat, warning } = picker;
+  const overrides = threadSeat && !picker.takeoverOver ? seatOverrides(threadSeat, chosen) : [];
 
-  const readyRole = resolved.state === "ready" ? resolved.role : null;
-  const threadSeat =
-    team && harness && readyRole ? seatForThread(team.settings, harness, readyRole) : null;
-  const inheritKey =
-    team && readyRole && threadSeat ? seatKey(team.team, readyRole, threadSeat) : null;
-  const { threadId, onSeat, chosen } = props;
-  // A thread bound to a seat runs on what the seat runs on, unless a person
-  // chooses otherwise after that. The draft is set from the seat once for each
-  // seat that is chosen, here, because the seat also changes when the harness does.
-  useEffect(() => {
-    if (!enabled || !inheritKey || !threadSeat || inheritedFor === inheritKey) return;
-    if (inheritedFor === SEAT_TAKEOVER_OVER) return;
-    onSeat(threadSeat, takeOverFor(inheritedFor, threadSeat));
-    markInherited(threadId, inheritKey);
-  }, [enabled, inheritKey, threadSeat, inheritedFor, onSeat, markInherited, threadId]);
-  const overrides =
-    threadSeat && inheritedFor !== SEAT_TAKEOVER_OVER ? seatOverrides(threadSeat, chosen) : [];
+  if (!picker.enabled) return null;
+  if (picker.loading) {
+    return (
+      <span
+        role="status"
+        className="flex items-center gap-1.5 px-1.5 text-xs text-muted-foreground"
+      >
+        <UsersIcon className="size-3.5" />
+        Loading teams…
+      </span>
+    );
+  }
 
-  if (!enabled) return null;
-
-  const role = readyRole;
   const seat =
     team && harness && role
       ? (team.seats.find((item) => item.harness === harness && item.role === role) ?? null)
       : null;
-  const detail = teamsRead.error
-    ? `Delivery engine not reachable. ${teamsRead.error}`
-    : resolved.state === "blocked"
-      ? resolved.why
+  const detail = warning
+    ? warning.detail
+    : picker.loading
+      ? `Team ${choice.team}. Teams are still loading.`
       : resolved.state === "choose-role"
         ? "Choose the role this harness is to take in the team."
         : resolved.state === "ready"
           ? `Team ${resolved.team}, role ${resolved.role}. A conversation with that seat: sending here puts nothing on the Board. Work for the team is started with New task on the Board. Fixed once the thread is sent.`
           : "No team: an ordinary thread, with no team instructions or tools. Sending here puts nothing on the Board.";
-  const attention = Boolean(teamsRead.error) || resolved.state === "blocked";
+  const chooseRole = !picker.loading && resolved.state === "choose-role";
 
   return (
     <div className="flex min-w-0 items-center gap-0.5" data-delivery-team-picker>
       <Tooltip>
         <Select
           value={choice.team ?? NO_TEAM}
-          onValueChange={(value) =>
-            setChoice(props.threadId, {
-              team: value === NO_TEAM ? null : String(value),
-              role: null,
-            })
-          }
+          onValueChange={(value) => picker.setTeam(value === NO_TEAM ? null : String(value))}
         >
           <TooltipTrigger
             render={
               <SelectTrigger
                 aria-label="Team profile"
+                aria-describedby={warning ? warningId : undefined}
                 size="compact"
                 variant="ghost"
-                className={attention ? "w-auto min-w-0 text-warning" : "w-auto min-w-0"}
+                className="w-auto min-w-0"
               />
             }
           >
-            <UsersIcon className="size-3.5" />
-            <SelectValue>{choice.team ?? "No team"}</SelectValue>
+            <span className={warning ? "contents text-warning" : "contents"}>
+              <UsersIcon className="size-3.5" />
+              <SelectValue>{choice.team ?? "No team"}</SelectValue>
+            </span>
           </TooltipTrigger>
           <SelectPopup alignItemWithTrigger={false}>
             {teams.map((item) => (
@@ -148,7 +116,7 @@ export function TeamPicker(props: {
               </span>
             </SelectItem>
             <p
-              className="max-w-72 border-t border-border px-2 pt-1.5 pb-1 text-[11px] text-muted-foreground"
+              className="max-w-72 border-t border-border px-2 pt-1.5 pb-1 text-2xs text-muted-foreground"
               data-delivery-thread-note
             >
               A thread is a conversation, with or without a team seat. Sending here puts nothing on
@@ -159,22 +127,24 @@ export function TeamPicker(props: {
         <TooltipPopup side="top">{detail}</TooltipPopup>
       </Tooltip>
 
+      {/* Said in words beside the team: a colour and a tooltip are not seen by everyone. */}
+      {warning ? (
+        <span id={warningId} className="shrink-0 text-xs text-warning" data-delivery-team-warning>
+          {warning.short}
+        </span>
+      ) : null}
+
       {team && offered ? (
-        <Select
-          value={role ?? ""}
-          onValueChange={(value) =>
-            setChoice(props.threadId, { team: choice.team, role: String(value) })
-          }
-        >
+        <Select value={role ?? ""} onValueChange={(value) => picker.setRole(String(value))}>
           <SelectTrigger
             aria-label="Role"
             size="compact"
             variant="ghost"
-            className={
-              resolved.state === "choose-role" ? "w-auto min-w-0 text-warning" : "w-auto min-w-0"
-            }
+            className="w-auto min-w-0"
           >
-            <SelectValue>{role ?? "Choose a role"}</SelectValue>
+            <span className={chooseRole ? "contents text-warning" : "contents"}>
+              <SelectValue>{role ?? "Choose a role"}</SelectValue>
+            </span>
           </SelectTrigger>
           <SelectPopup alignItemWithTrigger={false}>
             {offered.roles.map((item) => (
@@ -200,13 +170,15 @@ export function TeamPicker(props: {
                 type="button"
                 size="xs"
                 variant="ghost"
-                className="min-w-0 gap-1 px-1.5 font-normal text-warning"
+                className="min-w-0"
                 data-delivery-seat-overrides={overrides.map((item) => item.setting).join(" ")}
                 onClick={() => onSeat(threadSeat, "reset")}
               />
             }
           >
-            {overrides.length === 1 ? "1 override" : `${overrides.length} overrides`}
+            <span className="contents font-normal text-warning">
+              {overrides.length === 1 ? "1 override" : `${overrides.length} overrides`}
+            </span>
           </TooltipTrigger>
           <TooltipPopup side="top" className="max-w-96">
             <span className="flex flex-col gap-0.5">
@@ -241,7 +213,7 @@ export function TeamPicker(props: {
             <InfoIcon />
           </PopoverTrigger>
           <PopoverPopup side="top" align="start" className="w-[38rem] max-w-[calc(100vw-2rem)]">
-            <PopoverTitle className="pb-2 text-sm">What this session is given</PopoverTitle>
+            <PopoverTitle className="mb-2">What this session is given</PopoverTitle>
             {seat ? (
               <SetupPanel environmentId={props.environmentId} team={team.team} seat={seat.seat} />
             ) : (

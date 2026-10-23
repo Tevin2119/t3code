@@ -1,8 +1,18 @@
 import type { EnvironmentId } from "@t3tools/contracts";
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 
+import { minutesLeft, parseDeliveryEngineHealth } from "../../lib/deliveryEngineControl";
 import type { DeliveryCard } from "../../lib/delivery";
-import { useBoardStore, useDeliveryAct, usePersonName } from "../../state/delivery";
+import { ACTION_LABEL, LANE_TITLE, moveIntent } from "../../lib/deliveryBoard";
+
+export { ACTION_LABEL };
+import {
+  useBoardStore,
+  useDeliveryAct,
+  useDeliveryRead,
+  useMinuteClock,
+  usePersonName,
+} from "../../state/delivery";
 import { Button } from "../ui/button";
 import {
   Dialog,
@@ -15,23 +25,9 @@ import {
 import { Input } from "../ui/input";
 import { Textarea } from "../ui/textarea";
 
-export const ACTION_LABEL: Record<string, string> = {
-  submit: "Submit",
-  discard: "Discard draft",
-  pause: "Pause",
-  resume: "Resume",
-  stop: "Stop the running step",
-  retry: "Try again",
-  retriage: "Send to triage again",
-  "start-anyway": "Start without waiting",
-  approve: "Approve",
-  reject: "Send back",
-  deliver: "Start delivery",
-  close: "Close",
-  publish: "Publish",
-};
-
 export const ACTION_HELP: Record<string, string> = {
+  "accept-artifacts":
+    "Accepts the exact non-code deliverables that were reviewed. Nothing is published or submitted for you.",
   submit: "The team takes it on. It goes to triage and on from there without being asked.",
   discard: "The draft is removed. Nothing was asked of anyone.",
   pause: "Nothing more is started for this task until it is resumed. A running step is stopped.",
@@ -48,6 +44,9 @@ export const ACTION_HELP: Record<string, string> = {
   close: "Nothing more is done for it. What was said and found is kept.",
   publish:
     "Pushes the approved commit to its own branch and opens one pull request for it, or finds the one already open. Nothing is merged.",
+  first:
+    "Its seats take the next free slots, before other tasks. Nothing is skipped: it waits its turn for memory and limits like any task, but goes first in the queue.",
+  "not-first": "It goes back to waiting its turn with the rest.",
 };
 
 /** What an action is called on this task. On a part of a split task, approving is a review. */
@@ -74,7 +73,13 @@ type Target = Pick<
   DeliveryCard,
   "id" | "title" | "number" | "run" | "partOf" | "parts" | "publication"
 >;
-type Decision = { readonly card: Target; readonly decision: "approve" | "reject" | "publish" };
+type Decision = {
+  readonly card: Target;
+  readonly decision: "approve" | "reject" | "publish" | "accept-artifacts";
+};
+/** Steps that end or redo work: a drop on a column asks before taking them. */
+const ASKED_FIRST = new Set(["close", "deliver", "retriage"]);
+type Confirming = { readonly card: Target; readonly action: string; readonly lane: string };
 
 /**
  * What a person may ask the engine to do with a task. Every one of these is
@@ -89,32 +94,63 @@ export function useTaskActions(
 ) {
   const person = usePersonName();
   const act = useDeliveryAct(environmentId, "task action");
+  const [decision, setDecision] = useState<Decision | null>(null);
+  const health = useDeliveryRead(
+    environmentId,
+    "/api/health",
+    decision !== null ? { pollMs: 5000 } : {},
+  );
+  const { refresh: refreshHealth } = health;
+  const [requireKey, setRequireKey] = useState(false);
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
-  const [decision, setDecision] = useState<Decision | null>(null);
+  const [confirming, setConfirming] = useState<Confirming | null>(null);
   const { onDone, onDiscarded } = options;
+  // One request at a time. A second press while one is out is dropped, not queued: the state it
+  // was pressed against may be gone by the time the first returns. A lost answer is not sent again.
+  const inFlight = useRef(false);
 
-  const send = useCallback(
-    async (path: string, body: Record<string, unknown>) => {
-      setBusy(true);
-      setProblem(null);
-      const result = await act(path, body);
-      setBusy(false);
-      onDone();
-      if (!result.ok) {
-        setProblem(result.why);
-        return false;
-      }
-      return true;
-    },
-    [act, onDone],
-  );
+  const sendDecision = async (path: string, body: Record<string, unknown>) => {
+    if (inFlight.current) {
+      setProblem("Another step is being sent. Wait for it, then try again.");
+      return { ok: false, status: null };
+    }
+    inFlight.current = true;
+    setBusy(true);
+    setProblem(null);
+    const result = await act(path, body);
+    const signoff = path.endsWith("/decide") || path.endsWith("/publish");
+    if (signoff || Object.hasOwn(body, "key")) refreshHealth();
+    inFlight.current = false;
+    setBusy(false);
+    onDone();
+    if (!result.ok) {
+      setProblem(result.why);
+      return { ok: false, status: result.status };
+    }
+    return { ok: true, status: null };
+  };
+
+  const send = async (path: string, body: Record<string, unknown>) =>
+    (await sendDecision(path, body)).ok;
+  const decide = async (path: string, body: Record<string, unknown>) => {
+    const result = await sendDecision(path, body);
+    if (!result.ok && result.status === 403 && !Object.hasOwn(body, "key")) setRequireKey(true);
+    return result.ok;
+  };
 
   const run = useCallback(
     (card: Target, action: string) => {
       // A decision, and publishing what was approved, each need a person's name and the key.
-      if (action === "approve" || action === "reject" || action === "publish") {
+      if (
+        action === "approve" ||
+        action === "reject" ||
+        action === "publish" ||
+        action === "accept-artifacts"
+      ) {
         setProblem(null);
+        setRequireKey(false);
+        refreshHealth();
         setDecision({ card, decision: action });
         return;
       }
@@ -125,17 +161,44 @@ export function useTaskActions(
         void send(`/api/tasks/${card.id}/discard`, {}).then(
           (done) => done && onDiscarded?.(card.id),
         );
+      } else if (action === "first" || action === "not-first") {
+        void send(`/api/tasks/${card.id}/first`, { on: action === "first", by: person });
       } else if (action === "stop") {
         if (card.run) void send(`/api/runs/${card.run.id}/stop`, {});
       } else void send(`/api/tasks/${card.id}/control`, { action, by: person });
     },
-    [onDiscarded, person, send],
+    [onDiscarded, person, refreshHealth, send],
   );
 
   const move = useCallback(
-    (card: Pick<DeliveryCard, "id">, lane: string, before: string | null) =>
-      send(`/api/tasks/${card.id}/move`, { lane, before, by: person }),
+    (card: Pick<DeliveryCard, "id" | "lane">, lane: string, before: string | null) =>
+      // Where the card was seen: if it stands elsewhere now, the engine refuses the move.
+      send(`/api/tasks/${card.id}/move`, { lane, before, by: person, seen: card.lane }),
     [person, send],
+  );
+
+  /**
+   * A card taken to a column, by a drop or by choosing the column. A column a step leads to is
+   * reached by that step, asked for as its button asks; one no step leads to is refused with
+   * the reason, and the card stays where it was.
+   */
+  const moveTo = useCallback(
+    (
+      card: Target & Pick<DeliveryCard, "lane" | "actions">,
+      lane: string,
+      before: string | null,
+    ) => {
+      const intent = moveIntent(card, lane);
+      if (intent.kind === "move") return void move(card, lane, before);
+      if (intent.kind === "refused") return setProblem(intent.why);
+      if (ASKED_FIRST.has(intent.action)) {
+        setProblem(null);
+        setConfirming({ card, action: intent.action, lane });
+        return;
+      }
+      run(card, intent.action);
+    },
+    [move, run],
   );
 
   return {
@@ -144,21 +207,82 @@ export function useTaskActions(
     clearProblem: () => setProblem(null),
     run,
     move,
-    dialog: decision ? (
+    moveTo,
+    dialog: confirming ? (
+      <Dialog open onOpenChange={(open) => !open && !busy && setConfirming(null)}>
+        <DialogPopup className="max-w-md" data-delivery-move-confirm={confirming.action}>
+          <DialogHeader>
+            <DialogTitle>
+              {actionLabel(confirming.action, confirming.card)}: #{confirming.card.number}{" "}
+              {confirming.card.title}
+            </DialogTitle>
+          </DialogHeader>
+          <DialogPanel>
+            <div className="flex flex-col gap-6 text-sm">
+              <p>
+                Moving it to {LANE_TITLE[confirming.lane] ?? confirming.lane} means this step.{" "}
+                {actionHelp(confirming.action, confirming.card)}
+              </p>
+              {problem ? (
+                <p className="text-warning" data-delivery-problem>
+                  {problem}
+                </p>
+              ) : null}
+            </div>
+          </DialogPanel>
+          <DialogFooter>
+            <Button variant="outline" disabled={busy} onClick={() => setConfirming(null)}>
+              Leave it where it is
+            </Button>
+            <Button
+              disabled={busy}
+              onClick={() => {
+                const { card, action } = confirming;
+                setConfirming(null);
+                run(card, action);
+              }}
+              data-delivery-move-confirm-do
+            >
+              {actionLabel(confirming.action, confirming.card)}
+            </Button>
+          </DialogFooter>
+        </DialogPopup>
+      </Dialog>
+    ) : decision ? (
       <DecisionDialog
         decision={decision}
+        healthBody={!health.error ? health.body : null}
+        requireKey={requireKey}
         busy={busy}
         problem={problem}
         onClose={() => setDecision(null)}
         onDecide={(input) =>
-          decision.decision === "publish"
-            ? send(`/api/tasks/${decision.card.id}/publish`, { by: input.actor, key: input.key })
-            : decision.card.run
-              ? send(`/api/runs/${decision.card.run.id}/decide`, {
-                  decision: decision.decision,
-                  ...input,
+          decision.decision === "accept-artifacts"
+            ? decide(`/api/tasks/${decision.card.id}/control`, {
+                action: "accept-artifacts",
+                run: decision.card.run?.id,
+                by: input.actor,
+                key: input.key,
+              })
+            : decision.decision === "publish"
+              ? decide(`/api/tasks/${decision.card.id}/publish`, {
+                  by: input.actor,
+                  ...(input.key === undefined ? {} : { key: input.key }),
+                  // The commit the dialog names: if another is approved now, nothing is pushed.
+                  ...(decision.card.run?.candidate
+                    ? { candidate: decision.card.run.candidate }
+                    : {}),
                 })
-              : Promise.resolve(false)
+              : decision.card.run
+                ? decide(`/api/runs/${decision.card.run.id}/decide`, {
+                    decision: decision.decision,
+                    // The candidate the person was shown: if another is waiting now, nothing is decided.
+                    ...(decision.card.run.candidate
+                      ? { candidate: decision.card.run.candidate }
+                      : {}),
+                    ...input,
+                  })
+                : Promise.resolve(false)
         }
       />
     ) : null,
@@ -167,34 +291,49 @@ export function useTaskActions(
 
 function DecisionDialog(props: {
   readonly decision: Decision;
+  readonly healthBody: unknown;
+  readonly requireKey: boolean;
   readonly busy: boolean;
   readonly problem: string | null;
   readonly onClose: () => void;
   readonly onDecide: (input: {
     readonly actor: string;
-    readonly key: string;
+    readonly key?: string;
     readonly notes?: string;
   }) => Promise<boolean>;
 }) {
   const person = usePersonName();
+  const now = useMinuteClock();
   const setPerson = useBoardStore((state) => state.setPerson);
   const [actor, setActor] = useState(person);
+  const window = parseDeliveryEngineHealth(props.healthBody, actor.trim()).approvalWindow;
+  const windowUntil =
+    !props.requireKey &&
+    props.decision.decision !== "accept-artifacts" &&
+    window?.open &&
+    window.by === actor.trim()
+      ? window.until
+      : null;
+  const windowOpen = windowUntil !== null && minutesLeft(windowUntil, now) > 0;
   const [approvalKey, setApprovalKey] = useState("");
   const [notes, setNotes] = useState("");
   const { card, decision } = props.decision;
-  const approving = decision === "approve";
+  const accepting = decision === "accept-artifacts";
+  const approving = decision === "approve" || accepting;
   const publishing = decision === "publish";
   const whole = card.partOf;
   const parts = card.parts.length;
-  const verb = publishing
-    ? card.publication?.state === "failed"
-      ? "Try publishing again"
-      : "Publish"
-    : approving
-      ? whole
-        ? "Mark as reviewed"
-        : "Approve"
-      : "Send back";
+  const verb = accepting
+    ? "Accept deliverables"
+    : publishing
+      ? card.publication?.state === "failed"
+        ? "Try publishing again"
+        : "Publish"
+      : approving
+        ? whole
+          ? "Mark as reviewed"
+          : "Approve"
+        : "Send back";
   return (
     <Dialog open onOpenChange={(open) => !open && props.onClose()}>
       <DialogPopup data-delivery-decision={decision}>
@@ -203,71 +342,91 @@ function DecisionDialog(props: {
             {verb}: #{card.number} {card.title}
           </DialogTitle>
         </DialogHeader>
-        <DialogPanel className="flex flex-col gap-3 text-sm">
-          {whole ? (
-            <p
-              className="rounded-md border border-border bg-muted/40 p-2"
-              data-delivery-decision-part
-            >
-              {approving
-                ? `This is a part of #${whole.number} ${whole.title}. Marking it as reviewed does not approve the whole. The whole is decided on its own, when every part is built and they were tested together.`
-                : `This is a part of #${whole.number} ${whole.title}. Sent back, this part is built again, and the whole is put together and tested again after it.`}
-            </p>
-          ) : parts > 0 ? (
-            <p
-              className="rounded-md border border-border bg-muted/40 p-2"
-              data-delivery-decision-whole
-            >
-              {approving
-                ? `This decides the whole, and with it each of its ${parts} parts. It can be approved only while every part is the one that was tested together and the checks of the whole passed.`
-                : `This sends the whole back, and with it each of its ${parts} parts.`}
-            </p>
-          ) : null}
-          {publishing ? (
-            <p className="text-muted-foreground" data-delivery-decision-publish>
-              Pushes the approved commit
-              {card.run?.candidate ? ` ${card.run.candidate.slice(0, 10)}` : ""} to its own branch
-              and opens one pull request for it, or finds the one already open. It is checked again
-              first: the approval must still stand for that commit and every check must have passed.
-              Nothing is merged; that is done on the repository host. The approval key is shown on
-              the terminal the engine was started from, and is not stored here.
-            </p>
-          ) : (
-            <p className="text-muted-foreground">
-              A decision is recorded against the commit that was tested
-              {card.run?.candidate ? ` (${card.run.candidate.slice(0, 10)})` : ""}. Approving is not
-              merging. Where publishing is on, the approved commit is then pushed and one pull
-              request opened for review. The approval key is shown on the terminal the engine was
-              started from, and is not stored here.
-            </p>
-          )}
-          <Input
-            aria-label="Your name"
-            placeholder="Your name"
-            value={actor}
-            onChange={(event) => setActor(event.target.value)}
-          />
-          <Input
-            aria-label="Approval key"
-            placeholder="Approval key"
-            type="password"
-            autoComplete="off"
-            value={approvalKey}
-            onChange={(event) => setApprovalKey(event.target.value)}
-          />
-          {approving || publishing ? null : (
-            <Textarea
-              aria-label="What to redo"
-              placeholder="What to redo"
-              value={notes}
-              onChange={(event) => setNotes(event.target.value)}
+        <DialogPanel>
+          <div className="flex flex-col gap-7 text-sm">
+            {whole ? (
+              <p
+                className="rounded-md border border-border bg-muted/40 p-2"
+                data-delivery-decision-part
+              >
+                {approving
+                  ? `This is a part of #${whole.number} ${whole.title}. Marking it as reviewed does not approve the whole. The whole is decided on its own, when every part is built and they were tested together.`
+                  : `This is a part of #${whole.number} ${whole.title}. Sent back, this part is built again, and the whole is put together and tested again after it.`}
+              </p>
+            ) : parts > 0 ? (
+              <p
+                className="rounded-md border border-border bg-muted/40 p-2"
+                data-delivery-decision-whole
+              >
+                {approving
+                  ? `This decides the whole, and with it each of its ${parts} parts. It can be approved only while every part is the one that was tested together and the checks of the whole passed.`
+                  : `This sends the whole back, and with it each of its ${parts} parts.`}
+              </p>
+            ) : null}
+            {accepting ? (
+              <p className="text-muted-foreground">
+                Records your acceptance against the exact artifact hashes reviewed by the team. No
+                software pull request is opened and nothing is submitted to a course or publisher.
+                Use this environment's approval passphrase. T3 does not save it.
+              </p>
+            ) : publishing ? (
+              <p className="text-muted-foreground" data-delivery-decision-publish>
+                Pushes the approved commit
+                {card.run?.candidate ? ` ${card.run.candidate.slice(0, 10)}` : ""} to its own branch
+                and opens one pull request for it, or finds the one already open. It is checked
+                again first: the approval must still stand for that commit and every check must have
+                passed. Nothing is merged; that is done on the repository host.{" "}
+                {windowOpen
+                  ? ""
+                  : "Use this environment's approval passphrase, or its terminal key if no passphrase is set. T3 does not save it."}
+              </p>
+            ) : (
+              <p className="text-muted-foreground">
+                A decision is recorded against the commit that was tested
+                {card.run?.candidate ? ` (${card.run.candidate.slice(0, 10)})` : ""}. Approving is
+                not merging. Where publishing is on, the approved commit is then pushed and one pull
+                request opened for review.{" "}
+                {windowOpen
+                  ? ""
+                  : "Use this environment's approval passphrase, or its terminal key if no passphrase is set. T3 does not save it."}
+              </p>
+            )}
+            <Input
+              aria-label="Your name"
+              placeholder="Your name"
+              value={actor}
+              onChange={(event) => setActor(event.target.value)}
             />
-          )}
-          {props.problem ? (
-            <p className="text-warning" data-delivery-problem>
-              {props.problem}
-            </p>
-          ) : null}
+            {windowOpen ? (
+              <p data-approvals-open>
+                Approvals are open; no passphrase needed. {minutesLeft(windowUntil, now)} minutes
+                left.
+              </p>
+            ) : (
+              <Input
+                aria-label="Approval passphrase or terminal key"
+                placeholder="Approval passphrase or terminal key"
+                name="delivery-approval"
+                type="password"
+                autoComplete="current-password"
+                value={approvalKey}
+                onChange={(event) => setApprovalKey(event.target.value)}
+              />
+            )}
+            {approving || publishing ? null : (
+              <Textarea
+                aria-label="What to redo"
+                placeholder="What to redo"
+                value={notes}
+                onChange={(event) => setNotes(event.target.value)}
+              />
+            )}
+            {props.problem ? (
+              <p className="text-warning" data-delivery-problem>
+                {props.problem}
+              </p>
+            ) : null}
+          </div>
         </DialogPanel>
         <DialogFooter>
           <Button variant="outline" onClick={props.onClose}>
@@ -277,7 +436,7 @@ function DecisionDialog(props: {
             disabled={
               props.busy ||
               !actor.trim() ||
-              !approvalKey ||
+              (!windowOpen && !approvalKey) ||
               (!approving && !publishing && !notes.trim())
             }
             onClick={() => {
@@ -285,7 +444,7 @@ function DecisionDialog(props: {
               void props
                 .onDecide({
                   actor: actor.trim(),
-                  key: approvalKey,
+                  ...(windowOpen ? {} : { key: approvalKey }),
                   ...(notes.trim() ? { notes: notes.trim() } : {}),
                 })
                 .then((done) => {

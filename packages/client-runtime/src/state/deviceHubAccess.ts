@@ -1,38 +1,23 @@
 /**
- * Credentials for the Device panel's media requests.
- *
- * The panel reaches simulator streams through `/api/device-hub/*` on the
- * environment origin. `<img>`, `EventSource`, and `WebSocket` cannot set
- * bearer or DPoP headers, so bearer and DPoP connections mint a
- * short-lived WebSocket ticket and pass it as `wsTicket`, the same way the
- * app's own `/ws` upgrade authenticates. Cookie sessions send the cookie.
- *
- * A ticket lives five minutes server-side and is bound to the session, not
- * to one request, so one ticket covers everything a panel opens at once.
- * Callers fetch a fresh one each time they (re)connect a stream.
+ * `<img>`, `EventSource`, and `WebSocket` cannot set bearer or DPoP headers, so bearer and DPoP
+ * connections mint a short-lived WebSocket ticket and pass it as `wsTicket`, the same way the
+ * app's own `/ws` upgrade authenticates. Callers fetch a fresh one each time they (re)connect a
+ * stream.
  */
 import * as Effect from "effect/Effect";
-import type { HttpClient } from "effect/unstable/http";
+import type { HttpClient } from "effect/http";
 
-import { RemoteEnvironmentAuthorization } from "../authorization/service.ts";
+import * as RemoteEnvironmentAuthorization from "../authorization/service.ts";
 import type { PreparedConnection } from "../connection/model.ts";
 import { environmentEndpointUrl } from "../environment/endpoint.ts";
-import { ManagedRelayDpopSigner } from "../relay/managedRelay.ts";
+import * as ManagedRelay from "../relay/managedRelay.ts";
 import type { RemoteEnvironmentRequestError } from "../rpc/http.ts";
 import { executeAuthenticatedEnvironmentHttpRequest } from "./environmentHttpAuth.ts";
+import type { DeviceHubAccess } from "../device/hubAccess.ts";
+
+export { type DeviceHubAccess, withDeviceHubQuery } from "../device/hubAccess.ts";
 
 const TICKET_TIMEOUT_MS = 8_000;
-
-export interface DeviceHubAccess {
-  /** Absolute origin-relative base, e.g. `https://env.example/api/device-hub`. */
-  readonly httpBase: string;
-  /** Same base with the `ws(s)` scheme. */
-  readonly wsBase: string;
-  /** Query parameters to append to every hub request; empty for cookie sessions. */
-  readonly query: Readonly<Record<string, string>>;
-  /** Whether requests must include cookies (same-origin session). */
-  readonly credentials: boolean;
-}
 
 export const resolveDeviceHubAccess = Effect.fn("clientRuntime.state.resolveDeviceHubAccess")(
   function* (input: {
@@ -44,15 +29,17 @@ export const resolveDeviceHubAccess = Effect.fn("clientRuntime.state.resolveDevi
     if (input.prepared.httpAuthorization === null) {
       return { httpBase, wsBase, query: {}, credentials: true };
     }
-    const signer = yield* Effect.serviceOption(ManagedRelayDpopSigner);
-    const remoteAuthorization = yield* Effect.serviceOption(RemoteEnvironmentAuthorization);
+    const signer = yield* Effect.serviceOption(ManagedRelay.ManagedRelayDpopSigner);
+    const remoteAuthorization = yield* Effect.serviceOption(
+      RemoteEnvironmentAuthorization.RemoteEnvironmentAuthorization,
+    );
     const ticket = yield* executeAuthenticatedEnvironmentHttpRequest({
       prepared: input.prepared,
       signer,
       remoteAuthorization,
       group: "auth",
       method: "POST",
-      url: (httpBaseUrl) => environmentEndpointUrl(httpBaseUrl, "/api/auth/websocket-ticket"),
+      url: (urls) => urls.webSocketTicket(),
       timeoutMs: TICKET_TIMEOUT_MS,
       request: ({ client, headers }) => client.webSocketTicket({ headers }),
     });
@@ -64,10 +51,3 @@ export const resolveDeviceHubAccess = Effect.fn("clientRuntime.state.resolveDevi
     };
   },
 );
-
-export const withDeviceHubQuery = (url: string, access: DeviceHubAccess): string => {
-  const entries = Object.entries(access.query);
-  if (entries.length === 0) return url;
-  const separator = url.includes("?") ? "&" : "?";
-  return `${url}${separator}${new URLSearchParams(entries).toString()}`;
-};

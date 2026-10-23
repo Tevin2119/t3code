@@ -45,7 +45,7 @@ function Block(props: {
       <header className="flex items-center justify-between gap-2 border-b border-border px-2 py-1">
         <h4 className="min-w-0 truncate text-xs font-medium">{props.title}</h4>
         {props.meta ? (
-          <span className="min-w-0 shrink truncate font-mono text-[10px] text-muted-foreground">
+          <span className="min-w-0 shrink truncate font-mono text-3xs text-muted-foreground">
             {props.meta}
           </span>
         ) : null}
@@ -123,7 +123,7 @@ export function SetupPanel(props: {
         <Badge size="sm" variant="outline">
           {setup.source === "custom" ? "your profile" : "comes with the engine"}
         </Badge>
-        <span className="font-mono text-[10px] text-muted-foreground">{setup.configuration}</span>
+        <span className="font-mono text-3xs text-muted-foreground">{setup.configuration}</span>
         <Select value={setup.seat.seat} onValueChange={(value) => setSeat(String(value))}>
           <SelectTrigger
             aria-label="Seat to look at"
@@ -153,7 +153,7 @@ export function SetupPanel(props: {
           </SelectPopup>
         </Select>
       </div>
-      <p className="text-[11px] text-muted-foreground" data-setup-seat>
+      <p className="text-2xs text-muted-foreground" data-setup-seat>
         {setup.seat.title} runs on {harnessLabel(setup.seat.harness)},{" "}
         {setup.seat.model ?? "its own model"}
         {setup.seat.reasoning ? `, ${setup.seat.reasoning} reasoning` : ""}, {setup.seat.access}{" "}
@@ -163,7 +163,7 @@ export function SetupPanel(props: {
           : ` ${harnessLabel(setup.seat.harness)} is not installed on this host.`}
       </p>
       {setup.problems.length > 0 ? (
-        <ul className="list-disc pl-5 text-[11px] text-warning" data-setup-problems>
+        <ul className="list-disc pl-5 text-2xs text-warning" data-setup-problems>
           {setup.problems.map((item) => (
             <li key={item}>{item}</li>
           ))}
@@ -196,7 +196,7 @@ export function SetupPanel(props: {
       <div className="flex max-h-[50vh] min-h-0 flex-col gap-2 overflow-y-auto">
         {section === "instructions" ? (
           <>
-            <p className="text-[11px] text-muted-foreground">
+            <p className="text-2xs text-muted-foreground">
               Given in this order. What comes later is read with what came before it in mind.
               {setup.memoryScope === "profile"
                 ? " This profile keeps notes, which every conversation of it is given."
@@ -212,7 +212,7 @@ export function SetupPanel(props: {
                 {layer.text === null ? (
                   <p className="text-muted-foreground">{layer.note}</p>
                 ) : (
-                  <pre className="max-h-64 overflow-y-auto font-mono text-[11px] leading-relaxed whitespace-pre-wrap">
+                  <pre className="max-h-64 overflow-y-auto font-mono text-2xs leading-relaxed whitespace-pre-wrap">
                     {layer.text}
                   </pre>
                 )}
@@ -224,7 +224,7 @@ export function SetupPanel(props: {
         {section === "tools" ? (
           <>
             <div className="flex items-center justify-between gap-2">
-              <p className="text-[11px] text-muted-foreground">
+              <p className="text-2xs text-muted-foreground">
                 {unchecked > 0
                   ? "That a tool is configured does not show that it works. Check to have each server started as this seat would be given it."
                   : "Each server was started as this seat is given it, and asked for its tools."}
@@ -269,7 +269,7 @@ export function SetupPanel(props: {
                       <ul className="flex flex-col gap-0.5" data-tool-list>
                         {tool.checked.tools.map((item) => (
                           <li key={item.name}>
-                            <span className="font-mono text-[11px]">{item.name}</span>
+                            <span className="font-mono text-2xs">{item.name}</span>
                             {item.description ? (
                               <span className="text-muted-foreground"> {item.description}</span>
                             ) : null}
@@ -277,7 +277,7 @@ export function SetupPanel(props: {
                         ))}
                       </ul>
                     ) : null}
-                    <p className="text-[10px] text-muted-foreground">
+                    <p className="text-3xs text-muted-foreground">
                       Checked {tool.checked.at}.{" "}
                       {tool.checked.connected
                         ? `It listed ${tool.checked.tools.length} tools${tool.checked.exercised ? ", and answered for this team and seat" : ""}.`
@@ -290,7 +290,7 @@ export function SetupPanel(props: {
                       ? `It was checked at ${tool.checkedBefore.at}, and ${tool.checkedBefore.why}. That check does not count for this setup.`
                       : "Not checked yet."}{" "}
                     The team's definition says it offers:{" "}
-                    <span className="font-mono text-[11px]">
+                    <span className="font-mono text-2xs">
                       {tool.declared.join(", ") || "nothing it names"}
                     </span>
                     . That is what is written down, not what was seen.
@@ -306,7 +306,7 @@ export function SetupPanel(props: {
             {setup.specialists.length === 0 ? (
               <p className="text-xs text-muted-foreground">This team has no specialists.</p>
             ) : (
-              <p className="text-[11px] text-muted-foreground">
+              <p className="text-2xs text-muted-foreground">
                 A specialist may be an agent the engine starts, a subagent the harness starts by
                 itself, or only words. Which it is depends on the team and on the harness of the
                 seat.
@@ -339,13 +339,12 @@ export function SetupPanel(props: {
                   <p className="text-muted-foreground">
                     Runs on {harnessLabel(item.host.harness)}, {item.host.model ?? "its own model"},
                     with the tools of {item.host.seat}:{" "}
-                    <span className="font-mono text-[11px]">{item.tools.join(", ") || "none"}</span>
-                    .
+                    <span className="font-mono text-2xs">{item.tools.join(", ") || "none"}</span>.
                   </p>
                 ) : null}
                 <p
                   className={cn(
-                    "text-[10px]",
+                    "text-3xs",
                     item.history.started > 0 ? "text-foreground" : "text-muted-foreground",
                   )}
                   data-specialist-history
@@ -389,7 +388,7 @@ export function SetupPanel(props: {
                 {flow.offered ? (
                   <p>
                     Seats that would take part:{" "}
-                    <span className="font-mono text-[11px]">{flow.seats.join(", ") || "none"}</span>
+                    <span className="font-mono text-2xs">{flow.seats.join(", ") || "none"}</span>
                   </p>
                 ) : (
                   <p>{flow.why}.</p>

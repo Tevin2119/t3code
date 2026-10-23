@@ -4,23 +4,31 @@ import type {
   PullRequestCheck,
   PullRequestCheckStatus,
   PullRequestChecksState,
+  PullRequestLabel,
   PullRequestMergeability,
+  PullRequestReviewDecision,
   PullRequestState,
 } from "@t3tools/contracts";
+import { formatDiffCount } from "@t3tools/client-runtime/diff-count";
 import {
   CircleCheckIcon,
   CircleDashedIcon,
   CircleDotIcon,
+  CircleSlashIcon,
   CircleXIcon,
   UserCheckIcon,
+  UserRoundIcon,
+  UserRoundXIcon,
 } from "lucide-react";
-import { Children, isValidElement, type ReactNode, useState } from "react";
+import { Children, type CSSProperties, isValidElement, type ReactNode, useState } from "react";
 
 import { cn } from "~/lib/utils";
 
 import { Badge } from "../ui/badge";
+import { InlineButton } from "../ui/button";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import type { PullRequestReviewOutcome } from "./pullRequestDetail.logic";
+import { pullRequestLabelColor } from "./pullRequestList.logic";
 import {
   PULL_REQUEST_STATE_PRESENTATION,
   PullRequestGlyph,
@@ -28,28 +36,71 @@ import {
   type PullRequestGlyphIcon,
 } from "./pullRequestIcons";
 
-export function PullRequestApprovalGlyph() {
+export function PullRequestLabelChip({
+  label,
+  size = "sm",
+  className,
+  children,
+}: {
+  label: Pick<PullRequestLabel, "name" | "color">;
+  size?: "sm" | "default";
+  className?: string;
+  children?: ReactNode;
+}) {
+  const color = pullRequestLabelColor(label.color);
+  return (
+    <Badge
+      size={size}
+      variant={color ? "label" : "secondary"}
+      className={cn("min-w-0 max-w-40 shrink justify-start", className)}
+      {...(color ? { style: { "--label": color } as CSSProperties } : {})}
+    >
+      <span className="truncate">{label.name}</span>
+      {children}
+    </Badge>
+  );
+}
+
+function reviewDecisionPresentation(decision: PullRequestReviewDecision) {
+  switch (decision) {
+    case "approved":
+      return {
+        Icon: UserCheckIcon,
+        label: "Approved",
+        toneClassName: CHECK_STATUS_PRESENTATION.success.toneClassName,
+      };
+    case "changes-requested":
+      return {
+        Icon: UserRoundXIcon,
+        label: "Changes requested",
+        toneClassName: "text-amber-600/90 dark:text-amber-400/80",
+      };
+    case "review-required":
+      return {
+        Icon: UserRoundIcon,
+        label: "Awaiting review",
+        toneClassName: "text-muted-foreground/60",
+      };
+  }
+}
+
+export function PullRequestReviewDecisionGlyph({
+  decision,
+}: {
+  decision: PullRequestReviewDecision;
+}) {
+  const presentation = reviewDecisionPresentation(decision);
   return (
     <Tooltip>
       <TooltipTrigger render={<span className="inline-flex shrink-0" />}>
-        <UserCheckIcon
-          aria-hidden
-          className={cn("size-3.5", CHECK_STATUS_PRESENTATION.success.toneClassName)}
-        />
-        <span className="sr-only">Approved</span>
+        <presentation.Icon aria-hidden className={cn("size-3.5", presentation.toneClassName)} />
+        <span className="sr-only">{presentation.label}</span>
       </TooltipTrigger>
-      <TooltipPopup>Approved</TooltipPopup>
+      <TooltipPopup>{presentation.label}</TooltipPopup>
     </Tooltip>
   );
 }
 
-/**
- * How a pull request's state reads anywhere it appears: the thread badge, the right-panel tab,
- * the list, and the detail header all resolve through here so one pull request cannot look like
- * two different things in two places.
- *
- * Closed and merged take precedence over a stale draft flag.
- */
 export function resolvePullRequestState(input: {
   readonly state: PullRequestState;
   readonly isDraft: boolean;
@@ -64,7 +115,7 @@ export interface PullRequestConflictPresentation {
   readonly Icon: PullRequestGlyphIcon;
 }
 
-export function resolvePullRequestConflict(input: {
+function resolvePullRequestConflict(input: {
   readonly state: PullRequestState;
   readonly isDraft: boolean;
   readonly mergeability?: PullRequestMergeability;
@@ -154,7 +205,7 @@ const CHECK_STATUS_PRESENTATION = {
   },
   failure: { label: "Failed", Icon: CircleXIcon, toneClassName: "text-destructive" },
   cancelled: { label: "Cancelled", Icon: CircleXIcon, toneClassName: "text-destructive" },
-  skipped: { label: "Skipped", Icon: CircleDashedIcon, toneClassName: "text-muted-foreground/70" },
+  skipped: { label: "Skipped", Icon: CircleSlashIcon, toneClassName: "text-muted-foreground/70" },
   neutral: { label: "Neutral", Icon: CircleDashedIcon, toneClassName: "text-muted-foreground/70" },
 } as const satisfies Record<
   PullRequestCheckStatus,
@@ -187,10 +238,6 @@ export function PullRequestCheckStatusIcon({ status }: { status: PullRequestChec
   );
 }
 
-/**
- * The rollup a listing row carries, which is one word rather than the checks behind it. The
- * headline is GitHub's own wording, so a reader who knows that page reads this one the same way.
- */
 const CHECKS_STATE_PRESENTATION = {
   passing: {
     label: "All checks have passed",
@@ -216,12 +263,6 @@ export function pullRequestChecksStatePresentation(state: PullRequestChecksState
   return CHECKS_STATE_PRESENTATION[state];
 }
 
-/**
- * The same rollup the server sends with a listing row, worked out here from the checks a detail
- * already holds — so the header shows the icon without a second field travelling with it.
- *
- * Null for a change request with no checks: nothing to show beats a tick nobody earned.
- */
 export function pullRequestChecksState(
   checks: ReadonlyArray<PullRequestCheck>,
 ): PullRequestChecksState | null {
@@ -232,14 +273,6 @@ export function pullRequestChecksState(
   return statuses.has("success") ? "passing" : null;
 }
 
-/**
- * How a verdict reads, in the one place every surface takes it from. The green is the green a
- * passing check already wears in the same panel, so "approved" and "all checks passed" cannot
- * look like two different kinds of good news.
- *
- * The ring runs a shade stronger than the text tones. At 16px across it is a thin arc, and the
- * muted pairing that reads well as a word was barely there as an outline.
- */
 const REVIEW_OUTCOME_PRESENTATION = {
   approved: {
     label: "Approved",
@@ -283,7 +316,6 @@ export function pullRequestReviewOutcomeToneClassName(outcome: PullRequestReview
   return REVIEW_OUTCOME_PRESENTATION[outcome].toneClassName;
 }
 
-/** Worn by whatever wraps a reviewer's avatar, so their verdict reads without a row of its own. */
 /**
  * A faded verdict is mixed into the background rather than made translucent. The ring is the only
  * separator an avatar carrying one has — the summary drops the opaque `ring-background` where a
@@ -298,15 +330,10 @@ export function pullRequestReviewOutcomeRingClassName(
   return stale ? presentation.staleRingClassName : presentation.ringClassName;
 }
 
-/**
- * What a superseded verdict says, which is the same word with when it applied added. Commits
- * landed after it, so it stands for code the branch no longer has.
- */
 export function pullRequestReviewOutcomeStaleLabel(outcome: PullRequestReviewOutcome): string {
   return `${REVIEW_OUTCOME_PRESENTATION[outcome].label} earlier changes`;
 }
 
-/** Decorative: every caller says which verdict this is in words beside it. */
 export function PullRequestReviewOutcomeIcon({
   outcome,
   className,
@@ -336,9 +363,12 @@ export function PullRequestReviewOutcomeBadge({
 }) {
   const presentation = REVIEW_OUTCOME_PRESENTATION[outcome];
   return (
-    <Badge size="sm" variant={presentation.badgeVariant} className={cn("gap-1", className)}>
-      <presentation.Icon aria-hidden className="size-3" />
-      {presentation.label}
+    <Badge size="sm" variant={presentation.badgeVariant} className={className}>
+      {/* Align with surrounding text using the label, rather than the icon's bottom edge. */}
+      <span className="inline-flex items-baseline gap-1">
+        <presentation.Icon aria-hidden className="size-3 self-center" />
+        <span>{presentation.label}</span>
+      </span>
     </Badge>
   );
 }
@@ -354,11 +384,10 @@ export function PullRequestActorAvatar({
   const avatarUrl = actor?.avatarUrl ?? null;
   const [failedAvatarUrl, setFailedAvatarUrl] = useState<string | null>(null);
   return avatarUrl === null || failedAvatarUrl === avatarUrl ? (
-    // Not every host reports an avatar, and a private host may refuse the browser's request.
     <span
       aria-hidden
       className={cn(
-        "flex size-4 shrink-0 items-center justify-center rounded-full bg-muted text-[8px] font-medium text-muted-foreground",
+        "flex size-4 shrink-0 items-center justify-center rounded-full bg-muted text-3xs font-medium text-muted-foreground",
         className,
       )}
     >
@@ -376,51 +405,51 @@ export function PullRequestActorAvatar({
   );
 }
 
-/** GitHub attributes work from a deleted account to "ghost"; say the same word everywhere. */
 export function PullRequestActorLabel({
   actor,
   className,
-  labelClassName,
+  variant = "label",
   tooltip = true,
   profileUrl,
 }: {
   actor: PullRequestActor | null;
   className?: string;
-  labelClassName?: string;
+  variant?: "label" | "avatar";
   tooltip?: boolean;
   profileUrl?: string | null;
 }) {
   const login = actor?.login ?? "ghost";
+  // Let the name supply the group's baseline while the avatar stays vertically centered.
   const label = (
-    <>
-      <PullRequestActorAvatar actor={actor} />
-      <span className={cn("truncate", labelClassName)}>{login}</span>
-    </>
+    <span className={cn("flex min-w-0 items-baseline", variant === "label" && "gap-1.5")}>
+      <PullRequestActorAvatar actor={actor} className="self-center" />
+      <span className={variant === "label" ? "truncate font-medium text-foreground" : "sr-only"}>
+        {login}
+      </span>
+    </span>
   );
-  if (!tooltip) {
-    return <span className={cn("flex min-w-0 items-center gap-1.5", className)}>{label}</span>;
-  }
+  const placement = cn("flex min-w-0 shrink", className);
+  if (!tooltip) return <span className={placement}>{label}</span>;
   return (
     <Tooltip>
       <TooltipTrigger
         render={
           profileUrl ? (
-            <a
-              href={profileUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              aria-label={`Open ${login}'s profile`}
+            <InlineButton
+              className={placement}
+              render={
+                <a
+                  href={profileUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  aria-label={`Open ${login}'s profile`}
+                />
+              }
             />
           ) : (
-            <span />
+            <span className={placement} />
           )
         }
-        className={cn(
-          "flex min-w-0 items-center gap-1.5",
-          profileUrl &&
-            "cursor-pointer rounded-sm underline-offset-2 outline-none hover:text-foreground hover:underline focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background",
-          className,
-        )}
       >
         {label}
       </TooltipTrigger>
@@ -432,7 +461,6 @@ export function PullRequestActorLabel({
   );
 }
 
-/** Added and removed lines, coloured the way every host colours them. */
 export function PullRequestDiffStat({
   additions,
   deletions,
@@ -442,26 +470,17 @@ export function PullRequestDiffStat({
   deletions: number;
   className?: string;
 }) {
-  // Not every host reports line counts. Showing "+0 -0" would read as an empty change set
-  // rather than as a missing one, so the stat is left out instead.
   if (additions === 0 && deletions === 0) {
     return null;
   }
   return (
     <span className={cn("inline-flex items-baseline gap-1 tabular-nums", className)}>
-      <span className="text-diff-addition-foreground">+{additions.toLocaleString()}</span>
-      <span className="text-diff-deletion">-{deletions.toLocaleString()}</span>
+      <span className="text-diff-addition-foreground">+{formatDiffCount(additions)}</span>
+      <span className="text-diff-deletion">-{formatDiffCount(deletions)}</span>
     </span>
   );
 }
 
-/**
- * Dot-separated metadata. It owns the separator, and draws one only between the segments that
- * survive, so a caller can render `{condition ? <span/> : null}` without leaving a stray dot.
- * `Children.toArray` drops the nullish entries and keys what remains, which a plain array
- * check would not do for a single child or a fragment. A separator borrows the key of the
- * segment it precedes, so it stays stable without counting positions.
- */
 function separatorKey(segment: ReactNode): string {
   return `separator:${isValidElement(segment) ? String(segment.key) : String(segment)}`;
 }

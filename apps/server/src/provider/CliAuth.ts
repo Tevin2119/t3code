@@ -33,9 +33,9 @@ import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
-import type { ProviderAuthController } from "./Services/ProviderAuthService.ts";
+import type { ProviderAuthController } from "./ProviderAuthService.ts";
 
 /** Verification target a device-code CLI prints on its way to waiting. */
 export interface CliAuthChallenge {
@@ -323,11 +323,16 @@ export const makeCliAuth = Effect.fn("makeCliAuth")(function* (
                 `${options.providerName} setup is already in progress.`,
               );
             }
-            const flowId = yield* crypto.randomUUIDv4.pipe(
-              Effect.mapError(() =>
-                setupError("start", `Could not start ${options.providerName} sign-in. Try again.`),
-              ),
-            );
+            const flowId = yield* crypto
+              .randomUUIDv4()
+              .pipe(
+                Effect.mapError(() =>
+                  setupError(
+                    "start",
+                    `Could not start ${options.providerName} sign-in. Try again.`,
+                  ),
+                ),
+              );
             const expiresAtMillis = (yield* Clock.currentTimeMillis) + flowTimeoutMs;
             const state: ProviderAuthState = {
               ...emptyState,

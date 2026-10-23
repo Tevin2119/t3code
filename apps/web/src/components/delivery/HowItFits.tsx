@@ -55,7 +55,7 @@ export function HowItFits() {
         <CircleHelpIcon />
       </PopoverTrigger>
       <PopoverPopup side="bottom" align="end" className="w-[30rem] max-w-[calc(100vw-2rem)]">
-        <PopoverTitle className="pb-2 text-sm">How it fits together</PopoverTitle>
+        <PopoverTitle className="mb-2">How it fits together</PopoverTitle>
         <dl className="flex max-h-[60vh] flex-col gap-2 overflow-y-auto text-xs">
           {PARTS.map(([term, meaning]) => (
             <div key={term}>

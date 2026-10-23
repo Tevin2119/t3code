@@ -1,11 +1,12 @@
 import type { EnvironmentId, ProviderInstanceId } from "@t3tools/contracts";
 import { RotateCcwIcon } from "lucide-react";
-import { useMemo } from "react";
+import type { ReactNode } from "react";
 
 import { useEnvironmentSettings } from "../../hooks/useSettings";
 import {
   moveSeat,
   seatIsOn,
+  seatSources,
   seatOfferFor,
   type SeatChoice,
   type SeatSettings,
@@ -25,7 +26,7 @@ import {
   deriveProviderInstanceEntries,
   sortProviderInstanceEntries,
 } from "../../providerInstances";
-import { useEnvironment } from "../../state/environments";
+import { useEnvironmentProviders } from "../../state/environments";
 import { EMPTY_SERVER_PROVIDERS } from "../../state/server";
 import { ProviderModelPicker } from "../chat/ProviderModelPicker";
 import type { ModelEsque } from "../chat/providerIconUtils";
@@ -68,6 +69,13 @@ function Choice(props: {
   }
   return (
     <Select
+      items={[
+        {
+          value: TEAM_DEFAULT,
+          label: `${props.baseLabel}${props.baseValue ? `: ${props.baseValue}` : ""}`,
+        },
+        ...props.options.map((option) => ({ value: option, label: option })),
+      ]}
       value={props.value ?? TEAM_DEFAULT}
       onValueChange={(value) => props.onChange(value === TEAM_DEFAULT ? "" : String(value))}
     >
@@ -98,15 +106,15 @@ function Choice(props: {
 
 /** The harnesses and models of this environment, as the composer's own picker has them. */
 export function useSeatCatalog(environmentId: EnvironmentId | null) {
-  const environment = useEnvironment(environmentId);
+  const providersByEnvironment = useEnvironmentProviders();
   const settings = useEnvironmentSettings((environmentId ?? "") as EnvironmentId);
-  const providers = environment?.serverConfig?.providers ?? EMPTY_SERVER_PROVIDERS;
-  return useMemo(() => {
-    const entries = sortProviderInstanceEntries(
-      applyProviderInstanceSettings(deriveProviderInstanceEntries(providers), settings),
-    ).filter((entry) => harnessOfDriver(entry.driverKind) !== null);
-    return { entries, options: getCustomModelOptionsByInstance(settings, providers) };
-  }, [providers, settings]);
+  const providers =
+    (environmentId === null ? undefined : providersByEnvironment.get(environmentId)) ??
+    EMPTY_SERVER_PROVIDERS;
+  const entries = sortProviderInstanceEntries(
+    applyProviderInstanceSettings(deriveProviderInstanceEntries(providers), settings, null),
+  ).filter((entry) => harnessOfDriver(entry.driverKind) !== null);
+  return { entries, options: getCustomModelOptionsByInstance(settings, providers) };
 }
 
 /**
@@ -132,6 +140,8 @@ export function SeatSettingsPanel(props: {
   readonly taking?: ReadonlyArray<string> | undefined;
   /** Only the switches: what each seat runs on is set somewhere else. */
   readonly switchesOnly?: boolean;
+  /** More to set for a seat, shown under it: its fallbacks. */
+  readonly renderExtra?: ((item: SeatSettings) => ReactNode) | undefined;
 }) {
   const catalog = useSeatCatalog(props.environmentId);
   const locked = props.onChange === undefined;
@@ -144,7 +154,7 @@ export function SeatSettingsPanel(props: {
 
   return (
     <div className="flex flex-col gap-1" data-delivery-seat-settings>
-      <p className="text-[11px] text-muted-foreground" data-delivery-seats-on>
+      <p className="text-2xs text-muted-foreground" data-delivery-seats-on>
         {on} of {props.settings.length} seats switched on
       </p>
       <div className="flex flex-col divide-y divide-border">
@@ -248,14 +258,14 @@ export function SeatSettingsPanel(props: {
                     <TooltipPopup side="top">Back to {baseLabel.toLowerCase()}</TooltipPopup>
                   </Tooltip>
                 ) : (
-                  <Badge size="sm" variant="outline" className="shrink-0 text-muted-foreground">
+                  <Badge size="sm" variant="outline" className="shrink-0 ">
                     {baseLabel}
                   </Badge>
                 )}
               </div>
 
               {props.switchesOnly ? (
-                <p className="pl-10 text-[11px] text-muted-foreground" data-seat-runs-on>
+                <p className="pl-10 text-2xs text-muted-foreground" data-seat-runs-on>
                   {harnessLabel(values.harness)}, {values.model ?? "its own model"}
                   {values.reasoning ? `, ${values.reasoning}` : ""}
                   {values.access && values.access !== "full" ? `, ${values.access}` : ""}
@@ -268,13 +278,13 @@ export function SeatSettingsPanel(props: {
                     </span>
                   ) : entry ? (
                     <ProviderModelPicker
+                      environmentId={props.environmentId}
                       activeInstanceId={entry.instanceId}
                       model={values.model ?? ""}
                       lockedProvider={null}
                       instanceEntries={entries}
                       modelOptionsByInstance={options}
                       size="xs"
-                      triggerVariant="outline"
                       triggerAriaLabel={`Harness and model for ${item.title}`}
                       {...(offer.model
                         ? {}
@@ -337,6 +347,14 @@ export function SeatSettingsPanel(props: {
                   />
                 </div>
               )}
+              {over === "task" && !locked && seatSources(item).length > 0 ? (
+                <p className="pl-10 text-2xs text-muted-foreground" data-seat-source>
+                  {baseLabel} set by {seatSources(item).join(" and ")}
+                </p>
+              ) : null}
+              {props.renderExtra && !props.switchesOnly ? (
+                <div className="pl-10">{props.renderExtra(item)}</div>
+              ) : null}
             </div>
           );
         })}

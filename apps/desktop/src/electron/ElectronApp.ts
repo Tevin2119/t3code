@@ -51,6 +51,7 @@ export class ElectronApp extends Context.Service<
      */
     readonly systemLocale: Effect.Effect<string>;
     readonly whenReady: Effect.Effect<void, ElectronAppWhenReadyError>;
+    readonly requestSingleInstanceLock: Effect.Effect<boolean>;
     readonly quit: Effect.Effect<void>;
     readonly exit: (code: number) => Effect.Effect<void>;
     readonly relaunch: (options: Electron.RelaunchOptions) => Effect.Effect<void>;
@@ -64,7 +65,6 @@ export class ElectronApp extends Context.Service<
     ) => Effect.Effect<void>;
     readonly setAppUserModelId: (id: string) => Effect.Effect<void>;
     readonly getAppMetrics: Effect.Effect<ReadonlyArray<Electron.ProcessMetric>>;
-    readonly isDefaultProtocolClient: (protocol: string) => Effect.Effect<boolean>;
     readonly setAsDefaultProtocolClient: (
       protocol: string,
       path?: string,
@@ -138,6 +138,7 @@ export const make = ElectronApp.of({
       catch: (cause) => new ElectronAppWhenReadyError({ isPackaged, cause }),
     });
   }),
+  requestSingleInstanceLock: Effect.sync(() => Electron.app.requestSingleInstanceLock()),
   quit: Effect.sync(() => {
     Electron.app.quit();
   }),
@@ -166,8 +167,6 @@ export const make = ElectronApp.of({
       Electron.app.setAppUserModelId(id);
     }),
   getAppMetrics: Effect.sync(() => Electron.app.getAppMetrics()),
-  isDefaultProtocolClient: (protocol) =>
-    Effect.sync(() => Electron.app.isDefaultProtocolClient(protocol)),
   setAsDefaultProtocolClient: (protocol, path, args) =>
     Effect.sync(() => {
       if (path === undefined) {
