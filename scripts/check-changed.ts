@@ -22,7 +22,15 @@ const git = (...args: Array<string>) =>
     .split("\n")
     .filter(Boolean);
 
-const ref = process.argv[2] ?? "origin/main";
+// A fork whose default branch is not main can keep a stale origin/main, and a merge base with it
+// counts thousands of files as changed. The remote's own default branch is the base when known.
+const remoteHead = NodeChildProcess.spawnSync(
+  "git",
+  ["symbolic-ref", "-q", "--short", "refs/remotes/origin/HEAD"],
+  { cwd: root, encoding: "utf8" },
+);
+const ref =
+  process.argv[2] ?? ((remoteHead.status === 0 && remoteHead.stdout.trim()) || "origin/main");
 const mergeBase = NodeChildProcess.spawnSync("git", ["merge-base", "HEAD", ref], {
   cwd: root,
   encoding: "utf8",
