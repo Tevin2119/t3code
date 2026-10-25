@@ -1409,10 +1409,8 @@ function Info(props: {
   const suggested = task.suggestedBoard ?? card.suggestedBoard ?? null;
   const [moving, setMoving] = useState<{
     readonly board: string;
-    readonly base: string | null;
   } | null>(null);
-  const startMove = (board: string) =>
-    setMoving({ board, base: suggested?.id === board ? suggested.base : null });
+  const startMove = (board: string) => setMoving({ board });
   // What is set for the task, which the switches change.
   const set = Object.fromEntries(task.settings.map((item) => [item.seat, item.set]));
   // The seat choices last sent. Until a read of the task shows it changed since (its last
@@ -1469,7 +1467,6 @@ function Info(props: {
           task={task}
           boards={boards}
           board={moving.board}
-          base={moving.base}
           onClose={() => setMoving(null)}
           onMoved={props.onChanged}
         />

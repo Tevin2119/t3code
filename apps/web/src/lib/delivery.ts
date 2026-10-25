@@ -1856,6 +1856,8 @@ export function targetLine(target: DeliveryTarget | null): string {
 
 /** A repository a board can be bound to, with its branches. */
 export interface DeliveryRepository {
+  readonly delivery: { readonly remote: string | null; readonly mode: string | null } | null;
+  readonly fetch: { readonly remote: string | null } | null;
   readonly id: string;
   readonly title: string;
   readonly path: string;
@@ -1875,6 +1877,10 @@ export function parseRepositories(body: unknown): ReadonlyArray<DeliveryReposito
             title: text(item.title, item.id),
             path: text(item.path),
             defaultBase: textOrNull(item.defaultBase),
+            delivery: isRecord(item.delivery)
+              ? { remote: textOrNull(item.delivery.remote), mode: textOrNull(item.delivery.mode) }
+              : null,
+            fetch: isRecord(item.fetch) ? { remote: textOrNull(item.fetch.remote) } : null,
             branches: strings(item.branches),
             kind: text(item.kind, "own"),
             ok: item.ok === true,
