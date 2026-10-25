@@ -359,11 +359,20 @@ function SharedBoardContent(props: SharedBoardProps) {
 function SharedTaskAllocationContent(props: {
   environmentId: EnvironmentId | null;
   taskId: string;
+  readonly open?: boolean;
+  readonly onOpenChange?: (open: boolean) => void;
 }) {
-  const [open, setOpen] = useState(false);
+  const [localOpen, setLocalOpen] = useState(false);
+  const open = props.open ?? localOpen;
+  const setOpen = props.onOpenChange ?? setLocalOpen;
   return (
     <>
-      <Button size="sm" variant="ghost" onClick={() => setOpen(true)}>
+      <Button
+        size="sm"
+        variant="ghost"
+        className="hidden [@media(min-width:640px)_and_(min-height:600px)]:inline-flex"
+        onClick={() => setOpen(true)}
+      >
         Allocate
       </Button>
       <Dialog open={open} onOpenChange={setOpen}>
@@ -381,6 +390,8 @@ function SharedTaskAllocationContent(props: {
 export function SharedTaskAllocation(props: {
   environmentId: EnvironmentId | null;
   taskId: string;
+  readonly open?: boolean;
+  readonly onOpenChange?: (open: boolean) => void;
 }) {
   return <SharedTaskAllocationContent key={`${props.environmentId}:${props.taskId}`} {...props} />;
 }

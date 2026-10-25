@@ -27,6 +27,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
 
 import { isElectron } from "../../env";
+import { useMediaQuery } from "../../hooks/useMediaQuery";
 import { usePrimarySettings } from "../../hooks/useSettings";
 import {
   parseTarget,
@@ -2094,6 +2095,8 @@ export function TaskWorkspace(props: {
   const [taskBrief, setTaskBrief] = useState<string | null>(null);
   const [creatingTask, setCreatingTask] = useState(false);
   const [createProblem, setCreateProblem] = useState<string | null>(null);
+  const [allocatingTask, setAllocatingTask] = useState<string | null>(null);
+  const wide = useMediaQuery("(min-width: 640px) and (min-height: 600px)");
 
   // Opened and looked at, what the team said is read.
   const unread = task?.card.unread ?? 0;
@@ -2173,6 +2176,7 @@ export function TaskWorkspace(props: {
                 <Button
                   size="xs"
                   variant="outline"
+                  className="hidden [@media(min-width:640px)_and_(min-height:600px)]:inline-flex"
                   onClick={() => {
                     setCreateProblem(null);
                     setTaskBrief("");
@@ -2182,9 +2186,14 @@ export function TaskWorkspace(props: {
                 </Button>
               ) : null}
               {task ? (
-                <SharedTaskAllocation environmentId={props.environmentId} taskId={task.id} />
+                <SharedTaskAllocation
+                  environmentId={props.environmentId}
+                  taskId={task.id}
+                  open={allocatingTask === task.id}
+                  onOpenChange={(open) => setAllocatingTask(open ? task.id : null)}
+                />
               ) : null}
-              {task && others.length > 0 ? (
+              {task && (!wide || others.length > 0) ? (
                 <Menu>
                   <MenuTrigger
                     render={
@@ -2199,6 +2208,32 @@ export function TaskWorkspace(props: {
                     <EllipsisIcon />
                   </MenuTrigger>
                   <MenuPopup align="end">
+                    {!wide && task.workflow === "chat" && task.state === "chat" ? (
+                      <MenuItem
+                        disabled={actions.busy}
+                        onClick={() => {
+                          setCreateProblem(null);
+                          setTaskBrief("");
+                        }}
+                      >
+                        <span className="flex max-w-80 flex-col">
+                          <span>Create task from chat</span>
+                          <span className="text-xs text-muted-foreground">
+                            Make this chat a task; nothing starts yet.
+                          </span>
+                        </span>
+                      </MenuItem>
+                    ) : null}
+                    {!wide ? (
+                      <MenuItem disabled={actions.busy} onClick={() => setAllocatingTask(task.id)}>
+                        <span className="flex max-w-80 flex-col">
+                          <span>Allocate</span>
+                          <span className="text-xs text-muted-foreground">
+                            Choose the machine for it, or follow its move.
+                          </span>
+                        </span>
+                      </MenuItem>
+                    ) : null}
                     {others.map((action) => (
                       <MenuItem
                         key={action}
