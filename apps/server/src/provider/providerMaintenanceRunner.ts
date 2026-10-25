@@ -572,7 +572,23 @@ export const make = Effect.fn("ProviderMaintenanceRunner.make")(function* () {
           },
         );
 
-        return yield* runCommandAndVerify().pipe(Effect.catchCause(recordFailedUpdate));
+        return yield* runCommandAndVerify().pipe(
+          Effect.catchCause(recordFailedUpdate),
+          // Request cancellation interrupts the error handler too. Publish the
+          // terminal state in a finalizer so Settings cannot stay on "updating".
+          Effect.onInterrupt(() =>
+            Effect.gen(function* () {
+              yield* finish(
+                makeUpdateState({
+                  status: "failed",
+                  startedAt: yield* Ref.get(startedAtRef),
+                  finishedAt: yield* nowIso,
+                  message: "Provider update was interrupted. Try again.",
+                }),
+              );
+            }),
+          ),
+        );
       },
     );
 
