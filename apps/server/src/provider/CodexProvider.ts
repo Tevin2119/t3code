@@ -15,6 +15,7 @@ import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as CodexClient from "effect-codex-app-server/client";
 import * as CodexSchema from "effect-codex-app-server/schema";
 import * as CodexErrors from "effect-codex-app-server/errors";
+import { enrichCodexContextWindows } from "./CodexContextWindow.ts";
 
 import type {
   CodexSettings,
@@ -310,7 +311,15 @@ function appendCustomCodexModels(
   models: ReadonlyArray<ServerProviderModel>,
   customModels: ReadonlyArray<CustomModelSetting>,
 ): ReadonlyArray<ServerProviderModel> {
-  const fallbackCapabilities = models.find((model) => model.capabilities)?.capabilities ?? null;
+  const reportedCapabilities = models.find((model) => model.capabilities)?.capabilities;
+  // Window sizes belong to an exact catalog model, never an unrelated custom slug.
+  const fallbackCapabilities = reportedCapabilities
+    ? createModelCapabilities({
+        optionDescriptors: (reportedCapabilities.optionDescriptors ?? []).filter(
+          ({ id }) => id !== "contextWindow",
+        ),
+      })
+    : null;
   return providerModelsFromSettings(models, customModels, fallbackCapabilities);
 }
 
@@ -594,7 +603,13 @@ const probeCodexAppServerProvider = Effect.fn("probeCodexAppServerProvider")(fun
     account: accountResponse,
     ...(rateLimits ? { rateLimits } : {}),
     version,
-    models,
+    models:
+      models === undefined
+        ? undefined
+        : ((yield* withCodexDiscoveryDeadline(
+            enrichCodexContextWindows(models, initialize.codexHome),
+            deadlineMs,
+          )) ?? models),
     serviceTier,
     skills: skillsResponse ? parseCodexSkillsListResponse(skillsResponse, input.cwd) : [],
   } satisfies CodexAppServerProviderSnapshot;

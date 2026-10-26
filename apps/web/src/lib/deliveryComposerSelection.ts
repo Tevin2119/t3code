@@ -40,7 +40,7 @@ type ComposerSelectionInput = {
 /** ChatView's selection for send and conversation controls. */
 export function useChatViewComposerProviderSelection(
   input: ComposerSelectionInput & {
-    activeRuntime: Thread["runtime"];
+    activeRuntime: { readonly providerInstanceId: ProviderInstanceId } | null;
   },
 ) {
   const runtimeInstanceId = input.activeRuntime?.providerInstanceId;

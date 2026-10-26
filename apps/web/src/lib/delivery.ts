@@ -1348,6 +1348,7 @@ export const parseTaskFile = (value: Json): TaskFile => ({
 
 /** One line of a task's history: something said, or something that happened. */
 export interface TimelineEntry {
+  readonly fullAuto: { readonly by: string; readonly since: string } | null;
   readonly id: string;
   readonly at: string;
   readonly source: "message" | "event";
@@ -1372,10 +1373,30 @@ export interface TimelineEntry {
   readonly evidence: string | null;
 }
 
+export function fullAutoAttribution(entry: Pick<TimelineEntry, "by" | "fullAuto">) {
+  if (entry.fullAuto) return entry.fullAuto;
+  const match = /^full auto, turned on by (.+) at (.+)$/.exec(entry.by);
+  if (match) {
+    return {
+      by: match[1]!.trim() || null,
+      since: Number.isFinite(Date.parse(match[2]!)) ? match[2]! : null,
+    };
+  }
+  return entry.by === "full auto" ? { by: null, since: null } : null;
+}
+
 const parseTimeline = (value: unknown): ReadonlyArray<TimelineEntry> =>
   records(value).map((entry) => {
     const change = entry.change;
+    const auto = entry.fullAuto;
     return {
+      fullAuto:
+        isRecord(auto) &&
+        typeof auto.by === "string" &&
+        typeof auto.since === "string" &&
+        Number.isFinite(Date.parse(auto.since))
+          ? { by: auto.by, since: auto.since }
+          : null,
       id: text(entry.id),
       at: text(entry.at),
       source: text(entry.source) === "message" ? "message" : "event",

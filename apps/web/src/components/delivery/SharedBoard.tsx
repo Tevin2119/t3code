@@ -64,24 +64,22 @@ function SharedBoardContent(props: SharedBoardProps) {
   async function run(path: string, body: Record<string, unknown>, purpose?: "policy" | "move") {
     setBusy(true);
     setProblem(null);
-    try {
-      const result = await act(path, {
-        ...body,
-        ...(purpose ? { key: purpose === "policy" ? policyKey : moveKey } : {}),
-      });
-      if (!result.ok) setProblem(result.why);
-      else {
-        read.refresh();
-        if (purpose === "move") {
-          allocation.refresh();
-          setMoveAccepted(true);
-          setTaskId(null);
-        }
+    // The engine request settles into a result, so cleanup can follow the await.
+    const result = await act(path, {
+      ...body,
+      ...(purpose ? { key: purpose === "policy" ? policyKey : moveKey } : {}),
+    });
+    setBusy(false);
+    if (purpose === "policy") setPolicyKey("");
+    if (purpose === "move") setMoveKey("");
+    if (!result.ok) setProblem(result.why);
+    else {
+      read.refresh();
+      if (purpose === "move") {
+        allocation.refresh();
+        setMoveAccepted(true);
+        setTaskId(null);
       }
-    } finally {
-      setBusy(false);
-      if (purpose === "policy") setPolicyKey("");
-      if (purpose === "move") setMoveKey("");
     }
   }
   if (read.error)

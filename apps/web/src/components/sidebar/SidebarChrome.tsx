@@ -1,4 +1,5 @@
-import { ArrowLeftIcon, ChartNoAxesColumnIcon, HomeIcon, SettingsIcon } from "lucide-react";
+import { SidebarApprovalControls } from "../delivery/ApprovalControls";
+import { ChartNoAxesColumnIcon, HomeIcon, SettingsIcon } from "lucide-react";
 import type { ReactNode } from "react";
 import { memo } from "react";
 import { Link, useLocation, useNavigate } from "@tanstack/react-router";
@@ -31,7 +32,6 @@ import {
 } from "../ui/sidebar";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { readPullRequestListPreferences } from "../pullRequest/pullRequestListPreferences";
-import { useNavigateToMainApp } from "./mainAppLocation";
 import { SidebarThreadUndoNotice } from "./SidebarThreadUndoNotice";
 import { SidebarCheckoutUpdatePill } from "./SidebarCheckoutUpdatePill";
 import { SidebarProviderUpdatePill } from "./SidebarProviderUpdatePill";
@@ -187,7 +187,6 @@ function SidebarUtilityItem({
 
 export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
   const navigate = useNavigate();
-  const navigateToMainApp = useNavigateToMainApp();
   const { isMobile, setOpenMobile } = useSidebar();
   const currentFooterPage = useLocation({
     select: (location) =>
@@ -216,6 +215,10 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
       setOpenMobile(false);
     }
   };
+  const handleHomeClick = () => {
+    closeMobileSidebar();
+    void navigate({ to: "/" });
+  };
   const handlePullRequestsClick = () => {
     closeMobileSidebar();
     void navigate({
@@ -240,66 +243,36 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
     void navigate({ to: "/board" });
   };
 
-  const handleBackClick = () => {
-    closeMobileSidebar();
-    void navigateToMainApp();
-  };
-
-  const handleHomeClick = () => {
-    closeMobileSidebar();
-    void navigate({ to: "/" });
-  };
-
   return (
     <SidebarMenu className="flex-row items-center">
       {currentFooterPage ? (
-        <>
-          <SidebarMenuItem className="min-w-0 flex-1">
-            <SidebarMenuButton onClick={handleBackClick}>
-              <ArrowLeftIcon />
-              <span>Back</span>
-            </SidebarMenuButton>
-          </SidebarMenuItem>
-          <SidebarMenuItem className="min-w-0 flex-1">
-            <SidebarMenuButton onClick={handleHomeClick} aria-label="Home">
-              <HomeIcon />
-              <span>Home</span>
-            </SidebarMenuButton>
-          </SidebarMenuItem>
-        </>
-      ) : (
-        <>
-          <SidebarUtilityItem
-            icon={<SettingsIcon />}
-            label="Settings"
-            onClick={handleSettingsClick}
-          />
-          {pullRequestsSupported ? (
-            <SidebarUtilityItem
-              icon={<PullRequestGlyph.pullRequest />}
-              label="Pull Requests"
-              onClick={handlePullRequestsClick}
-            />
-          ) : null}
-          <SidebarUtilityItem
-            icon={<ChartNoAxesColumnIcon />}
-            label="Usage"
-            onClick={handleUsageClick}
-          />
-          {deliveryEnabled ? (
-            <SidebarUtilityItem
-              badge={boardAttention}
-              icon={<BoardIcon />}
-              label={
-                boardAttention
-                  ? `Board, ${boardAttention} ${boardAttention === 1 ? "task needs" : "tasks need"} you`
-                  : "Board"
-              }
-              onClick={handleBoardClick}
-            />
-          ) : null}
-        </>
-      )}
+        <SidebarUtilityItem icon={<HomeIcon />} label="Threads" onClick={handleHomeClick} />
+      ) : null}
+      <SidebarUtilityItem icon={<SettingsIcon />} label="Settings" onClick={handleSettingsClick} />
+      {pullRequestsSupported ? (
+        <SidebarUtilityItem
+          icon={<PullRequestGlyph.pullRequest />}
+          label="Pull Requests"
+          onClick={handlePullRequestsClick}
+        />
+      ) : null}
+      <SidebarUtilityItem
+        icon={<ChartNoAxesColumnIcon />}
+        label="Usage"
+        onClick={handleUsageClick}
+      />
+      {deliveryEnabled ? (
+        <SidebarUtilityItem
+          badge={boardAttention}
+          icon={<BoardIcon />}
+          label={
+            boardAttention
+              ? `Board, ${boardAttention} ${boardAttention === 1 ? "task needs" : "tasks need"} you`
+              : "Board"
+          }
+          onClick={handleBoardClick}
+        />
+      ) : null}
       <SidebarUpdatePill />
     </SidebarMenu>
   );
@@ -311,6 +284,7 @@ export const SidebarChromeFooter = memo(function SidebarChromeFooter() {
       <SidebarThreadUndoNotice />
       <SidebarProviderUpdatePill />
       <SidebarCheckoutUpdatePill />
+      <SidebarApprovalControls />
       <SidebarUpdateArchitectureWarning />
       <SidebarUtilityMenu />
     </SidebarFooter>

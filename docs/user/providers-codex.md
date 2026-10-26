@@ -76,6 +76,14 @@ reported accounts, refresh provider status, and confirm the second instance has
 its own shadow path and login. A shadow-home conflict usually means the directory
 contains a copied Codex setup. Use a fresh shadow directory and sign in again.
 
+## Choose a context window
+
+Select **Context Window** in the thread's model options before sending a message.
+This option appears when your Codex model catalog reports both a standard and an
+expanded window. Available sizes depend on the model and account; the context
+meter reports the usable capacity returned by Codex, which can be smaller than
+the selected size. Select the standard size to switch back.
+
 ## Answer questions while Codex works
 
 Codex can ask a question and keep working. Answer it in the thread's question

@@ -1,3 +1,4 @@
+import { ApprovalControls } from "./ApprovalControls";
 import { useAtomValue } from "@effect/atom-react";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
@@ -130,40 +131,41 @@ function EngineControl(props: {
     setBusy(true);
     setProblem(null);
     setNotice(null);
-    try {
-      const result = await act(
-        action === "channel"
-          ? "/api/engine/channel"
-          : action === "later"
-            ? "/api/engine/update/later"
-            : "/api/engine/update",
-        { key: approval, commit: versions.available?.commit, channel },
-      );
-      if (!result.ok) throw new Error(result.why);
-      if (action === "update") {
-        const receipt = requireDeliveryUpdateReceipt(result.body);
-        props.onUpdateAccepted(receipt.id);
-        setNotice(
-          `Update ${receipt.id} accepted for ${receipt.channel} ${receipt.commit.slice(0, 10)}. The supervisor drains work, snapshots state, then verifies the replacement. Acceptance is not completion.`,
-        );
-      } else
-        setNotice(
-          action === "later"
-            ? "Update deferred. This engine keeps working. You can still update here later."
-            : "Release channel saved. No work was stopped and nothing was installed.",
-        );
-      health.refresh();
-    } catch (error) {
-      setProblem(
+    // A promise chain instead of try/finally keeps this component compiled.
+    const problem = await act(
+      action === "channel"
+        ? "/api/engine/channel"
+        : action === "later"
+          ? "/api/engine/update/later"
+          : "/api/engine/update",
+      { key: approval, commit: versions.available?.commit, channel },
+    )
+      .then((result) => {
+        if (!result.ok) return result.why;
+        if (action === "update") {
+          const receipt = requireDeliveryUpdateReceipt(result.body);
+          props.onUpdateAccepted(receipt.id);
+          setNotice(
+            `Update ${receipt.id} accepted for ${receipt.channel} ${receipt.commit.slice(0, 10)}. The supervisor drains work, snapshots state, then verifies the replacement. Acceptance is not completion.`,
+          );
+        } else
+          setNotice(
+            action === "later"
+              ? "Update deferred. This engine keeps working. You can still update here later."
+              : "Release channel saved. No work was stopped and nothing was installed.",
+          );
+        health.refresh();
+        return null;
+      })
+      .catch((error: unknown) =>
         error instanceof Error
           ? error.message
           : "Update request failed. Inspect the engine terminal; do not retry automatically.",
       );
-    } finally {
-      setApproval("");
-      setBusy(false);
-      inFlight.current = false;
-    }
+    if (problem !== null) setProblem(problem);
+    setApproval("");
+    setBusy(false);
+    inFlight.current = false;
   };
 
   const control = async (action: "start" | "stop" | "restart") => {
@@ -172,51 +174,51 @@ function EngineControl(props: {
     setBusy(true);
     setProblem(null);
     setNotice(null);
-    try {
-      await controlDeliveryEngine(action, {
-        stop: async () => {
-          const result = await act("/api/engine/stop", { key: approval });
-          if (!result.ok) throw new Error(result.why);
-          return result.body;
-        },
-        start: async () => {
-          if (!command || !configuration)
-            throw new Error(
-              "Set delivery.engineCommand in this environment's server settings before starting it.",
-            );
-          const opened = await terminalOpen({
-            environmentId,
-            input: { threadId: ENGINE_THREAD, terminalId: ENGINE_TERMINAL, cwd: configuration.cwd },
-          });
-          if (opened._tag === "Failure") throw new Error(String(squashAtomCommandFailure(opened)));
-          setTerminal(true);
-          const written = await terminalWrite({
-            environmentId,
-            input: { threadId: ENGINE_THREAD, terminalId: ENGINE_TERMINAL, data: `${command}\r` },
-          });
-          if (written._tag === "Failure")
-            throw new Error(
-              "The start command was not confirmed. Check the engine terminal before trying again.",
-            );
-        },
-      });
-      setNotice(
-        action === "stop"
-          ? "Engine stopped. Its work is kept for the next start."
-          : "Start command sent. Check the terminal and engine health; a command sent is not proof that it started.",
-      );
-      health.refresh();
-    } catch (error) {
-      setProblem(
+    const problem = await controlDeliveryEngine(action, {
+      stop: async () => {
+        const result = await act("/api/engine/stop", { key: approval });
+        if (!result.ok) throw new Error(result.why);
+        return result.body;
+      },
+      start: async () => {
+        if (!command || !configuration)
+          throw new Error(
+            "Set delivery.engineCommand in this environment's server settings before starting it.",
+          );
+        const opened = await terminalOpen({
+          environmentId,
+          input: { threadId: ENGINE_THREAD, terminalId: ENGINE_TERMINAL, cwd: configuration.cwd },
+        });
+        if (opened._tag === "Failure") throw new Error(String(squashAtomCommandFailure(opened)));
+        setTerminal(true);
+        const written = await terminalWrite({
+          environmentId,
+          input: { threadId: ENGINE_THREAD, terminalId: ENGINE_TERMINAL, data: `${command}\r` },
+        });
+        if (written._tag === "Failure")
+          throw new Error(
+            "The start command was not confirmed. Check the engine terminal before trying again.",
+          );
+      },
+    })
+      .then(() => {
+        setNotice(
+          action === "stop"
+            ? "Engine stopped. Its work is kept for the next start."
+            : "Start command sent. Check the terminal and engine health; a command sent is not proof that it started.",
+        );
+        health.refresh();
+        return null;
+      })
+      .catch((error: unknown) =>
         error instanceof Error
           ? error.message
           : "Engine control failed. Check its terminal before trying again.",
       );
-    } finally {
-      setApproval("");
-      setBusy(false);
-      inFlight.current = false;
-    }
+    if (problem !== null) setProblem(problem);
+    setApproval("");
+    setBusy(false);
+    inFlight.current = false;
   };
 
   return (
@@ -241,6 +243,7 @@ function EngineControl(props: {
             </p>
             {reachable ? (
               <>
+                <ApprovalControls environmentId={environmentId} health={health} />
                 <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-xs">
                   <dt className="text-muted-foreground">Account profile</dt>
                   <dd>{summary.profile ?? "Not reported"}</dd>

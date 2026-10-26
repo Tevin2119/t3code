@@ -98,6 +98,48 @@ If you run the server with `npx` rather than an installed `t3`, there is
 nothing to update on the host: stop the server and relaunch it as
 `npx t3@<client-version>` with the same subcommand and options.
 
+## Update a server running from a git checkout
+
+When you run T3 Code from a cloned repository with `vp run dev`, the checkout
+supervisor watches the branch for new commits. When the remote branch moves
+ahead, the sidebar shows an **Update and restart** notification. Clicking it
+pulls the new commits, installs dependencies if a lockfile changed, rebuilds,
+and restarts the server. The browser reloads automatically once the server is
+back.
+
+This is the recommended way to run from source on any platform where you want
+automatic updates from your own repository. It works on macOS, Linux, and
+Windows.
+
+### Choosing between the desktop app and `vp run dev`
+
+|                   | Desktop app                                                  | `vp run dev` + browser                                 |
+| ----------------- | ------------------------------------------------------------ | ------------------------------------------------------ |
+| **Auto-update**   | Released builds only (from GitHub Releases)                  | Any commit on your branch, including your own merges   |
+| **Update flow**   | Downloads new binary, installs, restarts                     | Git pull, install, rebuild, restart — shown in the UI  |
+| **Remote access** | Server embedded in app; killing the app kills the connection | Server runs independently; browser tabs are disposable |
+| **Native chrome** | Full OS window, system tray, notifications                   | Browser tab                                            |
+| **Best for**      | End users on a released build                                | Developers running from source, especially remote      |
+
+If you access T3 Code remotely (from a phone, tablet, or another machine), `vp run dev` is more
+resilient: the server process survives browser disconnects and does not depend on an Electron
+window staying alive. Start it with `--share` for Tailscale access.
+
+The desktop app bundles its own server, so its auto-updater only applies to released builds
+downloaded from GitHub Releases or a package manager. Running the desktop app from a source
+checkout does not give it the checkout supervisor, so it will not detect or offer code updates.
+
+### Start `vp run dev` on boot (Windows)
+
+Create a shortcut in your Startup folder (`shell:startup`) that runs:
+
+```
+pwsh -WindowStyle Minimized -Command "Set-Location C:\path\to\t3code; npx vp run dev"
+```
+
+Or register it as a scheduled task that starts at logon. The dev server prints
+its URL on startup; connect to it from any browser.
+
 ## If an update fails
 
 Keep the client open until it reconnects or reports a failure. A failed service

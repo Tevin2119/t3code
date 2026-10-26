@@ -344,6 +344,12 @@ export function AccountBreakdownTable(props: {
 const connectionKey = (harness: UsageProviderKind, modelProvider: string) =>
   `${harness}\u0000${modelProvider}`;
 
+// Outside the component: React Compiler does not support `??=`.
+const membersOf = (
+  accounts: Record<string, { members: Array<UsageAccount["members"][number]> }>,
+  name: string,
+) => (accounts[name] ??= { members: [] }).members;
+
 /**
  * Names the account each recorded connection belongs to. Only connections the user
  * names are grouped, and only exactly: a harness and the provider it recorded. The
@@ -395,7 +401,7 @@ export function UsageAccountsEditor(props: {
     for (const connection of connections) {
       const name = names.get(connectionKey(connection.harness, connection.modelProvider))?.trim();
       if (!name) continue;
-      (accounts[name] ??= { members: [] }).members.push({
+      membersOf(accounts, name).push({
         harness: connection.harness,
         modelProvider: connection.modelProvider,
       });
@@ -407,7 +413,7 @@ export function UsageAccountsEditor(props: {
           const key = connectionKey(member.harness, member.modelProvider);
           if (connections.some((item) => connectionKey(item.harness, item.modelProvider) === key))
             continue;
-          const members = (accounts[name] ??= { members: [] }).members;
+          const members = membersOf(accounts, name);
           if (!members.some((item) => connectionKey(item.harness, item.modelProvider) === key))
             members.push(member);
         }

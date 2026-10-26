@@ -1,6 +1,6 @@
 import { ChevronDownIcon, LayersIcon, PencilIcon, PlusIcon, SearchIcon, XIcon } from "lucide-react";
 import type { EnvironmentId } from "@t3tools/contracts";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import {
   parseRepositories,
@@ -308,23 +308,13 @@ export function BoardDialog(props: {
   );
   // Repositories the engine has added here and not yet listed, so they can be chosen at once.
   const [added, setAdded] = useState<ReadonlyArray<DeliveryRepository>>([]);
-  const known = useMemo(
-    () => knownRepositories(parseRepositories(reposRead.body), added),
-    [reposRead.body, added],
-  );
-  const repositories = useMemo(
-    () => known.filter((item) => item.kind !== "qualification"),
-    [known],
-  );
+  const known = knownRepositories(parseRepositories(reposRead.body), added);
+  const repositories = known.filter((item) => item.kind !== "qualification");
   // T3's own projects in this environment are offered too, and added to the engine when chosen.
   const projects = useProjects();
-  const choices = useMemo(
-    () =>
-      isBoard
-        ? repositoryChoices({ repositories: known, projects, environmentId: props.environmentId })
-        : [],
-    [isBoard, known, projects, props.environmentId],
-  );
+  const choices = isBoard
+    ? repositoryChoices({ repositories: known, projects, environmentId: props.environmentId })
+    : [];
   const projectChoices = choices.filter((choice) => choice.kind === "project");
   // A project is added only once the engine's list is read, so one it has is never added again.
   const projectBlocked = reposRead.error
@@ -410,30 +400,26 @@ export function BoardDialog(props: {
     const at = generation.current;
     registeringRef.current = true;
     setRegistering(repositoryTitle);
-    try {
-      const result = await addAct("/api/repositories", {
-        path,
-        title: repositoryTitle,
-        by: props.by,
-      });
-      if (at !== generation.current) return null;
-      if (!result.ok) return { ok: false, why: result.why };
-      reposRead.refresh();
-      const made = addedRepository(result.body, { path, title: repositoryTitle });
-      if (!made) {
-        return {
-          ok: false,
-          why: `${repositoryTitle} was added, but the engine did not say which repository it is. Choose it once the list is read again.`,
-        };
-      }
-      setAdded((current) => [...current.filter((item) => item.id !== made.id), made]);
-      return { ok: true, repository: made };
-    } finally {
-      if (at === generation.current) {
-        registeringRef.current = false;
-        setRegistering(null);
-      }
+    // The engine request settles into a result, so release can follow the await.
+    const result = await addAct("/api/repositories", {
+      path,
+      title: repositoryTitle,
+      by: props.by,
+    });
+    if (at !== generation.current) return null;
+    registeringRef.current = false;
+    setRegistering(null);
+    if (!result.ok) return { ok: false, why: result.why };
+    reposRead.refresh();
+    const made = addedRepository(result.body, { path, title: repositoryTitle });
+    if (!made) {
+      return {
+        ok: false,
+        why: `${repositoryTitle} was added, but the engine did not say which repository it is. Choose it once the list is read again.`,
+      };
     }
+    setAdded((current) => [...current.filter((item) => item.id !== made.id), made]);
+    return { ok: true, repository: made };
   };
   const repositoryTrigger = useRef<HTMLButtonElement>(null);
   const baseTrigger = useRef<HTMLButtonElement>(null);

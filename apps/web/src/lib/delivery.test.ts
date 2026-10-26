@@ -3,6 +3,7 @@ import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  fullAutoAttribution,
   deliveryRequestBody,
   parseRepositories,
   parseSeatLive,
@@ -1535,4 +1536,39 @@ describe("repository delivery metadata", () => {
       [{ remote: null, mode: null }, null],
     ]);
   });
+});
+
+it("reads full auto history attribution without inventing it from grantedBy", () => {
+  const task = parseTask({
+    id: "auto-task",
+    card: card({}),
+    timeline: [
+      { by: "full auto", fullAuto: { by: "Sam", since: "2026-10-19T10:00:00Z" } },
+      { by: "full auto", grantedBy: "Not attribution" },
+      { by: "Sam", fullAuto: { by: 42, since: null } },
+    ],
+  });
+  expect(task?.timeline.map((entry) => entry.fullAuto)).toEqual([
+    { by: "Sam", since: "2026-10-19T10:00:00Z" },
+    null,
+    null,
+  ]);
+});
+
+it("attributes the engine actor string and prefers structured full auto data", () => {
+  const by = "full auto, turned on by Alex at 2026-10-19T10:00:00Z";
+  expect(fullAutoAttribution({ by, fullAuto: null })).toEqual({
+    by: "Alex",
+    since: "2026-10-19T10:00:00Z",
+  });
+  const fullAuto = { by: "Sam", since: "2026-10-19T11:00:00Z" };
+  expect(fullAutoAttribution({ by, fullAuto })).toEqual(fullAuto);
+  expect(
+    fullAutoAttribution({ by: "full auto, turned on by Alex at oops", fullAuto: null }),
+  ).toEqual({ by: "Alex", since: null });
+  expect(fullAutoAttribution({ by: "full auto", fullAuto: null })).toEqual({
+    by: null,
+    since: null,
+  });
+  expect(fullAutoAttribution({ by: "Sam", fullAuto: null })).toBeNull();
 });

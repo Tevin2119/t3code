@@ -18,12 +18,15 @@ import { GUARD_LENGTH, type TranscriptParsePosition } from "./usageTranscriptRea
 // way, so v4 entries still load; see `decodeScanCache` for v4 stateful entries.
 // v6, v7 (upstream): files count their malformed records, and Codex records
 // may name the turn whose service tier is still unresolved.
-// v8 (fork): records also carry the model provider and how it is known, as two
-// fields after the speed and before upstream's rate model. The fork wrote that
-// layout under version 6 too; such a row is at least 13 long where an upstream
-// v6 row is at most 12. The fork's own v5 rows put the two fields where
-// upstream v5 rows keep the speed; such a row is 12 long, an upstream v5 row 11.
-const USAGE_SCAN_CACHE_VERSION = 8 as const;
+// v8 exists in both layouts. Upstream's v8 fixes Codex compaction and resume
+// counters; its rows are at most 13 long. The fork's v8 adds the model provider
+// and how it is known, as two fields after the speed, so its rows are at least
+// 14 long. The fork also wrote that layout under version 6, where its rows are
+// at least 13 long and upstream's at most 12. The fork's own v5 rows put the two
+// fields where upstream v5 rows keep the speed; such a row is 12 long, an
+// upstream v5 row 11.
+// v9: the fork layout with upstream's v8 Codex state.
+const USAGE_SCAN_CACHE_VERSION = 9 as const;
 const SPEED_COMPATIBLE_SINCE_VERSION = 4;
 /** Serialised as the index into this list. */
 const PROVIDER_SOURCE_CODES = [null, "recorded", "harness"] as const;
@@ -33,8 +36,9 @@ const PROVIDER_SOURCE_CODES = [null, "recorded", "harness"] as const;
  * replace it, dropping saved usage for deleted transcripts. Separate files keep
  * both.
  */
-export const SCAN_CACHE_FILE_NAME = "usage-scan-cache-v8.json";
+export const SCAN_CACHE_FILE_NAME = "usage-scan-cache-v9.json";
 export const LEGACY_SCAN_CACHE_FILE_NAMES = [
+  "usage-scan-cache-v8.json",
   "usage-scan-cache-v7.json",
   "usage-scan-cache-v6.json",
   "usage-scan-cache-v5.json",
@@ -247,8 +251,9 @@ export function decodeScanCache(
     for (const row of rows) {
       if (!isRecordArray(row)) return null;
       // Fork rows carry the provider fields after the speed; upstream rows go
-      // straight to the rate model. Version 6 exists in both layouts.
-      const forkLayout = version >= 8 || (version === 6 && row.length >= 13);
+      // straight to the rate model. Versions 6 and 8 exist in both layouts.
+      const forkLayout =
+        version >= 9 || (version === 8 && row.length >= 14) || (version === 6 && row.length >= 13);
       if (row.length < (forkLayout ? 13 : 11)) return null;
       const [
         timestampMs,
@@ -378,9 +383,14 @@ export function decodeScanCache(
       continue;
     }
     // Keep history for deleted rollouts, but re-parse incompatible reducer state.
-    // Only Codex requires new provenance state in v7.
+    // Older Codex entries lack provenance state (v7) or misread compaction and
+    // resume counters (before upstream's v8, which includes the fork's v8).
+    const forkV8 =
+      version === 8 &&
+      [...entry.r, ...entry.t].some((row) => isRecordArray(row) && row.length >= 14);
     const legacy =
-      format.state !== undefined && (version < 6 || (entry.p === "codex" && version < 7));
+      format.state !== undefined &&
+      (version < 6 || (entry.p === "codex" && (version < 8 || forkV8)));
     // A corrupt state disqualifies the entry: resuming with it would attach
     // appended usage to the wrong model or replay fork-copied history.
     if (!legacy && !isValidState.get(entry.p)?.(entry.cs)) continue;

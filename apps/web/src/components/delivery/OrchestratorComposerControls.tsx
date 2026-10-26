@@ -4,7 +4,7 @@ import { useNavigate } from "@tanstack/react-router";
 
 import { whatStartDoes } from "../../lib/deliveryBoard";
 import { PlayIcon, SaveIcon, SlidersHorizontalIcon, UsersIcon, WorkflowIcon } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState, type PointerEventHandler } from "react";
+import { useEffect, useRef, useState, type PointerEventHandler } from "react";
 
 import {
   chosenTeamUnavailable,
@@ -70,7 +70,7 @@ export function OrchestratorComposerControls(props: {
     (state) => state.startRequests[props.threadId] ?? 0,
   );
   const teamsRead = useDeliveryRead(props.environmentId, "/api/teams", { pollMs: 10_000 });
-  const teams = useMemo(() => selectableTeams(teamsRead.body), [teamsRead.body]);
+  const teams = selectableTeams(teamsRead.body);
   const teamsLoaded = teamListStatus(teamsRead) === "loaded";
   const awaitingTeams = draft?.awaitingTeams === true;
   // A new draft starts from the remembered team before the teams are read. Once
@@ -84,12 +84,12 @@ export function OrchestratorComposerControls(props: {
   }, [awaitingTeams, props.threadId, reconcileTeam, teams, teamsLoaded]);
   const act = useDeliveryAct(props.environmentId, "orchestrator draft");
   const boardsRead = useDeliveryRead(props.environmentId, "/api/boards", { pollMs: 10_000 });
-  const boards = useMemo(() => boardPlacementChoices(boardsRead.body), [boardsRead.body]);
+  const boards = boardPlacementChoices(boardsRead.body);
   const taskRead = useDeliveryRead(
     props.environmentId,
     draft?.engineThread ? `/api/tasks/${draft.engineThread}` : null,
   );
-  const savedTask = useMemo(() => parseTask(taskRead.body), [taskRead.body]);
+  const savedTask = parseTask(taskRead.body);
   const board =
     draft?.board !== undefined
       ? draft.board
@@ -108,27 +108,25 @@ export function OrchestratorComposerControls(props: {
   }) => {
     setBoardBusy(true);
     setBoardProblem(null);
-    try {
-      const result = await act(
-        boardDialog?.editing ? `/api/boards/${boardDialog.editing.id}/edit` : "/api/boards",
-        { ...input, by: person },
-      );
-      if (!result.ok) {
-        setBoardProblem(result.why);
-        return;
-      }
-      if (
-        !boardDialog?.editing &&
-        result.body &&
-        typeof result.body === "object" &&
-        "id" in result.body
-      )
-        update(props.threadId, { board: String(result.body.id) });
-      setBoardDialog(null);
-      boardsRead.refresh();
-    } finally {
-      setBoardBusy(false);
+    // The engine request settles into a result, so cleanup can follow the await.
+    const result = await act(
+      boardDialog?.editing ? `/api/boards/${boardDialog.editing.id}/edit` : "/api/boards",
+      { ...input, by: person },
+    );
+    setBoardBusy(false);
+    if (!result.ok) {
+      setBoardProblem(result.why);
+      return;
     }
+    if (
+      !boardDialog?.editing &&
+      result.body &&
+      typeof result.body === "object" &&
+      "id" in result.body
+    )
+      update(props.threadId, { board: String(result.body.id) });
+    setBoardDialog(null);
+    boardsRead.refresh();
   };
   const [busy, setBusy] = useState<"save" | "start" | null>(null);
   // Held from the press to the answer, so a second press cannot start a second workflow.
@@ -140,10 +138,10 @@ export function OrchestratorComposerControls(props: {
     action: "save" | "start";
   } | null>(null);
   // What the engine or a refused press said stays until the next attempt; the loading notice gives way to it.
-  const report = useCallback((said: ReadonlyArray<string>) => {
+  const report = (said: ReadonlyArray<string>) => {
     setPendingAttempt(null);
     setProblems(said);
-  }, []);
+  };
   const [editingDefaults, setEditingDefaults] = useState(false);
 
   const team = teams.find((candidate) => candidate.team === draft?.team) ?? null;
@@ -158,15 +156,17 @@ export function OrchestratorComposerControls(props: {
     awaitingTeams && props.environmentId !== null && !teamsRead.error && !teamAvailabilityReason;
   // Read while rendering, so the notice leaves as soon as loading is no longer what blocks.
   const loadingNotice = loadingBlock && pendingAttempt?.threadId === props.threadId;
-  const flow = flowFor(team, draft?.workflow ?? null);
+  const resolved = flowFor(team, draft?.workflow ?? null);
+  const flow =
+    resolved === "standard"
+      ? (team?.flows.find((item) => item.offered && item.id !== "standard")?.id ?? "chat")
+      : resolved;
   const text = props.prompt.trim();
-  const seatsToSend = useMemo(
-    () => (team && draft ? seatSettingsToSend(team.settings, draft.seats) : {}),
-    [draft, team],
-  );
+  const seatsToSend = team && draft ? seatSettingsToSend(team.settings, draft.seats) : {};
   const preview = useFlowPreview(props.environmentId, team?.team ?? null, flow, seatsToSend);
-  const flows = preview?.flows ?? team?.flows ?? [];
-  const chosen = flows.find((item) => item.id === flow) ?? null;
+  const allFlows = preview?.flows ?? team?.flows ?? [];
+  const flows = allFlows.filter((item) => item.id !== "standard");
+  const chosen = allFlows.find((item) => item.id === flow) ?? null;
   const seatsOn = team
     ? team.settings.filter((item) => seatIsOn(item, draft?.seats[item.seat] ?? {})).length
     : 0;
@@ -224,7 +224,7 @@ export function OrchestratorComposerControls(props: {
     teamAvailabilityReason,
   ]);
 
-  const save = useCallback(async (): Promise<string | null> => {
+  const save = async (): Promise<string | null> => {
     if (!draft) return null;
     report([]);
     const body = {
@@ -266,34 +266,20 @@ export function OrchestratorComposerControls(props: {
       board: draft.engineThread && draft.board === undefined ? task.card.set : board,
     });
     return task.id;
-  }, [
-    act,
-    board,
-    draft,
-    flow,
-    person,
-    props.threadId,
-    props.workspace,
-    report,
-    seatsToSend,
-    text,
-    update,
-  ]);
+  };
 
-  const once = useCallback(async (kind: "save" | "start", work: () => Promise<void>) => {
+  const once = async (kind: "save" | "start", work: () => Promise<void>) => {
     if (working.current) return;
     working.current = true;
     setBusy(kind);
-    try {
-      await work();
-    } finally {
+    await work().finally(() => {
       working.current = false;
       setBusy(null);
-    }
-  }, []);
+    });
+  };
 
   const { onPromptCleared, threadId } = props;
-  const onSave = useCallback(() => {
+  const onSave = () => {
     if (text.length === 0) return;
     if (teamAvailabilityReason) return;
     // The team may still give way to another: nothing is saved under it until it is settled.
@@ -305,9 +291,9 @@ export function OrchestratorComposerControls(props: {
     void once("save", async () => {
       await save();
     });
-  }, [awaitingTeams, once, save, text.length, teamAvailabilityReason, threadId]);
+  };
 
-  const onStart = useCallback(() => {
+  const onStart = () => {
     if (blocked) {
       if (loadingBlock) {
         setProblems([]);
@@ -332,22 +318,7 @@ export function OrchestratorComposerControls(props: {
       // What is written next is written on the task, in its own composer.
       void navigate({ to: "/board", search: { task: id } });
     });
-  }, [
-    act,
-    flow,
-    update,
-    blocked,
-    leave,
-    loadingBlock,
-    navigate,
-    once,
-    onPromptCleared,
-    person,
-    report,
-    save,
-    threadId,
-    teamAvailabilityReason,
-  ]);
+  };
 
   // The buttons stand in the composer's own place for Send, and ask from there.
   // The composer keeps this component across threads while the counters are per

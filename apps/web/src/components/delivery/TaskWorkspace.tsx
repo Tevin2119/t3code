@@ -1,3 +1,4 @@
+import { fullAutoAttribution } from "../../lib/delivery";
 import type { EnvironmentId } from "@t3tools/contracts";
 import { SharedTaskAllocation } from "./SharedBoard";
 import {
@@ -172,6 +173,30 @@ function ShowSection(props: {
   );
 }
 
+export function FullAutoAttribution({
+  entry,
+}: {
+  readonly entry: Pick<TimelineEntry, "by" | "fullAuto">;
+}) {
+  const attribution = fullAutoAttribution(entry);
+  if (!attribution) return null;
+  return (
+    <span
+      className="inline-flex max-w-full flex-wrap items-center gap-1 wrap-break-word"
+      data-full-auto-attribution
+    >
+      <Badge variant="outline">Full auto</Badge>
+      {attribution.by || attribution.since ? (
+        <span>
+          {attribution.by ? `turned on by ${attribution.by}` : null}
+          {attribution.by && attribution.since ? ", " : null}
+          {attribution.since ? time(attribution.since) : null}
+        </span>
+      ) : null}
+    </span>
+  );
+}
+
 function Message(props: {
   readonly onShow?: ((section: "acceptance" | "plan") => void) | undefined;
   readonly environmentId: EnvironmentId | null;
@@ -209,6 +234,7 @@ function Message(props: {
           <span className="font-medium text-foreground">{mine ? entry.by : entry.by}</span>
           {", "}
           {MESSAGE_KIND_LABEL[entry.kind] ?? entry.kind}, {time(entry.at)}
+          <FullAutoAttribution entry={entry} />
         </p>
         {props.repliedTo ? (
           <p className="flex items-start gap-1 border-l-2 border-border pl-2 text-xs text-muted-foreground">
@@ -292,6 +318,7 @@ function Happening(props: {
       <Icon className={cn("mt-0.5 size-3.5 shrink-0", EVENT_TONE[entry.icon])} />
       <p className="min-w-0 flex-1 break-words">
         <span className="font-medium text-foreground/80">{entry.by}</span> {entry.text}
+        <FullAutoAttribution entry={entry} />
         <ShowSection entry={entry} onShow={props.onShow} />
         {entry.evidence ? (
           <span className="block font-mono text-3xs break-all">{entry.evidence}</span>
