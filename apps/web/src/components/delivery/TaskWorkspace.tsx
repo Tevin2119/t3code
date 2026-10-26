@@ -22,7 +22,7 @@ import {
   SendIcon,
   XIcon,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { useNavigate } from "@tanstack/react-router";
 
@@ -1025,18 +1025,11 @@ function Communications(props: {
   const [composerExpanded, setComposerExpanded] = useState(false);
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
-  const entries = useMemo(
-    () => task.timeline.filter((entry) => showDetail || !entry.detail),
-    [showDetail, task.timeline],
-  );
-  const bySeq = useMemo(
-    () =>
-      new Map(
-        task.timeline
-          .filter((entry) => entry.seq !== null)
-          .map((entry) => [entry.seq as number, entry]),
-      ),
-    [task.timeline],
+  const entries = task.timeline.filter((entry) => showDetail || !entry.detail);
+  const bySeq = new Map(
+    task.timeline
+      .filter((entry) => entry.seq !== null)
+      .map((entry) => [entry.seq as number, entry]),
   );
   // A question that was answered meanwhile is not answered twice.
   const replying =
@@ -1047,6 +1040,7 @@ function Communications(props: {
   useEffect(() => {
     const node = scroller.current;
     if (node && atEnd.current) node.scrollTop = node.scrollHeight;
+    // oxlint-disable-next-line react/exhaustive-effect-dependencies -- Follow new visible entries without scrolling again on unrelated renders.
   }, [entries.length]);
 
   const settle = async (entry: TimelineEntry, accept: boolean) => {
@@ -1418,20 +1412,18 @@ function Info(props: {
   const navigate = useNavigate();
   // The boards of the person's own, to move the task between, with where each one's work is done.
   const boardsRead = useDeliveryRead(props.environmentId, "/api/boards");
-  const boards = useMemo(
-    (): ReadonlyArray<MoveBoard> =>
-      (Array.isArray(boardsRead.body) ? boardsRead.body : []).flatMap((item: unknown) =>
-        item && typeof item === "object" && "id" in item && "title" in item
-          ? [
-              {
-                id: String(item.id),
-                title: String(item.title),
-                target: "target" in item ? parseTarget(item.target) : null,
-              },
-            ]
-          : [],
-      ),
-    [boardsRead.body],
+  const boards: ReadonlyArray<MoveBoard> = (
+    Array.isArray(boardsRead.body) ? boardsRead.body : []
+  ).flatMap((item: unknown) =>
+    item && typeof item === "object" && "id" in item && "title" in item
+      ? [
+          {
+            id: String(item.id),
+            title: String(item.title),
+            target: "target" in item ? parseTarget(item.target) : null,
+          },
+        ]
+      : [],
   );
   // The board triage thinks the task belongs on, and the move a person is about to confirm.
   const suggested = task.suggestedBoard ?? card.suggestedBoard ?? null;
@@ -2083,7 +2075,7 @@ export function TaskWorkspace(props: {
   const read = useDeliveryRead(props.environmentId, `/api/tasks/${props.taskId}`, {
     pollMs: 3_000,
   });
-  const task = useMemo(() => parseTask(read.body), [read.body]);
+  const task = parseTask(read.body);
   const stale = useStaleReading(read.readAt);
   const act = useDeliveryAct(props.environmentId, "task seen");
   const actions = useTaskActions(props.environmentId, {
@@ -2173,17 +2165,18 @@ export function TaskWorkspace(props: {
             ) : null}
             <div className="ml-auto flex shrink-0 items-center gap-1">
               {task?.workflow === "chat" && task.state === "chat" ? (
-                <Button
-                  size="xs"
-                  variant="outline"
-                  className="hidden [@media(min-width:640px)_and_(min-height:600px)]:inline-flex"
-                  onClick={() => {
-                    setCreateProblem(null);
-                    setTaskBrief("");
-                  }}
-                >
-                  Create task from chat
-                </Button>
+                <span className="hidden [@media(min-width:640px)_and_(min-height:600px)]:inline-flex">
+                  <Button
+                    size="xs"
+                    variant="outline"
+                    onClick={() => {
+                      setCreateProblem(null);
+                      setTaskBrief("");
+                    }}
+                  >
+                    Create task from chat
+                  </Button>
+                </span>
               ) : null}
               {task ? (
                 <SharedTaskAllocation
