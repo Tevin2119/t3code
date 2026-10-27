@@ -1,7 +1,7 @@
 import { EnvironmentId } from "@t3tools/contracts";
-import { act } from "react";
 import { create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
+import { act } from "../../../test/render";
 import { ApprovalControls } from "./ApprovalControls";
 
 const mock = vi.hoisted(() => ({
@@ -66,7 +66,6 @@ async function open() {
   await act(() => find("data-full-auto-continue").props.onClick());
 }
 beforeEach(() => {
-  (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   mock.action.mockReset().mockResolvedValue({ ok: true });
   mock.refresh.mockClear();
   mock.person = "Sam";
