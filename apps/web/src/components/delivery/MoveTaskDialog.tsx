@@ -93,7 +93,7 @@ export function MoveTaskDialog(props: {
 
   return (
     <Dialog open onOpenChange={(open) => !open && !busy && props.onClose()}>
-      <DialogPopup className="max-w-lg" data-move-task>
+      <DialogPopup data-move-task>
         <DialogHeader>
           <DialogTitle>Move #{task.number} to another board</DialogTitle>
           <DialogDescription>

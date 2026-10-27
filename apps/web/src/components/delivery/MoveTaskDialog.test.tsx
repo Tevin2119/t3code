@@ -1,6 +1,5 @@
 import { EnvironmentId } from "@t3tools/contracts";
-import { act } from "react";
-import { create, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";
+import { act, create, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { parseTask } from "../../lib/delivery";
 import type { MoveBoard } from "../../lib/deliveryMove";
