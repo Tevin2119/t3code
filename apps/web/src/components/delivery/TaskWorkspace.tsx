@@ -22,11 +22,12 @@ import {
   SendIcon,
   XIcon,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { useNavigate } from "@tanstack/react-router";
 
 import { isElectron } from "../../env";
+import { useMediaQuery } from "../../hooks/useMediaQuery";
 import { usePrimarySettings } from "../../hooks/useSettings";
 import {
   parseTarget,
@@ -1024,18 +1025,11 @@ function Communications(props: {
   const [composerExpanded, setComposerExpanded] = useState(false);
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
-  const entries = useMemo(
-    () => task.timeline.filter((entry) => showDetail || !entry.detail),
-    [showDetail, task.timeline],
-  );
-  const bySeq = useMemo(
-    () =>
-      new Map(
-        task.timeline
-          .filter((entry) => entry.seq !== null)
-          .map((entry) => [entry.seq as number, entry]),
-      ),
-    [task.timeline],
+  const entries = task.timeline.filter((entry) => showDetail || !entry.detail);
+  const bySeq = new Map(
+    task.timeline
+      .filter((entry) => entry.seq !== null)
+      .map((entry) => [entry.seq as number, entry]),
   );
   // A question that was answered meanwhile is not answered twice.
   const replying =
@@ -1046,6 +1040,7 @@ function Communications(props: {
   useEffect(() => {
     const node = scroller.current;
     if (node && atEnd.current) node.scrollTop = node.scrollHeight;
+    // oxlint-disable-next-line react/exhaustive-effect-dependencies -- Follow new visible entries without scrolling again on unrelated renders.
   }, [entries.length]);
 
   const settle = async (entry: TimelineEntry, accept: boolean) => {
@@ -1417,20 +1412,18 @@ function Info(props: {
   const navigate = useNavigate();
   // The boards of the person's own, to move the task between, with where each one's work is done.
   const boardsRead = useDeliveryRead(props.environmentId, "/api/boards");
-  const boards = useMemo(
-    (): ReadonlyArray<MoveBoard> =>
-      (Array.isArray(boardsRead.body) ? boardsRead.body : []).flatMap((item: unknown) =>
-        item && typeof item === "object" && "id" in item && "title" in item
-          ? [
-              {
-                id: String(item.id),
-                title: String(item.title),
-                target: "target" in item ? parseTarget(item.target) : null,
-              },
-            ]
-          : [],
-      ),
-    [boardsRead.body],
+  const boards: ReadonlyArray<MoveBoard> = (
+    Array.isArray(boardsRead.body) ? boardsRead.body : []
+  ).flatMap((item: unknown) =>
+    item && typeof item === "object" && "id" in item && "title" in item
+      ? [
+          {
+            id: String(item.id),
+            title: String(item.title),
+            target: "target" in item ? parseTarget(item.target) : null,
+          },
+        ]
+      : [],
   );
   // The board triage thinks the task belongs on, and the move a person is about to confirm.
   const suggested = task.suggestedBoard ?? card.suggestedBoard ?? null;
@@ -2082,7 +2075,7 @@ export function TaskWorkspace(props: {
   const read = useDeliveryRead(props.environmentId, `/api/tasks/${props.taskId}`, {
     pollMs: 3_000,
   });
-  const task = useMemo(() => parseTask(read.body), [read.body]);
+  const task = parseTask(read.body);
   const stale = useStaleReading(read.readAt);
   const act = useDeliveryAct(props.environmentId, "task seen");
   const actions = useTaskActions(props.environmentId, {
@@ -2094,6 +2087,8 @@ export function TaskWorkspace(props: {
   const [taskBrief, setTaskBrief] = useState<string | null>(null);
   const [creatingTask, setCreatingTask] = useState(false);
   const [createProblem, setCreateProblem] = useState<string | null>(null);
+  const [allocatingTask, setAllocatingTask] = useState<string | null>(null);
+  const wide = useMediaQuery("(min-width: 640px) and (min-height: 600px)");
 
   // Opened and looked at, what the team said is read.
   const unread = task?.card.unread ?? 0;
@@ -2170,21 +2165,28 @@ export function TaskWorkspace(props: {
             ) : null}
             <div className="ml-auto flex shrink-0 items-center gap-1">
               {task?.workflow === "chat" && task.state === "chat" ? (
-                <Button
-                  size="xs"
-                  variant="outline"
-                  onClick={() => {
-                    setCreateProblem(null);
-                    setTaskBrief("");
-                  }}
-                >
-                  Create task from chat
-                </Button>
+                <span className="hidden [@media(min-width:640px)_and_(min-height:600px)]:inline-flex">
+                  <Button
+                    size="xs"
+                    variant="outline"
+                    onClick={() => {
+                      setCreateProblem(null);
+                      setTaskBrief("");
+                    }}
+                  >
+                    Create task from chat
+                  </Button>
+                </span>
               ) : null}
               {task ? (
-                <SharedTaskAllocation environmentId={props.environmentId} taskId={task.id} />
+                <SharedTaskAllocation
+                  environmentId={props.environmentId}
+                  taskId={task.id}
+                  open={allocatingTask === task.id}
+                  onOpenChange={(open) => setAllocatingTask(open ? task.id : null)}
+                />
               ) : null}
-              {task && others.length > 0 ? (
+              {task && (!wide || others.length > 0) ? (
                 <Menu>
                   <MenuTrigger
                     render={
@@ -2199,6 +2201,32 @@ export function TaskWorkspace(props: {
                     <EllipsisIcon />
                   </MenuTrigger>
                   <MenuPopup align="end">
+                    {!wide && task.workflow === "chat" && task.state === "chat" ? (
+                      <MenuItem
+                        disabled={actions.busy}
+                        onClick={() => {
+                          setCreateProblem(null);
+                          setTaskBrief("");
+                        }}
+                      >
+                        <span className="flex max-w-80 flex-col">
+                          <span>Create task from chat</span>
+                          <span className="text-xs text-muted-foreground">
+                            Make this chat a task; nothing starts yet.
+                          </span>
+                        </span>
+                      </MenuItem>
+                    ) : null}
+                    {!wide ? (
+                      <MenuItem disabled={actions.busy} onClick={() => setAllocatingTask(task.id)}>
+                        <span className="flex max-w-80 flex-col">
+                          <span>Allocate</span>
+                          <span className="text-xs text-muted-foreground">
+                            Choose the machine for it, or follow its move.
+                          </span>
+                        </span>
+                      </MenuItem>
+                    ) : null}
                     {others.map((action) => (
                       <MenuItem
                         key={action}
