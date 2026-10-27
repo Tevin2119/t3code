@@ -1,7 +1,7 @@
 import { EnvironmentId } from "@t3tools/contracts";
-import { act } from "react";
 import { create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
+import { act } from "../../../test/render";
 import { ApprovalControls } from "./ApprovalControls";
 
 const mock = vi.hoisted(() => ({
@@ -66,7 +66,6 @@ async function open() {
   await act(() => find("data-full-auto-continue").props.onClick());
 }
 beforeEach(() => {
-  (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   mock.action.mockReset().mockResolvedValue({ ok: true });
   mock.refresh.mockClear();
   mock.person = "Sam";
@@ -153,10 +152,11 @@ it("ends the window and turns off auto without sending a key", async () => {
     approvalWindow: { open: true, windows: [{ by: "Sam", expiresAt: "2026-10-19T10:10:00Z" }] },
   };
   await render();
+  expect(renderer.root.findAllByProps({ "data-full-auto-off": true })).toHaveLength(0);
   expect(JSON.stringify(renderer.toJSON())).toContain("Alex");
   expect(JSON.stringify(renderer.toJSON())).toContain("since");
   await act(async () => find("data-approval-end").props.onClick());
-  await act(async () => find("data-full-auto-off").props.onClick());
+  await act(async () => renderer.root.findByType("switch").props.onCheckedChange(false));
   expect(mock.action.mock.calls).toEqual([
     ["/api/approval/window/end", { by: "Sam" }],
     ["/api/engine/auto/off", { by: "Sam" }],
@@ -188,21 +188,13 @@ it("disables activation until a passphrase is entered", async () => {
   expect(find("data-full-auto-on").props.disabled).toBe(true);
   expect(renderer.root.findByType("input").props.value).toBeUndefined();
 });
-it("disables turn off when the name is missing", async () => {
+it("disables the off switch when no person is set", async () => {
   mock.person = "";
   body = { fullAuto: { on: true, by: "Alex", since: "2026-10-19T09:00:00Z" } };
   await render();
-  expect(find("data-full-auto-off").props.disabled).toBe(true);
-  await act(async () => find("data-full-auto-off").props.onClick());
-  expect(mock.action).not.toHaveBeenCalled();
-  expect(JSON.stringify(renderer.toJSON())).toContain("Set your name");
-});
-
-it("disables the off switch when no person is set", async () => {
-  mock.person = "";
-  await render();
   expect(renderer.root.findByType("switch").props.disabled).toBe(true);
   expect(JSON.stringify(renderer.toJSON())).toContain("Set your name");
+  await act(async () => renderer.root.findByType("switch").props.onCheckedChange(false));
   expect(mock.action).not.toHaveBeenCalled();
 });
 
@@ -256,7 +248,7 @@ it.each([
   { by: "   ", since: "oops" },
   { by: "Alex", since: "oops" },
   { by: "", since: "2026-10-19T09:00:00Z" },
-])("keeps turn off available with partial attribution %j", async (attribution) => {
+])("turns auto off with the switch under partial attribution %j", async (attribution) => {
   body = { fullAuto: { on: true, ...attribution } };
   await render();
   const output = JSON.stringify(renderer.toJSON());
@@ -266,11 +258,30 @@ it.each([
   if (!attribution.by.trim()) expect(output).not.toContain("Turned on by");
   if (attribution.since === "oops" || attribution.since === null)
     expect(output).not.toContain("since ");
-  await act(async () => find("data-full-auto-off").props.onClick());
+  await act(async () => renderer.root.findByType("switch").props.onCheckedChange(false));
   expect(mock.action).toHaveBeenCalledExactlyOnceWith("/api/engine/auto/off", { by: "Sam" });
 });
 it("shows the supported off switch in the sidebar without a window", async () => {
   sidebar = true;
   await render();
   expect(renderer.root.findByType("switch").props.checked).toBe(false);
+});
+
+it("shows only the label and switch for full auto in the sidebar", async () => {
+  sidebar = true;
+  body = { fullAuto: { on: true, by: "Alex", since: "2026-10-19T09:00:00Z" } };
+  await render();
+  const output = JSON.stringify(renderer.toJSON());
+  expect(output).toContain("Full auto ");
+  expect(renderer.root.findByProps({ role: "status" }).props.children).toEqual([
+    "Full auto ",
+    "on",
+  ]);
+  expect(renderer.root.findByType("switch").props.checked).toBe(true);
+  expect(renderer.root.findAllByProps({ "data-full-auto-off": true })).toHaveLength(0);
+  expect(renderer.root.findAllByType("button")).toHaveLength(0);
+  expect(output).not.toContain("Turned on by");
+  expect(output).not.toContain("since");
+  await act(async () => renderer.root.findByType("switch").props.onCheckedChange(false));
+  expect(mock.action).toHaveBeenCalledExactlyOnceWith("/api/engine/auto/off", { by: "Sam" });
 });

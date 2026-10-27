@@ -8,7 +8,7 @@ import {
 import { act as reactAct, createContext, use, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { vi } from "vite-plus/test";
-import { page, utils, type Locator, type LocatorSelectors } from "vite-plus/test/browser";
+import type { Locator, LocatorSelectors } from "vite-plus/test/browser";
 
 declare global {
   var IS_REACT_ACT_ENVIRONMENT: boolean | undefined;
@@ -71,6 +71,7 @@ export async function render(
   ui: ReactNode,
   { container = document.createElement("div"), router: path = "/" }: RenderOptions = {},
 ): Promise<Screen> {
+  const { page, utils } = await import("vite-plus/test/browser");
   if (!container.isConnected) document.body.append(container);
   const root = createRoot(container);
   const router = path === false ? undefined : createTestRouter(path);
