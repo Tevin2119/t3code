@@ -121,9 +121,15 @@ function SupportedApprovalControls({
       {showAuto && auto ? (
         <div
           data-delivery-full-auto
-          className="flex flex-wrap items-center gap-2 rounded-lg bg-sidebar-control-surface px-2 py-1.5"
+          className={
+            sidebar
+              ? "flex items-center gap-2 rounded-lg bg-sidebar-control-surface px-2 py-1.5"
+              : "flex flex-wrap items-center gap-2 rounded-lg bg-sidebar-control-surface px-2 py-1.5"
+          }
         >
-          <span role="status">Full auto {auto.on ? "on" : "off"}</span>
+          <span role="status" className="shrink-0 whitespace-nowrap">
+            Full auto {auto.on ? "on" : "off"}
+          </span>
           <Switch
             size="sm"
             aria-label="Full auto"
@@ -136,25 +142,12 @@ function SupportedApprovalControls({
               } else void send("/api/engine/auto/off");
             }}
           />
-          {auto.on ? (
-            <>
-              {auto.by || auto.since ? (
-                <span className="min-w-0 wrap-break-word">
-                  {auto.by ? `Turned on by ${auto.by}` : null}
-                  {auto.by && auto.since ? ", " : null}
-                  {auto.since ? `since ${new Date(auto.since).toLocaleString()}` : null}
-                </span>
-              ) : null}
-              <Button
-                size="xs"
-                variant="outline"
-                disabled={busy || !person.trim()}
-                data-full-auto-off
-                onClick={() => void send("/api/engine/auto/off")}
-              >
-                Turn off
-              </Button>
-            </>
+          {!sidebar && auto.on && (auto.by || auto.since) ? (
+            <span className="min-w-0 wrap-break-word">
+              {auto.by ? `Turned on by ${auto.by}` : null}
+              {auto.by && auto.since ? ", " : null}
+              {auto.since ? `since ${new Date(auto.since).toLocaleString()}` : null}
+            </span>
           ) : null}
         </div>
       ) : null}

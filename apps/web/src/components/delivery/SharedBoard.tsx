@@ -1,5 +1,5 @@
 import type { EnvironmentId } from "@t3tools/contracts";
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { parseAllocation, parseShared, sharedLanes } from "../../lib/deliveryShared";
 import { useDeliveryAct, useDeliveryRead } from "../../state/delivery";
 import { Button } from "../ui/button";
@@ -25,7 +25,7 @@ export function SharedBoard(props: SharedBoardProps) {
 
 function SharedBoardContent(props: SharedBoardProps) {
   const read = useDeliveryRead(props.environmentId, "/api/shared", { pollMs: 5000 });
-  const view = useMemo(() => parseShared(read.body), [read.body]);
+  const view = parseShared(read.body);
   const act = useDeliveryAct(props.environmentId, "shared allocation");
   const [localBoardId, setLocalBoardId] = useState("");
   const boardId = props.boardId ?? localBoardId;
@@ -43,7 +43,7 @@ function SharedBoardContent(props: SharedBoardProps) {
     taskId ? `/api/shared/tasks/${taskId}/allocation` : null,
     { pollMs: 5000 },
   );
-  const choices = useMemo(() => parseAllocation(allocation.body), [allocation.body]);
+  const choices = parseAllocation(allocation.body);
   const chosen = view?.tasks.find((t) => t.id === taskId);
   const currentMove = view?.moves.find(
     (move) => move.id === chosen?.moving && move.root === chosen?.id,
@@ -359,13 +359,19 @@ function SharedBoardContent(props: SharedBoardProps) {
 function SharedTaskAllocationContent(props: {
   environmentId: EnvironmentId | null;
   taskId: string;
+  readonly open?: boolean;
+  readonly onOpenChange?: (open: boolean) => void;
 }) {
-  const [open, setOpen] = useState(false);
+  const [localOpen, setLocalOpen] = useState(false);
+  const open = props.open ?? localOpen;
+  const setOpen = props.onOpenChange ?? setLocalOpen;
   return (
     <>
-      <Button size="sm" variant="ghost" onClick={() => setOpen(true)}>
-        Allocate
-      </Button>
+      <span className="hidden [@media(min-width:640px)_and_(min-height:600px)]:inline-flex">
+        <Button size="sm" variant="ghost" onClick={() => setOpen(true)}>
+          Allocate
+        </Button>
+      </span>
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogPopup>
           <DialogHeader>
@@ -381,6 +387,8 @@ function SharedTaskAllocationContent(props: {
 export function SharedTaskAllocation(props: {
   environmentId: EnvironmentId | null;
   taskId: string;
+  readonly open?: boolean;
+  readonly onOpenChange?: (open: boolean) => void;
 }) {
   return <SharedTaskAllocationContent key={`${props.environmentId}:${props.taskId}`} {...props} />;
 }
