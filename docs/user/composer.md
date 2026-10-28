@@ -14,11 +14,13 @@ to keep a large paste editable in the composer instead.
 
 ## Team conversations and non-code delivery
 
-On web and desktop, select Orchestrator and a team to discuss work in the current
-project. Team chat can use a project folder without initializing a Git repository.
-The team works from a read-only copy; your original documents stay unchanged.
+On web and desktop, open the model picker and select Orchestrator to choose a team,
+flow, seats and board. Team chat starts as a discussion without project-folder
+access. Enable **Use project folder** when the team needs local documents; every
+active seat must then use read-only access supported by the environment. No Git
+repository is required. The team works from a read-only copy.
 
-Choose a board in the team composer to group the conversation. A unique board
+Choose a board in the Orchestrator picker to group the conversation. A unique board
 matching the current project folder is suggested for a new draft. If several
 boards match, choose one yourself. **New board** can use an existing T3 project
 folder for chat and non-code work, or a repository and branch for code delivery.

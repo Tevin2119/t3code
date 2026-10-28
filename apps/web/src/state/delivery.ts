@@ -335,6 +335,7 @@ export interface OrchestratorDraft {
   /** The text as it was when last saved, to tell a saved draft from a changed one. */
   readonly savedText: string | null;
   readonly board?: string | null;
+  readonly useProjectFolder?: boolean;
   /**
    * Set on a draft whose team was taken from what is remembered and has not
    * been held against a list that offers a team yet: an empty list leaves an

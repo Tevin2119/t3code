@@ -19,6 +19,8 @@ import {
   useOrchestratorDraft,
   useOrchestratorDraftStore,
 } from "../../state/delivery";
+import { OrchestratorBoardPicker } from "./OrchestratorBoardPicker";
+import { Switch } from "../ui/switch";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
@@ -120,6 +122,7 @@ export function OrchestratorPanel(props: {
   readonly environmentId: EnvironmentId | null;
   readonly threadId: string;
   readonly onRequestClose: () => void;
+  readonly workspace?: string | null;
 }) {
   const navigate = useNavigate();
   const draft = useOrchestratorDraft(props.threadId);
@@ -240,6 +243,26 @@ export function OrchestratorPanel(props: {
       <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-3 py-2">
         {teamsRead.error ? (
           <p className="text-xs text-warning">Delivery engine not reachable. {teamsRead.error}</p>
+        ) : null}
+        <OrchestratorBoardPicker
+          environmentId={props.environmentId}
+          threadId={props.threadId}
+          workspace={props.workspace ?? null}
+        />
+        {flow === "chat" && props.workspace ? (
+          <label className="flex items-start gap-2 text-xs">
+            <Switch
+              checked={draft.useProjectFolder === true}
+              onCheckedChange={(checked) => update(props.threadId, { useProjectFolder: checked })}
+              aria-label="Use project folder"
+            />
+            <span>
+              Use project folder
+              <span className="block text-muted-foreground">
+                Optional for a discussion. Requires read-only access for every active seat.
+              </span>
+            </span>
+          </label>
         ) : null}
         <section className="flex flex-col gap-1">
           <h4 className="text-xs font-medium text-muted-foreground">Flow</h4>

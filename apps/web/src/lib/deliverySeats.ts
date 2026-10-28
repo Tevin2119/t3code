@@ -5,7 +5,12 @@
  */
 import { DELIVERY_HARNESS_BY_DRIVER } from "@t3tools/contracts";
 
-import type { SeatChoice, SeatSettings, SeatSettingValues } from "./delivery";
+import {
+  seatOfferFor,
+  type SeatChoice,
+  type SeatSettings,
+  type SeatSettingValues,
+} from "./delivery";
 
 const DRIVER_BY_HARNESS: Readonly<Record<string, string>> = Object.fromEntries(
   Object.entries(DELIVERY_HARNESS_BY_DRIVER).map(([driver, harness]) => [harness, driver]),
@@ -78,6 +83,27 @@ export function withTeamModels<Option extends ModelOption>(
   if (named.length === 0) return options;
   const first = named.map((slug) => options.find((option) => option.slug === slug) ?? make(slug));
   return [...first, ...options.filter((option) => !named.includes(option.slug))];
+}
+
+export const HARNESS_DEFAULT_MODEL = "__delivery_harness_default__";
+
+/** Keep configured seat models visible even before a dynamic catalog has loaded. */
+export function modelsForSeat(
+  options: ReadonlyArray<ModelOption>,
+  item: SeatSettings,
+  harness: string,
+): ReadonlyArray<ModelOption> {
+  const named = new Set(harness === item.defined.harness ? item.models : []);
+  for (const values of [item.defined, item.now, item.effective]) {
+    if (values.harness === harness && values.model) named.add(values.model);
+  }
+  const models = withTeamModels(options, [...named], (slug) => ({ slug, name: slug }));
+  return seatOfferFor(item, { harness }).model
+    ? models
+    : [
+        { slug: HARNESS_DEFAULT_MODEL, name: `${harnessLabel(harness)} configured model` },
+        ...models,
+      ];
 }
 
 /** What a seat would run on with this choice laid over a base. */
