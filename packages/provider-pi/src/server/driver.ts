@@ -142,19 +142,20 @@ export const PiDriver: ProviderDriver<PiSettings, PiDriverEnv, Path.Path> = {
     const textGeneration = yield* makePiTextGeneration(effectiveConfig, processEnv);
 
     const checkProvider = checkPiProviderStatus(effectiveConfig, processEnv, cwd).pipe(
-      Effect.flatMap((draft) =>
-        effectiveConfig.enabled && draft.installed && draft.auth.status === "authenticated"
-          ? readPiUsageLimits(
-              {
-                ...effectiveConfig,
-                provider:
-                  effectiveConfig.provider ??
-                  draft.models.find((model) => model.isDefault)?.subProvider ??
-                  "",
-              },
-              processEnv,
-            ).pipe(Effect.map((usageLimits) => ({ ...draft, usageLimits })))
-          : Effect.succeed(draft),
+      Effect.filterOrElse(
+        (draft) =>
+          !(effectiveConfig.enabled && draft.installed && draft.auth.status === "authenticated"),
+        (draft) =>
+          readPiUsageLimits(
+            {
+              ...effectiveConfig,
+              provider:
+                effectiveConfig.provider ??
+                draft.models.find((model) => model.isDefault)?.subProvider ??
+                "",
+            },
+            processEnv,
+          ).pipe(Effect.map((usageLimits) => ({ ...draft, usageLimits }))),
       ),
       Effect.map(stampIdentity),
       Effect.provideService(HttpClient.HttpClient, httpClient),
