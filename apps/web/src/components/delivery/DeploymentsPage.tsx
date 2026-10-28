@@ -152,9 +152,15 @@ function Configuration({
             <Choice
               label="Release environment"
               value={releaseEnvironment}
-              items={(adapter === "engine" ? ["production"] : DEPLOYMENT_ENVIRONMENTS).map(
-                (value) => ({ value, label: value }),
-              )}
+              items={(adapter === "engine"
+                ? ["production"]
+                : [
+                    ...new Set([
+                      ...DEPLOYMENT_ENVIRONMENTS,
+                      ...snapshot.projects.map((item) => item.environment),
+                    ]),
+                  ]
+              ).map((value) => ({ value, label: value }))}
               onChange={setReleaseEnvironment}
             />
             <Choice

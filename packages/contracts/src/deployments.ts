@@ -92,7 +92,7 @@ const Approval = { by: TrimmedNonEmptyString, key: Schema.String.check(Schema.is
 export const DeploymentProjectInput = Schema.Struct({
   repository: TrimmedNonEmptyString,
   branch: TrimmedNonEmptyString,
-  environment: Schema.Literals(DEPLOYMENT_ENVIRONMENTS),
+  environment: Schema.String.check(Schema.isPattern(/^[a-z0-9][a-z0-9._-]{0,39}$/)),
   mode: DeploymentMode,
   adapter: DeploymentAdapter,
   ...Approval,

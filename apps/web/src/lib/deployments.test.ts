@@ -84,7 +84,8 @@ describe("deployment contract", () => {
     expect(isProject({ ...project, adapter: "command", environment: "staging" })).toBe(true);
     expect(isProject({ ...project, environment: "staging" })).toBe(false);
     expect(isProject({ ...project, adapter: "command", environment: "development" })).toBe(true);
-    expect(isProject({ ...project, adapter: "command", environment: "qa" })).toBe(false);
+    expect(isProject({ ...project, adapter: "command", environment: "qa.eu" })).toBe(true);
+    expect(isProject({ ...project, adapter: "command", environment: "invalid space" })).toBe(false);
     expect(isProject({ ...project, mode: "automatic" })).toBe(false);
     expect(isProject({ ...project, key: undefined })).toBe(false);
     expect(isProject({ ...project, mode: "full-auto", confirmed: true, key: "" })).toBe(false);
