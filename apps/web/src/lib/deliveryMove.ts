@@ -1,4 +1,5 @@
-import type { DeliveryTarget } from "./delivery";
+import type { VcsRef } from "@t3tools/contracts";
+import type { DeliveryRepository, DeliveryTarget } from "./delivery";
 
 /** The board triage thinks a task belongs on. The task waits on a person until it is moved. */
 export interface SuggestedBoard {
@@ -71,4 +72,29 @@ export function relocateBody(input: {
 }): { readonly board: string; readonly base: string | null; readonly by: string } {
   const base = input.base.trim();
   return { board: input.board, base: base || null, by: input.by };
+}
+
+export function deliveryRemoteOf(entry: DeliveryRepository | null | undefined): string | null {
+  if (!entry?.delivery || entry.delivery.mode === "local") return null;
+  if (entry.fetch?.remote) return entry.fetch.remote;
+  const remote = entry.delivery.remote;
+  return remote && !/[\\/:]/.test(remote) ? remote : null;
+}
+
+export function eligibleMoveBases(
+  refs: ReadonlyArray<VcsRef>,
+  deliveryRemote: string | null,
+): string[] {
+  const names = new Set<string>();
+  for (const ref of refs) {
+    if (!ref.isRemote) {
+      names.add(ref.name);
+      continue;
+    }
+    const remote = ref.remoteName ?? ref.name.split("/")[0];
+    if (!deliveryRemote || remote !== deliveryRemote) continue;
+    const prefix = `${remote}/`;
+    names.add(ref.name.startsWith(prefix) ? ref.name.slice(prefix.length) : ref.name);
+  }
+  return [...names];
 }

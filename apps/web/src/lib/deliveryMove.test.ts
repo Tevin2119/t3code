@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vite-plus/test";
-import type { DeliveryTarget } from "./delivery";
+import { parseRepositories, type DeliveryTarget } from "./delivery";
 import {
   boardChoiceKind,
+  deliveryRemoteOf,
+  eligibleMoveBases,
   moveOutcomeLine,
   parseSuggestedBoard,
   relocateBody,
@@ -105,5 +107,41 @@ describe("the board triage suggests", () => {
     expect(parseSuggestedBoard(null)).toBeNull();
     expect(parseSuggestedBoard(undefined)).toBeNull();
     expect(parseSuggestedBoard({ title: "no id" })).toBeNull();
+  });
+});
+
+describe("eligible move bases", () => {
+  it.each([
+    [{}, null],
+    [{ delivery: { remote: "origin" } }, "origin"],
+    [{ delivery: { remote: "/repo" } }, null],
+    [{ delivery: { remote: "https://example.com/r" } }, null],
+    [{ delivery: { remote: "origin", mode: "local" }, fetch: { remote: "resolved" } }, null],
+    [{ delivery: { remote: "/repo" }, fetch: { remote: "delivery-123" } }, "delivery-123"],
+    [{ fetch: { remote: "origin" } }, null],
+    [{ delivery: { remote: "origin" }, fetch: { remote: "resolved" } }, "resolved"],
+  ])("resolves delivery metadata %j", (metadata, expected) => {
+    expect(deliveryRemoteOf(parseRepositories([{ id: "a", ...metadata }])[0])).toBe(expected);
+  });
+  it("keeps local slashes, scopes remotes, strips their prefix and deduplicates", () => {
+    const refs = ["main", "feature/demo"].map((name) => ({
+      name,
+      current: false,
+      isDefault: false,
+      worktreePath: null,
+    }));
+    const remoteRefs = [
+      { name: "delivery-123/feature/demo", isRemote: true },
+      { name: "delivery-123/release", isRemote: true },
+      { name: "other/no", isRemote: true, remoteName: "other" },
+      { name: "delivery-123/feature/new", isRemote: true, remoteName: "delivery-123" },
+    ].map((ref) => ({ ...ref, current: false, isDefault: false, worktreePath: null }));
+    expect(eligibleMoveBases([...refs, ...remoteRefs], "delivery-123")).toEqual([
+      "main",
+      "feature/demo",
+      "release",
+      "feature/new",
+    ]);
+    expect(eligibleMoveBases([...refs, ...remoteRefs], null)).toEqual(["main", "feature/demo"]);
   });
 });

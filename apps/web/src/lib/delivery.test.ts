@@ -5,6 +5,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   fullAutoAttribution,
   deliveryRequestBody,
+  parseRepositories,
   parseSeatLive,
   waitingWords,
   chosenTeamUnavailable,
@@ -1513,6 +1514,27 @@ describe("the run panel's readings", () => {
   it("says a wait for a slot plainly", () => {
     expect(waitingWords("global limit")).toBe("waits for a free slot");
     expect(waitingWords("memory headroom")).toBe("waits for memory");
+  });
+});
+
+describe("repository delivery metadata", () => {
+  it("reads delivery and resolved fetch metadata defensively", () => {
+    const entries = parseRepositories([
+      {
+        id: "a",
+        delivery: { remote: "/bare/repo", mode: "publish" },
+        fetch: { remote: "delivery-123" },
+      },
+      { id: "b" },
+      { id: "c", delivery: 42, fetch: { remote: 42 } },
+      { id: "d", delivery: { remote: 42, mode: false }, fetch: null },
+    ]);
+    expect(entries.map((e) => [e.delivery, e.fetch])).toEqual([
+      [{ remote: "/bare/repo", mode: "publish" }, { remote: "delivery-123" }],
+      [null, null],
+      [null, { remote: null }],
+      [{ remote: null, mode: null }, null],
+    ]);
   });
 });
 
