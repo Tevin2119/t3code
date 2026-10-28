@@ -116,7 +116,7 @@ Windows.
 |                   | Desktop app                                                  | `vp run dev` + browser                                 |
 | ----------------- | ------------------------------------------------------------ | ------------------------------------------------------ |
 | **Auto-update**   | Released builds only (from GitHub Releases)                  | Any commit on your branch, including your own merges   |
-| **Update flow**   | Downloads new binary, installs, restarts                     | Git pull, install, rebuild, restart — shown in the UI  |
+| **Update flow**   | Downloads new binary, installs, restarts                     | Git pull, install, rebuild, restart, shown in the UI   |
 | **Remote access** | Server embedded in app; killing the app kills the connection | Server runs independently; browser tabs are disposable |
 | **Native chrome** | Full OS window, system tray, notifications                   | Browser tab                                            |
 | **Best for**      | End users on a released build                                | Developers running from source, especially remote      |
@@ -190,3 +190,25 @@ download updates in the background and apply them when you next leave the app.
 It saves drafts and queued messages before restarting. If you keep the app open
 for a long time, it may ask to install immediately; choosing **Later** leaves the
 update queued for the next suitable moment.
+
+## Track merged commits through deployment
+
+When Delivery is enabled, open **Deployments** in the sidebar to compare each
+repository's latest merged revision with its live revision in each release environment. Add a
+repository, branch and release environment (development, staging or production) from the available choices, then use **Discover commits**
+to create release candidates. Deployment revisions stay pinned while they are
+qualified, deployed and verified.
+
+Start with **Manual** mode to approve each step. **Auto-qualify** checks new
+candidates and waits before deployment. **Full auto** also deploys and verifies;
+changing to it requires explicit consent. Dependencies can require another
+release to be live first. Every deployment change asks for the engine's approval
+passphrase, even while an approval window is open.
+
+Use the built-in adapter for the engine's own production repository. For other
+repositories, choose **Repository commands** and configure a JSON object of
+argument arrays: `qualify`, `deploy`, and `verify`, with optional `setup`. Each
+array begins with the executable followed by its arguments. Keep secrets out of
+this configuration. Leaving commands blank preserves existing configuration.
+An unavailable adapter or a failed check appears on the deployment rather than
+being reported as a successful release.

@@ -15,6 +15,7 @@ import { Route as SettingsRouteImport } from './routes/settings'
 import { Route as ProfilesRouteImport } from './routes/profiles'
 import { Route as PairRouteImport } from './routes/pair'
 import { Route as OrchestratorRouteImport } from './routes/orchestrator'
+import { Route as DeploymentsRouteImport } from './routes/deployments'
 import { Route as ConnectAgentRouteImport } from './routes/connect-agent'
 import { Route as ConnectRouteImport } from './routes/connect'
 import { Route as BoardRouteImport } from './routes/board'
@@ -68,6 +69,11 @@ const PairRoute = PairRouteImport.update({
 const OrchestratorRoute = OrchestratorRouteImport.update({
   id: '/orchestrator',
   path: '/orchestrator',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const DeploymentsRoute = DeploymentsRouteImport.update({
+  id: '/deployments',
+  path: '/deployments',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ConnectAgentRoute = ConnectAgentRouteImport.update({
@@ -197,6 +203,7 @@ export interface FileRoutesByFullPath {
   '/board': typeof BoardRoute
   '/connect': typeof ConnectRoute
   '/connect-agent': typeof ConnectAgentRoute
+  '/deployments': typeof DeploymentsRoute
   '/orchestrator': typeof OrchestratorRoute
   '/pair': typeof PairRoute
   '/profiles': typeof ProfilesRoute
@@ -227,6 +234,7 @@ export interface FileRoutesByTo {
   '/board': typeof BoardRoute
   '/connect': typeof ConnectRoute
   '/connect-agent': typeof ConnectAgentRoute
+  '/deployments': typeof DeploymentsRoute
   '/orchestrator': typeof OrchestratorRoute
   '/pair': typeof PairRoute
   '/profiles': typeof ProfilesRoute
@@ -260,6 +268,7 @@ export interface FileRoutesById {
   '/board': typeof BoardRoute
   '/connect': typeof ConnectRoute
   '/connect-agent': typeof ConnectAgentRoute
+  '/deployments': typeof DeploymentsRoute
   '/orchestrator': typeof OrchestratorRoute
   '/pair': typeof PairRoute
   '/profiles': typeof ProfilesRoute
@@ -294,6 +303,7 @@ export interface FileRouteTypes {
     | '/board'
     | '/connect'
     | '/connect-agent'
+    | '/deployments'
     | '/orchestrator'
     | '/pair'
     | '/profiles'
@@ -324,6 +334,7 @@ export interface FileRouteTypes {
     | '/board'
     | '/connect'
     | '/connect-agent'
+    | '/deployments'
     | '/orchestrator'
     | '/pair'
     | '/profiles'
@@ -356,6 +367,7 @@ export interface FileRouteTypes {
     | '/board'
     | '/connect'
     | '/connect-agent'
+    | '/deployments'
     | '/orchestrator'
     | '/pair'
     | '/profiles'
@@ -389,6 +401,7 @@ export interface RootRouteChildren {
   BoardRoute: typeof BoardRoute
   ConnectRoute: typeof ConnectRoute
   ConnectAgentRoute: typeof ConnectAgentRoute
+  DeploymentsRoute: typeof DeploymentsRoute
   OrchestratorRoute: typeof OrchestratorRoute
   PairRoute: typeof PairRoute
   ProfilesRoute: typeof ProfilesRoute
@@ -440,6 +453,13 @@ declare module '@tanstack/react-router' {
       path: '/orchestrator'
       fullPath: '/orchestrator'
       preLoaderRoute: typeof OrchestratorRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/deployments': {
+      id: '/deployments'
+      path: '/deployments'
+      fullPath: '/deployments'
+      preLoaderRoute: typeof DeploymentsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/connect-agent': {
@@ -674,6 +694,7 @@ const rootRouteChildren: RootRouteChildren = {
   BoardRoute: BoardRoute,
   ConnectRoute: ConnectRoute,
   ConnectAgentRoute: ConnectAgentRoute,
+  DeploymentsRoute: DeploymentsRoute,
   OrchestratorRoute: OrchestratorRoute,
   PairRoute: PairRoute,
   ProfilesRoute: ProfilesRoute,

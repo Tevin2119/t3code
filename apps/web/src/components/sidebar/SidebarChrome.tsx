@@ -1,5 +1,5 @@
 import { SidebarApprovalControls } from "../delivery/ApprovalControls";
-import { ChartNoAxesColumnIcon, HomeIcon, SettingsIcon } from "lucide-react";
+import { ChartNoAxesColumnIcon, HomeIcon, RocketIcon, SettingsIcon } from "lucide-react";
 import type { ReactNode } from "react";
 import { memo } from "react";
 import { Link, useLocation, useNavigate } from "@tanstack/react-router";
@@ -200,9 +200,11 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
               ? "pull-requests"
               : location.pathname === "/board"
                 ? "board"
-                : location.pathname === "/profiles"
-                  ? "profiles"
-                  : null,
+                : location.pathname === "/deployments"
+                  ? "deployments"
+                  : location.pathname === "/profiles"
+                    ? "profiles"
+                    : null,
   });
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const deliveryEnabled = useDeliveryEnabled(primaryEnvironmentId);
@@ -271,6 +273,16 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
               : "Board"
           }
           onClick={handleBoardClick}
+        />
+      ) : null}
+      {deliveryEnabled ? (
+        <SidebarUtilityItem
+          icon={<RocketIcon />}
+          label="Deployments"
+          onClick={() => {
+            closeMobileSidebar();
+            void navigate({ to: "/deployments" });
+          }}
         />
       ) : null}
       <SidebarUpdatePill />
