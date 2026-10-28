@@ -51,14 +51,7 @@ export type UsageCostSource = typeof UsageCostSource.Type;
 export const UsageModelProviderSource = Schema.Literals(["recorded", "harness"]);
 export type UsageModelProviderSource = typeof UsageModelProviderSource.Type;
 
-/**
- * Token counts for a bucket.
- *
- * `cachedInputTokens` and `cacheCreationTokens` are disjoint from
- * `uncachedInputTokens`; summing all three gives total input. `reasoningTokens`
- * is a *subset* of `outputTokens` (Codex reports it that way, and Anthropic
- * folds thinking into output), so it must never be added on top.
- */
+// Input categories are disjoint. Reasoning is already part of output and must not be added again.
 export const UsageTokenTotals = Schema.Struct({
   uncachedInputTokens: NonNegativeInt,
   cachedInputTokens: NonNegativeInt,

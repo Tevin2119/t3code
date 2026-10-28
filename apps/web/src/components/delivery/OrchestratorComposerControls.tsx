@@ -56,6 +56,7 @@ export function OrchestratorComposerControls(props: {
   const awaitingTeams = draft?.awaitingTeams === true;
   // A new draft starts from the remembered team before the teams are read. Once
   // a reading offers any, prefer development if offered, else the first offered team, one time.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Settle the persisted draft default once the engine catalog arrives, preserving explicit and saved choices.
   useEffect(() => {
     if (!awaitingTeams || !teamsLoaded) return;
     reconcileTeam(
@@ -142,6 +143,7 @@ export function OrchestratorComposerControls(props: {
       ? blocked
       : null;
 
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Publish per-thread composer status to the draft store read by detached composer buttons.
   useEffect(() => {
     setActivity(props.threadId, {
       busy,
@@ -265,6 +267,7 @@ export function OrchestratorComposerControls(props: {
   // The composer keeps this component across threads while the counters are per
   // thread, so a thread change only takes the new thread's counter as handled.
   const handledSave = useRef({ threadId, request: saveRequest });
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Consume save commands from the detached composer buttons once per request and thread.
   useEffect(() => {
     const handled = handledSave.current;
     handledSave.current = { threadId, request: saveRequest };
@@ -272,6 +275,7 @@ export function OrchestratorComposerControls(props: {
     onSave();
   }, [onSave, saveRequest, threadId]);
   const handledStart = useRef({ threadId, request: startRequest });
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Consume start commands from the composer form once per request and thread.
   useEffect(() => {
     const handled = handledStart.current;
     handledStart.current = { threadId, request: startRequest };

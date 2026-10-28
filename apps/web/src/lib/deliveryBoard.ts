@@ -37,7 +37,7 @@ export const PRIORITY_LABEL: Record<TaskPriority, string> = {
   low: "Low",
 };
 
-export const PRIORITY_ORDER: Record<TaskPriority, number> = {
+const PRIORITY_ORDER: Record<TaskPriority, number> = {
   urgent: 0,
   high: 1,
   medium: 2,
@@ -266,8 +266,6 @@ export function whatStartDoes(flow: string, verb: "Start" | "Submit"): string {
  */
 export const boardSetOf = (stored: string): string =>
   stored === "pilot" || !stored ? "unsorted" : stored;
-/** Boards that come with every engine, which a new task is not filed onto. */
-export const BUILT_IN_BOARDS: ReadonlyArray<string> = ["unsorted", "qualification", "all"];
 
 export const BOARD_GROUPINGS = ["none", "priority", "team", "owner", "tag"] as const;
 export type BoardGrouping = (typeof BOARD_GROUPINGS)[number];
@@ -347,7 +345,7 @@ export function formatBytes(bytes: number): string {
 /** The engine takes a file of up to 200 MB, in pieces. */
 export const TASK_FILE_LIMIT_BYTES = 200 * 1024 * 1024;
 /** Small enough to pass as one message over a relay, large enough to be quick. */
-export const TASK_FILE_PIECE_BYTES = 512 * 1024;
+const TASK_FILE_PIECE_BYTES = 512 * 1024;
 
 /** Where each piece of a file of this size starts and ends. An empty file is one empty piece. */
 export function piecesOf(
@@ -525,7 +523,7 @@ export const LANE_TITLE: Readonly<Record<string, string>> = {
 };
 
 /** The lanes where a task waits for the person: for an answer, or for a sign-off. */
-export const ATTENTION_LANES: ReadonlyArray<string> = ["needs-decision", "human-review"];
+const ATTENTION_LANES: ReadonlyArray<string> = ["needs-decision", "human-review"];
 
 /** The reading the attention count is taken from: every board, every lane, no filter. */
 export const ATTENTION_BOARD_PATH = "/api/lanes?view=development&set=all";

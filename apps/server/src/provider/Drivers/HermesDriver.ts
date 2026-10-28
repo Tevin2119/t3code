@@ -1,20 +1,4 @@
-/**
- * Hermes Agent driver.
- *
- * `hermes acp` is a first-class ACP agent, so this driver composes the shared
- * ACP runtime the same way the Kimi driver does rather than owning a transport.
- * Hermes fronts whichever inference provider `hermes model` selected on the
- * host (DeepSeek on a default install), so T3 Code holds no key of its own.
- *
- * There is no headless sign-in: Hermes' setup is an interactive wizard
- * (`hermes acp --setup` / `hermes model`) that picks a provider and model in a
- * TTY, and its sign-out (`hermes logout`) is scoped to that same choice. So the
- * auth controller here verifies rather than signs in, the way pi's does:
- * `start` re-reads the CLI's credential verdict and reports it, and the failure
- * text sends the user to the wizard.
- *
- * @module provider/Drivers/HermesDriver
- */
+// Hermes owns inference credentials. Headless auth verifies them; setup requires its TTY wizard.
 import { HermesSettings, ProviderDriverKind } from "@t3tools/contracts";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";

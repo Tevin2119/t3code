@@ -1,4 +1,5 @@
-import { act, useEffect } from "react";
+import { useEffect } from "react";
+import { act } from "../../test/render";
 import { create, type ReactTestRenderer } from "react-test-renderer";
 import type { CheckoutUpdateState } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
@@ -10,6 +11,8 @@ const testState = vi.hoisted(() => ({
   supported: true as boolean | null,
   checkout: null as unknown,
   hydrated: true,
+  enabled: true,
+  probeMounted: vi.fn(),
   pathname: "/",
   start: vi.fn(),
   setStorage: vi.fn(),
@@ -81,6 +84,9 @@ const success = AsyncResult.success(undefined);
 
 let pill: CheckoutUpdatePillModel | null = null;
 function Probe() {
+  useEffect(() => {
+    testState.probeMounted();
+  }, []);
   const current = useCheckoutUpdatePill();
   useEffect(() => {
     pill = current;
@@ -90,7 +96,7 @@ function Probe() {
 
 let renderer: ReactTestRenderer | undefined;
 const app = () => (
-  <CheckoutUpdateProvider enabled>
+  <CheckoutUpdateProvider enabled={testState.enabled}>
     <Probe />
   </CheckoutUpdateProvider>
 );
@@ -113,13 +119,13 @@ function deferred() {
 const toastTitles = () => testState.toastAdd.mock.calls.map(([toast]) => toast.title);
 
 beforeEach(() => {
-  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal("window", { location: { reload: testState.reload } });
   Object.assign(testState, {
     environmentId: "env-a",
     supported: true,
     checkout: offered,
     hydrated: true,
+    enabled: true,
     pathname: "/",
     dismissed: null,
   });
@@ -129,6 +135,7 @@ beforeEach(() => {
     testState.toastAdd,
     testState.toastClose,
     testState.reload,
+    testState.probeMounted,
   ]) {
     mock.mockReset();
   }
@@ -142,6 +149,19 @@ afterEach(async () => {
 });
 
 describe("CheckoutUpdateProvider", () => {
+  it("clears a disabled update without remounting children or accepting a late response", async () => {
+    await mount();
+    const finish = deferred();
+    await act(async () => pill!.start());
+    await serverSays({ enabled: false });
+    expect(pill).toBeNull();
+    await finish(AsyncResult.failure(Cause.fail(new Error("offline"))));
+    expect(testState.toastAdd).not.toHaveBeenCalled();
+    await serverSays({ enabled: true });
+    expect(pill?.view).toMatchObject({ action: "update", notice: null });
+    expect(testState.probeMounted).toHaveBeenCalledTimes(1);
+  });
+
   it("offers the update in the pill, not a toast, with the v2 sidebar", async () => {
     await mount();
     expect(pill?.view).toMatchObject({

@@ -1,17 +1,4 @@
-/**
- * DeepSeek Harness driver.
- *
- * `dsh --profile acp` is a first-class ACP agent, so this driver composes the
- * shared ACP runtime the same way the Hermes driver does rather than owning a
- * transport. The harness keeps the DeepSeek API key in its own home, so T3 Code
- * holds no key of its own.
- *
- * There is no headless sign-in: the key is saved on the credentials page of
- * `dsh web`. So the auth controller here verifies rather than signs in, the way
- * pi's does: `start` re-reads whether a key is stored and reports it.
- *
- * @module provider/Drivers/DeepSeekDriver
- */
+// The harness owns the API key. Headless auth verifies it; interactive setup belongs to dsh web.
 import { DeepSeekSettings, ProviderDriverKind } from "@t3tools/contracts";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";

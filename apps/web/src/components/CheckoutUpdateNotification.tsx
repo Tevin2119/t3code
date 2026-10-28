@@ -5,16 +5,15 @@ import * as Schema from "effect/Schema";
 import { DownloadIcon } from "lucide-react";
 import {
   createContext,
-  useCallback,
   useContext,
   useEffect,
   useLayoutEffect,
-  useMemo,
   useRef,
   useState,
   type ReactNode,
 } from "react";
 
+import { useStableCallback } from "../hooks/useStableCallback";
 import { getLocalStorageItem, setLocalStorageItem } from "../hooks/useLocalStorage";
 import { useClientSettingsHydrated } from "../hooks/useSettings";
 import { usePrimaryEnvironmentId } from "../state/environments";
@@ -61,17 +60,15 @@ export function CheckoutUpdateProvider({
   readonly enabled: boolean;
   readonly children: ReactNode;
 }) {
-  const [pill, setPill] = useState<CheckoutUpdatePillModel | null>(null);
+  const pill = useCheckoutUpdateController(enabled);
   return (
-    <CheckoutUpdatePillContext.Provider value={pill}>
-      {enabled ? <CheckoutUpdateController onPill={setPill} /> : null}
-      {children}
-    </CheckoutUpdatePillContext.Provider>
+    <CheckoutUpdatePillContext.Provider value={pill}>{children}</CheckoutUpdatePillContext.Provider>
   );
 }
 
 /** What this tab knows about one environment's checkout update. */
 interface Session {
+  readonly enabled: boolean;
   readonly environmentId: EnvironmentId | null;
   /** The last capability the server reported, kept while its config reconnects. */
   readonly supported: boolean;
@@ -89,8 +86,9 @@ interface Session {
   readonly sentState: CheckoutUpdateState | null | undefined;
 }
 
-const newSession = (environmentId: EnvironmentId | null): Session => ({
+const newSession = (environmentId: EnvironmentId | null, enabled: boolean): Session => ({
   environmentId,
+  enabled,
   supported: false,
   lastState: null,
   loadedCommit: null,
@@ -103,19 +101,17 @@ const newSession = (environmentId: EnvironmentId | null): Session => ({
 
 const reloadPage = () => window.location.reload();
 
-export function CheckoutUpdateController({
-  onPill,
-}: {
-  readonly onPill: (pill: CheckoutUpdatePillModel | null) => void;
-}) {
+function useCheckoutUpdateController(enabled: boolean): CheckoutUpdatePillModel | null {
   const environmentId = usePrimaryEnvironmentId();
   const config = useAtomValue(primaryServerConfigAtom);
   const settingsHydrated = useClientSettingsHydrated();
   const pathname = useLocation({ select: (location) => location.pathname });
 
-  const [session, setSession] = useState(() => newSession(environmentId));
+  const [session, setSession] = useState(() => newSession(environmentId, enabled));
   let current = session;
-  if (current.environmentId !== environmentId) current = newSession(environmentId);
+  if (current.environmentId !== environmentId || current.enabled !== enabled) {
+    current = newSession(environmentId, enabled);
+  }
   if (config !== null) {
     const reported = config.environment.capabilities.checkoutUpdate === true;
     if (reported !== current.supported) {
@@ -123,7 +119,7 @@ export function CheckoutUpdateController({
     }
   }
   const queried = useEnvironmentQuery(
-    current.supported && environmentId !== null
+    enabled && current.supported && environmentId !== null
       ? serverEnvironment.checkoutUpdateState({ environmentId, input: {} })
       : null,
   ).data;
@@ -134,7 +130,7 @@ export function CheckoutUpdateController({
       loadedCommit: current.loadedCommit ?? queried.running.commit,
     };
   }
-  const state = current.supported ? current.lastState : null;
+  const state = enabled && current.supported ? current.lastState : null;
 
   const [dismissedCommit, setDismissedCommit] = useState(() =>
     getLocalStorageItem(DISMISSED_KEY, DismissedCommit),
@@ -177,21 +173,24 @@ export function CheckoutUpdateController({
   const pending = current.pending;
   const attemptRef = useRef(0);
   const environmentRef = useRef(environmentId);
+  const enabledRef = useRef(enabled);
   const presentationRef = useRef<CheckoutUpdatePresentation>(presentation);
   const latestRef = useRef({ state, view });
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Keep in-flight update responses tied to the committed environment and presentation.
   useLayoutEffect(() => {
-    if (environmentRef.current !== environmentId) {
+    if (environmentRef.current !== environmentId || enabledRef.current !== enabled) {
       // A request still out belongs to the old environment and must not land here.
       attemptRef.current += 1;
       environmentRef.current = environmentId;
+      enabledRef.current = enabled;
     }
     pendingRef.current = pending;
     presentationRef.current = presentation;
     latestRef.current = { state, view };
   });
 
-  const start = useCallback(() => {
-    if (pendingRef.current || environmentId === null) return;
+  const start = () => {
+    if (!enabled || pendingRef.current || environmentId === null) return;
     const offeredCommit = latestRef.current.state?.available?.commit ?? null;
     pendingRef.current = true;
     const attempt = ++attemptRef.current;
@@ -226,14 +225,15 @@ export function CheckoutUpdateController({
         );
       }
     });
-  }, [environmentId, startCommand]);
+  };
 
   const reloadingHere = view?.kind === "reload" && current.startedHere;
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Reload the browser after the update started by this tab completes.
   useEffect(() => {
     if (reloadingHere) reloadPage();
   }, [reloadingHere]);
 
-  const close = useCallback(() => {
+  const close = () => {
     const { state, view } = latestRef.current;
     if (view === null) return;
     if (view.kind === "available" && state?.available) {
@@ -242,7 +242,7 @@ export function CheckoutUpdateController({
       return;
     }
     setSession((previous) => ({ ...previous, closedKey: view.key }));
-  }, [setDismissedCommit]);
+  };
 
   const shown = reloadingHere || view === null || view.key === current.closedKey ? null : view;
   useCheckoutUpdateToast(presentation === "toast" ? shown : null, start, close);
@@ -255,24 +255,7 @@ export function CheckoutUpdateController({
           closedKey: current.closedKey,
         })
       : null;
-  // The view is rebuilt every render; its contents decide whether the pill changed.
-  const pillJson = pillView === null ? null : JSON.stringify(pillView);
-  const pill = useMemo<CheckoutUpdatePillModel | null>(
-    () =>
-      pillJson === null
-        ? null
-        : {
-            view: JSON.parse(pillJson) as CheckoutUpdatePillView,
-            start,
-            close,
-            reload: reloadPage,
-          },
-    [pillJson, start, close],
-  );
-  useEffect(() => onPill(pill), [onPill, pill]);
-  useEffect(() => () => onPill(null), [onPill]);
-
-  return null;
+  return pillView ? { view: pillView, start, close, reload: reloadPage } : null;
 }
 
 function useCheckoutUpdateToast(
@@ -284,13 +267,10 @@ function useCheckoutUpdateToast(
     readonly id: ReturnType<typeof toastManager.add>;
     readonly key: string;
   } | null>(null);
-  const startRef = useRef(start);
-  const closeRef = useRef(close);
-  useLayoutEffect(() => {
-    startRef.current = start;
-    closeRef.current = close;
-  });
+  const onStart = useStableCallback(start);
+  const onClose = useStableCallback(close);
 
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Keep the imperative toast manager aligned with the current checkout notice.
   useEffect(() => {
     const current = toastRef.current;
     if (current?.key === view?.key) return;
@@ -307,7 +287,7 @@ function useCheckoutUpdateToast(
         description: view.description,
         timeout: 0,
         ...(view.kind === "available"
-          ? { actionProps: { children: "Update and restart", onClick: () => startRef.current() } }
+          ? { actionProps: { children: "Update and restart", onClick: onStart } }
           : view.kind === "reload"
             ? { actionProps: { children: "Reload", onClick: reloadPage } }
             : {}),
@@ -317,14 +297,15 @@ function useCheckoutUpdateToast(
           // Called only when the person closes the toast.
           onClose: () => {
             toastRef.current = null;
-            closeRef.current();
+            onClose();
           },
         },
       }),
     );
     toastRef.current = { id, key: view.key };
-  }, [view]);
+  }, [onClose, onStart, view]);
 
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Release the imperative checkout toast when its controller unmounts.
   useEffect(
     () => () => {
       if (toastRef.current !== null) toastManager.close(toastRef.current.id);

@@ -45,7 +45,7 @@ export function OrchestratorBoardPicker(props: {
   }) => {
     setBoardBusy(true);
     setBoardProblem(null);
-    try {
+    await (async () => {
       const result = await act(
         boardDialog?.editing ? `/api/boards/${boardDialog.editing.id}/edit` : "/api/boards",
         { ...input, by: person },
@@ -63,9 +63,7 @@ export function OrchestratorBoardPicker(props: {
         update(props.threadId, { board: String(result.body.id) });
       setBoardDialog(null);
       boardsRead.refresh();
-    } finally {
-      setBoardBusy(false);
-    }
+    })().finally(() => setBoardBusy(false));
   };
   return (
     <>

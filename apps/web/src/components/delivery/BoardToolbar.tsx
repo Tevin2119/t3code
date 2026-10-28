@@ -32,7 +32,7 @@ const subscribe = (notify: () => void) => {
 const getDesktop = () => window.matchMedia(desktopQuery).matches;
 export const useBoardDesktop = () => useSyncExternalStore(subscribe, getDesktop, () => true);
 
-export function boardToolbarFiltered(
+function boardToolbarFiltered(
   filters: BoardFilters,
   grouping: BoardGrouping,
   view: string,

@@ -3251,7 +3251,7 @@ export const WS_RPC_SERVER_OPTIONS = {
 } as const;
 
 /** The fork's handlers. See `ForkWsRpcGroup` for why they are a layer of their own. */
-export const layerForkWsRpc = (currentSession: EnvironmentAuth.AuthenticatedSession) =>
+const layerForkWsRpc = (currentSession: EnvironmentAuth.AuthenticatedSession) =>
   ForkServerWsRpcGroup.toLayer(
     Effect.gen(function* () {
       const checkoutUpdate = yield* CheckoutUpdate.CheckoutUpdate;

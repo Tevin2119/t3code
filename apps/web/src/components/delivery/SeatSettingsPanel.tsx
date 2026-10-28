@@ -154,15 +154,13 @@ export function SeatSettingsPanel(props: {
     if (!props.environmentId || refreshing.current) return;
     refreshing.current = true;
     setIsRefreshing(true);
-    try {
-      await refreshProviders({
-        environmentId: props.environmentId,
-        input: { refreshModels: true },
-      });
-    } finally {
+    await refreshProviders({
+      environmentId: props.environmentId,
+      input: { refreshModels: true },
+    }).finally(() => {
       refreshing.current = false;
       setIsRefreshing(false);
-    }
+    });
   };
   const over = props.over ?? "task";
   const base = over === "task" ? "now" : "defined";

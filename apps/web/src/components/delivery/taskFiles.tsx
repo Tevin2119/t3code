@@ -8,14 +8,7 @@ import {
   VideoIcon,
   XIcon,
 } from "lucide-react";
-import {
-  useCallback,
-  useEffect,
-  useRef,
-  useState,
-  type ClipboardEvent,
-  type DragEvent,
-} from "react";
+import { useEffect, useRef, useState, type ClipboardEvent, type DragEvent } from "react";
 
 import { parseTaskFile, type TaskFile } from "../../lib/delivery";
 import {
@@ -68,81 +61,75 @@ export function useTaskUploads(environmentId: EnvironmentId | null, person: stri
   const [transit, setTransit] = useState<ReadonlyArray<FileInTransit>>([]);
   const counter = useRef(0);
 
-  const patch = useCallback((key: string, change: Partial<FileInTransit> | null) => {
+  const patch = (key: string, change: Partial<FileInTransit> | null) => {
     setTransit((current) =>
       change === null
         ? current.filter((item) => item.key !== key)
         : current.map((item) => (item.key === key ? { ...item, ...change } : item)),
     );
-  }, []);
+  };
 
-  const send = useCallback(
-    async (taskId: string, file: File): Promise<TaskFile | null> => {
-      counter.current += 1;
-      const key = `up-${counter.current}`;
-      const name = pastedFileName(file, new Date());
-      setTransit((current) => [...current, { key, name, size: file.size, sent: 0, problem: null }]);
-      if (file.size > TASK_FILE_LIMIT_BYTES) {
-        patch(key, {
-          problem: `A file is at most ${formatBytes(TASK_FILE_LIMIT_BYTES)}. This one is ${formatBytes(file.size)}.`,
-        });
+  const send = async (taskId: string, file: File): Promise<TaskFile | null> => {
+    counter.current += 1;
+    const key = `up-${counter.current}`;
+    const name = pastedFileName(file, new Date());
+    setTransit((current) => [...current, { key, name, size: file.size, sent: 0, problem: null }]);
+    if (file.size > TASK_FILE_LIMIT_BYTES) {
+      patch(key, {
+        problem: `A file is at most ${formatBytes(TASK_FILE_LIMIT_BYTES)}. This one is ${formatBytes(file.size)}.`,
+      });
+      return null;
+    }
+    let upload: string | null = null;
+    for (const piece of piecesOf(file.size)) {
+      const bytes = new Uint8Array(await file.slice(piece.from, piece.to).arrayBuffer());
+      const result = await act(`/api/tasks/${taskId}/files`, {
+        ...(upload ? { upload } : { name, type: file.type || "application/octet-stream" }),
+        data: toBase64(bytes),
+        more: !piece.last,
+        by: person,
+      });
+      if (!result.ok) {
+        patch(key, { problem: result.why });
         return null;
       }
-      let upload: string | null = null;
-      for (const piece of piecesOf(file.size)) {
-        const bytes = new Uint8Array(await file.slice(piece.from, piece.to).arrayBuffer());
-        const result = await act(`/api/tasks/${taskId}/files`, {
-          ...(upload ? { upload } : { name, type: file.type || "application/octet-stream" }),
-          data: toBase64(bytes),
-          more: !piece.last,
-          by: person,
-        });
-        if (!result.ok) {
-          patch(key, { problem: result.why });
-          return null;
-        }
-        patch(key, { sent: piece.to });
-        const body = result.body as Record<string, unknown> | null;
-        if (piece.last) {
-          patch(key, null);
-          return body ? parseTaskFile(body) : null;
-        }
-        upload = typeof body?.upload === "string" ? body.upload : upload;
+      patch(key, { sent: piece.to });
+      const body = result.body as Record<string, unknown> | null;
+      if (piece.last) {
+        patch(key, null);
+        return body ? parseTaskFile(body) : null;
       }
-      return null;
-    },
-    [act, patch, person],
-  );
+      upload = typeof body?.upload === "string" ? body.upload : upload;
+    }
+    return null;
+  };
 
-  const dismiss = useCallback((key: string) => patch(key, null), [patch]);
+  const dismiss = (key: string) => patch(key, null);
   return { transit, send, dismiss };
 }
 
 /** Reads a whole file from the engine, piece by piece. */
-export function useTaskDownload(environmentId: EnvironmentId | null) {
+function useTaskDownload(environmentId: EnvironmentId | null) {
   const read = useDeliveryFetch(environmentId);
-  return useCallback(
-    async (
-      file: Pick<TaskFile, "id" | "type">,
-      onProgress?: (received: number) => void,
-    ): Promise<{ readonly blob: Blob } | { readonly problem: string }> => {
-      const parts: Array<Uint8Array<ArrayBuffer>> = [];
-      let from = 0;
-      for (;;) {
-        const result = await read(`/api/files/${file.id}?from=${from}`);
-        if (!result.ok) return { problem: result.why };
-        const body = result.body as Record<string, unknown> | null;
-        const data = typeof body?.data === "string" ? body.data : "";
-        const bytes = fromBase64(data);
-        parts.push(bytes);
-        from += bytes.length;
-        onProgress?.(from);
-        if (body?.more !== true || bytes.length === 0) break;
-      }
-      return { blob: new Blob(parts, { type: file.type }) };
-    },
-    [read],
-  );
+  return async (
+    file: Pick<TaskFile, "id" | "type">,
+    onProgress?: (received: number) => void,
+  ): Promise<{ readonly blob: Blob } | { readonly problem: string }> => {
+    const parts: Array<Uint8Array<ArrayBuffer>> = [];
+    let from = 0;
+    for (;;) {
+      const result = await read(`/api/files/${file.id}?from=${from}`);
+      if (!result.ok) return { problem: result.why };
+      const body = result.body as Record<string, unknown> | null;
+      const data = typeof body?.data === "string" ? body.data : "";
+      const bytes = fromBase64(data);
+      parts.push(bytes);
+      from += bytes.length;
+      onProgress?.(from);
+      if (body?.more !== true || bytes.length === 0) break;
+    }
+    return { blob: new Blob(parts, { type: file.type }) };
+  };
 }
 
 const KIND_ICON: Record<FileKind, typeof FileIcon> = {
@@ -175,17 +162,19 @@ function useFileContent(
   readonly received: number;
 } {
   const download = useTaskDownload(environmentId);
+  const { id, type, name } = file;
   const [state, setState] = useState<{
     url: string | null;
     text: string | null;
     problem: string | null;
     received: number;
   }>({ url: null, text: null, problem: null, received: 0 });
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- owns the preview download and blob URL while mounted; cleanup ignores late results and revokes the URL
   useEffect(() => {
     if (!wanted) return;
     let gone = false;
     let made: string | null = null;
-    void download(file, (received) => {
+    void download({ id, type }, (received) => {
       if (!gone) setState((current) => ({ ...current, received }));
     }).then(async (result) => {
       if (gone) return;
@@ -193,7 +182,7 @@ function useFileContent(
         setState((current) => ({ ...current, problem: result.problem }));
         return;
       }
-      if (fileKindOf(file.type, file.name) === "text") {
+      if (fileKindOf(type, name) === "text") {
         const text = await result.blob.slice(0, 400_000).text();
         if (!gone) setState((current) => ({ ...current, text }));
         return;
@@ -205,8 +194,7 @@ function useFileContent(
       gone = true;
       if (made) URL.revokeObjectURL(made);
     };
-    // The file's id names its content, which never changes.
-  }, [download, file.id, wanted]);
+  }, [download, id, type, name, wanted]);
   return state;
 }
 
@@ -420,7 +408,7 @@ export function FilesInTransit(props: {
 }
 
 /** Files out of what was pasted or dropped. Text that was pasted is left to the field. */
-export function filesFrom(data: DataTransfer | null): File[] {
+function filesFrom(data: DataTransfer | null): File[] {
   if (!data) return [];
   const files = Array.from(data.files ?? []);
   if (files.length > 0) return files;

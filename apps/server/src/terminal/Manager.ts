@@ -557,13 +557,8 @@ function shellCandidateFromCommand(
 
 const powerShellLiteral = (value: string) => `'${value.replaceAll("'", "''")}'`;
 
-/**
- * Makes terminals team-aware when a delivery entry script is configured.
- * PowerShell dot-sources the script, because a function defined by a profile
- * is found before anything on the path. Every other shell gets the script's
- * folder first on its path, where the launchers of the same names live.
- * Nothing outside this one terminal is changed.
- */
+// PowerShell profiles outrank PATH, so dot-source its entry script; other shells prepend its folder.
+// Limit these changes to the terminal being launched.
 export function withDeliveryTerminalEntry(input: {
   readonly candidates: ReadonlyArray<ShellCandidate>;
   readonly env: NodeJS.ProcessEnv;

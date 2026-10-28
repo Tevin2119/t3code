@@ -1,19 +1,5 @@
-/**
- * DeliveryService - relays to a team delivery engine and remembers which
- * threads are bound to a team.
- *
- * The engine owns teams, task flow and approvals. This service decides
- * nothing of that: it relays requests, and it keeps one small record per
- * bound thread so a thread stays bound across restarts even while the engine
- * is down.
- *
- * Every doubt is resolved against starting. A record that cannot be read, a
- * record that cannot be saved, a team setup that did not complete and a
- * session that does not match what the thread was bound with all stop the
- * session, because the alternative is an ordinary thread under a team's name.
- *
- * @module DeliveryService
- */
+// The engine owns delivery decisions; persist bindings so engine downtime does not erase them.
+// Refuse to start if a binding cannot be read, saved, set up, or matched to its session.
 import {
   DELIVERY_HARNESS_BY_DRIVER,
   DeliveryError,
@@ -146,28 +132,7 @@ export class DeliveryService extends Context.Service<
   }
 >()("t3/delivery/DeliveryService") {}
 
-const disabled = () =>
-  Effect.fail(new DeliveryError({ reason: "disabled", detail: "Delivery is turned off." }));
-
-/** Inert service, for suites that only need the RPC surface to resolve. */
-export const layerTest = Layer.succeed(
-  DeliveryService,
-  DeliveryService.of({
-    read: disabled,
-    act: disabled,
-    bindThread: disabled,
-    threadState: Effect.fn("DeliveryService.threadState")(() =>
-      Effect.succeed({ binding: null, pending: null }),
-    ),
-    releaseThread: Effect.fn("DeliveryService.releaseThread")(() =>
-      Effect.succeed({ binding: null, pending: null }),
-    ),
-    prepareThread: Effect.fn("DeliveryService.prepareThread")(() => Effect.succeed(false)),
-    terminalEntryScript: Effect.succeed(null),
-  }),
-);
-
-export const make = Effect.gen(function* () {
+const make = Effect.gen(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const config = yield* ServerConfig;

@@ -25,12 +25,12 @@ export interface EnvironmentUsage {
  * The account a bucket belongs to: the one that names its harness and its recorded
  * provider exactly. A bucket with no recorded provider belongs to none.
  */
-export function accountOf(
+function accountOf(
   accounts: Readonly<Record<string, UsageAccount>> | undefined,
   bucket: Pick<UsageBucket, "provider" | "modelProvider">,
 ): string | null {
   if (!accounts || !bucket.modelProvider) return null;
-  for (const name of [...Object.keys(accounts)].sort()) {
+  for (const name of Object.keys(accounts).sort()) {
     const members = accounts[name]?.members ?? [];
     if (
       members.some(

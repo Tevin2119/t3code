@@ -1,20 +1,5 @@
-/**
- * Hermes Agent provider snapshot.
- *
- * Health, credentials and the configured model all come from short CLI calls
- * rather than the agent: `hermes --version` for the install probe,
- * `hermes config get model.provider` / `model.default` for what Hermes will
- * run, and `hermes auth status <provider>` for the sign-in verdict. None of
- * them start `hermes acp`, which matters because the health check runs on an
- * interval and the ACP agent loads the machine's whole tool and MCP surface
- * before it answers.
- *
- * Hermes fronts an inference provider chosen on the host (DeepSeek on a
- * default install), so the model catalog is that one pair, published under the
- * `provider:model` id Hermes itself uses over ACP.
- *
- * @module provider/Layers/HermesProvider
- */
+// Periodic probes must not start ACP, which loads the host tool and MCP surface.
+// Advertise the host-selected provider/model pair using Hermes' ACP identifier.
 import {
   HERMES_DEFAULT_MODEL,
   type CustomModelSetting,
@@ -88,16 +73,9 @@ const HERMES_FALLBACK_MODELS: ReadonlyArray<ServerProviderModel> = [
   },
 ];
 
-/**
- * Hermes takes its level of reasoning from its own configuration, and from nowhere else when
- * it runs as `hermes acp`: the flag `--reasoning` is dropped by that command, the session
- * offers no option for it, and a home of its own needs a sign-in of its own. So the picker
- * shows one entry that says so, with the level Hermes itself reports, and sends nothing.
- *
- * A level set for one model (`agent.reasoning_overrides`) outranks the general one. Where
- * such a setting exists the level is not named, since it may not be the one that applies.
- */
-export const HERMES_REASONING_OPTION_ID = "reasoning";
+// Hermes ACP ignores reasoning flags and has no session option, so the picker sends nothing.
+// Per-model overrides prevent naming a single effective level.
+const HERMES_REASONING_OPTION_ID = "reasoning";
 
 export function hermesReasoningCapabilities(
   configured: { readonly level: string | undefined; readonly perModel: boolean } | undefined,
@@ -166,13 +144,7 @@ export function hermesModelsFromRuntimeConfig(
   ];
 }
 
-/**
- * Hermes snapshots advertise `canAuthenticate` so clients can re-check
- * credentials from settings. Signing in means running Hermes' own setup wizard
- * in a terminal (`hermes acp --setup`), so the driver's controller verifies
- * rather than signs in, and sign-out has no headless equivalent either. There
- * is no managed runtime to download, so `canInstall` stays false.
- */
+// Authentication re-checks host credentials; setup requires Hermes' interactive wizard.
 function buildHermesProvider(
   input: Parameters<typeof buildServerProvider>[0],
 ): ServerProviderDraft {
@@ -277,10 +249,8 @@ function hermesModelsFromSettings(
   return providerModelsFromSettings(builtIn, customModels, EMPTY_CAPABILITIES);
 }
 
-export function buildInitialHermesProviderSnapshot(
-  hermesSettings: HermesSettings,
-): Effect.Effect<ServerProviderDraft> {
-  return Effect.gen(function* () {
+export const buildInitialHermesProviderSnapshot = Effect.fn("buildInitialHermesProviderSnapshot")(
+  function* (hermesSettings: HermesSettings): Effect.fn.Return<ServerProviderDraft> {
     const checkedAt = DateTime.formatIso(yield* DateTime.now);
     return buildHermesProvider({
       presentation: HERMES_PRESENTATION,
@@ -296,8 +266,8 @@ export function buildInitialHermesProviderSnapshot(
         message: "Checking Hermes Agent CLI…",
       },
     });
-  });
-}
+  },
+);
 
 export const checkHermesProviderStatus = Effect.fn("checkHermesProviderStatus")(function* (
   hermesSettings: HermesSettings,

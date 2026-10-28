@@ -3,7 +3,7 @@ import { useAtomValue } from "@effect/atom-react";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import { ThreadId, type EnvironmentId, type DeliveryReleaseChannel } from "@t3tools/contracts";
-import { useMemo, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { PowerIcon } from "lucide-react";
 import { useEnvironmentSettings } from "../../hooks/useSettings";
 import {
@@ -109,7 +109,7 @@ function EngineControl(props: {
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const terminalOpen = useAtomCommand(terminalEnvironment.open, { reportFailure: false });
   const terminalWrite = useAtomCommand(terminalEnvironment.write, { reportFailure: false });
-  const threadRef = useMemo(() => scopeThreadRef(environmentId, ENGINE_THREAD), [environmentId]);
+  const threadRef = scopeThreadRef(environmentId, ENGINE_THREAD);
   const [approval, setApproval] = useState("");
   const [busy, setBusy] = useState(false);
   const inFlight = useRef(false);

@@ -69,7 +69,7 @@ export const createBoardState: StateCreator<BoardState> = (set) => ({
  * The tags that were chosen, from what was kept on this device. Before several could be chosen
  * one was kept as `tag`; it is read only when no list was kept. Anything else is no tag.
  */
-export function keptTags(filters: unknown): ReadonlyArray<string> {
+function keptTags(filters: unknown): ReadonlyArray<string> {
   if (typeof filters !== "object" || filters === null) return [];
   const { tags, tag } = filters as { readonly tags?: unknown; readonly tag?: unknown };
   const list = tags === undefined ? [tag] : Array.isArray(tags) ? tags : [];

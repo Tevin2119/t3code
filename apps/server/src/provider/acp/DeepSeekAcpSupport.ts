@@ -1,19 +1,4 @@
-/**
- * DeepSeek Harness ACP wiring.
- *
- * `dsh --profile acp` runs the harness as an Agent Client Protocol server over
- * stdio, so the generic `AcpSessionRuntime` drives it directly the same way it
- * drives `hermes acp`.
- *
- * Verified against dsh 0.1.5-rc.3. Its `initialize` response advertises
- * protocol version 1, session `resume`/`list`/`close` and no auth methods; it
- * accepts any `authenticate` request, because the API key is resolved from the
- * harness home when a turn runs. Models are a `model` config option whose
- * values are JSON pairs of backend and model id, so they are set through
- * `session/set_config_option` and never through `session/set_model`.
- *
- * @module provider/acp/DeepSeekAcpSupport
- */
+// DeepSeek uses shared ACP, with model selection sent as a JSON backend/model config option.
 import * as NodeOS from "node:os";
 
 import { type DeepSeekSettings } from "@t3tools/contracts";
@@ -29,9 +14,9 @@ import { expandHomePath } from "@t3tools/provider-core/server/pathExpansion";
 import * as AcpSessionRuntime from "@t3tools/provider-acp/server/AcpSessionRuntime";
 
 /** dsh advertises no auth method and accepts any id; this one names what it checks. */
-export const DEEPSEEK_AUTH_METHOD_ID = "deepseek-api-key";
+const DEEPSEEK_AUTH_METHOD_ID = "deepseek-api-key";
 /** The backend the harness ships for DeepSeek's own API. */
-export const DEEPSEEK_OFFICIAL_BACKEND = "deepseek-official";
+const DEEPSEEK_OFFICIAL_BACKEND = "deepseek-official";
 export const DEEPSEEK_MODEL_CONFIG_ID = "model";
 
 export type DeepSeekAcpRuntimeSettings = Pick<DeepSeekSettings, "binaryPath" | "homePath">;
@@ -51,24 +36,17 @@ export interface DeepSeekAcpRuntimeInput extends Omit<
   readonly permissionMode?: DeepSeekPermissionMode;
 }
 
-export const DSH_PERMISSION_MODE = "DSH_PERMISSION_MODE";
+const DSH_PERMISSION_MODE = "DSH_PERMISSION_MODE";
 export type DeepSeekPermissionMode = "danger-full-access" | "read-only";
 
-/**
- * The permission mode of dsh that honours an access mode of a thread.
- *
- * Full access is the mode of that name: nothing is asked and nothing is
- * confined. Supervised is the read-only mode, in which dsh may read and has
- * to ask a person before anything that writes. In its default mode dsh
- * writes inside the workspace without asking, which is no mode of a thread.
- */
+// Supervised access maps to read-only; the harness default permits writes without asking.
 export function deepseekPermissionModeFor(runtimeMode: string): DeepSeekPermissionMode | undefined {
   if (runtimeMode === "full-access") return "danger-full-access";
   if (runtimeMode === "approval-required") return "read-only";
   return undefined;
 }
 
-export function deepseekAcpSpawnArgs(): ReadonlyArray<string> {
+function deepseekAcpSpawnArgs(): ReadonlyArray<string> {
   // Approval policy is negotiated per tool call over ACP `session/request_permission`.
   return ["--profile", "acp"];
 }
@@ -108,34 +86,33 @@ export function buildDeepSeekAcpSpawnInput(
   };
 }
 
-export const makeDeepSeekAcpRuntime = (
+export const makeDeepSeekAcpRuntime = Effect.fn("makeDeepSeekAcpRuntime")(function* (
   input: DeepSeekAcpRuntimeInput,
-): Effect.Effect<
+): Effect.fn.Return<
   AcpSessionRuntime.AcpSessionRuntime["Service"],
   EffectAcpErrors.AcpError,
   Crypto.Crypto | Scope.Scope
-> =>
-  Effect.gen(function* () {
-    const acpContext = yield* Layer.build(
-      AcpSessionRuntime.layer({
-        ...input,
-        spawn: buildDeepSeekAcpSpawnInput(
-          input.deepseekSettings,
-          input.cwd,
-          input.environment,
-          input.permissionMode,
-        ),
-        authMethodId: DEEPSEEK_AUTH_METHOD_ID,
-      }).pipe(
-        Layer.provide(
-          Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, input.childProcessSpawner),
-        ),
+> {
+  const acpContext = yield* Layer.build(
+    AcpSessionRuntime.layer({
+      ...input,
+      spawn: buildDeepSeekAcpSpawnInput(
+        input.deepseekSettings,
+        input.cwd,
+        input.environment,
+        input.permissionMode,
       ),
-    );
-    return yield* Effect.service(AcpSessionRuntime.AcpSessionRuntime).pipe(
-      Effect.provide(acpContext),
-    );
-  });
+      authMethodId: DEEPSEEK_AUTH_METHOD_ID,
+    }).pipe(
+      Layer.provide(
+        Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, input.childProcessSpawner),
+      ),
+    ),
+  );
+  return yield* Effect.service(AcpSessionRuntime.AcpSessionRuntime).pipe(
+    Effect.provide(acpContext),
+  );
+});
 
 /**
  * The config value dsh expects for a model: a JSON pair of backend and model

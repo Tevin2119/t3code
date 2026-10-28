@@ -783,7 +783,7 @@ export type ClaudeSettings = typeof ClaudeSettings.Type;
  * device-code flow targets a different host for each (`kimi.ai` vs `kimi.com`),
  * so the region has to be chosen before login rather than discovered after it.
  */
-export const KIMI_REGIONS = [
+const KIMI_REGIONS = [
   { value: "global", label: "Global (kimi.ai)" },
   { value: "mainland-cn", label: "Mainland China (kimi.com)" },
 ] as const satisfies ReadonlyArray<ProviderSettingsFormOption>;
@@ -828,13 +828,7 @@ export const KimiSettings = makeProviderSettingsSchema(
 );
 export type KimiSettings = typeof KimiSettings.Type;
 
-/**
- * Hermes fronts whichever inference provider `hermes model` selected on the
- * host — DeepSeek on a default install — so T3 Code carries no key or endpoint
- * of its own. The only credential lives in Hermes' own config, which is why
- * this schema is a binary path, the home that config is read from, and a hook
- * policy and nothing else.
- */
+// Hermes owns the configured inference provider and its credentials; T3 stores neither.
 export const HermesSettings = makeProviderSettingsSchema(
   {
     // Off by default, for the same reason as Kimi above.

@@ -119,10 +119,9 @@ export function BoardPicker(props: {
         <span className={props.look === "field" ? "flex-1 truncate" : "truncate"}>
           {current?.title ?? props.value}
         </span>
-        <ChevronDownIcon
-          className={props.look === "field" ? "-me-1 size-3 opacity-50" : "size-3 opacity-60"}
-          aria-hidden
-        />
+        {props.look !== "field" ? (
+          <ChevronDownIcon className="size-3 opacity-60" aria-hidden />
+        ) : null}
       </PopoverTrigger>
       <PopoverPopup padding="none" align="start" className="w-80 max-w-[calc(100vw-2rem)] ">
         <div className="flex items-center gap-1 border-b border-border p-2">
@@ -332,6 +331,7 @@ export function BoardDialog(props: {
   const [chooseProblem, setChooseProblem] = useState<string | null>(null);
   // An add that ends after the dialog closed or its environment changed is let go.
   const generation = useRef(0);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Cancel repository registrations and discard their environment-owned results when the connection changes or the dialog closes.
   useEffect(
     () => () => {
       generation.current += 1;
@@ -425,6 +425,7 @@ export function BoardDialog(props: {
   const baseTrigger = useRef<HTMLButtonElement>(null);
   // Where focus goes once the add form closes: back to the list, or on to the added one's branch.
   const focusAfterAdd = useRef<"repository" | "base" | null>(null);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Restore DOM focus after the add form gives way to the repository selectors.
   useEffect(() => {
     if (adding || !focusAfterAdd.current) return;
     (focusAfterAdd.current === "base" ? baseTrigger : repositoryTrigger).current?.focus();

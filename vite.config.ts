@@ -577,10 +577,7 @@ export default defineConfig({
         rules: { "shadcn/no-arbitrary-values": "off" },
       },
       {
-        // Fork only, temporary: the delivery components predate the shadcn rules that the
-        // 2026-10-18 upstream sync brought in (222 findings), and every delivery task's lint
-        // check failed on them. Warnings until #1796 brings these files to zero, which removes
-        // this block.
+        // Delivery styling is migrated incrementally; keep these legacy violations visible as warnings.
         files: [
           "apps/web/src/components/delivery/**",
           "apps/web/src/state/delivery.ts",

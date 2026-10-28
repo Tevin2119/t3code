@@ -1,17 +1,4 @@
-/**
- * Kimi Code driver.
- *
- * `kimi acp` is a first-class ACP agent, so this driver composes the shared ACP
- * runtime the same way the Grok driver does rather than owning a transport.
- *
- * Sign-in is a device-code flow: `kimi login` prints a verification URL plus a
- * short code and polls until the user approves, so `CliAuth` runs it as a child
- * process and republishes the code instead of hosting a browser callback.
- * Sign-out goes the other way: the ACP agent advertises `auth.logout`, so it
- * is an ACP request, the same shape `AntigravityAuth` uses.
- *
- * @module provider/Drivers/KimiDriver
- */
+// Kimi sign-in uses a device code from the CLI; sign-out uses the ACP auth.logout request.
 import { KimiSettings, ProviderDriverKind, ProviderSetupError } from "@t3tools/contracts";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
 import * as Crypto from "effect/Crypto";

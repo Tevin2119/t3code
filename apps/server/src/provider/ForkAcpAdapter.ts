@@ -77,7 +77,7 @@ export function withNativeTurnReceipt(
   };
 }
 
-export function forkApprovalOptions(
+function forkApprovalOptions(
   request: EffectAcpSchema.RequestPermissionRequest,
 ): ReadonlyArray<ProviderApprovalOption> {
   const has = (kind: EffectAcpSchema.PermissionOption["kind"]) =>

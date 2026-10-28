@@ -1,11 +1,10 @@
 import type { EnvironmentId } from "@t3tools/contracts";
-import { useCallback, useRef, useState } from "react";
+import { useRef, useState } from "react";
 
 import { minutesLeft, parseDeliveryEngineHealth } from "../../lib/deliveryEngineControl";
 import type { DeliveryCard } from "../../lib/delivery";
 import { ACTION_LABEL, LANE_TITLE, moveIntent } from "../../lib/deliveryBoard";
 
-export { ACTION_LABEL };
 import {
   useBoardStore,
   useDeliveryAct,
@@ -25,7 +24,7 @@ import {
 import { Input } from "../ui/input";
 import { Textarea } from "../ui/textarea";
 
-export const ACTION_HELP: Record<string, string> = {
+const ACTION_HELP: Record<string, string> = {
   "accept-artifacts":
     "Accepts the exact non-code deliverables that were reviewed. Nothing is published or submitted for you.",
   submit: "The team takes it on. It goes to triage and on from there without being asked.",
@@ -139,67 +138,56 @@ export function useTaskActions(
     return result.ok;
   };
 
-  const run = useCallback(
-    (card: Target, action: string) => {
-      // A decision, and publishing what was approved, each need a person's name and the key.
-      if (
-        action === "approve" ||
-        action === "reject" ||
-        action === "publish" ||
-        action === "accept-artifacts"
-      ) {
-        setProblem(null);
-        setRequireKey(false);
-        refreshHealth();
-        setDecision({ card, decision: action });
-        return;
-      }
-      if (action === "submit") void send(`/api/tasks/${card.id}/submit`, { by: person });
-      else if (action === "deliver" || action === "close") {
-        void send(`/api/tasks/${card.id}/control`, { action, by: person });
-      } else if (action === "discard") {
-        void send(`/api/tasks/${card.id}/discard`, {}).then(
-          (done) => done && onDiscarded?.(card.id),
-        );
-      } else if (action === "first" || action === "not-first") {
-        void send(`/api/tasks/${card.id}/first`, { on: action === "first", by: person });
-      } else if (action === "stop") {
-        if (card.run) void send(`/api/runs/${card.run.id}/stop`, {});
-      } else void send(`/api/tasks/${card.id}/control`, { action, by: person });
-    },
-    [onDiscarded, person, refreshHealth, send],
-  );
+  const run = (card: Target, action: string) => {
+    // A decision, and publishing what was approved, each need a person's name and the key.
+    if (
+      action === "approve" ||
+      action === "reject" ||
+      action === "publish" ||
+      action === "accept-artifacts"
+    ) {
+      setProblem(null);
+      setRequireKey(false);
+      refreshHealth();
+      setDecision({ card, decision: action });
+      return;
+    }
+    if (action === "submit") void send(`/api/tasks/${card.id}/submit`, { by: person });
+    else if (action === "deliver" || action === "close") {
+      void send(`/api/tasks/${card.id}/control`, { action, by: person });
+    } else if (action === "discard") {
+      void send(`/api/tasks/${card.id}/discard`, {}).then((done) => done && onDiscarded?.(card.id));
+    } else if (action === "first" || action === "not-first") {
+      void send(`/api/tasks/${card.id}/first`, { on: action === "first", by: person });
+    } else if (action === "stop") {
+      if (card.run) void send(`/api/runs/${card.run.id}/stop`, {});
+    } else void send(`/api/tasks/${card.id}/control`, { action, by: person });
+  };
 
-  const move = useCallback(
-    (card: Pick<DeliveryCard, "id" | "lane">, lane: string, before: string | null) =>
-      // Where the card was seen: if it stands elsewhere now, the engine refuses the move.
-      send(`/api/tasks/${card.id}/move`, { lane, before, by: person, seen: card.lane }),
-    [person, send],
-  );
+  const move = (card: Pick<DeliveryCard, "id" | "lane">, lane: string, before: string | null) =>
+    // Where the card was seen: if it stands elsewhere now, the engine refuses the move.
+    send(`/api/tasks/${card.id}/move`, { lane, before, by: person, seen: card.lane });
 
   /**
    * A card taken to a column, by a drop or by choosing the column. A column a step leads to is
    * reached by that step, asked for as its button asks; one no step leads to is refused with
    * the reason, and the card stays where it was.
    */
-  const moveTo = useCallback(
-    (
-      card: Target & Pick<DeliveryCard, "lane" | "actions">,
-      lane: string,
-      before: string | null,
-    ) => {
-      const intent = moveIntent(card, lane);
-      if (intent.kind === "move") return void move(card, lane, before);
-      if (intent.kind === "refused") return setProblem(intent.why);
-      if (ASKED_FIRST.has(intent.action)) {
-        setProblem(null);
-        setConfirming({ card, action: intent.action, lane });
-        return;
-      }
-      run(card, intent.action);
-    },
-    [move, run],
-  );
+  const moveTo = (
+    card: Target & Pick<DeliveryCard, "lane" | "actions">,
+    lane: string,
+    before: string | null,
+  ) => {
+    const intent = moveIntent(card, lane);
+    if (intent.kind === "move") return void move(card, lane, before);
+    if (intent.kind === "refused") return setProblem(intent.why);
+    if (ASKED_FIRST.has(intent.action)) {
+      setProblem(null);
+      setConfirming({ card, action: intent.action, lane });
+      return;
+    }
+    run(card, intent.action);
+  };
 
   return {
     busy,

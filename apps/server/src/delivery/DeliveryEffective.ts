@@ -1,14 +1,4 @@
-/**
- * What a team thread really ran on, for the record the delivery engine keeps.
- *
- * Three things are kept apart. `requested` is what the person chose in the
- * composer. `passed` is what an adapter says it handed to the harness.
- * `confirmed` is what the harness itself said it runs on, in an answer or an
- * event of its own. Nothing here is read from what a model wrote, and a value
- * nobody reported stays empty: an echo of the request is not a confirmation.
- *
- * @module delivery/DeliveryEffective
- */
+// Keep requested, passed, and harness-confirmed settings distinct; an echoed request is not proof.
 import {
   DELIVERY_HARNESS_BY_DRIVER,
   type ModelSelection,
@@ -54,16 +44,10 @@ const HARNESS_DEFAULT = "harness-default";
  * access. The other modes ask a person, which no seat's access does, so they
  * are reported as the mode they are and as no access of a seat.
  */
-export const accessOfRuntimeMode = (mode: RuntimeMode | undefined): string | null =>
+const accessOfRuntimeMode = (mode: RuntimeMode | undefined): string | null =>
   mode === "full-access" ? "full" : null;
 
-export const runtimeModeOfAccess = (access: string | null | undefined): RuntimeMode | null =>
-  access === "full" ? "full-access" : null;
-
-export function reasoningOf(
-  driver: string,
-  modelSelection: ModelSelection | undefined,
-): string | null {
+function reasoningOf(driver: string, modelSelection: ModelSelection | undefined): string | null {
   const option = REASONING_OPTION_BY_DRIVER[driver];
   if (!option || !modelSelection) return null;
   const value = getModelSelectionStringOptionValue(modelSelection, option);
@@ -114,10 +98,7 @@ export type EffectivePatch = Partial<
 >;
 
 /** What an adapter handed over, as a patch of the record. */
-export function patchFromPassed(
-  passed: Readonly<Record<string, unknown>>,
-  at: string,
-): EffectivePatch {
+function patchFromPassed(passed: Readonly<Record<string, unknown>>, at: string): EffectivePatch {
   const has = (name: string) => Object.hasOwn(passed, name);
   return {
     passed: {

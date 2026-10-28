@@ -422,7 +422,7 @@ function Approval({
     if (busy || !allowed) return;
     setBusy(true);
     setProblem(null);
-    try {
+    await (async () => {
       const body = deploymentRequestBody(request.path, {
         ...request.body,
         by: by.trim(),
@@ -440,14 +440,16 @@ function Approval({
         type: "success",
       });
       onDone();
-    } catch {
-      setProblem(
-        "The deployment request could not be submitted. Check its settings and try again.",
-      );
-    } finally {
-      setKey("");
-      setBusy(false);
-    }
+    })()
+      .catch(() => {
+        setProblem(
+          "The deployment request could not be submitted. Check its settings and try again.",
+        );
+      })
+      .finally(() => {
+        setKey("");
+        setBusy(false);
+      });
   };
   return (
     <Dialog open onOpenChange={(value) => !value && !busy && onClose()}>

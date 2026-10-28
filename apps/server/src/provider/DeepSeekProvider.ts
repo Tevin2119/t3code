@@ -1,18 +1,5 @@
-/**
- * DeepSeek Harness provider snapshot.
- *
- * Health comes from `dsh --version` and the sign-in verdict from the harness
- * home, where the API key is kept. Neither starts `dsh --profile acp`, which
- * matters because the health check runs on an interval.
- *
- * dsh has no command that reports whether a key is stored, so the verdict is
- * read the way the harness resolves the key itself: the process environment,
- * then its credential file, then its dotenv file. The key is never sent
- * anywhere by this check, so a stored key that DeepSeek has revoked still reads
- * as signed in until a turn fails.
- *
- * @module provider/Layers/DeepSeekProvider
- */
+// Check stored credentials without starting ACP or sending the key to the network.
+// A stored but revoked key remains signed in until a turn fails.
 import * as NodeOS from "node:os";
 
 import {
@@ -59,8 +46,8 @@ const DEEPSEEK_PRESENTATION = {
  * The values differ with the model, so this list is what the picker shows and no more: a
  * value is sent only when a person chose it and the session offers it.
  */
-export const DEEPSEEK_REASONING_OPTION_ID = "reasoning_effort";
-export const DEEPSEEK_REASONING_LEVELS = ["off", "low", "high", "max"] as const;
+const DEEPSEEK_REASONING_OPTION_ID = "reasoning_effort";
+const DEEPSEEK_REASONING_LEVELS = ["off", "low", "high", "max"] as const;
 
 const LEVEL_LABELS: Record<string, string> = { off: "Off", low: "Low", high: "High", max: "Max" };
 
@@ -172,26 +159,24 @@ function deepseekModelsFromSettings(
   return providerModelsFromSettings(DEEPSEEK_BUILT_IN_MODELS, customModels, EMPTY_CAPABILITIES);
 }
 
-export function buildInitialDeepSeekProviderSnapshot(
-  deepseekSettings: DeepSeekSettings,
-): Effect.Effect<ServerProviderDraft> {
-  return Effect.gen(function* () {
-    const checkedAt = DateTime.formatIso(yield* DateTime.now);
-    return buildDeepSeekProvider({
-      presentation: DEEPSEEK_PRESENTATION,
-      enabled: deepseekSettings.enabled,
-      checkedAt,
-      models: deepseekModelsFromSettings(deepseekSettings.customModels),
-      probe: {
-        installed: false,
-        version: null,
-        status: "warning",
-        auth: { status: "unknown" },
-        message: "Checking DeepSeek Harness CLI…",
-      },
-    });
+export const buildInitialDeepSeekProviderSnapshot = Effect.fn(
+  "buildInitialDeepSeekProviderSnapshot",
+)(function* (deepseekSettings: DeepSeekSettings): Effect.fn.Return<ServerProviderDraft> {
+  const checkedAt = DateTime.formatIso(yield* DateTime.now);
+  return buildDeepSeekProvider({
+    presentation: DEEPSEEK_PRESENTATION,
+    enabled: deepseekSettings.enabled,
+    checkedAt,
+    models: deepseekModelsFromSettings(deepseekSettings.customModels),
+    probe: {
+      installed: false,
+      version: null,
+      status: "warning",
+      auth: { status: "unknown" },
+      message: "Checking DeepSeek Harness CLI…",
+    },
   });
-}
+});
 
 export const checkDeepSeekProviderStatus = Effect.fn("checkDeepSeekProviderStatus")(function* (
   deepseekSettings: DeepSeekSettings,

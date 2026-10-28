@@ -5,7 +5,7 @@ import type {
   UsageSource,
 } from "@t3tools/contracts";
 import { formatCount, formatTokens, formatUsd } from "@t3tools/shared/usageFormat";
-import type { AccountTotals, MergedUsage, UsageFilter } from "@t3tools/shared/usageMerge";
+import type { AccountTotals, MergedUsage } from "@t3tools/shared/usageMerge";
 import { ChevronDownIcon, UsersIcon, XIcon } from "lucide-react";
 import { useState } from "react";
 
@@ -48,14 +48,6 @@ export const NO_USAGE_FILTER: UsageFilterState = {
   models: new Set(),
   accounts: new Set(),
 };
-
-export const hasUsageFilter = (filter: UsageFilterState): boolean =>
-  filter.harnesses.size > 0 ||
-  filter.modelProviders.size > 0 ||
-  filter.models.size > 0 ||
-  filter.accounts.size > 0;
-
-export const toUsageFilter = (filter: UsageFilterState): UsageFilter => filter;
 
 const toggled = <T,>(set: ReadonlySet<T>, value: T, on: boolean): ReadonlySet<T> => {
   const next = new Set(set);
@@ -285,7 +277,7 @@ export function AccountBreakdownTable(props: {
                 {row.account !== null ? (
                   <span className="flex flex-col">
                     <span>{row.account}</span>
-                    <span className="text-[11px] text-muted-foreground">
+                    <span className="text-2xs text-muted-foreground">
                       your grouping of {row.members.length} connection
                       {row.members.length === 1 ? "" : "s"}
                     </span>
@@ -456,50 +448,52 @@ export function UsageAccountsEditor(props: {
             provider, stays apart. Leave a name empty to keep a connection on its own.
           </DialogDescription>
         </DialogHeader>
-        <DialogPanel className="flex flex-col gap-2">
-          {connections.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No recorded provider in this window.</p>
-          ) : null}
-          {connections.map((connection) => {
-            const key = connectionKey(connection.harness, connection.modelProvider);
-            return (
-              <label
-                key={key}
-                className="grid grid-cols-1 items-center gap-1 sm:grid-cols-[minmax(0,1fr)_14rem] sm:gap-3"
-                data-usage-account-connection={key.replace("\u0000", ":")}
-              >
-                <span className="text-sm">
-                  {PROVIDER_PRESENTATION[connection.harness].label}
-                  <span className="text-muted-foreground">
-                    {" · "}
-                    {connection.source === "harness"
-                      ? `${connection.modelProvider} (not recorded; the harness's only provider)`
-                      : `records ${connection.modelProvider}`}
+        <DialogPanel>
+          <div className="flex flex-col gap-2">
+            {connections.length === 0 ? (
+              <p className="text-sm text-muted-foreground">No recorded provider in this window.</p>
+            ) : null}
+            {connections.map((connection) => {
+              const key = connectionKey(connection.harness, connection.modelProvider);
+              return (
+                <label
+                  key={key}
+                  className="grid grid-cols-1 items-center gap-1 sm:grid-cols-[minmax(0,1fr)_14rem] sm:gap-3"
+                  data-usage-account-connection={key.replace("\u0000", ":")}
+                >
+                  <span className="text-sm">
+                    {PROVIDER_PRESENTATION[connection.harness].label}
+                    <span className="text-muted-foreground">
+                      {" · "}
+                      {connection.source === "harness"
+                        ? `${connection.modelProvider} (not recorded; the harness's only provider)`
+                        : `records ${connection.modelProvider}`}
+                    </span>
                   </span>
-                </span>
-                <Input
-                  aria-label={`Account for ${PROVIDER_PRESENTATION[connection.harness].label}, ${connection.modelProvider}`}
-                  placeholder="Not grouped"
-                  value={names.get(key) ?? ""}
-                  onChange={(event) =>
-                    setNames((current) => new Map(current).set(key, event.target.value))
-                  }
-                />
-              </label>
-            );
-          })}
-          {unrecorded ? (
-            <p className="text-xs text-muted-foreground">
-              Usage with no recorded provider (
-              {unrecorded.harnesses.map((kind) => PROVIDER_PRESENTATION[kind].label).join(", ")})
-              cannot be grouped: its account is not known.
-            </p>
-          ) : null}
-          {outcome.map((line) => (
-            <p key={line} className="text-xs text-muted-foreground">
-              {line}
-            </p>
-          ))}
+                  <Input
+                    aria-label={`Account for ${PROVIDER_PRESENTATION[connection.harness].label}, ${connection.modelProvider}`}
+                    placeholder="Not grouped"
+                    value={names.get(key) ?? ""}
+                    onChange={(event) =>
+                      setNames((current) => new Map(current).set(key, event.target.value))
+                    }
+                  />
+                </label>
+              );
+            })}
+            {unrecorded ? (
+              <p className="text-xs text-muted-foreground">
+                Usage with no recorded provider (
+                {unrecorded.harnesses.map((kind) => PROVIDER_PRESENTATION[kind].label).join(", ")})
+                cannot be grouped: its account is not known.
+              </p>
+            ) : null}
+            {outcome.map((line) => (
+              <p key={line} className="text-xs text-muted-foreground">
+                {line}
+              </p>
+            ))}
+          </div>
         </DialogPanel>
         <DialogFooter variant="bare">
           <Button variant="ghost" disabled={busy} onClick={() => props.onOpenChange(false)}>

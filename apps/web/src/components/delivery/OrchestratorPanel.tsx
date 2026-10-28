@@ -1,7 +1,7 @@
 import type { EnvironmentId } from "@t3tools/contracts";
 import { useNavigate } from "@tanstack/react-router";
 import { CopyIcon, PencilIcon, PlusIcon } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 
 import {
   flowFor,
@@ -38,20 +38,22 @@ export function useFlowPreview(
 ): SeatSetup | null {
   const act = useDeliveryAct(environmentId, "flow preview");
   const [preview, setPreview] = useState<SeatSetup | null>(null);
-  const asked = useRef(0);
   const sent = JSON.stringify(seats);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Debounce the engine preview request and cancel its timer and response on cleanup.
   useEffect(() => {
     if (!team) return;
-    asked.current += 1;
-    const mine = asked.current;
+    let cancelled = false;
     // A short wait, so that a row of switches is asked about once.
     const timer = window.setTimeout(() => {
       void act(`/api/teams/${team}/setup`, { flow, seats: JSON.parse(sent) }).then((result) => {
-        if (mine !== asked.current || !result.ok) return;
+        if (cancelled || !result.ok) return;
         setPreview(parseSeatSetup(result.body));
       });
     }, 250);
-    return () => window.clearTimeout(timer);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
   }, [act, flow, sent, team]);
   return preview?.team === team ? preview : null;
 }
@@ -130,7 +132,7 @@ export function OrchestratorPanel(props: {
   const chooseTeam = useOrchestratorDraftStore((state) => state.chooseTeam);
   const setSeat = useOrchestratorDraftStore((state) => state.setSeat);
   const teamsRead = useDeliveryRead(props.environmentId, "/api/teams");
-  const teams = useMemo(() => selectableTeams(teamsRead.body), [teamsRead.body]);
+  const teams = selectableTeams(teamsRead.body);
   const [showing, setShowing] = useState<"seats" | "setup">("seats");
   const [editingDefaults, setEditingDefaults] = useState(false);
 
@@ -140,18 +142,11 @@ export function OrchestratorPanel(props: {
     resolved === "standard"
       ? (team?.flows.find((item) => item.offered && item.id !== "standard")?.id ?? "chat")
       : resolved;
-  const seatsToSend = useMemo(
-    () => (team && draft ? seatSettingsToSend(team.settings, draft.seats) : {}),
-    [draft, team],
-  );
+  const seatsToSend = team && draft ? seatSettingsToSend(team.settings, draft.seats) : {};
   const preview = useFlowPreview(props.environmentId, team?.team ?? null, flow, seatsToSend);
   const allFlows = preview?.flows ?? team?.flows ?? [];
   const flows = allFlows.filter((item) => item.id !== "standard");
   const chosen = allFlows.find((item) => item.id === flow) ?? null;
-  // A flow the team has and the draft does not name yet is written into the draft.
-  useEffect(() => {
-    if (draft && team && draft.workflow !== flow) update(props.threadId, { workflow: flow });
-  }, [draft, flow, props.threadId, team, update]);
 
   if (!draft) return null;
   const open = (search: { name?: string; new?: boolean; from?: string }) => {

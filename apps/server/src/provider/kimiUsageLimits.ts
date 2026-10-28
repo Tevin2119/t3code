@@ -96,13 +96,7 @@ const shareText = (ratio: number): string => {
   return `${Math.round(percent * 10) / 10}%`;
 };
 
-/**
- * `limit_month_code` is not an allowance of its own. Kimi's own CLI and web app show one
- * monthly limit (`limit_month_total`) and split what was used of it in two: Code, the ratio
- * of `limit_month_code`, and Kimi, the rest (total minus code). So Code is folded into the
- * monthly window's label, in Kimi's words, and never shown as a quota with its own "left".
- * Which use Kimi counts as Code is not documented, and the label does not guess.
- */
+// Code usage is part of the monthly total, not a separate allowance with its own remaining quota.
 export function kimiUsageResponseToLimits(
   response: typeof KimiUsageResponse.Type,
   checkedAt: string,
@@ -143,7 +137,7 @@ export function kimiBaseUrlFromConfig(config: string): string | undefined {
   return match?.[1]?.trim() || undefined;
 }
 
-export function kimiOAuthFromConfig(config: string) {
+function kimiOAuthFromConfig(config: string) {
   const section =
     /^\[providers\."managed:kimi-code"\.oauth\]\s*$([\s\S]*?)(?=^\[|(?![\s\S]))/m.exec(
       config,

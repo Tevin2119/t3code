@@ -21,7 +21,7 @@ export const harnessOfDriver = (driver: string): string | null =>
 export const driverOfHarness = (harness: string): string | null =>
   DRIVER_BY_HARNESS[harness] ?? null;
 
-export const HARNESS_LABEL: Readonly<Record<string, string>> = {
+const HARNESS_LABEL: Readonly<Record<string, string>> = {
   claude: "Claude",
   codex: "Codex",
   opencode: "OpenCode",
@@ -339,14 +339,7 @@ export function seatForThread(
   };
 }
 
-/**
- * How much of a seat a draft takes over when its seat changes.
- *
- * The harness of a draft is changed in one way only: a person picks a model
- * of another harness. That model is what they chose, so it stands, and the
- * rest of the new seat is taken over. A seat that changed with the team or the
- * role is taken over whole, as is the first seat of a draft.
- */
+// Preserve an explicitly chosen model when the harness changes; otherwise inherit the whole seat.
 export function takeOverFor(
   previousKey: string | null,
   seat: SeatForThread,

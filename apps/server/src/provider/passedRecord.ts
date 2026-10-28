@@ -1,15 +1,5 @@
-/**
- * What an adapter handed to its harness, for the record.
- *
- * A harness may not say what it runs on. What was sent to it is known all the
- * same, and is kept apart from what the harness confirmed: the arguments it
- * was started with, and the settings sent to it over its protocol. Nothing
- * secret is kept. The value of an argument or a setting whose name speaks of
- * a key, a token or a password is left out, and so is the text of the
- * instructions, which is kept elsewhere.
- *
- * @module provider/passedRecord
- */
+// Record what was passed separately from what the harness confirmed.
+// Exclude credentials and instruction text from the record.
 
 export interface PassedRecord {
   readonly model?: string | null;

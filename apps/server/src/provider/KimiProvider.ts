@@ -1,13 +1,4 @@
-/**
- * Kimi Code provider snapshot.
- *
- * Health, auth and model discovery all come from the CLI without starting an
- * agent: `kimi --version` for the install probe and `kimi provider list --json`
- * for the configured providers and their model catalog. Neither spawns the ACP
- * server, which matters because the health check runs on an interval.
- *
- * @module provider/Layers/KimiProvider
- */
+// Periodic discovery uses short CLI probes without starting the ACP agent.
 import type {
   CustomModelSetting,
   KimiSettings,
@@ -52,8 +43,8 @@ const KIMI_PRESENTATION = {
  * The values differ with the model, so this list is what the picker shows and no more: a
  * value is sent only when a person chose it and the session offers it.
  */
-export const KIMI_THINKING_OPTION_ID = "thinking";
-export const KIMI_THINKING_LEVELS = ["on", "low", "high", "max"] as const;
+const KIMI_THINKING_OPTION_ID = "thinking";
+const KIMI_THINKING_LEVELS = ["on", "low", "high", "max"] as const;
 
 const LEVEL_LABELS: Record<string, string> = { on: "On", low: "Low", high: "High", max: "Max" };
 
@@ -226,10 +217,8 @@ export const probeKimiAuthenticated = Effect.fn("probeKimiAuthenticated")(functi
   return parseKimiProviderCatalog(result.success.value.stdout)?.auth.status === "authenticated";
 });
 
-export function buildInitialKimiProviderSnapshot(
-  kimiSettings: KimiSettings,
-): Effect.Effect<ServerProviderDraft> {
-  return Effect.gen(function* () {
+export const buildInitialKimiProviderSnapshot = Effect.fn("buildInitialKimiProviderSnapshot")(
+  function* (kimiSettings: KimiSettings): Effect.fn.Return<ServerProviderDraft> {
     const checkedAt = DateTime.formatIso(yield* DateTime.now);
     return buildKimiProvider({
       presentation: KIMI_PRESENTATION,
@@ -245,8 +234,8 @@ export function buildInitialKimiProviderSnapshot(
         message: "Checking Kimi Code CLI…",
       },
     });
-  });
-}
+  },
+);
 
 export const checkKimiProviderStatus = Effect.fn("checkKimiProviderStatus")(function* (
   kimiSettings: KimiSettings,
