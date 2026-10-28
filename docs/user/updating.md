@@ -1,9 +1,8 @@
 # Updating T3 Code
 
 The app you use and the server running your agents can be on different machines.
-When a server is behind your web or desktop app, an update notice appears in the
-conversation and **Settings → Connections**. Update the machine named in that
-notice.
+When a server is behind your web or desktop app, the update button at the bottom
+of the sidebar and **Settings → Environments** offer to update it.
 
 ## Update everything at once
 
@@ -25,8 +24,8 @@ restarts.
 
 Server updates appear only after that version is published to npm. Remote
 desktop apps do not wait for npm. The confirmation lists each machine it skips
-and why, such as a machine that is offline or needs a manual update. Use the
-notice or **Settings → Connections** for those.
+and why, such as a machine that is offline or needs a manual update. Use
+**Settings → Environments** for those.
 
 If a desktop app restarts on its old version, T3 Code tells you the update did
 not apply. It does not install that version again on its own, even when another
@@ -41,7 +40,7 @@ below.
 Server updates restart the connection and can interrupt active agents and
 terminal commands. Saved threads, settings, and project files remain.
 
-**Settings → General → Continue threads after restarts** is on by default.
+**Settings → Maintenance → Continue threads after restarts** is on by default.
 It resumes supported active threads after an update, crash, or machine
 restart. Changes are saved to connected environments that support this setting;
 update older servers first. If a supported environment was offline or has a
@@ -49,9 +48,10 @@ different value, use **Apply to all** in Settings after it connects.
 T3 Code must start again on that machine;
 the setting does not enable automatic startup. Terminal commands may still be
 interrupted, and threads without saved provider resume state need a new message.
-A thread that finished its turn to wait on a monitor, subagent, or background task
-is woken and told that this work stopped. A background shell, such as a dev server,
-does not wake it; the thread learns about it with your next message.
+A thread that finished its turn to wait on a subagent, a background task, or a
+command or monitor the agent said it was waiting on is woken and told that this work
+stopped. Other background shells and monitors, such as a dev server and its
+watchdog, do not wake it; the thread learns about them with your next message.
 A thread is not resumed while it waits for your approval, answer, or secret, or
 while it is archived, snoozed, or settled. After three automatic resumes in a row,
 the thread waits for your next message.
@@ -153,6 +153,14 @@ Only one server can use a T3 home directory at a time. If startup reports that
 another server owns it, stop that server before retrying, or use a separate home
 directory and pair with the running server.
 
+## If the desktop app does not start
+
+If the desktop app's server keeps failing at startup, T3 Code shows a "T3 Code
+could not start" window instead of the app. If a newer version is available,
+choose **Update** to install it. If not, the window links to the last version
+that started on your computer. Download and install it to go back. Use **Copy
+details** to include the error in a bug report.
+
 ## Update providers
 
 **Settings → Providers** shows provider updates for the selected environment.
@@ -216,3 +224,37 @@ configuration. Leaving commands blank keeps the saved ones. The built-in engine
 adapter is offered only for the engine's own checkout in production, when the
 engine has it configured. A missing command configuration or a failed check
 appears on the deployment rather than being reported as a successful release.
+
+## Fork baseline: nightly integration for delivery work
+
+The `integrate/nightly-20261028-deployment-board` branch combines the fork's deployment
+board at `7a9abca8df` with upstream tag `v0.1.4-nightly.20261028.3814`, commit
+`ce66aab13fabde01b82deac4b4b3eaae53641988`. This is a fork built from that nightly's source,
+not a switch to the stock nightly update channel. The running checkout follows the fork's
+configured remote and branch. Integrating an upstream tag does not install it or restart T3.
+
+Delivery tasks that reuse native T3 code should use this integrated baseline once it is merged.
+In particular:
+
+- Web and mobile provider clients now share `packages/client-runtime/src/providerClients.ts`.
+  Kimi, Hermes and DeepSeek belong there alongside the upstream providers. Web's
+  `providerDriverMeta.ts` reexports that registry; do not build another provider list there.
+- Existing mobile thread settings read their thread and draft state in
+  `ThreadSettingsSheet.tsx`. Delivery binding and model-lock checks follow that route. The
+  composer no longer passes an ephemeral settings-session object through navigation.
+- Sidebar project grouping uses the upstream sidebar. Keep the Board, Deployments and
+  profile navigation entries when reusing its layout.
+- Core WebSocket handlers are split by method prefix. Delivery handlers remain in the
+  fork RPC group, with the same server authorization middleware. Keep both groups when
+  adding native interactions.
+- The active PM profile uses `~/Projects/t3code-board/.t3/userdata/statev2.sqlite`.
+  `~/.t3/userdata` is a different home. Read the configured profile and running server's
+  descriptor before inspecting data. Code worktrees and installed releases do not determine
+  which database is active.
+
+The nightly adds migrations 068 through 072, including message search and peer links.
+Migration 067 is already upstream and must not be renumbered. Preserve the old database and
+provider resume artifacts: successful V2 transcript import is not permission to delete them.
+Validate upgrades on a consistent SQLite backup without starting agent recovery on the copy.
+Keep a pre-upgrade backup for rollback rather than assuming an older executable can undo newer
+migrations. Attachments and provider-owned resume files retain their own formats.

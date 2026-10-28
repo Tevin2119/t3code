@@ -21,7 +21,7 @@ import type {
 import { CornerLeftUpIcon, FolderIcon } from "lucide-react";
 import { type KeyboardEvent, useEffect, useState } from "react";
 
-import { normalizeProjectPathForComparison } from "../../lib/projectPaths";
+import { normalizeProjectPathForComparison } from "@t3tools/client-runtime/state/projects";
 import { useEnvironment } from "../../state/environments";
 import { filesystemEnvironment } from "../../state/filesystem";
 import { useEnvironmentQuery } from "../../state/query";

@@ -119,22 +119,21 @@ function buildDeepSeekProvider(
   };
 }
 
-const runDeepSeekCliCommand = (
+const runDeepSeekCliCommand = Effect.fn("runDeepSeekCliCommand")(function* (
   deepseekSettings: DeepSeekSettings,
   args: ReadonlyArray<string>,
   environment: NodeJS.ProcessEnv,
-) =>
-  Effect.gen(function* () {
-    const command = deepseekSettings.binaryPath || "dsh";
-    const spawnCommand = yield* resolveSpawnCommand(command, args, { env: environment });
-    return yield* spawnAndCollect(
-      command,
-      ChildProcess.make(spawnCommand.command, spawnCommand.args, {
-        env: environment,
-        shell: spawnCommand.shell,
-      }),
-    );
-  });
+) {
+  const command = deepseekSettings.binaryPath || "dsh";
+  const spawnCommand = yield* resolveSpawnCommand(command, args, { env: environment });
+  return yield* spawnAndCollect(
+    command,
+    ChildProcess.make(spawnCommand.command, spawnCommand.args, {
+      env: environment,
+      shell: spawnCommand.shell,
+    }),
+  );
+});
 
 /** Whether a credential file names a non-empty key under its `refs` section. */
 export function credentialFileHoldsApiKey(contents: string): boolean {

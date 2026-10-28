@@ -16,7 +16,7 @@ import {
 } from "react";
 
 import { getLocalStorageItem, setLocalStorageItem } from "../hooks/useLocalStorage";
-import { useClientSettingsHydrated, useLegacySidebarEnabled } from "../hooks/useSettings";
+import { useClientSettingsHydrated } from "../hooks/useSettings";
 import { usePrimaryEnvironmentId } from "../state/environments";
 import { useEnvironmentQuery } from "../state/query";
 import { primaryServerConfigAtom, serverEnvironment } from "../state/server";
@@ -29,7 +29,7 @@ import {
   type CheckoutUpdatePillView,
   type CheckoutUpdatePresentation,
 } from "./CheckoutUpdate.logic";
-import { hiddenToastActionProps, stackedThreadToast, toastManager } from "./ui/toast";
+import { stackedThreadToast, toastManager } from "./ui/toast";
 
 const DISMISSED_KEY = "t3code:checkout-update-dismissed:v1";
 const DismissedCommit = Schema.String;
@@ -52,8 +52,7 @@ export function useCheckoutUpdatePill(): CheckoutUpdatePillModel | null {
 /**
  * Offers the update of the T3 this page came from, when that T3 runs from a
  * git checkout under the supervisor, and reloads the page once it has moved on.
- * Wraps the app shell so the sidebar pill can read it; on Settings and with the
- * legacy sidebar it shows a toast instead.
+ * Wraps the app shell so the sidebar pill can read it; on Settings it shows a toast instead.
  */
 export function CheckoutUpdateProvider({
   enabled,
@@ -112,7 +111,6 @@ export function CheckoutUpdateController({
   const environmentId = usePrimaryEnvironmentId();
   const config = useAtomValue(primaryServerConfigAtom);
   const settingsHydrated = useClientSettingsHydrated();
-  const legacySidebar = useLegacySidebarEnabled();
   const pathname = useLocation({ select: (location) => location.pathname });
 
   const [session, setSession] = useState(() => newSession(environmentId));
@@ -167,7 +165,6 @@ export function CheckoutUpdateController({
   const presentation = checkoutUpdatePresentation({
     settingsHydrated,
     supported: current.supported,
-    legacySidebar,
     pathname,
   });
 
@@ -309,12 +306,11 @@ function useCheckoutUpdateToast(
         title: view.title,
         description: view.description,
         timeout: 0,
-        actionProps:
-          view.kind === "available"
-            ? { children: "Update and restart", onClick: () => startRef.current() }
-            : view.kind === "reload"
-              ? { children: "Reload", onClick: reloadPage }
-              : hiddenToastActionProps,
+        ...(view.kind === "available"
+          ? { actionProps: { children: "Update and restart", onClick: () => startRef.current() } }
+          : view.kind === "reload"
+            ? { actionProps: { children: "Reload", onClick: reloadPage } }
+            : {}),
         data: {
           hideCopyButton: true,
           leadingIcon: <DownloadIcon aria-hidden="true" className="size-4 text-success" />,

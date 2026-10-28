@@ -10,7 +10,6 @@
  *
  * @module provider/passedRecord
  */
-import type { SessionConfiguredPayload } from "@t3tools/contracts";
 
 export interface PassedRecord {
   readonly model?: string | null;
@@ -62,8 +61,8 @@ export function cleanSettings(
   );
 }
 
-/** The payload of a `session.configured` event that says what was handed to the harness. */
-export function passedPayload(passed: PassedRecord): SessionConfiguredPayload {
+/** Sanitized configuration for delivery reporting, independent of provider event transport. */
+export function passedPayload(passed: PassedRecord) {
   return {
     config: {
       passed: {

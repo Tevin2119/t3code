@@ -10,7 +10,6 @@ const testState = vi.hoisted(() => ({
   supported: true as boolean | null,
   checkout: null as unknown,
   hydrated: true,
-  legacy: false,
   pathname: "/",
   start: vi.fn(),
   setStorage: vi.fn(),
@@ -46,7 +45,6 @@ vi.mock("../state/server", () => ({
 vi.mock("../state/use-atom-command", () => ({ useAtomCommand: () => testState.start }));
 vi.mock("../hooks/useSettings", () => ({
   useClientSettingsHydrated: () => testState.hydrated,
-  useLegacySidebarEnabled: () => testState.hydrated && testState.legacy,
 }));
 vi.mock("../hooks/useLocalStorage", () => ({
   getLocalStorageItem: () => testState.dismissed,
@@ -55,7 +53,6 @@ vi.mock("../hooks/useLocalStorage", () => ({
 vi.mock("./ui/toast", () => ({
   toastManager: { add: testState.toastAdd, close: testState.toastClose },
   stackedThreadToast: (toast: unknown) => toast,
-  hiddenToastActionProps: {},
 }));
 
 import {
@@ -123,7 +120,6 @@ beforeEach(() => {
     supported: true,
     checkout: offered,
     hydrated: true,
-    legacy: false,
     pathname: "/",
     dismissed: null,
   });
@@ -335,6 +331,7 @@ describe("CheckoutUpdateProvider", () => {
     await serverSays({ checkout: { ...offered, phase: "installing" } });
     await serverSays({ checkout: failed });
     const firstFailure = testState.toastAdd.mock.calls.at(-1)![0];
+    expect(firstFailure.actionProps).toBeUndefined();
     expect(firstFailure).toMatchObject({
       title: "T3 could not update",
       description: failed.message,
@@ -387,8 +384,8 @@ describe("CheckoutUpdateProvider", () => {
     expect(pill?.view.action).toBe("update");
   });
 
-  it("keeps the toast with the legacy sidebar, with its actions", async () => {
-    testState.legacy = true;
+  it("keeps the settings toast actions available", async () => {
+    testState.pathname = "/settings";
     await mount();
     expect(pill).toBeNull();
     const toast = testState.toastAdd.mock.calls[0]![0];
@@ -406,7 +403,7 @@ describe("CheckoutUpdateProvider", () => {
     expect(pill).toBeNull();
     await serverSays({ hydrated: true, supported: false });
     expect(pill).toBeNull();
-    await serverSays({ legacy: true });
+    await serverSays({ pathname: "/settings" });
     expect(testState.toastAdd).not.toHaveBeenCalled();
   });
 

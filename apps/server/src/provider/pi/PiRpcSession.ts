@@ -9,7 +9,7 @@
  * Framing follows the protocol's strict JSONL rule: records are split on `\n`
  * only, with a trailing `\r` stripped. A generic line reader is not usable here
  * because pi's own documentation calls out that splitting on `U+2028`/`U+2029`
- * corrupts records — those code points are legal inside JSON strings.
+ * corrupts records: those code points are legal inside JSON strings.
  *
  * @module provider/pi/PiRpcSession
  */
@@ -140,7 +140,7 @@ export const makePiRpcSession = Effect.fn("makePiRpcSession")(function* (
   // fiber drains for the life of the session.
   yield* Stream.fromQueue(stdinQueue).pipe(
     Stream.run(handle.stdin),
-    Effect.catchCause(() => Effect.void),
+    Effect.ignoreCause,
     Effect.forkScoped,
   );
 
@@ -187,7 +187,7 @@ export const makePiRpcSession = Effect.fn("makePiRpcSession")(function* (
       ),
     );
   }).pipe(
-    Effect.catchCause(() => Effect.void),
+    Effect.ignoreCause,
     // Nothing is waiting on a dead process; settle the outstanding requests so
     // callers see a transport failure rather than hanging forever.
     Effect.ensuring(
@@ -214,21 +214,20 @@ export const makePiRpcSession = Effect.fn("makePiRpcSession")(function* (
     yield* handle.stderr.pipe(
       Stream.decodeText(),
       Stream.runForEach((text) => onStderr(text)),
-      Effect.catchCause(() => Effect.void),
+      Effect.ignoreCause,
       Effect.forkScoped,
     );
   }
 
-  const request: PiRpcSession["request"] = (command) =>
-    Effect.gen(function* () {
-      const id = `t3-${++nextId}`;
-      const waiter = yield* Deferred.make<PiRpcResponse>();
-      pending.set(id, waiter);
-      yield* write({ ...command, id }).pipe(
-        Effect.tapError(() => Effect.sync(() => pending.delete(id))),
-      );
-      return yield* Deferred.await(waiter);
-    });
+  const request: PiRpcSession["request"] = Effect.fn("request")(function* (command) {
+    const id = `t3-${++nextId}`;
+    const waiter = yield* Deferred.make<PiRpcResponse>();
+    pending.set(id, waiter);
+    yield* write({ ...command, id }).pipe(
+      Effect.tapError(() => Effect.sync(() => pending.delete(id))),
+    );
+    return yield* Deferred.await(waiter);
+  });
 
   const exitCode = handle.exitCode.pipe(
     Effect.map(Number),

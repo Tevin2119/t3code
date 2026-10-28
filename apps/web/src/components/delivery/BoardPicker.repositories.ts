@@ -2,7 +2,7 @@ import type { EnvironmentId } from "@t3tools/contracts";
 import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
 
 import { parseRepositories, type DeliveryRepository } from "../../lib/delivery";
-import { normalizeProjectPathForComparison } from "../../lib/projectPaths";
+import { normalizeProjectPathForComparison } from "@t3tools/client-runtime/state/projects";
 
 /** Option values of T3 projects start with this, so they never clash with an engine id. */
 export const PROJECT_CHOICE_PREFIX = "__t3_project__:";

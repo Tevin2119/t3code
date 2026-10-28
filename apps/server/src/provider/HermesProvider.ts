@@ -182,22 +182,21 @@ function buildHermesProvider(
   };
 }
 
-const runHermesCliCommand = (
+const runHermesCliCommand = Effect.fn("runHermesCliCommand")(function* (
   hermesSettings: HermesSettings,
   args: ReadonlyArray<string>,
   environment: NodeJS.ProcessEnv,
-) =>
-  Effect.gen(function* () {
-    const command = hermesSettings.binaryPath || "hermes";
-    const spawnCommand = yield* resolveSpawnCommand(command, args, { env: environment });
-    return yield* spawnAndCollect(
-      command,
-      ChildProcess.make(spawnCommand.command, spawnCommand.args, {
-        env: environment,
-        shell: spawnCommand.shell,
-      }),
-    );
-  });
+) {
+  const command = hermesSettings.binaryPath || "hermes";
+  const spawnCommand = yield* resolveSpawnCommand(command, args, { env: environment });
+  return yield* spawnAndCollect(
+    command,
+    ChildProcess.make(spawnCommand.command, spawnCommand.args, {
+      env: environment,
+      shell: spawnCommand.shell,
+    }),
+  );
+});
 
 /** Stdout of a CLI call that exited cleanly within the probe budget. */
 const runHermesCliValue = Effect.fn("runHermesCliValue")(function* (

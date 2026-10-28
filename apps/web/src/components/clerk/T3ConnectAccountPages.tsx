@@ -1,9 +1,10 @@
 import { useAuth, useClerk } from "@clerk/react";
-import { ServerIcon, SmartphoneIcon } from "lucide-react";
+import { MessageSquareIcon, ServerIcon, SmartphoneIcon } from "lucide-react";
 import { type ReactNode, useState } from "react";
 import { createPortal } from "react-dom";
 
 import { MobileClientsUserProfilePage } from "./MobileClientsUserProfilePage";
+import { T3ChatUserProfilePage } from "./T3ChatUserProfilePage";
 import { T3ConnectUserProfilePage } from "./T3ConnectUserProfilePage";
 
 export const T3_CONNECT_ACCOUNT_PAGES = [
@@ -19,14 +20,17 @@ export const T3_CONNECT_ACCOUNT_PAGES = [
     icon: <ServerIcon className="size-4" />,
     content: <T3ConnectUserProfilePage />,
   },
+  {
+    label: "T3 Chat",
+    url: "t3-chat",
+    icon: <MessageSquareIcon className="size-4" />,
+    content: <T3ChatUserProfilePage />,
+  },
 ] as const;
 
 type PortalTargets = Readonly<Record<string, HTMLDivElement | undefined>>;
 
-/**
- * Clerk mounts custom pages into DOM nodes it owns, so the caller must keep `portals` rendered for
- * as long as the modal can be open.
- */
+/** Keep portals rendered while the modal can open; Clerk owns the custom-page DOM nodes. */
 export function useT3ConnectAccountPage(): {
   readonly open: (() => void) | null;
   readonly portals: ReactNode;

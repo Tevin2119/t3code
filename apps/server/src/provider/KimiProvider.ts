@@ -184,22 +184,21 @@ function buildKimiProvider(input: Parameters<typeof buildServerProvider>[0]): Se
   };
 }
 
-const runKimiCliCommand = (
+const runKimiCliCommand = Effect.fn("runKimiCliCommand")(function* (
   kimiSettings: KimiSettings,
   args: ReadonlyArray<string>,
   environment: NodeJS.ProcessEnv,
-) =>
-  Effect.gen(function* () {
-    const command = kimiSettings.binaryPath || "kimi";
-    const spawnCommand = yield* resolveSpawnCommand(command, args, { env: environment });
-    return yield* spawnAndCollect(
-      command,
-      ChildProcess.make(spawnCommand.command, spawnCommand.args, {
-        env: environment,
-        shell: spawnCommand.shell,
-      }),
-    );
-  });
+) {
+  const command = kimiSettings.binaryPath || "kimi";
+  const spawnCommand = yield* resolveSpawnCommand(command, args, { env: environment });
+  return yield* spawnAndCollect(
+    command,
+    ChildProcess.make(spawnCommand.command, spawnCommand.args, {
+      env: environment,
+      shell: spawnCommand.shell,
+    }),
+  );
+});
 
 function kimiModelsFromSettings(
   customModels: ReadonlyArray<CustomModelSetting>,

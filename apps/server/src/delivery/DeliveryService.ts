@@ -156,9 +156,13 @@ export const layerTest = Layer.succeed(
     read: disabled,
     act: disabled,
     bindThread: disabled,
-    threadState: () => Effect.succeed({ binding: null, pending: null }),
-    releaseThread: () => Effect.succeed({ binding: null, pending: null }),
-    prepareThread: () => Effect.succeed(false),
+    threadState: Effect.fn("DeliveryService.threadState")(() =>
+      Effect.succeed({ binding: null, pending: null }),
+    ),
+    releaseThread: Effect.fn("DeliveryService.releaseThread")(() =>
+      Effect.succeed({ binding: null, pending: null }),
+    ),
+    prepareThread: Effect.fn("DeliveryService.prepareThread")(() => Effect.succeed(false)),
     terminalEntryScript: Effect.succeed(null),
   }),
 );
@@ -442,12 +446,11 @@ export const make = Effect.gen(function* () {
     pending.set(input.threadId, intent);
     yield* persist.pipe(Effect.tapError(() => Effect.sync(() => pending.delete(input.threadId))));
 
-    const held = (error: DeliveryError) =>
-      Effect.gen(function* () {
-        pending.set(input.threadId, { ...intent, why: error.detail });
-        yield* persist.pipe(Effect.ignore);
-        return yield* error;
-      });
+    const held = Effect.fn("held")(function* (error: DeliveryError) {
+      pending.set(input.threadId, { ...intent, why: error.detail });
+      yield* persist.pipe(Effect.ignore);
+      return yield* error;
+    });
 
     const opened = yield* request("POST", "/api/sessions", {
       team: input.team,
@@ -673,10 +676,12 @@ export const make = Effect.gen(function* () {
   );
 
   return DeliveryService.of({
-    read: (input) => request("GET", input.path),
-    act: (input) => request("POST", input.path, input.body),
+    read: Effect.fn("DeliveryService.read")((input) => request("GET", input.path)),
+    act: Effect.fn("DeliveryService.act")((input) => request("POST", input.path, input.body)),
     bindThread,
-    threadState: (threadId) => storeReadable.pipe(Effect.as(stateOf(threadId))),
+    threadState: Effect.fn("DeliveryService.threadState")((threadId) =>
+      storeReadable.pipe(Effect.as(stateOf(threadId))),
+    ),
     releaseThread,
     prepareThread,
     terminalEntryScript: delivery.pipe(Effect.map(entryScriptOf)),

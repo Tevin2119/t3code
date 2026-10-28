@@ -10,7 +10,7 @@ import { type KeyboardEvent, useMemo, useState } from "react";
 
 import { useTheme } from "~/hooks/useTheme";
 import { joinReferencePath } from "../../lib/deliveryReferences";
-import { ensureBrowseDirectoryPath } from "../../lib/projectPaths";
+import { ensureBrowseDirectoryPath } from "@t3tools/client-runtime/state/projects";
 import { useProjects } from "../../state/entities";
 import { useEnvironment } from "../../state/environments";
 import { filesystemEnvironment } from "../../state/filesystem";

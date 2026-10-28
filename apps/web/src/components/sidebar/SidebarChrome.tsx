@@ -1,5 +1,6 @@
+import { isSidebarUtilityPage, useNavigateToMainApp } from "./mainAppLocation";
 import { SidebarApprovalControls } from "../delivery/ApprovalControls";
-import { ChartNoAxesColumnIcon, HomeIcon, RocketIcon, SettingsIcon } from "lucide-react";
+import { ChartNoAxesColumnIcon, ArrowLeftIcon, RocketIcon, SettingsIcon } from "lucide-react";
 import type { ReactNode } from "react";
 import { memo } from "react";
 import { Link, useLocation, useNavigate } from "@tanstack/react-router";
@@ -52,7 +53,7 @@ export const SidebarChromeHeader = memo(function SidebarChromeHeader({
   const environmentIdentificationMode = useEnvironmentIdentificationMode();
   const backdropVariant = resolveSidebarStageBackdropVariant(
     stageLabel,
-    environmentIdentificationMode === "artwork",
+    environmentIdentificationMode,
   );
   const pillLabel =
     environmentIdentificationMode === "pill"
@@ -185,26 +186,15 @@ function SidebarUtilityItem({
   );
 }
 
-export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
+const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
   const navigate = useNavigate();
+  const navigateToMainApp = useNavigateToMainApp();
   const { isMobile, setOpenMobile } = useSidebar();
-  const currentFooterPage = useLocation({
-    select: (location) =>
-      /^\/settings(?:\/|$)/.test(location.pathname)
-        ? "settings"
-        : /^\/projects\/[^/]+\/?$/.test(location.pathname)
-          ? "project-settings"
-          : location.pathname === "/usage"
-            ? "usage"
-            : location.pathname === "/pull-requests"
-              ? "pull-requests"
-              : location.pathname === "/board"
-                ? "board"
-                : location.pathname === "/deployments"
-                  ? "deployments"
-                  : location.pathname === "/profiles"
-                    ? "profiles"
-                    : null,
+  const isOnDeliveryPage = useLocation({
+    select: (location) => ["/board", "/profiles", "/deployments"].includes(location.pathname),
+  });
+  const isOnUtilityPage = useLocation({
+    select: (location) => isSidebarUtilityPage(location.pathname),
   });
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const deliveryEnabled = useDeliveryEnabled(primaryEnvironmentId);
@@ -217,9 +207,10 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
       setOpenMobile(false);
     }
   };
-  const handleHomeClick = () => {
+  const handleBackClick = () => {
     closeMobileSidebar();
-    void navigate({ to: "/" });
+    if (isOnDeliveryPage) void navigate({ to: "/" });
+    else void navigateToMainApp();
   };
   const handlePullRequestsClick = () => {
     closeMobileSidebar();
@@ -247,22 +238,34 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
 
   return (
     <SidebarMenu className="flex-row items-center">
-      {currentFooterPage ? (
-        <SidebarUtilityItem icon={<HomeIcon />} label="Threads" onClick={handleHomeClick} />
-      ) : null}
-      <SidebarUtilityItem icon={<SettingsIcon />} label="Settings" onClick={handleSettingsClick} />
-      {pullRequestsSupported ? (
-        <SidebarUtilityItem
-          icon={<PullRequestGlyph.pullRequest />}
-          label="Pull Requests"
-          onClick={handlePullRequestsClick}
-        />
-      ) : null}
-      <SidebarUtilityItem
-        icon={<ChartNoAxesColumnIcon />}
-        label="Usage"
-        onClick={handleUsageClick}
-      />
+      {isOnUtilityPage || isOnDeliveryPage ? (
+        <SidebarMenuItem className="min-w-0 flex-1">
+          <SidebarMenuButton onClick={handleBackClick}>
+            <ArrowLeftIcon />
+            <span>Back</span>
+          </SidebarMenuButton>
+        </SidebarMenuItem>
+      ) : (
+        <>
+          <SidebarUtilityItem
+            icon={<SettingsIcon />}
+            label="Settings"
+            onClick={handleSettingsClick}
+          />
+          {pullRequestsSupported ? (
+            <SidebarUtilityItem
+              icon={<PullRequestGlyph.pullRequest />}
+              label="Pull requests"
+              onClick={handlePullRequestsClick}
+            />
+          ) : null}
+          <SidebarUtilityItem
+            icon={<ChartNoAxesColumnIcon />}
+            label="Usage"
+            onClick={handleUsageClick}
+          />
+        </>
+      )}
       {deliveryEnabled ? (
         <SidebarUtilityItem
           badge={boardAttention}
@@ -290,10 +293,14 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
   );
 });
 
-export const SidebarChromeFooter = memo(function SidebarChromeFooter() {
+export const SidebarChromeFooter = memo(function SidebarChromeFooter({
+  showUndoNotice = false,
+}: {
+  showUndoNotice?: boolean;
+}) {
   return (
     <SidebarFooter>
-      <SidebarThreadUndoNotice />
+      {showUndoNotice ? <SidebarThreadUndoNotice /> : null}
       <SidebarProviderUpdatePill />
       <SidebarCheckoutUpdatePill />
       <SidebarApprovalControls />

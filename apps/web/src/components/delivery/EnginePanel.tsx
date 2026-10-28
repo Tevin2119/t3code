@@ -494,11 +494,8 @@ function EngineControl(props: {
                   terminalLabel="Delivery engine"
                   cwd={configuration.cwd}
                   onSessionExited={() => setTerminal(false)}
-                  focusRequestId={0}
                   autoFocus
                   visible
-                  resizeEpoch={0}
-                  drawerHeight={320}
                   keybindings={keybindings}
                 />
               </div>

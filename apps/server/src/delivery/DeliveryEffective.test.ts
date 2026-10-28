@@ -1,16 +1,9 @@
-import {
-  EventId,
-  ProviderDriverKind,
-  ProviderInstanceId,
-  ThreadId,
-  type ModelSelection,
-  type ProviderRuntimeEvent,
-} from "@t3tools/contracts";
+import { ProviderDriverKind, ProviderInstanceId, type ModelSelection } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
   confirmedBySession,
-  patchFromRuntimeEvent,
+  patchFromConfiguration,
   requestedOf,
   withPatch,
   type EffectiveReport,
@@ -27,15 +20,11 @@ const selection = (
     ...(options.length > 0 ? { options } : {}),
   }) as ModelSelection;
 
-const configured = (provider: string, config: Record<string, unknown>): ProviderRuntimeEvent =>
-  ({
-    type: "session.configured",
-    eventId: EventId.make("event-1"),
-    provider: ProviderDriverKind.make(provider),
-    createdAt: "2026-09-29T00:00:00.000Z",
-    threadId: ThreadId.make("thread-1"),
-    payload: { config },
-  }) as ProviderRuntimeEvent;
+const configured = (provider: string, config: Record<string, unknown>) => ({
+  driver: ProviderDriverKind.make(provider),
+  createdAt: "2026-09-29T00:00:00.000Z",
+  config,
+});
 
 const EMPTY: EffectiveReport = {
   reason: "the session was started",
@@ -95,10 +84,10 @@ describe("confirmedBySession", () => {
   });
 });
 
-describe("patchFromRuntimeEvent", () => {
+describe("patchFromConfiguration", () => {
   it("keeps what was passed apart from what the harness read back", () => {
     expect(
-      patchFromRuntimeEvent(
+      patchFromConfiguration(
         configured("kimi", {
           reasoning: { option: "thinking", chosen: "high", effective: "high", applied: true },
         }),
@@ -112,7 +101,7 @@ describe("patchFromRuntimeEvent", () => {
 
   it("says what was chosen and not applied, with the reason the adapter gave", () => {
     expect(
-      patchFromRuntimeEvent(
+      patchFromConfiguration(
         configured("kimi", {
           reasoning: {
             option: "thinking",
@@ -135,7 +124,7 @@ describe("patchFromRuntimeEvent", () => {
 
   it("takes the model from the first message of Claude, and what the adapter handed over as passed", () => {
     expect(
-      patchFromRuntimeEvent(
+      patchFromConfiguration(
         configured("claudeAgent", { type: "system", subtype: "init", model: "claude-fable-5-1" }),
       ),
     ).toEqual({
@@ -143,7 +132,7 @@ describe("patchFromRuntimeEvent", () => {
       confirmedBy: { model: "the first message of Claude itself" },
     });
     expect(
-      patchFromRuntimeEvent(
+      patchFromConfiguration(
         configured("claudeAgent", { model: "claude-fable-5-1[1m]", effort: "high" }),
       ),
     ).toEqual({
@@ -162,7 +151,7 @@ describe("patchFromRuntimeEvent", () => {
 
   it("keeps the permission mode the Claude adapter handed over apart from the one Claude names", () => {
     expect(
-      patchFromRuntimeEvent(
+      patchFromConfiguration(
         configured("claudeAgent", {
           model: "claude-sonnet-5-5",
           effort: "low",
@@ -190,7 +179,7 @@ describe("patchFromRuntimeEvent", () => {
       ],
     });
     expect(
-      patchFromRuntimeEvent(
+      patchFromConfiguration(
         configured("claudeAgent", {
           type: "system",
           subtype: "init",
@@ -208,7 +197,7 @@ describe("patchFromRuntimeEvent", () => {
   });
 
   it("finds nothing in an event that reports neither", () => {
-    expect(patchFromRuntimeEvent(configured("opencode", { cwd: "/work" }))).toBeNull();
+    expect(patchFromConfiguration(configured("opencode", { cwd: "/work" }))).toBeNull();
   });
 });
 

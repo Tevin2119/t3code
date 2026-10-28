@@ -69,6 +69,7 @@ const makeHarness = Effect.fn("TestDeliveryEnvironments.makeHarness")(function* 
       subscribeServerConfig: () => Stream.never,
       ready: Effect.void,
       probe: Effect.void,
+      inboundFrames: Effect.succeed(0),
       closed: Effect.never,
     };
     supervisors.set(
