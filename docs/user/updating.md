@@ -276,7 +276,11 @@ The same applies to native update notifications (#1337, #1611), delegation ident
 remains part of the fork; this local integration does not change its configured schedule,
 remote branch or publication permissions.
 
-The separate completed mobile-orchestrator/team-chat changes are being carried forward
-from their original checkouts. Keep those original uncommitted edits until their owner
+The separate completed responsive-web orchestrator/team-chat changes were integrated as
+T3 commit `81eac5bee6d08b2d42cbe9e5e649b12b11b11094` and engine commit
+`694480474331ded8921d9b924d3c9e7c386441c2`. The integrated checks passed 121 web tests,
+web typecheck and production build, 30 engine flow tests, and 21 upstream-sync helper tests.
+React Native and live blocked-draft recovery were not verified. The UI port retains existing
+lint findings rather than bundling unrelated cleanup. Keep those original uncommitted edits until their owner
 reconciles them with the integrated commits. A task marked completed, code committed,
 a release published and a version running are separate facts; report each independently.
