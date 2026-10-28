@@ -8,7 +8,6 @@ import {
   DELIVERY_DEFAULT_TEAM,
   DELIVERY_HARNESS_BY_DRIVER,
   type DeliveryThreadBinding,
-  type ThreadId,
 } from "@t3tools/contracts";
 import { parseSuggestedBoard, type SuggestedBoard } from "./deliveryMove";
 
@@ -111,7 +110,7 @@ export interface DeliveryFlow extends DeliveryWorkflow {
   readonly isDefault: boolean;
 }
 
-export const FLOW_START_LABEL: Readonly<Record<string, string>> = {
+const FLOW_START_LABEL: Readonly<Record<string, string>> = {
   "non-code": "Start non-code delivery",
   chat: "Start team chat",
   plan: "Start plan",
@@ -140,7 +139,7 @@ export const parseFlows = (value: unknown): ReadonlyArray<DeliveryFlow> =>
       isDefault: flag(item.isDefault),
     }));
 
-export const SEAT_SETTING_KEYS = ["active", "harness", "model", "reasoning", "access"] as const;
+const SEAT_SETTING_KEYS = ["active", "harness", "model", "reasoning", "access"] as const;
 export type SeatSettingKey = (typeof SEAT_SETTING_KEYS)[number];
 /** What a person chose for a seat. A key left out runs as the team has it. */
 export type SeatChoice = Partial<Record<SeatSettingKey, string>>;
@@ -304,7 +303,7 @@ export function seatSources(item: SeatSettings): ReadonlyArray<string> {
  * The fallbacks to send for one seat, or null when they are left as they are. An empty list is
  * sent: it says "none", where leaving them out inherits.
  */
-export function fallbacksToSend(
+function fallbacksToSend(
   wanted: ReadonlyArray<SeatFallback> | null | undefined,
 ): ReadonlyArray<{ harness: string; model?: string }> | null {
   if (!wanted) return null;
@@ -903,14 +902,7 @@ export function crewLine(card: Pick<DeliveryCard, "workers">): string {
     .join("; ");
 }
 
-/**
- * Where a settings form stands with a reading. A draft is what the person changed, kept with the
- * revision it was made against (`base`) for as long as it is kept. It gives way to a reading only
- * when it is still what the form's own save answered and the reading is at least that save: then
- * nothing of the person's is lost. A draft made against an older revision than the reading's is
- * behind: saving it would be refused, and the form says so rather than saving over a reading the
- * person has not seen.
- */
+// Replace only an unchanged saved draft with a current reading; preserve edits against their base revision.
 export function draftAgainstRead(input: {
   /** The revision the draft was made against; null when there is no draft. */
   readonly base: number | null;
@@ -1932,15 +1924,13 @@ export function deliveryFailureText(error: unknown): string {
 }
 
 /** A reading older than this is shown as stale, so a quiet board is not taken for a live one. */
-export const DELIVERY_STALE_AFTER_MS = 20_000;
+const DELIVERY_STALE_AFTER_MS = 20_000;
 
 export function isStaleReading(readAt: string | null, nowMs: number): boolean {
   if (!readAt) return true;
   const at = Date.parse(readAt);
   return Number.isNaN(at) || nowMs - at > DELIVERY_STALE_AFTER_MS;
 }
-
-export const draftTeamKey = (threadId: ThreadId | string) => String(threadId);
 
 export type TeamSendDecision =
   /** Nothing to set up: delivery is off, the thread is bound, or it never had a team. */

@@ -2,7 +2,6 @@ import { describe, expect, it } from "@effect/vitest";
 
 import {
   decodeScanCache,
-  encodeScanCache,
   makeScanCacheWriter,
   type CachedFile,
   type ScanCache,
@@ -60,6 +59,29 @@ function cacheWith(entries: readonly [string, number, readonly UsageRecord[]][])
   return cache;
 }
 
+function writtenCache(cache: ScanCache): {
+  version: number;
+  models: string[];
+  sessions: string[];
+  files: Record<
+    string,
+    {
+      s: number;
+      m: number;
+      p: UsageRecord["provider"];
+      r: unknown[][];
+      t: unknown[][];
+      mr: number;
+      o: number;
+      gl: number;
+      gh: number;
+      cs: unknown;
+    }
+  >;
+} {
+  return JSON.parse(makeScanCacheWriter()(cache, {}));
+}
+
 describe("scan cache round trip", () => {
   it("distinguishes upstream and fork v8 rows without losing usage history", () => {
     const usage = record({
@@ -67,7 +89,7 @@ describe("scan cache round trip", () => {
       modelProvider: "anthropic",
       modelProviderSource: "recorded",
     });
-    const current = encodeScanCache(cacheWith([["/v8.jsonl", 100, [usage]]]));
+    const current = writtenCache(cacheWith([["/v8.jsonl", 100, [usage]]]));
     const fork = { ...current, version: 8 };
     const upstream = {
       ...current,
@@ -88,6 +110,65 @@ describe("scan cache round trip", () => {
     expect(decoded).toMatchObject({ rateModel: usage.rateModel, totals: usage.totals });
     expect(decoded?.modelProvider).toBeUndefined();
   });
+  it.each([
+    { layout: "upstream", version: 9, malformedRecords: 0, reparse: false },
+    { layout: "upstream", version: 9, malformedRecords: 2, reparse: true },
+    { layout: "fork", version: 9, malformedRecords: 0, reparse: false },
+    { layout: "fork", version: 9, malformedRecords: 2, reparse: true },
+    { layout: "fork", version: 10, malformedRecords: 2, reparse: false },
+  ])(
+    "preserves $layout v$version history with $malformedRecords malformed records (reparse: $reparse)",
+    ({ layout, version, malformedRecords, reparse }) => {
+      const usage = record({
+        provider: "codex",
+        model: "gpt-6-astra",
+        rateModel: "gpt-6",
+        modelProvider: "openai",
+        modelProviderSource: "recorded",
+        speed: "ultrafast",
+        unresolvedServiceTierTurnId: "native-turn",
+      });
+      const { unresolvedServiceTierTurnId: _turn, ...settled } = usage;
+      const tail = { ...usage, dedupeKey: null, unresolvedServiceTierTurnId: "native-tail" };
+      const entry: CachedFile = {
+        size: 256,
+        mtimeMs: 100,
+        provider: "codex",
+        records: [settled, usage],
+        tailRecords: [tail],
+        malformedRecords,
+        position: position({ state: initialCodexScanState() }),
+      };
+      const current = writtenCache(new Map([["/codex.jsonl", entry]]));
+      expect(current.version).toBe(10);
+      const toLegacyRow = (row: unknown[]) =>
+        layout === "upstream" ? [...row.slice(0, 11), ...row.slice(13)] : row;
+      const document = {
+        ...current,
+        version,
+        files: Object.fromEntries(
+          Object.entries(current.files).map(([path, file]) => [
+            path,
+            { ...file, r: file.r.map(toLegacyRow), t: file.t.map(toLegacyRow) },
+          ]),
+        ),
+      };
+      const expectedRecord = (value: UsageRecord) => {
+        const { modelProvider: _provider, modelProviderSource: _source, ...unattributed } = value;
+        return layout === "upstream" ? unattributed : value;
+      };
+      expect(decodeScanCache(document, TEST_FORMAT_MAP).get("/codex.jsonl")).toEqual({
+        ...entry,
+        records: [expectedRecord(settled), expectedRecord(usage)],
+        tailRecords: [expectedRecord(tail)],
+        size: reparse ? -1 : entry.size,
+        position: reparse
+          ? { resumeOffset: 0, guardLength: 0, guardHash: 0, state: null }
+          : entry.position,
+      });
+    },
+  );
+
   it("distinguishes fork provider-attribution v5 tuples from upstream speed v5 tuples", () => {
     const usage = record({
       model: "glm-5.3",
@@ -95,8 +176,8 @@ describe("scan cache round trip", () => {
       modelProviderSource: "recorded",
       speed: "fast",
     });
-    const current = encodeScanCache(cacheWith([["/legacy.jsonl", 100, [usage]]]));
-    expect(current.version).toBe(9);
+    const current = writtenCache(cacheWith([["/legacy.jsonl", 100, [usage]]]));
+    expect(current.version).toBe(10);
     const fork = {
       ...current,
       version: 5,
@@ -223,7 +304,7 @@ describe("scan cache round trip", () => {
       ],
     });
     const restored = decodeScanCache(
-      JSON.parse(JSON.stringify(encodeScanCache(cached))),
+      JSON.parse(makeScanCacheWriter()(cached, {})),
       TEST_FORMAT_MAP,
     );
 
@@ -231,13 +312,14 @@ describe("scan cache round trip", () => {
     expect(restored).toEqual(original);
   });
 
-  it.each([5, 6, 7])(
+  it.each([5, 6, 7, 8])(
     "retains v%s history and compatible positions but invalidates obsolete state",
     (version) => {
       const original = cacheWith([["/gone.jsonl", 100, [record({ speed: "fast" })]]]);
       original.set("/gone-codex.jsonl", {
         ...original.get("/gone.jsonl")!,
         provider: "codex",
+        malformedRecords: 1,
         records: [record({ provider: "codex", speed: "fast", dedupeKey: null })],
         position: position({
           state: {
@@ -260,7 +342,12 @@ describe("scan cache round trip", () => {
         malformedRecords: 3,
         position: position({ state: { sessionId: "session-a" } }),
       });
-      const encoded = encodeScanCache(original);
+      const cleanCodex = {
+        ...original.get("/gone-codex.jsonl")!,
+        malformedRecords: 0,
+      };
+      original.set("/clean-codex.jsonl", cleanCodex);
+      const encoded = writtenCache(original);
       const entry = encoded.files["/gone.jsonl"]!;
       const legacy = {
         ...encoded,
@@ -321,6 +408,11 @@ describe("scan cache round trip", () => {
         size: -1,
         position: { resumeOffset: 0, guardLength: 0, guardHash: 0, state: null },
       });
+      expect(restored.get("/clean-codex.jsonl")).toEqual({
+        ...expected(cleanCodex),
+        size: -1,
+        position: { resumeOffset: 0, guardLength: 0, guardHash: 0, state: null },
+      });
       expect(restored.get("/gone-pi.jsonl")).toEqual(
         version >= 6
           ? expected(original.get("/gone-pi.jsonl")!)
@@ -355,7 +447,7 @@ describe("scan cache round trip", () => {
   });
 
   it("interns repeated model and session strings", () => {
-    const encoded = encodeScanCache(
+    const encoded = writtenCache(
       cacheWith([["/a.jsonl", 100, [record(), record({ dedupeKey: "msg_2:" }), record()]]]),
     );
 
@@ -372,7 +464,9 @@ describe("scan cache round trip", () => {
   });
 
   it("skips malformed file entries but keeps good ones", () => {
-    const encoded = encodeScanCache(cacheWith([["/good.jsonl", 100, [record()]]]));
+    const encoded = JSON.parse(
+      makeScanCacheWriter()(cacheWith([["/good.jsonl", 100, [record()]]]), {}),
+    );
     const withJunk = {
       ...encoded,
       files: { ...encoded.files, "/bad.jsonl": { s: "nope", m: 1, p: "claude", r: [] } },
@@ -383,8 +477,11 @@ describe("scan cache round trip", () => {
   });
 
   it("drops the whole entry when any row is corrupt, forcing a cold re-parse", () => {
-    const encoded = encodeScanCache(
-      cacheWith([["/a.jsonl", 100, [record(), record({ dedupeKey: "msg_2:" })]]]),
+    const encoded = JSON.parse(
+      makeScanCacheWriter()(
+        cacheWith([["/a.jsonl", 100, [record(), record({ dedupeKey: "msg_2:" })]]]),
+        {},
+      ),
     );
     const rows = encoded.files["/a.jsonl"]!.r;
     const poisoned = {

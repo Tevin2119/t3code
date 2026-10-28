@@ -1,9 +1,7 @@
 import type { EnvironmentId } from "@t3tools/contracts";
-import { InfoPopover } from "./InfoPopover";
 import { useNavigate } from "@tanstack/react-router";
 
-import { whatStartDoes } from "../../lib/deliveryBoard";
-import { PlayIcon, SaveIcon, SlidersHorizontalIcon, UsersIcon, WorkflowIcon } from "lucide-react";
+import { PlayIcon, SaveIcon } from "lucide-react";
 import { useEffect, useRef, useState, type PointerEventHandler } from "react";
 
 import {
@@ -11,15 +9,13 @@ import {
   flowFor,
   flowStartLabel,
   parseTask,
-  seatIsOn,
   seatSettingsToSend,
   selectableTeams,
   teamListStatus,
   teamTaskBlock,
 } from "../../lib/delivery";
 import { cn } from "../../lib/utils";
-import { boardPlacementChoices, matchingProjectBoard } from "../../lib/deliveryBoardPlacement";
-import { BoardDialog, BoardPicker, type PickerItem } from "./BoardPicker";
+import { matchingProjectBoard } from "../../lib/deliveryBoardPlacement";
 import {
   useDeliveryAct,
   useDeliveryRead,
@@ -29,26 +25,13 @@ import {
   usePersonName,
 } from "../../state/delivery";
 import { Button } from "../ui/button";
-import { Popover, PopoverPopup, PopoverTitle, PopoverTrigger } from "../ui/popover";
-import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Spinner } from "../ui/spinner";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { useFlowPreview } from "./OrchestratorPanel";
-import { SeatSettingsPanel } from "./SeatSettingsPanel";
-import { SetupPanel } from "./SetupPanel";
-import { TeamDefaultsDialog } from "./TeamDefaultsDialog";
 
 const TEAMS_LOADING = "Teams are still loading.";
 
-/**
- * The composer's controls while it prepares work for a team. They take the
- * place of the model, reasoning and access controls of a single harness: a
- * team has a flow, and a harness and a model for each seat that takes part.
- *
- * What is typed is a draft. Saving keeps it on the engine, where nothing
- * runs. Starting saves it and gives it to the team in one step; the buttons
- * for both stand where Send stands, in `OrchestratorPrimaryActions`.
- */
+/** Keeps save/start handling mounted while configuration lives in the model picker. */
 export function OrchestratorComposerControls(props: {
   readonly environmentId: EnvironmentId | null;
   readonly threadId: string;
@@ -60,9 +43,7 @@ export function OrchestratorComposerControls(props: {
   const person = usePersonName();
   const draft = useOrchestratorDraft(props.threadId);
   const update = useOrchestratorDraftStore((state) => state.update);
-  const chooseTeam = useOrchestratorDraftStore((state) => state.chooseTeam);
   const reconcileTeam = useOrchestratorDraftStore((state) => state.reconcileTeam);
-  const setSeat = useOrchestratorDraftStore((state) => state.setSeat);
   const leave = useOrchestratorDraftStore((state) => state.leave);
   const setActivity = useOrchestratorDraftStore((state) => state.setActivity);
   const saveRequest = useOrchestratorDraftStore((state) => state.saveRequests[props.threadId] ?? 0);
@@ -75,6 +56,7 @@ export function OrchestratorComposerControls(props: {
   const awaitingTeams = draft?.awaitingTeams === true;
   // A new draft starts from the remembered team before the teams are read. Once
   // a reading offers any, prefer development if offered, else the first offered team, one time.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Settle the persisted draft default once the engine catalog arrives, preserving explicit and saved choices.
   useEffect(() => {
     if (!awaitingTeams || !teamsLoaded) return;
     reconcileTeam(
@@ -84,7 +66,6 @@ export function OrchestratorComposerControls(props: {
   }, [awaitingTeams, props.threadId, reconcileTeam, teams, teamsLoaded]);
   const act = useDeliveryAct(props.environmentId, "orchestrator draft");
   const boardsRead = useDeliveryRead(props.environmentId, "/api/boards", { pollMs: 10_000 });
-  const boards = boardPlacementChoices(boardsRead.body);
   const taskRead = useDeliveryRead(
     props.environmentId,
     draft?.engineThread ? `/api/tasks/${draft.engineThread}` : null,
@@ -96,38 +77,6 @@ export function OrchestratorComposerControls(props: {
       : draft?.engineThread
         ? (savedTask?.card.set ?? null)
         : matchingProjectBoard(boardsRead.body, props.workspace);
-  const [boardDialog, setBoardDialog] = useState<{ editing: PickerItem | null } | null>(null);
-  const [boardBusy, setBoardBusy] = useState(false);
-  const [boardProblem, setBoardProblem] = useState<string | null>(null);
-  const saveBoard = async (input: {
-    title: string;
-    description: string;
-    repository?: string;
-    base?: string;
-    workspace?: string;
-  }) => {
-    setBoardBusy(true);
-    setBoardProblem(null);
-    // The engine request settles into a result, so cleanup can follow the await.
-    const result = await act(
-      boardDialog?.editing ? `/api/boards/${boardDialog.editing.id}/edit` : "/api/boards",
-      { ...input, by: person },
-    );
-    setBoardBusy(false);
-    if (!result.ok) {
-      setBoardProblem(result.why);
-      return;
-    }
-    if (
-      !boardDialog?.editing &&
-      result.body &&
-      typeof result.body === "object" &&
-      "id" in result.body
-    )
-      update(props.threadId, { board: String(result.body.id) });
-    setBoardDialog(null);
-    boardsRead.refresh();
-  };
   const [busy, setBusy] = useState<"save" | "start" | null>(null);
   // Held from the press to the answer, so a second press cannot start a second workflow.
   const working = useRef(false);
@@ -142,7 +91,6 @@ export function OrchestratorComposerControls(props: {
     setPendingAttempt(null);
     setProblems(said);
   };
-  const [editingDefaults, setEditingDefaults] = useState(false);
 
   const team = teams.find((candidate) => candidate.team === draft?.team) ?? null;
   // A draft still waiting may yet give its team up, so only a settled one is called unavailable.
@@ -165,14 +113,7 @@ export function OrchestratorComposerControls(props: {
   const seatsToSend = team && draft ? seatSettingsToSend(team.settings, draft.seats) : {};
   const preview = useFlowPreview(props.environmentId, team?.team ?? null, flow, seatsToSend);
   const allFlows = preview?.flows ?? team?.flows ?? [];
-  const flows = allFlows.filter((item) => item.id !== "standard");
   const chosen = allFlows.find((item) => item.id === flow) ?? null;
-  const seatsOn = team
-    ? team.settings.filter((item) => seatIsOn(item, draft?.seats[item.seat] ?? {})).length
-    : 0;
-  const seatsSet = Object.values(seatsToSend).filter((choice) =>
-    Object.keys(choice).some((key) => key !== "active"),
-  ).length;
   const saved =
     draft?.engineThread == null ? "new" : text !== (draft.savedText ?? "") ? "changed" : "saved";
   const blocked = !props.environmentId
@@ -202,6 +143,7 @@ export function OrchestratorComposerControls(props: {
       ? blocked
       : null;
 
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Publish per-thread composer status to the draft store read by detached composer buttons.
   useEffect(() => {
     setActivity(props.threadId, {
       busy,
@@ -234,9 +176,10 @@ export function OrchestratorComposerControls(props: {
       seats: seatsToSend,
       by: person,
       ...(!draft.engineThread && board ? { board } : {}),
-      ...(["chat", "non-code"].includes(flow) && props.workspace
-        ? { workspace: props.workspace }
-        : {}),
+      workspace:
+        flow === "non-code" || (flow === "chat" && draft.useProjectFolder)
+          ? (props.workspace ?? null)
+          : null,
     };
     const result = draft.engineThread
       ? await act(`/api/tasks/${draft.engineThread}/edit`, body)
@@ -324,6 +267,7 @@ export function OrchestratorComposerControls(props: {
   // The composer keeps this component across threads while the counters are per
   // thread, so a thread change only takes the new thread's counter as handled.
   const handledSave = useRef({ threadId, request: saveRequest });
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Consume save commands from the detached composer buttons once per request and thread.
   useEffect(() => {
     const handled = handledSave.current;
     handledSave.current = { threadId, request: saveRequest };
@@ -331,6 +275,7 @@ export function OrchestratorComposerControls(props: {
     onSave();
   }, [onSave, saveRequest, threadId]);
   const handledStart = useRef({ threadId, request: startRequest });
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Consume start commands from the composer form once per request and thread.
   useEffect(() => {
     const handled = handledStart.current;
     handledStart.current = { threadId, request: startRequest };
@@ -340,197 +285,14 @@ export function OrchestratorComposerControls(props: {
 
   if (!draft) return null;
 
-  return (
-    <div
-      className="flex min-w-0 flex-1 flex-wrap items-center gap-x-1 gap-y-0.5"
-      data-delivery-orchestrator
-    >
-      <Select
-        value={draft.team}
-        disabled={teamsLoaded && teams.length === 0}
-        onValueChange={(value) => chooseTeam(props.threadId, props.environmentId, String(value))}
-      >
-        <SelectTrigger aria-label="Team" size="compact" variant="ghost" className="w-auto min-w-0">
-          <UsersIcon className="size-3.5" />
-          <SelectValue>{teamsLoaded && teams.length === 0 ? "No teams" : draft.team}</SelectValue>
-        </SelectTrigger>
-        <SelectPopup alignItemWithTrigger={false}>
-          {teams.map((item) => (
-            <SelectItem key={item.team} value={item.team} disabled={teamTaskBlock(item) !== null}>
-              <span className="flex max-w-96 flex-col">
-                <span>
-                  {item.team}
-                  {item.source === "custom" ? " (your profile)" : ""}
-                </span>
-                <span className="text-xs text-muted-foreground">
-                  {teamTaskBlock(item) ?? item.purpose}
-                </span>
-              </span>
-            </SelectItem>
-          ))}
-        </SelectPopup>
-      </Select>
-
-      <Select
-        value={flow}
-        onValueChange={(value) => update(props.threadId, { workflow: String(value) })}
-      >
-        <SelectTrigger aria-label="Flow" size="compact" variant="ghost" className="w-auto min-w-0">
-          <span className={cn("contents", chosen && !chosen.ready && "text-warning")}>
-            <WorkflowIcon className="size-3.5" />
-            <SelectValue>{chosen?.title ?? flow}</SelectValue>
-          </span>
-        </SelectTrigger>
-        <SelectPopup alignItemWithTrigger={false}>
-          {flows.map((item) => (
-            <SelectItem key={item.id} value={item.id} disabled={!item.offered}>
-              <span className="flex max-w-96 flex-col">
-                <span>{item.title}</span>
-                <span className="text-xs text-muted-foreground">
-                  {item.offered ? item.summary : `${item.why}.`}
-                </span>
-              </span>
-            </SelectItem>
-          ))}
-        </SelectPopup>
-      </Select>
-
-      <BoardPicker
-        label="Board"
-        marker="composer"
-        look="field"
-        items={[
-          {
-            id: "__no_board__",
-            title: "Not on a board",
-            description: "Keep this work outside boards.",
-            kind: "built-in",
-          },
-          ...boards,
-        ]}
-        value={board ?? "__no_board__"}
-        newLabel="New board…"
-        onChoose={(id) => update(props.threadId, { board: id === "__no_board__" ? null : id })}
-        onCreate={() => setBoardDialog({ editing: null })}
-        onEdit={(editing) => setBoardDialog({ editing })}
-        noneYet="Create a board for this project, or keep the chat off boards."
-      />
-      {boardDialog ? (
-        <BoardDialog
-          key={boardDialog.editing?.id ?? "new"}
-          kind="board"
-          environmentId={props.environmentId}
-          workspace={props.workspace ?? null}
-          by={person}
-          editing={boardDialog.editing}
-          busy={boardBusy}
-          problem={boardProblem}
-          onClose={() => setBoardDialog(null)}
-          onSave={(input) => void saveBoard(input)}
-        />
-      ) : null}
-
-      <Popover>
-        <PopoverTrigger
-          render={
-            <Button size="xs" variant="ghost" aria-label="Seats" data-delivery-seats-button />
-          }
-        >
-          <SlidersHorizontalIcon />
-          Seats ({seatsOn} of {team?.settings.length ?? 0} on
-          {seatsSet > 0 ? `, ${seatsSet} set` : ""})
-        </PopoverTrigger>
-        <PopoverPopup side="top" align="start" className="w-[34rem] max-w-[calc(100vw-2rem)]">
-          <div className="flex items-center justify-between gap-2 pb-1">
-            <PopoverTitle>Seats of team {draft.team}</PopoverTitle>
-            <Button size="xs" variant="ghost" onClick={() => setEditingDefaults(true)}>
-              Team defaults
-            </Button>
-          </div>
-          <p className="pb-2 text-xs text-muted-foreground">
-            Switch a seat off to leave it out. Each seat keeps its role. Choose the harness and the
-            model it runs on for this work, or leave it on the team default. What you set is
-            recorded with the run.
-          </p>
-          {chosen && chosen.problems.length > 0 ? (
-            <ul className="list-disc pb-2 pl-5 text-2xs text-warning" data-flow-problems>
-              {chosen.problems.map((item) => (
-                <li key={item}>{item}</li>
-              ))}
-            </ul>
-          ) : null}
-          {team ? (
-            <div className="max-h-[50vh] overflow-y-auto">
-              <SeatSettingsPanel
-                environmentId={props.environmentId}
-                settings={team.settings}
-                chosen={draft.seats}
-                taking={chosen?.seats}
-                onChange={(seat, choice) => setSeat(props.threadId, seat, choice)}
-              />
-            </div>
-          ) : (
-            <p className="text-xs text-warning">
-              {teamsRead.error
-                ? `Delivery engine not reachable. ${teamsRead.error}`
-                : (teamAvailabilityReason ?? "Reading the team.")}
-            </p>
-          )}
-        </PopoverPopup>
-      </Popover>
-
-      {team ? (
-        <Popover>
-          <PopoverTrigger
-            render={
-              <Button
-                size="xs"
-                variant="ghost"
-                aria-label="Inspect team setup"
-                data-delivery-setup-button
-              />
-            }
-          >
-            Setup
-          </PopoverTrigger>
-          <PopoverPopup side="top" align="start" className="w-[38rem] max-w-[calc(100vw-2rem)]">
-            <PopoverTitle className="mb-2">What each seat is given</PopoverTitle>
-            <SetupPanel
-              environmentId={props.environmentId}
-              team={team.team}
-              flow={flow}
-              seats={seatsToSend}
-            />
-          </PopoverPopup>
-        </Popover>
-      ) : null}
-
-      {/* What Start does, a tap away: kept out of the way, and reachable on a phone. */}
-      <InfoPopover label="What Start does" marker={{ "data-delivery-what-starts": flow }}>
-        {whatStartDoes(flow, "Start")}
-      </InfoPopover>
-
-      {teamAvailabilityReason || loadingNotice || settledStartReason || problems.length > 0 ? (
-        <span
-          className="ml-auto max-w-[32rem] text-xs text-warning"
-          data-delivery-orchestrator-status
-          role="alert"
-        >
-          {teamAvailabilityReason ??
-            (loadingNotice ? TEAMS_LOADING : (settledStartReason ?? problems.join(" ")))}
-        </span>
-      ) : null}
-
-      {editingDefaults ? (
-        <TeamDefaultsDialog
-          environmentId={props.environmentId}
-          team={draft.team}
-          onClose={() => setEditingDefaults(false)}
-          onSaved={teamsRead.refresh}
-        />
-      ) : null}
-    </div>
-  );
+  const notice =
+    teamAvailabilityReason ??
+    (loadingNotice ? TEAMS_LOADING : (settledStartReason ?? problems.join(" ")));
+  return notice ? (
+    <span className="min-w-0 text-xs text-warning" data-delivery-orchestrator-status role="alert">
+      {notice}
+    </span>
+  ) : null;
 }
 
 const SAVED_LABEL = {

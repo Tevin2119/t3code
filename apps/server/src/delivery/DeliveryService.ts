@@ -1,19 +1,5 @@
-/**
- * DeliveryService - relays to a team delivery engine and remembers which
- * threads are bound to a team.
- *
- * The engine owns teams, task flow and approvals. This service decides
- * nothing of that: it relays requests, and it keeps one small record per
- * bound thread so a thread stays bound across restarts even while the engine
- * is down.
- *
- * Every doubt is resolved against starting. A record that cannot be read, a
- * record that cannot be saved, a team setup that did not complete and a
- * session that does not match what the thread was bound with all stop the
- * session, because the alternative is an ordinary thread under a team's name.
- *
- * @module DeliveryService
- */
+// The engine owns delivery decisions; persist bindings so engine downtime does not erase them.
+// Refuse to start if a binding cannot be read, saved, set up, or matched to its session.
 import {
   DELIVERY_HARNESS_BY_DRIVER,
   DeliveryError,
@@ -146,24 +132,7 @@ export class DeliveryService extends Context.Service<
   }
 >()("t3/delivery/DeliveryService") {}
 
-const disabled = () =>
-  Effect.fail(new DeliveryError({ reason: "disabled", detail: "Delivery is turned off." }));
-
-/** Inert service, for suites that only need the RPC surface to resolve. */
-export const layerTest = Layer.succeed(
-  DeliveryService,
-  DeliveryService.of({
-    read: disabled,
-    act: disabled,
-    bindThread: disabled,
-    threadState: () => Effect.succeed({ binding: null, pending: null }),
-    releaseThread: () => Effect.succeed({ binding: null, pending: null }),
-    prepareThread: () => Effect.succeed(false),
-    terminalEntryScript: Effect.succeed(null),
-  }),
-);
-
-export const make = Effect.gen(function* () {
+const make = Effect.gen(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const config = yield* ServerConfig;
@@ -442,12 +411,11 @@ export const make = Effect.gen(function* () {
     pending.set(input.threadId, intent);
     yield* persist.pipe(Effect.tapError(() => Effect.sync(() => pending.delete(input.threadId))));
 
-    const held = (error: DeliveryError) =>
-      Effect.gen(function* () {
-        pending.set(input.threadId, { ...intent, why: error.detail });
-        yield* persist.pipe(Effect.ignore);
-        return yield* error;
-      });
+    const held = Effect.fn("held")(function* (error: DeliveryError) {
+      pending.set(input.threadId, { ...intent, why: error.detail });
+      yield* persist.pipe(Effect.ignore);
+      return yield* error;
+    });
 
     const opened = yield* request("POST", "/api/sessions", {
       team: input.team,
@@ -673,10 +641,12 @@ export const make = Effect.gen(function* () {
   );
 
   return DeliveryService.of({
-    read: (input) => request("GET", input.path),
-    act: (input) => request("POST", input.path, input.body),
+    read: Effect.fn("DeliveryService.read")((input) => request("GET", input.path)),
+    act: Effect.fn("DeliveryService.act")((input) => request("POST", input.path, input.body)),
     bindThread,
-    threadState: (threadId) => storeReadable.pipe(Effect.as(stateOf(threadId))),
+    threadState: Effect.fn("DeliveryService.threadState")((threadId) =>
+      storeReadable.pipe(Effect.as(stateOf(threadId))),
+    ),
     releaseThread,
     prepareThread,
     terminalEntryScript: delivery.pipe(Effect.map(entryScriptOf)),

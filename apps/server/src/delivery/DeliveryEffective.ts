@@ -1,18 +1,8 @@
-/**
- * What a team thread really ran on, for the record the delivery engine keeps.
- *
- * Three things are kept apart. `requested` is what the person chose in the
- * composer. `passed` is what an adapter says it handed to the harness.
- * `confirmed` is what the harness itself said it runs on, in an answer or an
- * event of its own. Nothing here is read from what a model wrote, and a value
- * nobody reported stays empty: an echo of the request is not a confirmation.
- *
- * @module delivery/DeliveryEffective
- */
+// Keep requested, passed, and harness-confirmed settings distinct; an echoed request is not proof.
 import {
   DELIVERY_HARNESS_BY_DRIVER,
   type ModelSelection,
-  type ProviderRuntimeEvent,
+  type ProviderDriverKind,
   type RuntimeMode,
 } from "@t3tools/contracts";
 import { getModelSelectionStringOptionValue } from "@t3tools/shared/model";
@@ -54,16 +44,10 @@ const HARNESS_DEFAULT = "harness-default";
  * access. The other modes ask a person, which no seat's access does, so they
  * are reported as the mode they are and as no access of a seat.
  */
-export const accessOfRuntimeMode = (mode: RuntimeMode | undefined): string | null =>
+const accessOfRuntimeMode = (mode: RuntimeMode | undefined): string | null =>
   mode === "full-access" ? "full" : null;
 
-export const runtimeModeOfAccess = (access: string | null | undefined): RuntimeMode | null =>
-  access === "full" ? "full-access" : null;
-
-export function reasoningOf(
-  driver: string,
-  modelSelection: ModelSelection | undefined,
-): string | null {
+function reasoningOf(driver: string, modelSelection: ModelSelection | undefined): string | null {
   const option = REASONING_OPTION_BY_DRIVER[driver];
   if (!option || !modelSelection) return null;
   const value = getModelSelectionStringOptionValue(modelSelection, option);
@@ -114,10 +98,7 @@ export type EffectivePatch = Partial<
 >;
 
 /** What an adapter handed over, as a patch of the record. */
-export function patchFromPassed(
-  passed: Readonly<Record<string, unknown>>,
-  at: string,
-): EffectivePatch {
+function patchFromPassed(passed: Readonly<Record<string, unknown>>, at: string): EffectivePatch {
   const has = (name: string) => Object.hasOwn(passed, name);
   return {
     passed: {
@@ -129,13 +110,16 @@ export function patchFromPassed(
   };
 }
 
-/** What an event of a session says of what was passed and what the harness confirmed. */
-export function patchFromRuntimeEvent(event: ProviderRuntimeEvent): EffectivePatch | null {
-  if (event.type !== "session.configured") return null;
-  const config = event.payload.config;
+/** Only explicit adapter or harness configuration is evidence of effective settings. */
+export function patchFromConfiguration(input: {
+  readonly driver: ProviderDriverKind;
+  readonly config: Readonly<Record<string, unknown>>;
+  readonly createdAt: string;
+}): EffectivePatch | null {
+  const config = input.config;
 
   // What an adapter says it handed over, at the start of the session or with a turn.
-  if (isRecord(config.passed)) return patchFromPassed(config.passed, event.createdAt);
+  if (isRecord(config.passed)) return patchFromPassed(config.passed, input.createdAt);
 
   // The harness read back after a level was set: pi, Kimi and the DeepSeek harness.
   if (isRecord(config.reasoning)) {
@@ -181,10 +165,7 @@ export function patchFromRuntimeEvent(event: ProviderRuntimeEvent): EffectivePat
   // What the Claude adapter handed over when it started the session. The model is handed
   // over with the context window it is to have, as in `claude-fable-5-1[1m]`, and Claude
   // names the model without it: the two are the same model.
-  if (
-    event.provider === "claudeAgent" &&
-    (config.model || config.effort || config.permissionMode)
-  ) {
+  if (input.driver === "claudeAgent" && (config.model || config.effort || config.permissionMode)) {
     const model = text(config.model)?.replace(/\[[^\]]*\]$/, "") ?? null;
     const reasoning = text(config.effort);
     const mode = text(config.permissionMode);
@@ -193,7 +174,7 @@ export function patchFromRuntimeEvent(event: ProviderRuntimeEvent): EffectivePat
       // The options the query of Claude was opened with, by the names Claude gives them.
       passedDetail: [
         {
-          at: event.createdAt,
+          at: input.createdAt,
           when: "session",
           model,
           reasoning,

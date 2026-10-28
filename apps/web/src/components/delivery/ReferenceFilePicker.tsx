@@ -6,11 +6,11 @@ import {
 } from "@t3tools/client-runtime/state/filesystem";
 import type { EnvironmentId, FilesystemBrowseEntry } from "@t3tools/contracts";
 import { CornerLeftUpIcon, FolderIcon } from "lucide-react";
-import { type KeyboardEvent, useMemo, useState } from "react";
+import { type KeyboardEvent, useState } from "react";
 
 import { useTheme } from "~/hooks/useTheme";
 import { joinReferencePath } from "../../lib/deliveryReferences";
-import { ensureBrowseDirectoryPath } from "../../lib/projectPaths";
+import { ensureBrowseDirectoryPath } from "@t3tools/client-runtime/state/projects";
 import { useProjects } from "../../state/entities";
 import { useEnvironment } from "../../state/environments";
 import { filesystemEnvironment } from "../../state/filesystem";
@@ -117,26 +117,24 @@ function ProjectStep(props: {
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const [query, setQuery] = useState("");
   const [highlighted, setHighlighted] = useState<string | null>(null);
-  const items = useMemo<CommandPaletteActionItem[]>(() => {
-    const needle = query.trim().toLowerCase();
-    return projects
-      .filter((project) => project.environmentId === props.environmentId)
-      .filter(
-        (project) =>
-          project.title.toLowerCase().includes(needle) ||
-          project.workspaceRoot.toLowerCase().includes(needle),
-      )
-      .map((project) => ({
-        kind: "action",
-        value: `project:${project.id}`,
-        searchTerms: [project.title, project.workspaceRoot],
-        title: project.title,
-        description: project.workspaceRoot,
-        icon: <ProjectFavicon project={project} className="size-4" />,
-        keepOpen: true,
-        run: async () => props.onChoose(project),
-      }));
-  }, [projects, props, query]);
+  const needle = query.trim().toLowerCase();
+  const items: CommandPaletteActionItem[] = projects
+    .filter((project) => project.environmentId === props.environmentId)
+    .filter(
+      (project) =>
+        project.title.toLowerCase().includes(needle) ||
+        project.workspaceRoot.toLowerCase().includes(needle),
+    )
+    .map((project) => ({
+      kind: "action",
+      value: `project:${project.id}`,
+      searchTerms: [project.title, project.workspaceRoot],
+      title: project.title,
+      description: project.workspaceRoot,
+      icon: <ProjectFavicon project={project} className="size-4" />,
+      keepOpen: true,
+      run: async () => props.onChoose(project),
+    }));
   return (
     <CommandPaletteContent
       aria-label="Choose a project"
@@ -193,31 +191,30 @@ function ProjectFilesStep(props: {
   const { resolvedTheme } = useTheme();
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const hasMatchedQuery = /\S/.test(result.matchedQuery);
-  const items = useMemo<CommandPaletteActionItem[]>(
-    () =>
-      getProjectFilePickerMatches(result.entries, result.matchedQuery).map((match) => ({
-        kind: "action",
-        value: `file:${match.path}`,
-        searchTerms: [match.name, match.path],
-        title: (
-          <HighlightedFuzzyText
-            active={hasMatchedQuery}
-            value={match.name}
-            indices={match.nameMatchIndices}
-          />
-        ),
-        description: (
-          <HighlightedFuzzyText
-            active={hasMatchedQuery}
-            value={match.path}
-            indices={match.pathMatchIndices}
-          />
-        ),
-        icon: <PierreEntryIcon pathValue={match.path} kind="file" theme={resolvedTheme} />,
-        run: async () => props.onPick(joinReferencePath(project.workspaceRoot, match.path)),
-      })),
-    [hasMatchedQuery, project.workspaceRoot, props, resolvedTheme, result],
-  );
+  const items: CommandPaletteActionItem[] = getProjectFilePickerMatches(
+    result.entries,
+    result.matchedQuery,
+  ).map((match) => ({
+    kind: "action",
+    value: `file:${match.path}`,
+    searchTerms: [match.name, match.path],
+    title: (
+      <HighlightedFuzzyText
+        active={hasMatchedQuery}
+        value={match.name}
+        indices={match.nameMatchIndices}
+      />
+    ),
+    description: (
+      <HighlightedFuzzyText
+        active={hasMatchedQuery}
+        value={match.path}
+        indices={match.pathMatchIndices}
+      />
+    ),
+    icon: <PierreEntryIcon pathValue={match.path} kind="file" theme={resolvedTheme} />,
+    run: async () => props.onPick(joinReferencePath(project.workspaceRoot, match.path)),
+  }));
   // Escape, or Backspace in an empty search, goes back to the projects.
   const onKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
     if (event.key !== "Escape" && !(event.key === "Backspace" && query === "")) return;
@@ -355,7 +352,7 @@ function BrowsedFolder(props: {
   // An empty directory path lists the folder's immediate children, ignored ones included.
   const listing = useProjectEntriesQuery(props.environmentId, folder, "");
   const up = getFilesystemBrowsePath(ensureBrowseDirectoryPath(folder), props.platform);
-  const groups = useMemo<CommandPaletteGroup[]>(() => {
+  const groups: CommandPaletteGroup[] = (() => {
     const folders = filterFilesystemBrowseEntries(props.folders, props.query).visibleEntries;
     const [directories] = buildBrowseGroups({
       browseEntries: folders,
@@ -391,7 +388,7 @@ function BrowsedFolder(props: {
     if (directories && directories.items.length > 0) all.push(directories);
     if (fileItems.length > 0) all.push({ value: "files", label: folder, items: fileItems });
     return all;
-  }, [folder, listing, props, resolvedTheme, up.canBrowseUp, up.parentPath]);
+  })();
   return (
     <CommandPaletteResults
       groups={groups}

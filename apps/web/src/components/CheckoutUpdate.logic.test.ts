@@ -191,11 +191,10 @@ describe("checkoutUpdatePillView", () => {
 });
 
 describe("checkoutUpdatePresentation", () => {
-  const v2 = { settingsHydrated: true, supported: true, legacySidebar: false };
+  const v2 = { settingsHydrated: true, supported: true };
   it.each([
     [{ ...v2, settingsHydrated: false, pathname: "/" }, "none"],
     [{ ...v2, supported: false, pathname: "/" }, "none"],
-    [{ ...v2, legacySidebar: true, pathname: "/" }, "toast"],
     [{ ...v2, pathname: "/settings" }, "toast"],
     [{ ...v2, pathname: "/settings/connections" }, "toast"],
     [{ ...v2, pathname: "/settingsx" }, "pill"],

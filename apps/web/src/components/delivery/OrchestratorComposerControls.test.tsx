@@ -1,8 +1,9 @@
 import { EnvironmentId } from "@t3tools/contracts";
-import { act } from "react";
+import { act } from "../../../test/render";
 import { create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
 import { useDeliveryDraftStore, useOrchestratorDraftStore } from "../../state/delivery";
+import { OrchestratorBoardPicker } from "./OrchestratorBoardPicker";
 import { OrchestratorComposerControls } from "./OrchestratorComposerControls";
 
 const mock = vi.hoisted(() => ({
@@ -40,7 +41,23 @@ vi.mock("./TeamDefaultsDialog", () => ({ TeamDefaultsDialog: "team-defaults" }))
 vi.mock("./BoardPicker", () => ({ BoardPicker: "board-picker", BoardDialog: "board-dialog" }));
 const store = () => useOrchestratorDraftStore.getState();
 const offered = (...names: ReadonlyArray<string>) =>
-  names.map((team) => ({ team, available: true, seats: [], settings: [] }));
+  names.map((team) => ({
+    team,
+    available: true,
+    seats: [],
+    settings: [],
+    defaultFlow: "delivery",
+    flows: [
+      {
+        id: "delivery",
+        title: "Delivery",
+        offered: true,
+        ready: true,
+        stages: ["build"],
+        builds: true,
+      },
+    ],
+  }));
 const teams = offered("rnd", "alpha");
 let renderer: ReactTestRenderer | undefined;
 let environment: string | null = "env-a";
@@ -49,16 +66,23 @@ const prompts: Record<string, string> = { t1: "Build this", t2: "Fix that" };
 let cleared: Array<string> = [];
 // The composer keeps one instance across threads and passes a fresh callback on each render.
 const view = (threadId = "t1", prompt = prompts[threadId] ?? "Build this") => (
-  <OrchestratorComposerControls
-    workspace={workspace}
-    environmentId={environment === null ? null : EnvironmentId.make(environment)}
-    threadId={threadId}
-    prompt={prompt}
-    onPromptCleared={() => {
-      cleared.push(threadId);
-      mock.promptCleared();
-    }}
-  />
+  <>
+    <OrchestratorBoardPicker
+      environmentId={environment === null ? null : EnvironmentId.make(environment)}
+      threadId={threadId}
+      workspace={workspace}
+    />
+    <OrchestratorComposerControls
+      workspace={workspace}
+      environmentId={environment === null ? null : EnvironmentId.make(environment)}
+      threadId={threadId}
+      prompt={prompt}
+      onPromptCleared={() => {
+        cleared.push(threadId);
+        mock.promptCleared();
+      }}
+    />
+  </>
 );
 async function render(threadId = "t1", prompt?: string) {
   await act(() => {
@@ -73,8 +97,7 @@ const alert = () =>
     .map((node) => node.children.join(""))
     .join(" ");
 const LOADING = "Teams are still loading.";
-const chosenTeam = () =>
-  renderer!.root.findByProps({ "aria-label": "Team" }).findByType("output").children;
+const chosenTeam = () => [store().drafts.t1?.team];
 /** Asks once, and resolves when the work that followed has ended. */
 async function ask(request: "requestStart" | "requestSave") {
   const ended = new Promise<void>((resolve) => {
@@ -118,7 +141,6 @@ async function startsForRnd() {
   expect(mock.navigate).toHaveBeenCalledWith({ to: "/board", search: { task: "task-1" } });
 }
 beforeEach(() => {
-  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   environment = "env-a";
   workspace = null;
   useDeliveryDraftStore.setState({ choices: {}, inherited: {}, remembered: {} });
@@ -221,6 +243,7 @@ it.each(["chat", "non-code"])(
       error: null,
     };
     store().enter("t1", "env-a");
+    store().update("t1", { useProjectFolder: true });
     await render();
     await ask("requestSave");
     expect(mock.action).toHaveBeenCalledWith(
@@ -278,9 +301,7 @@ it.each([null, "gone"])(
     mock.reading = { body: teams, error: null };
     await render();
     expect(mock.action).not.toHaveBeenCalled();
-    expect(
-      renderer!.root.findByProps({ "aria-label": "Team" }).findByType("output").children,
-    ).toEqual(["rnd"]);
+    expect(chosenTeam()).toEqual(["rnd"]);
     const navigated = new Promise<void>((resolve) =>
       mock.navigate.mockImplementation(() => resolve()),
     );
@@ -350,9 +371,7 @@ it.each([
     expect(mock.action).not.toHaveBeenCalled();
     expect(store().drafts.t1?.team).toBe(expected);
     expect(store().drafts.t1).not.toHaveProperty("awaitingTeams");
-    expect(
-      renderer!.root.findByProps({ "aria-label": "Team" }).findByType("output").children,
-    ).toEqual([expected]);
+    expect(chosenTeam()).toEqual([expected]);
     expect(alert()).toBe("");
     expect(store().activity.t1?.blocked).toBeNull();
     expect(reasons.filter((reason) => /is not offered here/.test(reason ?? ""))).toEqual([]);
@@ -853,4 +872,38 @@ it("starts a thread switched to once, when Start is asked on it", async () => {
   // The refused start on t1 stays refused when t1 is shown again.
   await switchTo("t1");
   expect(paths()).toEqual(["/api/tasks", "/api/tasks/task-2/submit"]);
+});
+
+it("clears an inherited folder when resaving a throwaway chat draft", async () => {
+  workspace = "/projects/intresets";
+  mock.reading = {
+    body: [
+      {
+        ...teams[0],
+        defaultFlow: "chat",
+        flows: [
+          {
+            id: "chat",
+            title: "Team chat",
+            offered: true,
+            ready: true,
+            stages: ["chat"],
+            builds: false,
+          },
+        ],
+      },
+    ],
+    error: null,
+  };
+  store().enter("t1", "env-a");
+  store().chooseTeam("t1", "env-a", "rnd");
+  store().update("t1", { engineThread: "task-1" });
+  await render();
+  expect(store().activity.t1?.blocked).toBeNull();
+  await ask("requestStart");
+  expect(mock.action).toHaveBeenCalledWith(
+    "/api/tasks/task-1/edit",
+    expect.objectContaining({ workspace: null, workflow: "chat", text: "Build this" }),
+  );
+  expect(paths()).toContain("/api/tasks/task-1/submit");
 });

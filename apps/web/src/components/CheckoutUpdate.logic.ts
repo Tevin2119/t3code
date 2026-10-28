@@ -122,17 +122,14 @@ export function checkoutUpdateView(
 export type CheckoutUpdatePresentation = "none" | "toast" | "pill";
 
 /**
- * The v2 sidebar footer holds the pill on every route but Settings, which swaps
- * the footer for its own nav. The legacy sidebar keeps the toast.
+ * Settings uses a toast so the update action remains accessible above the modal.
  */
 export function checkoutUpdatePresentation(input: {
   readonly settingsHydrated: boolean;
   readonly supported: boolean;
-  readonly legacySidebar: boolean;
   readonly pathname: string;
 }): CheckoutUpdatePresentation {
   if (!input.settingsHydrated || !input.supported) return "none";
-  if (input.legacySidebar) return "toast";
   if (input.pathname === "/settings" || input.pathname.startsWith("/settings/")) return "toast";
   return "pill";
 }

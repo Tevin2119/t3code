@@ -4,7 +4,7 @@ import { getStartedThreadModelChangeBlockReason } from "../components/ChatView.l
 export function getThreadModelDisabledReason(
   input: Parameters<typeof getStartedThreadModelChangeBlockReason>[0],
 ) {
-  const driver = input.providers.find(
+  const driver = input.providers?.find(
     (entry) => entry.instanceId === input.nextModelSelection.instanceId,
   )?.driver;
   const deliveryReason = deliveryModelDisabledReason(input.deliveryBinding, driver);

@@ -3,6 +3,8 @@ import { describe, expect, it } from "vite-plus/test";
 import { parseSeatSettings, type SeatSettings, type SeatSettingValues } from "./delivery";
 import {
   describeSeatValues,
+  modelsForSeat,
+  HARNESS_DEFAULT_MODEL,
   driverOfHarness,
   entriesForSeat,
   entryForHarness,
@@ -305,5 +307,29 @@ describe("seatsChangedForTask", () => {
       "Senior developer 1 runs on codex, gpt-6-astra, workspace access for this task, in place of the team's claude, claude-fable-5-1, full access.",
       "Senior developer 2 is switched off for this task.",
     ]);
+  });
+});
+
+describe("seat model catalogs", () => {
+  it("keeps a model from saved team defaults on a different harness", () => {
+    const seat = { ...lead, now: { ...lead.now, harness: "claude", model: "custom-claude" } };
+    expect(modelsForSeat([], seat, "claude").map((model) => model.slug)).toEqual(["custom-claude"]);
+    expect(modelsForSeat([], seat, "codex").map((model) => model.slug)).toContain("gpt-6-astra");
+  });
+  it("offers the harness configured model even when it publishes no models", () => {
+    const seat = {
+      ...lead,
+      byHarness: { hermes: { model: false, reasoning: [], access: ["full"] } },
+    };
+    expect(modelsForSeat([], seat, "hermes")).toEqual([
+      { slug: HARNESS_DEFAULT_MODEL, name: "Hermes configured model" },
+    ]);
+  });
+  it("preserves catalog metadata and does not add a fake model to a selectable harness", () => {
+    const model = { slug: "gpt-6-astra", name: "Astra", isUnavailable: true };
+    expect(modelsForSeat([model], lead, "codex")[0]).toBe(model);
+    expect(
+      modelsForSeat([], lead, "codex").some((model) => model.slug === HARNESS_DEFAULT_MODEL),
+    ).toBe(false);
   });
 });

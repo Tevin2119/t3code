@@ -56,6 +56,11 @@ export const PROVIDER_PRESENTATION = {
     color: "#a26bd6",
     driverKind: ProviderDriverKind.make("hermes"),
   },
+  muse: {
+    label: "Muse Code",
+    color: "#0866ff",
+    driverKind: ProviderDriverKind.make("muse"),
+  },
 } satisfies Record<UsageProviderKind, UsageProviderPresentation>;
 
 /**

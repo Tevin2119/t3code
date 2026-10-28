@@ -1,20 +1,9 @@
-/**
- * Delivery - the wire contract between clients and a team delivery engine.
- *
- * The engine is a separate local service that owns teams, task flow and
- * approvals. T3 Code is a window onto it: the server relays requests and
- * never decides anything the engine owns. Engine payloads are relayed as
- * untyped JSON so the engine can evolve without a contract change here;
- * only what T3 Code itself stores or acts on is typed.
- *
- * @module delivery
- */
+// Relay engine-owned payloads as JSON; type only the state T3 stores or acts on.
 import * as Schema from "effect/Schema";
 
 import { ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
 
 export const DELIVERY_DEFAULT_TEAM = "development";
-export const DELIVERY_DEFAULT_ENGINE_URL = "http://127.0.0.1:4320";
 
 export const DeliveryReleaseChannel = Schema.Literals(["dev", "qa", "main"]);
 export type DeliveryReleaseChannel = typeof DeliveryReleaseChannel.Type;

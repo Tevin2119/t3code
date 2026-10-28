@@ -1,5 +1,8 @@
+import { vi } from "vite-plus/test";
 import { describe, expect, it } from "@effect/vitest";
 import {
+  AuthOrchestrationOperateScope,
+  type AuthSessionState,
   EnvironmentId,
   WS_METHODS,
   type DeliveryActInput,
@@ -25,6 +28,23 @@ import type { WsRpcProtocolClient } from "../rpc/protocol.ts";
 import type { RpcSession } from "../rpc/session.ts";
 import { createDeliveryEnvironmentAtoms } from "./delivery.ts";
 
+vi.mock("./session.ts", () => ({
+  createEnvironmentSessionAtoms: () => ({ sessionStateAtom: () => grantedSession }),
+}));
+const grantedSession = Atom.make(
+  AsyncResult.success<AuthSessionState>({
+    authenticated: true,
+    auth: {
+      policy: "remote-reachable",
+      bootstrapMethods: [],
+      sessionMethods: [],
+      sessionCookieName: "test",
+    },
+    scopes: [AuthOrchestrationOperateScope],
+    permissions: [AuthOrchestrationOperateScope],
+  }),
+);
+
 const MAC = EnvironmentId.make("mac");
 const WINDOWS = EnvironmentId.make("windows");
 const TASK_PATH = "/api/tasks/1016";
@@ -49,6 +69,7 @@ const makeHarness = Effect.fn("TestDeliveryEnvironments.makeHarness")(function* 
       subscribeServerConfig: () => Stream.never,
       ready: Effect.void,
       probe: Effect.void,
+      inboundFrames: Effect.succeed(0),
       closed: Effect.never,
     };
     supervisors.set(

@@ -27,7 +27,6 @@ it.effect("a successful ACP stop reason cannot hide a failed native turn receipt
   }).pipe(
     Effect.provide(
       Layer.mock(AcpSessionRuntime.AcpSessionRuntime)({
-        processContainment: "process-group",
         start,
         prompt: () => Effect.succeed({ stopReason: "end_turn" as const }),
       }),
@@ -53,7 +52,6 @@ it.effect(
     }).pipe(
       Effect.provide(
         Layer.mock(AcpSessionRuntime.AcpSessionRuntime)({
-          processContainment: "process-group",
           start,
           prompt: () => Effect.succeed({ stopReason: "end_turn" as const }),
         }),
@@ -72,7 +70,6 @@ it.effect("an interrupted native prompt stays cancelled without consulting a suc
   }).pipe(
     Effect.provide(
       Layer.mock(AcpSessionRuntime.AcpSessionRuntime)({
-        processContainment: "process-group",
         start,
         prompt: () => Effect.succeed({ stopReason: "cancelled" as const }),
       }),

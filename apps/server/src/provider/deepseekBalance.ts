@@ -1,18 +1,5 @@
-/**
- * DeepSeek API balance, read with the key the harness can be given in plain form.
- *
- * DeepSeek bills by use from prepaid credit, so it has no plan windows; what it
- * can report is the balance (`GET /user/balance`). The key is read from where the
- * DeepSeek Harness itself reads a plain key: `DEEPSEEK_API_KEY` in the connection's
- * environment, or the harness home's `.env`. A key the harness keeps sealed in its
- * own credential store (`.credentials.yaml`, a reference to a grant) is not opened:
- * the card says so instead.
- *
- * The key only ever goes to DeepSeek's own API host, as a bearer header. It is not
- * returned, logged or written anywhere, and no message quotes it.
- *
- * @module provider/Layers/deepseekBalance
- */
+// Read only plaintext harness credentials; sealed grants remain private to the harness.
+// Send the key only to DeepSeek, never to logs or returned data.
 import * as NodeOS from "node:os";
 
 import type { ServerProviderBalance, ServerProviderUsageLimits } from "@t3tools/contracts";
@@ -101,12 +88,9 @@ export const readDeepSeekBalance = Effect.fn("readDeepSeekBalance")(function* (
   // A harness pointed at another endpoint is not using DeepSeek's account.
   const baseUrl = text(environment.DEEPSEEK_BASE_URL);
   if (baseUrl) {
-    let host = "";
-    try {
-      host = new URL(baseUrl).hostname.toLowerCase();
-    } catch {
-      host = "";
-    }
+    const host = yield* Effect.try(() => new URL(baseUrl).hostname.toLowerCase()).pipe(
+      Effect.orElseSucceed(() => ""),
+    );
     if (!OFFICIAL_HOSTS.has(host)) {
       return unavailable(
         "The DeepSeek Harness points at another endpoint, which has no DeepSeek balance.",

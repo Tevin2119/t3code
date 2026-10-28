@@ -1,5 +1,4 @@
 import type { DeliveryThreadBinding } from "@t3tools/contracts";
-import { getThreadModelDisabledReason } from "../../lib/deliveryModelPicker";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 import type { UnifiedSettings } from "@t3tools/contracts";
 import type { Dispatch } from "react";

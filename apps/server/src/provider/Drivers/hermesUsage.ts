@@ -1,12 +1,4 @@
-/**
- * Usage history for Hermes: the per-session model totals in its `state.db`.
- *
- * The store is opened read-only for each read. Hermes writes to it while it
- * runs and is not kept from it. A store that cannot be read is a failed source,
- * never a store without usage.
- *
- * @module provider/Drivers/hermesUsage
- */
+// Open Hermes usage read-only; an unreadable database is a failed source, not empty usage.
 import type { HermesSettings, UsageTokenTotals } from "@t3tools/contracts";
 import { expandHomePath } from "@t3tools/provider-core/server/pathExpansion";
 import {
@@ -30,15 +22,8 @@ type Row = Readonly<Record<string, unknown>>;
 const text = (value: unknown): string | null =>
   typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
 
-/**
- * Hermes keeps the running totals of each session per model and billing
- * provider (`session_model_usage`), not a record of each call. So one row is one
- * record, dated by the last time Hermes used that model in the session: a
- * session that ran over midnight counts on the later day. `input_tokens` is the
- * uncached input and reasoning is a part of the output, as Hermes normalises
- * them. The actual cost is kept when Hermes has one, then its estimate; a row
- * whose cost Hermes does not know has none.
- */
+// Session/model totals belong to their last-use day; reasoning is already included in output.
+// Prefer actual cost, then the estimate, and leave unknown cost absent.
 export function hermesRecordFrom(row: Row): UsageRecord | null {
   const model = text(row["model"]);
   const sessionId = text(row["session_id"]);
@@ -73,8 +58,8 @@ export function hermesRecordFrom(row: Row): UsageRecord | null {
 }
 
 /** The records of `database` last seen at or after `sinceMs`. */
-export const readHermesRecords = (database: string, sinceMs: number) =>
-  Effect.gen(function* () {
+const readHermesRecords = Effect.fn("readHermesRecords")(
+  function* (_database: string, sinceMs: number) {
     const sql = yield* SqlClient.SqlClient;
     // A busy Hermes should fail this source promptly rather than stall the scan.
     yield* sql.unsafe("PRAGMA busy_timeout = 100");
@@ -83,10 +68,13 @@ export const readHermesRecords = (database: string, sinceMs: number) =>
       [sinceMs / 1000],
     );
     return rows.flatMap((row) => hermesRecordFrom(row) ?? []);
-  }).pipe(
-    Effect.provide(NodeSqliteClient.layer({ filename: database, readonly: true })),
-    Effect.orElseSucceed(() => null),
-  );
+  },
+  (effect, database) =>
+    effect.pipe(
+      Effect.provide(NodeSqliteClient.layer({ filename: database, readonly: true })),
+      Effect.orElseSucceed(() => null),
+    ),
+);
 
 export type HermesUsageReaderEnv = FileSystem.FileSystem | Path.Path;
 

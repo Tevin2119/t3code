@@ -1,7 +1,7 @@
 import { createDeliveryEnvironmentAtoms } from "@t3tools/client-runtime/state/delivery";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import { DELIVERY_DEFAULT_TEAM, type EnvironmentId } from "@t3tools/contracts";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 
@@ -46,16 +46,14 @@ export function useDeliveryRead(
   path: string | null,
   options: { readonly pollMs?: number } = {},
 ) {
-  const atom = useMemo(
-    () =>
-      environmentId && path
-        ? deliveryEnvironment.read({ environmentId, input: { path: path as never } })
-        : null,
-    [environmentId, path],
-  );
+  const atom =
+    environmentId && path
+      ? deliveryEnvironment.read({ environmentId, input: { path: path as never } })
+      : null;
   const query = useEnvironmentQuery(atom);
   const { refresh } = query;
   const pollMs = options.pollMs;
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Poll the engine while mounted because delivery has no push channel.
   useEffect(() => {
     if (!atom || !pollMs) return;
     const timer = window.setInterval(() => {
@@ -77,6 +75,7 @@ export function useStaleReading(readAt: string | null): boolean {
   // The clock only moves forward on its timer. A fresh reading is newer than the clock, so it
   // is never taken for stale, and an old one turns stale within five seconds.
   const [now, setNow] = useState(() => Date.now());
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Advance the freshness clock while mounted and release its timer on unmount.
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 5_000);
     return () => window.clearInterval(timer);
@@ -87,6 +86,7 @@ export function useStaleReading(readAt: string | null): boolean {
 /** The time, for ages shown on cards. Moves once a minute, which is as fine as an age is shown. */
 export function useMinuteClock(): number {
   const [now, setNow] = useState(() => Date.now());
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Advance card ages while mounted and release the clock timer on unmount.
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 60_000);
     return () => window.clearInterval(timer);
@@ -107,34 +107,31 @@ export type DeliveryActResult =
 /** Asks the engine to do something, and answers with what it said or why it refused. */
 export function useDeliveryAct(environmentId: EnvironmentId | null, label: string) {
   const act = useAtomCommand(deliveryEnvironment.act, { label, reportFailure: false });
-  return useCallback(
-    async (path: string, body: unknown = {}): Promise<DeliveryActResult> => {
-      if (!environmentId) {
-        return { ok: false, why: "No environment is connected.", problems: [], status: null };
-      }
-      const result = await act({
-        environmentId,
-        input: { path: path as never, body: deliveryRequestBody(body) },
-      });
-      if (result._tag === "Failure") {
-        const failure = squashAtomCommandFailure(result);
-        return {
-          ok: false,
-          status:
-            typeof failure === "object" &&
-            failure !== null &&
-            "status" in failure &&
-            typeof failure.status === "number"
-              ? failure.status
-              : null,
-          why: deliveryFailureText(failure),
-          problems: deliveryFailureProblems(failure),
-        };
-      }
-      return { ok: true, body: result.value.body };
-    },
-    [act, environmentId],
-  );
+  return async (path: string, body: unknown = {}): Promise<DeliveryActResult> => {
+    if (!environmentId) {
+      return { ok: false, why: "No environment is connected.", problems: [], status: null };
+    }
+    const result = await act({
+      environmentId,
+      input: { path: path as never, body: deliveryRequestBody(body) },
+    });
+    if (result._tag === "Failure") {
+      const failure = squashAtomCommandFailure(result);
+      return {
+        ok: false,
+        status:
+          typeof failure === "object" &&
+          failure !== null &&
+          "status" in failure &&
+          typeof failure.status === "number"
+            ? failure.status
+            : null,
+        why: deliveryFailureText(failure),
+        problems: deliveryFailureProblems(failure),
+      };
+    }
+    return { ok: true, body: result.value.body };
+  };
 }
 
 /** Reads the engine once, outside of rendering: a piece of a file, for one. */
@@ -143,24 +140,21 @@ export function useDeliveryFetch(environmentId: EnvironmentId | null) {
     label: "delivery read",
     reportFailure: false,
   });
-  return useCallback(
-    async (path: string): Promise<DeliveryActResult> => {
-      if (!environmentId) {
-        return { ok: false, why: "No environment is connected.", problems: [], status: null };
-      }
-      const result = await read({ environmentId, input: { path: path as never } });
-      if (result._tag === "Failure") {
-        return {
-          ok: false,
-          status: null,
-          why: deliveryFailureText(squashAtomCommandFailure(result)),
-          problems: [],
-        };
-      }
-      return { ok: true, body: result.value.body };
-    },
-    [environmentId, read],
-  );
+  return async (path: string): Promise<DeliveryActResult> => {
+    if (!environmentId) {
+      return { ok: false, why: "No environment is connected.", problems: [], status: null };
+    }
+    const result = await read({ environmentId, input: { path: path as never } });
+    if (result._tag === "Failure") {
+      return {
+        ok: false,
+        status: null,
+        why: deliveryFailureText(squashAtomCommandFailure(result)),
+        problems: [],
+      };
+    }
+    return { ok: true, body: result.value.body };
+  };
 }
 
 export interface DraftTeamChoice {
@@ -307,7 +301,7 @@ export function useDraftTeamChoice(
   const remembered = useDeliveryDraftStore((state) =>
     rememberedTeam(state.remembered, environmentId),
   );
-  return useMemo(() => chosen ?? inheritedChoice(remembered), [chosen, remembered]);
+  return chosen ?? inheritedChoice(remembered);
 }
 
 /** Replaces what is chosen for a seat, dropping what was set back to the team default. */
@@ -335,6 +329,7 @@ export interface OrchestratorDraft {
   /** The text as it was when last saved, to tell a saved draft from a changed one. */
   readonly savedText: string | null;
   readonly board?: string | null;
+  readonly useProjectFolder?: boolean;
   /**
    * Set on a draft whose team was taken from what is remembered and has not
    * been held against a list that offers a team yet: an empty list leaves an
@@ -382,13 +377,7 @@ interface OrchestratorDraftState {
   readonly update: (threadId: string, patch: Partial<OrchestratorDraft>) => void;
   /** A person choosing a team: it stands whatever the list says, and is remembered. */
   readonly chooseTeam: (threadId: string, environmentId: string | null, team: string) => void;
-  /**
-   * Holds a new draft's team against the teams there are, once, on the first
-   * reading that offers any: keep the draft's team if offered, else prefer
-   * development, else the first offered team. An empty list leaves an unsaved
-   * draft waiting for a later one. A team a person chose, or one the draft was
-   * saved with, is never replaced.
-   */
+  // Reconcile unsaved defaults only after a nonempty catalog arrives; preserve explicit or saved teams.
   readonly reconcileTeam: (threadId: string, teams: ReadonlyArray<string>) => void;
   /** Replaces what is chosen for one seat. */
   readonly setSeat: (threadId: string, seat: string, choice: SeatChoice) => void;
@@ -540,30 +529,26 @@ export function useBoardPreferences(environment: string | null) {
 
 export function useBoardControls(environment: string | null) {
   const update = useBoardStore((state) => state.updateBoard);
-  return useMemo(
-    () => ({
-      setBoardSet: (boardSet: string) => update(environment, () => ({ boardSet })),
-      setBoardSelection: (value: string) => {
-        const patch = boardSelectionPatch(value);
-        if (patch) update(environment, () => patch);
-      },
-      setView: (view: string) => update(environment, () => ({ view })),
-      setFilters: (patch: Partial<BoardFilters>) =>
-        update(environment, (current) => ({ filters: { ...current.filters, ...patch } })),
-      clearFilters: () => update(environment, () => ({ filters: NO_FILTERS })),
-      setGrouping: (grouping: BoardGrouping) => update(environment, () => ({ grouping })),
-      foldLane: (lane: string, folded: boolean) =>
-        update(environment, (current) => ({ laneFolds: { ...current.laneFolds, [lane]: folded } })),
-      foldPanel: (group: string, folded: boolean) =>
-        update(environment, (current) => ({
-          panelFolds: { ...current.panelFolds, [group]: folded },
-        })),
-      setShared: (shared: boolean) => update(environment, () => ({ shared })),
-      setSharedBoardSet: (sharedBoardSet: string) =>
-        update(environment, () => ({ sharedBoardSet })),
-    }),
-    [environment, update],
-  );
+  return {
+    setBoardSet: (boardSet: string) => update(environment, () => ({ boardSet })),
+    setBoardSelection: (value: string) => {
+      const patch = boardSelectionPatch(value);
+      if (patch) update(environment, () => patch);
+    },
+    setView: (view: string) => update(environment, () => ({ view })),
+    setFilters: (patch: Partial<BoardFilters>) =>
+      update(environment, (current) => ({ filters: { ...current.filters, ...patch } })),
+    clearFilters: () => update(environment, () => ({ filters: NO_FILTERS })),
+    setGrouping: (grouping: BoardGrouping) => update(environment, () => ({ grouping })),
+    foldLane: (lane: string, folded: boolean) =>
+      update(environment, (current) => ({ laneFolds: { ...current.laneFolds, [lane]: folded } })),
+    foldPanel: (group: string, folded: boolean) =>
+      update(environment, (current) => ({
+        panelFolds: { ...current.panelFolds, [group]: folded },
+      })),
+    setShared: (shared: boolean) => update(environment, () => ({ shared })),
+    setSharedBoardSet: (sharedBoardSet: string) => update(environment, () => ({ sharedBoardSet })),
+  };
 }
 
 /** The name to write on what is done. Empty, the engine writes "person". */
@@ -571,14 +556,8 @@ export function usePersonName(): string {
   return useBoardStore((state) => state.person.trim());
 }
 
-/**
- * The environment whose delivery engine the Board, its panel and Profiles talk to. A window can be
- * connected to several environments, and the engine is the one of the environment the work lives
- * in, not always the window's own: a task made from a conversation goes to the engine of that
- * conversation's environment. Otherwise the one the person chose on the Board, if still connected;
- * otherwise the window's own. A URL can pin the environment. Turning delivery off does not change
- * whose tasks the screen shows.
- */
+// Prefer the pinned or conversation environment, then the connected Board choice, then this window.
+// Disabling delivery does not change which environment owns the displayed tasks.
 export function useDeliveryEnvironmentId(
   fromConversation: string | null = null,
   requested: string | null = null,

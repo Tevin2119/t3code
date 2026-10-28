@@ -60,25 +60,24 @@ export function withNativeTurnReceipt(
           }),
         ),
       ),
-    prompt: (payload, promptOptions) =>
-      Effect.gen(function* () {
-        const before =
-          sessionId && options.countTurnEnds ? yield* options.countTurnEnds(sessionId) : 0;
-        const result = yield* runtime.prompt(payload, promptOptions);
-        if (result.stopReason === "end_turn" && sessionId && options.turnEnd) {
-          const end = yield* options.turnEnd(sessionId, before);
-          if (!end.endedWell)
-            return yield* new EffectAcpErrors.AcpTransportError({
-              detail: "The harness reported no successful native turn receipt.",
-              cause: end,
-            });
-        }
-        return result;
-      }),
+    prompt: Effect.fn("prompt")(function* (payload, promptOptions) {
+      const before =
+        sessionId && options.countTurnEnds ? yield* options.countTurnEnds(sessionId) : 0;
+      const result = yield* runtime.prompt(payload, promptOptions);
+      if (result.stopReason === "end_turn" && sessionId && options.turnEnd) {
+        const end = yield* options.turnEnd(sessionId, before);
+        if (!end.endedWell)
+          return yield* new EffectAcpErrors.AcpTransportError({
+            detail: "The harness reported no successful native turn receipt.",
+            cause: end,
+          });
+      }
+      return result;
+    }),
   };
 }
 
-export function forkApprovalOptions(
+function forkApprovalOptions(
   request: EffectAcpSchema.RequestPermissionRequest,
 ): ReadonlyArray<ProviderApprovalOption> {
   const has = (kind: EffectAcpSchema.PermissionOption["kind"]) =>
@@ -121,42 +120,40 @@ export function makeForkAcpAdapter(
           : kind === "kimi"
             ? resolveKimiAcpModelId(selection.model)
             : resolveDeepSeekAcpModelId(selection.model),
-      applyModelSelection: (input) =>
-        Effect.gen(function* () {
-          const selected =
-            kind === "hermes"
-              ? resolveHermesAcpModelId(input.modelSelection.model)
-              : kind === "kimi"
-                ? resolveKimiAcpModelId(input.modelSelection.model)
-                : resolveDeepSeekAcpModelId(input.modelSelection.model);
-          if (selected) {
-            if (kind === "deepseek")
-              yield* input.runtime.setConfigOption(DEEPSEEK_MODEL_CONFIG_ID, selected);
-            else yield* input.runtime.setSessionModel(selected);
-          }
-          if (kind !== "hermes") {
-            const option = kind === "kimi" ? "thinking" : "reasoning_effort";
-            const chosen = getModelSelectionStringOptionValue(input.modelSelection, option);
-            const result = yield* applyAcpSessionOption(input.runtime, option, chosen);
-            if (chosen && chosen !== "harness-default" && !result.applied)
-              return yield* new EffectAcpErrors.AcpTransportError({
-                detail: "The harness did not apply the requested reasoning option.",
-                cause: result,
-              });
-          }
-          return selected;
-        }),
-      makeRuntime: (input) =>
-        Effect.gen(function* () {
-          const problem = runtimeModeProblem(support, input.runtimePolicy.runtimeMode);
-          if (problem)
+      applyModelSelection: Effect.fn("applyModelSelection")(function* (input) {
+        const selected =
+          kind === "hermes"
+            ? resolveHermesAcpModelId(input.modelSelection.model)
+            : kind === "kimi"
+              ? resolveKimiAcpModelId(input.modelSelection.model)
+              : resolveDeepSeekAcpModelId(input.modelSelection.model);
+        if (selected) {
+          if (kind === "deepseek")
+            yield* input.runtime.setConfigOption(DEEPSEEK_MODEL_CONFIG_ID, selected);
+          else yield* input.runtime.setSessionModel(selected);
+        }
+        if (kind !== "hermes") {
+          const option = kind === "kimi" ? "thinking" : "reasoning_effort";
+          const chosen = getModelSelectionStringOptionValue(input.modelSelection, option);
+          const result = yield* applyAcpSessionOption(input.runtime, option, chosen);
+          if (chosen && chosen !== "harness-default" && !result.applied)
             return yield* new EffectAcpErrors.AcpTransportError({
-              detail: problem,
-              cause: undefined,
+              detail: "The harness did not apply the requested reasoning option.",
+              cause: result,
             });
-          const runtime = yield* options.makeRuntime(input);
-          return withNativeTurnReceipt(runtime, options);
-        }),
+        }
+        return selected;
+      }),
+      makeRuntime: Effect.fn("makeRuntime")(function* (input) {
+        const problem = runtimeModeProblem(support, input.runtimePolicy.runtimeMode);
+        if (problem)
+          return yield* new EffectAcpErrors.AcpTransportError({
+            detail: problem,
+            cause: undefined,
+          });
+        const runtime = yield* options.makeRuntime(input);
+        return withNativeTurnReceipt(runtime, options);
+      }),
     },
   });
 }

@@ -66,13 +66,12 @@ export const resolveServerEnvironmentWorkspace = Effect.fn("resolveServerEnviron
           const encoded = yield* encodeWorkspace(workspace);
           yield* fileSystem.writeFileString(temporary, encoded);
           yield* fileSystem.chmod(temporary, 0o600);
-          yield* fileSystem
-            .link(temporary, bindingPath)
-            .pipe(
-              Effect.catch((cause) =>
-                cause.reason._tag === "AlreadyExists" ? Effect.void : Effect.fail(cause),
-              ),
-            );
+          yield* fileSystem.link(temporary, bindingPath).pipe(
+            Effect.catchIf(
+              (cause) => cause.reason._tag === "AlreadyExists",
+              () => Effect.void,
+            ),
+          );
         }),
       );
     }

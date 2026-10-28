@@ -31,6 +31,7 @@ const makeEnvironment = (path: Path.Path, overrides: Record<string, unknown> = {
     linuxDesktopEntryName: "com.t3tools.T3Code.desktop",
     linuxWmClass: "t3code",
     linuxApplicationsDir: "/home/alice/.local/share/applications",
+    desktopLauncherPath: Option.none(),
     appImagePath: Option.some("/home/alice/Applications/T3-Code.AppImage"),
     path,
     ...overrides,
@@ -225,6 +226,18 @@ describe("DesktopLinuxUrlHandler", () => {
           iconPath: "/home/alice/.local/share/icons/com.t3tools.T3Code.desktop.png",
         }),
       );
+    });
+  });
+
+  it.effect("launches a distribution package through its configured launcher", () => {
+    const recorded = emptyRecording();
+
+    return Effect.gen(function* () {
+      yield* runRegister(recorded, {
+        environment: { desktopLauncherPath: Option.some("/opt/T3 Code/t3code") },
+      });
+
+      assert.include(recorded.files[0]?.content, 'Exec="/opt/T3 Code/t3code" %U');
     });
   });
 
@@ -452,14 +465,14 @@ const themeIconFixture = (source: Uint8Array) =>
     const fileSystem = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
     const root = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-theme-icons-" });
+    yield* fileSystem.writeFileString(path.join(root, "case-probe"), "probe");
+    const caseSensitive = !(yield* fileSystem.exists(path.join(root, "CASE-PROBE")));
     yield* fileSystem.makeDirectory(path.join(root, "resources", "icons"), { recursive: true });
     yield* fileSystem.writeFile(path.join(root, "resources", "icons", "256x256.png"), source);
     const hicolorDir = path.join(root, "icons", "hicolor");
     const appsDir = path.join(hicolorDir, "256x256", "apps");
     const cachePath = path.join(hicolorDir, "icon-theme.cache");
-    // A fixed time in the past, in whole seconds as fs.utimes expects.
     const pastSeconds = 1_600_000_000;
-    // An existing cache that predates any installed icon.
     const seedCache = Effect.gen(function* () {
       yield* fileSystem.makeDirectory(appsDir, { recursive: true });
       yield* fileSystem.writeFile(cachePath, new Uint8Array([0]));
@@ -468,7 +481,16 @@ const themeIconFixture = (source: Uint8Array) =>
     const rewriteCache = fileSystem
       .writeFile(cachePath, new Uint8Array([1]))
       .pipe(Effect.orDie, Effect.provideService(FileSystem.FileSystem, fileSystem));
-    return { root, hicolorDir, appsDir, cachePath, pastSeconds, seedCache, rewriteCache };
+    return {
+      root,
+      hicolorDir,
+      appsDir,
+      cachePath,
+      pastSeconds,
+      seedCache,
+      rewriteCache,
+      caseSensitive,
+    };
   });
 
 const iconCacheRuns = (run: ThemeIconRun) =>
@@ -484,10 +506,12 @@ it.layer(NodeServices.layer)("DesktopLinuxUrlHandler theme icons", (it) => {
       const run: ThemeIconRun = { root: fixture.root, commands: [] };
 
       yield* registerWithRealFileSystem(run);
-      assert.deepEqual([...(yield* fileSystem.readDirectory(fixture.appsDir))].sort(), [
-        "com.t3tools.T3Code.png",
-        "com.t3tools.t3code.png",
-      ]);
+      assert.deepEqual(
+        [...(yield* fileSystem.readDirectory(fixture.appsDir))].sort(),
+        fixture.caseSensitive
+          ? ["com.t3tools.T3Code.png", "com.t3tools.t3code.png"]
+          : ["com.t3tools.t3code.png"],
+      );
       for (const name of ["com.t3tools.t3code", "com.t3tools.T3Code"]) {
         const target = path.join(fixture.appsDir, `${name}.png`);
         assert.deepEqual([...(yield* fileSystem.readFile(target))], [...icon]);
@@ -514,6 +538,8 @@ it.layer(NodeServices.layer)("DesktopLinuxUrlHandler theme icons", (it) => {
       const upper = path.join(fixture.appsDir, "com.t3tools.T3Code.png");
       yield* fileSystem.writeFile(lower, new Uint8Array([3, 2, 1]));
       yield* fileSystem.writeFile(upper, new Uint8Array([1, 2, 3]));
+      // Case-insensitive hosts alias these Linux names; retain a stale icon to exercise replacement.
+      if (!fixture.caseSensitive) yield* fileSystem.writeFile(lower, new Uint8Array([3, 2, 1]));
       for (const target of [lower, upper]) {
         yield* fileSystem.utimes(target, fixture.pastSeconds, fixture.pastSeconds);
       }
@@ -528,7 +554,11 @@ it.layer(NodeServices.layer)("DesktopLinuxUrlHandler theme icons", (it) => {
 
       assert.deepEqual([...(yield* fileSystem.readFile(lower))], [1, 2, 3]);
       const upperInfo = yield* fileSystem.stat(upper);
-      assert.equal(Option.getOrThrow(upperInfo.mtime).getTime(), fixture.pastSeconds * 1000);
+      if (!fixture.caseSensitive) {
+        assert.notEqual(Option.getOrThrow(upperInfo.mtime).getTime(), fixture.pastSeconds * 1000);
+      } else {
+        assert.equal(Option.getOrThrow(upperInfo.mtime).getTime(), fixture.pastSeconds * 1000);
+      }
       assert.deepEqual(
         run.commands.filter(({ command }) => command === "gtk-update-icon-cache"),
         [{ command: "gtk-update-icon-cache", args: ["-f", "-t", fixture.hicolorDir] }],
@@ -547,7 +577,6 @@ it.layer(NodeServices.layer)("DesktopLinuxUrlHandler theme icons", (it) => {
         commands: [],
         onIconCacheRefresh: fixture.rewriteCache,
       };
-      // A cache stamped later than the new icons, as after a clock correction.
       const future = fixture.pastSeconds + 10 * 365 * 24 * 60 * 60;
       yield* fileSystem.utimes(fixture.cachePath, future, future);
 

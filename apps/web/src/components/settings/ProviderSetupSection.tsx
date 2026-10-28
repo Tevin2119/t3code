@@ -10,7 +10,6 @@ import {
   type EnvironmentId,
   type ProviderInstanceId,
   type ServerProvider,
-  type ProviderAuthState,
 } from "@t3tools/contracts";
 import { useRef, useState } from "react";
 import { Trash2Icon } from "lucide-react";
@@ -34,97 +33,6 @@ interface ProviderSetupSectionProps {
   readonly enabled: boolean;
   readonly readOnly: boolean;
   readonly onEnable: () => void;
-}
-
-const AUTH_PHASE_LABELS: Record<ProviderAuthState["phase"], string> = {
-  idle: "Sign in with your Google account.",
-  starting: "Starting Google sign-in.",
-  waiting: "Waiting for Google sign-in.",
-  verifying: "Checking Google sign-in and available models.",
-  succeeded: "Google sign-in complete.",
-  failed: "Google sign-in failed.",
-  cancelled: "Google sign-in cancelled.",
-};
-
-/** API key methods skip the browser, so the phases read as a credential check. */
-const CREDENTIAL_PHASE_LABELS: Record<ProviderAuthState["phase"], string> = {
-  idle: "Connect with the credentials in the provider settings.",
-  starting: "Checking credentials.",
-  waiting: "Checking credentials.",
-  verifying: "Checking credentials and available models.",
-  succeeded: "Connected.",
-  failed: "Could not connect with the configured credentials.",
-  cancelled: "Connection cancelled.",
-};
-
-/**
- * Presentation for one provider's setup flow.
- *
- * Antigravity keeps its Google-specific wording; every other driver reads from
- * its own display name. `usesBrowser` is what decides whether the redirect-URL
- * form appears — a device-code flow (Kimi) finishes in the browser with nothing
- * to paste back, and a credential check (pi) never opens a browser at all.
- */
-interface ProviderSetupCopy {
-  readonly providerName: string;
-  readonly accountLabel: string;
-  readonly accountDescription: string;
-  readonly signInLabel: string;
-  readonly retryLabel: string;
-  readonly signOutLabel: string;
-  readonly signedInMessage: string;
-  readonly signOutConfirmVerb: string;
-  readonly usesBrowser: boolean;
-  readonly phaseLabels: Record<ProviderAuthState["phase"], string>;
-}
-
-export function resolveProviderSetupCopy(input: {
-  readonly provider: ServerProvider | undefined;
-  readonly authMethod: AntigravityAuthMethod;
-}): ProviderSetupCopy {
-  const driver = input.provider?.driver;
-  if (driver === undefined || driver === "antigravity") {
-    const usesBrowser =
-      input.authMethod === "oauth-personal" || input.authMethod === "oauth-business";
-    return {
-      providerName: input.provider?.displayName?.trim() || "Antigravity",
-      accountLabel:
-        ANTIGRAVITY_AUTH_METHODS.find((method) => method.value === input.authMethod)?.label ??
-        "Google account",
-      accountDescription: usesBrowser
-        ? "Connect your Google account."
-        : "Connect with the credentials below.",
-      signInLabel: usesBrowser ? "Sign in with Google" : "Connect",
-      retryLabel: usesBrowser ? "Retry Google sign-in" : "Retry connection",
-      signOutLabel: usesBrowser ? "Sign out of Google" : "Disconnect",
-      signedInMessage: usesBrowser ? "Signed in with Google." : "Connected.",
-      signOutConfirmVerb: usesBrowser ? "Sign out of Google" : "Disconnect",
-      usesBrowser,
-      phaseLabels: usesBrowser ? AUTH_PHASE_LABELS : CREDENTIAL_PHASE_LABELS,
-    };
-  }
-  const providerName = input.provider?.displayName?.trim() || String(driver);
-  return {
-    providerName,
-    accountLabel: `${providerName} account`,
-    accountDescription: `Sign in to ${providerName} on this environment.`,
-    signInLabel: `Sign in to ${providerName}`,
-    retryLabel: `Retry ${providerName} sign-in`,
-    signOutLabel: `Sign out of ${providerName}`,
-    signedInMessage: `Signed in to ${providerName}.`,
-    signOutConfirmVerb: `Sign out of ${providerName}`,
-    // No driver outside Antigravity hosts a redirect back to T3 Code.
-    usesBrowser: false,
-    phaseLabels: {
-      idle: `Sign in to ${providerName} on this environment.`,
-      starting: `Starting ${providerName} sign-in.`,
-      waiting: `Waiting for ${providerName} sign-in.`,
-      verifying: `Checking ${providerName} credentials.`,
-      succeeded: `Signed in to ${providerName}.`,
-      failed: `${providerName} sign-in failed.`,
-      cancelled: `${providerName} sign-in cancelled.`,
-    },
-  };
 }
 
 /** Read the configured method from the instance config. Unknown values fall back to personal. */
@@ -278,7 +186,8 @@ function ProviderSetupActions({
 
   return (
     <div className="divide-y divide-border/50">
-      {/* Keep the live region first so the last visible row is not followed by a sibling that adds its divider. */}
+      {/* Keep the live region first so sibling divider rules do not add a divider after the last visible
+       * row. */}
       <p className="sr-only" role="status">
         {pendingLabel ? `${pendingLabel}.` : null}
       </p>

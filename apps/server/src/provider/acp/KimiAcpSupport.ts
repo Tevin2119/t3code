@@ -1,16 +1,4 @@
-/**
- * Kimi Code ACP wiring.
- *
- * `kimi acp` runs the CLI as an Agent Client Protocol server over stdio, so the
- * generic `AcpSessionRuntime` drives it directly — there is no bespoke
- * transport to translate the way Codex or OpenCode need.
- *
- * Verified against Kimi Code CLI 0.42.0. Its `initialize` response advertises
- * protocol version 1, `loadSession`, session `resume`/`list`/`fork`, and a
- * single terminal-type auth method with id `login`.
- *
- * @module provider/acp/KimiAcpSupport
- */
+// Kimi speaks ACP directly; use the shared runtime rather than a separate transport.
 import { type KimiSettings, ProviderDriverKind } from "@t3tools/contracts";
 import { normalizeModelSlug } from "@t3tools/shared/model";
 import * as Crypto from "effect/Crypto";
@@ -30,7 +18,7 @@ const KIMI_DRIVER_KIND = ProviderDriverKind.make("kimi");
  * re-execs itself with `--login` and runs the device-code exchange in a TTY,
  * so T3 Code never sees an authorization URL to open in a browser.
  */
-export const KIMI_AUTH_METHOD_ID = "login";
+const KIMI_AUTH_METHOD_ID = "login";
 
 /** Model alias `kimi provider list` reports as the account default. */
 export const KIMI_DEFAULT_MODEL_SLUG = "kimi-code/kimi-for-coding";
@@ -46,13 +34,13 @@ export interface KimiAcpRuntimeInput extends Omit<
   readonly environment?: NodeJS.ProcessEnv;
 }
 
-export function kimiAcpSpawnArgs(): ReadonlyArray<string> {
+function kimiAcpSpawnArgs(): ReadonlyArray<string> {
   // `kimi acp` takes no permission-mode flags: approval policy is negotiated
   // per tool call over ACP `session/request_permission`.
   return ["acp"];
 }
 
-export function buildKimiAcpSpawnInput(
+function buildKimiAcpSpawnInput(
   kimiSettings: KimiAcpRuntimeSettings | null | undefined,
   cwd: string,
   environment?: NodeJS.ProcessEnv,
@@ -70,16 +58,7 @@ export function kimiLoginArgs(region: KimiSettings["region"]): ReadonlyArray<str
   return ["login", "--region", region];
 }
 
-/**
- * Pull the device-code challenge out of `kimi login` output. Verified against
- * CLI 0.42.0, which prints to stderr:
- *
- *   Opening browser for Kimi device login: https://…/authorize_device?user_code=AB1C-DEFG
- *   If the browser did not open, paste the URL above and enter code: AB1C-DEFG
- *
- * The code is read from the URL's own `user_code` parameter when present, so a
- * reworded prompt line does not cost us the code.
- */
+// Prefer the URL's user_code over CLI wording so rephrased device-login prompts still work.
 export function parseKimiLoginChallenge(
   output: string,
 ): { readonly verificationUrl: string; readonly verificationCode: string | undefined } | undefined {
@@ -97,29 +76,28 @@ export function parseKimiLoginChallenge(
   };
 }
 
-export const makeKimiAcpRuntime = (
+export const makeKimiAcpRuntime = Effect.fn("makeKimiAcpRuntime")(function* (
   input: KimiAcpRuntimeInput,
-): Effect.Effect<
+): Effect.fn.Return<
   AcpSessionRuntime.AcpSessionRuntime["Service"],
   EffectAcpErrors.AcpError,
   Crypto.Crypto | Scope.Scope
-> =>
-  Effect.gen(function* () {
-    const acpContext = yield* Layer.build(
-      AcpSessionRuntime.layer({
-        ...input,
-        spawn: buildKimiAcpSpawnInput(input.kimiSettings, input.cwd, input.environment),
-        authMethodId: KIMI_AUTH_METHOD_ID,
-      }).pipe(
-        Layer.provide(
-          Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, input.childProcessSpawner),
-        ),
+> {
+  const acpContext = yield* Layer.build(
+    AcpSessionRuntime.layer({
+      ...input,
+      spawn: buildKimiAcpSpawnInput(input.kimiSettings, input.cwd, input.environment),
+      authMethodId: KIMI_AUTH_METHOD_ID,
+    }).pipe(
+      Layer.provide(
+        Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, input.childProcessSpawner),
       ),
-    );
-    return yield* Effect.service(AcpSessionRuntime.AcpSessionRuntime).pipe(
-      Effect.provide(acpContext),
-    );
-  });
+    ),
+  );
+  return yield* Effect.service(AcpSessionRuntime.AcpSessionRuntime).pipe(
+    Effect.provide(acpContext),
+  );
+});
 
 /**
  * Kimi accepts fully-qualified `provider/model` aliases over ACP, which is also

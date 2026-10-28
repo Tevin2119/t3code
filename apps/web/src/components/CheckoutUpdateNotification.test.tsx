@@ -1,4 +1,5 @@
-import { act, useEffect } from "react";
+import { useEffect } from "react";
+import { act } from "../../test/render";
 import { create, type ReactTestRenderer } from "react-test-renderer";
 import type { CheckoutUpdateState } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
@@ -10,7 +11,8 @@ const testState = vi.hoisted(() => ({
   supported: true as boolean | null,
   checkout: null as unknown,
   hydrated: true,
-  legacy: false,
+  enabled: true,
+  probeMounted: vi.fn(),
   pathname: "/",
   start: vi.fn(),
   setStorage: vi.fn(),
@@ -46,7 +48,6 @@ vi.mock("../state/server", () => ({
 vi.mock("../state/use-atom-command", () => ({ useAtomCommand: () => testState.start }));
 vi.mock("../hooks/useSettings", () => ({
   useClientSettingsHydrated: () => testState.hydrated,
-  useLegacySidebarEnabled: () => testState.hydrated && testState.legacy,
 }));
 vi.mock("../hooks/useLocalStorage", () => ({
   getLocalStorageItem: () => testState.dismissed,
@@ -55,7 +56,6 @@ vi.mock("../hooks/useLocalStorage", () => ({
 vi.mock("./ui/toast", () => ({
   toastManager: { add: testState.toastAdd, close: testState.toastClose },
   stackedThreadToast: (toast: unknown) => toast,
-  hiddenToastActionProps: {},
 }));
 
 import {
@@ -84,6 +84,9 @@ const success = AsyncResult.success(undefined);
 
 let pill: CheckoutUpdatePillModel | null = null;
 function Probe() {
+  useEffect(() => {
+    testState.probeMounted();
+  }, []);
   const current = useCheckoutUpdatePill();
   useEffect(() => {
     pill = current;
@@ -93,7 +96,7 @@ function Probe() {
 
 let renderer: ReactTestRenderer | undefined;
 const app = () => (
-  <CheckoutUpdateProvider enabled>
+  <CheckoutUpdateProvider enabled={testState.enabled}>
     <Probe />
   </CheckoutUpdateProvider>
 );
@@ -116,14 +119,13 @@ function deferred() {
 const toastTitles = () => testState.toastAdd.mock.calls.map(([toast]) => toast.title);
 
 beforeEach(() => {
-  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal("window", { location: { reload: testState.reload } });
   Object.assign(testState, {
     environmentId: "env-a",
     supported: true,
     checkout: offered,
     hydrated: true,
-    legacy: false,
+    enabled: true,
     pathname: "/",
     dismissed: null,
   });
@@ -133,6 +135,7 @@ beforeEach(() => {
     testState.toastAdd,
     testState.toastClose,
     testState.reload,
+    testState.probeMounted,
   ]) {
     mock.mockReset();
   }
@@ -146,6 +149,19 @@ afterEach(async () => {
 });
 
 describe("CheckoutUpdateProvider", () => {
+  it("clears a disabled update without remounting children or accepting a late response", async () => {
+    await mount();
+    const finish = deferred();
+    await act(async () => pill!.start());
+    await serverSays({ enabled: false });
+    expect(pill).toBeNull();
+    await finish(AsyncResult.failure(Cause.fail(new Error("offline"))));
+    expect(testState.toastAdd).not.toHaveBeenCalled();
+    await serverSays({ enabled: true });
+    expect(pill?.view).toMatchObject({ action: "update", notice: null });
+    expect(testState.probeMounted).toHaveBeenCalledTimes(1);
+  });
+
   it("offers the update in the pill, not a toast, with the v2 sidebar", async () => {
     await mount();
     expect(pill?.view).toMatchObject({
@@ -335,6 +351,7 @@ describe("CheckoutUpdateProvider", () => {
     await serverSays({ checkout: { ...offered, phase: "installing" } });
     await serverSays({ checkout: failed });
     const firstFailure = testState.toastAdd.mock.calls.at(-1)![0];
+    expect(firstFailure.actionProps).toBeUndefined();
     expect(firstFailure).toMatchObject({
       title: "T3 could not update",
       description: failed.message,
@@ -387,8 +404,8 @@ describe("CheckoutUpdateProvider", () => {
     expect(pill?.view.action).toBe("update");
   });
 
-  it("keeps the toast with the legacy sidebar, with its actions", async () => {
-    testState.legacy = true;
+  it("keeps the settings toast actions available", async () => {
+    testState.pathname = "/settings";
     await mount();
     expect(pill).toBeNull();
     const toast = testState.toastAdd.mock.calls[0]![0];
@@ -406,7 +423,7 @@ describe("CheckoutUpdateProvider", () => {
     expect(pill).toBeNull();
     await serverSays({ hydrated: true, supported: false });
     expect(pill).toBeNull();
-    await serverSays({ legacy: true });
+    await serverSays({ pathname: "/settings" });
     expect(testState.toastAdd).not.toHaveBeenCalled();
   });
 

@@ -21,7 +21,7 @@ import type {
 import { CornerLeftUpIcon, FolderIcon } from "lucide-react";
 import { type KeyboardEvent, useEffect, useState } from "react";
 
-import { normalizeProjectPathForComparison } from "../../lib/projectPaths";
+import { normalizeProjectPathForComparison } from "@t3tools/client-runtime/state/projects";
 import { useEnvironment } from "../../state/environments";
 import { filesystemEnvironment } from "../../state/filesystem";
 import { useEnvironmentQuery } from "../../state/query";
@@ -123,6 +123,7 @@ export function RepositoryBrowse(props: {
   // The name as edited, for the folder it was edited for; another folder gets its own suggestion.
   const [edit, setEdit] = useState<{ readonly path: string; readonly name: string } | null>(null);
   const [navigation] = useState(createBrowseNavigationCoordinator);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Invalidate outstanding filesystem navigation when the browser unmounts.
   useEffect(() => () => navigation.invalidate(), [navigation]);
   // Only the move that lands clears `moving`; typing abandons every move still loading.
   const [moving, setMoving] = useState(false);
