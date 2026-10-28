@@ -258,3 +258,25 @@ provider resume artifacts: successful V2 transcript import is not permission to 
 Validate upgrades on a consistent SQLite backup without starting agent recovery on the copy.
 Keep a pre-upgrade backup for rollback rather than assuming an older executable can undo newer
 migrations. Attachments and provider-owned resume files retain their own formats.
+
+### Context for queued and completed native-reuse work
+
+The first verified integration is `b092ce8a949c2cb27b93eb15a8d8c7c6cd867a9a`.
+On 2026-10-28, the engine's repository notes for `t3-code-fork` and `delivery-engine`
+were updated through the existing repository-notes API. Those notes are included in each
+new seat attempt. This reaches queued tasks and later attempts on existing runs without
+rewriting task history, changing acceptance criteria or moving pinned candidates.
+
+Audit #1197 is historical evidence, not a current file map. Its native-reuse follow-ups
+include Markdown and previews (#1269), provider/model pickers (#1270), Combobox controls
+(#1271), composer drafts (#1273), toasts (#1274), and Settings (#1275). Recheck their
+component paths and findings against the integration before accepting an older candidate.
+The same applies to native update notifications (#1337, #1611), delegation identities
+(#1347), and sync verification (#1827). Completed upstream-sync work (#1242, #1596)
+remains part of the fork; this local integration does not change its configured schedule,
+remote branch or publication permissions.
+
+The separate completed mobile-orchestrator/team-chat changes are being carried forward
+from their original checkouts. Keep those original uncommitted edits until their owner
+reconciles them with the integrated commits. A task marked completed, code committed,
+a release published and a version running are separate facts; report each independently.

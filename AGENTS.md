@@ -40,6 +40,15 @@ The rest of this document is meant to help you navigate the codebase and make ch
 
 Of note: Most T3 Code contributions will come from T3 Code itself, often controlled remotely. This means you should be careful about accessing data, killing dev servers, and other things that may damage the T3 Code instance that the contributor is using.
 
+## Fork integration context
+
+Before delivery, board, profile or engine UI work, read the fork baseline section in
+[Updating](docs/user/updating.md#fork-baseline-nightly-integration-for-delivery-work).
+It identifies the verified nightly integration and native APIs that moved. Recheck older task
+audit paths against the checkout you actually use. Reuse the current native component before
+adding an equivalent. A local integration commit does not mean master or the running server
+has it; retain pinned QA candidates and validate their eventual integration separately.
+
 ## A small glossary
 
 We need to be on the same page with terminology. When communicating, use this language:
