@@ -478,7 +478,7 @@ function DeploymentsContent({ environmentId }: { environmentId: EnvironmentId | 
   );
   const [dependencies, setDependencies] = useState<DeploymentCandidate | null>(null);
   const [request, setRequest] = useState<Request | null>(null);
-  const disabled = !allowed || stale || !!read.error || !snapshot;
+  const disabled = !allowed || stale || !!read.error || !snapshot || !!snapshot.problem;
   return (
     <main className="min-h-0 flex-1 overflow-auto p-4 md:p-6">
       <div className="mb-5 flex flex-wrap items-center gap-2">
@@ -519,6 +519,11 @@ function DeploymentsContent({ environmentId }: { environmentId: EnvironmentId | 
         <p role="alert">
           This engine returned an unsupported deployment response. Update the engine and T3 to
           compatible versions.
+        </p>
+      ) : null}
+      {snapshot?.problem ? (
+        <p role="alert" className="mb-4 text-warning">
+          {snapshot.problem}
         </p>
       ) : null}
       {stale && snapshot ? (

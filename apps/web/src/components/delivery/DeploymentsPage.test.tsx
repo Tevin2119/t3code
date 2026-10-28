@@ -206,3 +206,14 @@ it("preserves a saved environment and command arrays when editing", async () => 
     key: "passphrase",
   });
 });
+
+it("shows a queue persistence fault and disables changes even with an empty queue", async () => {
+  await using view = await setup();
+  mock.snapshot = { ...(mock.snapshot as object), problem: "Deployment state could not be saved." };
+  await act(() => view.renderer.update(<DeploymentsPage />));
+  expect(view.renderer.root.findByProps({ role: "alert" }).children.join("")).toContain(
+    "Deployment state could not be saved.",
+  );
+  expect(view.button("Add deployment").props.disabled).toBe(true);
+  expect(view.button("Discover commits").props.disabled).toBe(true);
+});

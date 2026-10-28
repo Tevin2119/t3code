@@ -70,6 +70,7 @@ export const DeploymentCandidate = Schema.Struct({
 });
 export type DeploymentCandidate = typeof DeploymentCandidate.Type;
 export const DeploymentsSnapshot = Schema.Struct({
+  problem: Problem,
   version: Schema.Literal(1),
   projects: Schema.Array(DeploymentProject),
   candidates: Schema.Array(DeploymentCandidate),
