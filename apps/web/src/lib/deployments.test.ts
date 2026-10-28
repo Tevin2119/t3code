@@ -1,9 +1,15 @@
 import { describe, expect, it } from "vite-plus/test";
-import { DeploymentActionInput, DeploymentProjectInput, DeliveryPath } from "@t3tools/contracts";
+import {
+  DeploymentActionInput,
+  DeploymentProjectInput,
+  DeliveryPath,
+  type DeploymentCandidate,
+} from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 import {
   deploymentRequestBody,
   deploymentActions,
+  deploymentStatus,
   parseDeployments,
   parseDeploymentCommands,
 } from "./deployments";
@@ -139,16 +145,95 @@ describe("deployment contract", () => {
     for (const path of ["https://example.com/api/deployments", "/api/../secret"])
       expect(isPath(path)).toBe(false);
   });
+  const candidate = (changes: Partial<DeploymentCandidate>): DeploymentCandidate => ({
+    id: "release-1",
+    projectId: "project-1",
+    commit: "a".repeat(40),
+    baseCommit: null,
+    state: "merged",
+    createdAt: "2026-10-28T00:00:00Z",
+    updatedAt: "2026-10-28T00:00:00Z",
+    evidence: null,
+    events: [],
+    ...changes,
+  });
   it("only offers deploying after qualification and keeps superseded releases inert", () => {
-    expect(deploymentActions("merged")).not.toContain("deploy");
-    expect(deploymentActions("qualifying")).not.toContain("deploy");
-    expect(deploymentActions("ready")).toContain("deploy");
-    expect(deploymentActions("blocked")).toContain("retry");
-    expect(deploymentActions("superseded")).toEqual([]);
-    expect(deploymentActions("deploying", "deploy")).not.toContain("cancel");
-    expect(deploymentActions("deploying", "preflight")).toContain("cancel");
-    expect(deploymentActions("blocked", null, true)).toContain("verify");
-    expect(deploymentActions("blocked", null, true)).not.toContain("cancel");
-    expect(deploymentActions("verifying", "restart", false, true)).toEqual(["verify"]);
+    expect(deploymentActions(candidate({ state: "merged" }))).not.toContain("deploy");
+    expect(deploymentActions(candidate({ state: "qualifying" }))).not.toContain("deploy");
+    expect(deploymentActions(candidate({ state: "ready" }))).toContain("deploy");
+    expect(deploymentActions(candidate({ state: "superseded" }))).toEqual([]);
+    expect(deploymentActions(candidate({ state: "deploying", phase: "deploy" }))).not.toContain(
+      "cancel",
+    );
+    expect(deploymentActions(candidate({ state: "deploying", phase: "preflight" }))).toContain(
+      "cancel",
+    );
+    const unverified = candidate({ state: "blocked", needsVerify: true, failedPhase: "deploy" });
+    expect(deploymentActions(unverified)).toContain("verify");
+    expect(deploymentActions(unverified)).not.toContain("cancel");
+    expect(
+      deploymentActions(candidate({ state: "verifying", phase: "restart", awaitingRestart: true })),
+    ).toEqual(["verify"]);
+  });
+  it("hides a repeated cancel and retries the engine would refuse", () => {
+    expect(deploymentActions(candidate({ state: "qualifying", cancelRequested: "Sam" }))).toEqual(
+      [],
+    );
+    const failedQualify = { state: "blocked" as const, failedPhase: "qualify" };
+    expect(
+      deploymentActions(candidate({ ...failedQualify, attempts: { qualify: 4, deploy: 0 } })),
+    ).toContain("retry");
+    expect(
+      deploymentActions(candidate({ ...failedQualify, attempts: { qualify: 5, deploy: 0 } })),
+    ).not.toContain("retry");
+    const failedDeploy = { state: "blocked" as const, failedPhase: "deploy" };
+    expect(deploymentActions(candidate({ ...failedDeploy, evidence: { passed: true } }))).toContain(
+      "retry",
+    );
+    expect(
+      deploymentActions(candidate({ ...failedDeploy, evidence: { passed: false } })),
+    ).not.toContain("retry");
+    expect(
+      deploymentActions(
+        candidate({
+          ...failedDeploy,
+          evidence: { passed: true },
+          attempts: { qualify: 1, deploy: 5 },
+        }),
+      ),
+    ).not.toContain("retry");
+    // A cancelled ready release resumes without a new attempt.
+    expect(
+      deploymentActions(
+        candidate({ ...failedDeploy, resumeState: "ready", attempts: { qualify: 1, deploy: 5 } }),
+      ),
+    ).toContain("retry");
+  });
+  it("offers only stopping while another release for the environment runs", () => {
+    expect(deploymentActions(candidate({ state: "merged" }), true)).toEqual(["cancel"]);
+    expect(deploymentActions(candidate({ state: "ready" }), true)).toEqual(["cancel"]);
+    expect(deploymentActions(candidate({ state: "live" }), true)).toEqual([]);
+    expect(
+      deploymentActions(
+        candidate({ state: "verifying", phase: "restart", awaitingRestart: true }),
+        true,
+      ),
+    ).toEqual(["verify"]);
+  });
+  it("reports whether the running revision matches without calling it healthy", () => {
+    const latest = "a".repeat(40);
+    const hotfix = "b".repeat(40);
+    expect(deploymentStatus({ latestCommit: latest, liveCommit: latest })).toBe(
+      "Running revision matches latest merge",
+    );
+    expect(deploymentStatus({ latestCommit: latest, liveCommit: hotfix })).toBe(
+      "Running revision differs from latest merge",
+    );
+    expect(
+      deploymentStatus({ latestCommit: latest, liveCommit: latest, liveProblem: "Health failed" }),
+    ).toBe("Running revision problem: Health failed");
+    expect(deploymentStatus({ latestCommit: null, liveCommit: hotfix })).toBe(
+      "No merged revision discovered",
+    );
   });
 });

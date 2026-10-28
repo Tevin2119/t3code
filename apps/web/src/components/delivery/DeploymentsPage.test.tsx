@@ -8,7 +8,12 @@ const mock = vi.hoisted(() => ({
   action: vi.fn(),
   refresh: vi.fn(),
   snapshot: {} as unknown,
+  projects: [] as unknown[],
 }));
+vi.mock("../../state/entities", () => ({ useProjects: () => mock.projects }));
+vi.mock("./EnginePanel", () => ({ EnginePanel: "engine-panel" }));
+vi.mock("./BoardToolbar", () => ({ useBoardDesktop: () => true }));
+vi.mock("./BoardPicker.browse", () => ({ RepositoryBrowse: "repository-browse" }));
 vi.mock("@effect/atom-react", () => ({ useAtomValue: () => mock.allowed }));
 vi.mock("../../env", () => ({ isElectron: false }));
 vi.mock("../../state/delivery", () => ({
@@ -65,6 +70,7 @@ async function setup() {
   mock.allowed = true;
   mock.action.mockReset().mockResolvedValue({ ok: true });
   mock.refresh.mockReset();
+  mock.projects = [];
   mock.snapshot = {
     version: 1,
     projects: [],
@@ -78,6 +84,7 @@ async function setup() {
         branches: ["main"],
         kind: "git",
         ok: true,
+        engineAdapter: true,
       },
     ],
     capabilities: { engine: true, command: true },
@@ -123,6 +130,7 @@ it("requires full-auto consent, uses listed repository and branch, and submits t
   await act(() => view.button("Add deployment").props.onClick());
   const selects = () => view.renderer.root.findAllByType("select");
   await act(() => selects()[0]!.props.onValueChange("repo"));
+  await act(() => selects()[4]!.props.onValueChange("engine"));
   await act(() => selects()[3]!.props.onValueChange("full-auto"));
   expect(view.button("Review settings").props.disabled).toBe(true);
   await act(() => view.renderer.root.findByType("checkbox" as never).props.onCheckedChange(true));
@@ -216,4 +224,159 @@ it("shows a queue persistence fault and disables changes even with an empty queu
   );
   expect(view.button("Add deployment").props.disabled).toBe(true);
   expect(view.button("Discover commits").props.disabled).toBe(true);
+});
+
+const commands = {
+  qualify: ["npm", "test"],
+  deploy: ["npm", "run", "deploy"],
+  verify: ["npm", "run", "verify"],
+};
+const repositoryRow = (changes: object = {}) => ({
+  id: "repo",
+  title: "Repository",
+  path: "/repo",
+  defaultBase: "main",
+  branches: ["main"],
+  kind: "git",
+  ok: true,
+  ...changes,
+});
+const projectRow = (changes: object = {}) => ({
+  id: "project",
+  repository: "repo",
+  title: "Repository",
+  branch: "main",
+  environment: "production",
+  mode: "manual",
+  adapter: "command",
+  commands,
+  latestCommit: null,
+  liveCommit: null,
+  ...changes,
+});
+const adapterChoices = (view: Awaited<ReturnType<typeof setup>>) =>
+  view.renderer.root
+    .findAllByType("select")[4]!
+    .props.items.map((item: { value: string }) => item.value);
+
+it("starts new deployments on repository commands and offers the engine only where it can release", async () => {
+  await using view = await setup();
+  mock.snapshot = { ...(mock.snapshot as object), repositories: [repositoryRow()] };
+  await act(() => view.renderer.update(<DeploymentsPage />));
+  await act(() => view.button("Add deployment").props.onClick());
+  await act(() => view.renderer.root.findAllByType("select")[0]!.props.onValueChange("repo"));
+  expect(view.renderer.root.findAllByType("select")[4]!.props.value).toBe("command");
+  expect(adapterChoices(view)).toEqual(["command"]);
+  // Repository commands need their arrays before they can be saved.
+  expect(view.button("Review settings").props.disabled).toBe(true);
+});
+
+it("registers a T3 project with the engine from the repository list, without a board", async () => {
+  await using view = await setup();
+  mock.projects = [
+    {
+      id: "p1",
+      environmentId: "host",
+      workspaceRoot: "/work/app",
+      title: "App",
+      repositoryIdentity: null,
+    },
+  ];
+  mock.snapshot = { ...(mock.snapshot as object), repositories: [] };
+  mock.action.mockResolvedValueOnce({
+    ok: true,
+    body: repositoryRow({ id: "app", title: "App", path: "/work/app" }),
+  });
+  await act(() => view.renderer.update(<DeploymentsPage />));
+  await act(() => view.button("Add deployment").props.onClick());
+  const repository = () => view.renderer.root.findAllByType("select")[0]!;
+  expect(repository().props.items.map((item: { value: string }) => item.value)).toEqual([
+    "__t3_project__:p1",
+    "__add_folder__",
+  ]);
+  await act(async () => repository().props.onValueChange("__t3_project__:p1"));
+  expect(mock.action).toHaveBeenCalledWith("/api/repositories", {
+    path: "/work/app",
+    title: "App",
+    by: "Sam",
+  });
+  expect(repository().props.value).toBe("app");
+  expect(view.renderer.root.findAllByType("select")[1]!.props.value).toBe("main");
+  expect(mock.refresh).toHaveBeenCalled();
+  await act(() => repository().props.onValueChange("__add_folder__"));
+  expect(view.renderer.root.findAllByType("repository-browse" as never)).toHaveLength(1);
+});
+
+it("switching a command deployment to the engine sends no commands", async () => {
+  await using view = await setup();
+  mock.snapshot = {
+    ...(mock.snapshot as object),
+    projects: [projectRow()],
+    repositories: [repositoryRow({ engineAdapter: true })],
+  };
+  await act(() => view.renderer.update(<DeploymentsPage />));
+  await act(() => view.button("Configure").props.onClick());
+  await act(() => view.renderer.root.findAllByType("select")[4]!.props.onValueChange("engine"));
+  await act(() => view.button("Review settings").props.onClick());
+  await confirmWithKey(view);
+  expect(mock.action).toHaveBeenCalledWith("/api/deployments/projects", {
+    repository: "repo",
+    branch: "main",
+    environment: "production",
+    mode: "manual",
+    adapter: "engine",
+    by: "Sam",
+    key: "passphrase",
+  });
+});
+
+it("keeps an existing engine deployment's adapter when the repository row does not offer it", async () => {
+  await using view = await setup();
+  mock.snapshot = {
+    ...(mock.snapshot as object),
+    projects: [projectRow({ adapter: "engine", commands: null })],
+    repositories: [repositoryRow({ engineAdapter: false })],
+  };
+  await act(() => view.renderer.update(<DeploymentsPage />));
+  await act(() => view.button("Configure").props.onClick());
+  expect(adapterChoices(view)).toEqual(["command", "engine"]);
+  expect(view.button("Review settings").props.disabled).toBe(false);
+});
+
+it("warns about missing commands and offers only cancel while the environment is busy", async () => {
+  await using view = await setup();
+  mock.snapshot = {
+    ...(mock.snapshot as object),
+    projects: [projectRow({ commands: null, busy: true })],
+    candidates: [
+      {
+        id: "release-1",
+        projectId: "project",
+        commit: "a".repeat(40),
+        baseCommit: null,
+        state: "ready",
+        subject: "Fix the login form",
+        seq: 3,
+        createdAt: "2026-10-28T00:00:00Z",
+        updatedAt: "2026-10-28T00:00:00Z",
+        evidence: null,
+        events: [],
+      },
+    ],
+  };
+  await act(() => view.renderer.update(<DeploymentsPage />));
+  const text = JSON.stringify(view.renderer.toJSON());
+  expect(text).toContain("Repository commands are not configured");
+  expect(text).toContain("Fix the login form");
+  expect(view.button("Deploy")).toBeUndefined();
+  expect(view.button("Cancel")).toBeDefined();
+});
+
+it("asks for delivery permission without declaring the connection read-only", async () => {
+  await using view = await setup();
+  mock.allowed = false;
+  await act(() => view.renderer.update(<DeploymentsPage />));
+  const text = JSON.stringify(view.renderer.toJSON());
+  expect(text).toContain("Deployment changes require delivery permission.");
+  expect(text).not.toContain("Read-only");
 });

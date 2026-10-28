@@ -9,9 +9,11 @@ import {
 } from "@t3tools/contracts";
 import { useState } from "react";
 import { isElectron } from "../../env";
+import type { DeliveryRepository } from "../../lib/delivery";
 import {
   deploymentActions,
   deploymentRequestBody,
+  deploymentStatus,
   parseDeployments,
   parseDeploymentCommands,
 } from "../../lib/deployments";
@@ -42,6 +44,11 @@ import { Input } from "../ui/input";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { SidebarInset } from "../ui/sidebar";
 import { toastManager } from "../ui/toast";
+import { useProjects } from "../../state/entities";
+import { addedRepository, repositoryChoices } from "./BoardPicker.repositories";
+import { RepositoryBrowse } from "./BoardPicker.browse";
+import { useBoardDesktop } from "./BoardToolbar";
+import { EnginePanel } from "./EnginePanel";
 import { EnvironmentPicker } from "./EnvironmentPicker";
 
 const MODE_LABELS = {
@@ -50,6 +57,9 @@ const MODE_LABELS = {
   "full-auto": "Full auto",
 } as const;
 const short = (commit: string | null) => commit?.slice(0, 10) ?? "None";
+const when = (iso: string) => new Date(iso).toLocaleString();
+const ADD_FOLDER = "__add_folder__";
+type SnapshotRepository = DeploymentsSnapshot["repositories"][number];
 type Request = { title: string; path: string; body: Record<string, unknown> };
 
 function Choice({
@@ -88,25 +98,116 @@ function Choice({
   );
 }
 
+/**
+ * The repository choices the board offers: the engine's repositories, then T3 projects and any
+ * folder, which are added to the engine (not to a board) when chosen.
+ */
+function useRepositoryRegistration(
+  environmentId: EnvironmentId,
+  listed: ReadonlyArray<SnapshotRepository>,
+  onRegistered: () => void,
+) {
+  const projects = useProjects();
+  const by = usePersonName();
+  const addAct = useDeliveryAct(environmentId, "add repository");
+  const [added, setAdded] = useState<ReadonlyArray<SnapshotRepository>>([]);
+  const [registering, setRegistering] = useState(false);
+  const [problem, setProblem] = useState<string | null>(null);
+  const ids = new Set(listed.map((repo) => repo.id));
+  const repositories = [...listed, ...added.filter((repo) => !ids.has(repo.id))].filter(
+    (repo) => repo.kind !== "qualification",
+  );
+  const choices = repositoryChoices({
+    repositories: repositories.map((repo): DeliveryRepository => ({
+      ...repo,
+      delivery: null,
+      fetch: null,
+      problem: null,
+    })),
+    projects,
+    environmentId,
+  });
+  const register = async (path: string, title: string): Promise<SnapshotRepository | null> => {
+    if (registering) return null;
+    setRegistering(true);
+    setProblem(null);
+    const result = await addAct("/api/repositories", { path, title, by });
+    setRegistering(false);
+    if (!result.ok) {
+      setProblem(result.why);
+      return null;
+    }
+    const made = addedRepository(result.body, { path, title });
+    if (!made) {
+      setProblem(`${title} was added. Choose it once the list is read again.`);
+      onRegistered();
+      return null;
+    }
+    const row = { ...made, engineAdapter: false };
+    setAdded((current) => [...current.filter((repo) => repo.id !== made.id), row]);
+    onRegistered();
+    return row;
+  };
+  return { projects, repositories, choices, registering, problem, register };
+}
+
 function Configuration({
+  environmentId,
   snapshot,
   project,
   onClose,
+  onRegistered,
   onSave,
 }: {
+  environmentId: EnvironmentId;
   snapshot: DeploymentsSnapshot;
   project: DeploymentProject | null;
   onClose: () => void;
+  onRegistered: () => void;
   onSave: (body: Record<string, unknown>) => void;
 }) {
+  const registration = useRepositoryRegistration(
+    environmentId,
+    snapshot.repositories,
+    onRegistered,
+  );
+  const [browsing, setBrowsing] = useState(false);
   const [repository, setRepository] = useState(project?.repository ?? "");
-  const selected = snapshot.repositories.find((repo) => repo.id === repository);
+  const selected = registration.repositories.find((repo) => repo.id === repository);
   const [branch, setBranch] = useState(project?.branch ?? "");
   const [releaseEnvironment, setReleaseEnvironment] = useState(
     project?.environment ?? "production",
   );
   const [mode, setMode] = useState<string>(project?.mode ?? "manual");
-  const [adapter, setAdapter] = useState<string>(project?.adapter ?? "engine");
+  const [adapter, setAdapter] = useState<string>(project?.adapter ?? "command");
+  // An existing engine deployment keeps its adapter; a new one needs the engine's own checkout.
+  const keepsEngine = project?.adapter === "engine" && project.repository === repository;
+  const engineEligible =
+    snapshot.capabilities.engine && (selected?.engineAdapter === true || keepsEngine);
+  const choose = (repo: SnapshotRepository) => {
+    setRepository(repo.id);
+    setBranch(repo.defaultBase ?? "");
+    const eligible =
+      snapshot.capabilities.engine &&
+      (repo.engineAdapter === true ||
+        (project?.adapter === "engine" && project.repository === repo.id));
+    if (!eligible && adapter === "engine") setAdapter("command");
+  };
+  const chooseRepository = async (value: string) => {
+    if (value === ADD_FOLDER) {
+      setBrowsing(true);
+      return;
+    }
+    const choice = registration.choices.find((item) => item.value === value);
+    if (!choice) return;
+    if (choice.kind === "engine") {
+      const repo = registration.repositories.find((item) => item.id === choice.repository.id);
+      if (repo) choose(repo);
+      return;
+    }
+    const made = await registration.register(choice.folder, choice.name);
+    if (made) choose(made);
+  };
   const [confirmed, setConfirmed] = useState(false);
   const [commandsText, setCommandsText] = useState(
     project?.commands ? JSON.stringify(project.commands, null, 2) : "",
@@ -129,19 +230,48 @@ function Configuration({
             <Choice
               label="Repository"
               value={repository}
-              items={snapshot.repositories
-                .filter((repo) => repo.ok)
-                .map((repo) => ({ value: repo.id, label: repo.title }))}
-              onChange={(id) => {
-                setRepository(id);
-                setBranch(snapshot.repositories.find((repo) => repo.id === id)?.defaultBase ?? "");
-              }}
+              items={[
+                ...registration.choices.flatMap((choice) =>
+                  choice.kind === "engine"
+                    ? choice.repository.ok
+                      ? [{ value: choice.value, label: choice.repository.title }]
+                      : []
+                    : [
+                        {
+                          value: choice.value,
+                          label: `${choice.name} (T3 project, added when chosen)`,
+                        },
+                      ],
+                ),
+                { value: ADD_FOLDER, label: "Add a repository by its folder..." },
+              ]}
+              onChange={(value) => void chooseRepository(value)}
             />
-            {snapshot.repositories.length === 0 ? (
-              <p>
-                No repositories are available. Add a project in T3 and register it with the delivery
-                engine.
+            {registration.registering ? (
+              <p role="status" className="text-sm text-muted-foreground">
+                Adding the repository to the engine...
               </p>
+            ) : null}
+            {registration.problem && !browsing ? (
+              <p role="alert" className="text-sm text-warning">
+                {registration.problem}
+              </p>
+            ) : null}
+            {browsing ? (
+              <RepositoryBrowse
+                environmentId={environmentId}
+                projects={registration.projects}
+                registering={registration.registering}
+                problem={registration.problem}
+                onCancel={() => setBrowsing(false)}
+                onAdd={(path, title) =>
+                  void registration.register(path, title).then((made) => {
+                    if (!made) return;
+                    choose(made);
+                    setBrowsing(false);
+                  })
+                }
+              />
             ) : null}
             <Choice
               label="Branch"
@@ -189,14 +319,20 @@ function Configuration({
               label="Adapter"
               value={adapter}
               items={[
-                { value: "engine", label: "Built-in engine" },
                 { value: "command", label: "Repository commands" },
+                ...(engineEligible ? [{ value: "engine", label: "Built-in engine" }] : []),
               ]}
               onChange={(value) => {
                 setAdapter(value);
                 if (value === "engine") setReleaseEnvironment("production");
               }}
             />
+            {!engineEligible && selected ? (
+              <p className="text-sm text-muted-foreground">
+                The built-in engine adapter releases only the engine's own checkout, when this
+                engine has it configured.
+              </p>
+            ) : null}
             {adapter === "command" ? (
               <div className="flex flex-col gap-2">
                 <p className="text-sm text-muted-foreground">
@@ -233,8 +369,10 @@ function Configuration({
           </Button>
           <Button
             disabled={
+              registration.registering ||
               !selected?.ok ||
               !selected.branches.includes(branch) ||
+              (adapter === "engine" && !engineEligible) ||
               (mode === "full-auto" && !confirmed) ||
               (adapter === "command" &&
                 (!!commandResult.problem || (!commandResult.commands && !project?.commands)))
@@ -368,27 +506,63 @@ function Approval({
 function Candidate({
   candidate,
   disabled,
+  projectBusy,
   onRequest,
   onDependencies,
 }: {
   candidate: DeploymentCandidate;
   disabled: boolean;
+  projectBusy: boolean;
   onRequest: (request: Request) => void;
   onDependencies: () => void;
 }) {
+  const attempts = candidate.attempts;
   return (
     <article className="flex flex-col gap-3 rounded-lg border border-border bg-background p-3">
       <div>
+        {candidate.subject ? (
+          <p className="break-words text-sm">
+            {candidate.seq !== undefined ? (
+              <span className="text-muted-foreground">#{candidate.seq} </span>
+            ) : null}
+            {candidate.subject}
+          </p>
+        ) : null}
         <p className="text-xs text-muted-foreground">Pinned revision</p>
         <code className="break-all text-xs">{candidate.commit}</code>
       </div>
       <p className="text-xs text-muted-foreground">
         Base {short(candidate.baseCommit)}
         <br />
-        Updated {candidate.updatedAt}
+        Updated {when(candidate.updatedAt)}
+        {candidate.liveAt ? (
+          <>
+            <br />
+            Live since {when(candidate.liveAt)}
+          </>
+        ) : null}
+        {candidate.liveUntil ? (
+          <>
+            <br />
+            Replaced {when(candidate.liveUntil)}
+          </>
+        ) : null}
       </p>
       {candidate.phase ? (
         <p className="text-xs text-muted-foreground">Phase: {candidate.phase}</p>
+      ) : null}
+      {candidate.state === "blocked" && candidate.failedPhase ? (
+        <p className="text-xs text-warning">Stopped during {candidate.failedPhase}</p>
+      ) : null}
+      {attempts && (attempts.qualify > 0 || attempts.deploy > 0) ? (
+        <p className="text-xs text-muted-foreground">
+          Attempts: qualify {attempts.qualify}, deploy {attempts.deploy}
+        </p>
+      ) : null}
+      {candidate.cancelRequested ? (
+        <p role="status" className="text-xs text-muted-foreground">
+          Cancel requested by {candidate.cancelRequested}. It stops at the next safe point.
+        </p>
       ) : null}
       {candidate.needsVerify ? (
         <p className="text-xs text-warning">
@@ -419,12 +593,7 @@ function Candidate({
         </pre>
       </details>
       <div className="flex flex-wrap gap-1">
-        {deploymentActions(
-          candidate.state,
-          candidate.phase,
-          candidate.needsVerify,
-          candidate.awaitingRestart,
-        ).map((action) => (
+        {deploymentActions(candidate, projectBusy).map((action) => (
           <Button
             key={action}
             size="xs"
@@ -450,12 +619,16 @@ function Candidate({
 export function DeploymentsPage() {
   const environmentId = useDeliveryEnvironmentId();
   const setEnvironment = useBoardStore((state) => state.setDeliveryEnvironment);
+  const desktop = useBoardDesktop();
   return (
     <SidebarInset>
       <div className="flex h-dvh min-h-0 flex-col overflow-hidden">
         <WorkspacePageHeader electron={isElectron}>
           <div className="flex min-w-0 flex-1 flex-wrap items-center gap-3 py-2">
             <h1 className="text-sm font-medium">Deployments</h1>
+            {environmentId ? (
+              <EnginePanel environmentId={environmentId} compact={!desktop} />
+            ) : null}
             <EnvironmentPicker value={environmentId} onChoose={setEnvironment} />
           </div>
         </WorkspacePageHeader>
@@ -533,7 +706,7 @@ function DeploymentsContent({ environmentId }: { environmentId: EnvironmentId | 
       ) : null}
       {!allowed && enabled ? (
         <p className="mb-4 text-sm text-muted-foreground">
-          Read-only connection. Deployment changes require delivery permission.
+          Deployment changes require delivery permission.
         </p>
       ) : null}
       {snapshot?.projects.length === 0 ? (
@@ -568,28 +741,33 @@ function DeploymentsContent({ environmentId }: { environmentId: EnvironmentId | 
                 Configure
               </Button>
             </div>
-            <p className="text-sm">
-              Latest merged <code>{short(project.latestCommit)}</code> · Live{" "}
+            <p className="text-sm" data-deployment-status>
+              Latest merged <code>{short(project.latestCommit)}</code> · Running{" "}
               <code>{short(project.liveCommit)}</code> ·{" "}
-              {project.latestCommit === null
-                ? "No merged revision discovered"
-                : project.liveCommit === project.latestCommit
-                  ? "Up to date"
-                  : "Merged changes are not live"}
+              <span className={project.liveProblem ? "text-warning" : undefined}>
+                {deploymentStatus(project)}
+              </span>
+              {project.liveObservedAt ? (
+                <span className="text-muted-foreground">
+                  {" "}
+                  · Observed {when(project.liveObservedAt)}
+                </span>
+              ) : null}
             </p>
             {project.busy ? (
               <p role="status" className="text-sm text-muted-foreground">
                 A release operation is running.
               </p>
             ) : null}
-            {project.liveProblem ? (
-              <p className="text-sm text-warning">Live verification: {project.liveProblem}</p>
-            ) : null}
             {project.problem ? <p className="text-sm text-warning">{project.problem}</p> : null}
-            {project.configured === false || !snapshot.capabilities[project.adapter] ? (
+            {project.adapter === "command" && !project.commands ? (
               <p className="text-sm text-warning">
-                Adapter unavailable or unconfigured. Configure the engine or repository commands
-                before running a release.
+                Repository commands are not configured. Configure them before running a release.
+              </p>
+            ) : !snapshot.capabilities[project.adapter] ? (
+              <p className="text-sm text-warning">
+                This adapter is unavailable on this engine. Configure the engine before running a
+                release.
               </p>
             ) : null}
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
@@ -613,6 +791,7 @@ function DeploymentsContent({ environmentId }: { environmentId: EnvironmentId | 
                             key={candidate.id}
                             candidate={candidate}
                             disabled={disabled}
+                            projectBusy={!!project.busy}
                             onRequest={setRequest}
                             onDependencies={() => setDependencies(candidate)}
                           />
@@ -643,11 +822,13 @@ function DeploymentsContent({ environmentId }: { environmentId: EnvironmentId | 
           }}
         />
       ) : null}
-      {configuration && snapshot ? (
+      {configuration && snapshot && environmentId ? (
         <Configuration
+          environmentId={environmentId}
           snapshot={snapshot}
           project={configuration.project}
           onClose={() => setConfiguration(null)}
+          onRegistered={read.refresh}
           onSave={(body) => {
             setConfiguration(null);
             setRequest({

@@ -194,21 +194,25 @@ update queued for the next suitable moment.
 ## Track merged commits through deployment
 
 When Delivery is enabled, open **Deployments** in the sidebar to compare each
-repository's latest merged revision with its live revision in each release environment. Add a
-repository, branch and release environment (development, staging or production) from the available choices, then use **Discover commits**
-to create release candidates. Deployment revisions stay pinned while they are
+repository's latest merged revision with the revision running in each release
+environment. A matching revision is not a health check; a failed live check is
+shown first. Choose **Add deployment**, then pick a repository, branch and
+release environment from the lists. A T3 project or folder the engine does not
+know yet is added to the engine when you choose it. Use **Discover commits** to
+create release candidates. Their revisions stay pinned while they are
 qualified, deployed and verified.
 
 Start with **Manual** mode to approve each step. **Auto-qualify** checks new
 candidates and waits before deployment. **Full auto** also deploys and verifies;
 changing to it requires explicit consent. Dependencies can require another
 release to be live first. Every deployment change asks for the engine's approval
-passphrase, even while an approval window is open.
+passphrase, even while an approval window is open. While one release for an
+environment is running, the others there can only be cancelled.
 
-Use the built-in adapter for the engine's own production repository. For other
-repositories, choose **Repository commands** and configure a JSON object of
-argument arrays: `qualify`, `deploy`, and `verify`, with optional `setup`. Each
-array begins with the executable followed by its arguments. Keep secrets out of
-this configuration. Leaving commands blank preserves existing configuration.
-An unavailable adapter or a failed check appears on the deployment rather than
-being reported as a successful release.
+New deployments use **Repository commands**: a JSON object of argument arrays,
+`qualify`, `deploy` and `verify`, with optional `setup`. Each array begins with
+the executable followed by its arguments. Keep secrets out of this
+configuration. Leaving commands blank keeps the saved ones. The built-in engine
+adapter is offered only for the engine's own checkout in production, when the
+engine has it configured. A missing command configuration or a failed check
+appears on the deployment rather than being reported as a successful release.
