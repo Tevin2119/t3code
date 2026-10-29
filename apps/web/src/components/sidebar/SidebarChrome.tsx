@@ -152,12 +152,14 @@ function SidebarBrandMark({ onBackdrop }: { onBackdrop: boolean }) {
 function SidebarUtilityItem({
   badge,
   icon,
+  isActive = false,
   label,
   onClick,
 }: {
   /** A count shown on the icon's corner. Nothing is shown for zero or when it is not known. */
   badge?: number | null;
   icon: ReactNode;
+  isActive?: boolean;
   label: string;
   onClick: () => void;
 }) {
@@ -166,7 +168,7 @@ function SidebarUtilityItem({
       <Tooltip>
         <TooltipTrigger
           render={
-            <SidebarMenuButton aria-label={label} onClick={onClick} size="icon">
+            <SidebarMenuButton aria-label={label} isActive={isActive} onClick={onClick} size="icon">
               {icon}
             </SidebarMenuButton>
           }
@@ -186,13 +188,17 @@ function SidebarUtilityItem({
   );
 }
 
-const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
+export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
   const navigate = useNavigate();
   const navigateToMainApp = useNavigateToMainApp();
   const { isMobile, setOpenMobile } = useSidebar();
-  const isOnDeliveryPage = useLocation({
-    select: (location) => ["/board", "/profiles", "/deployments"].includes(location.pathname),
+  const deliveryPathname = useLocation({
+    select: (location) =>
+      ["/board", "/profiles", "/deployments"].includes(location.pathname)
+        ? location.pathname
+        : null,
   });
+  const isOnDeliveryPage = deliveryPathname !== null;
   const isOnUtilityPage = useLocation({
     select: (location) => isSidebarUtilityPage(location.pathname),
   });
@@ -238,7 +244,7 @@ const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
 
   return (
     <SidebarMenu className="flex-row items-center">
-      {isOnUtilityPage || isOnDeliveryPage ? (
+      {isOnUtilityPage ? (
         <SidebarMenuItem className="min-w-0 flex-1">
           <SidebarMenuButton onClick={handleBackClick}>
             <ArrowLeftIcon />
@@ -247,6 +253,14 @@ const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
         </SidebarMenuItem>
       ) : (
         <>
+          {/* The board panel replaces the thread list, so delivery pages keep a way back to chat. */}
+          {isOnDeliveryPage ? (
+            <SidebarUtilityItem
+              icon={<ArrowLeftIcon />}
+              label="Back to chat"
+              onClick={handleBackClick}
+            />
+          ) : null}
           <SidebarUtilityItem
             icon={<SettingsIcon />}
             label="Settings"
@@ -270,6 +284,7 @@ const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
         <SidebarUtilityItem
           badge={boardAttention}
           icon={<BoardIcon />}
+          isActive={deliveryPathname === "/board"}
           label={
             boardAttention
               ? `Board, ${boardAttention} ${boardAttention === 1 ? "task needs" : "tasks need"} you`
@@ -281,6 +296,7 @@ const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
       {deliveryEnabled ? (
         <SidebarUtilityItem
           icon={<RocketIcon />}
+          isActive={deliveryPathname === "/deployments"}
           label="Deployments"
           onClick={() => {
             closeMobileSidebar();
