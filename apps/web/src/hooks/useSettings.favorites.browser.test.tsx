@@ -191,10 +191,10 @@ describe("environment favorite toggles", () => {
     "toggles twice before any server echo when initially favorited=%s",
     async (initiallyFavorited) => {
       await using fixture = await setup();
-      const { registry, durable, writes, mount, click } = fixture;
+      const { durable, writes, mount, click } = fixture;
       const favorites = initiallyFavorited ? [{ provider, model }] : [];
       const settings = { ...initialSettings, favorites };
-      registry.set(settingsAtom(primaryId), settings);
+      state.settings.set(primaryId, Atom.make<ServerSettings | null>(settings));
       durable.set(primaryId, settings);
       await mount();
       const first = click();

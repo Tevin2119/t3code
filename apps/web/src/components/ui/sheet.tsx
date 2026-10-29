@@ -1,5 +1,6 @@
-import { ControlledOpenContext, renderRetainedPopup } from "~/components/ui/dialog";
-("use client");
+"use client";
+
+import { renderRetainedPopup } from "~/components/ui/dialog";
 
 import { Dialog as SheetPrimitive } from "@base-ui/react/dialog";
 import { XIcon } from "lucide-react";
@@ -79,6 +80,7 @@ function SheetPopup({
   const instant = transitionDurationMs === 0;
   const [portal, setPortal] = useState<HTMLDivElement | null>(null);
 
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- keeps Base UI's portal tab order and focusout listener in step with the mounted inline portal
   useLayoutEffect(() => {
     if (!inline || !portal) return;
 

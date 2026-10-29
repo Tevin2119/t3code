@@ -52,7 +52,7 @@ export function SessionStatusFooter(props: {
   return (
     <div
       aria-label="Session status"
-      className="pointer-events-auto flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 px-3 pt-1 font-mono text-[10px] text-muted-foreground sm:px-4"
+      className="pointer-events-auto flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 px-3 pt-1 font-mono text-3xs text-muted-foreground sm:px-4"
     >
       {props.delivery?.unreadable ? (
         <StatusField detail={props.delivery.unreadable}>

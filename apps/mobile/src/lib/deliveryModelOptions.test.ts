@@ -78,9 +78,9 @@ describe("mobile delivery model options", () => {
       }
     },
   );
-  it("keeps unbound filtering unchanged and revalidates staged selections on binding changes", () => {
+  it("keeps compatible unbound instances and revalidates staged selections on binding changes", () => {
     const unbound = buildModelOptions(config, current, current.instanceId, null);
-    expect(unbound).toHaveLength(2);
+    expect(unbound).toHaveLength(4);
     expect(unbound.every((option) => !option.disabledReason)).toBe(true);
     const unrestricted = buildModelOptions(config, current, undefined, null);
     const staged = unrestricted.find((option) => option.providerKey === "pi_personal")!;

@@ -1133,7 +1133,7 @@ describe("UsageService", () => {
           assert.strictEqual(
             summary.sources.find((source) => source.fingerprint.provider === "pi")?.fingerprint
               .resolvedHomePath,
-            dir,
+            yield* Effect.promise(() => NodeFSP.realpath(dir)),
           );
         }).pipe(
           Effect.scoped,
@@ -2051,19 +2051,22 @@ describe("UsageService", () => {
             if (malformed > 0) assert.match(source?.message ?? "", /1 malformed or inconsistent/);
             else assert.notMatch(source?.message ?? "", /malformed|inconsistent/);
           };
+          const canonicalTranscript = yield* Effect.promise(() => NodeFSP.realpath(transcript));
+          const openedTranscript = ([path]: Parameters<typeof NodeFSP.open>) =>
+            path === transcript || path === canonicalTranscript;
           const open = vi.spyOn(NodeFSP, "open");
           open.mockClear();
           yield* Effect.addFinalizer(() => Effect.sync(() => open.mockRestore()));
           const first = yield* UsageService.make;
           const cold = yield* first.readSummary(WINDOW);
-          assert.isTrue(open.mock.calls.some(([path]) => path === transcript));
+          assert.isTrue(open.mock.calls.some(openedTranscript));
           verify(cold, 20, 20, 1);
           yield* first.awaitPersisted;
           const restarted = yield* UsageService.make;
           open.mockClear();
           verify(yield* first.readSummary(WINDOW), 20, 20, 1);
           verify(yield* restarted.readSummary(WINDOW), 20, 20, 1);
-          assert.isFalse(open.mock.calls.some(([path]) => path === transcript));
+          assert.isFalse(open.mock.calls.some(openedTranscript));
           open.mockRestore();
 
           const append = "\n" + counted(10, 2, 140, 30) + "\n";
@@ -2262,7 +2265,7 @@ describe("UsageService", () => {
             60 + 20 * (version === 4 ? 1 : 2),
           );
           yield* upgraded.awaitPersisted;
-          assert.strictEqual(SCAN_CACHE_FILE_NAME, "usage-scan-cache-v9.json");
+          assert.strictEqual(SCAN_CACHE_FILE_NAME, "usage-scan-cache-v10.json");
           assert.strictEqual(
             yield* Effect.promise(() => NodeFSP.readFile(legacyPath, "utf8")),
             legacy,
