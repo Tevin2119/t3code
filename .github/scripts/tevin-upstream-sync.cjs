@@ -112,7 +112,6 @@ function mergeRef(cwd, ref, message, env) {
 
 /** Renders a path as an inline code span that survives backticks and control characters. */
 function codeSpan(value) {
-  // oxlint-disable-next-line no-control-regex -- Git paths can contain control characters.
   const visible = value.replace(/[\u0000-\u001f\u007f]/g, (char) =>
     char === "\n" ? "\\n" : `\\x${char.charCodeAt(0).toString(16).padStart(2, "0")}`,
   );
