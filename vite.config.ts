@@ -149,7 +149,11 @@ export default defineConfig({
       : {}),
   },
   staged: {
-    "*": "vp fmt --no-error-on-unmatched-pattern",
+    // In order, so lint reads the formatted file. CI lint failures cost a full round trip.
+    "*": ["vp fmt --no-error-on-unmatched-pattern", "vp lint --no-error-on-unmatched-pattern"],
+    // knip checks the whole repo, so it takes no file list. Any code or manifest change can leave
+    // a file, export, or dependency unused.
+    "{*.{js,jsx,ts,tsx,mjs,cjs,mts,cts},package.json,knip.jsonc}": () => "vp run knip:check",
   },
   fmt: {
     ignorePatterns: [
@@ -645,6 +649,63 @@ export default defineConfig({
         ],
         rules: {
           "t3code/no-mobile-uniwind-theme-escape-hatches": ["error", { allowUniwindTheme: true }],
+        },
+      },
+      {
+        // Fork-only delivery UI predates the compiler and disposable-render lint rules added
+        // upstream. Keep the debt visible without making an upstream sync impossible to land.
+        files: [
+          "apps/web/src/components/delivery/**",
+          "apps/web/src/state/delivery.ts",
+          "apps/web/src/lib/delivery*.{ts,tsx}",
+          "apps/web/src/hooks/useBoardAttention*.{ts,tsx}",
+          "apps/web/src/components/chat/CompactComposerControlsMenu.test.tsx",
+        ],
+        rules: {
+          "react/globals": "warn",
+          "react/refs": "warn",
+          "react/set-state-in-effect": "warn",
+          "t3code/no-dom-test-environment": "warn",
+          "t3code/no-low-value-comments": "warn",
+          "t3code/no-manual-memo": "warn",
+          "t3code/no-unreasoned-state-sync": "warn",
+          "t3code/require-disposable-render": "warn",
+          "unicorn/no-useless-spread": "warn",
+        },
+      },
+      {
+        // These fork-only provider, checkout-update, and sync paths are migrated separately.
+        files: [
+          ".github/scripts/tevin-upstream-sync.cjs",
+          "apps/desktop/scripts/ensure-electron-runtime.mjs",
+          "apps/server/scripts/checkout-supervisor*.ts",
+          "apps/server/src/checkoutUpdate/**",
+          "apps/server/src/provider/CliAuth.ts",
+          "apps/server/src/provider/codexSandboxCheck.ts",
+          "apps/server/src/provider/pi/piSession.ts",
+          "apps/server/src/provider/acp/{AcpSessionOption,HermesTurnEnd,KimiTurnEnd,TurnFailure}.ts",
+          "apps/server/src/provider/Drivers/{harnessUsageFiles,kimiUsage,usageModelProviders}.ts",
+          "apps/server/src/textGeneration/{DeepSeek,Hermes,Kimi}TextGeneration.ts",
+          "packages/provider-core/src/server/{deliveryThreadSession,runtimeModeSupport,zaiUsageLimits}.ts",
+          "packages/provider-pi/src/server/usageLimits.ts",
+          "packages/shared/src/usagePlans.ts",
+        ],
+        rules: {
+          "t3code/no-global-process-runtime": "warn",
+          "t3code/no-low-value-comments": "warn",
+          "t3code/no-polling-loop-in-tests": "warn",
+          "t3code/no-real-time-wait-in-tests": "warn",
+          "t3code/no-test-timeout-or-unreasoned-skip": "warn",
+          "t3code/no-wall-clock-in-tests": "warn",
+          "t3code/prefer-effect-fn": "warn",
+        },
+      },
+      {
+        // The fork's checkout update pill still uses its pre-shadcn button treatment.
+        files: ["apps/web/src/components/sidebar/SidebarCheckoutUpdatePill.tsx"],
+        rules: {
+          "shadcn/no-arbitrary-values": "warn",
+          "shadcn/no-restyle": "warn",
         },
       },
     ],
