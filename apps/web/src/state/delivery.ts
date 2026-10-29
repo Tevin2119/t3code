@@ -1,7 +1,7 @@
 import { createDeliveryEnvironmentAtoms } from "@t3tools/client-runtime/state/delivery";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import { DELIVERY_DEFAULT_TEAM, type EnvironmentId } from "@t3tools/contracts";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 
@@ -301,7 +301,8 @@ export function useDraftTeamChoice(
   const remembered = useDeliveryDraftStore((state) =>
     rememberedTeam(state.remembered, environmentId),
   );
-  return chosen ?? inheritedChoice(remembered);
+  const inherited = useMemo(() => inheritedChoice(remembered), [remembered]);
+  return chosen ?? inherited;
 }
 
 /** Replaces what is chosen for a seat, dropping what was set back to the team default. */

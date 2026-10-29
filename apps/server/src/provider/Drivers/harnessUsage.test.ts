@@ -4,9 +4,7 @@ import { DEFAULT_SERVER_SETTINGS, ProviderInstanceId } from "@t3tools/contracts"
 import type { ProviderUsageReader, UsageRecord } from "@t3tools/provider-core/server/usage";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
-import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
-import { FetchHttpClient } from "effect/http";
 
 import { UsageAggregator } from "../../usage/usageAggregation.ts";
 import { hermesRecordFrom } from "./hermesUsage.ts";
