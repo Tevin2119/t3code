@@ -1,7 +1,7 @@
 import { EnvironmentId } from "@t3tools/contracts";
-import { act } from "react";
 import { create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, expect, it, vi } from "vite-plus/test";
+import { act } from "../../../test/render";
 import { BoardDialog } from "./BoardPicker";
 
 vi.mock("../../state/entities", () => ({
@@ -31,14 +31,19 @@ vi.mock("../ui/select", () => ({
   SelectItem: "select-item",
   SelectButton: "select-button",
 }));
+vi.mock("../ui/command", async (original) => ({
+  ...(await original<typeof import("../ui/command")>()),
+  CommandDialog: "command-dialog",
+  CommandDialogPopup: "command-dialog-popup",
+}));
+vi.mock("../CommandPaletteContent", () => ({ CommandPaletteContent: "palette-content" }));
+vi.mock("../CommandPaletteResults", () => ({ CommandPaletteResults: "palette-results" }));
 let renderer: ReactTestRenderer | undefined;
 afterEach(async () => {
   await act(() => renderer?.unmount());
-  vi.unstubAllGlobals();
 });
 
 it("makes a folder board from a listed project without asking for a path or a repository", async () => {
-  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   const save = vi.fn();
   await act(() => {
     renderer = create(
@@ -54,9 +59,15 @@ it("makes a folder board from a listed project without asking for a path or a re
       />,
     );
   });
+  await act(() =>
+    renderer!.root
+      .findByProps({ "aria-label": "Board project folder", size: "compact" })
+      .props.onClick(),
+  );
   const options = renderer!.root
-    .findAll((node) => String(node.type) === "select-item")
-    .map((node) => node.props.value);
+    .findByType("palette-results" as never)
+    .props.groups.flatMap((group: { items: Array<{ value: string }> }) => group.items)
+    .map((item: { value: string }) => item.value);
   expect(options).toContain("/projects/ILM");
   expect(options).not.toContain("/remote/Other");
   const button = renderer!.root.findByProps({ "data-board-dialog-save": true });

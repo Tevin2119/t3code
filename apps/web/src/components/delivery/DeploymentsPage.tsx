@@ -47,6 +47,7 @@ import { toastManager } from "../ui/toast";
 import { useProjects } from "../../state/entities";
 import { addedRepository, repositoryChoices } from "./BoardPicker.repositories";
 import { RepositoryBrowse } from "./BoardPicker.browse";
+import { ADD_REPOSITORY, RepositoryPicker } from "./RepositoryPicker";
 import { useBoardDesktop } from "./BoardToolbar";
 import { EnginePanel } from "./EnginePanel";
 import { EnvironmentPicker } from "./EnvironmentPicker";
@@ -58,7 +59,6 @@ const MODE_LABELS = {
 } as const;
 const short = (commit: string | null) => commit?.slice(0, 10) ?? "None";
 const when = (iso: string) => new Date(iso).toLocaleString();
-const ADD_FOLDER = "__add_folder__";
 type SnapshotRepository = DeploymentsSnapshot["repositories"][number];
 type Request = { title: string; path: string; body: Record<string, unknown> };
 
@@ -194,7 +194,7 @@ function Configuration({
     if (!eligible && adapter === "engine") setAdapter("command");
   };
   const chooseRepository = async (value: string) => {
-    if (value === ADD_FOLDER) {
+    if (value === ADD_REPOSITORY) {
       setBrowsing(true);
       return;
     }
@@ -227,26 +227,23 @@ function Configuration({
         </DialogHeader>
         <DialogPanel>
           <div className="flex flex-col gap-4">
-            <Choice
-              label="Repository"
-              value={repository}
-              items={[
-                ...registration.choices.flatMap((choice) =>
-                  choice.kind === "engine"
-                    ? choice.repository.ok
-                      ? [{ value: choice.value, label: choice.repository.title }]
-                      : []
-                    : [
-                        {
-                          value: choice.value,
-                          label: `${choice.name} (T3 project, added when chosen)`,
-                        },
-                      ],
-                ),
-                { value: ADD_FOLDER, label: "Add a repository by its folder..." },
-              ]}
-              onChange={(value) => void chooseRepository(value)}
-            />
+            <label className="flex min-w-0 flex-col gap-1 text-sm">
+              <span>Repository</span>
+              <RepositoryPicker
+                label="Repository"
+                placeholder="Choose repository"
+                size="default"
+                environmentId={environmentId}
+                value={repository || null}
+                shown={selected?.title ?? null}
+                choices={registration.choices}
+                projects={registration.projects}
+                projectsLabel="T3 projects, added to the engine when chosen"
+                canAddFolder
+                disabled={registration.registering}
+                onChoose={(value) => void chooseRepository(value)}
+              />
+            </label>
             {registration.registering ? (
               <p role="status" className="text-sm text-muted-foreground">
                 Adding the repository to the engine...

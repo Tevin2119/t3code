@@ -45,9 +45,32 @@ Of note: Most T3 Code contributions will come from T3 Code itself, often control
 Before delivery, board, profile or engine UI work, read the fork baseline section in
 [Updating](docs/user/updating.md#fork-baseline-nightly-integration-for-delivery-work).
 It identifies the verified nightly integration and native APIs that moved. Recheck older task
-audit paths against the checkout you actually use. Reuse the current native component before
-adding an equivalent. A local integration commit does not mean master or the running server
-has it; retain pinned QA candidates and validate their eventual integration separately.
+audit paths against the checkout you actually use. A local integration commit does not mean
+master or the running server has it; retain pinned QA candidates and validate their eventual
+integration separately.
+
+### Reuse T3 first
+
+Every fork integration (board, delivery, deployments, engine views) uses T3's own elements, look
+and feel. Before building any UI, ask "does T3 already do this?" and reuse that piece the same
+way. Never make the user type what T3 can list or browse: folder paths, repositories, projects,
+branches, models. Known pieces, all under `apps/web/src/components` unless a package is named:
+
+- Folder browsing and add-project: the Command Palette's browse (`filesystem.browse`,
+  `getFilesystemBrowsePath` in `packages/client-runtime/src/state/filesystem.ts`,
+  `buildBrowseGroups`); `delivery/BoardPicker.browse.tsx` wraps it as `RepositoryBrowse`.
+- Projects with their git and remote details: `useProjects()` in `apps/web/src/state/entities.ts`,
+  each with its `repositoryIdentity`; their icons are `ProjectFavicon.tsx`.
+- Project lists and pickers: the palette's `CommandPaletteContent`, `CommandPaletteResults`, and
+  `buildProjectActionItems` and `filterCommandPaletteGroups` in `CommandPalette.logic.ts`;
+  `delivery/RepositoryPicker.tsx` wraps them for repositories and T3 projects.
+- Branches: `BranchPicker.tsx` and `BranchToolbarBranchSelector.tsx`.
+- Providers and models: `chat/ProviderInstanceIcon.tsx` and `chat/ProviderModelPicker.tsx`.
+- Markdown and messages: `ChatMarkdown.tsx`. Attachments: `chat/ComposerAttachmentStrip.tsx`.
+- Dialogs, menus and toasts: `ui/dialog.tsx`, `ui/alert-dialog.tsx`, `ui/menu.tsx`, `ui/toast.tsx`.
+- Update pills: the v2 sidebar's `sidebar/SidebarChrome.tsx`.
+
+Every result names the T3 piece it reused for each element, or says why none fits.
 
 ## A small glossary
 
