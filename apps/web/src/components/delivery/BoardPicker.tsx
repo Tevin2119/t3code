@@ -19,6 +19,7 @@ import {
   type RepositoryChoice,
 } from "./BoardPicker.repositories";
 import { RepositoryBrowse } from "./BoardPicker.browse";
+import { ADD_REPOSITORY, RepositoryPicker } from "./RepositoryPicker";
 import { BaseBranchPicker } from "./BoardPicker.branches";
 
 import { Button } from "../ui/button";
@@ -35,16 +36,7 @@ import {
 import { Input } from "../ui/input";
 import { InputGroup, InputGroupAddon, InputGroupInput } from "../ui/input-group";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
-import {
-  Select,
-  SelectGroup,
-  SelectGroupLabel,
-  SelectItem,
-  SelectPopup,
-  SelectTrigger,
-  SelectValue,
-  SelectButton,
-} from "../ui/select";
+import { SelectButton } from "../ui/select";
 import { Textarea } from "../ui/textarea";
 
 export interface PickerItem {
@@ -262,8 +254,6 @@ export function BoardPicker(props: {
   );
 }
 
-const ADD_REPOSITORY = "__add_repository__";
-
 /**
  * Makes or edits a board or a view: a name and what it is for, for a board the repository and
  * base branch its tasks are done in, and for a view the columns it shows. Removing says what
@@ -314,7 +304,6 @@ export function BoardDialog(props: {
   const choices = isBoard
     ? repositoryChoices({ repositories: known, projects, environmentId: props.environmentId })
     : [];
-  const projectChoices = choices.filter((choice) => choice.kind === "project");
   // A project is added only once the engine's list is read, so one it has is never added again.
   const projectBlocked = reposRead.error
     ? "The engine's repositories could not be read, so this cannot be added."
@@ -517,23 +506,23 @@ export function BoardDialog(props: {
               {binding === "workspace" ? (
                 <label className="flex flex-col gap-1">
                   <span className="text-xs font-medium">Project folder</span>
-                  <Select
+                  <RepositoryPicker
+                    label="Board project folder"
+                    placeholder="Choose a T3 project"
+                    environmentId={props.environmentId ?? null}
                     value={workspace || null}
-                    onValueChange={(value) => setWorkspace(String(value ?? ""))}
-                  >
-                    <SelectTrigger aria-label="Board project folder" size="compact">
-                      <SelectValue placeholder="Choose a T3 project">
-                        {projectFolders.find(([folder]) => folder === workspace)?.[1]}
-                      </SelectValue>
-                    </SelectTrigger>
-                    <SelectPopup alignItemWithTrigger={false}>
-                      {projectFolders.map(([folder, name]) => (
-                        <SelectItem key={folder} value={folder}>
-                          {name}
-                        </SelectItem>
-                      ))}
-                    </SelectPopup>
-                  </Select>
+                    shown={projectFolders.find(([folder]) => folder === workspace)?.[1] ?? null}
+                    choices={projectFolders.map(([folder, folderName]) => ({
+                      kind: "project",
+                      value: folder,
+                      name: folderName,
+                      folder,
+                    }))}
+                    projects={projects}
+                    projectsLabel="T3 projects"
+                    canAddFolder={false}
+                    onChoose={setWorkspace}
+                  />
                   <span className="text-2xs text-muted-foreground">
                     {workspace || "Add a project using T3's project picker first."} No Git
                     repository is created. Submitted tasks keep their existing work folder.
@@ -549,78 +538,22 @@ export function BoardDialog(props: {
                   ) : null}
                   <label className="flex flex-col gap-1">
                     <span className="text-xs font-medium">Repository</span>
-                    <Select
+                    <RepositoryPicker
+                      label="Repository"
+                      placeholder="Choose the repository its tasks are done in"
+                      environmentId={props.environmentId ?? null}
                       value={repository || null}
-                      onValueChange={(value) => void chooseRepository(String(value ?? ""))}
+                      shown={chosen ? chosen.title : registering}
+                      choices={choices}
+                      projects={projects}
+                      projectsLabel="T3 projects, added to the engine when chosen"
+                      projectBlocked={projectBlocked}
+                      canAddFolder={Boolean(props.environmentId)}
                       disabled={registering !== null}
-                    >
-                      <SelectTrigger
-                        ref={repositoryTrigger}
-                        aria-label="Repository"
-                        size="compact"
-                        data-board-dialog-repository
-                      >
-                        <SelectValue placeholder="Choose the repository its tasks are done in">
-                          {chosen ? chosen.title : (registering ?? undefined)}
-                        </SelectValue>
-                      </SelectTrigger>
-                      <SelectPopup alignItemWithTrigger={false}>
-                        <SelectItem value={ADD_REPOSITORY}>
-                          <PlusIcon className="size-3.5" />
-                          Add a repository by its folder…
-                        </SelectItem>
-                        {repositories.map((item) => (
-                          <SelectItem
-                            key={item.id}
-                            value={item.id}
-                            label={item.title}
-                            disabled={!item.ok}
-                          >
-                            <span className="flex min-w-0 flex-col">
-                              <span className="truncate">{item.title}</span>
-                              <span className="truncate text-2xs text-muted-foreground">
-                                {item.path}
-                              </span>
-                              {item.ok ? null : (
-                                <span className="truncate text-2xs text-warning">
-                                  {item.problem ?? "It cannot be read."}
-                                </span>
-                              )}
-                            </span>
-                          </SelectItem>
-                        ))}
-                        {projectChoices.length > 0 ? (
-                          <SelectGroup>
-                            <SelectGroupLabel>
-                              T3 projects, added to the engine when chosen
-                            </SelectGroupLabel>
-                            {projectChoices.map((choice) =>
-                              choice.kind === "project" ? (
-                                <SelectItem
-                                  key={choice.value}
-                                  value={choice.value}
-                                  label={choice.name}
-                                  disabled={projectBlocked !== null}
-                                  data-board-dialog-project={choice.folder}
-                                >
-                                  <span className="flex min-w-0 flex-col">
-                                    <span className="truncate">{choice.name}</span>
-                                    <span className="truncate text-2xs text-muted-foreground">
-                                      {choice.folder}
-                                    </span>
-                                    {projectBlocked ? (
-                                      <span className="truncate text-2xs text-muted-foreground">
-                                        {projectBlocked}
-                                      </span>
-                                    ) : null}
-                                  </span>
-                                </SelectItem>
-                              ) : null,
-                            )}
-                          </SelectGroup>
-                        ) : null}
-                      </SelectPopup>
-                    </Select>
+                      onChoose={(value) => void chooseRepository(value)}
+                      ref={repositoryTrigger}
+                      marker="repository"
+                    />
                   </label>
                   <p
                     role="alert"

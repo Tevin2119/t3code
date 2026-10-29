@@ -1,9 +1,9 @@
 import { EnvironmentId } from "@t3tools/contracts";
 import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
-import { act } from "react";
 import { create, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
+import { act } from "../../../test/render";
 import { parseRepositories } from "../../lib/delivery";
 import { BoardDialog, type PickerItem } from "./BoardPicker";
 import {
@@ -18,6 +18,7 @@ import {
   projectRepositoryName,
   repositoryChoices,
 } from "./BoardPicker.repositories";
+import { ADD_REPOSITORY, RepositoryPicker } from "./RepositoryPicker";
 
 const mock = vi.hoisted(() => ({
   reading: {
@@ -121,6 +122,11 @@ vi.mock("../ui/select", () => ({
   SelectGroup: "select-group",
   SelectGroupLabel: "select-group-label",
   SelectButton: "select-button",
+}));
+vi.mock("../ui/command", async (original) => ({
+  ...(await original<typeof import("../ui/command")>()),
+  CommandDialog: "command-dialog",
+  CommandDialogPopup: "command-dialog-popup",
 }));
 vi.mock("../ui/dialog", () => ({
   Dialog: "dialog-root",
@@ -365,28 +371,31 @@ describe("BoardDialog repository list", () => {
       else renderer = create(view(editing));
     });
   }
-  const selects = () => renderer!.root.findAllByType("select-root" as never);
-  const repositorySelect = () => selects()[0]!;
+  const repositorySelect = () => renderer!.root.findAllByType(RepositoryPicker)[0]!;
   const basePicker = () => renderer!.root.findByType("combobox-root" as never);
   const baseTrigger = () => renderer!.root.findByProps({ "data-board-dialog-base": true });
-  const shown = (node: ReactTestInstance) => {
-    const value = node.findByType("output" as never);
-    return value.children.join("");
-  };
+  const shown = (node: ReactTestInstance) => node.props.shown;
   async function choose(value: string) {
     await act(async () => {
-      repositorySelect().props.onValueChange(value);
+      repositorySelect().props.onChoose(value);
     });
   }
   const saveButton = () => renderer!.root.findByProps({ "data-board-dialog-save": true });
   const problem = () =>
     renderer!.root.findByProps({ "data-board-dialog-repository-problem": true }).children.join("");
-  const items = () =>
-    renderer!.root
-      .findAllByType("select-item" as never)
-      .filter((item) => item.props.value !== "__add_repository__");
-  const text = (node: ReactTestInstance): string =>
-    node.children.map((child) => (typeof child === "string" ? child : text(child))).join("|");
+  /** The rows the picker's palette lists, opened from its field, without the add-by-folder row. */
+  async function items() {
+    await act(async () =>
+      renderer!.root.findByProps({ "data-repository-picker": "repository" }).props.onClick(),
+    );
+    return renderer!.root
+      .findByType("palette-results" as never)
+      .props.groups.flatMap(
+        (group: { items: Array<{ value: string; title: string; description: string }> }) =>
+          group.items,
+      )
+      .filter((item: { value: string }) => item.value !== ADD_REPOSITORY);
+  }
 
   beforeEach(() => {
     mock.reading = { body: [], error: null, isPending: false, refresh: vi.fn() };
@@ -408,11 +417,11 @@ describe("BoardDialog repository list", () => {
     ];
     mock.projects = [project("p1", "/work/proj", { title: "Proj" })];
     await render();
-    expect(items().map(text)).toEqual([
-      "Engine|/work/engine",
-      "r2|/work/broken|Folder is gone",
-      "Proj|/work/proj",
-    ]);
+    expect(
+      (await items()).map(
+        (item: { title: string; description: string }) => `${item.title}|${item.description}`,
+      ),
+    ).toEqual(["Engine|/work/engine", "r2|/work/broken · Folder is gone", "Proj|/work/proj"]);
   });
 
   it("adds an unmatched project with its folder and name, and selects it before the list is read again", async () => {
@@ -462,7 +471,7 @@ describe("BoardDialog repository list", () => {
     mock.reading.body = [engineRepo("r1", "/work/a", { defaultBase: "develop" })];
     mock.projects = [project("p1", "/work/a/")];
     await render();
-    expect(items().map((item) => item.props.value)).toEqual(["r1"]);
+    expect((await items()).map((item: { value: string }) => item.value)).toEqual(["r1"]);
     await choose("r1");
     expect(mock.action).not.toHaveBeenCalled();
     expect(repositorySelect().props.value).toBe("r1");
@@ -518,7 +527,7 @@ describe("BoardDialog repository list", () => {
     mock.reading = { ...reading, refresh: vi.fn() };
     mock.projects = [project("p1", "/work/b")];
     await render();
-    expect(items()[0]!.props.disabled).toBe(true);
+    expect((await items())[0]!.disabled).toBe(true);
     await choose(`${PROJECT_CHOICE_PREFIX}p1`);
     expect(mock.action).not.toHaveBeenCalled();
     expect(problem()).not.toBe("");
@@ -580,7 +589,7 @@ describe("BoardDialog base branch from T3's branch list", () => {
   }
   async function chooseRepository(value: string) {
     await act(async () => {
-      renderer!.root.findAllByType("select-root" as never)[0]!.props.onValueChange(value);
+      renderer!.root.findAllByType(RepositoryPicker)[0]!.props.onChoose(value);
     });
   }
   const picker = () => renderer!.root.findByType("combobox-root" as never);
@@ -1008,10 +1017,10 @@ describe("BoardDialog adds a repository by browsing", () => {
     });
   }
   const find = (prop: string) => renderer!.root.findByProps({ [prop]: true });
-  const repositorySelect = () => renderer!.root.findAllByType("select-root" as never)[0]!;
+  const repositorySelect = () => renderer!.root.findAllByType(RepositoryPicker)[0]!;
   const basePicker = () => renderer!.root.findByType("combobox-root" as never);
   async function openAdd() {
-    await act(async () => repositorySelect().props.onValueChange("__add_repository__"));
+    await act(async () => repositorySelect().props.onChoose(ADD_REPOSITORY));
   }
   const palette = () => renderer!.root.findByType("palette-content" as never);
   const results = () => renderer!.root.findByType("palette-results" as never);
