@@ -52,13 +52,19 @@ export function CommandPaletteContent({
           <CommandInput autoFocus={false} {...inputProps} ref={claimFocusInOpenDialog} />
           {inputAccessory}
         </div>
+        {/*
+          The list's scroll area bounds itself by its own max-height, so the panel's bound is
+          handed down to it. Without that, a panel in an ordinary dialog (the board's repository
+          browse) has no definite height to give, the list grows to its content, and the panel
+          clips what is past its bound instead of scrolling to it.
+        */}
         <CommandPanel
           className={
             panelSize === "fill"
               ? "flex min-h-0 flex-1 flex-col"
               : panelSize === "tall-list"
-                ? "max-h-[min(34rem,76vh)]"
-                : "flex max-h-[min(28rem,70vh)] min-h-0 flex-col"
+                ? "max-h-[min(34rem,76vh)] [&>*]:max-h-[inherit]"
+                : "flex max-h-[min(28rem,70vh)] min-h-0 flex-col [&>*]:max-h-[inherit]"
           }
         >
           {children}

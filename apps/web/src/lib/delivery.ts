@@ -2410,3 +2410,19 @@ export function deliveryRequestBody(body: unknown): unknown {
   const text = JSON.stringify(body);
   return text === undefined ? undefined : (JSON.parse(text) as unknown);
 }
+
+/**
+ * The engine's catalogues that a successful write at `path` has changed, as the read paths every
+ * open reader of them holds. The board's dialog, the task editor's board picker and the
+ * Orchestrator's each read these for themselves; a board or repository made in one of them must
+ * show in the others without a reload, so the write refreshes the reading for all of them.
+ */
+export function readsRefreshedBy(path: string): ReadonlyArray<string> {
+  const route = path.split("?")[0] ?? "";
+  if (route === "/api/boards" || route.startsWith("/api/boards/")) return ["/api/boards"];
+  if (route === "/api/views" || route.startsWith("/api/views/")) return ["/api/views"];
+  if (route === "/api/repositories" || route.startsWith("/api/repositories/")) {
+    return ["/api/repositories"];
+  }
+  return [];
+}

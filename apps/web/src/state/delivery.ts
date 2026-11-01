@@ -12,8 +12,10 @@ import {
   deliveryFailureText,
   deliveryRequestBody,
   isStaleReading,
+  readsRefreshedBy,
   type SeatChoice,
 } from "../lib/delivery";
+import { appAtomRegistry } from "../rpc/atomRegistry";
 import { NO_FILTERS, type BoardFilters, type BoardGrouping } from "../lib/deliveryBoard";
 import { deliveryEnvironmentChoice } from "../lib/delivery";
 import { boardSelectionPatch } from "../lib/deliveryBoardSelection";
@@ -129,6 +131,12 @@ export function useDeliveryAct(environmentId: EnvironmentId | null, label: strin
         why: deliveryFailureText(failure),
         problems: deliveryFailureProblems(failure),
       };
+    }
+    // A catalogue the write changed is read again wherever it is shown, not only by the caller.
+    for (const read of readsRefreshedBy(path)) {
+      appAtomRegistry.refresh(
+        deliveryEnvironment.read({ environmentId, input: { path: read as never } }),
+      );
     }
     return { ok: true, body: result.value.body };
   };
