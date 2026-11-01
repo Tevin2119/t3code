@@ -51,7 +51,7 @@ interface Engine {
   down: boolean;
   /** Changes what the engine says a session is, as a team edited behind a thread's back would. */
   tamper: ((identity: Identity) => Identity) | null;
-  health?: { profile: string; home: string };
+  health?: { profile: string | null; home: string };
 }
 
 const engine = (): Engine => ({ requests: [], sessions: new Map(), down: false, tamper: null });
@@ -252,6 +252,81 @@ describe("DeliveryService", () => {
       ),
     );
   });
+  it.effect("names the missing POLYMANIA_ACCOUNTS when the engine reports profile null", () => {
+    const fake = engine();
+    fake.health = { profile: null, home: "/test/main-engine" };
+    return Effect.gen(function* () {
+      const delivery = yield* DeliveryService.DeliveryService;
+      const reading = yield* delivery.read({ path: "/api/lanes" as never }).pipe(Effect.flip);
+      expect(reading.reason).toBe("invalid");
+      expect(reading.detail).toContain("without POLYMANIA_ACCOUNTS");
+      expect(reading.detail).toContain("expects profile 'main'");
+      expect(fake.requests.map((request) => request.path)).toEqual(["/api/health"]);
+    }).pipe(
+      Effect.provide(
+        layer(fake, {
+          prefix: "profile-engine-null-profile-",
+          engineUrl: "http://127.0.0.1:4322",
+          environment: {
+            T3_WORKSPACE_PROFILE_ID: "main",
+            T3_WORKSPACE_ENGINE_URL: "http://127.0.0.1:4322",
+            T3_WORKSPACE_ENGINE_HOME: "/test/main-engine",
+            POLYMANIA_ACCOUNTS: "main",
+          },
+        }),
+      ),
+    );
+  });
+
+  it.effect("says which identity field differs when the engine is another profile's", () => {
+    const fake = engine();
+    fake.health = { profile: "team", home: "/test/main-engine" };
+    return Effect.gen(function* () {
+      const delivery = yield* DeliveryService.DeliveryService;
+      const reading = yield* delivery.read({ path: "/api/lanes" as never }).pipe(Effect.flip);
+      expect(reading.reason).toBe("invalid");
+      expect(reading.detail).toContain("profile 'team' (expected 'main')");
+      expect(reading.detail).not.toContain("home '/test/main-engine'");
+    }).pipe(
+      Effect.provide(
+        layer(fake, {
+          prefix: "profile-engine-which-field-",
+          engineUrl: "http://127.0.0.1:4322",
+          environment: {
+            T3_WORKSPACE_PROFILE_ID: "main",
+            T3_WORKSPACE_ENGINE_URL: "http://127.0.0.1:4322",
+            T3_WORKSPACE_ENGINE_HOME: "/test/main-engine",
+            POLYMANIA_ACCOUNTS: "main",
+          },
+        }),
+      ),
+    );
+  });
+
+  it.effect("refuses before asking the engine when T3 itself lacks POLYMANIA_ACCOUNTS", () => {
+    const fake = engine();
+    fake.health = { profile: "main", home: "/test/main-engine" };
+    return Effect.gen(function* () {
+      const delivery = yield* DeliveryService.DeliveryService;
+      const reading = yield* delivery.read({ path: "/api/lanes" as never }).pipe(Effect.flip);
+      expect(reading.reason).toBe("invalid");
+      expect(reading.detail).toContain("started without POLYMANIA_ACCOUNTS");
+      expect(fake.requests).toEqual([]);
+    }).pipe(
+      Effect.provide(
+        layer(fake, {
+          prefix: "profile-t3-missing-accounts-",
+          engineUrl: "http://127.0.0.1:4322",
+          environment: {
+            T3_WORKSPACE_PROFILE_ID: "main",
+            T3_WORKSPACE_ENGINE_URL: "http://127.0.0.1:4322",
+            T3_WORKSPACE_ENGINE_HOME: "/test/main-engine",
+          },
+        }),
+      ),
+    );
+  });
+
   it.effect("relays nothing while delivery is turned off", () => {
     const fake = engine();
     return Effect.gen(function* () {
