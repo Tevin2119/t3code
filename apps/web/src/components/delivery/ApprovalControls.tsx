@@ -8,6 +8,7 @@ import {
   useDeliveryRead,
   useMinuteClock,
   usePersonName,
+  useBoardStore,
 } from "../../state/delivery";
 import { useEnvironment } from "../../state/environments";
 import { Button } from "../ui/button";
@@ -60,6 +61,10 @@ function SupportedApprovalControls({
   readonly health: Pick<ReturnType<typeof useDeliveryRead>, "body" | "error" | "refresh">;
 }) {
   const person = usePersonName();
+  // The same browser-wide name the Board writes on moves and approvals, editable here because the
+  // engine dialog is where a person first meets a control that needs it.
+  const personRaw = useBoardStore((state) => state.person);
+  const setPerson = useBoardStore((state) => state.setPerson);
   const now = useMinuteClock();
   const act = useDeliveryAct(environmentId, "approval controls");
   const [step, setStep] = useState<"warning" | "key" | null>(null);
@@ -151,7 +156,18 @@ function SupportedApprovalControls({
           ) : null}
         </div>
       ) : null}
-      {!person.trim() ? <p>Set your name on the board first.</p> : null}
+      {!person.trim() ? (
+        <label className="flex items-center gap-2" data-approval-person>
+          <span className="shrink-0">Your name</span>
+          <Input
+            aria-label="Your name"
+            placeholder="Written on what you decide here"
+            size="compact"
+            value={personRaw}
+            onChange={(event) => setPerson(event.target.value)}
+          />
+        </label>
+      ) : null}
       {problem ? <p role="alert">{problem}</p> : null}
       <Dialog
         open={step !== null}
