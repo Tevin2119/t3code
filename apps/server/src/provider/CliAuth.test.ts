@@ -1,7 +1,7 @@
 import { ProviderInstanceId, ProviderSetupError, type ProviderAuthState } from "@t3tools/contracts";
 import { assert, describe, expect, it } from "@effect/vitest";
 import * as Cause from "effect/Cause";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
@@ -16,10 +16,7 @@ import type { ProviderAuthController } from "./ProviderAuthService.ts";
 const INSTANCE_ID = ProviderInstanceId.make("pi");
 const OWNER = "owner-session";
 
-const testCrypto = Crypto.make({
-  randomBytes: (size) => new Uint8Array(size).fill(1),
-  digest: (_algorithm, data) => Effect.succeed(data),
-});
+const testRandom = SecureRandom.make((size) => new Uint8Array(size).fill(1));
 
 /**
  * A controller with no `login` must never start a process, so a spawner that
@@ -36,7 +33,7 @@ const runController = <A, E>(
   makeCliAuth(options).pipe(
     Effect.flatMap(body),
     Effect.scoped,
-    Effect.provideService(Crypto.Crypto, testCrypto),
+    Effect.provideService(SecureRandom.SecureRandom, testRandom),
     Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, noSpawner),
   );
 

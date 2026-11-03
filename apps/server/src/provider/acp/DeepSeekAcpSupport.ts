@@ -2,7 +2,7 @@
 import * as NodeOS from "node:os";
 
 import { type DeepSeekSettings } from "@t3tools/contracts";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Scope from "effect/Scope";
@@ -91,7 +91,7 @@ export const makeDeepSeekAcpRuntime = Effect.fn("makeDeepSeekAcpRuntime")(functi
 ): Effect.fn.Return<
   AcpSessionRuntime.AcpSessionRuntime["Service"],
   EffectAcpErrors.AcpError,
-  Crypto.Crypto | Scope.Scope
+  SecureRandom.SecureRandom | Scope.Scope
 > {
   const acpContext = yield* Layer.build(
     AcpSessionRuntime.layer({

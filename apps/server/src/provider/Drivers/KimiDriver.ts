@@ -1,7 +1,7 @@
 // Kimi sign-in uses a device code from the CLI; sign-out uses the ACP auth.logout request.
 import { KimiSettings, ProviderDriverKind, ProviderSetupError } from "@t3tools/contracts";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
@@ -62,7 +62,7 @@ export type KimiDriverEnv =
   | IdAllocator.IdAllocatorV2
   | ProviderHost.ProviderHost
   | ChildProcessSpawner.ChildProcessSpawner
-  | Crypto.Crypto
+  | SecureRandom.SecureRandom
   | FileSystem.FileSystem
   | HttpClient.HttpClient
   | Path.Path
@@ -85,7 +85,7 @@ export const KimiDriver: ProviderDriver<KimiSettings, KimiDriverEnv, KimiUsageRe
     enabled,
     config,
   }) {
-    const crypto = yield* Crypto.Crypto;
+    const random = yield* SecureRandom.SecureRandom;
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
     const httpClient = yield* HttpClient.HttpClient;
     const fileSystem = yield* FileSystem.FileSystem;
@@ -123,7 +123,7 @@ export const KimiDriver: ProviderDriver<KimiSettings, KimiDriverEnv, KimiUsageRe
         kimiSettings: effectiveConfig,
         environment: { ...processEnv, ...input.processEnvironment },
         childProcessSpawner: spawner,
-      }).pipe(Effect.provideService(Crypto.Crypto, crypto));
+      }).pipe(Effect.provideService(SecureRandom.SecureRandom, random));
 
     // Where Kimi keeps its sessions: the home it was given, or its own.
     const kimiHome =
@@ -225,7 +225,7 @@ export const KimiDriver: ProviderDriver<KimiSettings, KimiDriverEnv, KimiUsageRe
             kimiSettings: effectiveConfig,
             environment: processEnv,
             childProcessSpawner: spawner,
-          }).pipe(Effect.provideService(Crypto.Crypto, crypto));
+          }).pipe(Effect.provideService(SecureRandom.SecureRandom, random));
           const initialized = yield* runtime.initialize();
           if (!initialized.agentCapabilities?.auth?.logout) {
             return yield* setupError(
