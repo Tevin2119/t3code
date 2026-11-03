@@ -2417,6 +2417,23 @@ export function deliveryRequestBody(body: unknown): unknown {
  * Orchestrator's each read these for themselves; a board or repository made in one of them must
  * show in the others without a reload, so the write refreshes the reading for all of them.
  */
+/**
+ * The release environment a branch stands for. A repository's environments are its upstream
+ * branches (ClubRight: develop, qa, master), so the name is the branch's, written the way the
+ * engine accepts an environment: lowercase, letters, digits, dots, dashes and underscores, at most
+ * forty characters, starting with a letter or digit.
+ */
+export function environmentForBranch(branch: string): string {
+  const name = branch
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, "-")
+    .replace(/^[^a-z0-9]+/, "")
+    .slice(0, 40)
+    .replace(/[^a-z0-9]+$/, "");
+  return name || "production";
+}
+
 export function readsRefreshedBy(path: string): ReadonlyArray<string> {
   const route = path.split("?")[0] ?? "";
   if (route === "/api/boards" || route.startsWith("/api/boards/")) return ["/api/boards"];

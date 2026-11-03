@@ -5,6 +5,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   fullAutoAttribution,
   deliveryRequestBody,
+  environmentForBranch,
   readsRefreshedBy,
   parseRepositories,
   parseSeatLive,
@@ -1591,5 +1592,24 @@ describe("readsRefreshedBy", () => {
     expect(readsRefreshedBy("/api/tasks/t1/board")).toEqual([]);
     expect(readsRefreshedBy("/api/tasks")).toEqual([]);
     expect(readsRefreshedBy("/api/boardsx")).toEqual([]);
+  });
+});
+
+describe("environmentForBranch", () => {
+  it("keeps a plain branch name as the environment", () => {
+    expect(environmentForBranch("qa")).toBe("qa");
+    expect(environmentForBranch("develop")).toBe("develop");
+    expect(environmentForBranch("release-2.4")).toBe("release-2.4");
+  });
+
+  it("writes a branch the engine would refuse as a name it accepts", () => {
+    expect(environmentForBranch("feature/QA Fix")).toBe("feature-qa-fix");
+    expect(environmentForBranch("  /Hotfix//")).toBe("hotfix");
+    expect(environmentForBranch("x".repeat(60))).toHaveLength(40);
+  });
+
+  it("falls back to production for an empty branch", () => {
+    expect(environmentForBranch("")).toBe("production");
+    expect(environmentForBranch("///")).toBe("production");
   });
 });

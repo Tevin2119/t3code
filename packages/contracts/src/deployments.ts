@@ -15,7 +15,6 @@ export const DEPLOYMENT_STATES = [
 export const DeploymentState = Schema.Literals(DEPLOYMENT_STATES);
 export const DeploymentMode = Schema.Literals(["manual", "auto-qualify", "full-auto"]);
 export const DeploymentAdapter = Schema.Literals(["engine", "command"]);
-export const DEPLOYMENT_ENVIRONMENTS = ["development", "staging", "production"] as const;
 export const DeploymentAction = Schema.Literals(["qualify", "deploy", "retry", "cancel", "verify"]);
 export type DeploymentAction = typeof DeploymentAction.Type;
 const Revision = Schema.String.check(Schema.isPattern(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/));
