@@ -1,6 +1,6 @@
 // Hermes owns inference credentials. Headless auth verifies them; setup requires its TTY wizard.
 import { HermesSettings, ProviderDriverKind } from "@t3tools/contracts";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
@@ -57,7 +57,7 @@ export type HermesDriverEnv =
   | IdAllocator.IdAllocatorV2
   | ProviderHost.ProviderHost
   | ChildProcessSpawner.ChildProcessSpawner
-  | Crypto.Crypto
+  | SecureRandom.SecureRandom
   | FileSystem.FileSystem
   | HttpClient.HttpClient
   | Path.Path
@@ -80,7 +80,7 @@ export const HermesDriver: ProviderDriver<HermesSettings, HermesDriverEnv, Herme
     enabled,
     config,
   }) {
-    const crypto = yield* Crypto.Crypto;
+    const random = yield* SecureRandom.SecureRandom;
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
     const httpClient = yield* HttpClient.HttpClient;
     const fileSystem = yield* FileSystem.FileSystem;
@@ -124,7 +124,7 @@ export const HermesDriver: ProviderDriver<HermesSettings, HermesDriverEnv, Herme
         hermesSettings: effectiveConfig,
         environment: { ...processEnv, ...input.processEnvironment },
         childProcessSpawner: spawner,
-      }).pipe(Effect.provideService(Crypto.Crypto, crypto));
+      }).pipe(Effect.provideService(SecureRandom.SecureRandom, random));
 
     // Where Hermes keeps its sessions: the home it was given, or its own.
     const hermesHome =

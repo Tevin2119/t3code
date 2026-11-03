@@ -9,8 +9,8 @@ import * as Schema from "effect/Schema";
 import { CLAUDE_SYNTHETIC_MODEL } from "../provider/Drivers/claudeUsage.ts";
 import { GUARD_LENGTH, type TranscriptParsePosition } from "./usageTranscriptReader.ts";
 
-// v10 separates the fork attribution layout from upstream v9 and repairs skipped Codex requests.
-const USAGE_SCAN_CACHE_VERSION = 10 as const;
+// v12 is the fork attribution layout over upstream's v11; upstream wrote v10 and v11 too.
+const USAGE_SCAN_CACHE_VERSION = 12 as const;
 const SPEED_COMPATIBLE_SINCE_VERSION = 4;
 /** Serialised as the index into this list. */
 const PROVIDER_SOURCE_CODES = [null, "recorded", "harness"] as const;
@@ -20,8 +20,10 @@ const PROVIDER_SOURCE_CODES = [null, "recorded", "harness"] as const;
  * replace it, dropping saved usage for deleted transcripts. Separate files keep
  * both.
  */
-export const SCAN_CACHE_FILE_NAME = "usage-scan-cache-v10.json";
+export const SCAN_CACHE_FILE_NAME = "usage-scan-cache-v12.json";
 export const LEGACY_SCAN_CACHE_FILE_NAMES = [
+  "usage-scan-cache-v11.json",
+  "usage-scan-cache-v10.json",
   "usage-scan-cache-v9.json",
   "usage-scan-cache-v8.json",
   "usage-scan-cache-v7.json",
@@ -214,11 +216,9 @@ export function decodeScanCache(
     for (const row of rows) {
       if (!isRecordArray(row)) return null;
       // Fork rows carry the provider fields after the speed; upstream rows go
-      // straight to the rate model. Versions 6, 8, and 9 exist in both layouts.
+      // straight to the rate model. Versions 6 and 8 to 11 exist in both layouts.
       const forkLayout =
-        version >= 10 ||
-        ((version === 8 || version === 9) && row.length >= 14) ||
-        (version === 6 && row.length >= 13);
+        version >= 12 || (version >= 8 && row.length >= 14) || (version === 6 && row.length >= 13);
       if (row.length < (forkLayout ? 13 : 11)) return null;
       const [
         timestampMs,
@@ -348,16 +348,24 @@ export function decodeScanCache(
       continue;
     }
     // Keep history for deleted rollouts, but re-parse incompatible reducer state.
-    const forkV8 =
-      version === 8 &&
-      [...entry.r, ...entry.t].some((row) => isRecordArray(row) && row.length >= 14);
+    // v9 and v11 repair skipped Codex requests; clean v8+ entries stay served while unchanged.
+    // v10 adds Claude advisor calls, which no older Claude entry holds, nor the fork's own v10.
+    const rows = [...entry.r, ...entry.t];
+    const forkRows = rows.some((row) => isRecordArray(row) && row.length >= 14);
     const legacy =
-      format.state !== undefined &&
-      (version < 6 ||
-        (entry.p === "codex" && (version < 8 || forkV8 || (version < 10 && malformedRecords > 0))));
+      (entry.p === "claude" && (version < 10 || (version === 10 && (forkRows || !rows.length)))) ||
+      (format.state !== undefined &&
+        (version < 6 ||
+          (entry.p === "codex" &&
+            (version < 8 ||
+              (version === 8 && forkRows) ||
+              (version < 11 && malformedRecords > 0)))));
     // A corrupt state disqualifies the entry: resuming with it would attach
     // appended usage to the wrong model or replay fork-copied history.
     if (!legacy && !isValidState.get(entry.p)?.(entry.cs)) continue;
+    // Before v11 a clean scan could end past an interrupted request whose usage its state dropped,
+    // so a grown file re-parses whole instead of resuming.
+    const resumable = !legacy && !(entry.p === "codex" && version < 11);
 
     const provider = entry.p;
     const records = decodeRecords(entry.r, provider);
@@ -371,14 +379,14 @@ export function decodeScanCache(
       records,
       tailRecords,
       malformedRecords,
-      position: legacy
-        ? { resumeOffset: 0, guardLength: 0, guardHash: 0, state: null }
-        : {
+      position: resumable
+        ? {
             resumeOffset: entry.o,
             guardLength: entry.gl,
             guardHash: entry.gh,
             state: entry.cs,
-          },
+          }
+        : { resumeOffset: 0, guardLength: 0, guardHash: 0, state: null },
     });
   }
 

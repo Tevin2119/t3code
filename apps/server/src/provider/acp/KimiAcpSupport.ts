@@ -1,7 +1,7 @@
 // Kimi speaks ACP directly; use the shared runtime rather than a separate transport.
 import { type KimiSettings, ProviderDriverKind } from "@t3tools/contracts";
 import { normalizeModelSlug } from "@t3tools/shared/model";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Scope from "effect/Scope";
@@ -81,7 +81,7 @@ export const makeKimiAcpRuntime = Effect.fn("makeKimiAcpRuntime")(function* (
 ): Effect.fn.Return<
   AcpSessionRuntime.AcpSessionRuntime["Service"],
   EffectAcpErrors.AcpError,
-  Crypto.Crypto | Scope.Scope
+  SecureRandom.SecureRandom | Scope.Scope
 > {
   const acpContext = yield* Layer.build(
     AcpSessionRuntime.layer({

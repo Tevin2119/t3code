@@ -1,5 +1,5 @@
 import { EnvironmentId } from "@t3tools/contracts";
-import { act } from "../../../test/render";
+import { act } from "../../../test/act";
 import { create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
 import { useDeliveryDraftStore, useOrchestratorDraftStore } from "../../state/delivery";

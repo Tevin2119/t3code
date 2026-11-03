@@ -1,7 +1,7 @@
 import { EnvironmentId } from "@t3tools/contracts";
 import { create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, expect, it, vi } from "vite-plus/test";
-import { act } from "../../../test/render";
+import { act } from "../../../test/act";
 import { BoardDialog } from "./BoardPicker";
 
 vi.mock("../../state/entities", () => ({

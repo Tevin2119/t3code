@@ -1,6 +1,6 @@
 // The harness owns the API key. Headless auth verifies it; interactive setup belongs to dsh web.
 import { DeepSeekSettings, ProviderDriverKind } from "@t3tools/contracts";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
@@ -57,7 +57,7 @@ export type DeepSeekDriverEnv =
   | IdAllocator.IdAllocatorV2
   | ProviderHost.ProviderHost
   | ChildProcessSpawner.ChildProcessSpawner
-  | Crypto.Crypto
+  | SecureRandom.SecureRandom
   | FileSystem.FileSystem
   | HttpClient.HttpClient
   | Path.Path
@@ -84,7 +84,7 @@ export const DeepSeekDriver: ProviderDriver<
     enabled,
     config,
   }) {
-    const crypto = yield* Crypto.Crypto;
+    const random = yield* SecureRandom.SecureRandom;
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
     const fileSystem = yield* FileSystem.FileSystem;
     const httpClient = yield* HttpClient.HttpClient;
@@ -128,7 +128,7 @@ export const DeepSeekDriver: ProviderDriver<
         permissionMode: deepseekPermissionModeFor(input.runtimePolicy.runtimeMode) ?? "read-only",
         environment: { ...processEnv, ...input.processEnvironment },
         childProcessSpawner: spawner,
-      }).pipe(Effect.provideService(Crypto.Crypto, crypto));
+      }).pipe(Effect.provideService(SecureRandom.SecureRandom, random));
 
     const orchestrationAdapter = yield* makeDeepSeekAdapter(effectiveConfig, {
       instanceId,

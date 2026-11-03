@@ -22,7 +22,7 @@ import {
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -183,9 +183,9 @@ export const makeCliAuth = Effect.fn("makeCliAuth")(function* (
 ): Effect.fn.Return<
   ProviderAuthController,
   never,
-  ChildProcessSpawner.ChildProcessSpawner | Crypto.Crypto | Scope.Scope
+  ChildProcessSpawner.ChildProcessSpawner | SecureRandom.SecureRandom | Scope.Scope
 > {
-  const crypto = yield* Crypto.Crypto;
+  const random = yield* SecureRandom.SecureRandom;
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const instanceScope = yield* Scope.Scope;
   const lock = yield* Semaphore.make(1);
@@ -323,16 +323,7 @@ export const makeCliAuth = Effect.fn("makeCliAuth")(function* (
                 `${options.providerName} setup is already in progress.`,
               );
             }
-            const flowId = yield* crypto
-              .randomUUIDv4()
-              .pipe(
-                Effect.mapError(() =>
-                  setupError(
-                    "start",
-                    `Could not start ${options.providerName} sign-in. Try again.`,
-                  ),
-                ),
-              );
+            const flowId = yield* random.uuidV4();
             const expiresAtMillis = (yield* Clock.currentTimeMillis) + flowTimeoutMs;
             const state: ProviderAuthState = {
               ...emptyState,
