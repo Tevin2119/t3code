@@ -1,6 +1,6 @@
 import { create, type ReactTestRenderer } from "react-test-renderer";
 import { expect, it, vi } from "vite-plus/test";
-import { act } from "../../../test/render";
+import { act } from "../../../test/act";
 import { DeploymentsPage } from "./DeploymentsPage";
 import { ADD_REPOSITORY, RepositoryPicker } from "./RepositoryPicker";
 

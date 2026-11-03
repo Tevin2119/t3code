@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { act } from "../../test/render";
+import { act } from "../../test/act";
 import { create, type ReactTestRenderer } from "react-test-renderer";
 import type { CheckoutUpdateState } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";

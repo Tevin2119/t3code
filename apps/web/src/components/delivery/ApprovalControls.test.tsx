@@ -1,7 +1,7 @@
 import { EnvironmentId } from "@t3tools/contracts";
 import { create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
-import { act } from "../../../test/render";
+import { act } from "../../../test/act";
 import { ApprovalControls } from "./ApprovalControls";
 
 const mock = vi.hoisted(() => ({

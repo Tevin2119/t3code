@@ -1332,20 +1332,14 @@ function ProviderInstanceRow({
       }
       canWriteSettings={canWriteSettings}
       setup={
-        // Antigravity always renders setup (it may need installing before it
-        // can report anything); every other driver opts in by advertising a
-        // sign-in affordance on its snapshot.
-        mode === "editor" &&
-        (driver === "antigravity" || liveProvider?.setup?.canAuthenticate === true) ? (
+        mode === "editor" && driver === "antigravity" ? (
           <ProviderSetupSection
             environmentId={environmentId}
             environmentLabel={environmentLabel}
             instanceId={instanceId}
             provider={liveProvider}
             binaryPath={configuredBinaryPath(instance.config)}
-            authMethod={
-              driver === "antigravity" ? readAntigravityAuthMethod(instance.config) : undefined
-            }
+            authMethod={readAntigravityAuthMethod(instance.config)}
             enabled={resolveProviderInstanceEnabled(instance)}
             readOnly={readOnly}
             onEnable={() => actions.enableInstance(instanceId, { ...instance, enabled: true })}
