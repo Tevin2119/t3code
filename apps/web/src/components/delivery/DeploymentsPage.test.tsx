@@ -201,10 +201,10 @@ it("preserves a saved environment and command arrays when editing", async () => 
   await act(() => view.button("Configure").props.onClick());
   const environment = view.renderer.root.findAllByType("select")[1]!;
   expect(environment.props.value).toBe("staging");
+  // The repository's branches are its environments; the saved name stays offered beside them.
   expect(environment.props.items.map((item: { value: string }) => item.value)).toEqual([
-    "development",
+    "main",
     "staging",
-    "production",
   ]);
   expect(JSON.parse(view.renderer.root.findByType("textarea").props.value)).toEqual(commands);
   await act(() =>

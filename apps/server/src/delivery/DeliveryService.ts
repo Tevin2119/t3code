@@ -264,6 +264,21 @@ const make = Effect.gen(function* () {
         }),
     });
     if (hostEnvironment.T3_WORKSPACE_PROFILE_ID) {
+      // A bound profile needs T3's own side of the identity before the engine is asked for its.
+      // Saying which variable is missing beats a generic refusal: both halves come from the same
+      // profile launcher, and a half-set launcher is the common way to land here.
+      if (!hostEnvironment.POLYMANIA_ACCOUNTS || !hostEnvironment.T3_WORKSPACE_ENGINE_HOME) {
+        const missing = [
+          ...(hostEnvironment.POLYMANIA_ACCOUNTS ? [] : ["POLYMANIA_ACCOUNTS"]),
+          ...(hostEnvironment.T3_WORKSPACE_ENGINE_HOME ? [] : ["T3_WORKSPACE_ENGINE_HOME"]),
+        ].join(" and ");
+        return yield* new DeliveryError({
+          reason: "invalid",
+          detail: `This T3 runs workspace profile '${hostEnvironment.T3_WORKSPACE_PROFILE_ID}' but was started without ${missing}, so it cannot verify its engine. Start T3 through the profile launcher that sets them.`,
+        });
+      }
+      const expectedProfile = hostEnvironment.POLYMANIA_ACCOUNTS;
+      const expectedHome = hostEnvironment.T3_WORKSPACE_ENGINE_HOME;
       const healthResponse = yield* httpClient
         .execute(HttpClientRequest.get(new URL("/api/health", settings.engineUrl).toString()))
         .pipe(
@@ -282,7 +297,9 @@ const make = Effect.gen(function* () {
             Schema.Struct({
               engine: Schema.Literal("delivery"),
               ok: Schema.Literal(true),
-              profile: Schema.String,
+              // null is how the engine reports "POLYMANIA_ACCOUNTS was not set": a distinct, common
+              // failure that deserves its own message rather than a decode error.
+              profile: Schema.NullOr(Schema.String),
               home: Schema.String,
             }),
           ),
@@ -291,20 +308,34 @@ const make = Effect.gen(function* () {
           () =>
             new DeliveryError({
               reason: "invalid",
-              detail: "The bound endpoint did not provide a verifiable engine identity.",
+              detail: `The endpoint at ${settings.engineUrl} did not answer /api/health as a delivery engine (expected engine "delivery", ok true, profile and home). No task data was requested or changed.`,
             }),
         ),
       );
-      if (
-        healthResponse.status !== 200 ||
-        !hostEnvironment.T3_WORKSPACE_ENGINE_HOME ||
-        health.profile !== hostEnvironment.POLYMANIA_ACCOUNTS ||
-        health.home !== hostEnvironment.T3_WORKSPACE_ENGINE_HOME
-      ) {
+      if (healthResponse.status !== 200) {
         return yield* new DeliveryError({
           reason: "invalid",
-          detail:
-            "The bound endpoint is running another account profile or engine home. No task data was requested or changed.",
+          detail: `The engine at ${settings.engineUrl} answered /api/health with HTTP ${healthResponse.status}. No task data was requested or changed.`,
+        });
+      }
+      if (health.profile === null) {
+        return yield* new DeliveryError({
+          reason: "invalid",
+          detail: `The engine at ${settings.engineUrl} is running without POLYMANIA_ACCOUNTS (its health reports profile null); this T3 expects profile '${expectedProfile}'. Start the engine through the same profile launcher. No task data was requested or changed.`,
+        });
+      }
+      if (health.profile !== expectedProfile || health.home !== expectedHome) {
+        const differences = [
+          ...(health.profile === expectedProfile
+            ? []
+            : [`profile '${health.profile}' (expected '${expectedProfile}')`]),
+          ...(health.home === expectedHome
+            ? []
+            : [`home '${health.home}' (expected '${expectedHome}')`]),
+        ].join(", ");
+        return yield* new DeliveryError({
+          reason: "invalid",
+          detail: `The engine at ${settings.engineUrl} belongs to another account profile or engine home: ${differences}. No task data was requested or changed.`,
         });
       }
     }

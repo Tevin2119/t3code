@@ -12,8 +12,10 @@ import {
   deliveryFailureText,
   deliveryRequestBody,
   isStaleReading,
+  readsRefreshedBy,
   type SeatChoice,
 } from "../lib/delivery";
+import { appAtomRegistry } from "../rpc/atomRegistry";
 import { NO_FILTERS, type BoardFilters, type BoardGrouping } from "../lib/deliveryBoard";
 import { deliveryEnvironmentChoice } from "../lib/delivery";
 import { boardSelectionPatch } from "../lib/deliveryBoardSelection";
@@ -129,6 +131,12 @@ export function useDeliveryAct(environmentId: EnvironmentId | null, label: strin
         why: deliveryFailureText(failure),
         problems: deliveryFailureProblems(failure),
       };
+    }
+    // A catalogue the write changed is read again wherever it is shown, not only by the caller.
+    for (const read of readsRefreshedBy(path)) {
+      appAtomRegistry.refresh(
+        deliveryEnvironment.read({ environmentId, input: { path: read as never } }),
+      );
     }
     return { ok: true, body: result.value.body };
   };
@@ -507,6 +515,18 @@ export const useOrchestratorDraftStore = create<OrchestratorDraftState>()(
     },
   ),
 );
+
+/** The task a started chat workflow shows in place of its draft, or null while it is a draft. */
+export function orchestratorDraftTask(draft: OrchestratorDraft | undefined): string | null {
+  return draft?.started && ["chat", "non-code"].includes(draft.workflow)
+    ? (draft.viewTask ?? draft.engineThread)
+    : null;
+}
+
+/** A draft that became a task is not offered again as a new thread. */
+export function hasStartedOrchestratorTask(threadId: string): boolean {
+  return orchestratorDraftTask(useOrchestratorDraftStore.getState().drafts[threadId]) !== null;
+}
 
 export function isOrchestratorDraft(threadId: string): boolean {
   return threadId in useOrchestratorDraftStore.getState().drafts;

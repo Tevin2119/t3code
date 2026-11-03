@@ -1,6 +1,5 @@
 import { useAtomValue } from "@effect/atom-react";
 import {
-  DEPLOYMENT_ENVIRONMENTS,
   DEPLOYMENT_STATES,
   type DeploymentCandidate,
   type DeploymentProject,
@@ -9,7 +8,7 @@ import {
 } from "@t3tools/contracts";
 import { useState } from "react";
 import { isElectron } from "../../env";
-import type { DeliveryRepository } from "../../lib/delivery";
+import { type DeliveryRepository, environmentForBranch } from "../../lib/delivery";
 import {
   deploymentActions,
   deploymentRequestBody,
@@ -175,9 +174,15 @@ function Configuration({
   const [repository, setRepository] = useState(project?.repository ?? "");
   const selected = registration.repositories.find((repo) => repo.id === repository);
   const [branch, setBranch] = useState(project?.branch ?? "");
+  // A repository's environments are its branches: develop, qa, master. A new deployment's
+  // environment follows the branch chosen; a saved one keeps the name it was saved with.
   const [releaseEnvironment, setReleaseEnvironment] = useState(
-    project?.environment ?? "production",
+    project?.environment ?? environmentForBranch(project?.branch ?? ""),
   );
+  const chooseBranch = (value: string) => {
+    setBranch(value);
+    if (!project && adapter !== "engine") setReleaseEnvironment(environmentForBranch(value));
+  };
   const [mode, setMode] = useState<string>(project?.mode ?? "manual");
   const [adapter, setAdapter] = useState<string>(project?.adapter ?? "command");
   // An existing engine deployment keeps its adapter; a new one needs the engine's own checkout.
@@ -186,7 +191,7 @@ function Configuration({
     snapshot.capabilities.engine && (selected?.engineAdapter === true || keepsEngine);
   const choose = (repo: SnapshotRepository) => {
     setRepository(repo.id);
-    setBranch(repo.defaultBase ?? "");
+    chooseBranch(repo.defaultBase ?? "");
     const eligible =
       snapshot.capabilities.engine &&
       (repo.engineAdapter === true ||
@@ -274,7 +279,7 @@ function Configuration({
               label="Branch"
               value={branch}
               items={(selected?.branches ?? []).map((value) => ({ value, label: value }))}
-              onChange={setBranch}
+              onChange={chooseBranch}
             />
             <Choice
               label="Release environment"
@@ -283,8 +288,11 @@ function Configuration({
                 ? ["production"]
                 : [
                     ...new Set([
-                      ...DEPLOYMENT_ENVIRONMENTS,
-                      ...snapshot.projects.map((item) => item.environment),
+                      ...(selected?.branches ?? []).map(environmentForBranch),
+                      ...snapshot.projects
+                        .filter((item) => item.repository === repository)
+                        .map((item) => item.environment),
+                      releaseEnvironment,
                     ]),
                   ]
               ).map((value) => ({ value, label: value }))}
