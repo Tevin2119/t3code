@@ -4,6 +4,7 @@ import { SessionStatusFooter } from "./chat/SessionStatusFooter";
 import { resolveDraftTeam, selectableTeams, teamListStatus } from "../lib/delivery";
 import {
   deliveryEnvironment,
+  orchestratorDraftTask,
   useOrchestratorDraftStore,
   useDeliveryDraftStore,
   useDeliveryEnabled,
@@ -1653,12 +1654,9 @@ export default function ChatView(props: ChatViewProps) {
         worktreePath: activeThread?.worktreePath ?? null,
       })
     : null;
-  const teamConversationId = useOrchestratorDraftStore((state) => {
-    const draft = activeThread ? state.drafts[activeThread.id] : undefined;
-    return draft?.started && ["chat", "non-code"].includes(draft.workflow)
-      ? (draft.viewTask ?? draft.engineThread)
-      : null;
-  });
+  const teamConversationId = useOrchestratorDraftStore((state) =>
+    orchestratorDraftTask(activeThread ? state.drafts[activeThread.id] : undefined),
+  );
   const gitStatusCwd = activeThread?.worktreePath ?? gitCwd;
   const gitStatusQuery = useEnvironmentQuery(
     gitStatusCwd === null
