@@ -516,6 +516,18 @@ export const useOrchestratorDraftStore = create<OrchestratorDraftState>()(
   ),
 );
 
+/** The task a started chat workflow shows in place of its draft, or null while it is a draft. */
+export function orchestratorDraftTask(draft: OrchestratorDraft | undefined): string | null {
+  return draft?.started && ["chat", "non-code"].includes(draft.workflow)
+    ? (draft.viewTask ?? draft.engineThread)
+    : null;
+}
+
+/** A draft that became a task is not offered again as a new thread. */
+export function hasStartedOrchestratorTask(threadId: string): boolean {
+  return orchestratorDraftTask(useOrchestratorDraftStore.getState().drafts[threadId]) !== null;
+}
+
 export function isOrchestratorDraft(threadId: string): boolean {
   return threadId in useOrchestratorDraftStore.getState().drafts;
 }
