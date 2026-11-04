@@ -23,6 +23,7 @@ import {
   attributedPiUsageReader,
   attributedCodexUsageReader,
 } from "./Drivers/usageModelProviders.ts";
+import { KiroDriver, type KiroDriverEnv } from "@t3tools/provider-kiro/server";
 
 export type BuiltInDriversEnv =
   | AcpRegistryDriverEnv
@@ -32,6 +33,7 @@ export type BuiltInDriversEnv =
   | CursorDriverEnv
   | FxDriverEnv
   | GrokDriverEnv
+  | KiroDriverEnv
   | OpenCodeDriverEnv
   | PiDriverEnv
   | DeepSeekDriverEnv
@@ -47,6 +49,7 @@ export const BUILT_IN_DRIVERS: ReadonlyArray<AnyProviderDriver<BuiltInDriversEnv
   FxDriver,
   OpenCodeDriver,
   AntigravityDriver,
+  KiroDriver,
   PiDriver,
   KimiDriver,
   HermesDriver,

@@ -20,6 +20,7 @@ const testState = vi.hoisted(() => {
   } | null = null;
   let openDraftRoute: { readonly kind: "draft"; readonly draftId: string } | null = null;
   let draftsWithUserText = new Set<string>();
+  let threadsWithStartedTask = new Set<string>();
   const router = {
     state: {
       location: { href: "/" },
@@ -72,6 +73,10 @@ const testState = vi.hoisted(() => {
     },
     hasUserText: (draft: { readonly draftId?: string } | null | undefined) =>
       draft?.draftId !== undefined && draftsWithUserText.has(draft.draftId),
+    hasStartedTask: (threadId: string) => threadsWithStartedTask.has(threadId),
+    startTask(threadId: string) {
+      threadsWithStartedTask = new Set([...threadsWithStartedTask, threadId]);
+    },
     giveUserText(draftId: string) {
       draftsWithUserText = new Set([...draftsWithUserText, draftId]);
     },
@@ -94,6 +99,7 @@ const testState = vi.hoisted(() => {
       storedDraft = nextStoredDraft;
       openDraftRoute = null;
       draftsWithUserText = new Set();
+      threadsWithStartedTask = new Set();
       projectRemoved = false;
       connectedEnvironmentIds = ["environment-primary", "environment-ssh"];
       targetSettings = {
@@ -230,6 +236,9 @@ vi.mock("../state/entities", () => {
     useThread: () => null,
   };
 });
+vi.mock("../state/delivery", () => ({
+  hasStartedOrchestratorTask: (threadId: string) => testState.hasStartedTask(threadId),
+}));
 vi.mock("../state/olderSettledShelf", () => ({ readUnloadedThreadCount: () => 0 }));
 vi.mock("../state/presentation", () => ({
   environmentSummaries: { connectedEnvironmentIdsAtom: "connected-environment-ids" },
@@ -350,6 +359,29 @@ describe("useNewThreadHandler", () => {
       "draft-open",
       "Read the playbook. ",
     );
+  });
+
+  it("opens a fresh draft from one whose chat task has started", async () => {
+    testState.reset({
+      draftId: "draft-existing",
+      environmentId: "environment-ssh",
+      promotedTo: null,
+      threadId: "thread-existing",
+    });
+    testState.openEmptyDraft("draft-existing");
+    testState.startTask("thread-existing");
+    testState.startTask("thread-open");
+
+    const pendingOpen = useNewThreadHandler()({
+      environmentId: "environment-ssh",
+      projectId: "project-remote",
+    } as never);
+    testState.completeProjectFileRead(null);
+
+    await expect(pendingOpen).resolves.toEqual({
+      draftId: "draft-delayed",
+      threadId: "thread-delayed",
+    });
   });
 
   it("opens the draft without waiting on a project file from an offline machine", async () => {

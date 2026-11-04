@@ -5,6 +5,8 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   fullAutoAttribution,
   deliveryRequestBody,
+  environmentForBranch,
+  readsRefreshedBy,
   parseRepositories,
   parseSeatLive,
   waitingWords,
@@ -1571,4 +1573,43 @@ it("attributes the engine actor string and prefers structured full auto data", (
     since: null,
   });
   expect(fullAutoAttribution({ by: "Sam", fullAuto: null })).toBeNull();
+});
+
+describe("readsRefreshedBy", () => {
+  it("names the boards catalogue for a board made, edited or removed", () => {
+    expect(readsRefreshedBy("/api/boards")).toEqual(["/api/boards"]);
+    expect(readsRefreshedBy("/api/boards/dev-1/edit")).toEqual(["/api/boards"]);
+    expect(readsRefreshedBy("/api/boards/dev-1/remove")).toEqual(["/api/boards"]);
+  });
+
+  it("names the repositories catalogue for a repository added or changed", () => {
+    expect(readsRefreshedBy("/api/repositories")).toEqual(["/api/repositories"]);
+    expect(readsRefreshedBy("/api/repositories/t3/delivery")).toEqual(["/api/repositories"]);
+  });
+
+  it("names the views catalogue for a view, and nothing for other writes", () => {
+    expect(readsRefreshedBy("/api/views/v1/edit")).toEqual(["/api/views"]);
+    expect(readsRefreshedBy("/api/tasks/t1/board")).toEqual([]);
+    expect(readsRefreshedBy("/api/tasks")).toEqual([]);
+    expect(readsRefreshedBy("/api/boardsx")).toEqual([]);
+  });
+});
+
+describe("environmentForBranch", () => {
+  it("keeps a plain branch name as the environment", () => {
+    expect(environmentForBranch("qa")).toBe("qa");
+    expect(environmentForBranch("develop")).toBe("develop");
+    expect(environmentForBranch("release-2.4")).toBe("release-2.4");
+  });
+
+  it("writes a branch the engine would refuse as a name it accepts", () => {
+    expect(environmentForBranch("feature/QA Fix")).toBe("feature-qa-fix");
+    expect(environmentForBranch("  /Hotfix//")).toBe("hotfix");
+    expect(environmentForBranch("x".repeat(60))).toHaveLength(40);
+  });
+
+  it("falls back to production for an empty branch", () => {
+    expect(environmentForBranch("")).toBe("production");
+    expect(environmentForBranch("///")).toBe("production");
+  });
 });

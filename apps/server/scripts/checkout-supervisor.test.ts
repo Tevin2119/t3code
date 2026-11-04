@@ -512,7 +512,7 @@ else setInterval(() => {}, 1000);
   const child = NodeChildProcess.spawn(
     process.execPath,
     [
-      NodePath.resolve("apps/server/scripts/checkout-supervisor.ts"),
+      NodePath.join(import.meta.dirname, "checkout-supervisor.ts"),
       "--source",
       source,
       "--releases",

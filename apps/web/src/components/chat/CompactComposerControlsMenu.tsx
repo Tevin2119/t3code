@@ -24,7 +24,6 @@ export const CompactComposerControlsMenu = memo(function CompactComposerControls
   runtimeModeSupport: RuntimeModeSupport;
   runtimeModeOptions: ReadonlyArray<RuntimeModeOption>;
   showInteractionModeToggle: boolean;
-  traitsMenuContent?: ReactNode;
   teamControls?: ReactNode;
   showPermissions?: boolean;
   size?: "sm" | "xs";
@@ -54,14 +53,7 @@ export const CompactComposerControlsMenu = memo(function CompactComposerControls
               size={size}
               className="shrink-0"
               aria-label="More composer controls"
-              data-composer-shortcut={
-                [
-                  props.showPermissions !== false ? "composer.mode" : null,
-                  props.traitsMenuContent ? "composer.effort" : null,
-                ]
-                  .filter(Boolean)
-                  .join(" ") || undefined
-              }
+              data-composer-shortcut={props.showPermissions !== false ? "composer.mode" : undefined}
             />
           }
         >
@@ -74,12 +66,6 @@ export const CompactComposerControlsMenu = memo(function CompactComposerControls
                 <UsersIcon />
                 Team profile and role
               </MenuItem>
-              <MenuDivider />
-            </>
-          ) : null}
-          {props.traitsMenuContent ? (
-            <>
-              {props.traitsMenuContent}
               {props.showInteractionModeToggle || props.showPermissions !== false ? (
                 <MenuDivider />
               ) : null}

@@ -4,7 +4,7 @@ import {
   type ProviderInstanceId,
 } from "@t3tools/contracts";
 import { getModelSelectionStringOptionValue } from "@t3tools/shared/model";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as Scope from "effect/Scope";
 import * as EffectAcpErrors from "effect-acp/errors";
@@ -35,7 +35,7 @@ export interface ForkAcpAdapterOptions extends Omit<AcpAdapterV2Options, "flavor
   ) => Effect.Effect<
     AcpSessionRuntime.AcpSessionRuntime["Service"],
     EffectAcpErrors.AcpError,
-    Crypto.Crypto | Scope.Scope
+    SecureRandom.SecureRandom | Scope.Scope
   >;
   readonly turnEnd?: (
     sessionId: string,

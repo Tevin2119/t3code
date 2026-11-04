@@ -43,6 +43,7 @@ import { resolveThreadRouteTarget } from "../threadRoutes";
 import { legacyProjectCwdPreferenceKey, useUiStateStore } from "../uiStateStore";
 import { getClientSettings } from "./useSettings";
 import { useThreadRouteTarget } from "./useThreadRouteTarget";
+import { hasStartedOrchestratorTask } from "../state/delivery";
 import { readUnloadedThreadCount } from "../state/olderSettledShelf";
 import { resolveProjectDefaultProviderModelSelection } from "../providerInstances";
 import { resolveNewThreadModelSelection } from "@t3tools/shared/usageLimits";
@@ -231,7 +232,8 @@ export function createNewThreadHandler(router: AnyRouter) {
     }
     const emptyStoredDraftThread =
       reusableStoredDraftThread &&
-      !composerDraftHasUserContent(getComposerDraft(reusableStoredDraftThread.draftId))
+      !composerDraftHasUserContent(getComposerDraft(reusableStoredDraftThread.draftId)) &&
+      !hasStartedOrchestratorTask(reusableStoredDraftThread.threadId)
         ? reusableStoredDraftThread
         : null;
     const latestActiveDraftThread: DraftThreadState | null = currentRouteTarget
@@ -338,7 +340,8 @@ export function createNewThreadHandler(router: AnyRouter) {
       currentRouteTarget?.kind === "draft" &&
       latestActiveDraftThread.logicalProjectKey === logicalProjectKey &&
       latestActiveDraftThread.promotedTo == null &&
-      !composerDraftHasUserContent(getComposerDraft(currentRouteTarget.draftId))
+      !composerDraftHasUserContent(getComposerDraft(currentRouteTarget.draftId)) &&
+      !hasStartedOrchestratorTask(latestActiveDraftThread.threadId)
     ) {
       if (
         hasBranchOption ||
@@ -428,7 +431,7 @@ export function resolveDefaultProjectRef(
   projectOrder: readonly string[],
 ): ScopedProjectRef | null {
   const [defaultProject] = orderItemsByPreferredIds({
-    items: projects,
+    items: projects.filter((project) => project.archivedAt == null),
     preferredIds: projectOrder,
     getId: getProjectOrderKey,
     getPreferenceIds: (project) => [

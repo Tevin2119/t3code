@@ -3,7 +3,7 @@ import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
 import { create, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
-import { act } from "../../../test/render";
+import { act } from "../../../test/act";
 import { parseRepositories } from "../../lib/delivery";
 import { BoardDialog, type PickerItem } from "./BoardPicker";
 import {

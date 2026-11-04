@@ -1,7 +1,7 @@
 import { EnvironmentId } from "@t3tools/contracts";
 import { create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
-import { act } from "../../../test/render";
+import { act } from "../../../test/act";
 import { ApprovalControls } from "./ApprovalControls";
 
 const mock = vi.hoisted(() => ({
@@ -9,12 +9,16 @@ const mock = vi.hoisted(() => ({
   refresh: vi.fn(),
   person: "Sam",
   personRead: vi.fn(),
+  setPerson: vi.fn(),
 }));
 vi.mock("../../state/delivery", () => ({
   usePersonName: () => {
     mock.personRead();
     return mock.person;
   },
+  useBoardStore: (
+    select: (state: { person: string; setPerson: (name: string) => void }) => unknown,
+  ) => select({ person: mock.person, setPerson: mock.setPerson }),
   useMinuteClock: () => Date.parse("2026-10-19T10:00:00Z"),
   useDeliveryAct: () => mock.action,
 }));
@@ -193,7 +197,10 @@ it("disables the off switch when no person is set", async () => {
   body = { fullAuto: { on: true, by: "Alex", since: "2026-10-19T09:00:00Z" } };
   await render();
   expect(renderer.root.findByType("switch").props.disabled).toBe(true);
-  expect(JSON.stringify(renderer.toJSON())).toContain("Set your name");
+  // The name can be set right here, and it is the Board's name, not one of the dialog's own.
+  const name = renderer.root.findByProps({ "aria-label": "Your name" });
+  await act(async () => name.props.onChange({ target: { value: "Tevin" } }));
+  expect(mock.setPerson).toHaveBeenCalledWith("Tevin");
   await act(async () => renderer.root.findByType("switch").props.onCheckedChange(false));
   expect(mock.action).not.toHaveBeenCalled();
 });
@@ -216,7 +223,7 @@ it("prevents activation if the name is removed during the passphrase step", asyn
   mock.person = "";
   await act(() => renderer.update(view()));
   expect(find("data-full-auto-on").props.disabled).toBe(true);
-  expect(JSON.stringify(renderer.toJSON())).toContain("Set your name");
+  expect(find("data-approval-person")).toBeTruthy();
   await act(() => find("data-full-auto-on").props.onClick());
   expect(mock.action).not.toHaveBeenCalled();
 });
