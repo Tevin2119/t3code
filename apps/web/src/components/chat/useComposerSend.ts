@@ -8,9 +8,7 @@ import {
 import {
   deliveryEnvironment,
   hasDraftTeamChoice,
-  isOrchestratorDraft,
   readDraftTeamChoice,
-  useOrchestratorDraftStore,
   useDeliveryDraftStore,
   useDeliveryEnabled,
   useDeliveryRead,
@@ -824,13 +822,6 @@ export function useComposerSend(input: ComposerSendInput) {
       );
       return;
     }
-    // In Orchestrator mode the send button starts the workflow, and the send key
-    // does what the button does. It never starts a turn of a single harness.
-    if (!isServerThread && isOrchestratorDraft(activeThread.id)) {
-      useOrchestratorDraftStore.getState().requestStart(activeThread.id);
-      return;
-    }
-
     const threadIdForSend = activeThread.id;
     // A thread is bound to its team before its first turn. A choice that
     // cannot be honoured stops the send: sending anyway would start an

@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 import type { SeatForThread } from "../../lib/deliverySeats";
 import {
   SEAT_TAKEOVER_OVER,
+  enterOrchestratorChat,
   readDraftTeamChoice,
   useDeliveryDraftStore,
   useDraftTeamChoice,
@@ -176,8 +177,45 @@ describe("the team a new thread's picker shows", () => {
     // No team is always there to choose, among the teams without triage.
     expect(latest.teams.map((team) => team.team)).toEqual(["development", "rnd"]);
 
+    await act(() => enterOrchestratorChat("t1", ENV_A));
+    await render();
+    expect(latest.resolved).toEqual({
+      state: "ready",
+      team: "development",
+      role: "lead-developer",
+    });
+    expect(readDraftTeamChoice("t1", ENV_A)).toEqual({ team: "development", role: null });
+    expect(useOrchestratorDraftStore.getState().drafts.t1?.engineThread).toBeNull();
+    await render({ threadId: "t2" });
+    expect(useOrchestratorDraftStore.getState().drafts.t2).toBeUndefined();
+  });
+
+  it("keeps a native role choice when reopening orchestration with an old engine task", async () => {
+    drafts().chooseTeam("t1", ENV_A, { team: "development", role: "lead-developer" });
     useOrchestratorDraftStore.getState().enter("t1", ENV_A);
-    expect(useOrchestratorDraftStore.getState().drafts.t1?.team).toBe("development");
+    useOrchestratorDraftStore.getState().update("t1", {
+      engineThread: "old-task",
+      started: true,
+      workflow: "chat",
+    });
+    await act(() => enterOrchestratorChat("t1", ENV_A));
+    await render();
+    expect(latest.resolved).toEqual({
+      state: "ready",
+      team: "development",
+      role: "lead-developer",
+    });
+    expect(readDraftTeamChoice("t1", ENV_A)).toEqual({
+      team: "development",
+      role: "lead-developer",
+    });
+    await render({ threadId: "t2" });
+    expect(useOrchestratorDraftStore.getState().drafts.t2).toBeUndefined();
+    expect(latest.resolved).toEqual({
+      state: "ready",
+      team: "development",
+      role: "lead-developer",
+    });
   });
 
   it("is the team last chosen on the environment, and not on another", async () => {

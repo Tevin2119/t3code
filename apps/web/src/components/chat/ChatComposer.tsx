@@ -1,12 +1,8 @@
-import {
-  OrchestratorComposerControls,
-  OrchestratorPrimaryActions,
-} from "../delivery/OrchestratorComposerControls";
-import { OrchestratorPanel } from "../delivery/OrchestratorPanel";
 import { TeamBadge } from "../delivery/TeamBadge";
 import { TeamPicker } from "../delivery/TeamPicker";
 import { REASONING_OPTION_BY_DRIVER, type SeatForThread } from "../../lib/deliverySeats";
 import {
+  enterOrchestratorChat,
   useDeliveryEnabled,
   useOrchestratorDraft,
   useOrchestratorDraftStore,
@@ -2109,20 +2105,13 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const orchestratorOffered = deliveryEnabledForComposer && routeKind === "draft";
   const orchestratorDraft = useOrchestratorDraft(orchestratorOffered ? activeThreadId : null);
   const orchestratorMode = orchestratorOffered && orchestratorDraft !== null;
-  const enterOrchestrator = useOrchestratorDraftStore((store) => store.enter);
   const leaveOrchestrator = useOrchestratorDraftStore((store) => store.leave);
-  const requestWorkflowStart = useOrchestratorDraftStore((store) => store.requestStart);
 
   const submitComposer = (
     event?: { preventDefault: () => void },
     dispatchMode?: ComposerDispatchMode,
     submissionIntent?: ComposerSubmissionIntent,
   ) => {
-    if (orchestratorMode && activeThreadId) {
-      event?.preventDefault();
-      if (promptRef.current.trim().length > 0) requestWorkflowStart(activeThreadId);
-      return;
-    }
     if (
       noProviderAvailable ||
       isSendDisabled ||
@@ -2383,29 +2372,25 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           <TeamBadge environmentId={environmentId} threadId={activeThreadId} />
         ) : null
       }
-      orchestratorControls={
-        orchestratorMode && activeThreadId ? (
-          <OrchestratorComposerControls
-            environmentId={environmentId}
-            threadId={activeThreadId}
-            workspace={gitCwd}
-            prompt={prompt}
-            onPromptCleared={() => setComposerDraftPrompt(composerDraftTarget, "")}
-          />
-        ) : null
-      }
       orchestrator={
         orchestratorOffered && activeThreadId
           ? {
               active: orchestratorMode,
-              onSelect: () => enterOrchestrator(activeThreadId, environmentId),
+              onSelect: () => enterOrchestratorChat(activeThreadId, environmentId),
               panel: (
-                <OrchestratorPanel
-                  workspace={gitCwd}
-                  environmentId={environmentId}
-                  threadId={activeThreadId}
-                  onRequestClose={() => setIsComposerModelPickerOpen(false)}
-                />
+                <div className="flex flex-col gap-3 p-3">
+                  <p className="text-xs text-muted-foreground">
+                    Choose a team and role for this T3 conversation. Send starts the thread; the
+                    agent coordinates delegates through T3 orchestration.
+                  </p>
+                  <TeamPicker
+                    environmentId={environmentId}
+                    threadId={activeThreadId}
+                    driver={selectedProvider}
+                    chosen={chosenForSeat}
+                    onSeat={handleSeatForThread}
+                  />
+                </div>
               ),
             }
           : undefined
@@ -3569,72 +3554,64 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   >
                     {composerControls}
                   </div>
-                  {orchestratorMode && activeThreadId ? (
-                    <OrchestratorPrimaryActions
-                      threadId={activeThreadId}
-                      promptHasText={prompt.trim().length > 0}
-                      preserveComposerFocusOnPointerDown={isMobileViewport}
-                    />
-                  ) : (
-                    <ComposerFooterPrimaryActions
-                      compact={isComposerPrimaryActionsCompact}
-                      canOperateThread={canOperateThread}
-                      activeContextWindow={
-                        settings.contextWindowMeterEnabled ? activeContextWindow : null
-                      }
-                      reserveContextWindowMeter={reserveContextWindowMeter}
-                      activeThreadModelDisplayName={activeThreadModelDisplayName}
-                      pendingAction={pendingPrimaryAction}
-                      isRunning={phase === "running"}
-                      canInterrupt={canInterrupt}
-                      followUpBehavior={followUpBehavior}
-                      canSteer={!isCompacting}
-                      alternateShortcutLabel={shortcutLabelForCommand(
-                        keybindings,
-                        "composer.sendAlternate",
-                        {
-                          context: {
-                            composerFocus: true,
-                            draftThreadRoute: routeKind === "draft",
-                            turnRunning: true,
-                            composerRequiresModifier: composerRequiresModifier(
-                              settings.sendShortcut,
-                              prompt,
-                            ),
-                          },
+                  <ComposerFooterPrimaryActions
+                    compact={isComposerPrimaryActionsCompact}
+                    canOperateThread={canOperateThread}
+                    activeContextWindow={
+                      settings.contextWindowMeterEnabled ? activeContextWindow : null
+                    }
+                    reserveContextWindowMeter={reserveContextWindowMeter}
+                    activeThreadModelDisplayName={activeThreadModelDisplayName}
+                    pendingAction={pendingPrimaryAction}
+                    isRunning={phase === "running"}
+                    canInterrupt={canInterrupt}
+                    followUpBehavior={followUpBehavior}
+                    canSteer={!isCompacting}
+                    alternateShortcutLabel={shortcutLabelForCommand(
+                      keybindings,
+                      "composer.sendAlternate",
+                      {
+                        context: {
+                          composerFocus: true,
+                          draftThreadRoute: routeKind === "draft",
+                          turnRunning: true,
+                          composerRequiresModifier: composerRequiresModifier(
+                            settings.sendShortcut,
+                            prompt,
+                          ),
                         },
-                      )}
-                      showPlanFollowUpPrompt={
-                        pendingUserInputs.length === 0 && showPlanFollowUpPrompt
-                      }
-                      promptHasText={prompt.trim().length > 0}
-                      isSendBusy={isSendBusy}
-                      sendDisabledReason={sendDisabledReason}
-                      isEnvironmentUnavailable={
-                        environmentUnavailable !== null ||
-                        noProviderAvailable ||
-                        projectSelectionRequired
-                      }
-                      isPreparingWorktree={isPreparingWorktree}
-                      hasSendableContent={composerSendState.hasSendableContent}
-                      canResume={showResumeAction}
-                      preserveComposerFocusOnPointerDown={isMobileViewport}
-                      isEditingQueuedMessage={isEditingQueuedMessage}
-                      onSubmitMessage={handleSubmitMessageStable}
-                      onResume={onResume}
-                      onPreviousPendingQuestion={onPreviousActivePendingUserInputQuestion}
-                      onInterrupt={handleInterruptPrimaryActionStable}
-                      onImplementPlanInNewThread={handleImplementPlanInNewThreadPrimaryActionStable}
-                      compactBeforeSendTokens={props.resumeCompactionTokens}
-                      keepFullHistory={props.keepFullHistory}
-                      onToggleKeepFullHistory={props.onToggleKeepFullHistory}
-                      compactDisabled={compactDisabled || noProviderAvailable || isSendBusy}
-                      compactDisabledReason={resolvedCompactDisabledReason}
-                      {...(compactCommandAvailable
-                        ? { onCompactContext: compactThreadContextStable }
-                        : {})}
-                    />
-                  )}
+                      },
+                    )}
+                    showPlanFollowUpPrompt={
+                      pendingUserInputs.length === 0 && showPlanFollowUpPrompt
+                    }
+                    promptHasText={prompt.trim().length > 0}
+                    isSendBusy={isSendBusy}
+                    sendDisabledReason={sendDisabledReason}
+                    isEnvironmentUnavailable={
+                      environmentUnavailable !== null ||
+                      noProviderAvailable ||
+                      projectSelectionRequired
+                    }
+                    isPreparingWorktree={isPreparingWorktree}
+                    hasSendableContent={composerSendState.hasSendableContent}
+                    canResume={showResumeAction}
+                    preserveComposerFocusOnPointerDown={isMobileViewport}
+                    isEditingQueuedMessage={isEditingQueuedMessage}
+                    onSubmitMessage={handleSubmitMessageStable}
+                    onResume={onResume}
+                    onPreviousPendingQuestion={onPreviousActivePendingUserInputQuestion}
+                    onInterrupt={handleInterruptPrimaryActionStable}
+                    onImplementPlanInNewThread={handleImplementPlanInNewThreadPrimaryActionStable}
+                    compactBeforeSendTokens={props.resumeCompactionTokens}
+                    keepFullHistory={props.keepFullHistory}
+                    onToggleKeepFullHistory={props.onToggleKeepFullHistory}
+                    compactDisabled={compactDisabled || noProviderAvailable || isSendBusy}
+                    compactDisabledReason={resolvedCompactDisabledReason}
+                    {...(compactCommandAvailable
+                      ? { onCompactContext: compactThreadContextStable }
+                      : {})}
+                  />
                 </div>
               </div>
             )}

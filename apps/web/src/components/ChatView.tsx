@@ -4,7 +4,6 @@ import { SessionStatusFooter } from "./chat/SessionStatusFooter";
 import { resolveDraftTeam, selectableTeams, teamListStatus } from "../lib/delivery";
 import {
   deliveryEnvironment,
-  useOrchestratorDraftStore,
   useDeliveryDraftStore,
   useDeliveryEnabled,
   useDeliveryRead,
@@ -16,7 +15,6 @@ import {
   useChatViewComposerProviderSelection,
   useDeliveryThreadModelBinding,
 } from "../lib/deliveryComposerSelection";
-import { TaskWorkspace } from "./delivery/TaskWorkspace";
 import { workspaceAreaProps } from "../lib/workspaceFocus";
 import { sourceControlClients } from "@t3tools/client-runtime/source-control-clients";
 import { resolveNewThreadModelSelection } from "@t3tools/shared/usageLimits";
@@ -1653,12 +1651,6 @@ export default function ChatView(props: ChatViewProps) {
         worktreePath: activeThread?.worktreePath ?? null,
       })
     : null;
-  const teamConversationId = useOrchestratorDraftStore((state) => {
-    const draft = activeThread ? state.drafts[activeThread.id] : undefined;
-    return draft?.started && ["chat", "non-code"].includes(draft.workflow)
-      ? (draft.viewTask ?? draft.engineThread)
-      : null;
-  });
   const gitStatusCwd = activeThread?.worktreePath ?? gitCwd;
   const gitStatusQuery = useEnvironmentQuery(
     gitStatusCwd === null
@@ -3291,25 +3283,6 @@ export default function ChatView(props: ChatViewProps) {
     addFiles: addDroppedFilesToComposer,
     addFolders: addDroppedFoldersToComposer,
   });
-
-  if (teamConversationId) {
-    return (
-      <TaskWorkspace
-        environmentId={activeThread.environmentId}
-        taskId={teamConversationId}
-        from="Orchestrator"
-        onClose={() => {
-          const draft = useOrchestratorDraftStore.getState().drafts[activeThread.id];
-          if (draft?.viewTask)
-            useOrchestratorDraftStore.getState().update(activeThread.id, { viewTask: null });
-          else handleNewThreadInActiveProject();
-        }}
-        onOpenTask={(taskId) => {
-          useOrchestratorDraftStore.getState().update(activeThread.id, { viewTask: taskId });
-        }}
-      />
-    );
-  }
 
   const content = (
     <div

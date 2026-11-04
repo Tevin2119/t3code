@@ -14,25 +14,14 @@ to keep a large paste editable in the composer instead.
 
 ## Team conversations and non-code delivery
 
-On web and desktop, open the model picker and select Orchestrator to choose a team,
-flow, seats and board. Team chat starts as a discussion without project-folder
-access. Enable **Use project folder** when the team needs local documents; every
-active seat must then use read-only access supported by the environment. No Git
-repository is required. The team works from a read-only copy.
+On web and desktop, open the model picker and select Orchestrator, then choose a
+team and role. Send starts a normal T3 thread using the selected provider and model.
+The agent can coordinate delegates through T3 orchestration while the conversation
+stays in Threads. Choose the team's lead role when you want it to coordinate work.
+The thread uses the project's folder and the access settings you selected.
 
-Choose a board in the Orchestrator picker to group the conversation. A unique board
-matching the current project folder is suggested for a new draft. If several
-boards match, choose one yourself. **New board** can use an existing T3 project
-folder for chat and non-code work, or a repository and branch for code delivery.
-It never creates a Git repository in a document folder.
-
-To organise an existing chat, change its board in **About**. **Not on a board**
-explicitly removes it from boards, without changing its work folder, deleting
-messages or stopping the team. A task created from a chat keeps its board unless
-you move it. Removing a board keeps its tasks.
-
-Use **Do next** on a live chat to prioritise its seats for the next free slots.
-It does not interrupt other seats or bypass concurrency and memory limits.
+Start a delivery task explicitly with **New task** on the Board. Existing engine
+chats and their linked tasks remain available from the Board.
 
 Enable **Non-code delivery** in the team's profile to produce stories, reports,
 presentations or assignments. Choose its producer and validation seats, and set
@@ -51,9 +40,9 @@ Acceptance records the reviewed file versions; it does not publish a code PR,
 submit coursework or certify an official grade. Reflections requiring actual
 feedback cannot be completed before you supply it.
 
-The engine keeps the task and conversation history. The inline thread association
-currently stays in this browser's saved state; another client can open the task
-from the board. Native mobile does not yet provide this delivery view.
+Native T3 team conversations are stored as threads. Board tasks and engine chats
+keep their history in the delivery engine. Native mobile does not yet provide the
+delivery view.
 
 ## Formatting
 
