@@ -44,7 +44,6 @@ const MODEL_TRIGGER_STATES = "data-popup-open:bg-accent data-popup-open:text-for
 export function ComposerControlsBar(props: {
   deliveryBinding: ChatComposerProps["deliveryBinding"];
   teamControl: ReactNode;
-  orchestratorControls: ReactNode;
   orchestrator: ComponentProps<typeof ProviderModelPicker>["orchestrator"];
   runtimeModeSupport: ServerProvider["runtimeModes"];
   environmentId: EnvironmentId;
@@ -292,7 +291,7 @@ export function ComposerControlsBar(props: {
     <>
       {composerModelPicker}
 
-      {props.orchestratorControls || (
+      {
         <>
           {restingBlockDefs.map((def, index) => {
             const hidden = index >= restingBlockDefs.length - restingHiddenBlockCount;
@@ -343,7 +342,7 @@ export function ComposerControlsBar(props: {
             />
           </div>
         </>
-      )}
+      }
     </>
   );
 }

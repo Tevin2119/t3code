@@ -528,20 +528,8 @@ export function hasStartedOrchestratorTask(threadId: string): boolean {
   return orchestratorDraftTask(useOrchestratorDraftStore.getState().drafts[threadId]) !== null;
 }
 
-export function isOrchestratorDraft(threadId: string): boolean {
-  return threadId in useOrchestratorDraftStore.getState().drafts;
-}
-
 export function useOrchestratorDraft(threadId: string | null): OrchestratorDraft | null {
   return useOrchestratorDraftStore((state) => (threadId ? (state.drafts[threadId] ?? null) : null));
-}
-
-export function useOrchestratorActivity(threadId: string | null): OrchestratorActivity {
-  return useOrchestratorDraftStore((state) =>
-    threadId
-      ? (state.activity[threadId] ?? IDLE_ORCHESTRATOR_ACTIVITY)
-      : IDLE_ORCHESTRATOR_ACTIVITY,
-  );
 }
 
 export function useBoardPreferences(environment: string | null) {
@@ -595,4 +583,15 @@ export function useDeliveryEnvironmentId(
     connected,
     primary,
   });
+}
+
+export function enterOrchestratorChat(threadId: string, environmentId: string | null): void {
+  useOrchestratorDraftStore.getState().enter(threadId, environmentId);
+  const draft = useOrchestratorDraftStore.getState().drafts[threadId];
+  if (draft && !useDeliveryDraftStore.getState().choices[threadId]) {
+    useDeliveryDraftStore.getState().chooseTeam(threadId, environmentId, {
+      team: draft.team,
+      role: null,
+    });
+  }
 }
