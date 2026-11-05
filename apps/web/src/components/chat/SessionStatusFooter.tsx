@@ -5,7 +5,8 @@ import type {
   ServerProviderUsageLimits,
 } from "@t3tools/contracts";
 import type { ReactNode } from "react";
-import { formatContextWindowTokens, type ContextWindowSnapshot } from "../../lib/contextWindow";
+import type { ContextWindowSnapshot } from "@t3tools/client-runtime/state/context-window";
+import { formatContextWindowTokens } from "../../lib/contextWindow";
 import { SessionDetails } from "../delivery/SessionDetails";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 
