@@ -10,8 +10,16 @@ import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
 import * as OrchestratorMcpService from "../../OrchestratorMcpService.ts";
 import * as ThreadMetadataMcpService from "../../ThreadMetadataMcpService.ts";
+import * as NativeBuildExecution from "../../../delivery/NativeBuildExecution.ts";
 
 const handlers = {
+  delivery_native_build_step: McpToolAccess.actsAsCaller((input) =>
+    Effect.gen(function* () {
+      const scope = yield* McpInvocationContext.McpInvocationContext;
+      const service = yield* NativeBuildExecution.NativeBuildExecution;
+      return yield* service.step(scope, input);
+    }).pipe(Effect.provide(NativeBuildExecution.layer)),
+  ),
   orchestrator_capabilities: McpToolAccess.reads((input) =>
     Effect.gen(function* () {
       const scope = yield* McpInvocationContext.McpInvocationContext;

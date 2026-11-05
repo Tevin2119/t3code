@@ -110,6 +110,10 @@ export class DeliveryService extends Context.Service<
   {
     readonly read: (input: DeliveryReadInput) => Effect.Effect<DeliveryResponse, DeliveryError>;
     readonly act: (input: DeliveryActInput) => Effect.Effect<DeliveryResponse, DeliveryError>;
+    /** Internal coordinator writes. Never expose this method as a generic client relay. */
+    readonly nativeBuildAct: (
+      input: DeliveryActInput,
+    ) => Effect.Effect<DeliveryResponse, DeliveryError>;
     readonly bindThread: (
       input: DeliveryBindThreadInput,
     ) => Effect.Effect<DeliveryThreadBinding, DeliveryError>;
@@ -131,6 +135,24 @@ export class DeliveryService extends Context.Service<
     readonly terminalEntryScript: Effect.Effect<string | null>;
   }
 >()("t3/delivery/DeliveryService") {}
+
+const disabled = () =>
+  Effect.fail(new DeliveryError({ reason: "disabled", detail: "Delivery is turned off." }));
+
+/** Inert service, for suites that only need the RPC surface to resolve. */
+export const layerTest = Layer.succeed(
+  DeliveryService,
+  DeliveryService.of({
+    read: disabled,
+    act: disabled,
+    nativeBuildAct: disabled,
+    bindThread: disabled,
+    threadState: () => Effect.succeed({ binding: null, pending: null }),
+    releaseThread: () => Effect.succeed({ binding: null, pending: null }),
+    prepareThread: () => Effect.succeed(false),
+    terminalEntryScript: Effect.succeed(null),
+  }),
+);
 
 const make = Effect.gen(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
@@ -673,7 +695,12 @@ const make = Effect.gen(function* () {
 
   return DeliveryService.of({
     read: Effect.fn("DeliveryService.read")((input) => request("GET", input.path)),
-    act: Effect.fn("DeliveryService.act")((input) => request("POST", input.path, input.body)),
+    act: Effect.fn("DeliveryService.act")((input) => input.path.startsWith("/api/native-builds/")
+      ? Effect.fail(new DeliveryError({ reason: "refused", detail: "Native build receipts can only be written by the server's native coordinator." }))
+      : request("POST", input.path, input.body)),
+    nativeBuildAct: Effect.fn("DeliveryService.nativeBuildAct")((input) => /^\/api\/native-builds\/att-[A-Za-z0-9-]+\/(claim|attach|complete)$/.test(input.path)
+      ? request("POST", input.path, input.body)
+      : Effect.fail(new DeliveryError({ reason: "invalid", detail: "Invalid native coordinator mutation path." }))),
     bindThread,
     threadState: Effect.fn("DeliveryService.threadState")((threadId) =>
       storeReadable.pipe(Effect.as(stateOf(threadId))),

@@ -1,4 +1,6 @@
 import {
+  DeliveryNativeBuildStepInput,
+  DeliveryNativeBuildStepResult,
   OrchestratorMcpCapabilitiesInput,
   OrchestratorMcpCapabilitiesResult,
   OrchestrationV2StopWorkflowInput,
@@ -49,6 +51,7 @@ import * as PeerLinks from "../../../peer/PeerLinks.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as OrchestratorMcpService from "../../OrchestratorMcpService.ts";
 import * as ThreadMetadataMcpService from "../../ThreadMetadataMcpService.ts";
+import { DeliveryService } from "../../../delivery/DeliveryService.ts";
 
 const dependencies = [
   McpInvocationContext.McpInvocationContext,
@@ -346,8 +349,20 @@ const EnvironmentUnlinkTool = Tool.make("t3_environment_unlink", {
   .annotate(Tool.Destructive, true)
   .annotate(Tool.Idempotent, true)
   .annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenWhileLinksOff);
+const NativeBuildStepTool = Tool.make("delivery_native_build_step", {
+  description:
+    "Advance one opted-in team build using native T3 delegation. Requires an active coordinator in the engine's exact existing build worktree. Starts or reconciles the same child across retries; native terminal state and full final output are read by the server. Call again after a native completion notification, or to reconcile an engine-requested cancellation. Research and read-only flows remain on the legacy runner. The input never accepts a fabricated completion result.",
+  parameters: DeliveryNativeBuildStepInput,
+  success: DeliveryNativeBuildStepResult,
+  failure: OrchestratorMcpFailure,
+  failureMode: "return",
+  dependencies: [...dependencies, DeliveryService],
+})
+  .annotate(Tool.Title, "Advance a native team build")
+  .annotate(Tool.Destructive, true);
 
 export const OrchestratorToolkit = Toolkit.make(
+  NativeBuildStepTool,
   OrchestratorCapabilitiesTool,
   DelegateTaskTool,
   TaskStatusTool,

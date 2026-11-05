@@ -71,6 +71,15 @@ export const DeliveryResponse = Schema.Struct({
 });
 export type DeliveryResponse = typeof DeliveryResponse.Type;
 
+export const DeliveryNativeBuildStepInput = Schema.Struct({
+  attemptId: TrimmedNonEmptyString.check(Schema.isPattern(/^att-[A-Za-z0-9-]+$/)),
+});
+export const DeliveryNativeBuildStepResult = Schema.Struct({
+  attemptId: Schema.String,
+  state: Schema.String,
+  taskId: Schema.NullOr(Schema.String),
+});
+
 /**
  * What a thread was started with. Pinned at bind time: a thread keeps its
  * team, role and configuration revision even when the team is edited later.

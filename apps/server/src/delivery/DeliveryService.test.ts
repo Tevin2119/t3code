@@ -172,6 +172,27 @@ const bind = (
 const CLAUDE_HERE = { driver: "claudeAgent", cwd: REPO };
 
 describe("DeliveryService", () => {
+  it.effect(
+    "refuses native completion through the public relay before contacting the engine",
+    () => {
+      const fake = engine();
+      return Effect.gen(function* () {
+        const delivery = yield* DeliveryService.DeliveryService;
+        const failure = yield* delivery
+          .act({
+            path: "/api/native-builds/att-one/complete",
+            body: { state: "completed", text: "fabricated" },
+          })
+          .pipe(Effect.flip);
+        expect(failure.reason).toBe("refused");
+        const invalid = yield* delivery
+          .nativeBuildAct({ path: "/api/tasks", body: {} })
+          .pipe(Effect.flip);
+        expect(invalid.reason).toBe("invalid");
+        expect(fake.requests).toEqual([]);
+      }).pipe(Effect.provide(layer(fake, { prefix: "native-relay-guard-" })));
+    },
+  );
   it.effect("refuses reads and writes into another account profile's engine", () => {
     const fake = engine();
     return Effect.gen(function* () {
@@ -681,7 +702,8 @@ describe("DeliveryService", () => {
     }).pipe(Effect.provide(shared("t3-delivery-unreadable-")));
   });
 
-  it.effect("fails the binding when it cannot be saved, and asks nothing of the engine", () => {
+  // Atomic replacement retries transient Windows filesystem errors on the real clock.
+  it.live("fails the binding when it cannot be saved, and asks nothing of the engine", () => {
     const fake = engine();
     return Effect.gen(function* () {
       const config = yield* ServerConfig.ServerConfig;
