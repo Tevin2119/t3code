@@ -16,6 +16,7 @@ import {
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import { symlinksSupported } from "@t3tools/shared/testing/symlinks";
 import * as DateTime from "effect/DateTime";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
@@ -27,6 +28,7 @@ import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 
 import * as ServerConfig from "../config.ts";
+import * as ProcessRunner from "../processRunner.ts";
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as AgentSessionScanner from "./AgentSessionScanner.ts";
@@ -50,6 +52,7 @@ const layerProjectStore = (importedWorkspaceRoots: ReadonlyArray<string>) =>
   });
 
 interface ScannerTestInput {
+  readonly processRunner?: ProcessRunner.ProcessRunner["Service"];
   readonly claudeHomePath: string;
   readonly codexHomePath: string;
   readonly piAgentDir?: string;
@@ -59,7 +62,12 @@ interface ScannerTestInput {
 }
 
 const layerScannerTest = (input: ScannerTestInput) =>
-  AgentSessionScanner.layer.pipe(
+  (input.processRunner
+    ? Layer.effect(AgentSessionScanner.AgentSessionScanner, AgentSessionScanner.make).pipe(
+        Layer.provide(Layer.succeed(ProcessRunner.ProcessRunner, input.processRunner)),
+      )
+    : AgentSessionScanner.layer
+  ).pipe(
     Layer.provide(
       Layer.mergeAll(
         ServerSettings.layerTest({
@@ -1960,10 +1968,28 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
         }
 
         for (let attempt = 1; attempt <= 2; attempt++) {
-          const scan = yield* Effect.forkChild(runScan({ claudeHomePath, codexHomePath }));
+          const runner = yield* ProcessRunner.make();
+          const healthyReads = new Map([
+            [path.join(repos[0], ".git", "config"), yield* Deferred.make<void>()],
+            [path.join(repos[2], ".git", "config"), yield* Deferred.make<void>()],
+          ]);
+          const processRunner = ProcessRunner.ProcessRunner.of({
+            run: (request) =>
+              runner.run(request).pipe(
+                Effect.tap(() => {
+                  const completed = healthyReads.get(request.args[1] ?? "");
+                  return completed ? Deferred.succeed(completed, undefined) : Effect.void;
+                }),
+              ),
+          });
+          const scan = yield* Effect.forkChild(
+            runScan({ claudeHomePath, codexHomePath, processRunner }),
+          );
           const result = yield* Effect.scoped(
             Effect.gen(function* () {
               yield* awaitGateReader(path.join(repos[1], ".git", "config"));
+              // Advancing the shared clock before healthy reads finish expires their deadlines too.
+              yield* Effect.forEach(healthyReads.values(), Deferred.await);
               yield* TestClock.adjust("2 seconds");
               return yield* Fiber.join(scan);
             }),
