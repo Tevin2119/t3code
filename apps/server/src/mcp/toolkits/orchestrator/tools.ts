@@ -361,7 +361,8 @@ const NativeBuildStepTool = Tool.make("delivery_native_build_step", {
   dependencies: [...dependencies, DeliveryService],
 })
   .annotate(Tool.Title, "Advance a native team build")
-  .annotate(Tool.Destructive, true);
+  .annotate(Tool.Destructive, true)
+  .annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenWhileDeliveryOff);
 
 export const OrchestratorToolkit = Toolkit.make(
   NativeBuildStepTool,
