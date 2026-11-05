@@ -88,9 +88,7 @@ export const readDeepSeekBalance = Effect.fn("readDeepSeekBalance")(function* (
   // A harness pointed at another endpoint is not using DeepSeek's account.
   const baseUrl = text(environment.DEEPSEEK_BASE_URL);
   if (baseUrl) {
-    const host = yield* Effect.try(() => new URL(baseUrl).hostname.toLowerCase()).pipe(
-      Effect.orElseSucceed(() => ""),
-    );
+    const host = URL.canParse(baseUrl) ? new URL(baseUrl).hostname.toLowerCase() : "";
     if (!OFFICIAL_HOSTS.has(host)) {
       return unavailable(
         "The DeepSeek Harness points at another endpoint, which has no DeepSeek balance.",
