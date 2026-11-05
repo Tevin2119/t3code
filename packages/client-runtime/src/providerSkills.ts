@@ -167,14 +167,17 @@ const initialProviderWorkspaceSnapshotRefreshState: ProviderWorkspaceSnapshotRef
 function planProviderWorkspaceSnapshotRefresh(
   previous: ProviderWorkspaceSnapshotRefreshState,
   provider: ServerProvider | null | undefined,
-  cwd: string,
+  cwd: string | null,
   now: number,
 ): {
   readonly state: ProviderWorkspaceSnapshotRefreshState;
   readonly refresh: boolean;
   readonly recheckAt: number | null;
 } {
-  const hasSnapshot = hasCompleteProviderWorkspaceSnapshot(provider, cwd);
+  const hasSnapshot =
+    cwd === null
+      ? provider?.status === "ready" || provider?.status === "warning"
+      : hasCompleteProviderWorkspaceSnapshot(provider, cwd);
   const pending =
     (provider && resolveProviderWorkspaceSnapshot(provider, cwd)?.slashCommandsPending) === true;
   // Losing a snapshot (the server dropped it) lifts both the TTL and the retry
@@ -248,8 +251,11 @@ type WorkspaceSnapshotStatus = "absent" | "pending" | "complete";
 
 function resolveWorkspaceSnapshotStatus(
   provider: ServerProvider | undefined,
-  cwd: string,
+  cwd: string | null,
 ): WorkspaceSnapshotStatus {
+  if (cwd === null) {
+    return provider?.status === "ready" || provider?.status === "warning" ? "complete" : "absent";
+  }
   const snapshot = provider && resolveProviderWorkspaceSnapshot(provider, cwd);
   if (!snapshot) return "absent";
   return snapshot.slashCommandsPending ? "pending" : "complete";
@@ -258,7 +264,7 @@ function resolveWorkspaceSnapshotStatus(
 interface ProviderWorkspaceSnapshotRefreshTarget {
   readonly environmentId: EnvironmentId;
   readonly instanceId: ProviderInstanceId;
-  readonly cwd: string;
+  readonly cwd: string | null;
 }
 
 /**
@@ -274,7 +280,7 @@ export function createProviderWorkspaceSnapshotRefreshAtomFamily(input: {
   readonly refreshProviders: AtomCommand<
     {
       readonly environmentId: EnvironmentId;
-      readonly input: { readonly instanceId: ProviderInstanceId; readonly cwd: string };
+      readonly input: { readonly instanceId: ProviderInstanceId; readonly cwd?: string };
     },
     { readonly providers: ReadonlyArray<ServerProvider> },
     unknown
@@ -283,7 +289,7 @@ export function createProviderWorkspaceSnapshotRefreshAtomFamily(input: {
   // Plain-object keys compare structurally (Effect `Equal`/`Hash`).
   const family = Atom.family((target: ProviderWorkspaceSnapshotRefreshTarget) => {
     const { environmentId, instanceId, cwd } = target;
-    const key = `${environmentId}:${instanceId}:${cwd}`;
+    const key = JSON.stringify([environmentId, instanceId, cwd]);
     const findProvider = (providers: ReadonlyArray<ServerProvider> | null) =>
       providers?.find((provider) => provider.instanceId === instanceId);
     const statusAtom = Atom.make((get) =>
@@ -325,7 +331,7 @@ export function createProviderWorkspaceSnapshotRefreshAtomFamily(input: {
         void runAtomCommand(
           registry,
           input.refreshProviders,
-          { environmentId, input: { instanceId, cwd } },
+          { environmentId, input: { instanceId, ...(cwd === null ? {} : { cwd }) } },
           { reportFailure: false },
         ).then((result) => {
           const refreshedProvider =
@@ -335,11 +341,14 @@ export function createProviderWorkspaceSnapshotRefreshAtomFamily(input: {
           // A new server timestamp proves progress even when the client clock is ahead.
           // @effect-diagnostics-next-line globalDate:off
           const completedAt = Date.now();
+          // Global discovery has no workspace timestamp in the wire contract.
           const refreshed =
-            hasCompleteProviderWorkspaceSnapshot(refreshedProvider, cwd) &&
-            (hasCurrentProviderWorkspaceSnapshot(refreshedProvider, cwd, completedAt) ||
-              snapshot?.checkedAt !==
-                (provider && resolveProviderWorkspaceSnapshot(provider, cwd))?.checkedAt);
+            cwd === null
+              ? refreshedProvider?.status === "ready" || refreshedProvider?.status === "warning"
+              : hasCompleteProviderWorkspaceSnapshot(refreshedProvider, cwd) &&
+                (hasCurrentProviderWorkspaceSnapshot(refreshedProvider, cwd, completedAt) ||
+                  snapshot?.checkedAt !==
+                    (provider && resolveProviderWorkspaceSnapshot(provider, cwd))?.checkedAt);
           if (!refreshed) retryLater();
         }, retryLater);
         return plan.state;

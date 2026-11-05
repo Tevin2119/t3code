@@ -268,7 +268,7 @@ export function useComposerCommandMenu({
     : [];
   const selectedProviderInstanceId = selectedProviderStatus?.instanceId;
   const refreshWorkspaceSnapshot = useAtomRefresh(
-    environmentId && projectCwd && selectedProviderInstanceId
+    environmentId && selectedProviderInstanceId
       ? providerWorkspaceSnapshotRefresh({
           environmentId,
           instanceId: selectedProviderInstanceId,
