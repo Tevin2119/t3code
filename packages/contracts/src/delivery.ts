@@ -78,6 +78,7 @@ export const DeliveryNativeBuildStepResult = Schema.Struct({
   attemptId: Schema.String,
   state: Schema.String,
   taskId: Schema.NullOr(Schema.String),
+  next: Schema.optional(Schema.String),
 });
 
 /**

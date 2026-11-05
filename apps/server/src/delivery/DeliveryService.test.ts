@@ -178,13 +178,17 @@ describe("DeliveryService", () => {
       const fake = engine();
       return Effect.gen(function* () {
         const delivery = yield* DeliveryService.DeliveryService;
-        const failure = yield* delivery
-          .act({
-            path: "/api/native-builds/att-one/complete",
-            body: { state: "completed", text: "fabricated" },
-          })
-          .pipe(Effect.flip);
-        expect(failure.reason).toBe("refused");
+        for (const path of [
+          "/api/native-builds/att-one/complete",
+          "/api/tasks/../native-builds/att-one/complete",
+          "/api/tasks/%2e%2e/native-builds/att-one/complete",
+          "/api/tasks\\..\\native-builds\\att-one\\complete",
+        ]) {
+          const failure = yield* delivery
+            .act({ path, body: { state: "completed", text: "fabricated" } })
+            .pipe(Effect.flip);
+          expect(failure.reason).toBe("refused");
+        }
         const invalid = yield* delivery
           .nativeBuildAct({ path: "/api/tasks", body: {} })
           .pipe(Effect.flip);

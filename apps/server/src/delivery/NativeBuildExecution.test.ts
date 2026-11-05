@@ -21,7 +21,13 @@ const scope: McpInvocationScope = {
   client: undefined,
 };
 
-function setup({ mismatch = false, attachFailure = false, paged = false } = {}) {
+function setup({
+  mismatch = false,
+  attachFailure = false,
+  paged = false,
+  claimedCancellation = false,
+  cancelOnClaim = false,
+} = {}) {
   let build = {
     version: 1,
     id: "att-one",
@@ -30,9 +36,11 @@ function setup({ mismatch = false, attachFailure = false, paged = false } = {}) 
     model: "model",
     prompt: "Build and return JSON.",
     access: "full",
-    state: "queued",
-    owner: null as string | null,
-    cancelRequested: false,
+    state: claimedCancellation ? "claimed" : "queued",
+    owner: (claimedCancellation ? `${scope.environmentId}:${scope.thread?.threadId}` : null) as
+      | string
+      | null,
+    cancelRequested: claimedCancellation,
     native: null as { taskId: string; childThreadId: string } | null,
   };
   let nativeState = "running";
@@ -93,7 +101,10 @@ function setup({ mismatch = false, attachFailure = false, paged = false } = {}) 
       path: string;
       body: { owner: string; taskId: string; childThreadId: string; state: string };
     }) => {
-      if (path.endsWith("/claim")) build = { ...build, owner: body.owner, state: "claimed" };
+      if (path.endsWith("/claim"))
+        build = cancelOnClaim
+          ? { ...build, cancelRequested: true, state: "cancelled" }
+          : { ...build, owner: body.owner, state: "claimed" };
       if (path.endsWith("/attach")) {
         if (attachFailure) {
           attachFailure = false;
@@ -194,5 +205,23 @@ it.effect("pages the native transcript to obtain the authoritative final result"
     fixture.setNativeState("completed");
     expect((yield* service.step(scope, { attemptId: "att-one" })).state).toBe("completed");
     expect(fixture.completed).toEqual([expect.objectContaining({ text: '{"summary":"done"}' })]);
+  }),
+);
+
+it.effect("does not launch an uncertain claimed build after cancellation", () =>
+  Effect.gen(function* () {
+    const fixture = setup({ claimedCancellation: true });
+    const service = yield* fixture.service();
+    const failure = yield* service.step(scope, { attemptId: "att-one" }).pipe(Effect.flip);
+    expect(failure.message).toMatch(/No new child will be launched/);
+    expect(fixture.delegateTask).not.toHaveBeenCalled();
+  }),
+);
+it.effect("does not launch when cancellation wins between read and claim", () =>
+  Effect.gen(function* () {
+    const fixture = setup({ cancelOnClaim: true });
+    const service = yield* fixture.service();
+    expect((yield* service.step(scope, { attemptId: "att-one" })).state).toBe("cancelled");
+    expect(fixture.delegateTask).not.toHaveBeenCalled();
   }),
 );

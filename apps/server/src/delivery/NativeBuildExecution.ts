@@ -93,6 +93,15 @@ export const make = Effect.gen(function* () {
       }
       if (["completed", "failed", "cancelled", "interrupted"].includes(build.state))
         return { attemptId: build.id, state: build.state, taskId: build.native?.taskId ?? null };
+      const checkCancelledAdmission = () =>
+        build.cancelRequested && !build.native
+          ? Effect.fail(
+              refused(
+                "Cancellation arrived before a native receipt was recorded. No new child will be launched; reconcile the uncertain admission in this coordinator.",
+              ),
+            )
+          : Effect.void;
+      yield* checkCancelledAdmission();
       // This namespace survives provider-session and engine restarts. Replaying an uncertain
       // dispatch recovers its native receipt rather than admitting a second writable child.
       const nativeScope = { ...scope, requestNamespace: `delivery-native:${owner}:${build.id}` };
@@ -111,13 +120,8 @@ export const make = Effect.gen(function* () {
           return yield* refused(
             "The engine harness does not identify one enabled native provider instance.",
           );
-        const model =
-          build.model ??
-          (provider.providerInstanceId === scope.thread.providerInstanceId
-            ? capabilities.inheritedModel
-            : null);
-        if (!model)
-          return yield* refused("A native build on another provider needs an explicit model.");
+        const model = build.model;
+        if (!model) return yield* refused("A native build needs an explicit seat model.");
         if (
           capabilities.runtimeMode !== "full-access" ||
           (provider.runtimeModes && !provider.runtimeModes.includes("full-access"))
@@ -126,24 +130,29 @@ export const make = Effect.gen(function* () {
             "Native builds require a full-access coordinator and provider; approval modes do not grant filesystem access.",
           );
         build = yield* post("claim", { owner, worktree: build.worktree });
-        const task = yield* orchestrator.delegateTask(nativeScope, {
-          task: build.prompt,
-          title: `Team build ${build.id}`,
-          clientRequestId: "execute-v1",
-          isolation: "shared",
-          mode: "async",
-          runtimeMode: "full-access",
-          target: { providerInstanceId: provider.providerInstanceId, model, options: [] },
-        });
-        if (!task.childThreadId)
-          return yield* refused(
-            "Native admission returned no child thread. Retry this attempt to recover the receipt.",
-          );
-        build = yield* post("attach", {
-          owner,
-          taskId: task.taskId,
-          childThreadId: task.childThreadId,
-        });
+        if (["completed", "failed", "cancelled", "interrupted"].includes(build.state))
+          return { attemptId: build.id, state: build.state, taskId: build.native?.taskId ?? null };
+        yield* checkCancelledAdmission();
+        if (!build.native) {
+          const task = yield* orchestrator.delegateTask(nativeScope, {
+            task: build.prompt,
+            title: `Team build ${build.id}`,
+            clientRequestId: "execute-v1",
+            isolation: "shared",
+            mode: "async",
+            runtimeMode: "full-access",
+            target: { providerInstanceId: provider.providerInstanceId, model, options: [] },
+          });
+          if (!task.childThreadId)
+            return yield* refused(
+              "Native admission returned no child thread. Retry this attempt to recover the receipt.",
+            );
+          build = yield* post("attach", {
+            owner,
+            taskId: task.taskId,
+            childThreadId: task.childThreadId,
+          });
+        }
       }
       if (!build.native) return yield* refused("The native task receipt is missing.");
       const taskId = NodeId.make(build.native.taskId);
@@ -163,6 +172,7 @@ export const make = Effect.gen(function* () {
           attemptId: build.id,
           state: build.cancelRequested ? "cancelling" : "working",
           taskId,
+          next: "Completion wakes this thread, so end your turn. Call delivery_native_build_step with this attempt id after the notification; do not poll it.",
         };
       }
       let text = "";
