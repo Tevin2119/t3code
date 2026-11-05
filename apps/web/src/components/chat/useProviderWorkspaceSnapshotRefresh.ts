@@ -29,10 +29,9 @@ export function useProviderWorkspaceSnapshotRefresh(input: {
   readonly instanceId: ProviderInstanceId | undefined;
 }): { readonly refresh: () => void; readonly scanning: boolean } {
   const { environmentId, gitCwd, instanceId } = input;
-  const atom =
-    gitCwd && instanceId
-      ? providerWorkspaceSnapshotRefresh({ environmentId, instanceId, cwd: gitCwd })
-      : idleRefreshAtom;
+  const atom = instanceId
+    ? providerWorkspaceSnapshotRefresh({ environmentId, instanceId, cwd: gitCwd })
+    : idleRefreshAtom;
   return {
     refresh: useAtomRefresh(atom),
     scanning: isProviderWorkspaceSnapshotScanning(useAtomValue(atom)),

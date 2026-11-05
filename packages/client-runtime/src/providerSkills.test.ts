@@ -162,7 +162,11 @@ describe("provider workspace snapshot refresh atom", () => {
     | null
     | Promise<ReadonlyArray<ServerProvider> | null>;
 
-  function setup(initialProviders: ReadonlyArray<ServerProvider>, initialResponses?: Response[]) {
+  function setup(
+    initialProviders: ReadonlyArray<ServerProvider>,
+    initialResponses?: Response[],
+    targetCwd: string | null = cwd,
+  ) {
     const providersAtom = Atom.make<ReadonlyArray<ServerProvider> | null>(initialProviders);
     const responses: Response[] = [...(initialResponses ?? [])];
     const run = vi.fn(async () => {
@@ -178,10 +182,60 @@ describe("provider workspace snapshot refresh atom", () => {
       refreshProviders: { label: "refresh", run },
     });
     const registry = AtomRegistry.make();
-    const atom = family({ environmentId, instanceId: provider.instanceId, cwd });
+    const atom = family({ environmentId, instanceId: provider.instanceId, cwd: targetCwd });
     const unmount = registry.mount(atom);
     return { registry, atom, family, providersAtom, responses, run, unmount };
   }
+
+  it("refreshes global skills without sending a cwd or reusing a project scope", async () => {
+    vi.useFakeTimers({ now: Date.parse("2026-01-01T00:00:00.000Z") });
+    const { registry, atom, family, run, unmount } = setup(noSnapshot, [() => noSnapshot], null);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(run).toHaveBeenLastCalledWith(expect.anything(), {
+      environmentId,
+      input: { instanceId: provider.instanceId },
+    });
+    registry.refresh(atom);
+    expect(run).toHaveBeenCalledTimes(1);
+    const project = family({ environmentId, instanceId: provider.instanceId, cwd });
+    const unmountProject = registry.mount(project);
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(run).toHaveBeenLastCalledWith(expect.anything(), {
+      environmentId,
+      input: { instanceId: provider.instanceId, cwd },
+    });
+    unmountProject();
+    unmount();
+  });
+
+  it.each(["error", "disabled"] as const)(
+    "retries global %s probes with a bounded cooldown",
+    async (status) => {
+      vi.useFakeTimers({ now: Date.parse("2026-01-01T00:00:00.000Z") });
+      const failed = [{ ...provider, status, workspaceSnapshots: [] }];
+      const { registry, atom, run, unmount } = setup(
+        failed,
+        [() => failed, () => failed, () => failed],
+        null,
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      registry.refresh(atom);
+      expect(run).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(10_000);
+      registry.refresh(atom);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(run).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(10_000);
+      registry.refresh(atom);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(run).toHaveBeenCalledTimes(3);
+      await vi.advanceTimersByTimeAsync(10_000);
+      registry.refresh(atom);
+      expect(run).toHaveBeenCalledTimes(3);
+      unmount();
+    },
+  );
 
   it("scans a missing snapshot once and skips a repeat inside the TTL", async () => {
     vi.useFakeTimers({ now: Date.parse("2026-01-01T00:00:00.000Z") });
