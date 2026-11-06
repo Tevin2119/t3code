@@ -1059,7 +1059,7 @@ it.effect("accepts case-insensitive MCP bearer schemes and diagnoses rejected cr
   );
 });
 
-it.effect("hides tools for links and refuses another environment while the beta is off", () =>
+it.effect("hides tools for links and Delivery while off, and refuses another environment", () =>
   Effect.scoped(
     Effect.gen(function* () {
       const token = "linksToken";
@@ -1089,6 +1089,12 @@ it.effect("hides tools for links and refuses another environment while the beta 
           failure: OrchestratorMcpFailure,
           failureMode: "return",
         }),
+        Tool.make("delivery", {
+          description: "Steps a build.",
+          success: Schema.Struct({ stepped: Schema.Boolean }),
+          failure: OrchestratorMcpFailure,
+          failureMode: "return",
+        }).annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenWhileDeliveryOff),
       );
       const settingsContext = yield* Layer.build(ServerSettings.layerTest());
       const settings = Context.get(settingsContext, ServerSettings.ServerSettingsService);
@@ -1098,6 +1104,7 @@ it.effect("hides tools for links and refuses another environment while the beta 
           McpToolAccess.toLayer(LinksToolkit, {
             links: McpToolAccess.reads(() => Effect.succeed({ links: 0 })),
             where: McpToolAccess.reads(() => Effect.succeed({ ranIn: "here" })),
+            delivery: McpToolAccess.reads(() => Effect.succeed({ stepped: true })),
           }),
         ),
       ).pipe(
@@ -1177,6 +1184,9 @@ it.effect("hides tools for links and refuses another environment while the beta 
         isError: true,
         content: [{ text: expect.stringContaining("cannot reach linked environments") }],
       });
+
+      yield* settings.updateSettings({ delivery: { enabled: true } });
+      expect(yield* listed()).toEqual(["links", "where", "delivery"]);
     }),
   ).pipe(Effect.provide(NodeHttpServer.layerTest)),
 );
