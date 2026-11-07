@@ -15,8 +15,10 @@ or open a PR for it.
 
 - Change only the skill folders listed below and `~/.local/bin/tstack-sync`. Never touch
   T3's database, settings, or any `skills/synced` folder (that is Claude.ai's own sync).
-- Before copying, check each target for an existing skill with one of the nine names. If one
-  exists and is not from tstack, stop and ask the person; do not overwrite it.
+- Never overwrite a skill that is not from tstack. The script marks each folder it copies with a
+  `.tstack` file and skips a same-named folder without one (`SKIP ...`). Report each skip and ask
+  the person: they keep theirs, or install tstack's under another name with
+  `--rename council=tstack-council` (renames the folder and its `name:`).
 - Use real copies, not symlinks. Some harnesses skip symlinked skill folders.
 - Do not kill or restart the running T3 server.
 
