@@ -1,6 +1,7 @@
+import { useAtomValue } from "@effect/atom-react";
 import type { EnvironmentId, ProviderInstanceId } from "@t3tools/contracts";
 import { RotateCcwIcon } from "lucide-react";
-import { useMemo, type ReactNode } from "react";
+import { useMemo, useRef, useState, type ReactNode } from "react";
 
 import { useEnvironmentSettings } from "../../hooks/useSettings";
 import {
@@ -17,7 +18,8 @@ import {
   harnessLabel,
   harnessOfDriver,
   seatValues,
-  withTeamModels,
+  modelsForSeat,
+  HARNESS_DEFAULT_MODEL,
 } from "../../lib/deliverySeats";
 import { cn } from "../../lib/utils";
 import { getCustomModelOptionsByInstance } from "../../modelSelection";
@@ -26,8 +28,8 @@ import {
   deriveProviderInstanceEntries,
   sortProviderInstanceEntries,
 } from "../../providerInstances";
-import { useEnvironment } from "../../state/environments";
-import { EMPTY_SERVER_PROVIDERS } from "../../state/server";
+import { EMPTY_SERVER_PROVIDERS, serverEnvironment } from "../../state/server";
+import { useAtomCommand } from "../../state/use-atom-command";
 import { ProviderModelPicker } from "../chat/ProviderModelPicker";
 import type { ModelEsque } from "../chat/providerIconUtils";
 import { Badge } from "../ui/badge";
@@ -106,9 +108,10 @@ function Choice(props: {
 
 /** The harnesses and models of this environment, as the composer's own picker has them. */
 export function useSeatCatalog(environmentId: EnvironmentId | null) {
-  const environment = useEnvironment(environmentId);
+  const providers =
+    useAtomValue(serverEnvironment.providersValueAtom((environmentId ?? "") as EnvironmentId)) ??
+    EMPTY_SERVER_PROVIDERS;
   const settings = useEnvironmentSettings((environmentId ?? "") as EnvironmentId);
-  const providers = environment?.serverConfig?.providers ?? EMPTY_SERVER_PROVIDERS;
   return useMemo(() => {
     const entries = sortProviderInstanceEntries(
       applyProviderInstanceSettings(deriveProviderInstanceEntries(providers), settings),
@@ -145,6 +148,23 @@ export function SeatSettingsPanel(props: {
 }) {
   const catalog = useSeatCatalog(props.environmentId);
   const locked = props.onChange === undefined;
+  const refreshProviders = useAtomCommand(serverEnvironment.refreshProviders);
+  const refreshing = useRef(false);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const refreshModels = async () => {
+    if (!props.environmentId || refreshing.current) return;
+    refreshing.current = true;
+    setIsRefreshing(true);
+    try {
+      await refreshProviders({
+        environmentId: props.environmentId,
+        input: { refreshModels: true },
+      });
+    } finally {
+      refreshing.current = false;
+      setIsRefreshing(false);
+    }
+  };
   const over = props.over ?? "task";
   const base = over === "task" ? "now" : "defined";
   const baseLabel = over === "task" ? "Team default" : "As defined";
@@ -157,6 +177,17 @@ export function SeatSettingsPanel(props: {
       <p className="text-2xs text-muted-foreground" data-delivery-seats-on>
         {on} of {props.settings.length} seats switched on
       </p>
+      {!locked && !props.switchesOnly ? (
+        <Button
+          size="xs"
+          variant="ghost"
+          className="self-start"
+          disabled={isRefreshing || !props.environmentId}
+          onClick={() => void refreshModels()}
+        >
+          {isRefreshing ? "Refreshing models…" : "Refresh models"}
+        </Button>
+      ) : null}
       <div className="flex flex-col divide-y divide-border">
         {props.settings.map((item) => {
           const from = item[base];
@@ -177,9 +208,11 @@ export function SeatSettingsPanel(props: {
               // The models the team names for the seat belong to the harness it is defined on.
               return [
                 candidate.instanceId,
-                harnessOfDriver(candidate.driverKind) === item.defined.harness
-                  ? withTeamModels(listed, item.models, (slug) => ({ slug, name: slug }))
-                  : listed,
+                modelsForSeat(
+                  listed,
+                  { ...item, now: from },
+                  harnessOfDriver(candidate.driverKind)!,
+                ),
               ];
             }),
           );
@@ -279,7 +312,7 @@ export function SeatSettingsPanel(props: {
                   ) : entry ? (
                     <ProviderModelPicker
                       activeInstanceId={entry.instanceId}
-                      model={values.model ?? ""}
+                      model={offer.model ? (values.model ?? "") : HARNESS_DEFAULT_MODEL}
                       lockedProvider={null}
                       instanceEntries={entries}
                       modelOptionsByInstance={options}
@@ -288,6 +321,15 @@ export function SeatSettingsPanel(props: {
                       {...(offer.model
                         ? {}
                         : { triggerLabel: `${harnessLabel(values.harness)}, its own model` })}
+                      getModelDisabledReason={(instanceId, model) => {
+                        const candidate = entries.find((entry) => entry.instanceId === instanceId);
+                        const harness = candidate ? harnessOfDriver(candidate.driverKind) : null;
+                        return harness &&
+                          model !== HARNESS_DEFAULT_MODEL &&
+                          !seatOfferFor({ ...item, now: from }, { harness }).model
+                          ? "The delivery engine uses this harness's configured model. Model overrides are not supported here."
+                          : null;
+                      }}
                       onInstanceModelChange={(instanceId, model) => {
                         const picked = entries.find(
                           (candidate) => candidate.instanceId === instanceId,
@@ -300,7 +342,12 @@ export function SeatSettingsPanel(props: {
                           set(rest);
                           return;
                         }
-                        set(moveSeat({ ...item, now: from }, chosen, { harness, model }));
+                        set(
+                          moveSeat({ ...item, now: from }, chosen, {
+                            harness,
+                            model: model === HARNESS_DEFAULT_MODEL ? null : model,
+                          }),
+                        );
                       }}
                     />
                   ) : (

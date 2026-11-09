@@ -19,6 +19,8 @@ import {
   useOrchestratorDraft,
   useOrchestratorDraftStore,
 } from "../../state/delivery";
+import { OrchestratorBoardPicker } from "./OrchestratorBoardPicker";
+import { Switch } from "../ui/switch";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
@@ -92,7 +94,7 @@ export function FlowChoice(props: {
                 </Badge>
               ) : null}
             </span>
-            <span className="text-[11px] text-muted-foreground">
+            <span className="text-2xs text-muted-foreground">
               {flow.stages.join(", ")}. Stops at: {flow.stop}.
             </span>
           </button>
@@ -120,6 +122,7 @@ export function OrchestratorPanel(props: {
   readonly environmentId: EnvironmentId | null;
   readonly threadId: string;
   readonly onRequestClose: () => void;
+  readonly workspace?: string | null;
 }) {
   const navigate = useNavigate();
   const draft = useOrchestratorDraft(props.threadId);
@@ -156,7 +159,7 @@ export function OrchestratorPanel(props: {
       <header className="flex flex-col gap-1.5 border-b border-border/70 px-3 py-2">
         <div className="flex items-center gap-1.5">
           <h3 className="text-sm font-medium">Orchestrator</h3>
-          <span className="truncate text-[11px] text-muted-foreground">
+          <span className="truncate text-2xs text-muted-foreground">
             A team in place of one model. Nothing runs until you start it.
           </span>
         </div>
@@ -236,6 +239,26 @@ export function OrchestratorPanel(props: {
         {teamsRead.error ? (
           <p className="text-xs text-warning">Delivery engine not reachable. {teamsRead.error}</p>
         ) : null}
+        <OrchestratorBoardPicker
+          environmentId={props.environmentId}
+          threadId={props.threadId}
+          workspace={props.workspace ?? null}
+        />
+        {flow === "chat" && props.workspace ? (
+          <label className="flex items-start gap-2 text-xs">
+            <Switch
+              checked={draft.useProjectFolder === true}
+              onCheckedChange={(checked) => update(props.threadId, { useProjectFolder: checked })}
+              aria-label="Use project folder"
+            />
+            <span>
+              Use project folder
+              <span className="block text-muted-foreground">
+                Optional for a discussion. Requires read-only access for every active seat.
+              </span>
+            </span>
+          </label>
+        ) : null}
         <section className="flex flex-col gap-1">
           <h4 className="text-xs font-medium text-muted-foreground">Flow</h4>
           <FlowChoice
@@ -244,7 +267,7 @@ export function OrchestratorPanel(props: {
             onChange={(next) => update(props.threadId, { workflow: next })}
           />
           {chosen && chosen.problems.length > 0 ? (
-            <ul className="list-disc pl-5 text-[11px] text-warning" data-flow-problems>
+            <ul className="list-disc pl-5 text-2xs text-warning" data-flow-problems>
               {chosen.problems.map((item) => (
                 <li key={item}>{item}</li>
               ))}
@@ -299,10 +322,7 @@ export function OrchestratorPanel(props: {
       </div>
 
       <footer className="flex items-center justify-between gap-2 border-t border-border/70 px-3 py-1.5">
-        <span
-          className="min-w-0 truncate text-[11px] text-muted-foreground"
-          data-orchestrator-summary
-        >
+        <span className="min-w-0 truncate text-2xs text-muted-foreground" data-orchestrator-summary>
           {chosen
             ? `${chosen.title} with ${chosen.seats.length} seat${chosen.seats.length === 1 ? "" : "s"}: ${chosen.seats.join(", ")}`
             : "Choose a profile and a flow."}

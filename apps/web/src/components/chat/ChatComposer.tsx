@@ -5743,6 +5743,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                 onSelect: () => enterOrchestrator(activeThreadId, environmentId),
                 panel: (
                   <OrchestratorPanel
+                    workspace={gitCwd}
                     environmentId={environmentId}
                     threadId={activeThreadId}
                     onRequestClose={() => setIsComposerModelPickerOpen(false)}
