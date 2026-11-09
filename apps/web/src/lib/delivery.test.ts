@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  chosenTeamUnavailable,
+  deliveryEnvironmentChoice,
   decideTeamForSend,
   deliveryFailureText,
   describeBinding,
@@ -192,6 +194,34 @@ describe("resolveTeamChoice", () => {
       state: "blocked",
       why: "This team is not set up. Choose another team, or No team.",
     });
+  });
+});
+
+describe("settled team availability", () => {
+  it.each([
+    { name: "retained offered team", body: [{ team: "rnd" }], unavailable: false },
+    { name: "retained missing team", body: [{ team: "alpha" }], unavailable: true },
+    { name: "retained empty list", body: [], unavailable: true },
+    { name: "retained malformed body", body: {}, unavailable: true },
+    { name: "no body", body: null, unavailable: false },
+    { name: "undefined body", body: undefined, unavailable: false },
+  ])("uses $name after a failed reading", ({ body, unavailable }) => {
+    expect(chosenTeamUnavailable({ body, error: "offline" }, { team: "rnd" })).toBe(unavailable);
+  });
+
+  it("does not rule out a choice still awaiting teams", () => {
+    expect(
+      chosenTeamUnavailable(
+        { body: [{ team: "alpha" }], error: "offline" },
+        { team: "rnd", awaitingTeams: true },
+      ),
+    ).toBe(false);
+  });
+
+  it("clears unavailability when a successful reading offers the choice again", () => {
+    const draft = { team: "rnd" };
+    expect(chosenTeamUnavailable({ body: [], error: "offline" }, draft)).toBe(true);
+    expect(chosenTeamUnavailable({ body: [{ team: "rnd" }], error: null }, draft)).toBe(false);
   });
 });
 
@@ -1306,5 +1336,64 @@ describe("repeatKeys", () => {
     const keys = repeatKeys(["x", "x", "x#2", "2:x", ""]);
     expect(new Set(keys).size).toBe(5);
     expect(keys).toEqual(["1:x", "2:x", "1:x#2", "1:2:x", "1:"]);
+  });
+});
+
+describe("deliveryEnvironmentChoice", () => {
+  const connected = ["mac", "windows"] as const;
+  const on =
+    (...ids: Array<string | null>) =>
+    (environment: string | null) =>
+      ids.includes(environment);
+  it("takes the conversation's environment for a task made from it, even when the window's own is another", () => {
+    expect(
+      deliveryEnvironmentChoice({
+        fromConversation: "windows/thread-1",
+        chosen: null,
+        connected,
+        primary: "mac",
+        enabled: on("mac", "windows"),
+      }),
+    ).toBe("windows");
+  });
+  it("keeps the person's choice, and gives way to the window's own when the choice is off or gone", () => {
+    expect(
+      deliveryEnvironmentChoice({
+        fromConversation: null,
+        chosen: "windows",
+        connected,
+        primary: "mac",
+        enabled: on("windows"),
+      }),
+    ).toBe("windows");
+    expect(
+      deliveryEnvironmentChoice({
+        fromConversation: null,
+        chosen: "windows",
+        connected,
+        primary: "mac",
+        enabled: on("mac"),
+      }),
+    ).toBe("mac");
+    expect(
+      deliveryEnvironmentChoice({
+        fromConversation: null,
+        chosen: "gone",
+        connected,
+        primary: "mac",
+        enabled: on("mac"),
+      }),
+    ).toBe("mac");
+  });
+  it("stays on the chosen one when neither has delivery on, so the screen can say why", () => {
+    expect(
+      deliveryEnvironmentChoice({
+        fromConversation: "windows/t",
+        chosen: null,
+        connected,
+        primary: "mac",
+        enabled: on(),
+      }),
+    ).toBe("windows");
   });
 });

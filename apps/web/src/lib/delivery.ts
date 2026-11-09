@@ -505,8 +505,9 @@ export function selectableTeams(body: unknown): ReadonlyArray<DeliveryTeam> {
 }
 
 /**
- * How far the reading of the teams has come. Only `loaded` says which teams
- * there are: an empty list that was read is a list, one not read yet is not.
+ * How far the reading of the teams has come. `loaded` means a successful reading
+ * for reconciliation. Failed readings may retain a body that still determines
+ * whether a settled choice is offered.
  */
 export type TeamListStatus = "pending" | "failed" | "loaded";
 
@@ -515,6 +516,19 @@ export function teamListStatus(read: {
   readonly error: string | null;
 }): TeamListStatus {
   return read.error ? "failed" : read.body == null ? "pending" : "loaded";
+}
+
+/** A retained list can rule out a settled choice even when the latest reading failed. */
+export function chosenTeamUnavailable(
+  read: { readonly body: unknown; readonly error: string | null },
+  draft: { readonly team: string; readonly awaitingTeams?: boolean } | null,
+): boolean {
+  return (
+    read.body != null &&
+    draft !== null &&
+    !draft.awaitingTeams &&
+    !selectableTeams(read.body).some((team) => team.team === draft.team)
+  );
 }
 
 /**
@@ -2254,4 +2268,23 @@ export function parseSeatSetup(body: unknown): SeatSetup | null {
       };
     }),
   };
+}
+
+/**
+ * Which environment's engine the delivery screens talk to: the environment of the conversation a
+ * task is made from, else the one the person chose, else the window's own; each only while still
+ * connected. One with delivery off gives way to the window's own when that has it on.
+ */
+export function deliveryEnvironmentChoice<Id extends string>(input: {
+  readonly fromConversation: string | null;
+  readonly chosen: string | null;
+  readonly connected: ReadonlyArray<Id>;
+  readonly primary: Id | null;
+  readonly enabled: (environment: Id | null) => boolean;
+}): Id | null {
+  const known = (id: string | null | undefined): Id | null =>
+    id ? (input.connected.find((environment) => environment === id) ?? null) : null;
+  const wanted =
+    known(input.fromConversation?.split("/")[0]) ?? known(input.chosen) ?? input.primary;
+  return input.enabled(wanted) || !input.enabled(input.primary) ? wanted : input.primary;
 }

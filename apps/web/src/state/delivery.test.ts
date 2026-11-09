@@ -175,6 +175,157 @@ describe("the team of a draft thread", () => {
 });
 
 describe("the team of an Orchestrator draft", () => {
+  it.each([null, "old"])(
+    "settles offered teams without remembering them (remembered %s)",
+    async (remembered) => {
+      const state = await load();
+      const memory = state.useDeliveryDraftStore.getState();
+      if (remembered) memory.rememberTeam("env-a", remembered);
+      memory.rememberTeam("env-b", "other");
+      const before = state.useDeliveryDraftStore.getState().remembered;
+      const store = state.useOrchestratorDraftStore.getState();
+      for (const [id, teams, expected] of [
+        ["first", ["rnd", "alpha"], "rnd"],
+        ["default", ["rnd", "development"], "development"],
+      ] as const) {
+        store.enter(id, "env-a");
+        store.update(id, { workflow: "plan" });
+        store.setSeat(id, "developer", { model: "m" });
+        store.reconcileTeam(id, teams);
+        const settled = state.useOrchestratorDraftStore.getState().drafts[id];
+        expect(settled).toEqual({
+          team: expected,
+          workflow: !remembered && expected === "development" ? "plan" : "",
+          seats: !remembered && expected === "development" ? { developer: { model: "m" } } : {},
+          engineThread: null,
+          savedText: null,
+        });
+        expect(kept(ORCHESTRATOR_KEY)).toEqual({
+          state: { drafts: state.useOrchestratorDraftStore.getState().drafts },
+          version: 0,
+        });
+        store.reconcileTeam(id, ["different"]);
+        expect(state.useOrchestratorDraftStore.getState().drafts[id]).toBe(settled);
+        expect(state.useDeliveryDraftStore.getState().remembered).toEqual(before);
+      }
+    },
+  );
+
+  it.each([null, "rnd"])(
+    "goes on waiting through an empty list, changing nothing (remembered %s)",
+    async (remembered) => {
+      const state = await load();
+      if (remembered) state.useDeliveryDraftStore.getState().rememberTeam("env-a", remembered);
+      const memory = state.useDeliveryDraftStore.getState().remembered;
+      const store = state.useOrchestratorDraftStore.getState();
+      store.enter("t1", "env-a");
+      store.update("t1", { workflow: "plan" });
+      store.setSeat("t1", "developer", { model: "m" });
+      const entered = state.useOrchestratorDraftStore.getState().drafts.t1;
+      store.reconcileTeam("t1", []);
+      store.reconcileTeam("t1", []);
+      const waiting = state.useOrchestratorDraftStore.getState().drafts.t1;
+      expect(waiting).toBe(entered);
+      expect(waiting).toEqual({
+        team: remembered ?? "development",
+        workflow: "plan",
+        seats: { developer: { model: "m" } },
+        engineThread: null,
+        savedText: null,
+        awaitingTeams: true,
+      });
+      expect(kept(ORCHESTRATOR_KEY).state.drafts.t1).toEqual(waiting);
+      expect(state.useDeliveryDraftStore.getState().remembered).toEqual(memory);
+      // The first list that offers a team is the one the draft is held against.
+      store.reconcileTeam("t1", ["alpha"]);
+      expect(state.useOrchestratorDraftStore.getState().drafts.t1).toEqual({
+        team: "alpha",
+        workflow: "",
+        seats: {},
+        engineThread: null,
+        savedText: null,
+      });
+      expect(state.useDeliveryDraftStore.getState().remembered).toEqual(memory);
+    },
+  );
+
+  it.each([
+    [null, ["rnd", "alpha"], "rnd"],
+    [null, ["rnd", "development"], "development"],
+    ["gone", ["rnd", "development"], "development"],
+    ["gone", ["rnd", "alpha"], "rnd"],
+    ["alpha", ["rnd", "development", "alpha"], "alpha"],
+  ] as const)(
+    "settles on the first list that offers a team after an empty one (remembered %s, %j)",
+    async (remembered, teams, expected) => {
+      const state = await load();
+      if (remembered) state.useDeliveryDraftStore.getState().rememberTeam("env-a", remembered);
+      const memory = state.useDeliveryDraftStore.getState().remembered;
+      const store = state.useOrchestratorDraftStore.getState();
+      store.enter("t1", "env-a");
+      store.update("t1", { workflow: "plan" });
+      store.setSeat("t1", "developer", { model: "m" });
+      store.reconcileTeam("t1", []);
+      store.reconcileTeam("t1", teams);
+      // Flow and seats stand while the team does, and go when it gives way.
+      const retained = expected === (remembered ?? "development");
+      expect(state.useOrchestratorDraftStore.getState().drafts.t1).toEqual({
+        team: expected,
+        workflow: retained ? "plan" : "",
+        seats: retained ? { developer: { model: "m" } } : {},
+        engineThread: null,
+        savedText: null,
+      });
+      expect(state.useDeliveryDraftStore.getState().remembered).toEqual(memory);
+    },
+  );
+
+  it("settles on rnd after an empty list, and not again when the list changes", async () => {
+    const state = await load();
+    const store = state.useOrchestratorDraftStore.getState();
+    store.enter("t1", "env-a");
+    store.reconcileTeam("t1", []);
+    store.reconcileTeam("t1", ["rnd"]);
+    const settled = state.useOrchestratorDraftStore.getState().drafts.t1;
+    expect(settled?.team).toBe("rnd");
+    expect(settled).not.toHaveProperty("awaitingTeams");
+
+    store.reconcileTeam("t1", ["alpha"]);
+    expect(state.useOrchestratorDraftStore.getState().drafts.t1).toBe(settled);
+  });
+
+  it("never replaces a team a person chose while the list was empty", async () => {
+    const state = await load();
+    const store = state.useOrchestratorDraftStore.getState();
+    store.enter("t1", "env-a");
+    store.reconcileTeam("t1", []);
+    store.chooseTeam("t1", "env-a", "picked");
+    const chosen = state.useOrchestratorDraftStore.getState().drafts.t1;
+    store.reconcileTeam("t1", ["rnd", "development"]);
+    expect(state.useOrchestratorDraftStore.getState().drafts.t1).toBe(chosen);
+    expect(chosen?.team).toBe("picked");
+    expect(state.readRememberedTeam("env-a")).toBe("picked");
+  });
+
+  it("settles a saved draft on an empty list, keeping its team through later lists", async () => {
+    const state = await load();
+    const store = state.useOrchestratorDraftStore.getState();
+    store.enter("t1", "env-a");
+    store.update("t1", { engineThread: "task-1", savedText: "text", workflow: "plan" });
+    store.setSeat("t1", "developer", { model: "m" });
+    store.reconcileTeam("t1", []);
+    const settled = state.useOrchestratorDraftStore.getState().drafts.t1;
+    expect(settled).toEqual({
+      team: "development",
+      workflow: "plan",
+      seats: { developer: { model: "m" } },
+      engineThread: "task-1",
+      savedText: "text",
+    });
+    store.reconcileTeam("t1", ["rnd", "alpha"]);
+    expect(state.useOrchestratorDraftStore.getState().drafts.t1).toBe(settled);
+  });
+
   it("starts from the remembered team, else from development", async () => {
     const state = await load();
     const drafts = state.useDeliveryDraftStore.getState();
@@ -227,7 +378,7 @@ describe("the team of an Orchestrator draft", () => {
     expect(state.useOrchestratorDraftStore.getState().drafts.t1).toBe(settled);
   });
 
-  it("keeps a remembered team that is listed, and takes an empty list for a list", async () => {
+  it("keeps a remembered team that is listed, and goes on waiting through an empty list", async () => {
     const state = await load();
     state.useDeliveryDraftStore.getState().rememberTeam("env-a", "rnd");
     const orchestrator = state.useOrchestratorDraftStore.getState();
@@ -240,7 +391,10 @@ describe("the team of an Orchestrator draft", () => {
 
     orchestrator.enter("t2", "env-a");
     orchestrator.reconcileTeam("t2", []);
-    expect(state.useOrchestratorDraftStore.getState().drafts.t2?.team).toBe("development");
+    expect(state.useOrchestratorDraftStore.getState().drafts.t2).toMatchObject({
+      team: "rnd",
+      awaitingTeams: true,
+    });
   });
 
   it("never replaces a team a person chose before the teams were read", async () => {
@@ -298,13 +452,13 @@ describe("the team of an Orchestrator draft", () => {
     const state = await load();
     const orchestrator = state.useOrchestratorDraftStore.getState();
     const legacy = orchestrator.drafts.legacy;
-    orchestrator.reconcileTeam("legacy", ["development"]);
+    orchestrator.reconcileTeam("legacy", ["rnd", "alpha"]);
     expect(state.useOrchestratorDraftStore.getState().drafts.legacy).toBe(legacy);
 
     state.useDeliveryDraftStore.getState().rememberTeam("env-a", "old");
     orchestrator.enter("t1", "env-a");
     orchestrator.update("t1", { engineThread: "task-1", savedText: "text" });
-    orchestrator.reconcileTeam("t1", ["development"]);
+    orchestrator.reconcileTeam("t1", ["rnd", "alpha"]);
     expect(state.useOrchestratorDraftStore.getState().drafts.t1).toMatchObject({
       team: "old",
       engineThread: "task-1",
@@ -319,8 +473,21 @@ describe("the team of an Orchestrator draft", () => {
 
     const after = await load();
     expect(after.useOrchestratorDraftStore.getState().drafts.t1?.awaitingTeams).toBe(true);
-    after.useOrchestratorDraftStore.getState().reconcileTeam("t1", ["development"]);
-    expect(after.useOrchestratorDraftStore.getState().drafts.t1?.team).toBe("development");
+    after.useOrchestratorDraftStore.getState().reconcileTeam("t1", ["rnd", "alpha"]);
+    expect(after.useOrchestratorDraftStore.getState().drafts.t1?.team).toBe("rnd");
+    expect(kept(ORCHESTRATOR_KEY).state.drafts.t1).not.toHaveProperty("awaitingTeams");
+  });
+
+  it("still waits after an empty list and a reload, then settles", async () => {
+    const before = await load();
+    before.useOrchestratorDraftStore.getState().enter("t1", "env-a");
+    before.useOrchestratorDraftStore.getState().reconcileTeam("t1", []);
+    expect(kept(ORCHESTRATOR_KEY).state.drafts.t1.awaitingTeams).toBe(true);
+
+    const after = await load();
+    after.useOrchestratorDraftStore.getState().reconcileTeam("t1", ["rnd", "alpha"]);
+    expect(after.useOrchestratorDraftStore.getState().drafts.t1?.team).toBe("rnd");
+    expect(kept(ORCHESTRATOR_KEY).state.drafts.t1).toMatchObject({ team: "rnd" });
     expect(kept(ORCHESTRATOR_KEY).state.drafts.t1).not.toHaveProperty("awaitingTeams");
   });
 });
