@@ -106,7 +106,7 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
   /**
    * Offers "Orchestrator" as the first entry beside the harnesses: a whole
    * team in place of one model. Its setup is shown where the models of a
-   * harness are. Choosing a model again goes back to a single harness.
+   * harness are. The setup owns the explicit return to ordinary chat.
    */
   orchestrator?:
     | {

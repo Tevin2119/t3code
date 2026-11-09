@@ -19,6 +19,7 @@ import { appAtomRegistry } from "../rpc/atomRegistry";
 import { NO_FILTERS, type BoardFilters, type BoardGrouping } from "../lib/deliveryBoard";
 import { deliveryEnvironmentChoice } from "../lib/delivery";
 import { boardSelectionPatch } from "../lib/deliveryBoardSelection";
+import type { OrchestratorParticipantChoice } from "../lib/orchestratorChat";
 import { boardPreferencesOf, useBoardStore } from "./deliveryBoard";
 import { useEnvironments, usePrimaryEnvironmentId } from "./environments";
 import { useEnvironmentQuery } from "./query";
@@ -328,6 +329,7 @@ export function withSeatChoice(
 
 /** A workflow being prepared in the composer. It is saved to the engine as a draft. */
 export interface OrchestratorDraft {
+  readonly participantChoices?: Readonly<Record<string, OrchestratorParticipantChoice>>;
   readonly started?: boolean;
   readonly viewTask?: string | null;
   readonly team: string;
@@ -441,7 +443,21 @@ export const useOrchestratorDraftStore = create<OrchestratorDraftState>()(
             patch.team !== undefined && patch.team !== current.team && patch.seats === undefined
               ? {}
               : (patch.seats ?? current.seats);
-          return { drafts: { ...state.drafts, [threadId]: { ...current, ...patch, seats } } };
+          return {
+            drafts: {
+              ...state.drafts,
+              [threadId]: {
+                ...current,
+                ...patch,
+                seats,
+                ...(patch.team !== undefined &&
+                patch.team !== current.team &&
+                current.participantChoices
+                  ? { participantChoices: {} }
+                  : {}),
+              },
+            },
+          };
         }),
       chooseTeam: (threadId, environmentId, team) => {
         set((state) => {
@@ -449,7 +465,19 @@ export const useOrchestratorDraftStore = create<OrchestratorDraftState>()(
           if (!current) return state;
           const { awaitingTeams: _settled, ...settled } = current;
           const seats = team === current.team ? current.seats : {};
-          return { drafts: { ...state.drafts, [threadId]: { ...settled, team, seats } } };
+          return {
+            drafts: {
+              ...state.drafts,
+              [threadId]: {
+                ...settled,
+                team,
+                seats,
+                ...(team !== current.team && current.participantChoices
+                  ? { participantChoices: {} }
+                  : {}),
+              },
+            },
+          };
         });
         useDeliveryDraftStore.getState().rememberTeam(environmentId, team);
       },
@@ -467,6 +495,7 @@ export const useOrchestratorDraftStore = create<OrchestratorDraftState>()(
                   team: teams.includes(DELIVERY_DEFAULT_TEAM) ? DELIVERY_DEFAULT_TEAM : teams[0]!,
                   workflow: "",
                   seats: {},
+                  ...(current.participantChoices ? { participantChoices: {} } : {}),
                 };
           return { drafts: { ...state.drafts, [threadId]: next } };
         }),

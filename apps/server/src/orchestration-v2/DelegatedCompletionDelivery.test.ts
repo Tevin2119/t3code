@@ -25,6 +25,7 @@ import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
 import * as Tracer from "effect/Tracer";
 import * as TestClock from "effect/testing/TestClock";
@@ -43,6 +44,7 @@ import * as VcsProcess from "../vcs/VcsProcess.ts";
 import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
 import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
 import * as EventSink from "./EventSink.ts";
+import * as EffectOutbox from "./EffectOutbox.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 import { continueRestartedRun } from "./RestartContinuation.ts";
 import * as RuntimeLayer from "./runtimeLayer.ts";
@@ -117,6 +119,7 @@ const layerTestProviderInstanceRegistry = Layer.succeed(
 const layerTest = Layer.mergeAll(
   RuntimeLayer.layer,
   RuntimeLayer.layerEventSink,
+  EffectOutbox.layer,
   ThreadCommandExecutor.layer,
 ).pipe(
   Layer.provideMerge(RuntimeLayer.layerProjectService),
@@ -171,7 +174,7 @@ const seedParentWithTerminalTask = (input: {
   readonly deliveryState: "pending" | "delivered" | "claimed" | "acknowledged" | "disposed";
   readonly completionWake?: "always" | "settled_only";
   readonly deliveryTaskIds?: ReadonlyArray<NodeId>;
-  readonly parentRunStatus?: "running" | "completed";
+  readonly parentRunStatus?: "starting" | "running" | "completed";
   readonly siblingTasks?: ReadonlyArray<{
     readonly id: NodeId;
     readonly deliveryState: "delivered" | "claimed";
@@ -3484,14 +3487,15 @@ it.layer(layerTest)("delegated tasks across a server restart", (it) => {
     }),
   );
 
-  it.effect.each(["a background command", "a nested subagent"] as const)(
+  it.effect.each(["a background command", "a nested subagent", "a team discussion"] as const)(
     "finalizes a child whose run ended before %s settled",
     (blocker) =>
       Effect.gen(function* () {
         const orchestrator = yield* Orchestrator.OrchestratorV2;
         const sink = yield* EventSink.EventSinkV2;
         const now = yield* DateTime.now;
-        const key = blocker === "a background command" ? "command" : "nested";
+        const teamChat = blocker === "a team discussion";
+        const key = blocker === "a background command" ? "command" : teamChat ? "team" : "nested";
         const threadId = ThreadId.make(`late-settle-parent-${key}`);
         const runId = RunId.make(`late-settle-parent-run-${key}`);
         const rootNodeId = NodeId.make(`late-settle-parent-root-${key}`);
@@ -3502,6 +3506,7 @@ it.layer(layerTest)("delegated tasks across a server restart", (it) => {
           rootNodeId,
           taskId: NodeId.make(`late-settle-seed-task-${key}`),
           deliveryState: "acknowledged",
+          ...(teamChat ? { parentRunStatus: "starting" as const } : {}),
           now,
         });
         // A delegated child with a running task on the parent and a running run of its own.
@@ -3576,6 +3581,15 @@ it.layer(layerTest)("delegated tasks across a server restart", (it) => {
                     title: null,
                     model: null,
                     completionWake: "always",
+                    ...(teamChat
+                      ? {
+                          teamChat: {
+                            sourceRunId: runId,
+                            stage: "contribution" as const,
+                            seat: name,
+                          },
+                        }
+                      : {}),
                     status: "running",
                     result: null,
                     startedAt: now,
@@ -3704,6 +3718,17 @@ it.layer(layerTest)("delegated tasks across a server restart", (it) => {
         );
         assert.equal(finished?.status, "completed");
         assert.notEqual(finished?.completionDelivery?.state, "disposed");
+        if (teamChat) {
+          assert.equal(finished?.completionDelivery?.state, "acknowledged");
+          const outbox = yield* EffectOutbox.EffectOutboxV2;
+          const resume = yield* outbox.get(`effect:team-chat:${blocked.task.id}:${blocked.run.id}`);
+          assert.isTrue(Option.isSome(resume));
+          if (Option.isSome(resume))
+            assert.deepEqual(resume.value.request, { type: "provider-turn.start", runId });
+          const parent = yield* orchestrator.getThreadProjection(threadId);
+          assert.equal(parent.runs.length, 1);
+          assert.isNull(parent.runs[0]?.delegatedCompletion?.delivery);
+        }
       }),
   );
 });

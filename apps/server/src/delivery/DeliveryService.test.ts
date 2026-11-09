@@ -1,6 +1,7 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { ThreadId } from "@t3tools/contracts";
+import { ProviderInstanceId, ThreadId } from "@t3tools/contracts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
+import { createModelSelection } from "@t3tools/shared/model";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -626,6 +627,23 @@ describe("DeliveryService", () => {
     const fake = engine();
     const bound = threadId("thread-restart");
     const held = threadId("thread-restart-held");
+    const orchestration = {
+      participants: [
+        {
+          seat: "developer",
+          role: "lead-developer",
+          modelSelection: createModelSelection(
+            ProviderInstanceId.make("claudeAgent"),
+            "claude-model",
+          ),
+        },
+        {
+          seat: "reviewer",
+          role: "reviewer",
+          modelSelection: createModelSelection(ProviderInstanceId.make("codex"), "codex-model"),
+        },
+      ],
+    };
     return Effect.gen(function* () {
       const config = yield* ServerConfig.ServerConfig;
       const start = <A, E>(body: Effect.Effect<A, E, DeliveryService.DeliveryService>) =>
@@ -633,9 +651,16 @@ describe("DeliveryService", () => {
       yield* start(
         Effect.gen(function* () {
           const delivery = yield* DeliveryService.DeliveryService;
-          yield* bind(delivery, bound, { team: "rnd" });
+          const input = {
+            threadId: bound,
+            team: "rnd",
+            driver: "claudeAgent",
+            cwd: REPO,
+            orchestration,
+          };
+          yield* delivery.bindThread(input);
           fake.down = true;
-          yield* bind(delivery, held).pipe(Effect.flip);
+          yield* delivery.bindThread({ ...input, threadId: held }).pipe(Effect.flip);
           fake.down = false;
         }),
       );
@@ -644,8 +669,12 @@ describe("DeliveryService", () => {
           const delivery = yield* DeliveryService.DeliveryService;
           const state = yield* delivery.threadState(bound);
           expect([state.binding?.team, state.binding?.role]).toEqual(["rnd", "lead-developer"]);
+          expect(state.binding).toMatchObject({ orchestration });
           expect(yield* delivery.prepareThread(bound, CLAUDE_HERE)).toBe(true);
-          expect((yield* delivery.threadState(held)).pending?.team).toBe("development");
+          expect((yield* delivery.threadState(held)).pending).toMatchObject({
+            team: "rnd",
+            orchestration,
+          });
           const refused = yield* delivery.prepareThread(held, CLAUDE_HERE).pipe(Effect.flip);
           expect(refused.reason).toBe("pending");
         }),
