@@ -1,0 +1,97 @@
+#!/usr/bin/env node
+// Lets named machines on the tailnet reach this Mac's T3 Code web port, when Tailscale Serve is not
+// available on the tailnet (it needs HTTPS certificates, which the tailnet's admin has not enabled).
+//
+// It listens on this Mac's tailnet address only, never on the LAN or the internet, and passes
+// connections to the T3 web server on localhost. Only the addresses named with --allow get through;
+// every other connection is closed at once. T3's own pairing still applies to whoever gets through.
+//
+//   t3-tailnet-forward --port 8191 --allow 100.124.112.8
+//   t3-tailnet-forward --port 8191 --allow 100.124.112.8,100.84.0.116
+//
+// Stop it with Ctrl-C. Nothing is left behind.
+
+import { execFileSync } from "node:child_process";
+import net from "node:net";
+
+const args = process.argv.slice(2);
+const flag = (name) => {
+  const at = args.indexOf(`--${name}`);
+  return at >= 0 ? args[at + 1] : null;
+};
+
+const port = Number(flag("port"));
+const allowed = new Set(String(flag("allow") ?? "").split(",").map((item) => item.trim()).filter(Boolean));
+if (!Number.isInteger(port) || port < 1024 || port > 65535 || !allowed.size) {
+  console.error("usage: t3-tailnet-forward --port <T3 web port> --allow <tailnet address>[,<tailnet address>]");
+  process.exit(2);
+}
+const TAILNET = /^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.\d{1,3}\.\d{1,3}$/;
+for (const address of allowed) {
+  if (!TAILNET.test(address)) {
+    console.error(`${address} is not a tailnet address (100.64.0.0/10). Only tailnet machines can be allowed.`);
+    process.exit(2);
+  }
+}
+
+function tailnetAddress() {
+  const given = flag("listen");
+  if (given) return given;
+  for (const program of ["tailscale", "/Applications/Tailscale.app/Contents/MacOS/Tailscale"]) {
+    try {
+      const found = execFileSync(program, ["ip", "-4"], { encoding: "utf8", timeout: 5000 }).trim().split("\n")[0];
+      if (TAILNET.test(found)) return found;
+    } catch {
+      // Try the next place the program may be.
+    }
+  }
+  return null;
+}
+
+const listen = tailnetAddress();
+if (!listen || !TAILNET.test(listen)) {
+  console.error("This Mac's tailnet address could not be read. Is Tailscale running? Or name it with --listen.");
+  process.exit(1);
+}
+
+let open = 0;
+const server = net.createServer((client) => {
+  const from = String(client.remoteAddress ?? "").replace(/^::ffff:/, "");
+  if (!allowed.has(from)) {
+    console.log(`${new Date().toISOString()} refused ${from}`);
+    client.destroy();
+    return;
+  }
+  open += 1;
+  // The dev server may answer on IPv6 or IPv4 loopback; "localhost" finds whichever it is.
+  const upstream = net.connect({ host: "localhost", port });
+  const end = () => {
+    client.destroy();
+    upstream.destroy();
+  };
+  client.on("error", end);
+  upstream.on("error", end);
+  client.on("close", () => {
+    open -= 1;
+    upstream.destroy();
+  });
+  upstream.on("close", () => client.destroy());
+  client.pipe(upstream);
+  upstream.pipe(client);
+});
+
+server.on("error", (error) => {
+  console.error(`could not listen on ${listen}:${port}: ${error.message}`);
+  process.exit(1);
+});
+server.listen(port, listen, () => {
+  console.log(`T3 on this Mac is reachable at http://${listen}:${port} from: ${[...allowed].join(", ")}`);
+  console.log("Every other address is refused. Ctrl-C stops it.");
+});
+for (const signal of ["SIGINT", "SIGTERM"]) {
+  process.on(signal, () => {
+    console.log(`\nstopping (${open} connection${open === 1 ? "" : "s"} open)`);
+    server.close();
+    process.exit(0);
+  });
+}
