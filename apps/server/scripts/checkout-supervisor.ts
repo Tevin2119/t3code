@@ -520,15 +520,18 @@ export function withOwnNodeFirst(
 function execCommand(command: string, args: readonly string[], cwd: string): Promise<ExecResult> {
   return new Promise((resolve) => {
     const launch = windowsCommand(command);
-    const options = {
-      cwd,
-      env: withOwnNodeFirst(process.env),
-      windowsHide: true,
-      stdio: ["ignore", "pipe", "pipe"],
-    } satisfies NodeChildProcess.SpawnOptions;
-    const child = launch.shell
-      ? NodeChildProcess.spawn([launch.command, ...args].join(" "), { ...options, shell: true })
-      : NodeChildProcess.spawn(launch.command, args, options);
+    // Through a shell the arguments go in the command line: Node warns about args with shell: true.
+    const child = NodeChildProcess.spawn(
+      launch.shell ? [launch.command, ...args].join(" ") : launch.command,
+      launch.shell ? [] : args,
+      {
+        cwd,
+        env: withOwnNodeFirst(process.env),
+        shell: launch.shell,
+        windowsHide: true,
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
     let output = "";
     const keep = (chunk: Buffer) => {
       output = (output + chunk.toString("utf8")).slice(-64_000);

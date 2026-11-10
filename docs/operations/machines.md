@@ -25,11 +25,11 @@ home, port and repository.
 
 ## Machine table
 
-| Machine                     | OS         | Tailnet name         | Profile running | T3 port                                                 | Engine port            | Started by                                                                                                                                    | Notes                                                                                                                                                                    |
-| --------------------------- | ---------- | -------------------- | --------------- | ------------------------------------------------------- | ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Tevin's MacBook Pro         | macOS      | `tevins-macbook-pro` | `pm`            | 16231 (tailnet address) and 16232 (loopback, for HTTPS) | 4321                   | launchd jobs, see below                                                                                                                       | The machine this page was written from. Also runs `tailscale serve` for HTTPS.                                                                                           |
-| AMD box (`DESKTOP-2K5Q5NJ`) | Windows 11 | `desktop-2k5q5nj-1`  | team            | see its `OPERATING.md`                                  | see its `OPERATING.md` | By hand after sign-in: T3 desktop app from the Start menu, engine from a terminal, test instance by `pwsh delivery/qualification/restart.ps1` | Must run in the signed-in session, never session 0 or a service: Codex's sandbox refuses the desktop there. Documented 2026-09-29 in Operation-PaperClip `OPERATING.md`. |
-| Laptops                     |            |                      |                 |                                                         |                        |                                                                                                                                               | Not yet set up. Follow "Bringing a new machine up". Add a row when done.                                                                                                 |
+| Machine                     | OS         | Tailnet name         | Profile running     | T3 port                                                 | Engine port            | Started by                                                                                                                                    | Notes                                                                                                                                                                    |
+| --------------------------- | ---------- | -------------------- | ------------------- | ------------------------------------------------------- | ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Tevin's MacBook Pro         | macOS      | `tevins-macbook-pro` | `pm`                | 16231 (tailnet address) and 16232 (loopback, for HTTPS) | 4321                   | launchd jobs, see below                                                                                                                       | The machine this page was written from. Also runs `tailscale serve` for HTTPS.                                                                                           |
+| AMD box (`DESKTOP-2K5Q5NJ`) | Windows 11 | `desktop-2k5q5nj-1`  | team                | see its `OPERATING.md`                                  | see its `OPERATING.md` | By hand after sign-in: T3 desktop app from the Start menu, engine from a terminal, test instance by `pwsh delivery/qualification/restart.ps1` | Must run in the signed-in session, never session 0 or a service: Codex's sandbox refuses the desktop there. Documented 2026-09-29 in Operation-PaperClip `OPERATING.md`. |
+| Tevin's laptop              | Windows 11 | `tevin`              | `work`, `polymania` | 3773 (`work`), 3799 (`polymania`), tailnet address      | 4320, 4321             | Logon task running `~/bin/t3-servers.ps1 start`: PaperClip's `account-workspaces.mjs` per profile, through `~/bin/t3-run.ps1`, see below      | Two separate profiles with their own checkouts. Set up 2026-11-10.                                                                                                       |
 
 A tailnet address is read with `tailscale ip -4`, not copied from this table: it can change.
 
@@ -119,6 +119,25 @@ that differ from the Mac:
   work in progress, which the engine takes up again on the next start.
 - Other machines reach its T3 through `t3.host` and `t3.url` in the git-ignored
   `delivery/qualification/settings.local.json`, set to its Tailscale address.
+
+## Tevin's laptop, in brief
+
+Two profiles that share nothing: `work` (ClubRight: checkouts `t3code-work` and
+`paperclip-work`, the harnesses' default sign-in folders, T3 home `~/.t3`) and `polymania`
+(checkouts `t3code` and `Operation-PaperClip`, sign-ins under `~/.agent-profiles/polymania`).
+Each has its own manifest, `~/.agent-profiles/<profile>/workspaces.json`, instead of
+`~/.polymania/workspaces.json`, because the two profiles use different checkouts.
+
+- `~/bin/t3-servers.ps1 start|stop|restart|status [name]` starts each T3 and engine with
+  `account-workspaces.mjs t3|engine <profile>`, so T3 runs under its checkout supervisor and
+  offers merges to its checkout's `origin/master` as updates. The Windows logon task runs `start`.
+- `~/bin/t3-run.ps1` keeps one of them running, loading the profile's env through
+  `~/bin/pm-core.ps1`. It starts the engine again when the engine asks (exit 75), the job
+  launchd's KeepAlive does on the Mac.
+- Stopping kills the runner's process tree. Windows cannot deliver SIGTERM to Node, so the
+  supervisor's graceful stop does not run there.
+- Release builds need the pinned Node (26.12.1 from vite-plus) and short paths: a release under a
+  deep folder runs past Windows' 260-character limit inside `node_modules`.
 
 ## Bringing a new machine up
 
