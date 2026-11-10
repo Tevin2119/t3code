@@ -14,11 +14,21 @@ to keep a large paste editable in the composer instead.
 
 ## Team conversations and non-code delivery
 
-On web and desktop, open the model picker and select Orchestrator, then choose a
-team and role. Send starts a normal T3 thread using the selected provider and model.
-The agent can coordinate delegates through T3 orchestration while the conversation
-stays in Threads. Choose the team's lead role when you want it to coordinate work.
-The thread uses the project's folder and the access settings you selected.
+On web and desktop, open the model picker and select **Orchestrator**. Choose the
+lead's provider and model, a team and lead role, then the participants. Each
+participant needs an explicit provider and model; unavailable providers must be
+changed or excluded before sending. Choose between two and twelve participants
+with different provider/model combinations.
+
+Sending starts a native T3 team conversation. Participants contribute independently,
+then critique the findings before the lead brings the results together. Their
+threads and results stay linked to the conversation. Follow-up messages use the
+same team and repeat the discussion with the conversation's context. Participant
+rounds are read-only. The lead uses the project's folder and your selected access
+settings. Use **Use ordinary chat** to leave Orchestrator before starting.
+
+Team discussions currently accept text only. Include text or paths to files in the
+project instead of attaching files or images.
 
 Start a delivery task explicitly with **New task** on the Board. Existing engine
 chats and their linked tasks remain available from the Board.

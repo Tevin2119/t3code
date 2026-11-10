@@ -2,6 +2,18 @@
 import * as Schema from "effect/Schema";
 
 import { ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import { ModelSelection } from "./modelSelection.ts";
+
+export const DeliveryOrchestrationConfig = Schema.Struct({
+  participants: Schema.Array(
+    Schema.Struct({
+      seat: TrimmedNonEmptyString,
+      role: TrimmedNonEmptyString,
+      modelSelection: ModelSelection,
+    }),
+  ).check(Schema.isMinLength(2), Schema.isMaxLength(12)),
+});
+export type DeliveryOrchestrationConfig = typeof DeliveryOrchestrationConfig.Type;
 
 export const DELIVERY_DEFAULT_TEAM = "development";
 
@@ -98,6 +110,7 @@ export type DeliverySeatSettings = typeof DeliverySeatSettings.Type;
 
 export const DeliveryThreadBinding = Schema.Struct({
   threadId: ThreadId,
+  orchestration: Schema.optional(DeliveryOrchestrationConfig),
   /** The engine's session id, used to fetch this thread's instructions and tools. */
   session: TrimmedNonEmptyString,
   team: TrimmedNonEmptyString,
@@ -123,6 +136,7 @@ export type DeliveryThreadBinding = typeof DeliveryThreadBinding.Type;
 
 export const DeliveryBindThreadInput = Schema.Struct({
   threadId: ThreadId,
+  orchestration: Schema.optional(DeliveryOrchestrationConfig),
   team: TrimmedNonEmptyString,
   /** Required only when the harness can take more than one role in the team. */
   role: Schema.optional(TrimmedNonEmptyString),
@@ -139,6 +153,7 @@ export type DeliveryBindThreadInput = typeof DeliveryBindThreadInput.Type;
  */
 export const DeliveryThreadPending = Schema.Struct({
   threadId: ThreadId,
+  orchestration: Schema.optional(DeliveryOrchestrationConfig),
   team: TrimmedNonEmptyString,
   role: Schema.NullOr(Schema.String),
   driver: TrimmedNonEmptyString,

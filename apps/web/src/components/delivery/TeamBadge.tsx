@@ -56,6 +56,18 @@ export function TeamBadge(props: {
     ["Role", binding.role],
     ["Seat", binding.seat],
     ["Harness", binding.harness],
+    ...(binding.orchestration
+      ? [
+          ["Conversation", "Orchestrator: contributions, critique, and synthesis"] as const,
+          ...binding.orchestration.participants.map(
+            (participant) =>
+              [
+                `Participant: ${participant.seat}`,
+                `${participant.role}: ${participant.modelSelection.instanceId} / ${participant.modelSelection.model}`,
+              ] as const,
+          ),
+        ]
+      : []),
     [
       "Seat runs on",
       seat
@@ -120,6 +132,11 @@ export function TeamBadge(props: {
           <span className="truncate">{binding.team}</span>
           <span className="text-muted-foreground">/</span>
           <span className="truncate">{binding.role}</span>
+          {binding.orchestration ? (
+            <span className="text-muted-foreground">
+              {binding.orchestration.participants.length} participants
+            </span>
+          ) : null}
           {overrides.length > 0 ? (
             <span className="shrink-0 text-warning">
               {overrides.length === 1 ? "1 override" : `${overrides.length} overrides`}

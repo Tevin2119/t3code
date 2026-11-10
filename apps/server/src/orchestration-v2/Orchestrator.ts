@@ -7747,7 +7747,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
 
   const dispatchDelegatedTaskRequest = Effect.fn("orchestrationV2.dispatch.delegatedTaskRequest")(
     function* (
-      command: Extract<OrchestrationV2Command, { readonly type: "delegated_task.request" }>,
+      command: Extract<OrchestrationV2ServerCommand, { readonly type: "delegated_task.request" }>,
       events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
       effects: Ref.Ref<Array<PendingOrchestrationEffectV2>>,
     ) {
@@ -7861,6 +7861,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         prompt: command.task,
         title: command.title ?? null,
         model: command.modelSelection.model,
+        ...("teamChat" in command ? { teamChat: command.teamChat } : {}),
         ...(command.completionWake === undefined ? {} : { completionWake: command.completionWake }),
         status: "running",
         result: null,
@@ -12630,6 +12631,14 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         providerThreadId: childRun.providerThreadId,
         status: terminalStatus,
         result: result.text,
+        ...(task.teamChat === undefined
+          ? {}
+          : {
+              completionDelivery: {
+                state: "acknowledged" as const,
+                observedByRunId: task.teamChat.sourceRunId,
+              },
+            }),
         completedAt: now,
         updatedAt: now,
       };
@@ -12758,7 +12767,20 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           payload: resultTransfer,
         },
       ];
-      yield* writeSystemEvents(completionEvents, [], { updateDelegatedCompletionOnly: true });
+      const resumeTeamChat =
+        task.teamChat !== undefined && parentRun?.status === "starting"
+          ? [
+              {
+                id: `effect:team-chat:${task.id}:${childRun.id}`,
+                commandId: CommandId.make(`command:team-chat:${task.id}:${childRun.id}`),
+                threadId: parentThreadId,
+                request: { type: "provider-turn.start" as const, runId: parentRun.id },
+              },
+            ]
+          : [];
+      yield* writeSystemEvents(completionEvents, resumeTeamChat, {
+        updateDelegatedCompletionOnly: true,
+      });
 
       if (completionPlan.offer && completionPlan.parentRun !== undefined) {
         yield* offerDelegatedCompletionDelivery(parentThreadId, completionPlan.parentRun.id);

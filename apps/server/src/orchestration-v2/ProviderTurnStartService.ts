@@ -26,6 +26,8 @@ import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 
 import * as ServerConfig from "../config.ts";
+import * as NativeTeamChat from "../delivery/NativeTeamChat.ts";
+import * as DeliveryService from "../delivery/DeliveryService.ts";
 import { withWorkspaceLease } from "../workspace/workspaceLease.ts";
 import * as GitWorkflowService from "../git/GitWorkflowService.ts";
 import * as ProjectService from "../project/ProjectService.ts";
@@ -161,6 +163,8 @@ export const layer: Layer.Layer<
     const providerSessions = yield* ProviderSessionManager.ProviderSessionManagerV2;
     const runExecution = yield* RunExecutionService.RunExecutionServiceV2;
     const runtimePolicy = yield* RuntimePolicy.RuntimePolicyV2;
+    const teamChat = yield* Effect.serviceOption(NativeTeamChat.NativeTeamChat);
+    const deliveryService = yield* Effect.serviceOption(DeliveryService.DeliveryService);
     const isManagedWorktreePath = yield* makeIsManagedWorktreePath;
 
     const resolveRecreateBase = Effect.fn("ProviderTurnStartService.resolveRecreateBase")(
@@ -349,6 +353,18 @@ export const layer: Layer.Layer<
       if (run.status !== "starting") {
         return;
       }
+      if (
+        Option.isNone(teamChat) &&
+        Option.isSome(deliveryService) &&
+        (yield* deliveryService.value.threadState(input.threadId)).binding?.orchestration !==
+          undefined
+      ) {
+        return yield* new NativeTeamChat.NativeTeamChatError({ runId, reason: "state" });
+      }
+      const discussion = Option.isSome(teamChat)
+        ? yield* teamChat.value.prepareTurn({ threadId: input.threadId, runId })
+        : { ready: true, context: "" };
+      if (!discussion.ready) return;
       const rootNode = projection.nodes.find((candidate) => candidate.id === run.rootNodeId);
       const attempt = projection.attempts.find((candidate) => candidate.id === run.activeAttemptId);
       const providerThread = projection.providerThreads.find(
@@ -1606,7 +1622,7 @@ export const layer: Layer.Layer<
             sideChatHandoff === undefined || compact || goalCommand
               ? ""
               : sideChatHandoff.summaryText;
-          const context = [delivery.context, sideChatContext, restartNote]
+          const context = [delivery.context, sideChatContext, restartNote, discussion.context]
             .filter((part) => part !== "")
             .join("\n\n");
           const { restartContinuationOfRunId: _resumedRunId, ...promptedInput } = turnInput;
@@ -1673,6 +1689,7 @@ export const layer: Layer.Layer<
         effectiveHandoffs.length === 0 &&
         retryHandoff.length === 0 &&
         sideChatHandoff === undefined &&
+        discussion.context === "" &&
         restartNote === "" &&
         !noteContinuation
           ? session

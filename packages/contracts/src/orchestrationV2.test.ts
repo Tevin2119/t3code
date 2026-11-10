@@ -5,6 +5,7 @@ import * as Schema from "effect/Schema";
 import { NodeId, RunAttemptId, TrimmedNonEmptyString } from "./index.ts";
 import {
   latestProviderTurnForAttempt,
+  OrchestrationV2Command,
   OrchestrationV2ProviderCapabilities,
   OrchestrationV2ProviderThread,
   OrchestrationV2ProviderThreadJson,
@@ -18,6 +19,7 @@ import {
 } from "./orchestrationV2.ts";
 
 const now = DateTime.makeUnsafe("2026-04-20T00:00:00.000Z");
+const decodeOrchestrationV2Command = Schema.decodeUnknownSync(OrchestrationV2Command);
 
 const decodeOrchestrationV2TurnItemJson = Schema.decodeUnknownSync(OrchestrationV2TurnItemJson);
 const encodeOrchestrationV2TurnItemJson = Schema.encodeSync(OrchestrationV2TurnItemJson);
@@ -35,6 +37,24 @@ const decodeOrchestrationV2ProviderCapabilities = Schema.decodeUnknownSync(
 );
 
 describe("orchestration V2 contracts", () => {
+  it("does not let a client impersonate a server-coordinated team participant", () => {
+    const command = decodeOrchestrationV2Command({
+      type: "delegated_task.request",
+      commandId: "request",
+      createdBy: "user",
+      creationSource: "web",
+      parentThreadId: "parent",
+      parentRunId: "run",
+      parentNodeId: "root",
+      task: "Review the change",
+      modelSelection: { instanceId: "codex", model: "model" },
+      runtimeMode: "approval-required",
+      interactionMode: "plan",
+      teamChat: { sourceRunId: "run", stage: "contribution", seat: "critic" },
+    });
+    expect(command).not.toHaveProperty("teamChat");
+  });
+
   it("decodes thread event types from a newer server as skippable items", () => {
     const decodeWireItems = Schema.decodeUnknownSync(
       Schema.toCodecJson(Schema.Array(OrchestrationV2RpcSchemas.subscribeThread.output)),

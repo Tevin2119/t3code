@@ -881,6 +881,12 @@ export const OrchestrationV2RemoteTaskChild = Schema.Struct({
 });
 export type OrchestrationV2RemoteTaskChild = typeof OrchestrationV2RemoteTaskChild.Type;
 
+const TeamChatParticipation = Schema.Struct({
+  sourceRunId: RunId,
+  stage: Schema.Literals(["contribution", "critique"]),
+  seat: TrimmedNonEmptyString,
+});
+
 export const OrchestrationV2Subagent = Schema.Struct({
   id: NodeId,
   threadId: ThreadId,
@@ -898,6 +904,7 @@ export const OrchestrationV2Subagent = Schema.Struct({
   title: Schema.NullOr(Schema.String),
   model: Schema.NullOr(Schema.String),
   modelSelection: Schema.optional(ModelSelection),
+  teamChat: Schema.optional(TeamChatParticipation),
   completionWake: Schema.optional(Schema.Literals(["always", "settled_only"])),
   completionDelivery: Schema.optional(OrchestrationV2DelegatedCompletionTaskDelivery),
   status: Schema.Literals([
@@ -2892,6 +2899,23 @@ export const OrchestrationV2DomainEventJson = Schema.Union([
 ]);
 export type OrchestrationV2DomainEventJson = typeof OrchestrationV2DomainEventJson.Type;
 
+const DelegatedTaskRequest = Schema.Struct({
+  type: Schema.Literal("delegated_task.request"),
+  ...OrchestrationV2CreationFields,
+  commandId: CommandId,
+  parentThreadId: ThreadId,
+  parentRunId: RunId,
+  parentNodeId: NodeId,
+  task: TrimmedNonEmptyString,
+  title: Schema.optional(TrimmedNonEmptyString),
+  modelSelection: ModelSelection,
+  runtimeMode: RuntimeMode,
+  interactionMode: ProviderInteractionMode,
+  workspaceStrategy: Schema.optional(OrchestrationV2ThreadLaunchWorkspaceStrategy),
+  completionWake: Schema.optional(Schema.Literals(["always", "settled_only"])),
+  createdAt: Schema.optional(Schema.DateTimeUtc),
+});
+
 export const OrchestrationV2Command = Schema.Union([
   Schema.Struct({
     type: Schema.Literal("thread.stop"),
@@ -3316,23 +3340,7 @@ export const OrchestrationV2Command = Schema.Union([
     sourcePoint: OrchestrationV2ThreadForkSourcePoint,
     createdAt: Schema.optional(Schema.DateTimeUtc),
   }),
-  Schema.Struct({
-    type: Schema.Literal("delegated_task.request"),
-    ...OrchestrationV2CreationFields,
-    commandId: CommandId,
-    parentThreadId: ThreadId,
-    parentRunId: RunId,
-    parentNodeId: NodeId,
-    task: TrimmedNonEmptyString,
-    title: Schema.optional(TrimmedNonEmptyString),
-    modelSelection: ModelSelection,
-    runtimeMode: RuntimeMode,
-    interactionMode: ProviderInteractionMode,
-    workspaceStrategy: Schema.optional(OrchestrationV2ThreadLaunchWorkspaceStrategy),
-    // Defaults to settled_only; fire-and-forget wakes require always.
-    completionWake: Schema.optional(Schema.Literals(["always", "settled_only"])),
-    createdAt: Schema.optional(Schema.DateTimeUtc),
-  }),
+  DelegatedTaskRequest,
   Schema.Struct({
     type: Schema.Literal("delegated_task.wake-policy"),
     commandId: CommandId,
@@ -3374,6 +3382,7 @@ export type OrchestrationV2Command = typeof OrchestrationV2Command.Type;
 
 // Excluded from dispatchCommand so only the server can send these.
 const OrchestrationV2InternalCommand = Schema.Union([
+  DelegatedTaskRequest.mapFields((fields) => ({ ...fields, teamChat: TeamChatParticipation })),
   // Guest share commands the server issues after checking T3 Connect and the guest token.
   Schema.Struct({
     type: Schema.Literal("thread.guest-share.open"),

@@ -13,6 +13,7 @@ import {
   type ThreadId,
 } from "@t3tools/contracts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
+import { modelSelectionsEqual } from "@t3tools/shared/model";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -428,12 +429,43 @@ const make = Effect.gen(function* () {
     input: DeliveryBindThreadInput,
   ) {
     yield* storeReadable;
+    if (input.orchestration !== undefined) {
+      const participants = input.orchestration.participants;
+      if (
+        participants.length < 2 ||
+        participants.length > 12 ||
+        new Set(participants.map((seat) => seat.seat)).size !== participants.length ||
+        new Set(
+          participants.map((seat) =>
+            JSON.stringify([seat.modelSelection.instanceId, seat.modelSelection.model]),
+          ),
+        ).size !== participants.length
+      ) {
+        return yield* new DeliveryError({
+          reason: "invalid",
+          detail: "Choose between two and twelve distinct participants for the team discussion.",
+        });
+      }
+    }
     const existing = bindings.get(input.threadId);
     if (existing) {
       // A thread keeps what it started with. Anything else is another thread.
       const same =
         existing.team === input.team &&
         existing.driver === input.driver &&
+        (existing.orchestration === undefined
+          ? input.orchestration === undefined
+          : input.orchestration !== undefined &&
+            existing.orchestration.participants.length ===
+              input.orchestration.participants.length &&
+            existing.orchestration.participants.every((seat, index) => {
+              const other = input.orchestration!.participants[index]!;
+              return (
+                seat.seat === other.seat &&
+                seat.role === other.role &&
+                modelSelectionsEqual(seat.modelSelection, other.modelSelection)
+              );
+            })) &&
         (input.role === undefined || existing.role === input.role);
       if (same) return existing;
       return yield* new DeliveryError({
@@ -458,6 +490,7 @@ const make = Effect.gen(function* () {
       role: input.role ?? null,
       driver: input.driver,
       cwd: input.cwd,
+      ...(input.orchestration === undefined ? {} : { orchestration: input.orchestration }),
       since,
       why: null,
     }).pipe(
@@ -487,6 +520,7 @@ const make = Effect.gen(function* () {
       Effect.flatMap(({ identity }) =>
         decodeBinding({
           threadId: input.threadId,
+          ...(input.orchestration === undefined ? {} : { orchestration: input.orchestration }),
           session: identity.session,
           team: identity.team,
           role: identity.role,

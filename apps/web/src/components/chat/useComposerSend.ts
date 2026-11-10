@@ -12,7 +12,9 @@ import {
   useDeliveryDraftStore,
   useDeliveryEnabled,
   useDeliveryRead,
+  useOrchestratorDraftStore,
 } from "../../state/delivery";
+import { resolveOrchestratorRoster } from "../../lib/orchestratorChat";
 import { useEnvironmentQuery } from "../../state/query";
 import { useAtomCommand } from "../../state/use-atom-command";
 import {
@@ -593,7 +595,8 @@ export function useComposerSend(input: ComposerSendInput) {
       notifyDirectAnnotationAttached();
       return;
     }
-    const multipleModelSelections = sendCtx.multipleModelSelections;
+    const orchestratorDraft = useOrchestratorDraftStore.getState().drafts[activeThread.id];
+    const multipleModelSelections = orchestratorDraft ? null : sendCtx.multipleModelSelections;
     const approvalFeedbackTarget = pendingApprovalsRef.current.find(
       (approval) =>
         approval.supportsFeedback && approval.requestId === sendCtx.shownPendingApprovalIds[0],
@@ -922,6 +925,26 @@ export function useComposerSend(input: ComposerSendInput) {
       setThreadError(threadIdForSend, teamForSend.why);
       return;
     }
+    const orchestrationRoster = orchestratorDraft
+      ? resolveOrchestratorRoster({
+          team: deliveryForSend.teams.find((team) => team.team === orchestratorDraft.team) ?? null,
+          choices: orchestratorDraft.participantChoices,
+          entries: providerInstanceEntries,
+        })
+      : null;
+    const orchestrationForSend =
+      heldTeamForSend?.orchestration ?? orchestrationRoster?.configuration;
+    if (orchestratorDraft && boundForSend === null && !heldTeamForSend?.orchestration) {
+      const problem =
+        orchestrationRoster?.problem ??
+        (teamForSend.action !== "bind" || teamForSend.team !== orchestratorDraft.team
+          ? "Choose a team for Orchestrator before sending."
+          : null);
+      if (problem) {
+        setThreadError(threadIdForSend, problem);
+        return;
+      }
+    }
 
     const sendSnapshot = snapshotComposerSend({
       prompt: promptForSend,
@@ -944,6 +967,16 @@ export function useComposerSend(input: ComposerSendInput) {
       environmentContexts: composerEnvironmentContextsSnapshot,
       messageText: messageTextForSend,
     } = sendSnapshot;
+    if (
+      (orchestratorDraft || heldTeamForSend?.orchestration || boundForSend?.orchestration) &&
+      composerAttachmentsSnapshot.length > 0
+    ) {
+      setThreadError(
+        threadIdForSend,
+        "Team discussions currently accept text only. Remove the attachments and include text or paths to files in this project.",
+      );
+      return;
+    }
     const {
       missingWorktreeBaseBranch,
       baseBranchForWorktree,
@@ -1363,6 +1396,7 @@ export function useComposerSend(input: ComposerSendInput) {
           role: teamForSend.role as never,
           driver: ctxSelectedProvider as never,
           cwd: (activeThread.worktreePath ?? activeProject.workspaceRoot) as never,
+          ...(orchestrationForSend ? { orchestration: orchestrationForSend } : {}),
         },
       });
       if (bindResult._tag === "Failure") {

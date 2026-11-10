@@ -403,19 +403,26 @@ describe("the team of an Orchestrator draft", () => {
     state.useDeliveryDraftStore.getState().rememberTeam("env-a", "old");
     const orchestrator = state.useOrchestratorDraftStore.getState();
     orchestrator.enter("t1", "env-a");
+    const participantChoices = { critic: { included: false } };
+    orchestrator.update("t1", { participantChoices });
     // The same name as the draft started from: still a choice, which stands.
     orchestrator.chooseTeam("t1", "env-a", "old");
     orchestrator.reconcileTeam("t1", ["development"]);
     expect(state.useOrchestratorDraftStore.getState().drafts.t1?.team).toBe("old");
+    expect(state.useOrchestratorDraftStore.getState().drafts.t1?.participantChoices).toEqual(
+      participantChoices,
+    );
 
     orchestrator.enter("t2", "env-a");
     orchestrator.setSeat("t2", "developer", { model: "m" });
+    orchestrator.update("t2", { participantChoices });
     orchestrator.chooseTeam("t2", "env-a", "rnd");
     orchestrator.reconcileTeam("t2", ["development"]);
     expect(state.useOrchestratorDraftStore.getState().drafts.t2).toMatchObject({
       team: "rnd",
       // Settings made for one team's seats mean nothing for another's.
       seats: {},
+      participantChoices: {},
     });
     expect(state.readRememberedTeam("env-a")).toBe("rnd");
   });

@@ -127,7 +127,7 @@ const send = (threadId: ThreadId, text: string, type: "start_immediately" | "que
     });
   });
 
-const delegate = (parentThreadId: ThreadId, task: string) =>
+const delegate = (parentThreadId: ThreadId, task: string, teamChat = false) =>
   Effect.gen(function* () {
     const orchestrator = yield* Orchestrator.OrchestratorV2;
     const parentRun = (yield* orchestrator.getThreadProjection(parentThreadId)).runs.at(-1)!;
@@ -142,6 +142,11 @@ const delegate = (parentThreadId: ThreadId, task: string) =>
       runtimeMode: "full-access",
       interactionMode: "default",
       completionWake: "always",
+      ...(teamChat
+        ? {
+            teamChat: { sourceRunId: parentRun.id, stage: "contribution" as const, seat: "critic" },
+          }
+        : {}),
       createdBy: "agent",
       creationSource: "mcp",
     });
@@ -530,9 +535,13 @@ it.effect("Stop still stops the thread when a delegated child cannot be read", (
   }).pipe(Effect.provide(layerTest)),
 );
 
-it.effect.each(["run.interrupt", "thread.stop"] as const)(
+it.effect.each([
+  ["run.interrupt", false],
+  ["thread.stop", false],
+  ["thread.stop", true],
+] as const)(
   "%s Stop ends watches, holds queues, and stops the delegated tasks under the thread",
-  (type) =>
+  ([type, teamChat]) =>
     Effect.gen(function* () {
       const orchestrator = yield* Orchestrator.OrchestratorV2;
       const projections = yield* ProjectionStore.ProjectionStoreV2;
@@ -541,23 +550,25 @@ it.effect.each(["run.interrupt", "thread.stop"] as const)(
       const parentThreadId = ThreadId.make("thread:stop-parent");
       yield* createWatchingThread(parentThreadId, 1);
       yield* send(parentThreadId, "first", "start_immediately");
-      const childThreadId = yield* delegate(parentThreadId, "child task");
+      const childThreadId = yield* delegate(parentThreadId, "child task", teamChat);
       assert.isTrue(Exit.isFailure(yield* Effect.exit(watch(childThreadId, 2))));
       const grandchildThreadId = yield* delegate(childThreadId, "grandchild task");
       yield* send(childThreadId, "child follow-up", "queue_after_active");
 
       const now = yield* DateTime.now;
       const firstRun = (yield* orchestrator.getThreadProjection(parentThreadId)).runs[0]!;
-      yield* projections.apply({
-        id: EventId.make("event:stop-parent:first-run-completed"),
-        type: "run.updated",
-        threadId: parentThreadId,
-        runId: firstRun.id,
-        occurredAt: now,
-        payload: { ...firstRun, status: "completed", completedAt: now },
-      });
-      yield* send(parentThreadId, "second", "start_immediately");
+      if (!teamChat)
+        yield* projections.apply({
+          id: EventId.make("event:stop-parent:first-run-completed"),
+          type: "run.updated",
+          threadId: parentThreadId,
+          runId: firstRun.id,
+          occurredAt: now,
+          payload: { ...firstRun, status: "completed", completedAt: now },
+        });
+      if (!teamChat) yield* send(parentThreadId, "second", "start_immediately");
       const secondRun = (yield* orchestrator.getThreadProjection(parentThreadId)).runs.at(-1)!;
+      if (teamChat) assert.equal(secondRun.status, "starting");
 
       const stopCommandId = CommandId.make("stop-parent");
       yield* orchestrator.dispatch(
@@ -573,7 +584,7 @@ it.effect.each(["run.interrupt", "thread.stop"] as const)(
       );
 
       assert.deepEqual(yield* threadState(parentThreadId), {
-        runs: ["completed", "interrupted"],
+        runs: teamChat ? ["interrupted"] : ["completed", "interrupted"],
         watched: [],
       });
       const parent = yield* orchestrator.getThreadProjection(parentThreadId);

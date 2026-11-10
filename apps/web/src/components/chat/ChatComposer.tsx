@@ -1,9 +1,11 @@
 import { TeamBadge } from "../delivery/TeamBadge";
 import { TeamPicker } from "../delivery/TeamPicker";
+import { OrchestratorChatSetup } from "../delivery/OrchestratorChatSetup";
 import { REASONING_OPTION_BY_DRIVER, type SeatForThread } from "../../lib/deliverySeats";
 import {
   enterOrchestratorChat,
   useDeliveryEnabled,
+  useDeliveryDraftStore,
   useOrchestratorDraft,
   useOrchestratorDraftStore,
 } from "../../state/delivery";
@@ -2383,7 +2385,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       deliveryBinding={deliveryBinding}
       runtimeModeSupport={selectedProviderStatus?.runtimeModes}
       teamControl={
-        routeKind === "draft" && activeThreadId ? (
+        routeKind === "draft" && activeThreadId && !orchestratorMode ? (
           <TeamPicker
             environmentId={environmentId}
             threadId={activeThreadId}
@@ -2401,19 +2403,23 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
               active: orchestratorMode,
               onSelect: () => enterOrchestratorChat(activeThreadId, environmentId),
               panel: (
-                <div className="flex flex-col gap-3 p-3">
-                  <p className="text-xs text-muted-foreground">
-                    Choose a team and role for this T3 conversation. Send starts the thread; the
-                    agent coordinates delegates through T3 orchestration.
-                  </p>
-                  <TeamPicker
-                    environmentId={environmentId}
-                    threadId={activeThreadId}
-                    driver={selectedProvider}
-                    chosen={chosenForSeat}
-                    onSeat={handleSeatForThread}
-                  />
-                </div>
+                <OrchestratorChatSetup
+                  environmentId={environmentId}
+                  threadId={activeThreadId}
+                  lead={selectedModelSelection}
+                  entries={providerInstanceEntries}
+                  models={modelOptionsByInstance}
+                  getLeadDisabledReason={getModelDisabledReason}
+                  onLeadChange={(instanceId, model) =>
+                    onProviderModelSelect(instanceId, model, { focusComposer: false })
+                  }
+                  onExit={() => {
+                    leaveOrchestrator(activeThreadId);
+                    useDeliveryDraftStore
+                      .getState()
+                      .chooseTeam(activeThreadId, environmentId, { team: null, role: null });
+                  }}
+                />
               ),
             }
           : undefined
@@ -2449,14 +2455,11 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       onOpenProviderSetup={onOpenProviderSetup}
       providerCatalogPending={providerCatalogPending}
       isSendBusy={isSendBusy}
-      multipleModelsEnabled={routeKind === "draft" && supportsMultipleModels}
-      multipleModelSelections={multipleModelSelections}
+      multipleModelsEnabled={routeKind === "draft" && supportsMultipleModels && !orchestratorMode}
+      multipleModelSelections={orchestratorMode ? null : multipleModelSelections}
       onMultipleModelSelectionsChange={setMultipleModelSelections}
       selectedModelSelection={selectedModelSelection}
-      onProviderModelSelect={(...args) => {
-        if (activeThreadId) leaveOrchestrator(activeThreadId);
-        onProviderModelSelect(...args);
-      }}
+      onProviderModelSelect={onProviderModelSelect}
       activeThreadModelSelection={activeThreadModelSelection}
       selectedModelForPickerWithCustomFallback={selectedModelForPickerWithCustomFallback}
       lockedProvider={lockedProvider}
@@ -3108,7 +3111,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         selectedPromptEffort,
         selectedModelSelection,
         multipleModelSelections:
-          routeKind === "draft" && multipleModelSelections !== null
+          routeKind === "draft" && !orchestratorMode && multipleModelSelections !== null
             ? multipleModelSelections.map((selection) =>
                 selection.instanceId === selectedModelSelection.instanceId &&
                 selection.model === selectedModelSelection.model
@@ -3117,7 +3120,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
               )
             : null,
         providerAvailable:
-          multipleModelSelections !== null ||
+          (!orchestratorMode && multipleModelSelections !== null) ||
           (!noProviderAvailable && providerSendBlockReason === null),
         selectedProvider,
         selectedModel,
@@ -3180,6 +3183,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       settings.planModeEnabled,
       selectedModelSelection,
       multipleModelSelections,
+      orchestratorMode,
       setMultipleModelSelections,
       routeKind,
       noProviderAvailable,
