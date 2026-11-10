@@ -1,0 +1,59 @@
+#!/bin/bash
+# T3 Code on this Mac's tailnet address, under the team profile, run the way the AMD box runs it:
+# T3's own server (not the dev server), serving the built web app and its API on one port.
+#
+# On a non-loopback address T3 knows other machines can reach it, so Settings > Connections shows
+# its pairing controls, and no forwarder is needed. It listens on the tailnet address only, never
+# on Wi-Fi or the LAN. The dev server (`t3pm`) cannot do this: it refuses a specific address.
+#
+#   t3net            start; T3 updates itself from then on (Update and restart, in the app)
+#
+# Start it after Tailscale is connected: T3 cannot listen on an address that is not up yet.
+# Stop it with Ctrl-C. Open the pairing URL it prints, once, in the browser that is to own it.
+set -euo pipefail
+
+LAUNCHER="$HOME/Projects/opc-chat-board-placement/delivery/tools/account-workspaces.mjs"
+NODE="$HOME/.nvm/versions/node/v22.23.3/bin/node"
+# launchd starts this with PATH=/usr/bin:/bin:/usr/sbin:/sbin. T3 normally repairs that by
+# reading PATH from a login shell, but it gives the shell two seconds and gives up when the Mac
+# is busy, leaving it unable to find pnpm for updates ("spawn pnpm ENOENT") or any provider CLI
+# (claude, codex, opencode, pi, hermes, dsh). Resolve the login PATH here, with no time limit,
+# and fall back to the known locations if the shell cannot answer.
+# Interactive and login: nvm and the provider CLIs are added by .zshrc, not .zprofile.
+LOGIN_PATH="$(TERM=dumb /bin/zsh -ilc 'print -r -- $PATH' 2>/dev/null | tail -1 || true)"
+case "$LOGIN_PATH" in
+  */usr/bin*) ;;
+  *) LOGIN_PATH="/opt/homebrew/bin:$HOME/.local/bin:$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin" ;;
+esac
+export PATH="$LOGIN_PATH:$(dirname "$NODE")"
+PORT="16231"
+if [ -n "${T3NET_DATA:-}${T3NET_PORT:-}" ]; then
+  echo "t3net uses the pm profile's configured home and port; custom home/port overrides are not supported." >&2
+  exit 1
+fi
+
+address() {
+  local found
+  for program in tailscale /Applications/Tailscale.app/Contents/MacOS/Tailscale; do
+    found=$("$program" ip -4 2>/dev/null | head -1) || continue
+    [[ "$found" =~ ^100\. ]] && { echo "$found"; return; }
+  done
+}
+IP=$(address || true)
+if [ -z "$IP" ]; then
+  echo "Tailscale is not connected, so this Mac has no tailnet address. Connect it, then run t3net again." >&2
+  exit 1
+fi
+
+# T3 runs under its checkout supervisor: each commit is built in a release of its own, and
+# T3 offers "Update and restart" when origin/master has newer commits. The first start builds
+# the running commit once (about a minute and a half).
+if lsof -nP -iTCP:"$PORT" -sTCP:LISTEN >/dev/null 2>&1; then
+  echo "Port $PORT already has a listener. Use the running T3, or stop its launcher before starting t3net." >&2
+  exit 1
+fi
+"$NODE" "$LAUNCHER" expose pm on
+echo "T3 on http://$IP:$PORT, reachable from the tailnet only."
+echo "Open the 'Pairing URL' printed below, once, in the browser that is to own this T3."
+echo "If it has expired: t3-owner-link"
+exec "$NODE" "$LAUNCHER" t3 pm

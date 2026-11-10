@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- Starts T3 (t3net, under its checkout supervisor) at login and again if it stops.
+       t3net exits while Tailscale is not yet connected; launchd tries again every 30 seconds. -->
+  <key>Label</key><string>com.polymania.t3net</string>
+  <key>ProgramArguments</key><array><string>/Users/tevinmuparadzi/.local/bin/t3net</string></array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>ThrottleInterval</key><integer>30</integer>
+  <key>StandardOutPath</key><string>/Users/tevinmuparadzi/.paperclip/polymania/logs/t3net.log</string>
+  <key>StandardErrorPath</key><string>/Users/tevinmuparadzi/.paperclip/polymania/logs/t3net.log</string>
+</dict>
+</plist>

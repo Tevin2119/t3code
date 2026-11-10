@@ -1,0 +1,23 @@
+#!/bin/bash
+# Copy t3dotgg/tstack skills into every harness T3 runs. Usage: tstack-sync [--pull]
+set -euo pipefail
+SRC="$HOME/Projects/tstack"
+[ "${1:-}" = "--pull" ] && git -C "$SRC" pull --ff-only --quiet
+TARGETS=(
+  "$HOME/.polymania/claude/skills"          # Claude (CLAUDE_CONFIG_DIR)
+  "$HOME/.polymania/codex/skills"           # Codex (CODEX_HOME)
+  "$HOME/.agents/skills"                    # shared: Codex, OpenCode, Pi, Kimi
+  "$HOME/.config/opencode/skills"           # OpenCode
+  "$HOME/.polymania/kimi/skills"            # Kimi (KIMI_CODE_HOME)
+  "$HOME/.polymania/hermes/skills/tstack"   # Hermes (HERMES_HOME, category folder)
+  "$HOME/.gemini/config/skills"             # Antigravity
+)
+for t in "${TARGETS[@]}"; do
+  mkdir -p "$t"
+  for s in "$SRC"/skills/*/; do
+    n=$(basename "$s")
+    rm -rf "${t:?}/$n"
+    cp -R "$s" "$t/$n"
+  done
+  echo "synced $(ls "$SRC/skills" | wc -l | tr -d ' ') skills -> $t"
+done

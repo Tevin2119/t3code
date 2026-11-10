@@ -1,0 +1,103 @@
+#!/usr/bin/env node
+// Prints a pairing link that makes a browser an owner of this Mac's T3: it can then create pairing
+// links for other devices and manage their sessions (the access:write scope). The Mac's copy of
+// the AMD box's delivery/qualification/tools/t3-owner-link.mjs.
+//
+// T3's command line only issues links with standard rights, and the owner link T3 prints when it
+// starts lives five minutes. This asks the running T3 for an owner link instead: it issues a
+// short-lived administrative session, uses it once to request the link, and revokes it again, so
+// nothing with owner rights is left behind. Newer T3 releases name the full permission list
+// AuthStandardClientScopes instead of AuthAdministrativeScopes; either is accepted.
+//
+//   t3-owner-link [--sign-out <session id>] [--url http://<address>:<port>]
+//
+// A browser that is already signed in ignores a pairing link and goes straight in, so sign it out
+// first: name its session with --sign-out (from the session list below), or open the link in a
+// private window. The link lives five minutes. Treat it as a secret.
+import { execFileSync } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+
+const source = path.join(os.homedir(), "Projects/t3code-board");
+const data = process.env.T3NET_DATA ?? path.join(source, ".t3");
+
+const flag = (name) => {
+  const at = process.argv.indexOf(`--${name}`);
+  if (at < 0) return null;
+  const value = process.argv[at + 1];
+  if (!value || value.startsWith("--")) throw new Error(`--${name} needs a value`);
+  return value;
+};
+
+function tailnetAddress() {
+  for (const program of ["tailscale", "/Applications/Tailscale.app/Contents/MacOS/Tailscale"]) {
+    try {
+      const found = execFileSync(program, ["ip", "-4"], { encoding: "utf8", timeout: 5000 }).trim().split("\n")[0];
+      if (/^100\./.test(found)) return found;
+    } catch {
+      // Try the next place the program may be.
+    }
+  }
+  return null;
+}
+
+const url = (flag("url") ?? `http://${tailnetAddress() ?? "127.0.0.1"}:${process.env.T3NET_PORT ?? 16231}`).replace(/\/$/, "");
+const endpoint = new URL(url);
+if (!["http:", "https:"].includes(endpoint.protocol) || endpoint.username || endpoint.password || endpoint.search || endpoint.hash || endpoint.pathname !== "/" || !["localhost", "127.0.0.1", "[::1]", tailnetAddress()].includes(endpoint.hostname)) {
+  throw new Error("Use this Mac's loopback or tailnet origin. Owner credentials are never sent to another host.");
+}
+
+function runningCheckout() {
+  const explicit = flag("checkout");
+  if (explicit) return path.resolve(explicit);
+  const port = endpoint.port || (endpoint.protocol === "https:" ? "443" : "80");
+  const listeners = execFileSync("lsof", ["-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-t"], { encoding: "utf8" }).trim().split(/\s+/);
+  const folders = new Set();
+  for (const listener of listeners) {
+    if (!/^\d+$/.test(listener)) continue;
+    const command = execFileSync("ps", ["-p", listener, "-o", "command="], { encoding: "utf8" });
+    const entry = /(?:^|\s)(\/\S+\/apps\/server\/src\/bin\.ts)(?:\s|$)/.exec(command)?.[1];
+    if (entry) folders.add(path.resolve(path.dirname(entry), "../../.."));
+  }
+  if (folders.size !== 1) throw new Error("Cannot identify the running T3 release. Specify --checkout with its verified release folder.");
+  return [...folders][0];
+}
+
+const checkout = runningCheckout();
+if (!fs.existsSync(path.join(checkout, "apps/server/src/bin.ts"))) throw new Error("The selected T3 release has no native authentication CLI.");
+const administrative = JSON.parse(execFileSync(process.execPath, ["--input-type=module", "-e", "import * as contracts from '@t3tools/contracts'; console.log(JSON.stringify(contracts.AuthAdministrativeScopes ?? contracts.AuthStandardClientScopes));"], { cwd: path.join(checkout, "apps/server"), encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }));
+if (!Array.isArray(administrative) || !administrative.includes("filesystem:read") || !administrative.includes("access:write")) throw new Error("The selected T3 release does not provide current owner permissions.");
+if (process.argv.includes("--check")) {
+  console.log(JSON.stringify({ checkout, data, permissions: administrative }, null, 2));
+  process.exit(0);
+}
+const auth = (...rest) => execFileSync(process.execPath, ["apps/server/src/bin.ts", "auth", ...rest, "--base-dir", data], { cwd: checkout, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+
+const signOut = flag("sign-out");
+if (signOut) {
+  auth("session", "revoke", signOut);
+  console.log(`Signed out session ${signOut.slice(0, 8)}.`);
+}
+
+const issued = JSON.parse(auth("session", "issue", "--ttl", "5m", "--label", "Owner link issuance (temporary)", "--json"));
+try {
+  const response = await fetch(`${url}/api/auth/pairing-token`, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${issued.token ?? issued.accessToken ?? issued.credential}` },
+    body: JSON.stringify({ label: "Owner browser", scopes: administrative }),
+  });
+  const body = await response.json();
+  if (!response.ok) {
+    console.log(`T3 refused the owner link: HTTP ${response.status}. No pairing credential was printed.`);
+    process.exitCode = 1;
+  } else {
+    console.log(`${url}/pair#token=${body.credential}`);
+    console.log(`Expires ${body.expiresAt}. Open it once, in the browser that is to be the owner.`);
+  }
+} catch (error) {
+  console.log(`T3 did not answer at ${url}: ${error.cause?.code ?? error.message}. Is it running (t3net)?`);
+  process.exitCode = 1;
+} finally {
+  auth("session", "revoke", issued.sessionId ?? issued.id);
+}

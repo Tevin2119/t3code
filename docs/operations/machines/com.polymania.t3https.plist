@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>com.polymania.t3https</string>
+  <key>ProgramArguments</key><array>
+    <string>/Users/tevinmuparadzi/.nvm/versions/node/v22.23.3/bin/node</string>
+    <string>/Users/tevinmuparadzi/.local/share/t3https/forward.mjs</string>
+  </array>
+  <key>EnvironmentVariables</key><dict><key>PATH</key><string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin</string></dict>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>StandardOutPath</key><string>/Users/tevinmuparadzi/.paperclip/polymania/logs/t3https.log</string>
+  <key>StandardErrorPath</key><string>/Users/tevinmuparadzi/.paperclip/polymania/logs/t3https.log</string>
+</dict></plist>
