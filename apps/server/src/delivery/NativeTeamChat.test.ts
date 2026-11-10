@@ -26,7 +26,12 @@ type Delegation = Extract<
   { type: "delegated_task.request"; teamChat: unknown }
 >;
 
-function setup({ plain = false, uncertain = false, unavailable = false } = {}) {
+function setup({
+  plain = false,
+  uncertain = false,
+  unavailable = false,
+  critique = undefined as "first" | "always" | "never" | undefined,
+} = {}) {
   const participants = [
     {
       seat: "researcher",
@@ -45,7 +50,7 @@ function setup({ plain = false, uncertain = false, unavailable = false } = {}) {
     team: "research",
     configuration: "research@3#abc",
     workspace: "C:/workspace",
-    ...(plain ? {} : { orchestration: { participants } }),
+    ...(plain ? {} : { orchestration: { participants, ...(critique ? { critique } : {}) } }),
   };
   const message = {
     id: MessageId.make("question"),
@@ -179,6 +184,54 @@ it.effect("recovers a lost dispatch receipt and shares independent results befor
     expect(final.context).toContain("Preserve the audit log before migration.");
     expect(final.context).toContain("codex-work/codex-model, failed");
     expect(fixture.admissions.size).toBe(4);
+  }),
+);
+
+it.effect("critiques on the first message only unless the conversation asks otherwise", () =>
+  Effect.gen(function* () {
+    const settle = (fixture: ReturnType<typeof setup>) => {
+      for (const task of fixture.tasks) {
+        task.status = "completed";
+        task.result = "Finding.";
+      }
+    };
+    const earlier = {
+      teamChat: {
+        sourceRunId: RunId.make("earlier-turn"),
+        stage: "contribution" as const,
+        seat: "researcher",
+      },
+      status: "completed",
+      result: "Earlier finding.",
+      providerInstanceId: ProviderInstanceId.make("claude-work"),
+      model: "claude-model",
+    };
+
+    const followUp = setup();
+    followUp.tasks.push(earlier);
+    const service = yield* followUp.service;
+    yield* service.prepareTurn({ threadId, runId });
+    settle(followUp);
+    const final = yield* service.prepareTurn({ threadId, runId });
+    expect(final.ready).toBe(true);
+    expect(final.context).not.toContain("Critiques:");
+    expect(final.context).not.toContain("Earlier finding.");
+    expect(followUp.admissions.size).toBe(2);
+
+    const always = setup({ critique: "always" });
+    always.tasks.push(earlier);
+    const alwaysService = yield* always.service;
+    yield* alwaysService.prepareTurn({ threadId, runId });
+    settle(always);
+    expect((yield* alwaysService.prepareTurn({ threadId, runId })).ready).toBe(false);
+    expect(always.admissions.size).toBe(4);
+
+    const never = setup({ critique: "never" });
+    const neverService = yield* never.service;
+    yield* neverService.prepareTurn({ threadId, runId });
+    settle(never);
+    expect((yield* neverService.prepareTurn({ threadId, runId })).ready).toBe(true);
+    expect(never.admissions.size).toBe(2);
   }),
 );
 

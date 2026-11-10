@@ -21,6 +21,12 @@ import { Button } from "../ui/button";
 import { Checkbox } from "../ui/checkbox";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 
+const CRITIQUE_ROUNDS = [
+  { value: "first", label: "First message only" },
+  { value: "always", label: "Every message" },
+  { value: "never", label: "Never" },
+];
+
 export function OrchestratorChatSetup(props: {
   readonly environmentId: EnvironmentId;
   readonly threadId: string;
@@ -51,6 +57,7 @@ export function OrchestratorChatSetup(props: {
     team,
     choices: draft?.participantChoices,
     entries: props.entries,
+    critique: draft?.critique,
     orchestrator: {
       harness: leadEntry ? (DELIVERY_HARNESS_BY_DRIVER[leadEntry.driverKind] ?? null) : null,
       role: resolved.state === "ready" ? resolved.role : null,
@@ -225,6 +232,32 @@ export function OrchestratorChatSetup(props: {
           </div>
         );
       })}
+      <div className="flex flex-col gap-1">
+        <span className="text-xs font-medium">Critique round</span>
+        <Select
+          items={CRITIQUE_ROUNDS}
+          value={draft.critique ?? "first"}
+          onValueChange={(value) => {
+            if (value === "first" || value === "always" || value === "never")
+              update(props.threadId, { critique: value });
+          }}
+        >
+          <SelectTrigger aria-label="Critique round">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectPopup>
+            {CRITIQUE_ROUNDS.map((item) => (
+              <SelectItem key={item.value} value={item.value}>
+                {item.label}
+              </SelectItem>
+            ))}
+          </SelectPopup>
+        </Select>
+        <p className="text-xs text-muted-foreground">
+          Each round is one turn for every participant. Follow-up messages always get fresh
+          contributions.
+        </p>
+      </div>
       {roster.problem ? (
         <p role="alert" className="text-xs text-warning">
           {roster.problem}

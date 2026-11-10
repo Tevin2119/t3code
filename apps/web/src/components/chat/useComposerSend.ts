@@ -931,6 +931,7 @@ export function useComposerSend(input: ComposerSendInput) {
           team: deliveryForSend.teams.find((team) => team.team === orchestratorDraft.team) ?? null,
           choices: orchestratorDraft.participantChoices,
           entries: providerInstanceEntries,
+          critique: orchestratorDraft.critique,
           orchestrator: {
             harness: ctxSelectedProvider
               ? (DELIVERY_HARNESS_BY_DRIVER[ctxSelectedProvider] ?? null)
