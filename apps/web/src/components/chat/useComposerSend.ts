@@ -37,6 +37,7 @@ import { isUsageLimitsCommand } from "@t3tools/shared/usageLimits";
 import {
   AuthOrchestrationOperateScope,
   DEFAULT_MODEL,
+  DELIVERY_HARNESS_BY_DRIVER,
   type EnvironmentId,
   type ModelSelection,
   type PreviewAnnotationPayload,
@@ -930,6 +931,12 @@ export function useComposerSend(input: ComposerSendInput) {
           team: deliveryForSend.teams.find((team) => team.team === orchestratorDraft.team) ?? null,
           choices: orchestratorDraft.participantChoices,
           entries: providerInstanceEntries,
+          orchestrator: {
+            harness: ctxSelectedProvider
+              ? (DELIVERY_HARNESS_BY_DRIVER[ctxSelectedProvider] ?? null)
+              : null,
+            role: teamForSend.action === "bind" ? teamForSend.role : null,
+          },
         })
       : null;
     const orchestrationForSend =

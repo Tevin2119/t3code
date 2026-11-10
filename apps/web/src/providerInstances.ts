@@ -199,13 +199,34 @@ export function getDefaultProviderInstanceModel(
   instanceId: ProviderInstanceId,
 ): string | undefined {
   const entry = getProviderInstanceEntry(providers, instanceId);
-  if (!entry) return undefined;
+  return entry ? defaultModelOfProviderInstanceEntry(entry) : undefined;
+}
+
+export function defaultModelOfProviderInstanceEntry(
+  entry: ProviderInstanceEntry,
+): string | undefined {
   return (
     entry.models.find((model) => model.isDefault && !model.isCustom)?.slug ??
     entry.models.find((model) => !model.isCustom)?.slug ??
     entry.models[0]?.slug ??
     DEFAULT_MODEL_BY_PROVIDER[entry.driverKind]
   );
+}
+
+/** Why an instance cannot be picked, in the model picker's words. */
+export function describeUnavailableProviderInstance(entry: ProviderInstanceEntry): string {
+  const label = entry.displayName;
+  // An unavailable instance (a driver this build lacks or the policy leaves out) says why instead.
+  if ((!entry.enabled && entry.isAvailable) || entry.status === "disabled") {
+    return `${label}: Disabled in settings.`;
+  }
+  if (entry.status === "ready" && entry.isAvailable) {
+    return label;
+  }
+  const kind =
+    entry.status === "error" ? "Unavailable" : entry.status === "warning" ? "Limited" : "Not ready";
+  const msg = entry.snapshot.message?.trim();
+  return msg ? `${label}: ${kind}. ${msg}` : `${label}: ${kind}.`;
 }
 
 const isSelectableProviderInstanceEntry = (entry: ProviderInstanceEntry): boolean =>
