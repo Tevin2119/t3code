@@ -15,6 +15,8 @@ import {
   RESTART_WINDOW_MS,
   type ExecResult,
   type ServerProcess,
+  windowsCommand,
+  withOwnNodeFirst,
 } from "./checkout-supervisor.ts";
 
 const A = "a".repeat(40);
@@ -589,4 +591,18 @@ describe("CheckoutSupervisor real processes", () => {
       await cleanRealSupervisor(context);
     }
   }, 120_000);
+});
+
+describe("checkout supervisor child commands", () => {
+  it("starts package-manager shims through a shell on Windows only", () => {
+    expect(windowsCommand("pnpm", "win32")).toEqual({ command: "pnpm.cmd", shell: true });
+    expect(windowsCommand("git", "win32")).toEqual({ command: "git", shell: false });
+    expect(windowsCommand("pnpm", "darwin")).toEqual({ command: "pnpm", shell: false });
+  });
+
+  it("puts the supervisor's own Node first on the build's PATH, keeping Windows' Path key", () => {
+    const env = withOwnNodeFirst({ Path: "C:\system" }, "C:\node26");
+    expect(env.Path?.startsWith("C:\node26")).toBe(true);
+    expect(env.PATH).toBeUndefined();
+  });
 });

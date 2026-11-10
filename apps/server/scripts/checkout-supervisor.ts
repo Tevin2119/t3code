@@ -494,13 +494,41 @@ export class CheckoutSupervisor {
   }
 }
 
+/**
+ * On Windows, package managers are `.cmd` shims, which Node starts only through a shell.
+ * The supervisor passes them fixed arguments with no spaces, so the shell adds no quoting risk.
+ */
+export function windowsCommand(
+  command: string,
+  platform: NodeJS.Platform = process.platform,
+): { readonly command: string; readonly shell: boolean } {
+  if (platform !== "win32" || command === "git" || /\.(exe|cmd|bat)$/i.test(command)) {
+    return { command, shell: false };
+  }
+  return { command: `${command}.cmd`, shell: true };
+}
+
+/** Builds run on the Node that runs the supervisor (the pinned one), not whichever is first on PATH. */
+export function withOwnNodeFirst(
+  env: NodeJS.ProcessEnv,
+  nodeDir: string = NodePath.dirname(process.execPath),
+): NodeJS.ProcessEnv {
+  const key = Object.keys(env).find((name) => name.toUpperCase() === "PATH") ?? "PATH";
+  return { ...env, [key]: [nodeDir, env[key]].filter(Boolean).join(NodePath.delimiter) };
+}
+
 function execCommand(command: string, args: readonly string[], cwd: string): Promise<ExecResult> {
   return new Promise((resolve) => {
-    const child = NodeChildProcess.spawn(command, args, {
+    const launch = windowsCommand(command);
+    const options = {
       cwd,
-      env: process.env,
+      env: withOwnNodeFirst(process.env),
+      windowsHide: true,
       stdio: ["ignore", "pipe", "pipe"],
-    });
+    } satisfies NodeChildProcess.SpawnOptions;
+    const child = launch.shell
+      ? NodeChildProcess.spawn([launch.command, ...args].join(" "), { ...options, shell: true })
+      : NodeChildProcess.spawn(launch.command, args, options);
     let output = "";
     const keep = (chunk: Buffer) => {
       output = (output + chunk.toString("utf8")).slice(-64_000);
