@@ -33,6 +33,12 @@ const CRITIQUE_ROUNDS = [
   { value: "never", label: "Never" },
 ];
 
+const PARTICIPANT_ACCESS = [
+  { value: "thread", label: "Same as this conversation" },
+  { value: "approval-required", label: "Ask before changes" },
+  { value: "full-access", label: "Full access" },
+];
+
 export function OrchestratorChatSetup(props: {
   readonly environmentId: EnvironmentId;
   readonly threadId: string;
@@ -70,6 +76,7 @@ export function OrchestratorChatSetup(props: {
     choices: draft?.participantChoices,
     entries: props.entries,
     critique: draft?.critique,
+    access: draft?.access,
     extras: draft?.extraParticipants,
     orchestrator: {
       harness: leadEntry ? (DELIVERY_HARNESS_BY_DRIVER[leadEntry.driverKind] ?? null) : null,
@@ -373,6 +380,34 @@ export function OrchestratorChatSetup(props: {
         <p className="text-xs text-muted-foreground">
           Each round is one turn for every participant. Follow-up messages always get fresh
           contributions.
+        </p>
+      </div>
+      <div className="flex flex-col gap-1">
+        <span className="text-xs font-medium">Participants' access</span>
+        <Select
+          items={PARTICIPANT_ACCESS}
+          value={draft.access ?? "thread"}
+          onValueChange={(value) => {
+            if (value === "approval-required" || value === "full-access")
+              update(props.threadId, { access: value });
+            else if (value === "thread") update(props.threadId, { access: undefined });
+          }}
+        >
+          <SelectTrigger aria-label="Participants' access">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectPopup>
+            {PARTICIPANT_ACCESS.map((item) => (
+              <SelectItem key={item.value} value={item.value}>
+                {item.label}
+              </SelectItem>
+            ))}
+          </SelectPopup>
+        </Select>
+        <p className="text-xs text-muted-foreground">
+          Participants are asked to discuss, not to change files. With full access none of them
+          stops to ask; a provider that cannot run in the chosen mode is refused, not run in
+          another.
         </p>
       </div>
       {roster.problem ? (

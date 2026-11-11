@@ -34,8 +34,11 @@ Choose between two and twelve participants with different provider/model combina
 Sending starts a native T3 team conversation. Participants contribute independently,
 then critique the findings before the lead brings the results together. The critique runs on the first message only unless you set **Critique round** to every message or never; follow-ups always get fresh contributions. Their
 threads and results stay linked to the conversation. Follow-up messages use the
-same team with the conversation's context. Participant
-rounds are read-only. The lead uses the project's folder and your selected access
+same team with the conversation's context. Participants are
+asked to discuss, not to change files, and run with the conversation's own access
+unless you set **Participants' access**: with full access none of them stops to ask.
+A provider that cannot run in the chosen access is refused by name rather than run
+in another. The lead uses the project's folder and your selected access
 settings. Use **Use ordinary chat** to leave Orchestrator before starting.
 
 Team discussions currently accept text only. Include text or paths to files in the
