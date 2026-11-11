@@ -42,6 +42,10 @@ export function createDeliveryEnvironmentAtoms<R, E>(
       label: "environment-data:delivery:release-thread",
       tag: WS_METHODS.deliveryReleaseThread,
     }),
+    setThreadLineup: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:delivery:set-thread-lineup",
+      tag: WS_METHODS.deliverySetThreadLineup,
+    }),
     bindThread: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:delivery:bind-thread",
       tag: WS_METHODS.deliveryBindThread,

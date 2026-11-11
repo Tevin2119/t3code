@@ -356,8 +356,7 @@ export const layer: Layer.Layer<
       if (
         Option.isNone(teamChat) &&
         Option.isSome(deliveryService) &&
-        (yield* deliveryService.value.threadState(input.threadId)).binding?.orchestration !==
-          undefined
+        (yield* deliveryService.value.threadState(input.threadId)).lineup !== undefined
       ) {
         return yield* new NativeTeamChat.NativeTeamChatError({ runId, reason: "state" });
       }

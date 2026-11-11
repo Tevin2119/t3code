@@ -12,6 +12,8 @@ import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import { createModelSelection } from "@t3tools/shared/model";
+import { ServerConfig } from "../config.ts";
+import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import * as DeliveryService from "./DeliveryService.ts";
 import * as NativeTeamChat from "./NativeTeamChat.ts";
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
@@ -34,6 +36,9 @@ function setup({
   access = undefined as "approval-required" | "full-access" | undefined,
   threadAccess = "full-access",
   fullAccessOnly = false,
+  /** A conversation bound to no team; `callsTeam` names one for its participants. */
+  unbound = false,
+  callsTeam = undefined as string | undefined,
 } = {}) {
   const participants = [
     {
@@ -63,6 +68,15 @@ function setup({
           },
         }),
   };
+  // What the delivery service reports as joining the next message; a test may replace it.
+  const lineup = {
+    current: plain
+      ? undefined
+      : {
+          ...binding.orchestration!,
+          ...(callsTeam ? { team: callsTeam } : {}),
+        },
+  };
   const message = {
     id: MessageId.make("question"),
     role: "user",
@@ -84,10 +98,15 @@ function setup({
     model: string;
   }> = [];
   const admissions = new Map<string, Delegation>();
-  const bindings: Array<{ threadId: ThreadId; role?: string; driver: string }> = [];
+  const bindings: Array<{ threadId: ThreadId; team: string; role?: string; driver: string }> = [];
   const delivery = {
-    threadState: () => Effect.succeed({ binding, pending: null }),
-    bindThread: (input: { threadId: ThreadId; role?: string; driver: string }) => {
+    threadState: () =>
+      Effect.succeed({
+        binding: unbound ? null : binding,
+        pending: null,
+        ...(lineup.current ? { lineup: lineup.current } : {}),
+      }),
+    bindThread: (input: { threadId: ThreadId; team: string; role?: string; driver: string }) => {
       bindings.push(input);
       return Effect.succeed({ configuration: binding.configuration });
     },
@@ -158,7 +177,14 @@ function setup({
     admissions,
     bindings,
     participants,
+    lineup,
     service: NativeTeamChat.make.pipe(
+      Effect.provideService(ServerConfig, {
+        attachmentsDir: "C:/state/attachments",
+      } as unknown as ServerConfig["Service"]),
+      Effect.provideService(ProjectStore.ProjectStoreV2, {
+        get: () => Effect.succeedSome({ workspaceRoot: "C:/project" }),
+      } as unknown as ProjectStore.ProjectStoreV2["Service"]),
       Effect.provideService(DeliveryService.DeliveryService, delivery),
       Effect.provideService(ProjectionStore.ProjectionStoreV2, projections),
       Effect.provideService(ThreadManagementService.ThreadManagementService, threads),
@@ -309,8 +335,55 @@ it.effect("refuses an unavailable selected provider before launching any partici
     expect(fixture.bindings).toEqual([]);
   }),
 );
+it.effect("joins without a team, calls one in, and survives a lineup changed mid-round", () =>
+  Effect.gen(function* () {
+    const alone = setup({ unbound: true });
+    yield* (yield* alone.service).prepareTurn({ threadId, runId });
+    expect(alone.admissions.size).toBe(2);
+    expect(alone.bindings).toEqual([]);
+    expect([...alone.admissions.values()][0]!.task).toContain("in this conversation");
+
+    const called = setup({ unbound: true, callsTeam: "research" });
+    yield* (yield* called.service).prepareTurn({ threadId, runId });
+    expect(called.bindings.map((binding) => binding.team)).toEqual(["research", "research"]);
+    expect(called.bindings.map((binding) => binding.role)).toEqual(["researcher", "reviewer"]);
+
+    const changed = setup({ critique: "never" });
+    const service = yield* changed.service;
+    yield* service.prepareTurn({ threadId, runId });
+    for (const task of changed.tasks) {
+      task.status = "completed";
+      task.result = "Finding.";
+    }
+    changed.lineup.current = {
+      ...changed.lineup.current!,
+      participants: [
+        changed.participants[0]!,
+        {
+          seat: "custom-1",
+          role: "reviewer",
+          modelSelection: createModelSelection(ProviderInstanceId.make("claude-work"), "other"),
+        },
+      ],
+    };
+    expect((yield* service.prepareTurn({ threadId, runId })).ready).toBe(false);
+    expect([...changed.admissions.values()].map((command) => command.teamChat?.seat)).toEqual([
+      "researcher",
+      "critic",
+      "custom-1",
+    ]);
+    for (const task of changed.tasks) {
+      task.status = "completed";
+      task.result = "Finding.";
+    }
+    const final = yield* service.prepareTurn({ threadId, runId });
+    expect(final.ready).toBe(true);
+    expect(changed.admissions.size).toBe(3);
+  }),
+);
+
 it.effect(
-  "does not send compaction controls or unreadable attachments to the discussion roster",
+  "does not send compaction controls to the roster, and passes attachments as paths to read",
   () =>
     Effect.gen(function* () {
       const fixture = setup();
@@ -326,7 +399,11 @@ it.effect(
         mimeType: "image/png",
         sizeBytes: 12,
       });
-      yield* service.prepareTurn({ threadId, runId }).pipe(Effect.flip);
-      expect(fixture.admissions.size).toBe(0);
+      yield* service.prepareTurn({ threadId, runId });
+      expect(fixture.admissions.size).toBe(2);
+      for (const command of fixture.admissions.values()) {
+        expect(command.task).toContain("- diagram.png: ");
+        expect(command.task.replaceAll("\\", "/")).toContain("C:/state/attachments/image.png");
+      }
     }),
 );

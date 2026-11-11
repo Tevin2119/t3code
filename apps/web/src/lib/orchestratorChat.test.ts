@@ -243,4 +243,29 @@ it("adds participants for one conversation, in a role of the team, beside or ins
   expect(
     resolveOrchestratorRoster({ ...input, team, extras: [{ ...extra, role: "gone" }] }).problem,
   ).toMatch(/Choose a role/);
+
+  // With no team the participants are all added by hand, in any role.
+  const second = {
+    id: "custom-2",
+    role: "participant",
+    modelSelection: createModelSelection(ProviderInstanceId.make("claudeAgent"), "claude-model"),
+  };
+  expect(resolveOrchestratorRoster({ ...input, team: null, extras: [extra, second] }).problem).toBe(
+    "Choose a team for this conversation.",
+  );
+  const alone = resolveOrchestratorRoster({
+    ...input,
+    team: null,
+    teamless: true,
+    extras: [extra, second],
+  });
+  expect(alone.configuration?.participants.map((seat) => seat.seat)).toEqual([
+    "custom-1",
+    "custom-2",
+  ]);
+  expect(alone.configuration?.team).toBeUndefined();
+  // A conversation bound to no team names the one its participants take their roles from.
+  expect(
+    resolveOrchestratorRoster({ ...input, team, callsTeam: "research" }).configuration?.team,
+  ).toBe("research");
 });

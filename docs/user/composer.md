@@ -41,8 +41,20 @@ A provider that cannot run in the chosen access is refused by name rather than r
 in another. The lead uses the project's folder and your selected access
 settings. Use **Use ordinary chat** to leave Orchestrator before starting.
 
-Team discussions currently accept text only. Include text or paths to files in the
-project instead of attaching files or images.
+Choose **No team** in the setup to run a conversation with participants of your own
+only: add two or more, each with any provider and model. They join as themselves,
+with no team instructions, and nothing is saved.
+
+Once a conversation has started, open the model picker and choose **Orchestrator** to
+change who joins: tick seats on or off, add or remove participants, or change the
+critique round and access. **Use from the next message** applies it; messages already
+answered are not rerun. The same panel brings participants into an ordinary
+conversation that has already started, from a team's seats or of your own choosing,
+and **Use ordinary chat** sends them away again. A conversation keeps the team it
+started with.
+
+Files and images attached to a message reach the orchestrator as usual. Participants
+are given their paths to read.
 
 Start a delivery task explicitly with **New task** on the Board. Existing engine
 chats and their linked tasks remain available from the Board.

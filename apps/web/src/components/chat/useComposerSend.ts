@@ -382,6 +382,10 @@ export function useComposerSend(input: ComposerSendInput) {
     label: "bind team",
     reportFailure: false,
   });
+  const setDeliveryThreadLineup = useAtomCommand(deliveryEnvironment.setThreadLineup, {
+    label: "set participants",
+    reportFailure: false,
+  });
   const releaseDeliveryThread = useAtomCommand(deliveryEnvironment.releaseThread, {
     label: "release team",
     reportFailure: false,
@@ -928,7 +932,10 @@ export function useComposerSend(input: ComposerSendInput) {
     }
     const orchestrationRoster = orchestratorDraft
       ? resolveOrchestratorRoster({
-          team: deliveryForSend.teams.find((team) => team.team === orchestratorDraft.team) ?? null,
+          team: orchestratorDraft.teamless
+            ? null
+            : (deliveryForSend.teams.find((team) => team.team === orchestratorDraft.team) ?? null),
+          teamless: orchestratorDraft.teamless,
           choices: orchestratorDraft.participantChoices,
           entries: providerInstanceEntries,
           critique: orchestratorDraft.critique,
@@ -947,7 +954,8 @@ export function useComposerSend(input: ComposerSendInput) {
     if (orchestratorDraft && boundForSend === null && !heldTeamForSend?.orchestration) {
       const problem =
         orchestrationRoster?.problem ??
-        (teamForSend.action !== "bind" || teamForSend.team !== orchestratorDraft.team
+        (!orchestratorDraft.teamless &&
+        (teamForSend.action !== "bind" || teamForSend.team !== orchestratorDraft.team)
           ? "Choose a team for Orchestrator before sending."
           : null);
       if (problem) {
@@ -977,16 +985,6 @@ export function useComposerSend(input: ComposerSendInput) {
       environmentContexts: composerEnvironmentContextsSnapshot,
       messageText: messageTextForSend,
     } = sendSnapshot;
-    if (
-      (orchestratorDraft || heldTeamForSend?.orchestration || boundForSend?.orchestration) &&
-      composerAttachmentsSnapshot.length > 0
-    ) {
-      setThreadError(
-        threadIdForSend,
-        "Team discussions currently accept text only. Remove the attachments and include text or paths to files in this project.",
-      );
-      return;
-    }
     const {
       missingWorktreeBaseBranch,
       baseBranchForWorktree,
@@ -1411,6 +1409,21 @@ export function useComposerSend(input: ComposerSendInput) {
       });
       if (bindResult._tag === "Failure") {
         failure = bindResult;
+      }
+      readDeliveryState().refresh();
+    } else if (
+      failure === null &&
+      orchestratorDraft?.teamless &&
+      orchestrationForSend &&
+      boundForSend === null
+    ) {
+      // No team to bind to: the participants are put on record for the thread by themselves.
+      const lineupResult = await setDeliveryThreadLineup({
+        environmentId,
+        input: { threadId: threadIdForSend as never, orchestration: orchestrationForSend },
+      });
+      if (lineupResult._tag === "Failure") {
+        failure = lineupResult;
       }
       readDeliveryState().refresh();
     } else if (failure === null && teamForSend.action === "release") {

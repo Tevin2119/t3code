@@ -644,6 +644,11 @@ describe("DeliveryService", () => {
         },
       ],
     };
+    const unbound = threadId("thread-restart-unbound");
+    const changed = {
+      critique: "never" as const,
+      participants: orchestration.participants.toReversed(),
+    };
     return Effect.gen(function* () {
       const config = yield* ServerConfig.ServerConfig;
       const start = <A, E>(body: Effect.Effect<A, E, DeliveryService.DeliveryService>) =>
@@ -662,6 +667,15 @@ describe("DeliveryService", () => {
           fake.down = true;
           yield* delivery.bindThread({ ...input, threadId: held }).pipe(Effect.flip);
           fake.down = false;
+          // A lineup stands for a thread bound to no team, and replaces what one started with.
+          const plain = yield* delivery.setThreadLineup({ threadId: unbound, orchestration });
+          expect([plain.binding, plain.lineup]).toEqual([null, orchestration]);
+          yield* delivery.setThreadLineup({ threadId: bound, orchestration: changed });
+          const one = { participants: orchestration.participants.slice(0, 1) };
+          const refused = yield* delivery
+            .setThreadLineup({ threadId: unbound, orchestration: one })
+            .pipe(Effect.flip);
+          expect(refused.reason).toBe("invalid");
         }),
       );
       yield* start(
@@ -670,6 +684,12 @@ describe("DeliveryService", () => {
           const state = yield* delivery.threadState(bound);
           expect([state.binding?.team, state.binding?.role]).toEqual(["rnd", "lead-developer"]);
           expect(state.binding).toMatchObject({ orchestration });
+          expect(state.lineup).toEqual(changed);
+          expect((yield* delivery.threadState(unbound)).lineup).toEqual(orchestration);
+          // Null is the way back to an ordinary conversation, and it is remembered too.
+          expect(
+            (yield* delivery.setThreadLineup({ threadId: bound, orchestration: null })).lineup,
+          ).toBeUndefined();
           expect(yield* delivery.prepareThread(bound, CLAUDE_HERE)).toBe(true);
           expect((yield* delivery.threadState(held)).pending).toMatchObject({
             team: "rnd",

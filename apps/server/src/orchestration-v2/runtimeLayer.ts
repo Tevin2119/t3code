@@ -248,6 +248,7 @@ const layerNativeTeamChatProvided = NativeTeamChat.layer.pipe(
     Layer.mergeAll(
       layerThreadManagementProvided,
       ProjectionStore.layer,
+      ProjectStore.layer,
       IdAllocator.layer,
       ProviderAdapterRegistry.layerFromProviderInstanceRegistry,
     ),

@@ -341,6 +341,8 @@ export interface OrchestratorDraft {
   readonly critique?: OrchestratorCritique;
   /** The access participants run with; absent is the conversation's own. */
   readonly access?: OrchestratorAccess | undefined;
+  /** No team behind the conversation: every participant is added by hand. */
+  readonly teamless?: boolean;
   readonly started?: boolean;
   readonly viewTask?: string | null;
   readonly team: string;
