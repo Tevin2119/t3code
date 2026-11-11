@@ -31,6 +31,9 @@ function setup({
   uncertain = false,
   unavailable = false,
   critique = undefined as "first" | "always" | "never" | undefined,
+  access = undefined as "approval-required" | "full-access" | undefined,
+  threadAccess = "full-access",
+  fullAccessOnly = false,
 } = {}) {
   const participants = [
     {
@@ -50,7 +53,15 @@ function setup({
     team: "research",
     configuration: "research@3#abc",
     workspace: "C:/workspace",
-    ...(plain ? {} : { orchestration: { participants, ...(critique ? { critique } : {}) } }),
+    ...(plain
+      ? {}
+      : {
+          orchestration: {
+            participants,
+            ...(critique ? { critique } : {}),
+            ...(access ? { access } : {}),
+          },
+        }),
   };
   const message = {
     id: MessageId.make("question"),
@@ -84,7 +95,11 @@ function setup({
   const projections = {
     getThreadRecords: () =>
       Effect.succeed({
-        thread: { worktreePath: null, projectId: ProjectId.make("project") },
+        thread: {
+          worktreePath: null,
+          projectId: ProjectId.make("project"),
+          runtimeMode: threadAccess,
+        },
         runs: [run],
         messages: [message],
         subagents: tasks,
@@ -124,7 +139,14 @@ function setup({
         snapshot: {
           getSnapshot: Effect.succeed({
             installed: true,
-            supportedRuntimeModes: ["approval-required"],
+            ...(fullAccessOnly
+              ? {
+                  runtimeModes: [
+                    { mode: "approval-required", available: false, reason: "It cannot ask." },
+                    { mode: "full-access", available: true },
+                  ],
+                }
+              : {}),
           }),
         },
       }),
@@ -232,6 +254,32 @@ it.effect("critiques on the first message only unless the conversation asks othe
     settle(never);
     expect((yield* neverService.prepareTurn({ threadId, runId })).ready).toBe(true);
     expect(never.admissions.size).toBe(2);
+  }),
+);
+
+it.effect("runs participants with the conversation's access unless one is chosen", () =>
+  Effect.gen(function* () {
+    const inherited = setup({ fullAccessOnly: true });
+    yield* (yield* inherited.service).prepareTurn({ threadId, runId });
+    expect([...inherited.admissions.values()].map((command) => command.runtimeMode)).toEqual([
+      "full-access",
+      "full-access",
+    ]);
+
+    const chosen = setup({ access: "approval-required" });
+    yield* (yield* chosen.service).prepareTurn({ threadId, runId });
+    expect([...chosen.admissions.values()].map((command) => command.runtimeMode)).toEqual([
+      "approval-required",
+      "approval-required",
+    ]);
+
+    const refused = setup({ access: "approval-required", fullAccessOnly: true });
+    const error = yield* (yield* refused.service)
+      .prepareTurn({ threadId, runId })
+      .pipe(Effect.flip);
+    expect(error.message).toContain("researcher cannot join with approval-required access");
+    expect(error.message).toContain("It cannot ask.");
+    expect(refused.admissions.size).toBe(0);
   }),
 );
 

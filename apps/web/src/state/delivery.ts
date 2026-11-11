@@ -20,6 +20,7 @@ import { NO_FILTERS, type BoardFilters, type BoardGrouping } from "../lib/delive
 import { deliveryEnvironmentChoice } from "../lib/delivery";
 import { boardSelectionPatch } from "../lib/deliveryBoardSelection";
 import type {
+  OrchestratorAccess,
   OrchestratorCritique,
   OrchestratorExtraParticipant,
   OrchestratorParticipantChoice,
@@ -338,6 +339,8 @@ export interface OrchestratorDraft {
   readonly extraParticipants?: ReadonlyArray<OrchestratorExtraParticipant>;
   /** When participants critique each other; absent is the first message only. */
   readonly critique?: OrchestratorCritique;
+  /** The access participants run with; absent is the conversation's own. */
+  readonly access?: OrchestratorAccess | undefined;
   readonly started?: boolean;
   readonly viewTask?: string | null;
   readonly team: string;

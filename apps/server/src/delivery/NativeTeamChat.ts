@@ -12,6 +12,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
+import { runtimeModeProblem } from "@t3tools/provider-core/server/runtimeModeSupport";
 import * as DeliveryService from "./DeliveryService.ts";
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
@@ -23,10 +24,12 @@ export class NativeTeamChatError extends Schema.TaggedError<NativeTeamChatError>
   {
     runId: RunId,
     reason: Schema.Literals(["roster", "state", "dispatch", "attachments"]),
+    detail: Schema.optional(Schema.String),
     cause: Schema.optional(Schema.Defect()),
   },
 ) {
   override get message(): string {
+    if (this.detail !== undefined) return this.detail;
     if (this.reason === "attachments") {
       return "Team discussions currently support text only. Remove attachments or use an ordinary chat so participants are not asked to review files they cannot see.";
     }
@@ -146,6 +149,7 @@ export const make = Effect.gen(function* () {
           (seat) => !current.some((task) => task.teamChat?.seat === seat.seat),
         );
         if (missing.length === 0) return { ready: false, context: "" };
+        const access = binding.orchestration.access ?? parent.thread.runtimeMode;
         const available = yield* Effect.forEach(
           roster,
           Effect.fn("NativeTeamChat.preflight")(function* (seat) {
@@ -158,11 +162,21 @@ export const make = Effect.gen(function* () {
               return yield* new NativeTeamChatError({ runId: input.runId, reason: "roster" });
             }
             const snapshot = yield* instance.snapshot.getSnapshot;
-            if (
-              !snapshot.installed ||
-              snapshot.supportedRuntimeModes?.includes("approval-required") === false
-            ) {
+            if (!snapshot.installed) {
               return yield* new NativeTeamChatError({ runId: input.runId, reason: "roster" });
+            }
+            // A provider is never run in another mode than the one asked for, so say which seat.
+            const refused =
+              runtimeModeProblem(snapshot.runtimeModes, access) ??
+              (snapshot.supportedRuntimeModes?.includes(access) === false
+                ? "This provider cannot run in this mode."
+                : undefined);
+            if (refused !== undefined) {
+              return yield* new NativeTeamChatError({
+                runId: input.runId,
+                reason: "roster",
+                detail: `${seat.seat} cannot join with ${access} access: ${refused} Change the participants' access for this conversation, or leave ${seat.seat} out.`,
+              });
             }
             return yield* adapters.get(seat.modelSelection.instanceId);
           }),
@@ -202,7 +216,7 @@ export const make = Effect.gen(function* () {
                 : "Critique the independent contributions below. Identify errors, disagreements, overlooked alternatives, and evidence that changes your conclusion. Do not merely repeat the other participants."
             }\n\nConversation:\n${conversation}${stage === "critique" ? `\n\nIndependent contributions:\n${contributions(initial)}` : ""}`,
             modelSelection: seat.modelSelection,
-            runtimeMode: "approval-required",
+            runtimeMode: access,
             interactionMode: "plan",
             completionWake: "settled_only",
           });

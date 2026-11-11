@@ -14,6 +14,8 @@ export const DeliveryOrchestrationConfig = Schema.Struct({
   ).check(Schema.isMinLength(2), Schema.isMaxLength(12)),
   /** When participants critique each other. Absent means the conversation's first message only. */
   critique: Schema.optional(Schema.Literals(["first", "always", "never"])),
+  /** The access participants run with. Absent means the conversation's own access mode. */
+  access: Schema.optional(Schema.Literals(["approval-required", "full-access"])),
 });
 export type DeliveryOrchestrationConfig = typeof DeliveryOrchestrationConfig.Type;
 
