@@ -16,6 +16,8 @@ export const DeliveryOrchestrationConfig = Schema.Struct({
   critique: Schema.optional(Schema.Literals(["first", "always", "never"])),
   /** The access participants run with. Absent means the conversation's own access mode. */
   access: Schema.optional(Schema.Literals(["approval-required", "full-access"])),
+  /** The team participants take their roles from, when the conversation itself is bound to none. */
+  team: Schema.optional(TrimmedNonEmptyString),
 });
 export type DeliveryOrchestrationConfig = typeof DeliveryOrchestrationConfig.Type;
 
@@ -171,8 +173,17 @@ export type DeliveryThreadPending = typeof DeliveryThreadPending.Type;
 export const DeliveryThreadState = Schema.Struct({
   binding: Schema.NullOr(DeliveryThreadBinding),
   pending: Schema.NullOr(DeliveryThreadPending),
+  /** Who joins the next message. Absent for an ordinary conversation. */
+  lineup: Schema.optional(DeliveryOrchestrationConfig),
 });
 export type DeliveryThreadState = typeof DeliveryThreadState.Type;
+
+/** Replaces who joins a conversation from its next message on; null makes it an ordinary one. */
+export const DeliverySetThreadLineupInput = Schema.Struct({
+  threadId: ThreadId,
+  orchestration: Schema.NullOr(DeliveryOrchestrationConfig),
+});
+export type DeliverySetThreadLineupInput = typeof DeliverySetThreadLineupInput.Type;
 
 export const DeliveryThreadBindingInput = Schema.Struct({ threadId: ThreadId });
 export type DeliveryThreadBindingInput = typeof DeliveryThreadBindingInput.Type;

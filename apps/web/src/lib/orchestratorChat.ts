@@ -29,6 +29,10 @@ export type OrchestratorAccess = NonNullable<DeliveryOrchestrationConfig["access
 
 export function resolveOrchestratorRoster(input: {
   readonly team: DeliveryTeam | null;
+  /** A conversation with no team behind it: its participants are all added by hand. */
+  readonly teamless?: boolean | undefined;
+  /** The team participants take their roles from, for a conversation bound to none. */
+  readonly callsTeam?: string | undefined;
   readonly choices: Readonly<Record<string, OrchestratorParticipantChoice>> | undefined;
   readonly entries: ReadonlyArray<ProviderInstanceEntry>;
   readonly critique?: OrchestratorCritique | undefined;
@@ -118,11 +122,12 @@ export function resolveOrchestratorRoster(input: {
         modelSelection: extra.modelSelection ?? null,
         orchestrator: false,
         extra: true,
-        problem: !input.team?.roles.some((role) => role.role === extra.role)
-          ? `Choose a role for ${title}.`
-          : !extra.modelSelection
-            ? `Choose a provider and model for ${title}.`
-            : selectionProblem(title, extra.modelSelection),
+        problem:
+          input.team && !input.team.roles.some((role) => role.role === extra.role)
+            ? `Choose a role for ${title}.`
+            : !extra.modelSelection
+              ? `Choose a provider and model for ${title}.`
+              : selectionProblem(title, extra.modelSelection),
       };
     }),
   ];
@@ -133,21 +138,23 @@ export function resolveOrchestratorRoster(input: {
   const identities = new Set(
     selected.map((row) => `${row.modelSelection?.instanceId}:${row.modelSelection?.model}`),
   );
-  const problem = !input.team
-    ? "Choose a team for this conversation."
-    : stale
-      ? "The team's seats changed. Use Reset to team to refresh its participants."
-      : selected.length < 2 || selected.length > 12
-        ? "Choose between 2 and 12 participants."
-        : (selected.find((row) => row.problem)?.problem ??
-          (identities.size !== selected.length
-            ? "Choose a different provider or model for each participant."
-            : null));
+  const problem =
+    !input.team && !input.teamless
+      ? "Choose a team for this conversation."
+      : stale
+        ? "The team's seats changed. Use Reset to team to refresh its participants."
+        : selected.length < 2 || selected.length > 12
+          ? "Choose between 2 and 12 participants."
+          : (selected.find((row) => row.problem)?.problem ??
+            (identities.size !== selected.length
+              ? "Choose a different provider or model for each participant."
+              : null));
   const configuration: DeliveryOrchestrationConfig | null = problem
     ? null
     : {
         ...(input.critique && input.critique !== "first" ? { critique: input.critique } : {}),
         ...(input.access ? { access: input.access } : {}),
+        ...(input.callsTeam ? { team: input.callsTeam } : {}),
         participants: selected.flatMap((row) =>
           row.modelSelection
             ? [{ seat: row.seat, role: row.role, modelSelection: row.modelSelection }]

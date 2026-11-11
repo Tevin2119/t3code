@@ -13,6 +13,9 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import { runtimeModeProblem } from "@t3tools/provider-core/server/runtimeModeSupport";
+import { resolveAttachmentPath } from "../attachmentStore.ts";
+import { ServerConfig } from "../config.ts";
+import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import * as DeliveryService from "./DeliveryService.ts";
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
@@ -23,16 +26,13 @@ export class NativeTeamChatError extends Schema.TaggedError<NativeTeamChatError>
   "NativeTeamChatError",
   {
     runId: RunId,
-    reason: Schema.Literals(["roster", "state", "dispatch", "attachments"]),
+    reason: Schema.Literals(["roster", "state", "dispatch"]),
     detail: Schema.optional(Schema.String),
     cause: Schema.optional(Schema.Defect()),
   },
 ) {
   override get message(): string {
     if (this.detail !== undefined) return this.detail;
-    if (this.reason === "attachments") {
-      return "Team discussions currently support text only. Remove attachments or use an ordinary chat so participants are not asked to review files they cannot see.";
-    }
     return this.reason === "roster"
       ? "Choose between two and twelve distinct team participants with available providers."
       : "The native team discussion could not advance. Its recorded contributions are preserved.";
@@ -74,15 +74,20 @@ export const make = Effect.gen(function* () {
   const ids = yield* IdAllocator.IdAllocatorV2;
   const adapters = yield* ProviderAdapterRegistry.ProviderAdapterRegistryV2;
   const instances = yield* ProviderInstanceRegistry.ProviderInstanceRegistry;
+  const projects = yield* ProjectStore.ProjectStoreV2;
+  const { attachmentsDir } = yield* ServerConfig;
 
   return NativeTeamChat.of({
     prepareTurn: Effect.fn("NativeTeamChat.prepareTurn")(
       function* (input) {
         if (Option.isNone(deliveryOption)) return { ready: true, context: "" };
         const delivery = deliveryOption.value;
-        const { binding } = yield* delivery.threadState(input.threadId);
-        if (binding?.orchestration === undefined) return { ready: true, context: "" };
-        const roster = binding.orchestration.participants;
+        const { binding, lineup } = yield* delivery.threadState(input.threadId);
+        if (lineup === undefined) return { ready: true, context: "" };
+        const roster = lineup.participants;
+        // Participants take a team's roles when there is one; with none they join as themselves.
+        const team = binding?.team ?? lineup.team;
+        const group = team === undefined ? "this conversation" : `team ${team}`;
         if (
           roster.length < 2 ||
           roster.length > 12 ||
@@ -120,9 +125,15 @@ export const make = Effect.gen(function* () {
         ) {
           return { ready: true, context: "" };
         }
-        if (message.attachments.length > 0) {
-          return yield* new NativeTeamChatError({ runId: input.runId, reason: "attachments" });
-        }
+        // Participants get the files as paths to read, not as content in their context.
+        const files = message.attachments.flatMap((attachment) => {
+          const path = resolveAttachmentPath({ attachmentsDir, attachment });
+          return path === null ? [] : [`- ${attachment.name}: ${path}`];
+        });
+        const attached =
+          files.length === 0
+            ? ""
+            : `\n\nFiles attached to the latest message, to read from these paths:\n${files.join("\n")}`;
         const conversation = history.messages
           .map((message) => `${message.role}: ${message.text}`)
           .join("\n\n")
@@ -130,17 +141,21 @@ export const make = Effect.gen(function* () {
         const tasks = parent.subagents.filter((task) => task.teamChat?.sourceRunId === input.runId);
         const initial = tasks.filter((task) => task.teamChat?.stage === "contribution");
         const critiques = tasks.filter((task) => task.teamChat?.stage === "critique");
-        const initialDone = initial.length === roster.length && initial.every(terminal);
-        const critiqueDone = critiques.length === roster.length && critiques.every(terminal);
+        // By seat, so a lineup changed while a round runs neither hangs it nor repeats it.
+        const done = (round: ReadonlyArray<OrchestrationV2Subagent>) =>
+          round.every(terminal) &&
+          roster.every((seat) => round.some((task) => task.teamChat?.seat === seat.seat));
+        const initialDone = done(initial);
+        const critiqueDone = done(critiques);
         const followUp = parent.subagents.some(
           (task) => task.teamChat !== undefined && task.teamChat.sourceRunId !== input.runId,
         );
-        const mode = binding.orchestration.critique ?? "first";
+        const mode = lineup.critique ?? "first";
         const critiqueWanted = mode === "always" || (mode === "first" && !followUp);
         if (initialDone && (critiqueDone || !critiqueWanted)) {
           return {
             ready: true,
-            context: `<team_discussion>\nYou are the orchestrator for team ${binding.team}. The native participants have completed independent contributions${critiqueWanted ? " and a critique round" : ""}. Synthesize their evidence and disagreements into a response to the latest user message. Attribute useful insights to their seat/model, acknowledge failed or missing contributions, and distinguish consensus from unresolved disagreement. Do not launch these rounds again.\n\nIndependent contributions:\n${contributions(initial)}${critiqueWanted ? `\n\nCritiques:\n${contributions(critiques)}` : ""}\n</team_discussion>`,
+            context: `<team_discussion>\nYou are the orchestrator for ${group}. The native participants have completed independent contributions${critiqueWanted ? " and a critique round" : ""}. Synthesize their evidence and disagreements into a response to the latest user message. Attribute useful insights to their seat/model, acknowledge failed or missing contributions, and distinguish consensus from unresolved disagreement. Do not launch these rounds again.\n\nIndependent contributions:\n${contributions(initial)}${critiqueWanted ? `\n\nCritiques:\n${contributions(critiques)}` : ""}\n</team_discussion>`,
           };
         }
         const stage = initialDone ? "critique" : "contribution";
@@ -149,7 +164,7 @@ export const make = Effect.gen(function* () {
           (seat) => !current.some((task) => task.teamChat?.seat === seat.seat),
         );
         if (missing.length === 0) return { ready: false, context: "" };
-        const access = binding.orchestration.access ?? parent.thread.runtimeMode;
+        const access = lineup.access ?? parent.thread.runtimeMode;
         const available = yield* Effect.forEach(
           roster,
           Effect.fn("NativeTeamChat.preflight")(function* (seat) {
@@ -183,19 +198,30 @@ export const make = Effect.gen(function* () {
         );
         const commandFor = (seat: (typeof roster)[number]) =>
           CommandId.make(`team-chat:${input.threadId}:${input.runId}:${stage}:${seat.seat}`);
-        for (const seat of missing) {
-          const commandId = commandFor(seat);
-          const childThreadId = ids.derive.delegatedTaskThread({ commandId });
-          const adapter = available[roster.indexOf(seat)]!;
-          const member = yield* delivery.bindThread({
-            threadId: childThreadId,
-            team: binding.team,
-            role: seat.role,
-            driver: adapter.driver,
-            cwd: parent.thread.worktreePath ?? binding.workspace,
-          });
-          if (member.configuration !== binding.configuration) {
-            return yield* new NativeTeamChatError({ runId: input.runId, reason: "roster" });
+        if (team !== undefined) {
+          const cwd =
+            parent.thread.worktreePath ??
+            binding?.workspace ??
+            (yield* projects
+              .get(parent.thread.projectId)
+              .pipe(
+                Effect.map(Option.map((project) => project.workspaceRoot)),
+                Effect.map(Option.getOrUndefined),
+              ));
+          if (cwd === undefined) {
+            return yield* new NativeTeamChatError({ runId: input.runId, reason: "state" });
+          }
+          for (const seat of missing) {
+            const member = yield* delivery.bindThread({
+              threadId: ids.derive.delegatedTaskThread({ commandId: commandFor(seat) }),
+              team,
+              role: seat.role,
+              driver: available[roster.indexOf(seat)]!.driver,
+              cwd,
+            });
+            if (binding !== null && member.configuration !== binding.configuration) {
+              return yield* new NativeTeamChatError({ runId: input.runId, reason: "roster" });
+            }
           }
         }
         for (const seat of missing) {
@@ -210,11 +236,11 @@ export const make = Effect.gen(function* () {
             parentNodeId: run.rootNodeId,
             teamChat: { sourceRunId: input.runId, stage, seat: seat.seat },
             title: `${seat.seat} · ${stage}`,
-            task: `Participate as ${seat.role}, seat ${seat.seat}, in team ${binding.team}. This is a read-only discussion: do not edit files, commit, push, or delegate. ${
+            task: `Participate as ${seat.role}, seat ${seat.seat}, in ${group}. This is a read-only discussion: do not edit files, commit, push, or delegate. ${
               stage === "contribution"
                 ? "Give your independent assessment of the latest user message, with evidence, assumptions, and objections."
                 : "Critique the independent contributions below. Identify errors, disagreements, overlooked alternatives, and evidence that changes your conclusion. Do not merely repeat the other participants."
-            }\n\nConversation:\n${conversation}${stage === "critique" ? `\n\nIndependent contributions:\n${contributions(initial)}` : ""}`,
+            }\n\nConversation:\n${conversation}${attached}${stage === "critique" ? `\n\nIndependent contributions:\n${contributions(initial)}` : ""}`,
             modelSelection: seat.modelSelection,
             runtimeMode: access,
             interactionMode: "plan",

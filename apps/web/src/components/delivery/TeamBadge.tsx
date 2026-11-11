@@ -49,6 +49,7 @@ export function TeamBadge(props: {
     );
   }
   const seat = binding.seatSettings ?? null;
+  const lineup = state.data?.lineup;
   const effective = parseSessionEffective(sessionRead.body);
   const overrides = effective?.overrides ?? [];
   const rows: ReadonlyArray<readonly [string, string]> = [
@@ -56,10 +57,10 @@ export function TeamBadge(props: {
     ["Role", binding.role],
     ["Seat", binding.seat],
     ["Harness", binding.harness],
-    ...(binding.orchestration
+    ...(lineup
       ? [
           ["Conversation", "Orchestrator: contributions, critique, and synthesis"] as const,
-          ...binding.orchestration.participants.map(
+          ...lineup.participants.map(
             (participant) =>
               [
                 `Participant: ${participant.seat}`,
@@ -132,10 +133,8 @@ export function TeamBadge(props: {
           <span className="truncate">{binding.team}</span>
           <span className="text-muted-foreground">/</span>
           <span className="truncate">{binding.role}</span>
-          {binding.orchestration ? (
-            <span className="text-muted-foreground">
-              {binding.orchestration.participants.length} participants
-            </span>
+          {lineup ? (
+            <span className="text-muted-foreground">{lineup.participants.length} participants</span>
           ) : null}
           {overrides.length > 0 ? (
             <span className="shrink-0 text-warning">

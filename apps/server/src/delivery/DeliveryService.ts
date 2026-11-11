@@ -3,11 +3,13 @@
 import {
   DELIVERY_HARNESS_BY_DRIVER,
   DeliveryError,
+  DeliveryOrchestrationConfig,
   DeliveryThreadBinding,
   DeliveryThreadPending,
   type DeliveryActInput,
   type DeliveryBindThreadInput,
   type DeliveryReadInput,
+  type DeliverySetThreadLineupInput,
   type DeliveryResponse,
   type DeliveryThreadState,
   type ThreadId,
@@ -35,6 +37,10 @@ const BindingsFile = Schema.fromJsonString(
   Schema.Struct({
     threads: Schema.Record(Schema.String, DeliveryThreadBinding),
     pending: Schema.optional(Schema.Record(Schema.String, DeliveryThreadPending)),
+    // Null is a conversation that was a team discussion and went back to an ordinary one.
+    lineups: Schema.optional(
+      Schema.Record(Schema.String, Schema.NullOr(DeliveryOrchestrationConfig)),
+    ),
   }),
 );
 const decodeBindings = Schema.decodeUnknownEffect(BindingsFile);
@@ -123,6 +129,10 @@ export class DeliveryService extends Context.Service<
     readonly releaseThread: (
       threadId: ThreadId,
     ) => Effect.Effect<DeliveryThreadState, DeliveryError>;
+    /** Replaces who joins a conversation from its next message on; null makes it an ordinary one. */
+    readonly setThreadLineup: (
+      input: DeliverySetThreadLineupInput,
+    ) => Effect.Effect<DeliveryThreadState, DeliveryError>;
     /**
      * Fetches a bound thread's team setup and makes it readable by adapters.
      * Succeeds with `false` for a thread with no team, which starts as it
@@ -154,6 +164,7 @@ export const layerTest = Layer.succeed(
     releaseThread: Effect.fn("DeliveryService.releaseThread")(() =>
       Effect.succeed({ binding: null, pending: null }),
     ),
+    setThreadLineup: disabled,
     prepareThread: Effect.fn("DeliveryService.prepareThread")(() => Effect.succeed(false)),
     terminalEntryScript: Effect.succeed(null),
   }),
@@ -169,6 +180,7 @@ const make = Effect.gen(function* () {
   const bindingsPath = path.join(config.stateDir, "delivery-threads.json");
   const bindings = new Map<string, DeliveryThreadBinding>();
   const pending = new Map<string, DeliveryThreadPending>();
+  const lineups = new Map<string, DeliveryOrchestrationConfig | null>();
   const writeLock = yield* Semaphore.make(1);
 
   // Only a file that is not there means that no thread is bound. A file that
@@ -199,6 +211,9 @@ const make = Effect.gen(function* () {
       for (const [threadId, intent] of Object.entries(decoded.success.pending ?? {})) {
         pending.set(threadId, intent);
       }
+      for (const [threadId, lineup] of Object.entries(decoded.success.lineups ?? {})) {
+        lineups.set(threadId, lineup);
+      }
     }
   }
   if (storeProblem) yield* Effect.logError(storeProblem);
@@ -220,6 +235,7 @@ const make = Effect.gen(function* () {
       encodeBindings({
         threads: Object.fromEntries(bindings),
         pending: Object.fromEntries(pending),
+        ...(lineups.size > 0 ? { lineups: Object.fromEntries(lineups) } : {}),
       }),
     ).pipe(
       Effect.flatMap((contents) =>
@@ -420,9 +436,51 @@ const make = Effect.gen(function* () {
     return repository.readable && repository.root ? repository.root : folder;
   });
 
-  const stateOf = (threadId: ThreadId): DeliveryThreadState => ({
-    binding: bindings.get(threadId) ?? null,
-    pending: pending.get(threadId) ?? null,
+  const stateOf = (threadId: ThreadId): DeliveryThreadState => {
+    const binding = bindings.get(threadId) ?? null;
+    // What the thread was started with stands until a person changes it.
+    const lineup = lineups.has(threadId) ? lineups.get(threadId) : binding?.orchestration;
+    return {
+      binding,
+      pending: pending.get(threadId) ?? null,
+      ...(lineup ? { lineup } : {}),
+    };
+  };
+
+  const checkParticipants = (participants: DeliveryOrchestrationConfig["participants"]) =>
+    participants.length < 2 ||
+    participants.length > 12 ||
+    new Set(participants.map((seat) => seat.seat)).size !== participants.length ||
+    new Set(
+      participants.map((seat) =>
+        JSON.stringify([seat.modelSelection.instanceId, seat.modelSelection.model]),
+      ),
+    ).size !== participants.length
+      ? Effect.fail(
+          new DeliveryError({
+            reason: "invalid",
+            detail: "Choose between two and twelve distinct participants for the team discussion.",
+          }),
+        )
+      : Effect.void;
+
+  const setThreadLineup = Effect.fn("DeliveryService.setThreadLineup")(function* (
+    input: DeliverySetThreadLineupInput,
+  ) {
+    yield* storeReadable;
+    if (input.orchestration !== null) yield* checkParticipants(input.orchestration.participants);
+    const had = lineups.has(input.threadId);
+    const previous = lineups.get(input.threadId);
+    lineups.set(input.threadId, input.orchestration);
+    yield* persist.pipe(
+      Effect.tapError(() =>
+        Effect.sync(() => {
+          if (had) lineups.set(input.threadId, previous ?? null);
+          else lineups.delete(input.threadId);
+        }),
+      ),
+    );
+    return stateOf(input.threadId);
   });
 
   const bindThread = Effect.fn("DeliveryService.bindThread")(function* (
@@ -430,22 +488,7 @@ const make = Effect.gen(function* () {
   ) {
     yield* storeReadable;
     if (input.orchestration !== undefined) {
-      const participants = input.orchestration.participants;
-      if (
-        participants.length < 2 ||
-        participants.length > 12 ||
-        new Set(participants.map((seat) => seat.seat)).size !== participants.length ||
-        new Set(
-          participants.map((seat) =>
-            JSON.stringify([seat.modelSelection.instanceId, seat.modelSelection.model]),
-          ),
-        ).size !== participants.length
-      ) {
-        return yield* new DeliveryError({
-          reason: "invalid",
-          detail: "Choose between two and twelve distinct participants for the team discussion.",
-        });
-      }
+      yield* checkParticipants(input.orchestration.participants);
     }
     const existing = bindings.get(input.threadId);
     if (existing) {
@@ -759,6 +802,7 @@ const make = Effect.gen(function* () {
       storeReadable.pipe(Effect.as(stateOf(threadId))),
     ),
     releaseThread,
+    setThreadLineup,
     prepareThread,
     terminalEntryScript: delivery.pipe(Effect.map(entryScriptOf)),
   });

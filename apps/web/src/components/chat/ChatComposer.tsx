@@ -1,8 +1,11 @@
 import { TeamBadge } from "../delivery/TeamBadge";
 import { TeamPicker } from "../delivery/TeamPicker";
 import { OrchestratorChatSetup } from "../delivery/OrchestratorChatSetup";
+import { OrchestratorLineup } from "../delivery/OrchestratorLineup";
+import { useEnvironmentQuery } from "../../state/query";
 import { REASONING_OPTION_BY_DRIVER, type SeatForThread } from "../../lib/deliverySeats";
 import {
+  deliveryEnvironment,
   enterOrchestratorChat,
   useDeliveryEnabled,
   useDeliveryDraftStore,
@@ -2131,6 +2134,16 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const orchestratorDraft = useOrchestratorDraft(orchestratorOffered ? activeThreadId : null);
   const orchestratorMode = orchestratorOffered && orchestratorDraft !== null;
   const leaveOrchestrator = useOrchestratorDraftStore((store) => store.leave);
+  // A conversation that has started keeps its participants on the server, where they can change.
+  const lineupOffered = deliveryEnabledForComposer && routeKind !== "draft" && activeThreadId;
+  const startedLineup = useEnvironmentQuery(
+    lineupOffered
+      ? deliveryEnvironment.threadBinding({
+          environmentId,
+          input: { threadId: activeThreadId },
+        })
+      : null,
+  ).data?.lineup;
 
   const submitComposer = (
     event?: { preventDefault: () => void },
@@ -2422,7 +2435,21 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                 />
               ),
             }
-          : undefined
+          : lineupOffered
+            ? {
+                active: startedLineup !== undefined,
+                onSelect: () => {},
+                panel: (
+                  <OrchestratorLineup
+                    environmentId={environmentId}
+                    threadId={activeThreadId}
+                    driver={selectedProvider}
+                    entries={providerInstanceEntries}
+                    models={modelOptionsByInstance}
+                  />
+                ),
+              }
+            : undefined
       }
       environmentId={environmentId}
       routeKind={routeKind}

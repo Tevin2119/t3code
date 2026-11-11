@@ -3462,6 +3462,7 @@ const layerForkWsRpc = (currentSession: EnvironmentAuth.AuthenticatedSession) =>
         [WS_METHODS.deliveryBindThread]: (input) => delivery.bindThread(input),
         [WS_METHODS.deliveryThreadBinding]: (input) => delivery.threadState(input.threadId),
         [WS_METHODS.deliveryReleaseThread]: (input) => delivery.releaseThread(input.threadId),
+        [WS_METHODS.deliverySetThreadLineup]: (input) => delivery.setThreadLineup(input),
       });
     }),
   );

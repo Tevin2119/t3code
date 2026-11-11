@@ -53,6 +53,7 @@ import {
 import {
   DeliveryActInput,
   DeliveryBindThreadInput,
+  DeliverySetThreadLineupInput,
   DeliveryError,
   DeliveryReadInput,
   DeliveryResponse,
@@ -558,6 +559,7 @@ export const WS_METHODS = {
   deliveryBindThread: "delivery.bindThread",
   deliveryThreadBinding: "delivery.threadBinding",
   deliveryReleaseThread: "delivery.releaseThread",
+  deliverySetThreadLineup: "delivery.setThreadLineup",
   scheduledTasksList: "scheduledTasks.list",
   scheduledTasksSubscribe: "scheduledTasks.subscribe",
   scheduledTasksUpsert: "scheduledTasks.upsert",
@@ -1010,6 +1012,13 @@ const WsDeliveryBindThreadRpc = Rpc.make(WS_METHODS.deliveryBindThread, {
 /** Both null for a thread that was never bound: a manual or legacy thread. */
 const WsDeliveryThreadBindingRpc = Rpc.make(WS_METHODS.deliveryThreadBinding, {
   payload: DeliveryThreadBindingInput,
+  success: DeliveryThreadState,
+  error: Schema.Union([EnvironmentAuthorizationError, DeliveryError]),
+});
+
+/** Changes who joins a conversation's team discussion from its next message on. */
+const WsDeliverySetThreadLineupRpc = Rpc.make(WS_METHODS.deliverySetThreadLineup, {
+  payload: DeliverySetThreadLineupInput,
   success: DeliveryThreadState,
   error: Schema.Union([EnvironmentAuthorizationError, DeliveryError]),
 });
@@ -2294,6 +2303,7 @@ export const ForkWsRpcGroup = RpcGroup.make(
   WsDeliveryBindThreadRpc,
   WsDeliveryThreadBindingRpc,
   WsDeliveryReleaseThreadRpc,
+  WsDeliverySetThreadLineupRpc,
   WsServerSubscribeCheckoutUpdateRpc,
   WsServerCheckCheckoutUpdateRpc,
   WsServerStartCheckoutUpdateRpc,
