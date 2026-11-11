@@ -7,7 +7,10 @@ import {
 import { createModelSelection } from "@t3tools/shared/model";
 import { useNavigate } from "@tanstack/react-router";
 import { resolveTeamChoice, rolesForHarness, selectableTeams } from "../../lib/delivery";
-import { resolveOrchestratorRoster } from "../../lib/orchestratorChat";
+import {
+  type OrchestratorExtraParticipant,
+  resolveOrchestratorRoster,
+} from "../../lib/orchestratorChat";
 import { NO_PROVIDER_MODEL_SELECTION, type ProviderInstanceEntry } from "../../providerInstances";
 
 import {
@@ -67,6 +70,7 @@ export function OrchestratorChatSetup(props: {
     choices: draft?.participantChoices,
     entries: props.entries,
     critique: draft?.critique,
+    extras: draft?.extraParticipants,
     orchestrator: {
       harness: leadEntry ? (DELIVERY_HARNESS_BY_DRIVER[leadEntry.driverKind] ?? null) : null,
       role: resolved.state === "ready" ? resolved.role : null,
@@ -90,6 +94,15 @@ export function OrchestratorChatSetup(props: {
     }
   }
   if (!draft) return null;
+  const extras = draft.extraParticipants ?? [];
+  const setExtras = (next: ReadonlyArray<OrchestratorExtraParticipant>) =>
+    update(props.threadId, { extraParticipants: next });
+  const nextExtraId = `custom-${
+    extras.reduce((highest, extra) => Math.max(highest, Number(extra.id.slice(7)) || 0), 0) + 1
+  }`;
+  // A new participant takes the role of the first seat that is not the orchestrator's own.
+  const extraRole =
+    roster.rows.find((row) => !row.orchestrator && !row.extra)?.role ?? team?.roles[0]?.role;
 
   return (
     <div className="flex max-h-96 flex-col gap-3 overflow-y-auto p-3" data-orchestrator-chat-setup>
@@ -196,7 +209,7 @@ export function OrchestratorChatSetup(props: {
         <Button
           size="xs"
           variant="ghost"
-          onClick={() => update(props.threadId, { participantChoices: {} })}
+          onClick={() => update(props.threadId, { participantChoices: {}, extraParticipants: [] })}
         >
           Reset to team
         </Button>
@@ -206,25 +219,36 @@ export function OrchestratorChatSetup(props: {
         return (
           <div key={row.seat} className="flex flex-col gap-1">
             <div className="flex items-center gap-2">
-              <Checkbox
-                aria-label={`Include ${row.title}`}
-                checked={row.included}
-                onCheckedChange={(included) =>
-                  update(props.threadId, {
-                    participantChoices: {
-                      ...draft.participantChoices,
-                      [row.seat]: { ...draft.participantChoices?.[row.seat], included },
-                    },
-                  })
-                }
-              />
+              {row.extra ? (
+                <Button
+                  size="xs"
+                  variant="ghost"
+                  aria-label={`Remove ${row.title}`}
+                  onClick={() => setExtras(extras.filter((extra) => extra.id !== row.seat))}
+                >
+                  Remove
+                </Button>
+              ) : (
+                <Checkbox
+                  aria-label={`Include ${row.title}`}
+                  checked={row.included}
+                  onCheckedChange={(included) =>
+                    update(props.threadId, {
+                      participantChoices: {
+                        ...draft.participantChoices,
+                        [row.seat]: { ...draft.participantChoices?.[row.seat], included },
+                      },
+                    })
+                  }
+                />
+              )}
               <span className="min-w-0 flex-1 text-xs">
                 {row.title}
                 {row.orchestrator ? (
                   <span className="text-muted-foreground"> · orchestrator</span>
                 ) : null}
               </span>
-              {!row.orchestrator && row.modelSelection && !row.problem && team ? (
+              {!row.orchestrator && !row.extra && row.modelSelection && !row.problem && team ? (
                 <Button
                   size="xs"
                   variant="ghost"
@@ -253,30 +277,78 @@ export function OrchestratorChatSetup(props: {
                 {...(row.modelSelection === null ? { triggerLabel: "Choose model" } : {})}
                 isComposerOwned={false}
                 onInstanceModelChange={(instanceId, model) =>
-                  update(props.threadId, {
-                    participantChoices: {
-                      ...draft.participantChoices,
-                      [row.seat]: {
-                        ...draft.participantChoices?.[row.seat],
-                        modelSelection: createModelSelection(
-                          instanceId,
-                          model,
-                          instanceId === selection.instanceId && model === selection.model
-                            ? selection.options
-                            : undefined,
+                  row.extra
+                    ? setExtras(
+                        extras.map((extra) =>
+                          extra.id === row.seat
+                            ? { ...extra, modelSelection: createModelSelection(instanceId, model) }
+                            : extra,
                         ),
-                      },
-                    },
-                  })
+                      )
+                    : update(props.threadId, {
+                        participantChoices: {
+                          ...draft.participantChoices,
+                          [row.seat]: {
+                            ...draft.participantChoices?.[row.seat],
+                            modelSelection: createModelSelection(
+                              instanceId,
+                              model,
+                              instanceId === selection.instanceId && model === selection.model
+                                ? selection.options
+                                : undefined,
+                            ),
+                          },
+                        },
+                      })
                 }
               />
             </div>
+            {row.extra && team ? (
+              <Select
+                items={team.roles.map((role) => ({ value: role.role, label: role.title }))}
+                value={row.role}
+                onValueChange={(value) => {
+                  if (typeof value === "string")
+                    setExtras(
+                      extras.map((extra) =>
+                        extra.id === row.seat ? { ...extra, role: value } : extra,
+                      ),
+                    );
+                }}
+              >
+                <SelectTrigger aria-label={`Role of ${row.title}`}>
+                  <SelectValue placeholder="Choose a role" />
+                </SelectTrigger>
+                <SelectPopup>
+                  {team.roles.map((role) => (
+                    <SelectItem key={role.role} value={role.role}>
+                      {role.title}
+                    </SelectItem>
+                  ))}
+                </SelectPopup>
+              </Select>
+            ) : null}
             {row.included && row.problem ? (
               <p className="text-xs text-warning">{row.problem}</p>
             ) : null}
           </div>
         );
       })}
+      {team && extraRole ? (
+        <div className="flex flex-col gap-1">
+          <Button
+            size="xs"
+            variant="ghost"
+            disabled={roster.rows.filter((row) => row.included).length >= 12}
+            onClick={() => setExtras([...extras, { id: nextExtraId, role: extraRole }])}
+          >
+            Add participant
+          </Button>
+          <p className="text-xs text-muted-foreground">
+            Any provider and model, for this conversation only. Nothing is saved to the team.
+          </p>
+        </div>
+      ) : null}
       <div className="flex flex-col gap-1">
         <span className="text-xs font-medium">Critique round</span>
         <Select
