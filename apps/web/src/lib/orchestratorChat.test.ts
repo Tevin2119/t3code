@@ -176,6 +176,7 @@ it("gives a seat with no model its provider's default, and leaves out the orches
   });
   expect(result.problem).toBeNull();
   expect(result.configuration?.participants.map((seat) => seat.seat)).toEqual(["scout", "checker"]);
+  expect(result.rows.filter((row) => row.orchestrator).map((row) => row.seat)).toEqual(["critic"]);
   expect(result.configuration?.participants[1]?.modelSelection).toEqual({
     instanceId: "kimi",
     model: "kimi-main",
