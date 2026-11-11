@@ -27,9 +27,9 @@ be used says why: fix the provider in Settings, choose another, or leave the sea
 Choose between two and twelve participants with different provider/model combinations.
 
 Sending starts a native T3 team conversation. Participants contribute independently,
-then critique the findings before the lead brings the results together. Their
+then critique the findings before the lead brings the results together. The critique runs on the first message only unless you set **Critique round** to every message or never; follow-ups always get fresh contributions. Their
 threads and results stay linked to the conversation. Follow-up messages use the
-same team and repeat the discussion with the conversation's context. Participant
+same team with the conversation's context. Participant
 rounds are read-only. The lead uses the project's folder and your selected access
 settings. Use **Use ordinary chat** to leave Orchestrator before starting.
 

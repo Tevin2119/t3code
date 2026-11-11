@@ -17,10 +17,13 @@ export interface OrchestratorParticipantChoice {
   readonly modelSelection?: ModelSelection;
 }
 
+export type OrchestratorCritique = NonNullable<DeliveryOrchestrationConfig["critique"]>;
+
 export function resolveOrchestratorRoster(input: {
   readonly team: DeliveryTeam | null;
   readonly choices: Readonly<Record<string, OrchestratorParticipantChoice>> | undefined;
   readonly entries: ReadonlyArray<ProviderInstanceEntry>;
+  readonly critique?: OrchestratorCritique | undefined;
   /** The harness and role the orchestrator itself runs as, when known. */
   readonly orchestrator?: { readonly harness: string | null; readonly role: string | null };
 }) {
@@ -106,6 +109,7 @@ export function resolveOrchestratorRoster(input: {
   const configuration: DeliveryOrchestrationConfig | null = problem
     ? null
     : {
+        ...(input.critique && input.critique !== "first" ? { critique: input.critique } : {}),
         participants: selected.flatMap((row) =>
           row.modelSelection
             ? [{ seat: row.seat, role: row.role, modelSelection: row.modelSelection }]

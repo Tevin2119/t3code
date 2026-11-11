@@ -12,6 +12,8 @@ export const DeliveryOrchestrationConfig = Schema.Struct({
       modelSelection: ModelSelection,
     }),
   ).check(Schema.isMinLength(2), Schema.isMaxLength(12)),
+  /** When participants critique each other. Absent means the conversation's first message only. */
+  critique: Schema.optional(Schema.Literals(["first", "always", "never"])),
 });
 export type DeliveryOrchestrationConfig = typeof DeliveryOrchestrationConfig.Type;
 

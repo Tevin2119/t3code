@@ -60,6 +60,10 @@ function setup() {
 it("retains configured models and reasoning across different harnesses before their catalogs load", () => {
   const result = resolveOrchestratorRoster(setup());
   expect(result.problem).toBeNull();
+  expect(result.configuration).not.toHaveProperty("critique");
+  expect(resolveOrchestratorRoster({ ...setup(), critique: "never" }).configuration?.critique).toBe(
+    "never",
+  );
   expect(result.configuration?.participants).toEqual([
     {
       seat: "scout",

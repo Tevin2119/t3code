@@ -19,7 +19,7 @@ import { appAtomRegistry } from "../rpc/atomRegistry";
 import { NO_FILTERS, type BoardFilters, type BoardGrouping } from "../lib/deliveryBoard";
 import { deliveryEnvironmentChoice } from "../lib/delivery";
 import { boardSelectionPatch } from "../lib/deliveryBoardSelection";
-import type { OrchestratorParticipantChoice } from "../lib/orchestratorChat";
+import type { OrchestratorCritique, OrchestratorParticipantChoice } from "../lib/orchestratorChat";
 import { boardPreferencesOf, useBoardStore } from "./deliveryBoard";
 import { useEnvironments, usePrimaryEnvironmentId } from "./environments";
 import { useEnvironmentQuery } from "./query";
@@ -330,6 +330,8 @@ export function withSeatChoice(
 /** A workflow being prepared in the composer. It is saved to the engine as a draft. */
 export interface OrchestratorDraft {
   readonly participantChoices?: Readonly<Record<string, OrchestratorParticipantChoice>>;
+  /** When participants critique each other; absent is the first message only. */
+  readonly critique?: OrchestratorCritique;
   readonly started?: boolean;
   readonly viewTask?: string | null;
   readonly team: string;

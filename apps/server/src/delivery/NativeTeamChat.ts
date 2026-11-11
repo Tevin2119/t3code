@@ -129,10 +129,15 @@ export const make = Effect.gen(function* () {
         const critiques = tasks.filter((task) => task.teamChat?.stage === "critique");
         const initialDone = initial.length === roster.length && initial.every(terminal);
         const critiqueDone = critiques.length === roster.length && critiques.every(terminal);
-        if (initialDone && critiqueDone) {
+        const followUp = parent.subagents.some(
+          (task) => task.teamChat !== undefined && task.teamChat.sourceRunId !== input.runId,
+        );
+        const mode = binding.orchestration.critique ?? "first";
+        const critiqueWanted = mode === "always" || (mode === "first" && !followUp);
+        if (initialDone && (critiqueDone || !critiqueWanted)) {
           return {
             ready: true,
-            context: `<team_discussion>\nYou are the orchestrator for team ${binding.team}. The native participants have completed independent contributions and a critique round. Synthesize their evidence and disagreements into a response to the latest user message. Attribute useful insights to their seat/model, acknowledge failed or missing contributions, and distinguish consensus from unresolved disagreement. Do not launch these rounds again.\n\nIndependent contributions:\n${contributions(initial)}\n\nCritiques:\n${contributions(critiques)}\n</team_discussion>`,
+            context: `<team_discussion>\nYou are the orchestrator for team ${binding.team}. The native participants have completed independent contributions${critiqueWanted ? " and a critique round" : ""}. Synthesize their evidence and disagreements into a response to the latest user message. Attribute useful insights to their seat/model, acknowledge failed or missing contributions, and distinguish consensus from unresolved disagreement. Do not launch these rounds again.\n\nIndependent contributions:\n${contributions(initial)}${critiqueWanted ? `\n\nCritiques:\n${contributions(critiques)}` : ""}\n</team_discussion>`,
           };
         }
         const stage = initialDone ? "critique" : "contribution";
