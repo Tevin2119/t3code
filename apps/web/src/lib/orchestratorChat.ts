@@ -48,9 +48,16 @@ export function resolveOrchestratorRoster(input: {
     (seat) =>
       seat.role === input.orchestrator?.role && harnessOf(seat) === input.orchestrator?.harness,
   )?.seat;
+  // Read-only and "ask me" both run a participant in the mode that asks before a change.
+  const asks = input.access !== "full-access";
   const selectionProblem = (title: string, modelSelection: ModelSelection) => {
     const entry = input.entries.find((item) => item.instanceId === modelSelection.instanceId);
     const wayOut = `Choose another provider for ${title}, or leave it out.`;
+    const cannotAsk = asks
+      ? entry?.snapshot.runtimeModes?.find(
+          (mode) => mode.mode === "approval-required" && !mode.available,
+        )
+      : undefined;
     return !entry
       ? `${title}'s provider is unavailable. ${wayOut}`
       : !entry.enabled || !entry.installed || !entry.isAvailable || entry.status !== "ready"
@@ -63,7 +70,9 @@ export function resolveOrchestratorRoster(input: {
           ? `${entry.displayName} does not support team seats.`
           : !modelSelection.model.trim()
             ? `Choose a model for ${title}.`
-            : null;
+            : cannotAsk
+              ? `${entry.displayName} cannot be held to read-only${cannotAsk.reason ? `: ${cannotAsk.reason}` : "."} Leave ${title} out, or give participants full access.`
+              : null;
   };
   const teamRow = (seat: DeliveryTeam["seats"][number]) => {
     const settings = input.team?.settings.find((item) => item.seat === seat.seat);

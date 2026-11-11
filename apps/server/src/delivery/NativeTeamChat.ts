@@ -150,12 +150,16 @@ export const make = Effect.gen(function* () {
         const followUp = parent.subagents.some(
           (task) => task.teamChat !== undefined && task.teamChat.sourceRunId !== input.runId,
         );
+        // Read-only by default: a participant asks before it changes anything, and
+        // TeamChatReadOnlyReactor declines what it asks.
+        const readOnly = lineup.access === undefined;
+        const access = lineup.access ?? "approval-required";
         const mode = lineup.critique ?? "first";
         const critiqueWanted = mode === "always" || (mode === "first" && !followUp);
         if (initialDone && (critiqueDone || !critiqueWanted)) {
           return {
             ready: true,
-            context: `<team_discussion>\nYou are the orchestrator for ${group}. The native participants have completed independent contributions${critiqueWanted ? " and a critique round" : ""}. Synthesize their evidence and disagreements into a response to the latest user message. Attribute useful insights to their seat/model, acknowledge failed or missing contributions, and distinguish consensus from unresolved disagreement. Do not launch these rounds again.\n\nIndependent contributions:\n${contributions(initial)}${critiqueWanted ? `\n\nCritiques:\n${contributions(critiques)}` : ""}\n</team_discussion>`,
+            context: `<team_discussion>\nYou are the orchestrator for ${group}. The native participants have completed independent contributions${critiqueWanted ? " and a critique round" : ""}. Synthesize their evidence and disagreements into a response to the latest user message. Attribute useful insights to their seat/model, acknowledge failed or missing contributions, and distinguish consensus from unresolved disagreement. Do not launch these rounds again.${readOnly ? " The participants are read-only and have changed nothing. When the user asks for work to be done, do it yourself in this thread under the project's own rules, or say plainly what should be handed to a team that builds." : ""}\n\nIndependent contributions:\n${contributions(initial)}${critiqueWanted ? `\n\nCritiques:\n${contributions(critiques)}` : ""}\n</team_discussion>`,
           };
         }
         const stage = initialDone ? "critique" : "contribution";
@@ -164,7 +168,6 @@ export const make = Effect.gen(function* () {
           (seat) => !current.some((task) => task.teamChat?.seat === seat.seat),
         );
         if (missing.length === 0) return { ready: false, context: "" };
-        const access = lineup.access ?? parent.thread.runtimeMode;
         const available = yield* Effect.forEach(
           roster,
           Effect.fn("NativeTeamChat.preflight")(function* (seat) {
@@ -190,7 +193,9 @@ export const make = Effect.gen(function* () {
               return yield* new NativeTeamChatError({
                 runId: input.runId,
                 reason: "roster",
-                detail: `${seat.seat} cannot join with ${access} access: ${refused} Change the participants' access for this conversation, or leave ${seat.seat} out.`,
+                detail: readOnly
+                  ? `${seat.seat} cannot be held to read-only: ${refused} Leave ${seat.seat} out, or give this conversation's participants full access.`
+                  : `${seat.seat} cannot join with ${access} access: ${refused} Change the participants' access for this conversation, or leave ${seat.seat} out.`,
               });
             }
             return yield* adapters.get(seat.modelSelection.instanceId);
@@ -236,7 +241,11 @@ export const make = Effect.gen(function* () {
             parentNodeId: run.rootNodeId,
             teamChat: { sourceRunId: input.runId, stage, seat: seat.seat },
             title: `${seat.seat} · ${stage}`,
-            task: `Participate as ${seat.role}, seat ${seat.seat}, in ${group}. This is a read-only discussion: do not edit files, commit, push, or delegate. ${
+            task: `Participate as ${seat.role}, seat ${seat.seat}, in ${group}. ${
+              readOnly
+                ? "You are read-only here: anything that would change a file, a branch, a pull request, a board or any other system is declined, even when the user's message asks for the work to be done. Say what should be done and why; the orchestrator acts."
+                : "This is a discussion: do not edit files, commit, push, or delegate unless the user's message asks you to."
+            } ${
               stage === "contribution"
                 ? "Give your independent assessment of the latest user message, with evidence, assumptions, and objections."
                 : "Critique the independent contributions below. Identify errors, disagreements, overlooked alternatives, and evidence that changes your conclusion. Do not merely repeat the other participants."

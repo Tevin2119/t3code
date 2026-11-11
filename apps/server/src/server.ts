@@ -194,6 +194,7 @@ import * as CursorKeychain from "@t3tools/provider-cursor/server/CursorKeychain"
 import * as CursorUsageAccounts from "@t3tools/provider-cursor/server/CursorUsageAccounts";
 import * as UsageService from "./usage/UsageService.ts";
 import * as DeliveryService from "./delivery/DeliveryService.ts";
+import * as TeamChatReadOnlyReactor from "./delivery/TeamChatReadOnlyReactor.ts";
 import * as CodexUsageHistory from "./usage/CodexUsageHistory.ts";
 import * as RuntimeLayer from "./orchestration-v2/runtimeLayer.ts";
 import * as ProjectStore from "./orchestration-v2/ProjectStore.ts";
@@ -664,6 +665,16 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
       yield* service.start();
     }),
   ).pipe(Layer.provide(DelegatedTaskQuestionReactor.layer), Layer.provide(ProjectionStoreV2.layer)),
+  Layer.effectDiscard(
+    Effect.gen(function* () {
+      const service = yield* TeamChatReadOnlyReactor.TeamChatReadOnlyReactor;
+      yield* service.start();
+    }),
+  ).pipe(
+    Layer.provide(TeamChatReadOnlyReactor.layer),
+    Layer.provide(ProjectionStoreV2.layer),
+    Layer.provide(layerDelivery),
+  ),
   ProviderUsageLimitsIngestion.layer,
   layerProviderInstallationRefresh,
   ReplayMarkers.layer,
