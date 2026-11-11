@@ -5,10 +5,13 @@ import {
   type ProviderInstanceId,
 } from "@t3tools/contracts";
 import { createModelSelection } from "@t3tools/shared/model";
+import { useNavigate } from "@tanstack/react-router";
 import { resolveTeamChoice, rolesForHarness, selectableTeams } from "../../lib/delivery";
 import { resolveOrchestratorRoster } from "../../lib/orchestratorChat";
 import { NO_PROVIDER_MODEL_SELECTION, type ProviderInstanceEntry } from "../../providerInstances";
+
 import {
+  useBoardStore,
   useDeliveryDraftStore,
   useDeliveryRead,
   useDraftTeamChoice,
@@ -43,6 +46,12 @@ export function OrchestratorChatSetup(props: {
   const chooseTeam = useOrchestratorDraftStore((state) => state.chooseTeam);
   const chooseLead = useDeliveryDraftStore((state) => state.chooseTeam);
   const read = useDeliveryRead(props.environmentId, "/api/teams");
+  const navigate = useNavigate();
+  const setDeliveryEnvironment = useBoardStore((state) => state.setDeliveryEnvironment);
+  const openProfile = (search: { name: string } | { new: true; from?: string }) => {
+    setDeliveryEnvironment(props.environmentId);
+    void navigate({ to: "/profiles", search });
+  };
   const teams = selectableTeams(read.body);
   const team = teams.find((item) => item.team === draft?.team) ?? null;
   const entries = props.entries.filter((entry) => DELIVERY_HARNESS_BY_DRIVER[entry.driverKind]);
@@ -132,6 +141,20 @@ export function OrchestratorChatSetup(props: {
           ))}
         </SelectPopup>
       </Select>
+      <div className="flex items-center gap-1">
+        {team ? (
+          <Button size="xs" variant="ghost" onClick={() => openProfile({ name: team.team })}>
+            Edit team
+          </Button>
+        ) : null}
+        <Button
+          size="xs"
+          variant="ghost"
+          onClick={() => openProfile({ new: true, ...(team ? { from: team.team } : {}) })}
+        >
+          New team
+        </Button>
+      </div>
       {team && heldRole === null ? (
         <div className="flex flex-col gap-1">
           <Select
@@ -195,7 +218,29 @@ export function OrchestratorChatSetup(props: {
                   })
                 }
               />
-              <span className="min-w-0 flex-1 text-xs">{row.title}</span>
+              <span className="min-w-0 flex-1 text-xs">
+                {row.title}
+                {row.orchestrator ? (
+                  <span className="text-muted-foreground"> · orchestrator</span>
+                ) : null}
+              </span>
+              {!row.orchestrator && row.modelSelection && !row.problem && team ? (
+                <Button
+                  size="xs"
+                  variant="ghost"
+                  aria-label={`Make ${row.title} the orchestrator`}
+                  onClick={() => {
+                    if (!row.modelSelection) return;
+                    props.onLeadChange(row.modelSelection.instanceId, row.modelSelection.model);
+                    chooseLead(props.threadId, props.environmentId, {
+                      team: team.team,
+                      role: row.role,
+                    });
+                  }}
+                >
+                  Lead
+                </Button>
+              ) : null}
               <ProviderModelPicker
                 environmentId={props.environmentId}
                 activeInstanceId={selection.instanceId}

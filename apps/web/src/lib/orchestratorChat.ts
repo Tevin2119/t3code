@@ -86,6 +86,8 @@ export function resolveOrchestratorRoster(input: {
       role: seat.role,
       included,
       modelSelection,
+      /** The seat the orchestrator itself holds. */
+      orchestrator: seat.seat === ownSeat,
       problem,
     };
   });
