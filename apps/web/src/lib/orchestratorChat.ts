@@ -4,7 +4,11 @@ import {
   type ModelSelection,
 } from "@t3tools/contracts";
 import { createModelSelection } from "@t3tools/shared/model";
-import type { ProviderInstanceEntry } from "../providerInstances";
+import {
+  defaultModelOfProviderInstanceEntry,
+  describeUnavailableProviderInstance,
+  type ProviderInstanceEntry,
+} from "../providerInstances";
 import type { DeliveryTeam } from "./delivery";
 import { REASONING_OPTION_BY_DRIVER } from "./deliverySeats";
 
@@ -17,17 +21,29 @@ export function resolveOrchestratorRoster(input: {
   readonly team: DeliveryTeam | null;
   readonly choices: Readonly<Record<string, OrchestratorParticipantChoice>> | undefined;
   readonly entries: ReadonlyArray<ProviderInstanceEntry>;
+  /** The harness and role the orchestrator itself runs as, when known. */
+  readonly orchestrator?: { readonly harness: string | null; readonly role: string | null };
 }) {
+  const harnessOf = (seat: DeliveryTeam["seats"][number]) =>
+    input.team?.settings.find((item) => item.seat === seat.seat)?.now.harness ?? seat.harness;
+  // The orchestrator already speaks for the seat it holds, so that seat sits out unless asked in.
+  const ownSeat = input.team?.seats.find(
+    (seat) =>
+      seat.role === input.orchestrator?.role && harnessOf(seat) === input.orchestrator?.harness,
+  )?.seat;
   const rows = (input.team?.seats ?? []).map((seat) => {
     const settings = input.team?.settings.find((item) => item.seat === seat.seat);
     const choice = input.choices?.[seat.seat];
-    const included = choice?.included ?? settings?.now.active !== "off";
-    const harness = settings?.now.harness ?? seat.harness;
+    const included = choice?.included ?? (settings?.now.active !== "off" && seat.seat !== ownSeat);
+    const harness = harnessOf(seat);
     const candidates = input.entries.filter(
       (entry) => DELIVERY_HARNESS_BY_DRIVER[entry.driverKind] === harness && entry.enabled,
     );
     const configured = candidates.length === 1 ? candidates[0] : undefined;
-    const model = settings?.now.model ?? seat.model;
+    const seatModel = settings?.now.model ?? seat.model;
+    // A seat with no model of its own runs on its provider's default.
+    const model =
+      seatModel ?? (configured ? defaultModelOfProviderInstanceEntry(configured) : undefined);
     const option = configured ? REASONING_OPTION_BY_DRIVER[configured.driverKind] : undefined;
     const modelSelection =
       choice?.modelSelection ??
@@ -41,19 +57,26 @@ export function resolveOrchestratorRoster(input: {
           )
         : null);
     const entry = input.entries.find((item) => item.instanceId === modelSelection?.instanceId);
+    const wayOut = `Choose another provider for ${seat.title}, or leave it out.`;
     const problem = !modelSelection
-      ? `Choose a provider and model for ${seat.title}.`
-      : !entry ||
-          !entry.enabled ||
-          !entry.installed ||
-          !entry.isAvailable ||
-          entry.status !== "ready"
-        ? `${seat.title}'s provider is unavailable.`
-        : !DELIVERY_HARNESS_BY_DRIVER[entry.driverKind]
-          ? `${entry.displayName} does not support team seats.`
-          : !modelSelection.model.trim()
-            ? `Choose a model for ${seat.title}.`
-            : null;
+      ? candidates.length === 0
+        ? `No enabled provider runs ${harness}, which ${seat.title} is set to. ${wayOut}`
+        : candidates.length > 1
+          ? `More than one provider runs ${harness}. Choose the one ${seat.title} uses.`
+          : `Choose a model for ${seat.title}.`
+      : !entry
+        ? `${seat.title}'s provider is unavailable. ${wayOut}`
+        : !entry.enabled || !entry.installed || !entry.isAvailable || entry.status !== "ready"
+          ? `${seat.title}'s provider is unavailable. ${
+              entry.installed || !entry.enabled
+                ? describeUnavailableProviderInstance(entry)
+                : `${entry.displayName} is not installed.`
+            } ${wayOut}`
+          : !DELIVERY_HARNESS_BY_DRIVER[entry.driverKind]
+            ? `${entry.displayName} does not support team seats.`
+            : !modelSelection.model.trim()
+              ? `Choose a model for ${seat.title}.`
+              : null;
     return {
       seat: seat.seat,
       title: seat.title,

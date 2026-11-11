@@ -15,10 +15,16 @@ to keep a large paste editable in the composer instead.
 ## Team conversations and non-code delivery
 
 On web and desktop, open the model picker and select **Orchestrator**. Choose the
-lead's provider and model, a team and lead role, then the participants. Each
-participant needs an explicit provider and model; unavailable providers must be
-changed or excluded before sending. Choose between two and twelve participants
-with different provider/model combinations.
+orchestrator's provider and model, then a team. The team's seats are offered as
+participants, each on the provider and model the team gives it; a seat with no model
+of its own uses its provider's default. Untick a seat to leave it out, or change its
+provider and model for this conversation only.
+
+The orchestrator follows the instructions of the seat its provider holds in the team,
+and that seat sits out as a participant unless you tick it. You are asked for a role
+only when the provider holds no single seat in the team. A seat whose provider cannot
+be used says why: fix the provider in Settings, choose another, or leave the seat out.
+Choose between two and twelve participants with different provider/model combinations.
 
 Sending starts a native T3 team conversation. Participants contribute independently,
 then critique the findings before the lead brings the results together. Their

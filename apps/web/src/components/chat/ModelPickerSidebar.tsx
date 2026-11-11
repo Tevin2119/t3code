@@ -6,25 +6,11 @@ import { ProviderInstanceIcon } from "./ProviderInstanceIcon";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { cn } from "~/lib/utils";
 import {
+  describeUnavailableProviderInstance,
   isProviderInstancePickerReady,
   shouldShowInstanceBadge,
   type ProviderInstanceEntry,
 } from "../../providerInstances";
-
-function describeUnavailableInstance(entry: ProviderInstanceEntry): string {
-  const label = entry.displayName;
-  // An unavailable instance (a driver this build lacks or the policy leaves out) says why instead.
-  if ((!entry.enabled && entry.isAvailable) || entry.status === "disabled") {
-    return `${label}: Disabled in settings.`;
-  }
-  if (entry.status === "ready" && entry.isAvailable) {
-    return label;
-  }
-  const kind =
-    entry.status === "error" ? "Unavailable" : entry.status === "warning" ? "Limited" : "Not ready";
-  const msg = entry.snapshot.message?.trim();
-  return msg ? `${label}: ${kind}. ${msg}` : `${label}: ${kind}.`;
-}
 
 export function modelPickerInstanceTooltip(input: {
   entry: ProviderInstanceEntry;
@@ -36,7 +22,7 @@ export function modelPickerInstanceTooltip(input: {
   return (
     (input.isContextDisabled ? input.contextDisabledReason : null) ??
     (!isProviderInstancePickerReady(input.entry)
-      ? describeUnavailableInstance(input.entry)
+      ? describeUnavailableProviderInstance(input.entry)
       : input.isContextDisabled
         ? (input.disabledInstanceTooltip ?? input.entry.displayName)
         : input.showNewBadge

@@ -5,7 +5,7 @@ import {
   type ProviderInstanceId,
 } from "@t3tools/contracts";
 import { createModelSelection } from "@t3tools/shared/model";
-import { resolveTeamChoice, selectableTeams } from "../../lib/delivery";
+import { resolveTeamChoice, rolesForHarness, selectableTeams } from "../../lib/delivery";
 import { resolveOrchestratorRoster } from "../../lib/orchestratorChat";
 import { NO_PROVIDER_MODEL_SELECTION, type ProviderInstanceEntry } from "../../providerInstances";
 import {
@@ -51,7 +51,17 @@ export function OrchestratorChatSetup(props: {
     team,
     choices: draft?.participantChoices,
     entries: props.entries,
+    orchestrator: {
+      harness: leadEntry ? (DELIVERY_HARNESS_BY_DRIVER[leadEntry.driverKind] ?? null) : null,
+      role: resolved.state === "ready" ? resolved.role : null,
+    },
   });
+  // The role is only a question when the orchestrator's provider holds no one seat in the team.
+  const heldRole =
+    team && leadEntry
+      ? rolesForHarness(team, DELIVERY_HARNESS_BY_DRIVER[leadEntry.driverKind] ?? "").held
+      : null;
+  const roleTitle = (role: string) => team?.roles.find((item) => item.role === role)?.title ?? role;
   const models = new Map(props.models);
   for (const selection of [props.lead, ...roster.rows.map((row) => row.modelSelection)]) {
     if (!selection) continue;
@@ -115,25 +125,41 @@ export function OrchestratorChatSetup(props: {
           ))}
         </SelectPopup>
       </Select>
-      {team ? (
-        <Select
-          value={resolved.state === "ready" ? resolved.role : ""}
-          onValueChange={(value) => {
-            if (typeof value === "string")
-              chooseLead(props.threadId, props.environmentId, { team: team.team, role: value });
-          }}
-        >
-          <SelectTrigger aria-label="Orchestrator role">
-            <SelectValue placeholder="Choose the lead's role" />
-          </SelectTrigger>
-          <SelectPopup>
-            {team.roles.map((role) => (
-              <SelectItem key={role.role} value={role.role}>
-                {role.title}
-              </SelectItem>
-            ))}
-          </SelectPopup>
-        </Select>
+      {team && heldRole === null ? (
+        <div className="flex flex-col gap-1">
+          <Select
+            value={resolved.state === "ready" ? resolved.role : ""}
+            onValueChange={(value) => {
+              if (typeof value === "string")
+                chooseLead(props.threadId, props.environmentId, { team: team.team, role: value });
+            }}
+          >
+            <SelectTrigger aria-label="Orchestrator role">
+              <SelectValue placeholder="Choose the orchestrator's role" />
+            </SelectTrigger>
+            <SelectPopup>
+              {team.roles.map((role) => (
+                <SelectItem key={role.role} value={role.role}>
+                  {role.title}
+                </SelectItem>
+              ))}
+            </SelectPopup>
+          </Select>
+          <p className="text-xs text-muted-foreground">
+            {leadEntry?.displayName ?? "This provider"} holds no single seat in this team, so choose
+            which role's instructions the orchestrator follows.
+          </p>
+        </div>
+      ) : null}
+      {team && heldRole !== null && resolved.state === "ready" ? (
+        <p className="text-xs text-muted-foreground">
+          The orchestrator follows the team's {roleTitle(resolved.role)} instructions.
+        </p>
+      ) : null}
+      {resolved.state === "blocked" ? (
+        <p role="alert" className="text-xs text-warning">
+          {resolved.why}
+        </p>
       ) : null}
       <div className="flex items-center justify-between gap-2">
         <span className="text-xs font-medium">Participants</span>

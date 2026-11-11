@@ -138,3 +138,65 @@ it("holds a changed roster instead of sending stale seats or a single remaining 
       .configuration,
   ).toBeNull();
 });
+
+it("gives a seat with no model its provider's default, and leaves out the orchestrator's own seat", () => {
+  const input = setup();
+  const team = parseTeams([
+    {
+      team: "research",
+      available: true,
+      seats: [
+        ...input.team.seats,
+        { seat: "checker", title: "Checker", role: "checker", harness: "kimi", available: true },
+      ],
+      settings: input.team.settings,
+    },
+  ])[0]!;
+  const entries = [
+    ...input.entries,
+    ...deriveProviderInstanceEntries([
+      {
+        ...provider("kimi"),
+        models: [
+          { slug: "kimi-other", name: "Other", isCustom: false, capabilities: null },
+          { slug: "kimi-main", name: "Main", isCustom: false, isDefault: true, capabilities: null },
+        ],
+      },
+    ]),
+  ];
+  const result = resolveOrchestratorRoster({
+    team,
+    entries,
+    choices: undefined,
+    orchestrator: { harness: "codex", role: "reviewer" },
+  });
+  expect(result.problem).toBeNull();
+  expect(result.configuration?.participants.map((seat) => seat.seat)).toEqual(["scout", "checker"]);
+  expect(result.configuration?.participants[1]?.modelSelection).toEqual({
+    instanceId: "kimi",
+    model: "kimi-main",
+  });
+  // Asked back in, the orchestrator's seat takes part again.
+  expect(
+    resolveOrchestratorRoster({
+      team,
+      entries,
+      choices: { critic: { included: true } },
+      orchestrator: { harness: "codex", role: "reviewer" },
+    }).configuration?.participants,
+  ).toHaveLength(3);
+});
+
+it("says why a seat's provider cannot be used and what to do about it", () => {
+  const input = setup();
+  const entries = deriveProviderInstanceEntries([
+    { ...provider("claudeAgent"), status: "warning", message: "It did not list any models yet." },
+    provider("codex"),
+  ]);
+  const problem = resolveOrchestratorRoster({ ...input, entries }).rows[0]?.problem;
+  expect(problem).toContain("It did not list any models yet.");
+  expect(problem).toContain("leave it out");
+  expect(
+    resolveOrchestratorRoster({ ...input, entries: input.entries.slice(1) }).rows[0]?.problem,
+  ).toContain("No enabled provider runs claude");
+});
