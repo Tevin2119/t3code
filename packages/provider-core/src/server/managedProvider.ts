@@ -35,6 +35,8 @@ function withUsageLimits(
   return usageLimits ? { ...rest, usageLimits } : rest;
 }
 
+const STARTUP_RECHECK_DELAYS = ["30 seconds", "90 seconds", "3 minutes"] as const;
+
 export const makeManagedServerProvider = Effect.fn("makeManagedServerProvider")(function* <
   Settings,
 >(input: {
@@ -362,8 +364,25 @@ export const makeManagedServerProvider = Effect.fn("makeManagedServerProvider")(
     ),
   ).pipe(Effect.forkScoped);
 
+  // The first check runs while the server starts, beside every other provider's, and can time
+  // out on a provider that is fine. Nobody may be watching to ask again, so ask a few times.
   yield* applySnapshot(initialSettings, { forceRefresh: true }).pipe(
     Effect.ignoreCause({ log: true }),
+    Effect.andThen(
+      Effect.forEach(
+        STARTUP_RECHECK_DELAYS,
+        (delay) =>
+          Effect.sleep(delay).pipe(
+            Effect.andThen(Ref.get(snapshotStateRef)),
+            Effect.flatMap(({ snapshot }) =>
+              snapshot.enabled && snapshot.status !== "ready"
+                ? refreshSnapshot().pipe(Effect.ignoreCause({ log: true }))
+                : Effect.void,
+            ),
+          ),
+        { discard: true },
+      ),
+    ),
     Effect.forkScoped,
   );
 

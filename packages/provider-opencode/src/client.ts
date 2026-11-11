@@ -5,7 +5,7 @@ import { OpenCodeSettings } from "./settings.ts";
 
 export const openCodeClient = defineProviderClient({
   driverKind: ProviderDriverKind.make("opencode"),
-  label: "OpenCode",
+  label: "OpenCode 2",
   acpRegistryAgentIds: ["opencode", "opencode-v2"],
   settingsSchema: OpenCodeSettings,
   icon: {

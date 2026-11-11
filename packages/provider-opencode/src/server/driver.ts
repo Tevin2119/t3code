@@ -181,7 +181,7 @@ export const OpenCodeDriver: ProviderDriver<
 > = {
   driverKind: DRIVER_KIND,
   metadata: {
-    displayName: "OpenCode",
+    displayName: "OpenCode 2",
     supportsMultipleInstances: true,
   },
   configSchema: OpenCodeSettings,
