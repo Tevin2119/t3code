@@ -29,16 +29,18 @@ role of the team; untick the team's own seats to run a lineup that is entirely y
 Nothing is saved to the team. Use **Lead** beside a participant to make that seat the orchestrator instead. **Edit team**
 opens the team's profile, where its seats and defaults are kept, and **New team** starts
 a profile of your own from the chosen team.
-Choose between two and twelve participants with different provider/model combinations.
+Choose between two and twelve participants. Two seats may use the same provider and model.
 
 Sending starts a native T3 team conversation. Participants contribute independently,
 then critique the findings before the lead brings the results together. The critique runs on the first message only unless you set **Critique round** to every message or never; follow-ups always get fresh contributions. Their
 threads and results stay linked to the conversation. Follow-up messages use the
 same team with the conversation's context. Participants are
-asked to discuss, not to change files, and run with the conversation's own access
-unless you set **Participants' access**: with full access none of them stops to ask.
-A provider that cannot run in the chosen access is refused by name rather than run
-in another. The lead uses the project's folder and your selected access
+read-only: they read and discuss, anything that would change a file, a branch or a
+board is declined without asking you, and only the orchestrator acts. Set
+**Participants' access** to full access when you want the work done by the
+participants in the conversation itself, or to ask you before each change. A provider
+that cannot be held to read-only says so in the setup: leave it out or use full access.
+The lead uses the project's folder and your selected access
 settings. Use **Use ordinary chat** to leave Orchestrator before starting.
 
 Choose **No team** in the setup to run a conversation with participants of your own

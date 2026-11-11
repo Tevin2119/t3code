@@ -375,7 +375,8 @@ export const makeManagedServerProvider = Effect.fn("makeManagedServerProvider")(
           Effect.sleep(delay).pipe(
             Effect.andThen(Ref.get(snapshotStateRef)),
             Effect.flatMap(({ snapshot }) =>
-              snapshot.enabled && snapshot.status !== "ready"
+              // A provider that says not to ask again (a rejected password, say) is left alone.
+              snapshot.enabled && snapshot.status !== "ready" && needsProviderRefresh(snapshot)
                 ? refreshSnapshot().pipe(Effect.ignoreCause({ log: true }))
                 : Effect.void,
             ),

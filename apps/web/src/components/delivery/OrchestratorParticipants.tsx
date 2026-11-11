@@ -23,8 +23,8 @@ const CRITIQUE_ROUNDS = [
 ];
 
 const PARTICIPANT_ACCESS = [
-  { value: "thread", label: "Same as this conversation" },
-  { value: "approval-required", label: "Ask before changes" },
+  { value: "read-only", label: "Read-only" },
+  { value: "approval-required", label: "Ask me before changes" },
   { value: "full-access", label: "Full access" },
 ];
 
@@ -256,11 +256,11 @@ export function OrchestratorParticipants(props: {
         <span className="text-xs font-medium">Participants' access</span>
         <Select
           items={PARTICIPANT_ACCESS}
-          value={value.access ?? "thread"}
+          value={value.access ?? "read-only"}
           onValueChange={(next) => {
             if (next === "approval-required" || next === "full-access")
               props.onChange({ access: next });
-            else if (next === "thread") props.onChange({ access: undefined });
+            else if (next === "read-only") props.onChange({ access: undefined });
           }}
         >
           <SelectTrigger aria-label="Participants' access">
@@ -275,9 +275,9 @@ export function OrchestratorParticipants(props: {
           </SelectPopup>
         </Select>
         <p className="text-xs text-muted-foreground">
-          Participants are asked to discuss, not to change files. With full access none of them
-          stops to ask; a provider that cannot run in the chosen mode is refused, not run in
-          another.
+          Read-only participants discuss and cannot change anything, so only the orchestrator acts.
+          With full access they can edit, commit, push and post like the orchestrator: choose it
+          when you want the work done in this conversation.
         </p>
       </div>
       {roster.problem ? (

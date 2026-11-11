@@ -283,28 +283,36 @@ it.effect("critiques on the first message only unless the conversation asks othe
   }),
 );
 
-it.effect("runs participants with the conversation's access unless one is chosen", () =>
+it.effect("holds participants to read-only unless the conversation gives them more", () =>
   Effect.gen(function* () {
-    const inherited = setup({ fullAccessOnly: true });
-    yield* (yield* inherited.service).prepareTurn({ threadId, runId });
-    expect([...inherited.admissions.values()].map((command) => command.runtimeMode)).toEqual([
-      "full-access",
-      "full-access",
-    ]);
+    // Whatever the conversation's own access is, a participant asks before it changes anything.
+    const readOnly = setup({ threadAccess: "full-access" });
+    yield* (yield* readOnly.service).prepareTurn({ threadId, runId });
+    for (const command of readOnly.admissions.values()) {
+      expect(command.runtimeMode).toBe("approval-required");
+      expect(command.task).toContain("You are read-only here");
+    }
 
-    const chosen = setup({ access: "approval-required" });
+    const chosen = setup({ access: "full-access", fullAccessOnly: true });
     yield* (yield* chosen.service).prepareTurn({ threadId, runId });
-    expect([...chosen.admissions.values()].map((command) => command.runtimeMode)).toEqual([
-      "approval-required",
-      "approval-required",
-    ]);
+    for (const command of chosen.admissions.values()) {
+      expect(command.runtimeMode).toBe("full-access");
+      expect(command.task).not.toContain("You are read-only here");
+    }
+
+    const unheld = setup({ fullAccessOnly: true });
+    const unheldError = yield* (yield* unheld.service)
+      .prepareTurn({ threadId, runId })
+      .pipe(Effect.flip);
+    expect(unheldError.message).toContain("researcher cannot be held to read-only");
+    expect(unheldError.message).toContain("It cannot ask.");
+    expect(unheld.admissions.size).toBe(0);
 
     const refused = setup({ access: "approval-required", fullAccessOnly: true });
     const error = yield* (yield* refused.service)
       .prepareTurn({ threadId, runId })
       .pipe(Effect.flip);
     expect(error.message).toContain("researcher cannot join with approval-required access");
-    expect(error.message).toContain("It cannot ask.");
     expect(refused.admissions.size).toBe(0);
   }),
 );

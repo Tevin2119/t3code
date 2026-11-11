@@ -450,16 +450,12 @@ const make = Effect.gen(function* () {
   const checkParticipants = (participants: DeliveryOrchestrationConfig["participants"]) =>
     participants.length < 2 ||
     participants.length > 12 ||
-    new Set(participants.map((seat) => seat.seat)).size !== participants.length ||
-    new Set(
-      participants.map((seat) =>
-        JSON.stringify([seat.modelSelection.instanceId, seat.modelSelection.model]),
-      ),
-    ).size !== participants.length
+    // Two seats may run the same model: a team's roles differ, not only its models.
+    new Set(participants.map((seat) => seat.seat)).size !== participants.length
       ? Effect.fail(
           new DeliveryError({
             reason: "invalid",
-            detail: "Choose between two and twelve distinct participants for the team discussion.",
+            detail: "Choose between two and twelve participants for the team discussion.",
           }),
         )
       : Effect.void;
