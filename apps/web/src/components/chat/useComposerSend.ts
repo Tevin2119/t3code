@@ -932,6 +932,7 @@ export function useComposerSend(input: ComposerSendInput) {
           choices: orchestratorDraft.participantChoices,
           entries: providerInstanceEntries,
           critique: orchestratorDraft.critique,
+          extras: orchestratorDraft.extraParticipants,
           orchestrator: {
             harness: ctxSelectedProvider
               ? (DELIVERY_HARNESS_BY_DRIVER[ctxSelectedProvider] ?? null)

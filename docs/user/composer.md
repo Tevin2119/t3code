@@ -24,7 +24,9 @@ The orchestrator follows the instructions of the seat its provider holds in the 
 and that seat sits out as a participant unless you tick it. You are asked for a role
 only when the provider holds no single seat in the team. A seat whose provider cannot
 be used says why: fix the provider in Settings, choose another, or leave the seat out.
-Use **Lead** beside a participant to make that seat the orchestrator instead. **Edit team**
+**Add participant** brings in any provider and model for this conversation only, in a
+role of the team; untick the team's own seats to run a lineup that is entirely yours.
+Nothing is saved to the team. Use **Lead** beside a participant to make that seat the orchestrator instead. **Edit team**
 opens the team's profile, where its seats and defaults are kept, and **New team** starts
 a profile of your own from the chosen team.
 Choose between two and twelve participants with different provider/model combinations.

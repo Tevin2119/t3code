@@ -17,6 +17,13 @@ export interface OrchestratorParticipantChoice {
   readonly modelSelection?: ModelSelection;
 }
 
+/** A participant added for one conversation: any provider and model, in one of the team's roles. */
+export interface OrchestratorExtraParticipant {
+  readonly id: string;
+  readonly role: string;
+  readonly modelSelection?: ModelSelection;
+}
+
 export type OrchestratorCritique = NonNullable<DeliveryOrchestrationConfig["critique"]>;
 
 export function resolveOrchestratorRoster(input: {
@@ -24,6 +31,7 @@ export function resolveOrchestratorRoster(input: {
   readonly choices: Readonly<Record<string, OrchestratorParticipantChoice>> | undefined;
   readonly entries: ReadonlyArray<ProviderInstanceEntry>;
   readonly critique?: OrchestratorCritique | undefined;
+  readonly extras?: ReadonlyArray<OrchestratorExtraParticipant> | undefined;
   /** The harness and role the orchestrator itself runs as, when known. */
   readonly orchestrator?: { readonly harness: string | null; readonly role: string | null };
 }) {
@@ -34,7 +42,24 @@ export function resolveOrchestratorRoster(input: {
     (seat) =>
       seat.role === input.orchestrator?.role && harnessOf(seat) === input.orchestrator?.harness,
   )?.seat;
-  const rows = (input.team?.seats ?? []).map((seat) => {
+  const selectionProblem = (title: string, modelSelection: ModelSelection) => {
+    const entry = input.entries.find((item) => item.instanceId === modelSelection.instanceId);
+    const wayOut = `Choose another provider for ${title}, or leave it out.`;
+    return !entry
+      ? `${title}'s provider is unavailable. ${wayOut}`
+      : !entry.enabled || !entry.installed || !entry.isAvailable || entry.status !== "ready"
+        ? `${title}'s provider is unavailable. ${
+            entry.installed || !entry.enabled
+              ? describeUnavailableProviderInstance(entry)
+              : `${entry.displayName} is not installed.`
+          } ${wayOut}`
+        : !DELIVERY_HARNESS_BY_DRIVER[entry.driverKind]
+          ? `${entry.displayName} does not support team seats.`
+          : !modelSelection.model.trim()
+            ? `Choose a model for ${title}.`
+            : null;
+  };
+  const teamRow = (seat: DeliveryTeam["seats"][number]) => {
     const settings = input.team?.settings.find((item) => item.seat === seat.seat);
     const choice = input.choices?.[seat.seat];
     const included = choice?.included ?? (settings?.now.active !== "off" && seat.seat !== ownSeat);
@@ -59,27 +84,13 @@ export function resolveOrchestratorRoster(input: {
               : undefined,
           )
         : null);
-    const entry = input.entries.find((item) => item.instanceId === modelSelection?.instanceId);
-    const wayOut = `Choose another provider for ${seat.title}, or leave it out.`;
     const problem = !modelSelection
       ? candidates.length === 0
-        ? `No enabled provider runs ${harness}, which ${seat.title} is set to. ${wayOut}`
+        ? `No enabled provider runs ${harness}, which ${seat.title} is set to. Choose another provider for ${seat.title}, or leave it out.`
         : candidates.length > 1
           ? `More than one provider runs ${harness}. Choose the one ${seat.title} uses.`
           : `Choose a model for ${seat.title}.`
-      : !entry
-        ? `${seat.title}'s provider is unavailable. ${wayOut}`
-        : !entry.enabled || !entry.installed || !entry.isAvailable || entry.status !== "ready"
-          ? `${seat.title}'s provider is unavailable. ${
-              entry.installed || !entry.enabled
-                ? describeUnavailableProviderInstance(entry)
-                : `${entry.displayName} is not installed.`
-            } ${wayOut}`
-          : !DELIVERY_HARNESS_BY_DRIVER[entry.driverKind]
-            ? `${entry.displayName} does not support team seats.`
-            : !modelSelection.model.trim()
-              ? `Choose a model for ${seat.title}.`
-              : null;
+      : selectionProblem(seat.title, modelSelection);
     return {
       seat: seat.seat,
       title: seat.title,
@@ -88,12 +99,34 @@ export function resolveOrchestratorRoster(input: {
       modelSelection,
       /** The seat the orchestrator itself holds. */
       orchestrator: seat.seat === ownSeat,
+      extra: false,
       problem,
     };
-  });
+  };
+  const teamRows = (input.team?.seats ?? []).map(teamRow);
+  const rows = [
+    ...teamRows,
+    ...(input.extras ?? []).map((extra, index) => {
+      const title = `Extra participant ${index + 1}`;
+      return {
+        seat: extra.id,
+        title,
+        role: extra.role,
+        included: true,
+        modelSelection: extra.modelSelection ?? null,
+        orchestrator: false,
+        extra: true,
+        problem: !input.team?.roles.some((role) => role.role === extra.role)
+          ? `Choose a role for ${title}.`
+          : !extra.modelSelection
+            ? `Choose a provider and model for ${title}.`
+            : selectionProblem(title, extra.modelSelection),
+      };
+    }),
+  ];
   const selected = rows.filter((row) => row.included);
   const stale = Object.keys(input.choices ?? {}).some(
-    (seat) => !rows.some((row) => row.seat === seat),
+    (seat) => !teamRows.some((row) => row.seat === seat),
   );
   const identities = new Set(
     selected.map((row) => `${row.modelSelection?.instanceId}:${row.modelSelection?.model}`),

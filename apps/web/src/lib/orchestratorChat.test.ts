@@ -205,3 +205,42 @@ it("says why a seat's provider cannot be used and what to do about it", () => {
     resolveOrchestratorRoster({ ...input, entries: input.entries.slice(1) }).rows[0]?.problem,
   ).toContain("No enabled provider runs claude");
 });
+
+it("adds participants for one conversation, in a role of the team, beside or instead of its seats", () => {
+  const input = setup();
+  const team = parseTeams([
+    {
+      team: "research",
+      available: true,
+      seats: input.team.seats,
+      settings: input.team.settings,
+      roles: [
+        { role: "researcher", title: "Researcher" },
+        { role: "reviewer", title: "Reviewer" },
+      ],
+    },
+  ])[0]!;
+  const extra = {
+    id: "custom-1",
+    role: "reviewer",
+    modelSelection: createModelSelection(ProviderInstanceId.make("codex"), "another-codex"),
+  };
+  const result = resolveOrchestratorRoster({
+    ...input,
+    team,
+    choices: { critic: { included: false } },
+    extras: [extra],
+  });
+  expect(result.problem).toBeNull();
+  expect(result.configuration?.participants.map((seat) => [seat.seat, seat.role])).toEqual([
+    ["scout", "researcher"],
+    ["custom-1", "reviewer"],
+  ]);
+  expect(
+    resolveOrchestratorRoster({ ...input, team, extras: [{ id: "custom-2", role: "reviewer" }] })
+      .problem,
+  ).toMatch(/Choose a provider and model for Extra participant 1/);
+  expect(
+    resolveOrchestratorRoster({ ...input, team, extras: [{ ...extra, role: "gone" }] }).problem,
+  ).toMatch(/Choose a role/);
+});
