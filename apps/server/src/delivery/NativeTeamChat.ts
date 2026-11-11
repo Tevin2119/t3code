@@ -34,7 +34,7 @@ export class NativeTeamChatError extends Schema.TaggedError<NativeTeamChatError>
   override get message(): string {
     if (this.detail !== undefined) return this.detail;
     return this.reason === "roster"
-      ? "Choose between two and twelve distinct team participants with available providers."
+      ? "Choose between two and twelve team participants with available providers."
       : "The native team discussion could not advance. Its recorded contributions are preserved.";
   }
 }
@@ -91,12 +91,7 @@ export const make = Effect.gen(function* () {
         if (
           roster.length < 2 ||
           roster.length > 12 ||
-          new Set(roster.map((seat) => seat.seat)).size !== roster.length ||
-          new Set(
-            roster.map((seat) =>
-              JSON.stringify([seat.modelSelection.instanceId, seat.modelSelection.model]),
-            ),
-          ).size !== roster.length
+          new Set(roster.map((seat) => seat.seat)).size !== roster.length
         ) {
           return yield* new NativeTeamChatError({ runId: input.runId, reason: "roster" });
         }

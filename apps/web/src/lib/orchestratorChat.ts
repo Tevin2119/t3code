@@ -144,9 +144,6 @@ export function resolveOrchestratorRoster(input: {
   const stale = Object.keys(input.choices ?? {}).some(
     (seat) => !teamRows.some((row) => row.seat === seat),
   );
-  const identities = new Set(
-    selected.map((row) => `${row.modelSelection?.instanceId}:${row.modelSelection?.model}`),
-  );
   const problem =
     !input.team && !input.teamless
       ? "Choose a team for this conversation."
@@ -154,10 +151,7 @@ export function resolveOrchestratorRoster(input: {
         ? "The team's seats changed. Use Reset to team to refresh its participants."
         : selected.length < 2 || selected.length > 12
           ? "Choose between 2 and 12 participants."
-          : (selected.find((row) => row.problem)?.problem ??
-            (identities.size !== selected.length
-              ? "Choose a different provider or model for each participant."
-              : null));
+          : (selected.find((row) => row.problem)?.problem ?? null);
   const configuration: DeliveryOrchestrationConfig | null = problem
     ? null
     : {

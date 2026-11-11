@@ -136,11 +136,12 @@ it("holds a changed roster instead of sending stale seats or a single remaining 
   expect(
     resolveOrchestratorRoster({ ...input, choices: { scout: { included: false } } }).configuration,
   ).toBeNull();
+  // Two seats on the same provider and model are two roles of one team, and may both join.
   const duplicate = createModelSelection(ProviderInstanceId.make("codex"), "custom-codex");
   expect(
     resolveOrchestratorRoster({ ...input, choices: { scout: { modelSelection: duplicate } } })
-      .configuration,
-  ).toBeNull();
+      .configuration?.participants,
+  ).toHaveLength(2);
 });
 
 it("gives a seat with no model its provider's default, and leaves out the orchestrator's own seat", () => {

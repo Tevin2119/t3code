@@ -29,7 +29,7 @@ role of the team; untick the team's own seats to run a lineup that is entirely y
 Nothing is saved to the team. Use **Lead** beside a participant to make that seat the orchestrator instead. **Edit team**
 opens the team's profile, where its seats and defaults are kept, and **New team** starts
 a profile of your own from the chosen team.
-Choose between two and twelve participants with different provider/model combinations.
+Choose between two and twelve participants. Two seats may use the same provider and model.
 
 Sending starts a native T3 team conversation. Participants contribute independently,
 then critique the findings before the lead brings the results together. The critique runs on the first message only unless you set **Critique round** to every message or never; follow-ups always get fresh contributions. Their
