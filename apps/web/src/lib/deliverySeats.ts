@@ -24,7 +24,7 @@ export const driverOfHarness = (harness: string): string | null =>
 const HARNESS_LABEL: Readonly<Record<string, string>> = {
   claude: "Claude",
   codex: "Codex",
-  opencode: "OpenCode",
+  opencode: "OpenCode 2",
   pi: "Pi",
   kimi: "Kimi",
   dsh: "DeepSeek",

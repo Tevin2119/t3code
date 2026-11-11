@@ -27,7 +27,7 @@ export const PROVIDER_LABEL: Record<UsageProviderKind, string> = {
   grok: "Grok Build",
   deepseek: "DeepSeek",
   pi: "Pi",
-  opencode: "OpenCode",
+  opencode: "OpenCode 2",
   kimi: "Kimi Code",
   hermes: "Hermes",
   cursor: "Cursor",

@@ -26,7 +26,7 @@ export const PROVIDER_PRESENTATION = {
   },
   cursor: { label: "Cursor", color: "#8b8b8b", driverKind: ProviderDriverKind.make("cursor") },
   opencode: {
-    label: "OpenCode",
+    label: "OpenCode 2",
     color: "#5b9bbd",
     driverKind: ProviderDriverKind.make("opencode"),
   },

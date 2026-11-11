@@ -328,6 +328,38 @@ describe("makeManagedServerProvider", () => {
     ),
   );
 
+  it.effect("asks again after a first check that failed, with nobody watching", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const checkCalls = yield* Ref.make(0);
+        const initialCheckDone = yield* Deferred.make<void>();
+        const failedSnapshot = { ...refreshedSnapshot, status: "warning" as const };
+        const provider = yield* makeManagedServerProvider<TestSettings>({
+          resolveMaintenance: () => Effect.succeed(maintenanceCapabilities),
+          getSettings: Effect.succeed({ enabled: true }),
+          streamSettings: Stream.empty,
+          haveSettingsChanged: (previous, next) => previous.enabled !== next.enabled,
+          initialSnapshot: () => Effect.succeed(initialSnapshot),
+          checkProvider: Ref.updateAndGet(checkCalls, (count) => count + 1).pipe(
+            Effect.tap(() => Deferred.succeed(initialCheckDone, undefined).pipe(Effect.ignore)),
+            Effect.map((count) => (count === 1 ? failedSnapshot : refreshedSnapshot)),
+          ),
+        });
+
+        yield* Deferred.await(initialCheckDone);
+        yield* TestClock.adjust("30 seconds");
+        assert.strictEqual(yield* Ref.get(checkCalls), 2);
+        assert.strictEqual((yield* provider.getSnapshot).status, "ready");
+        yield* TestClock.adjust("10 minutes");
+        assert.strictEqual(yield* Ref.get(checkCalls), 2);
+      }),
+    ).pipe(
+      Effect.provide(
+        Layer.mergeAll(layerProviderHost({ runBackgroundWork: false }), TestClock.layer()),
+      ),
+    ),
+  );
+
   it.effect("stops periodic recovery checks once the snapshot is ready", () =>
     Effect.scoped(
       Effect.gen(function* () {

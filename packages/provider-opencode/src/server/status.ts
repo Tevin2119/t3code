@@ -28,7 +28,7 @@ import * as OpenCodeServerOwner from "./OpenCodeServerOwner.ts";
 
 const OPENCODE_PRESENTATION = {
   runtimeModes: OPENCODE_RUNTIME_MODES,
-  displayName: "OpenCode",
+  displayName: "OpenCode 2",
   showInteractionModeToggle: false,
 } as const;
 
