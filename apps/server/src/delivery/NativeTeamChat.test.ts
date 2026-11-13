@@ -290,6 +290,7 @@ it.effect("holds participants to read-only unless the conversation gives them mo
     yield* (yield* readOnly.service).prepareTurn({ threadId, runId });
     for (const command of readOnly.admissions.values()) {
       expect(command.runtimeMode).toBe("approval-required");
+      expect(command.interactionMode).toBe("plan");
       expect(command.task).toContain("You are read-only here");
     }
 
@@ -297,6 +298,7 @@ it.effect("holds participants to read-only unless the conversation gives them mo
     yield* (yield* chosen.service).prepareTurn({ threadId, runId });
     for (const command of chosen.admissions.values()) {
       expect(command.runtimeMode).toBe("full-access");
+      expect(command.interactionMode).toBe("default");
       expect(command.task).not.toContain("You are read-only here");
     }
 

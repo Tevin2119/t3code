@@ -247,7 +247,8 @@ export const make = Effect.gen(function* () {
             }\n\nConversation:\n${conversation}${attached}${stage === "critique" ? `\n\nIndependent contributions:\n${contributions(initial)}` : ""}`,
             modelSelection: seat.modelSelection,
             runtimeMode: access,
-            interactionMode: "plan",
+            // Plan mode outranks the access a conversation gives, so only read-only seats get it.
+            interactionMode: readOnly ? "plan" : "default",
             completionWake: "settled_only",
           });
         }
