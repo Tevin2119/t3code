@@ -113,9 +113,11 @@ function pendingSubagentRequestsByThread(
     firstParentId: ThreadId | null,
     request: PendingSubagentRequest,
     seen: Set<ThreadId>,
+    /** No agent started this child, so none is waiting to answer what it asks. */
+    uncoordinated = false,
   ) => {
     // The coordinator answers child questions; only approvals need user attention.
-    if (request === "user_input") return;
+    if (request === "user_input" && !uncoordinated) return;
     byId ??= new Map(threads.map((thread) => [thread.id, thread] as const));
     let parentId = firstParentId;
     while (parentId !== null && !seen.has(parentId)) {
@@ -139,7 +141,9 @@ function pendingSubagentRequestsByThread(
     }
     if (child.lineage.relationshipToParent !== "subagent") continue;
     const request = subagentRequest(child);
-    if (request !== null) flag(parentId, request, new Set([child.id]));
+    if (request !== null) {
+      flag(parentId, request, new Set([child.id]), child.creationSource === "server");
+    }
   }
   for (const task of delegated) flag(task.parentThreadId, task.request, new Set());
   return requests.size === 0 ? EMPTY_SUBAGENT_REQUESTS : requests;
