@@ -702,6 +702,97 @@ describe("DeliveryService", () => {
     }).pipe(Effect.provide(shared("t3-delivery-restart-")));
   });
 
+  it.effect("remembers a cleared team so one click brings it back", () => {
+    const fake = engine();
+    const teamThread = threadId("thread-remembered");
+    const solo = threadId("thread-never-team");
+    const bound = threadId("thread-bound-remembered");
+    const lead = createModelSelection(ProviderInstanceId.make("claudeAgent"), "claude-fable-5-1");
+    const orchestration = {
+      participants: [
+        {
+          seat: "developer",
+          role: "lead-developer",
+          modelSelection: createModelSelection(
+            ProviderInstanceId.make("claudeAgent"),
+            "claude-model",
+          ),
+        },
+        {
+          seat: "reviewer",
+          role: "reviewer",
+          modelSelection: createModelSelection(ProviderInstanceId.make("codex"), "codex-model"),
+        },
+      ],
+    };
+    return Effect.gen(function* () {
+      const config = yield* ServerConfig.ServerConfig;
+      const start = <A, E>(body: Effect.Effect<A, E, DeliveryService.DeliveryService>) =>
+        body.pipe(Effect.provide(layer(fake, { prefix: "unused-", config })));
+      yield* start(
+        Effect.gen(function* () {
+          const delivery = yield* DeliveryService.DeliveryService;
+          // Clearing a lineup remembers it, the lead model included.
+          yield* delivery.setThreadLineup({ threadId: teamThread, orchestration });
+          const cleared = yield* delivery.setThreadLineup({
+            threadId: teamThread,
+            orchestration: null,
+            rememberLeadModelSelection: lead,
+          });
+          expect(cleared.lineup).toBeUndefined();
+          expect(cleared.rememberedLineup).toEqual({
+            orchestration,
+            leadModelSelection: lead,
+          });
+          // Bringing the team back restores it and drops the memory.
+          const restored = yield* delivery.setThreadLineup({
+            threadId: teamThread,
+            orchestration,
+          });
+          expect(restored.lineup).toEqual(orchestration);
+          expect(restored.rememberedLineup).toBeUndefined();
+          // Clearing again replaces the memory.
+          yield* delivery.setThreadLineup({ threadId: teamThread, orchestration: null });
+          expect((yield* delivery.threadState(teamThread)).rememberedLineup?.orchestration).toEqual(
+            orchestration,
+          );
+          // A conversation that was never a team has nothing to bring back.
+          const soloCleared = yield* delivery.setThreadLineup({
+            threadId: solo,
+            orchestration: null,
+          });
+          expect(soloCleared.rememberedLineup).toBeUndefined();
+          // A bound thread's pinned lineup is what gets remembered.
+          yield* delivery.bindThread({
+            threadId: bound,
+            team: "rnd",
+            driver: "claudeAgent",
+            cwd: REPO,
+            orchestration,
+          });
+          const boundCleared = yield* delivery.setThreadLineup({
+            threadId: bound,
+            orchestration: null,
+          });
+          expect(boundCleared.lineup).toBeUndefined();
+          expect(boundCleared.rememberedLineup?.orchestration).toEqual(orchestration);
+        }),
+      );
+      yield* start(
+        Effect.gen(function* () {
+          const delivery = yield* DeliveryService.DeliveryService;
+          // The memory survives a restart.
+          const teamState = yield* delivery.threadState(teamThread);
+          expect(teamState.rememberedLineup?.orchestration).toEqual(orchestration);
+          expect(teamState.rememberedLineup?.leadModelSelection).toBeUndefined();
+          expect((yield* delivery.threadState(bound)).rememberedLineup?.orchestration).toEqual(
+            orchestration,
+          );
+        }),
+      );
+    }).pipe(Effect.provide(shared("t3-delivery-remembered-")));
+  });
+
   it.effect(
     "holds every thread when the record of bindings is damaged, and leaves the file",
     () => {
