@@ -139,7 +139,9 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
   const [shownFor, setShownFor] = useState(isMenuOpen);
   if (shownFor !== isMenuOpen) {
     setShownFor(isMenuOpen);
-    if (isMenuOpen) setTeamShown(orchestratorActive);
+    if (isMenuOpen) {
+      setTeamShown(orchestratorActive);
+    }
   }
   const searchInputRef = useRef<HTMLInputElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);

@@ -53,6 +53,10 @@ export function OrchestratorParticipants(props: {
     readonly role: string;
     readonly modelSelection: ModelSelection;
   }) => void;
+  /** Starts a single chat with one participant's harness and model. */
+  readonly onFocus?:
+    | ((row: { readonly role: string; readonly modelSelection: ModelSelection }) => void)
+    | undefined;
 }) {
   const { team, value, roster } = props;
   const entries = props.entries.filter((entry) => DELIVERY_HARNESS_BY_DRIVER[entry.driverKind]);
@@ -139,6 +143,20 @@ export function OrchestratorParticipants(props: {
                   }}
                 >
                   Lead
+                </Button>
+              ) : null}
+              {props.onFocus && !row.orchestrator && row.modelSelection && !row.problem ? (
+                <Button
+                  size="xs"
+                  variant="ghost"
+                  aria-label={`Chat 1:1 with ${row.title}`}
+                  data-orchestrator-chat-one-to-one={row.seat}
+                  onClick={() => {
+                    if (row.modelSelection)
+                      props.onFocus?.({ role: row.role, modelSelection: row.modelSelection });
+                  }}
+                >
+                  Chat 1:1
                 </Button>
               ) : null}
               <ProviderModelPicker

@@ -160,6 +160,9 @@ import { type LegendListRef } from "@legendapp/list/react";
 import { useWorkspaceMutationRefresh } from "../hooks/useWorkspaceMutationRefresh";
 import { DEFAULT_INTERACTION_MODE, type ChatMessage } from "../types";
 import { buildThreadRouteParams } from "../threadRoutes";
+import { planModelSwitchFork } from "../lib/switchThreadModel";
+import { newThreadId } from "~/lib/utils";
+import { waitForThreadShell } from "../state/entities";
 import { useTheme } from "../hooks/useTheme";
 import { copyThreadReference } from "../lib/copyThreadReference";
 import { subscribeSnapShotComposerFocus } from "../lib/desktopSnapShot";
@@ -2948,6 +2951,74 @@ export default function ChatView(props: ChatViewProps) {
     setPendingServerThreadStartFromOriginByThreadId,
     scheduleComposerFocus,
   });
+  const forkThreadForModelSwitch = useAtomCommand(threadEnvironment.forkFromRun, {
+    reportFailure: false,
+  });
+  // A pick that cannot switch in place continues in a native fork of this
+  // conversation, so the discussion comes along instead of dead-ending on
+  // "start a new chat to switch providers".
+  const onProviderModelSelectWithForkStable = useStableCallback(
+    (instanceId: ProviderInstanceId, model: string, options?: { focusComposer?: boolean }) => {
+      const forkRunId = planModelSwitchFork({
+        deliveryBinding,
+        supportsProviderSwitchingViaHandoff,
+        hasStartedSession: activeRuntime !== null,
+        currentProviderInstanceId:
+          activeRuntime?.providerInstanceId ?? activeThread?.modelSelection?.instanceId ?? null,
+        nextInstanceId: instanceId,
+        runs: serverProjection?.runs,
+      });
+      if (forkRunId === null || !activeThread) {
+        onProviderModelSelectStable(instanceId, model, options);
+        return;
+      }
+      void (async () => {
+        const targetThreadId = newThreadId();
+        const targetThreadRef = scopeThreadRef(environmentId, targetThreadId);
+        const result = await forkThreadForModelSwitch({
+          environmentId,
+          input: {
+            sourceThreadId: activeThread.id,
+            targetThreadId,
+            runId: forkRunId,
+            title: `${activeThread.title} fork`,
+          },
+        });
+        if (result._tag === "Failure") {
+          if (!isAtomCommandInterrupted(result)) {
+            onProviderModelSelectStable(instanceId, model, options);
+          }
+          return;
+        }
+        useComposerDraftStore
+          .getState()
+          .setModelSelection(
+            targetThreadRef,
+            { instanceId, model },
+            { explicit: true, replaceOptions: true },
+          );
+        const forkReady = await waitForThreadShell(targetThreadRef);
+        if (!forkReady) {
+          toastManager.add({
+            type: "warning",
+            title: "The fork was created, but its thread data did not reach this client.",
+            description: "Reconnect and try opening it from the sidebar.",
+          });
+          return;
+        }
+        await navigate({
+          to: "/$environmentId/$threadId",
+          params: buildThreadRouteParams(targetThreadRef),
+        });
+        toastManager.add({
+          type: "info",
+          title: "Continued in a fork.",
+          description:
+            "This thread cannot switch harnesses in place, so the conversation continues there on the picked model.",
+        });
+      })();
+    },
+  );
   const { onResume, isResuming } = useComposerResume({
     environmentId,
     routeThreadKey,
@@ -3821,7 +3892,7 @@ export default function ChatView(props: ChatViewProps) {
                               onChangeActivePendingUserInputCustomAnswer={
                                 onChangeActivePendingUserInputCustomAnswer
                               }
-                              onProviderModelSelect={onProviderModelSelectStable}
+                              onProviderModelSelect={onProviderModelSelectWithForkStable}
                               onOpenProviderSetup={openProviderSetupStable}
                               getModelDisabledReason={getModelDisabledReason}
                               toggleInteractionMode={toggleInteractionModeStable}

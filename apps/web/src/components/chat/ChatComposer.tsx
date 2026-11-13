@@ -1,12 +1,15 @@
 import { TeamBadge } from "../delivery/TeamBadge";
+import { TeamChatToggle } from "../delivery/TeamChatToggle";
 import { TeamPicker } from "../delivery/TeamPicker";
 import { OrchestratorChatSetup } from "../delivery/OrchestratorChatSetup";
 import { OrchestratorLineup } from "../delivery/OrchestratorLineup";
 import { useEnvironmentQuery } from "../../state/query";
+import { useAtomCommand } from "../../state/use-atom-command";
 import { REASONING_OPTION_BY_DRIVER, type SeatForThread } from "../../lib/deliverySeats";
 import {
   deliveryEnvironment,
   enterOrchestratorChat,
+  trackLineupMutation,
   useDeliveryEnabled,
   useDeliveryDraftStore,
   useOrchestratorDraft,
@@ -2136,14 +2139,93 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const leaveOrchestrator = useOrchestratorDraftStore((store) => store.leave);
   // A conversation that has started keeps its participants on the server, where they can change.
   const lineupOffered = deliveryEnabledForComposer && routeKind !== "draft" && activeThreadId;
-  const startedLineup = useEnvironmentQuery(
+  const startedLineupQuery = useEnvironmentQuery(
     lineupOffered
       ? deliveryEnvironment.threadBinding({
           environmentId,
           input: { threadId: activeThreadId },
         })
       : null,
-  ).data?.lineup;
+  );
+  const startedLineup = startedLineupQuery.data?.lineup;
+  const setComposerThreadLineup = useAtomCommand(deliveryEnvironment.setThreadLineup, {
+    label: "change participants",
+    reportFailure: false,
+  });
+  // Back to single chat for a started conversation: the server remembers the
+  // team, lead model included, so one click brings the team back as it was.
+  const switchStartedThreadToSingle = async (after?: () => void) => {
+    if (!activeThreadId || !lineupOffered) return;
+    const result = await trackLineupMutation(
+      activeThreadId,
+      setComposerThreadLineup({
+        environmentId,
+        input: {
+          threadId: activeThreadId,
+          orchestration: null,
+          ...(activeThreadModelSelection
+            ? { rememberLeadModelSelection: activeThreadModelSelection }
+            : {}),
+        },
+      }),
+    );
+    if (result._tag === "Failure") {
+      toastManager.add({
+        type: "warning",
+        title: "The participants could not be changed.",
+        description: "Try again.",
+      });
+      return;
+    }
+    startedLineupQuery.refresh();
+    after?.();
+  };
+  // A pick that differs while a team is on means single chat with that harness
+  // and model: the team is remembered and the pick goes on as it always has.
+  const leaveOrchestratorToSingleChat = (instanceId: ProviderInstanceId, model: string) => {
+    setIsComposerModelPickerOpen(false);
+    if (routeKind === "draft") {
+      if (activeThreadId) {
+        leaveOrchestrator(activeThreadId);
+        useDeliveryDraftStore
+          .getState()
+          .chooseTeam(activeThreadId, environmentId, { team: null, role: null });
+      }
+      onProviderModelSelect(instanceId, model);
+      return;
+    }
+    void switchStartedThreadToSingle(() => onProviderModelSelect(instanceId, model));
+  };
+  // A single chat with one participant stays in this conversation: the team is
+  // remembered server-side and the thread takes the participant's harness and
+  // model, so the whole discussion is still there.
+  const startSingleChatForSeat = (participant: {
+    role: string;
+    modelSelection: ModelSelection;
+  }) => {
+    void switchStartedThreadToSingle(() =>
+      onProviderModelSelect(
+        participant.modelSelection.instanceId,
+        participant.modelSelection.model,
+      ),
+    );
+  };
+  // The model picker's pick: a differing one in a team conversation is the way
+  // out to single chat, not a retarget of the lead.
+  const handleProviderModelSelect = (
+    instanceId: ProviderInstanceId,
+    model: string,
+    options?: { focusComposer?: boolean },
+  ) => {
+    if (
+      startedLineup !== undefined &&
+      (instanceId !== selectedInstanceId || model !== selectedModel)
+    ) {
+      leaveOrchestratorToSingleChat(instanceId, model);
+      return;
+    }
+    onProviderModelSelect(instanceId, model, options);
+  };
 
   const submitComposer = (
     event?: { preventDefault: () => void },
@@ -2407,7 +2489,19 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
             onSeat={handleSeatForThread}
           />
         ) : activeThreadId && !orchestratorMode ? (
-          <TeamBadge environmentId={environmentId} threadId={activeThreadId} />
+          <span className="flex min-w-0 items-center gap-0.5">
+            <TeamBadge environmentId={environmentId} threadId={activeThreadId} />
+            <TeamChatToggle
+              environmentId={environmentId}
+              threadId={activeThreadId}
+              leadModelSelection={activeThread?.modelSelection ?? null}
+              onRestoreLead={(modelSelection) =>
+                onProviderModelSelect(modelSelection.instanceId, modelSelection.model, {
+                  focusComposer: false,
+                })
+              }
+            />
+          </span>
         ) : null
       }
       orchestrator={
@@ -2446,6 +2540,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     driver={selectedProvider}
                     entries={providerInstanceEntries}
                     models={modelOptionsByInstance}
+                    onFocusChat={startSingleChatForSeat}
+                    onLeaveToSingle={() => void switchStartedThreadToSingle()}
                   />
                 ),
               }
@@ -2486,7 +2582,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       multipleModelSelections={orchestratorMode ? null : multipleModelSelections}
       onMultipleModelSelectionsChange={setMultipleModelSelections}
       selectedModelSelection={selectedModelSelection}
-      onProviderModelSelect={onProviderModelSelect}
+      onProviderModelSelect={handleProviderModelSelect}
       activeThreadModelSelection={activeThreadModelSelection}
       selectedModelForPickerWithCustomFallback={selectedModelForPickerWithCustomFallback}
       lockedProvider={lockedProvider}

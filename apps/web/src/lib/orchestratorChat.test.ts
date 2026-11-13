@@ -1,9 +1,14 @@
-import { ProviderDriverKind, ProviderInstanceId, type ServerProvider } from "@t3tools/contracts";
+import {
+  type DeliveryOrchestrationConfig,
+  ProviderDriverKind,
+  ProviderInstanceId,
+  type ServerProvider,
+} from "@t3tools/contracts";
 import { createModelSelection } from "@t3tools/shared/model";
 import { expect, it } from "vite-plus/test";
 import { deriveProviderInstanceEntries } from "../providerInstances";
 import { parseTeams } from "./delivery";
-import { resolveOrchestratorRoster } from "./orchestratorChat";
+import { decideOrchestrationForSend, resolveOrchestratorRoster } from "./orchestratorChat";
 
 function provider(driver: string, instanceId = driver): ServerProvider {
   return {
@@ -269,4 +274,169 @@ it("adds participants for one conversation, in a role of the team, beside or ins
   expect(
     resolveOrchestratorRoster({ ...input, team, callsTeam: "research" }).configuration?.team,
   ).toBe("research");
+});
+
+it("sends a later message to the saved lineup, not the draft it started with", () => {
+  const input = setup();
+  // The first send rode on the draft's choices.
+  const firstSend = resolveOrchestratorRoster({
+    ...input,
+    choices: {
+      critic: {
+        modelSelection: createModelSelection(ProviderInstanceId.make("codex"), "draft-codex"),
+      },
+    },
+  });
+  expect(firstSend.problem).toBeNull();
+  const draftConfiguration = firstSend.configuration;
+  expect(draftConfiguration?.participants.map((seat) => seat.modelSelection.model)).toEqual([
+    "custom-claude",
+    "draft-codex",
+  ]);
+
+  // A lineup saved after that first message, from the modal or another later change.
+  const savedLineup: DeliveryOrchestrationConfig = {
+    participants: [
+      {
+        seat: "scout",
+        role: "researcher",
+        modelSelection: createModelSelection(
+          ProviderInstanceId.make("claudeAgent"),
+          "custom-claude",
+        ),
+      },
+      {
+        seat: "critic",
+        role: "reviewer",
+        modelSelection: createModelSelection(ProviderInstanceId.make("codex"), "saved-codex"),
+      },
+    ],
+  };
+  const later = decideOrchestrationForSend({
+    draftConfiguration,
+    lineup: savedLineup,
+    heldOrchestration: undefined,
+  });
+  expect(later.source).toBe("lineup");
+  expect(later.orchestration).toEqual(savedLineup);
+
+  // No lineup saved yet: the first message takes the roster from the draft.
+  expect(
+    decideOrchestrationForSend({
+      draftConfiguration,
+      lineup: undefined,
+      heldOrchestration: undefined,
+    }),
+  ).toEqual({ source: "draft", orchestration: draftConfiguration });
+});
+
+it("does not put a started teamless conversation back on its stale draft", () => {
+  const input = setup();
+  const draftConfiguration = resolveOrchestratorRoster({
+    ...input,
+    team: null,
+    teamless: true,
+    extras: [
+      {
+        id: "extra-1",
+        role: "researcher",
+        modelSelection: createModelSelection(
+          ProviderInstanceId.make("claudeAgent"),
+          "draft-claude",
+        ),
+      },
+      {
+        id: "extra-2",
+        role: "reviewer",
+        modelSelection: createModelSelection(ProviderInstanceId.make("codex"), "draft-codex"),
+      },
+    ],
+  }).configuration;
+  expect(draftConfiguration?.participants.map((seat) => seat.seat)).toEqual(["extra-1", "extra-2"]);
+
+  // The lineup modal saved a different pairing after the conversation started.
+  const savedLineup: DeliveryOrchestrationConfig = {
+    participants: [
+      {
+        seat: "extra-1",
+        role: "researcher",
+        modelSelection: createModelSelection(
+          ProviderInstanceId.make("claudeAgent"),
+          "modal-claude",
+        ),
+      },
+      {
+        seat: "extra-3",
+        role: "reviewer",
+        modelSelection: createModelSelection(ProviderInstanceId.make("codex"), "modal-codex"),
+      },
+    ],
+  };
+  const decision = decideOrchestrationForSend({
+    draftConfiguration,
+    lineup: savedLineup,
+    heldOrchestration: undefined,
+  });
+  expect(decision.source).toBe("lineup");
+  expect(decision.orchestration).toEqual(savedLineup);
+});
+
+it("does not put a held retry back on the roster it failed with once a newer lineup is saved", () => {
+  const input = setup();
+  const draftConfiguration = resolveOrchestratorRoster({
+    ...input,
+    choices: {
+      critic: {
+        modelSelection: createModelSelection(ProviderInstanceId.make("codex"), "draft-codex"),
+      },
+    },
+  }).configuration;
+  // What the failed setup recorded when it was held, older than the lineup saved afterwards.
+  const heldOrchestration: DeliveryOrchestrationConfig = {
+    participants: [
+      {
+        seat: "scout",
+        role: "researcher",
+        modelSelection: createModelSelection(ProviderInstanceId.make("claudeAgent"), "held-claude"),
+      },
+      {
+        seat: "critic",
+        role: "reviewer",
+        modelSelection: createModelSelection(ProviderInstanceId.make("codex"), "held-codex"),
+      },
+    ],
+  };
+  const savedLineup: DeliveryOrchestrationConfig = {
+    participants: [
+      {
+        seat: "scout",
+        role: "researcher",
+        modelSelection: createModelSelection(
+          ProviderInstanceId.make("claudeAgent"),
+          "saved-claude",
+        ),
+      },
+      {
+        seat: "critic",
+        role: "reviewer",
+        modelSelection: createModelSelection(ProviderInstanceId.make("codex"), "saved-codex"),
+      },
+    ],
+  };
+  const decision = decideOrchestrationForSend({
+    draftConfiguration,
+    lineup: savedLineup,
+    heldOrchestration,
+  });
+  expect(decision.source).toBe("lineup");
+  expect(decision.orchestration).toEqual(savedLineup);
+
+  // No lineup saved since the failure: the retry rides on what the setup held.
+  expect(
+    decideOrchestrationForSend({
+      draftConfiguration,
+      lineup: undefined,
+      heldOrchestration,
+    }),
+  ).toEqual({ source: "held", orchestration: heldOrchestration });
 });

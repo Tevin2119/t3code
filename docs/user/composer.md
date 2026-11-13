@@ -49,11 +49,23 @@ with no team instructions, and nothing is saved.
 
 Once a conversation has started, open the model picker and choose **Orchestrator** to
 change who joins: tick seats on or off, add or remove participants, or change the
-critique round and access. **Use from the next message** applies it; messages already
-answered are not rerun. The same panel brings participants into an ordinary
-conversation that has already started, from a team's seats or of your own choosing,
-and **Use ordinary chat** sends them away again. A conversation keeps the team it
-started with.
+critique round and access. Every change is saved as you make it, from your next
+message on; messages already answered are not rerun. The same panel brings
+participants into an ordinary conversation that has already started, from a team's
+seats or of your own choosing, and **Use ordinary chat** sends them away again. A
+conversation keeps the team it started with.
+
+While a team conversation runs, the badge beside the composer says who receives the
+next message. Use the **Team chat / Single chat** switch beside it to narrow the
+conversation to the lead alone and to bring the team back: the team, lead model
+included, is remembered for the conversation on the server, so it returns as it was
+on any device. Picking another harness or model in the model picker while a team is
+on switches straight to single chat with it, remembering the team the same way. In
+the started conversation's Orchestrator panel, **Chat 1:1** beside a participant
+keeps this conversation and routes the next messages to that participant's harness
+and model until you switch the team back on. When a thread cannot switch harnesses
+in place, such as a team-bound conversation, the switch continues in a native fork
+that carries the discussion over.
 
 Files and images attached to a message reach the orchestrator as usual. Participants
 are given their paths to read.

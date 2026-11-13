@@ -166,3 +166,28 @@ export function resolveOrchestratorRoster(input: {
       };
   return { rows, configuration, problem };
 }
+
+/**
+ * Who receives the next message. A saved lineup is authoritative for a started
+ * conversation; the draft and a held setup configure the first message only.
+ */
+export function decideOrchestrationForSend(input: {
+  /** The roster resolved from the persisted composer draft, when there is one. */
+  readonly draftConfiguration: DeliveryOrchestrationConfig | null;
+  /** What the held setup recorded when its attempt failed. */
+  readonly heldOrchestration: DeliveryOrchestrationConfig | undefined;
+  /** Who joins the conversation now, as saved on the server. */
+  readonly lineup: DeliveryOrchestrationConfig | undefined;
+}): {
+  readonly source: "draft" | "held" | "lineup" | null;
+  readonly orchestration: DeliveryOrchestrationConfig | null;
+} {
+  if (input.lineup !== undefined) return { orchestration: input.lineup, source: "lineup" };
+  if (input.heldOrchestration !== undefined) {
+    return { orchestration: input.heldOrchestration, source: "held" };
+  }
+  return {
+    orchestration: input.draftConfiguration ?? null,
+    source: input.draftConfiguration !== null ? "draft" : null,
+  };
+}
