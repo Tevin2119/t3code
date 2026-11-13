@@ -45,6 +45,11 @@ export function createDeliveryEnvironmentAtoms<R, E>(
     setThreadLineup: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:delivery:set-thread-lineup",
       tag: WS_METHODS.deliverySetThreadLineup,
+      // A conversation's roster changes one at a time, in the order they were made.
+      concurrency: {
+        mode: "serial",
+        key: ({ environmentId, input }) => JSON.stringify([environmentId, input.threadId]),
+      },
     }),
     bindThread: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:delivery:bind-thread",

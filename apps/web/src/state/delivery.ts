@@ -250,7 +250,10 @@ export const useDeliveryDraftStore = create<DeliveryDraftState>()(
             ? state
             : { inherited: withMark(state.inherited, threadId, key) },
         ),
-      clearChoice: (threadId) =>
+      clearChoice: (threadId) => {
+        // A sent thread's orchestrator draft is spent with its team choice: the
+        // saved lineup decides who receives every message after the first.
+        useOrchestratorDraftStore.getState().leave(threadId);
         set((state) => {
           // The choice is cleared when the thread is sent, while the picker is still
           // shown. It then shows the remembered team, whose seat must not be taken over.
@@ -259,7 +262,8 @@ export const useDeliveryDraftStore = create<DeliveryDraftState>()(
             choices: rest,
             inherited: withMark(state.inherited, threadId, SEAT_TAKEOVER_OVER),
           };
-        }),
+        });
+      },
     }),
     { name: "t3code:delivery-draft-teams:v1" },
   ),
@@ -572,6 +576,29 @@ export function hasStartedOrchestratorTask(threadId: string): boolean {
 
 export function useOrchestratorDraft(threadId: string | null): OrchestratorDraft | null {
   return useOrchestratorDraftStore((state) => (threadId ? (state.drafts[threadId] ?? null) : null));
+}
+
+/**
+ * Lineup saves still in flight, by thread. A send that races one waits, so it
+ * speaks to the roster that is actually saved and never to the one it replaces.
+ */
+const pendingLineupMutations = new Map<string, Promise<unknown>>();
+
+/** Runs a lineup save and keeps it reachable until it settles, so sends can wait on it. */
+export function trackLineupMutation<T>(threadId: string, mutation: Promise<T>): Promise<T> {
+  const tracked = mutation.finally(() => {
+    if (pendingLineupMutations.get(threadId) === tracked) {
+      pendingLineupMutations.delete(threadId);
+    }
+  });
+  pendingLineupMutations.set(threadId, tracked);
+  return tracked;
+}
+
+/** Waits for a lineup save that started earlier, if one is still running. */
+export async function awaitPendingLineupMutation(threadId: string): Promise<void> {
+  const pending = pendingLineupMutations.get(threadId);
+  if (pending) await pending.catch(() => {});
 }
 
 export function useBoardPreferences(environment: string | null) {

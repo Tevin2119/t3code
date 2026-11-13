@@ -169,3 +169,79 @@ it("keeps a docked picker open after a pick and hands focus to that model's effo
   await userEvent.keyboard("{Escape}");
   await expect.element(search).not.toBeInTheDocument();
 });
+
+const orchestratorPickEntries = () =>
+  deriveProviderInstanceEntries(
+    (["codex", "claudeAgent"] as const).map((driver) => ({
+      instanceId: ProviderInstanceId.make(driver),
+      driver: ProviderDriverKind.make(driver),
+      enabled: true,
+      installed: true,
+      version: null,
+      status: "ready" as const,
+      auth: { status: "authenticated" as const },
+      checkedAt: "2026-01-01T00:00:00.000Z",
+      models: [
+        driver === "codex"
+          ? { slug: "original", name: "Original model", isCustom: false, capabilities: {} }
+          : { slug: "opus", name: "Opus model", isCustom: false, capabilities: {} },
+      ],
+      slashCommands: [],
+      skills: [],
+    })),
+  );
+
+function OrchestratorPicker(props: {
+  onInstanceModelChange: (instanceId: ProviderInstanceId, model: string) => void;
+}) {
+  const entries = orchestratorPickEntries();
+  return (
+    <ProviderModelPicker
+      environmentId={null}
+      activeInstanceId={ProviderInstanceId.make("codex")}
+      model="original"
+      lockedProvider={null}
+      instanceEntries={entries}
+      modelOptionsByInstance={
+        new Map(
+          entries.map((entry) => [
+            entry.instanceId,
+            entry.models.map((model) => ({ slug: model.slug, name: model.name })),
+          ]),
+        )
+      }
+      triggerAriaLabel="Choose model"
+      onInstanceModelChange={props.onInstanceModelChange}
+      orchestrator={{
+        active: true,
+        onSelect: () => {},
+        panel: <div data-orchestrator-panel>Team setup</div>,
+      }}
+    />
+  );
+}
+
+it("applies a pick straight through while a team is active", async () => {
+  const onInstanceModelChange = vi.fn();
+  await using screen = await render(
+    <OrchestratorPicker onInstanceModelChange={onInstanceModelChange} />,
+  );
+  await screen.getByRole("button", { name: "Choose model" }).click();
+  await expect.element(page.getByText("Team setup")).toBeInTheDocument();
+  // Choosing another harness in the rail leaves the team setup for its models.
+  await page.getByRole("button", { name: "Claude" }).click();
+  await page.getByRole("option", { name: /Opus model/ }).click();
+
+  // No chooser: the pick goes to the composer, which takes a team conversation
+  // to single chat with it.
+  expect(onInstanceModelChange).toHaveBeenCalledWith(
+    ProviderInstanceId.make("claudeAgent"),
+    "opus",
+  );
+  await expect
+    .element(page.getByRole("button", { name: "Set as orchestrator lead" }))
+    .not.toBeInTheDocument();
+  await expect
+    .element(page.getByRole("button", { name: /Switch to single chat/ }))
+    .not.toBeInTheDocument();
+});
