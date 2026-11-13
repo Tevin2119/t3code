@@ -1,5 +1,6 @@
 import {
   CommandId,
+  deliveryParticipantAccess,
   isCompactionCommandMessage,
   parseGoalCommand,
   type OrchestrationV2Subagent,
@@ -147,14 +148,26 @@ export const make = Effect.gen(function* () {
         );
         // Read-only by default: a participant asks before it changes anything, and
         // TeamChatReadOnlyReactor declines what it asks.
-        const readOnly = lineup.access === undefined;
-        const access = lineup.access ?? "approval-required";
+        const accessOf = (seat: (typeof roster)[number]) => {
+          const access = deliveryParticipantAccess(lineup, seat.seat);
+          // A read-only seat runs in the mode that asks, and every such request is declined.
+          return access === "read-only"
+            ? { readOnly: true, access: "approval-required" as const }
+            : { readOnly: false, access };
+        };
+        const readers = roster.filter((seat) => accessOf(seat).readOnly);
         const mode = lineup.critique ?? "first";
         const critiqueWanted = mode === "always" || (mode === "first" && !followUp);
         if (initialDone && (critiqueDone || !critiqueWanted)) {
           return {
             ready: true,
-            context: `<team_discussion>\nYou are the orchestrator for ${group}. The native participants have completed independent contributions${critiqueWanted ? " and a critique round" : ""}. Synthesize their evidence and disagreements into a response to the latest user message. Attribute useful insights to their seat/model, acknowledge failed or missing contributions, and distinguish consensus from unresolved disagreement. Do not launch these rounds again.${readOnly ? " The participants are read-only and have changed nothing. When the user asks for work to be done, do it yourself in this thread under the project's own rules, or say plainly what should be handed to a team that builds." : ""}\n\nIndependent contributions:\n${contributions(initial)}${critiqueWanted ? `\n\nCritiques:\n${contributions(critiques)}` : ""}\n</team_discussion>`,
+            context: `<team_discussion>\nYou are the orchestrator for ${group}. The native participants have completed independent contributions${critiqueWanted ? " and a critique round" : ""}. Synthesize their evidence and disagreements into a response to the latest user message. Attribute useful insights to their seat/model, acknowledge failed or missing contributions, and distinguish consensus from unresolved disagreement. Do not launch these rounds again.${
+              readers.length === roster.length
+                ? " The participants are read-only and have changed nothing. When the user asks for work to be done, do it yourself in this thread under the project's own rules, or say plainly what should be handed to a team that builds."
+                : readers.length > 0
+                  ? ` These participants are read-only and have changed nothing: ${readers.map((seat) => seat.seat).join(", ")}. The others could act on the user's message; check what they did before you do more.`
+                  : ""
+            }\n\nIndependent contributions:\n${contributions(initial)}${critiqueWanted ? `\n\nCritiques:\n${contributions(critiques)}` : ""}\n</team_discussion>`,
           };
         }
         const stage = initialDone ? "critique" : "contribution";
@@ -178,6 +191,7 @@ export const make = Effect.gen(function* () {
             if (!snapshot.installed) {
               return yield* new NativeTeamChatError({ runId: input.runId, reason: "roster" });
             }
+            const { readOnly, access } = accessOf(seat);
             // A provider is never run in another mode than the one asked for, so say which seat.
             const refused =
               runtimeModeProblem(snapshot.runtimeModes, access) ??
@@ -189,8 +203,8 @@ export const make = Effect.gen(function* () {
                 runId: input.runId,
                 reason: "roster",
                 detail: readOnly
-                  ? `${seat.seat} cannot be held to read-only: ${refused} Leave ${seat.seat} out, or give this conversation's participants full access.`
-                  : `${seat.seat} cannot join with ${access} access: ${refused} Change the participants' access for this conversation, or leave ${seat.seat} out.`,
+                  ? `${seat.seat} cannot be held to read-only: ${refused} Leave ${seat.seat} out, or give ${seat.seat} full access.`
+                  : `${seat.seat} cannot join with ${access} access: ${refused} Change the access ${seat.seat} has in this conversation, or leave ${seat.seat} out.`,
               });
             }
             return yield* adapters.get(seat.modelSelection.instanceId);
@@ -226,6 +240,7 @@ export const make = Effect.gen(function* () {
         }
         for (const seat of missing) {
           const commandId = commandFor(seat);
+          const { readOnly, access } = accessOf(seat);
           yield* threads.dispatch({
             type: "delegated_task.request",
             commandId,

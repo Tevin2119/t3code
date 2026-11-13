@@ -38,7 +38,10 @@ same team with the conversation's context. Participants are
 read-only: they read and discuss, anything that would change a file, a branch or a
 board is declined without asking you, and only the orchestrator acts. Set
 **Participants' access** to full access when you want the work done by the
-participants in the conversation itself, or to ask you before each change. A provider
+participants in the conversation itself, or to ask you before each change. Each
+participant also has its own access beside its name, which comes first: give full
+access only to the seats that should build. A seat the team's profile keeps read-only
+stays read-only until you change it there. A provider
 that cannot be held to read-only says so in the setup: leave it out or use full access.
 The lead uses the project's folder and your selected access
 settings. Use **Use ordinary chat** to leave Orchestrator before starting.

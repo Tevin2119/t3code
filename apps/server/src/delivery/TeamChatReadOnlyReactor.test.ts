@@ -17,6 +17,8 @@ const childId = ThreadId.make("team-child");
 
 function setup({
   access = undefined as "approval-required" | "full-access" | undefined,
+  /** The researcher's own access, over the conversation's. */
+  seatAccess = undefined as "read-only" | "full-access" | undefined,
   participant = true,
 } = {}) {
   const dispatched: Array<OrchestrationV2Command> = [];
@@ -45,7 +47,10 @@ function setup({
       Effect.succeed({
         binding: null,
         pending: null,
-        lineup: { participants: [], ...(access ? { access } : {}) },
+        lineup: {
+          participants: seatAccess ? [{ seat: "researcher", access: seatAccess }] : [],
+          ...(access ? { access } : {}),
+        },
       }),
   } as unknown as DeliveryService.DeliveryService["Service"];
   return {
@@ -106,6 +111,14 @@ it.effect("declines what a read-only participant asks to change, and nothing els
       yield* (yield* chosen.reactor).handle(request("file-change"));
       expect(chosen.dispatched).toEqual([]);
     }
+
+    // A seat's own access comes before the conversation's, in either direction.
+    const held = setup({ access: "full-access", seatAccess: "read-only" });
+    yield* (yield* held.reactor).handle(request("file-change"));
+    expect(held.dispatched).toMatchObject([{ decision: "decline" }]);
+    const lifted = setup({ seatAccess: "full-access" });
+    yield* (yield* lifted.reactor).handle(request("file-change"));
+    expect(lifted.dispatched).toEqual([]);
 
     // A delegated task that is not a discussion participant is not touched.
     const other = setup({ participant: false });

@@ -12,9 +12,15 @@ import {
 import type { DeliveryTeam } from "./delivery";
 import { REASONING_OPTION_BY_DRIVER } from "./deliverySeats";
 
+export type OrchestratorParticipantAccess = NonNullable<
+  DeliveryOrchestrationConfig["participants"][number]["access"]
+>;
+
 export interface OrchestratorParticipantChoice {
   readonly included?: boolean;
   readonly modelSelection?: ModelSelection;
+  /** This seat's access for the conversation, over the team's and the conversation's. */
+  readonly access?: OrchestratorParticipantAccess;
 }
 
 /** A participant added for one conversation: any provider and model, in one of the team's roles. */
@@ -22,6 +28,7 @@ export interface OrchestratorExtraParticipant {
   readonly id: string;
   readonly role: string;
   readonly modelSelection?: ModelSelection;
+  readonly access?: OrchestratorParticipantAccess;
 }
 
 export type OrchestratorCritique = NonNullable<DeliveryOrchestrationConfig["critique"]>;
@@ -48,9 +55,13 @@ export function resolveOrchestratorRoster(input: {
     (seat) =>
       seat.role === input.orchestrator?.role && harnessOf(seat) === input.orchestrator?.harness,
   )?.seat;
-  // Read-only and "ask me" both run a participant in the mode that asks before a change.
-  const asks = input.access !== "full-access";
-  const selectionProblem = (title: string, modelSelection: ModelSelection) => {
+  const selectionProblem = (
+    title: string,
+    modelSelection: ModelSelection,
+    access: OrchestratorParticipantAccess,
+  ) => {
+    // Read-only and "ask me" both run a participant in the mode that asks before a change.
+    const asks = access !== "full-access";
     const entry = input.entries.find((item) => item.instanceId === modelSelection.instanceId);
     const wayOut = `Choose another provider for ${title}, or leave it out.`;
     const cannotAsk = asks
@@ -71,13 +82,16 @@ export function resolveOrchestratorRoster(input: {
           : !modelSelection.model.trim()
             ? `Choose a model for ${title}.`
             : cannotAsk
-              ? `${entry.displayName} cannot be held to read-only${cannotAsk.reason ? `: ${cannotAsk.reason}` : "."} Leave ${title} out, or give participants full access.`
+              ? `${entry.displayName} cannot be held to read-only${cannotAsk.reason ? `: ${cannotAsk.reason}` : "."} Leave ${title} out, or give ${title} full access.`
               : null;
   };
   const teamRow = (seat: DeliveryTeam["seats"][number]) => {
     const settings = input.team?.settings.find((item) => item.seat === seat.seat);
     const choice = input.choices?.[seat.seat];
     const included = choice?.included ?? (settings?.now.active !== "off" && seat.seat !== ownSeat);
+    // A seat the team keeps read-only stays so, whatever the conversation gives the others.
+    const own = choice?.access ?? (settings?.now.access === "read-only" ? "read-only" : undefined);
+    const access = own ?? input.access ?? "read-only";
     const harness = harnessOf(seat);
     const candidates = input.entries.filter(
       (entry) => DELIVERY_HARNESS_BY_DRIVER[entry.driverKind] === harness && entry.enabled,
@@ -105,13 +119,16 @@ export function resolveOrchestratorRoster(input: {
         : candidates.length > 1
           ? `More than one provider runs ${harness}. Choose the one ${seat.title} uses.`
           : `Choose a model for ${seat.title}.`
-      : selectionProblem(seat.title, modelSelection);
+      : selectionProblem(seat.title, modelSelection, access);
     return {
       seat: seat.seat,
       title: seat.title,
       role: seat.role,
       included,
       modelSelection,
+      access,
+      /** Set when the seat's access is its own and not the conversation's. */
+      ownAccess: own,
       /** The seat the orchestrator itself holds. */
       orchestrator: seat.seat === ownSeat,
       extra: false,
@@ -129,6 +146,8 @@ export function resolveOrchestratorRoster(input: {
         role: extra.role,
         included: true,
         modelSelection: extra.modelSelection ?? null,
+        access: extra.access ?? input.access ?? ("read-only" as const),
+        ownAccess: extra.access,
         orchestrator: false,
         extra: true,
         problem:
@@ -136,7 +155,11 @@ export function resolveOrchestratorRoster(input: {
             ? `Choose a role for ${title}.`
             : !extra.modelSelection
               ? `Choose a provider and model for ${title}.`
-              : selectionProblem(title, extra.modelSelection),
+              : selectionProblem(
+                  title,
+                  extra.modelSelection,
+                  extra.access ?? input.access ?? "read-only",
+                ),
       };
     }),
   ];
@@ -160,7 +183,14 @@ export function resolveOrchestratorRoster(input: {
         ...(input.callsTeam ? { team: input.callsTeam } : {}),
         participants: selected.flatMap((row) =>
           row.modelSelection
-            ? [{ seat: row.seat, role: row.role, modelSelection: row.modelSelection }]
+            ? [
+                {
+                  seat: row.seat,
+                  role: row.role,
+                  modelSelection: row.modelSelection,
+                  ...(row.ownAccess ? { access: row.ownAccess } : {}),
+                },
+              ]
             : [],
         ),
       };

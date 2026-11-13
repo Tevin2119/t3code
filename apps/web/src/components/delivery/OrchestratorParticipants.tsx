@@ -6,6 +6,7 @@ import type {
   OrchestratorAccess,
   OrchestratorCritique,
   OrchestratorExtraParticipant,
+  OrchestratorParticipantAccess,
   OrchestratorParticipantChoice,
   resolveOrchestratorRoster,
 } from "../../lib/orchestratorChat";
@@ -96,6 +97,17 @@ export function OrchestratorParticipants(props: {
       {roster.rows.map((row) => {
         const selection = row.modelSelection ?? NO_PROVIDER_MODEL_SELECTION;
         const onLead = props.onLead;
+        const setAccess = (access: OrchestratorParticipantAccess) =>
+          row.extra
+            ? setExtras(
+                extras.map((extra) => (extra.id === row.seat ? { ...extra, access } : extra)),
+              )
+            : props.onChange({
+                participantChoices: {
+                  ...value.participantChoices,
+                  [row.seat]: { ...value.participantChoices?.[row.seat], access },
+                },
+              });
         return (
           <div key={row.seat} className="flex flex-col gap-1">
             <div className="flex items-center gap-2">
@@ -204,6 +216,31 @@ export function OrchestratorParticipants(props: {
                 </SelectPopup>
               </Select>
             ) : null}
+            {row.included ? (
+              <Select
+                items={PARTICIPANT_ACCESS}
+                value={row.access}
+                onValueChange={(next) => {
+                  if (
+                    next === "read-only" ||
+                    next === "approval-required" ||
+                    next === "full-access"
+                  )
+                    setAccess(next);
+                }}
+              >
+                <SelectTrigger aria-label={`Access of ${row.title}`}>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectPopup>
+                  {PARTICIPANT_ACCESS.map((item) => (
+                    <SelectItem key={item.value} value={item.value}>
+                      {item.label}
+                    </SelectItem>
+                  ))}
+                </SelectPopup>
+              </Select>
+            ) : null}
             {row.included && row.problem ? (
               <p className="text-xs text-warning">{row.problem}</p>
             ) : null}
@@ -276,8 +313,9 @@ export function OrchestratorParticipants(props: {
         </Select>
         <p className="text-xs text-muted-foreground">
           Read-only participants discuss and cannot change anything, so only the orchestrator acts.
-          With full access they can edit, commit, push and post like the orchestrator: choose it
-          when you want the work done in this conversation.
+          With full access they can edit, commit, push and post like the orchestrator. A
+          participant's own access, set beside it, comes first, and a seat the team keeps read-only
+          stays read-only unless you change it here.
         </p>
       </div>
       {roster.problem ? (
