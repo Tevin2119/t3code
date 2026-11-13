@@ -29,6 +29,17 @@ export const deliveryParticipantAccess = (
   seat: string,
 ) => lineup.participants.find((item) => item.seat === seat)?.access ?? lineup.access ?? "read-only";
 
+/**
+ * The team a conversation was switched away from, so one click brings it back.
+ * The lead model is what the thread itself ran while the team was on; restoring
+ * the team also points the thread back at it.
+ */
+export const DeliveryRememberedLineup = Schema.Struct({
+  orchestration: DeliveryOrchestrationConfig,
+  leadModelSelection: Schema.optional(ModelSelection),
+});
+export type DeliveryRememberedLineup = typeof DeliveryRememberedLineup.Type;
+
 export const DELIVERY_DEFAULT_TEAM = "development";
 
 export const DeliveryReleaseChannel = Schema.Literals(["dev", "qa", "main"]);
@@ -183,6 +194,8 @@ export const DeliveryThreadState = Schema.Struct({
   pending: Schema.NullOr(DeliveryThreadPending),
   /** Who joins the next message. Absent for an ordinary conversation. */
   lineup: Schema.optional(DeliveryOrchestrationConfig),
+  /** The team this conversation most recently switched away from, if any. */
+  rememberedLineup: Schema.optional(DeliveryRememberedLineup),
 });
 export type DeliveryThreadState = typeof DeliveryThreadState.Type;
 
@@ -190,6 +203,11 @@ export type DeliveryThreadState = typeof DeliveryThreadState.Type;
 export const DeliverySetThreadLineupInput = Schema.Struct({
   threadId: ThreadId,
   orchestration: Schema.NullOr(DeliveryOrchestrationConfig),
+  /**
+   * What the thread runs now, recorded with the team being switched away from so
+   * restoring the team can point the thread back at its lead model.
+   */
+  rememberLeadModelSelection: Schema.optional(ModelSelection),
 });
 export type DeliverySetThreadLineupInput = typeof DeliverySetThreadLineupInput.Type;
 

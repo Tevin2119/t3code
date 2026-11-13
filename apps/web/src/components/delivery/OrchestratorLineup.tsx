@@ -2,6 +2,7 @@ import {
   DELIVERY_HARNESS_BY_DRIVER,
   type DeliveryOrchestrationConfig,
   type EnvironmentId,
+  type ModelSelection,
   type ProviderDriverKind,
   type ProviderInstanceId,
   type ThreadId,
@@ -10,7 +11,12 @@ import { useState } from "react";
 import { type DeliveryTeam, selectableTeams } from "../../lib/delivery";
 import { resolveOrchestratorRoster } from "../../lib/orchestratorChat";
 import type { ProviderInstanceEntry } from "../../providerInstances";
-import { deliveryEnvironment, useDeliveryRead } from "../../state/delivery";
+import {
+  awaitPendingLineupMutation,
+  deliveryEnvironment,
+  trackLineupMutation,
+  useDeliveryRead,
+} from "../../state/delivery";
 import { useEnvironmentQuery } from "../../state/query";
 import { useAtomCommand } from "../../state/use-atom-command";
 import type { ModelEsque } from "../chat/providerIconUtils";
@@ -55,13 +61,24 @@ function valueOfLineup(
   };
 }
 
-/** Changes who joins a conversation that has already started, from its next message on. */
+/**
+ * Changes who joins a conversation that has already started, from its next
+ * message on. Every change is saved as it is made; one that would not make a
+ * team stays visible with its reason until it does.
+ */
 export function OrchestratorLineup(props: {
   readonly environmentId: EnvironmentId;
   readonly threadId: ThreadId;
   readonly driver: ProviderDriverKind | null;
   readonly entries: ReadonlyArray<ProviderInstanceEntry>;
   readonly models: ReadonlyMap<ProviderInstanceId, ReadonlyArray<ModelEsque>>;
+  /** Starts a single chat with one participant; the team conversation is untouched. */
+  readonly onFocusChat?: (participant: {
+    readonly role: string;
+    readonly modelSelection: ModelSelection;
+  }) => void;
+  /** Leaves the team for ordinary chat; the composer remembers it server-side. */
+  readonly onLeaveToSingle?: () => void;
 }) {
   const { threadId } = props;
   const state = useEnvironmentQuery(
@@ -76,52 +93,72 @@ export function OrchestratorLineup(props: {
   });
   const read = useDeliveryRead(props.environmentId, "/api/teams");
   const teams = selectableTeams(read.body);
-  // Unsaved changes; absent, the panel shows what is in force.
+  // A change already shown but not saved yet; absent, the panel shows what is in force.
   const [edit, setEdit] = useState<{
-    readonly team?: string | null;
-    readonly value?: OrchestratorLineupValue;
-  }>({});
+    readonly team: string | null | undefined;
+    readonly value: OrchestratorLineupValue | undefined;
+  }>({ team: undefined, value: undefined });
   const [failure, setFailure] = useState<string | null>(null);
-  const [saving, setSaving] = useState(false);
 
   const binding = state.data?.binding ?? null;
   const lineup = state.data?.lineup;
   const teamName = binding?.team ?? (edit.team !== undefined ? edit.team : (lineup?.team ?? null));
   const team = teams.find((item) => item.team === teamName) ?? null;
   const value = edit.value ?? valueOfLineup(lineup, team);
-  const roster = resolveOrchestratorRoster({
-    team,
-    teamless: team === null,
-    // A conversation bound to no team names the one its participants take their roles from.
-    ...(binding === null && team ? { callsTeam: team.team } : {}),
-    choices: value.participantChoices,
-    entries: props.entries,
-    critique: value.critique,
-    access: value.access,
-    extras: value.extraParticipants,
-    orchestrator: {
-      harness:
-        binding?.harness ??
-        (props.driver ? (DELIVERY_HARNESS_BY_DRIVER[props.driver] ?? null) : null),
-      role: binding?.role ?? null,
-    },
-  });
-  const changed = edit.team !== undefined || edit.value !== undefined;
-
-  const apply = async (orchestration: DeliveryOrchestrationConfig | null) => {
-    setSaving(true);
-    setFailure(null);
-    const result = await setLineup({
-      environmentId: props.environmentId,
-      input: { threadId, orchestration },
+  const resolveFor = (forTeam: DeliveryTeam | null, forValue: OrchestratorLineupValue) =>
+    resolveOrchestratorRoster({
+      team: forTeam,
+      teamless: forTeam === null,
+      // A conversation bound to no team names the one its participants take their roles from.
+      ...(binding === null && forTeam ? { callsTeam: forTeam.team } : {}),
+      choices: forValue.participantChoices,
+      entries: props.entries,
+      critique: forValue.critique,
+      access: forValue.access,
+      extras: forValue.extraParticipants,
+      orchestrator: {
+        harness:
+          binding?.harness ??
+          (props.driver ? (DELIVERY_HARNESS_BY_DRIVER[props.driver] ?? null) : null),
+        role: binding?.role ?? null,
+      },
     });
-    setSaving(false);
+  const roster = resolveFor(team, value);
+
+  const apply = async (
+    orchestration: DeliveryOrchestrationConfig | null,
+    appliedEdit: typeof edit,
+  ) => {
+    setFailure(null);
+    // Lineup saves for one thread run one at a time, in the order made.
+    await awaitPendingLineupMutation(threadId);
+    const result = await trackLineupMutation(
+      threadId,
+      setLineup({
+        environmentId: props.environmentId,
+        input: { threadId, orchestration },
+      }),
+    );
     if (result._tag === "Failure") {
       setFailure("The participants could not be changed. Try again.");
+      setEdit({ team: undefined, value: undefined });
+      state.refresh();
       return;
     }
-    setEdit({});
+    // Only clear a change that has not been replaced by a newer one.
+    setEdit((current) =>
+      current === appliedEdit ? { team: undefined, value: undefined } : current,
+    );
     state.refresh();
+  };
+
+  const change = (nextTeam: string | null | undefined, nextValue: OrchestratorLineupValue) => {
+    const nextEdit = { team: nextTeam, value: nextValue };
+    setEdit(nextEdit);
+    const candidateTeam =
+      nextTeam !== undefined ? (teams.find((item) => item.team === nextTeam) ?? null) : team;
+    const candidate = resolveFor(candidateTeam, nextValue);
+    if (candidate.configuration) void apply(candidate.configuration, nextEdit);
   };
 
   if (state.data === null) {
@@ -137,7 +174,7 @@ export function OrchestratorLineup(props: {
       <span className="text-sm font-medium">Orchestrator</span>
       <p className="text-xs text-muted-foreground">
         {lineup
-          ? "Change who joins this conversation. It takes effect from your next message."
+          ? "Changes here join or leave from your next message on."
           : "Bring participants into this conversation. From your next message they contribute first and this chat's model brings the results together."}
       </p>
       {binding ? (
@@ -150,10 +187,10 @@ export function OrchestratorLineup(props: {
           onValueChange={(next) => {
             if (typeof next !== "string" || !next) return;
             // Another team's seats are another lineup; added participants come along.
-            setEdit({
-              team: next === NO_TEAM ? null : next,
-              value: value.extraParticipants ? { extraParticipants: value.extraParticipants } : {},
-            });
+            change(
+              next === NO_TEAM ? null : next,
+              value.extraParticipants ? { extraParticipants: value.extraParticipants } : {},
+            );
           }}
         >
           <SelectTrigger aria-label="Team to bring in">
@@ -178,32 +215,19 @@ export function OrchestratorLineup(props: {
         environmentId={props.environmentId}
         team={team}
         value={value}
-        onChange={(patch) => setEdit({ ...edit, value: { ...value, ...patch } })}
+        onChange={(patch) => change(undefined, { ...value, ...patch })}
         roster={roster}
         entries={props.entries}
         models={props.models}
+        {...(props.onFocusChat ? { onFocus: props.onFocusChat } : {})}
       />
       {failure ? (
         <p role="alert" className="text-xs text-warning">
           {failure}
         </p>
       ) : null}
-      <Button
-        size="sm"
-        disabled={saving || !changed || roster.configuration === null}
-        onClick={() => {
-          if (roster.configuration) void apply(roster.configuration);
-        }}
-      >
-        Use from the next message
-      </Button>
-      {changed ? (
-        <Button size="sm" variant="ghost" disabled={saving} onClick={() => setEdit({})}>
-          Discard changes
-        </Button>
-      ) : null}
-      {lineup ? (
-        <Button size="sm" variant="ghost" disabled={saving} onClick={() => void apply(null)}>
+      {lineup && props.onLeaveToSingle ? (
+        <Button size="sm" variant="ghost" onClick={props.onLeaveToSingle}>
           Use ordinary chat
         </Button>
       ) : null}

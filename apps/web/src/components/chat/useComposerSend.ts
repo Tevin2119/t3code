@@ -7,6 +7,7 @@ import {
 } from "../../lib/delivery";
 import {
   deliveryEnvironment,
+  awaitPendingLineupMutation,
   hasDraftTeamChoice,
   readDraftTeamChoice,
   useDeliveryDraftStore,
@@ -14,9 +15,10 @@ import {
   useDeliveryRead,
   useOrchestratorDraftStore,
 } from "../../state/delivery";
-import { resolveOrchestratorRoster } from "../../lib/orchestratorChat";
+import { decideOrchestrationForSend, resolveOrchestratorRoster } from "../../lib/orchestratorChat";
 import { useEnvironmentQuery } from "../../state/query";
 import { useAtomCommand } from "../../state/use-atom-command";
+import { useAtomQueryRunner } from "../../state/use-atom-query-runner";
 import {
   mergeDirectPreviewAnnotation,
   resolveBackgroundDraftWorkspaceOptions,
@@ -378,6 +380,13 @@ export function useComposerSend(input: ComposerSendInput) {
   );
 
   const readDeliveryState = useStableCallback(() => deliveryThreadState);
+  // A send decides who receives the message from what is saved, not from what a
+  // screen shows mid-save, so it can ask the server directly.
+  const readDeliveryStateFresh = useAtomQueryRunner(deliveryEnvironment.threadBinding, {
+    label: "delivery thread state for a send",
+    reportFailure: false,
+    refresh: true,
+  });
   const bindDeliveryThread = useAtomCommand(deliveryEnvironment.bindThread, {
     label: "bind team",
     reportFailure: false,
@@ -902,7 +911,21 @@ export function useComposerSend(input: ComposerSendInput) {
     // cannot be honoured stops the send: sending anyway would start an
     // ordinary thread under a team's name.
     const deliveryForSend = readDeliverySendInput();
-    const deliveryStateForSend = readDeliveryState();
+    // Recipient changes save asynchronously. A send waits out a save in flight
+    // and reads the roster afresh, so an immediate Send can never speak to the
+    // participants it is replacing.
+    await awaitPendingLineupMutation(threadIdForSend);
+    const deliveryStateForSend =
+      deliveryEnabled && isServerThread
+        ? await readDeliveryStateFresh({
+            environmentId,
+            input: { threadId: threadIdForSend },
+          }).then((result) =>
+            result._tag === "Success"
+              ? { data: result.value, error: null }
+              : { data: undefined, error: "The conversation's participants could not be read." },
+          )
+        : readDeliveryState();
     const heldTeamForSend = deliveryStateForSend.data?.pending ?? null;
     const boundForSend = deliveryStateForSend.data?.binding ?? null;
     // A team choice stays in force until a turn has really started with it.
@@ -949,9 +972,20 @@ export function useComposerSend(input: ComposerSendInput) {
           },
         })
       : null;
-    const orchestrationForSend =
-      heldTeamForSend?.orchestration ?? orchestrationRoster?.configuration;
-    if (orchestratorDraft && boundForSend === null && !heldTeamForSend?.orchestration) {
+    const orchestrationSendDecision = decideOrchestrationForSend({
+      draftConfiguration: orchestrationRoster?.configuration ?? null,
+      heldOrchestration: heldTeamForSend?.orchestration,
+      lineup: deliveryStateForSend.data?.lineup,
+    });
+    const orchestrationForSend = orchestrationSendDecision.orchestration;
+    // The draft's problems stop a first message; a started conversation answers
+    // to its saved lineup, whatever the draft left behind says.
+    if (
+      orchestratorDraft &&
+      boundForSend === null &&
+      !heldTeamForSend?.orchestration &&
+      orchestrationSendDecision.source === "draft"
+    ) {
       const problem =
         orchestrationRoster?.problem ??
         (!orchestratorDraft.teamless &&
@@ -1415,9 +1449,11 @@ export function useComposerSend(input: ComposerSendInput) {
       failure === null &&
       orchestratorDraft?.teamless &&
       orchestrationForSend &&
-      boundForSend === null
+      boundForSend === null &&
+      orchestrationSendDecision.source === "draft"
     ) {
-      // No team to bind to: the participants are put on record for the thread by themselves.
+      // No team to bind to: the draft's first message puts the participants on
+      // record; a saved lineup stays as it is.
       const lineupResult = await setDeliveryThreadLineup({
         environmentId,
         input: { threadId: threadIdForSend as never, orchestration: orchestrationForSend },

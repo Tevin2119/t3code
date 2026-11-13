@@ -38,6 +38,60 @@ export function TeamBadge(props: {
   // A thread that was sent with no team says so, where the team would stand.
   if (!binding) {
     if (state.data === undefined || state.data === null) return null;
+    const lineup = state.data.lineup;
+    // A teamless conversation with participants: who receives the next message.
+    if (lineup) {
+      const rows = lineup.participants.map(
+        (participant) =>
+          [
+            `Participant: ${participant.seat}`,
+            `${participant.role}: ${participant.modelSelection.instanceId} / ${participant.modelSelection.model}`,
+          ] as const,
+      );
+      return (
+        <Popover>
+          <PopoverTrigger
+            render={
+              <Button
+                type="button"
+                size="xs"
+                variant="ghost"
+                className="min-w-0"
+                aria-label={`${lineup.participants.length} participants receive the next message`}
+                data-delivery-team-badge="participants"
+              />
+            }
+          >
+            <span className="contents font-normal">
+              <UsersIcon className="size-3.5 shrink-0" />
+              <span>
+                {lineup.participants.length === 1
+                  ? "1 participant"
+                  : `${lineup.participants.length} participants`}
+              </span>
+            </span>
+          </PopoverTrigger>
+          <PopoverPopup align="start" className="w-[min(36rem,calc(100vw-2rem))]">
+            <PopoverTitle>Who receives the next message</PopoverTitle>
+            <p className="mt-1 text-xs text-muted-foreground">
+              They join from your next message. Change the lineup in the model picker&apos;s{" "}
+              Orchestrator panel.
+            </p>
+            <dl
+              className="mt-3 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs"
+              data-delivery-team-badge-details
+            >
+              {rows.map(([name, value]) => (
+                <div key={name} className="contents">
+                  <dt className="text-muted-foreground">{name}</dt>
+                  <dd className="min-w-0 break-words">{value}</dd>
+                </div>
+              ))}
+            </dl>
+          </PopoverPopup>
+        </Popover>
+      );
+    }
     return (
       <span
         className="flex min-w-0 items-center gap-1 px-1.5 text-xs text-muted-foreground"

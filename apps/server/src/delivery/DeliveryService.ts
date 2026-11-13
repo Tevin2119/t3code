@@ -4,6 +4,7 @@ import {
   DELIVERY_HARNESS_BY_DRIVER,
   DeliveryError,
   DeliveryOrchestrationConfig,
+  DeliveryRememberedLineup,
   DeliveryThreadBinding,
   DeliveryThreadPending,
   type DeliveryActInput,
@@ -41,6 +42,8 @@ const BindingsFile = Schema.fromJsonString(
     lineups: Schema.optional(
       Schema.Record(Schema.String, Schema.NullOr(DeliveryOrchestrationConfig)),
     ),
+    // The team a conversation switched away from, kept so one click brings it back.
+    rememberedLineups: Schema.optional(Schema.Record(Schema.String, DeliveryRememberedLineup)),
   }),
 );
 const decodeBindings = Schema.decodeUnknownEffect(BindingsFile);
@@ -181,6 +184,7 @@ const make = Effect.gen(function* () {
   const bindings = new Map<string, DeliveryThreadBinding>();
   const pending = new Map<string, DeliveryThreadPending>();
   const lineups = new Map<string, DeliveryOrchestrationConfig | null>();
+  const rememberedLineups = new Map<string, DeliveryRememberedLineup>();
   const writeLock = yield* Semaphore.make(1);
 
   // Only a file that is not there means that no thread is bound. A file that
@@ -214,6 +218,11 @@ const make = Effect.gen(function* () {
       for (const [threadId, lineup] of Object.entries(decoded.success.lineups ?? {})) {
         lineups.set(threadId, lineup);
       }
+      for (const [threadId, remembered] of Object.entries(
+        decoded.success.rememberedLineups ?? {},
+      )) {
+        rememberedLineups.set(threadId, remembered);
+      }
     }
   }
   if (storeProblem) yield* Effect.logError(storeProblem);
@@ -236,6 +245,9 @@ const make = Effect.gen(function* () {
         threads: Object.fromEntries(bindings),
         pending: Object.fromEntries(pending),
         ...(lineups.size > 0 ? { lineups: Object.fromEntries(lineups) } : {}),
+        ...(rememberedLineups.size > 0
+          ? { rememberedLineups: Object.fromEntries(rememberedLineups) }
+          : {}),
       }),
     ).pipe(
       Effect.flatMap((contents) =>
@@ -440,10 +452,12 @@ const make = Effect.gen(function* () {
     const binding = bindings.get(threadId) ?? null;
     // What the thread was started with stands until a person changes it.
     const lineup = lineups.has(threadId) ? lineups.get(threadId) : binding?.orchestration;
+    const rememberedLineup = rememberedLineups.get(threadId);
     return {
       binding,
       pending: pending.get(threadId) ?? null,
       ...(lineup ? { lineup } : {}),
+      ...(rememberedLineup ? { rememberedLineup } : {}),
     };
   };
 
@@ -467,12 +481,36 @@ const make = Effect.gen(function* () {
     if (input.orchestration !== null) yield* checkParticipants(input.orchestration.participants);
     const had = lineups.has(input.threadId);
     const previous = lineups.get(input.threadId);
+    const hadRemembered = rememberedLineups.has(input.threadId);
+    const previousRemembered = rememberedLineups.get(input.threadId);
     lineups.set(input.threadId, input.orchestration);
+    if (input.orchestration === null) {
+      // Leaving a team keeps it on record, lead model included, so switching back
+      // restores exactly what was on. With nothing in force the memory stands.
+      const inForce = had
+        ? (previous ?? null)
+        : (bindings.get(input.threadId)?.orchestration ?? null);
+      if (inForce) {
+        rememberedLineups.set(input.threadId, {
+          orchestration: inForce,
+          ...(input.rememberLeadModelSelection
+            ? { leadModelSelection: input.rememberLeadModelSelection }
+            : {}),
+        });
+      }
+    } else {
+      rememberedLineups.delete(input.threadId);
+    }
     yield* persist.pipe(
       Effect.tapError(() =>
         Effect.sync(() => {
           if (had) lineups.set(input.threadId, previous ?? null);
           else lineups.delete(input.threadId);
+          if (hadRemembered && previousRemembered) {
+            rememberedLineups.set(input.threadId, previousRemembered);
+          } else {
+            rememberedLineups.delete(input.threadId);
+          }
         }),
       ),
     );

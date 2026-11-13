@@ -498,6 +498,77 @@ describe("the team of an Orchestrator draft", () => {
     expect(kept(ORCHESTRATOR_KEY).state.drafts.t1).toMatchObject({ team: "rnd" });
     expect(kept(ORCHESTRATOR_KEY).state.drafts.t1).not.toHaveProperty("awaitingTeams");
   });
+
+  it("spends a thread's orchestrator draft when its first message has been sent", async () => {
+    const before = await load();
+    const store = before.useOrchestratorDraftStore.getState();
+    store.enter("t1", "env-a");
+    store.update("t1", { workflow: "chat" });
+    store.update("t1", { participantChoices: { critic: { included: false } } });
+    store.enter("t2", "env-a");
+    store.update("t2", { participantChoices: { critic: { included: false } } });
+    // A successful first send spends the choices: the send path marks the team
+    // choice as sent, and must spend the orchestrator draft with it. Until it
+    // does, the stale choices drive the next send and survive every reload.
+    before.useDeliveryDraftStore.getState().clearChoice("t1");
+
+    expect(before.useOrchestratorDraftStore.getState().drafts.t1).toBeUndefined();
+    expect(kept(ORCHESTRATOR_KEY).state.drafts.t1).toBeUndefined();
+    // A draft still being set up survives, in memory and across a reload.
+    expect(before.useOrchestratorDraftStore.getState().drafts.t2).toMatchObject({
+      team: "development",
+      awaitingTeams: true,
+      participantChoices: { critic: { included: false } },
+    });
+
+    const after = await load();
+    expect(after.useOrchestratorDraftStore.getState().drafts.t1).toBeUndefined();
+    expect(after.useOrchestratorDraftStore.getState().drafts.t2).toMatchObject({
+      team: "development",
+      awaitingTeams: true,
+      participantChoices: { critic: { included: false } },
+    });
+  });
+});
+
+describe("lineup saves a send can wait on", () => {
+  it("settles before a racing send reads the roster", async () => {
+    const state = await load();
+    let release!: (value: string) => void;
+    const saving = new Promise<string>((resolve) => {
+      release = resolve;
+    });
+    const tracked = state.trackLineupMutation("t1", saving);
+    const waited = state.awaitPendingLineupMutation("t1");
+    let waitedDone = false;
+    void waited.then(() => {
+      waitedDone = true;
+    });
+    release("saved");
+    await tracked;
+    await waited;
+    expect(waitedDone).toBe(true);
+    // Settled, so a later send does not wait on anything.
+    await state.awaitPendingLineupMutation("t1");
+  });
+
+  it("keeps the last mutation when two overlap, and a failed one does not throw on await", async () => {
+    const state = await load();
+    let releaseSlow!: () => void;
+    const slow = new Promise<void>((resolve) => {
+      releaseSlow = resolve;
+    });
+    const trackedSlow = state.trackLineupMutation("t1", slow);
+    const trackedFast = state.trackLineupMutation("t1", Promise.resolve("fast"));
+    releaseSlow();
+    await trackedSlow;
+    await trackedFast;
+    await state.awaitPendingLineupMutation("t1");
+
+    const failing = state.trackLineupMutation("t2", Promise.reject(new Error("could not save")));
+    await expect(failing).rejects.toThrow("could not save");
+    await state.awaitPendingLineupMutation("t2");
+  });
 });
 
 describe("how the board is looked at", () => {
