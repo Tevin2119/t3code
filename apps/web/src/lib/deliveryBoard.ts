@@ -573,7 +573,7 @@ export function boardAttentionCount(body: unknown): number | null {
 export function messageStateLabel(state: string | null, revision: number | null): string | null {
   switch (state) {
     case "received":
-      return "Sent. Not read by the team yet";
+      return "Waiting. The team reads it at its next turn and answers it then";
     case "seen":
       return "Seen by the team";
     case "answered":
