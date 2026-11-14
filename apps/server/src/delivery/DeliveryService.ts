@@ -130,6 +130,9 @@ export class DeliveryService extends Context.Service<
     readonly nativeBuildAct: (
       input: DeliveryActInput,
     ) => Effect.Effect<DeliveryResponse, DeliveryError>;
+    readonly nativeIntakeAct: (
+      input: DeliveryActInput,
+    ) => Effect.Effect<DeliveryResponse, DeliveryError>;
     readonly bindThread: (
       input: DeliveryBindThreadInput,
     ) => Effect.Effect<DeliveryThreadBinding, DeliveryError>;
@@ -166,6 +169,7 @@ export const layerTest = Layer.succeed(
     read: disabled,
     act: disabled,
     nativeBuildAct: disabled,
+    nativeIntakeAct: disabled,
     bindThread: disabled,
     threadState: Effect.fn("DeliveryService.threadState")(() =>
       Effect.succeed({ binding: null, pending: null }),
@@ -829,7 +833,9 @@ const make = Effect.gen(function* () {
   return DeliveryService.of({
     read: Effect.fn("DeliveryService.read")((input) => request("GET", input.path)),
     act: Effect.fn("DeliveryService.act")((input) =>
-      new URL(input.path, "http://delivery.invalid").pathname.startsWith("/api/native-builds/")
+      /^\/api\/native-(builds|intakes)\//.test(
+        new URL(input.path, "http://delivery.invalid").pathname,
+      )
         ? Effect.fail(
             new DeliveryError({
               reason: "refused",
@@ -846,6 +852,18 @@ const make = Effect.gen(function* () {
             new DeliveryError({
               reason: "invalid",
               detail: "Invalid native coordinator mutation path.",
+            }),
+          ),
+    ),
+    nativeIntakeAct: Effect.fn("DeliveryService.nativeIntakeAct")((input) =>
+      /^\/api\/native-intakes\/intake-[a-f0-9]{64}\/(claim|attach|complete|abandon|cancel)$/.test(
+        input.path,
+      )
+        ? request("POST", input.path, input.body)
+        : Effect.fail(
+            new DeliveryError({
+              reason: "invalid",
+              detail: "Invalid native intake mutation path.",
             }),
           ),
     ),

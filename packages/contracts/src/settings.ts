@@ -1062,6 +1062,13 @@ export const DeliverySettings = Schema.Struct({
   /** Dot-sourced by PowerShell terminals T3 Code opens, so harnesses start with a team loaded. */
   terminalEntryScript: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
   engineCommand: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
+  nativeIntake: Schema.optionalKey(
+    Schema.Struct({
+      enabled: Schema.Boolean,
+      profilePath: TrimmedNonEmptyString,
+      projectId: ProjectId,
+    }),
+  ),
 });
 export type DeliverySettings = typeof DeliverySettings.Type;
 
@@ -1886,6 +1893,13 @@ export const ServerSettingsPatch = Schema.Struct({
       engineUrl: Schema.optionalKey(TrimmedString),
       terminalEntryScript: Schema.optionalKey(TrimmedString),
       engineCommand: Schema.optionalKey(TrimmedString),
+      nativeIntake: Schema.optionalKey(
+        Schema.Struct({
+          enabled: Schema.Boolean,
+          profilePath: TrimmedNonEmptyString,
+          projectId: ProjectId,
+        }),
+      ),
     }),
   ),
   /** Merges per host, replacing patched fields whole; redaction markers retain secrets, empty secrets remove them. A non-empty token map keeps the saved tokens of hosts it omits; an empty map clears them all. */
