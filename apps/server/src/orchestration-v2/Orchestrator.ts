@@ -4801,7 +4801,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       return yield* new OrchestratorDispatchError({
         commandId: input.command.commandId,
         commandType: input.command.type,
-        cause: `Target run ${input.targetRunId} was not found.`,
+        cause: "This turn is no longer available. Send your message as a new turn.",
       });
     }
     if (isNativeMaintenanceCommand(input)) {
@@ -4840,14 +4840,18 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       return yield* new OrchestratorDispatchError({
         commandId: input.command.commandId,
         commandType: input.command.type,
-        cause: `Target run ${targetRun.id} has no root node.`,
+        cause:
+          "This turn is not ready for steering. Wait for the agent to start or leave your message queued.",
       });
     }
     if (targetRun.status !== "running") {
       return yield* new OrchestratorDispatchError({
         commandId: input.command.commandId,
         commandType: input.command.type,
-        cause: `Target run ${targetRun.id} is ${targetRun.status} and cannot be steered.`,
+        cause:
+          targetRun.status === "starting" || targetRun.status === "preparing"
+            ? "Wait for the agent to start answering before steering. Queued messages will wait for the next turn."
+            : "This turn is no longer accepting steering. Send a new message or leave it queued for the next turn.",
       });
     }
     // The run reads as running until its provider stops, but a steer accepted
@@ -4856,7 +4860,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       return yield* new OrchestratorDispatchError({
         commandId: input.command.commandId,
         commandType: input.command.type,
-        cause: `Target run ${targetRun.id} is stopping and cannot be steered.`,
+        cause:
+          "This turn is stopping and cannot accept steering. Queued messages stay in the queue.",
       });
     }
     const providerThread = input.projection.providerThreads.find(
@@ -4866,7 +4871,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       return yield* new OrchestratorDispatchError({
         commandId: input.command.commandId,
         commandType: input.command.type,
-        cause: `Provider thread ${targetRun.providerThreadId} has no active provider session for steering.`,
+        cause:
+          "The agent is not connected for steering. Leave your message queued or try again when it is ready.",
       });
     }
     const providerSessionId = providerThread.providerSessionId;
@@ -4878,7 +4884,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       return yield* new OrchestratorDispatchError({
         commandId: input.command.commandId,
         commandType: input.command.type,
-        cause: `No running provider turn found for active run ${targetRun.id}.`,
+        cause: "The agent is not currently answering. Leave your message queued for the next turn.",
       });
     }
     const sessionOption = yield* providerSessions.get(providerSessionId).pipe(
@@ -4895,7 +4901,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       return yield* new OrchestratorDispatchError({
         commandId: input.command.commandId,
         commandType: input.command.type,
-        cause: `Provider session ${providerThread.providerSessionId} is not active.`,
+        cause:
+          "The agent session is no longer active. Leave your message queued for the next turn.",
       });
     }
 
@@ -9557,7 +9564,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       return yield* new OrchestratorDispatchError({
         commandId: command.commandId,
         commandType: command.type,
-        cause: `Queued run ${command.queuedRunId} is not queued.`,
+        cause: "This message is no longer queued. Check the conversation for its current status.",
       });
     }
     const queuedRootNode =
@@ -9579,7 +9586,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       return yield* new OrchestratorDispatchError({
         commandId: command.commandId,
         commandType: command.type,
-        cause: `Queued run ${queuedRun.id} is missing message or execution state.`,
+        cause: "This queued message is not ready to send. Please try again.",
       });
     }
     if (
@@ -9667,6 +9674,31 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         now,
       });
     }
+    yield* dispatchSteerIntoRun({
+      command,
+      events,
+      effects,
+      projection,
+      modelSelection: queuedRun.modelSelection,
+      targetRunId: command.targetRunId,
+      messageId: queuedMessage.id,
+      text: queuedMessage.text,
+      attachments: queuedMessage.attachments,
+      ...(queuedMessage.context ? { context: queuedMessage.context } : {}),
+      createdBy: queuedMessage.createdBy,
+      creationSource: queuedMessage.creationSource,
+      ...(queuedMessage.scheduledTaskId === undefined
+        ? {}
+        : { scheduledTaskId: queuedMessage.scheduledTaskId }),
+      ...(queuedMessage.senderThreadId === undefined
+        ? {}
+        : { senderThreadId: queuedMessage.senderThreadId }),
+      ...(queuedMessage.idleCompaction === undefined
+        ? {}
+        : { idleCompaction: queuedMessage.idleCompaction }),
+      forceRestart: false,
+    });
+
     yield* emitEvent({
       type: "run.updated",
       threadId: command.threadId,
@@ -9706,31 +9738,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         status: "cancelled",
         completedAt: now,
       },
-    });
-
-    yield* dispatchSteerIntoRun({
-      command,
-      events,
-      effects,
-      projection,
-      modelSelection: queuedRun.modelSelection,
-      targetRunId: command.targetRunId,
-      messageId: queuedMessage.id,
-      text: queuedMessage.text,
-      attachments: queuedMessage.attachments,
-      ...(queuedMessage.context ? { context: queuedMessage.context } : {}),
-      createdBy: queuedMessage.createdBy,
-      creationSource: queuedMessage.creationSource,
-      ...(queuedMessage.scheduledTaskId === undefined
-        ? {}
-        : { scheduledTaskId: queuedMessage.scheduledTaskId }),
-      ...(queuedMessage.senderThreadId === undefined
-        ? {}
-        : { senderThreadId: queuedMessage.senderThreadId }),
-      ...(queuedMessage.idleCompaction === undefined
-        ? {}
-        : { idleCompaction: queuedMessage.idleCompaction }),
-      forceRestart: false,
     });
   });
 

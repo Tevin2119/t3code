@@ -41,6 +41,20 @@ export interface ThreadQueueWorkflowState {
   readonly canSendNow: boolean;
 }
 
+export function deriveTeamChatPhase(
+  projection: Pick<Projection, "runs" | "subagents"> | null | undefined,
+  runId: Run["id"] | null | undefined,
+) {
+  if (runId == null || projection == null) return null;
+  const seats = projection.subagents.filter((task) => task.teamChat?.sourceRunId === runId);
+  if (seats.length === 0) return null;
+  const run = projection.runs.find((run) => run.id === runId);
+  if (run?.status === "starting") {
+    return seats.some((task) => task.teamChat?.stage === "critique") ? "critique" : "contribution";
+  }
+  return "lead";
+}
+
 export function resolveActiveThreadRun(projection: Pick<Projection, "runs">): Run | null {
   return projection.runs.findLast((run) => ACTIVE_RUN_STATUSES.has(run.status)) ?? null;
 }
