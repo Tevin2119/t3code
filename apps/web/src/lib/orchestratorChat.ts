@@ -202,8 +202,11 @@ export function resolveOrchestratorRoster(input: {
  * conversation; the draft and a held setup configure the first message only.
  */
 export function decideOrchestrationForSend(input: {
-  /** The roster resolved from the persisted composer draft, when there is one. */
-  readonly draftConfiguration: DeliveryOrchestrationConfig | null;
+  /**
+   * The roster resolved from the persisted composer draft: `undefined` with no
+   * draft, `null` for a draft whose roster has a problem and so makes no team.
+   */
+  readonly draftConfiguration: DeliveryOrchestrationConfig | null | undefined;
   /** What the held setup recorded when its attempt failed. */
   readonly heldOrchestration: DeliveryOrchestrationConfig | undefined;
   /** Who joins the conversation now, as saved on the server. */
@@ -218,6 +221,7 @@ export function decideOrchestrationForSend(input: {
   }
   return {
     orchestration: input.draftConfiguration ?? null,
-    source: input.draftConfiguration !== null ? "draft" : null,
+    // A draft with a problem is still the draft's to answer for: the send stops on it.
+    source: input.draftConfiguration !== undefined ? "draft" : null,
   };
 }

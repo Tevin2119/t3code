@@ -155,19 +155,19 @@ export const make = Effect.gen(function* () {
             ? { readOnly: true, access: "approval-required" as const }
             : { readOnly: false, access };
         };
-        const readers = roster.filter((seat) => accessOf(seat).readOnly);
+        // The orchestrator alone hands out work, so it is told who each participant is.
+        const members = roster
+          .map((seat) => {
+            const { readOnly, access } = accessOf(seat);
+            return `- ${seat.seat} (${seat.role}): providerInstanceId ${seat.modelSelection.instanceId}, model ${seat.modelSelection.model}, ${readOnly ? "read-only: questions and reviews only" : `may change things (runtimeMode ${access})`}`;
+          })
+          .join("\n");
         const mode = lineup.critique ?? "first";
         const critiqueWanted = mode === "always" || (mode === "first" && !followUp);
         if (initialDone && (critiqueDone || !critiqueWanted)) {
           return {
             ready: true,
-            context: `<team_discussion>\nYou are the orchestrator for ${group}. The native participants have completed independent contributions${critiqueWanted ? " and a critique round" : ""}. Synthesize their evidence and disagreements into a response to the latest user message. Attribute useful insights to their seat/model, acknowledge failed or missing contributions, and distinguish consensus from unresolved disagreement. Do not launch these rounds again.${
-              readers.length === roster.length
-                ? " The participants are read-only and have changed nothing. When the user asks for work to be done, do it yourself in this thread under the project's own rules, or say plainly what should be handed to a team that builds."
-                : readers.length > 0
-                  ? ` These participants are read-only and have changed nothing: ${readers.map((seat) => seat.seat).join(", ")}. The others could act on the user's message; check what they did before you do more.`
-                  : ""
-            }\n\nIndependent contributions:\n${contributions(initial)}${critiqueWanted ? `\n\nCritiques:\n${contributions(critiques)}` : ""}\n</team_discussion>`,
+            context: `<team_discussion>\nYou are the orchestrator for ${group}. The native participants have completed independent contributions${critiqueWanted ? " and a critique round" : ""}. Synthesize their evidence and disagreements into a response to the latest user message. Attribute useful insights to their seat/model, acknowledge failed or missing contributions, and distinguish consensus from unresolved disagreement. Do not launch these rounds again.\n\nYou decide who does what. The participants only discussed and were told to change nothing. When the user asks for work to be done, do it yourself in this thread under the project's own rules, or hand each piece to one participant with \`delegate_task\`: pass that participant's \`target\` (providerInstanceId and model) and \`runtimeMode\` from the list below, and a \`task\` that stands on its own, because the child sees none of this conversation. Give one piece of work to one participant. When more than one child would change files at the same time, give each \`isolation: 'worktree'\`. Hand work that changes anything only to a participant marked "may change things"; a read-only participant gets a question or a review with \`interactionMode: 'plan'\`. Check each result before you tell the user it is done.\n\nParticipants:\n${members}\n\nIndependent contributions:\n${contributions(initial)}${critiqueWanted ? `\n\nCritiques:\n${contributions(critiques)}` : ""}\n</team_discussion>`,
           };
         }
         const stage = initialDone ? "critique" : "contribution";
@@ -254,7 +254,7 @@ export const make = Effect.gen(function* () {
             task: `Participate as ${seat.role}, seat ${seat.seat}, in ${group}. ${
               readOnly
                 ? "You are read-only here: anything that would change a file, a branch, a pull request, a board or any other system is declined, even when the user's message asks for the work to be done. Say what should be done and why; the orchestrator acts."
-                : "This is a discussion: do not edit files, commit, push, or delegate unless the user's message asks you to."
+                : "This is a discussion: change nothing here, even when the user's message asks for the work to be done. Do not edit files, commit, push, post or delegate. Say what should be done, by whom and why; the orchestrator decides who does what and hands out the work afterwards."
             } ${
               stage === "contribution"
                 ? "Give your independent assessment of the latest user message, with evidence, assumptions, and objections."
@@ -262,7 +262,7 @@ export const make = Effect.gen(function* () {
             }\n\nConversation:\n${conversation}${attached}${stage === "critique" ? `\n\nIndependent contributions:\n${contributions(initial)}` : ""}`,
             modelSelection: seat.modelSelection,
             runtimeMode: access,
-            // Plan mode outranks the access a conversation gives, so only read-only seats get it.
+            // Plan mode makes a harness talk of approving a plan, so only read-only seats get it.
             interactionMode: readOnly ? "plan" : "default",
             completionWake: "settled_only",
           });

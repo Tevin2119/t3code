@@ -34,11 +34,12 @@ Choose between two and twelve participants. Two seats may use the same provider 
 Sending starts a native T3 team conversation. Participants contribute independently,
 then critique the findings before the lead brings the results together. The critique runs on the first message only unless you set **Critique round** to every message or never; follow-ups always get fresh contributions. Their
 threads and results stay linked to the conversation. Follow-up messages use the
-same team with the conversation's context. Participants are
-read-only: they read and discuss, anything that would change a file, a branch or a
-board is declined without asking you, and only the orchestrator acts. Set
-**Participants' access** to full access when you want the work done by the
-participants in the conversation itself, or to ask you before each change. Each
+same team with the conversation's context. Participants only
+discuss: the orchestrator decides who does what, does the work itself or hands each
+piece to one participant, and checks the result. Participants are read-only unless
+you say otherwise, so the orchestrator can hand them questions and reviews only. Set
+**Participants' access** to full access, or to ask you before each change, to let the
+orchestrator hand them work that changes things. Each
 participant also has its own access beside its name, which comes first: give full
 access only to the seats that should build. A seat the team's profile keeps read-only
 stays read-only until you change it there. A provider

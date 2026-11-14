@@ -355,6 +355,23 @@ it("sends a later message to the saved lineup, not the draft it started with", (
       heldOrchestration: undefined,
     }),
   ).toEqual({ source: "draft", orchestration: draftConfiguration });
+
+  // A draft whose roster has a problem is still the draft: the send stops on it
+  // and never goes out as an ordinary chat.
+  expect(
+    decideOrchestrationForSend({
+      draftConfiguration: null,
+      lineup: undefined,
+      heldOrchestration: undefined,
+    }),
+  ).toEqual({ source: "draft", orchestration: null });
+  expect(
+    decideOrchestrationForSend({
+      draftConfiguration: undefined,
+      lineup: undefined,
+      heldOrchestration: undefined,
+    }).source,
+  ).toBeNull();
 });
 
 it("does not put a started teamless conversation back on its stale draft", () => {
