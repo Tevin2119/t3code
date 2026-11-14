@@ -21,6 +21,7 @@ import {
 import { RepositoryBrowse } from "./BoardPicker.browse";
 import { ADD_REPOSITORY, RepositoryPicker } from "./RepositoryPicker";
 import { BaseBranchPicker } from "./BoardPicker.branches";
+import { publishTargetOf, RepositoryDelivery } from "./RepositoryDelivery";
 
 import { Button } from "../ui/button";
 import { Checkbox } from "../ui/checkbox";
@@ -591,6 +592,16 @@ export function BoardDialog(props: {
                       own; the branch itself is not changed.
                     </span>
                   </label>
+                  {chosen ? (
+                    <RepositoryDelivery
+                      key={chosen.id}
+                      environmentId={props.environmentId ?? null}
+                      repository={chosen}
+                      base={base || chosen.defaultBase || ""}
+                      suggested={publishTargetOf(projects, props.environmentId, chosen.path)}
+                      by={props.by}
+                    />
+                  ) : null}
                 </>
               )}
             </div>

@@ -564,6 +564,65 @@ describe("BoardDialog repository list", () => {
     await act(() => saveButton().props.onClick());
     expect(saved).toHaveBeenCalledWith({ title: "Board", description: "" });
   });
+
+  it("asks where a repository's approved work goes, offering the remote T3 knows", async () => {
+    mock.reading.body = [engineRepo("r1", "/work/a")];
+    mock.projects = [
+      project("p1", "/work/a", {
+        repositoryIdentity: {
+          provider: "github",
+          owner: "me",
+          name: "fork",
+          locator: { source: "git-remote", remoteName: "mine", remoteUrl: "https://x/me/fork" },
+        } as never,
+      }),
+    ];
+    mock.action = vi.fn(async () => ({ ok: true, body: { ready: { ok: true, problems: [] } } }));
+    await render({
+      id: "b1",
+      title: "Board",
+      description: "",
+      kind: "own",
+      target: {
+        ok: true,
+        repository: "r1",
+        base: "main",
+        title: "r1",
+        path: "/work/a",
+        problem: null,
+      },
+    });
+    const option = (mode: string) =>
+      renderer!.root.findByProps({ "data-repository-delivery-option": mode });
+    // Unset is said, since the engine starts no task there until it is chosen.
+    expect(renderer!.root.findAllByProps({ "data-repository-delivery-unset": true })).toHaveLength(
+      1,
+    );
+
+    await act(() => option("publish").props.onClick());
+    expect(mock.action).not.toHaveBeenCalled();
+    const form = renderer!.root.findByType("form");
+    expect(form.findByType("input" as never).props.value).toBe("me/fork");
+    await act(() =>
+      form.props.onSubmit({ preventDefault: () => undefined, stopPropagation: () => undefined }),
+    );
+    expect(mock.action).toHaveBeenCalledWith("/api/repositories/r1/delivery", {
+      delivery: {
+        mode: "publish",
+        remote: "mine",
+        base: "main",
+        host: "github",
+        repository: "me/fork",
+      },
+      by: "person",
+    });
+
+    await act(() => option("local").props.onClick());
+    expect(mock.action).toHaveBeenLastCalledWith("/api/repositories/r1/delivery", {
+      delivery: { mode: "local" },
+      by: "person",
+    });
+  });
 });
 
 describe("BoardDialog base branch from T3's branch list", () => {
