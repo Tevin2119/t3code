@@ -13,6 +13,7 @@ import {
   useHasDraftTeamChoice,
 } from "../state/delivery";
 import { taskStandsIn, useThreadTasks } from "./delivery/ThreadTaskLinks";
+import { ThreadTaskQuestions } from "./delivery/ThreadTaskQuestions";
 import {
   useChatViewComposerProviderSelection,
   useDeliveryThreadModelBinding,
@@ -3299,8 +3300,16 @@ export default function ChatView(props: ChatViewProps) {
     threadStatusLine === null &&
     pendingGuestMessageCount === 0 &&
     !hasQueuedTurns &&
-    !hasTeamChatActivity ? null : (
+    !hasTeamChatActivity &&
+    threadTasks.length === 0 ? null : (
       <>
+        {environmentId && threadTasks.length > 0 ? (
+          <ThreadTaskQuestions
+            key={routeThreadKey}
+            environmentId={environmentId}
+            tasks={threadTasks}
+          />
+        ) : null}
         {pendingHandoff === null ? null : (
           <div className="chat-content-lane">
             <HandoffRow
