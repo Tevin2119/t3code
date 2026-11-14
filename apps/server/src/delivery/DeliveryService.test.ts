@@ -17,6 +17,7 @@ import * as DeliveryService from "./DeliveryService.ts";
 import * as DeliveryThreadSession from "./DeliveryThreadSession.ts";
 
 const REPO = "C:/work/repo";
+const SCRATCH = "C:/home/scratch";
 const ROLE_BY_HARNESS: Record<string, string> = {
   claude: "lead-developer",
   codex: "team-lead",
@@ -124,6 +125,9 @@ const layer = (
             }
             if (url.pathname === "/api/repository") {
               const folder = url.searchParams.get("folder") ?? "";
+              if (folder.replaceAll("\\", "/").toLowerCase().startsWith(SCRATCH.toLowerCase())) {
+                return json({ readable: false, why: "this folder is not in a git repository" });
+              }
               // A worktree of the repository has the repository as its root.
               const inside = folder
                 .replaceAll("\\", "/")
@@ -583,6 +587,21 @@ describe("DeliveryService", () => {
       expect(workspace.detail).toContain("another repository");
       const nowhere = yield* start({ driver: "claudeAgent", cwd: undefined }).pipe(Effect.flip);
       expect(nowhere.detail).toContain("no working folder");
+
+      // A Scratch conversation is bound in the Scratch folder, which is no repository, and its
+      // session starts in a folder of its own below it.
+      const scratch = threadId("thread-scratch");
+      yield* bind(delivery, scratch, { cwd: SCRATCH });
+      expect(
+        yield* delivery.prepareThread(scratch, {
+          driver: "claudeAgent",
+          cwd: `${SCRATCH}/2026-11-14-a-question`,
+        }),
+      ).toBe(true);
+      const elsewhere = yield* delivery
+        .prepareThread(scratch, { driver: "claudeAgent", cwd: "C:/other/2026-11-14-a-question" })
+        .pipe(Effect.flip);
+      expect(elsewhere.detail).toContain("another repository");
 
       // The engine's setup for the session moved on behind the thread's back.
       fake.tamper = (identity) => ({ ...identity, role: "qa-attack" });
