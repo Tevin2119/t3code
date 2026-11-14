@@ -7,6 +7,7 @@ import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Scope from "effect/Scope";
+import * as Stream from "effect/Stream";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import type * as EffectAcpErrors from "effect-acp/errors";
 import type * as EffectAcpSchema from "effect-acp/compat";
@@ -69,6 +70,48 @@ export function buildHermesAcpSpawnInput(
   };
 }
 
+const OPEN_BRACE = 0x7b;
+const isSpace = (byte: number) => byte === 0x20 || byte === 0x09 || byte === 0x0d || byte === 0x0a;
+
+/**
+ * Drops every stdout line that cannot be an ACP message. A command Hermes runs can print to the
+ * stream its ACP messages travel on, and one such line ends the whole session: a JSON-RPC
+ * message is an object, so a line that does not open with a brace is never one.
+ */
+export function dropNonProtocolLines<E>(
+  stdout: Stream.Stream<Uint8Array, E>,
+): Stream.Stream<Uint8Array, E> {
+  return Stream.suspend(() => {
+    let pending: Uint8Array[] = [];
+    const finishLine = (): ReadonlyArray<Uint8Array> => {
+      const line = Buffer.concat(pending);
+      pending = [];
+      const first = line.find((byte) => !isSpace(byte));
+      return first === OPEN_BRACE ? [line] : [];
+    };
+    return stdout.pipe(
+      Stream.map((chunk) => {
+        const lines: Uint8Array[] = [];
+        let offset = 0;
+        while (offset < chunk.byteLength) {
+          const newline = chunk.indexOf(10, offset);
+          const end = newline === -1 ? chunk.byteLength : newline + 1;
+          pending.push(chunk.subarray(offset, end));
+          if (newline !== -1) lines.push(...finishLine());
+          offset = end;
+        }
+        return lines;
+      }),
+      Stream.flatMap(Stream.fromIterable),
+      Stream.concat(
+        Stream.suspend(() =>
+          pending.length > 0 ? Stream.fromIterable(finishLine()) : Stream.empty,
+        ),
+      ),
+    );
+  });
+}
+
 export const makeHermesAcpRuntime = Effect.fn("makeHermesAcpRuntime")(function* (
   input: HermesAcpRuntimeInput,
 ): Effect.fn.Return<
@@ -81,6 +124,7 @@ export const makeHermesAcpRuntime = Effect.fn("makeHermesAcpRuntime")(function* 
       ...input,
       spawn: buildHermesAcpSpawnInput(input.hermesSettings, input.cwd, input.environment),
       authMethodId: HERMES_AUTH_METHOD_ID,
+      transformStdout: dropNonProtocolLines,
     }).pipe(
       Layer.provide(
         Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, input.childProcessSpawner),

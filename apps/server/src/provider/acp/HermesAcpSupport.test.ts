@@ -1,8 +1,11 @@
 import { HERMES_DEFAULT_MODEL } from "@t3tools/contracts";
 import { expect, it } from "@effect/vitest";
+import * as Effect from "effect/Effect";
+import * as Stream from "effect/Stream";
 
 import {
   buildHermesAcpSpawnInput,
+  dropNonProtocolLines,
   hermesAcpSpawnArgs,
   hermesModelSlug,
   makeHermesEnvironment,
@@ -57,3 +60,22 @@ it("keeps Hermes on its own model unless the user picked one", () => {
   expect(resolveHermesAcpModelId("  ")).toBeUndefined();
   expect(resolveHermesAcpModelId("deepseek:deepseek-v4-pro")).toBe("deepseek:deepseek-v4-pro");
 });
+
+it.effect("drops lines a command printed onto the ACP stream and keeps every message whole", () =>
+  Effect.gen(function* () {
+    const encoder = new TextEncoder();
+    // Chunks do not end where lines do, and the last message has no trailing newline.
+    const chunks = [
+      '{"jsonrpc":"2.0","id":1,"re',
+      'sult":{}}\n--- scanning fares\n',
+      'Traceback (most recent call last):\n  {"jsonrpc":"2.0","method":"a"}\n\n',
+      '{"jsonrpc":"2.0","method":"b"}',
+    ].map((chunk) => encoder.encode(chunk));
+    const kept = yield* dropNonProtocolLines(Stream.fromIterable(chunks)).pipe(Stream.runCollect);
+    expect([...kept].map((line) => new TextDecoder().decode(line))).toEqual([
+      '{"jsonrpc":"2.0","id":1,"result":{}}\n',
+      '  {"jsonrpc":"2.0","method":"a"}\n',
+      '{"jsonrpc":"2.0","method":"b"}',
+    ]);
+  }),
+);
