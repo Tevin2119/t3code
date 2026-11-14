@@ -10,6 +10,8 @@ export const DeliveryOrchestrationConfig = Schema.Struct({
       seat: TrimmedNonEmptyString,
       role: TrimmedNonEmptyString,
       modelSelection: ModelSelection,
+      /** This participant's own access. Absent means the conversation's. */
+      access: Schema.optional(Schema.Literals(["read-only", "approval-required", "full-access"])),
     }),
   ).check(Schema.isMinLength(2), Schema.isMaxLength(12)),
   /** When participants critique each other. Absent means the conversation's first message only. */
@@ -20,6 +22,12 @@ export const DeliveryOrchestrationConfig = Schema.Struct({
   team: Schema.optional(TrimmedNonEmptyString),
 });
 export type DeliveryOrchestrationConfig = typeof DeliveryOrchestrationConfig.Type;
+
+/** The access one seat joins with: its own, else the conversation's, else read-only. */
+export const deliveryParticipantAccess = (
+  lineup: Pick<DeliveryOrchestrationConfig, "access" | "participants">,
+  seat: string,
+) => lineup.participants.find((item) => item.seat === seat)?.access ?? lineup.access ?? "read-only";
 
 /**
  * The team a conversation was switched away from, so one click brings it back.

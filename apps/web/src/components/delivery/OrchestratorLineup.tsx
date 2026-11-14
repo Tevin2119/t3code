@@ -38,13 +38,24 @@ function valueOfLineup(
         const joined = lineup.participants.find((item) => item.seat === seat.seat);
         return [
           seat.seat,
-          joined ? { included: true, modelSelection: joined.modelSelection } : { included: false },
+          joined
+            ? {
+                included: true,
+                modelSelection: joined.modelSelection,
+                ...(joined.access ? { access: joined.access } : {}),
+              }
+            : { included: false },
         ];
       }),
     ),
     extraParticipants: lineup.participants
       .filter((item) => !seats.has(item.seat))
-      .map((item) => ({ id: item.seat, role: item.role, modelSelection: item.modelSelection })),
+      .map((item) => ({
+        id: item.seat,
+        role: item.role,
+        modelSelection: item.modelSelection,
+        ...(item.access ? { access: item.access } : {}),
+      })),
     ...(lineup.critique ? { critique: lineup.critique } : {}),
     ...(lineup.access ? { access: lineup.access } : {}),
   };

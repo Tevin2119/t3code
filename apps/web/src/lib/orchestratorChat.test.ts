@@ -212,6 +212,33 @@ it("says why a seat's provider cannot be used and what to do about it", () => {
   ).toContain("No enabled provider runs claude");
 });
 
+it("gives each seat its own access: the team's read-only seat stays read-only until it is changed here", () => {
+  const input = setup();
+  const team = {
+    ...input.team,
+    settings: input.team.settings.map((item) => ({
+      ...item,
+      now: { ...item.now, access: "read-only" },
+    })),
+  };
+  const teamHeld = resolveOrchestratorRoster({ ...input, team, access: "full-access" });
+  expect(teamHeld.rows.map((row) => row.access)).toEqual(["full-access", "read-only"]);
+  expect(teamHeld.configuration?.participants.map((item) => item.access)).toEqual([
+    undefined,
+    "read-only",
+  ]);
+
+  const chosen = resolveOrchestratorRoster({
+    ...input,
+    team,
+    choices: { scout: { access: "read-only" }, critic: { access: "full-access" } },
+  });
+  expect(chosen.configuration?.participants.map((item) => item.access)).toEqual([
+    "read-only",
+    "full-access",
+  ]);
+});
+
 it("adds participants for one conversation, in a role of the team, beside or instead of its seats", () => {
   const input = setup();
   const team = parseTeams([

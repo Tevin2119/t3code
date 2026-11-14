@@ -34,6 +34,8 @@ function setup({
   unavailable = false,
   critique = undefined as "first" | "always" | "never" | undefined,
   access = undefined as "approval-required" | "full-access" | undefined,
+  /** The researcher's own access, over the conversation's. */
+  seatAccess = undefined as "read-only" | "approval-required" | "full-access" | undefined,
   threadAccess = "full-access",
   fullAccessOnly = false,
   /** A conversation bound to no team; `callsTeam` names one for its participants. */
@@ -45,6 +47,7 @@ function setup({
       seat: "researcher",
       role: "researcher",
       modelSelection: createModelSelection(ProviderInstanceId.make("claude-work"), "claude-model"),
+      ...(seatAccess ? { access: seatAccess } : {}),
     },
     {
       seat: "critic",
@@ -290,6 +293,7 @@ it.effect("holds participants to read-only unless the conversation gives them mo
     yield* (yield* readOnly.service).prepareTurn({ threadId, runId });
     for (const command of readOnly.admissions.values()) {
       expect(command.runtimeMode).toBe("approval-required");
+      expect(command.interactionMode).toBe("plan");
       expect(command.task).toContain("You are read-only here");
     }
 
@@ -297,8 +301,25 @@ it.effect("holds participants to read-only unless the conversation gives them mo
     yield* (yield* chosen.service).prepareTurn({ threadId, runId });
     for (const command of chosen.admissions.values()) {
       expect(command.runtimeMode).toBe("full-access");
+      expect(command.interactionMode).toBe("default");
       expect(command.task).not.toContain("You are read-only here");
     }
+
+    // A seat's own access comes before the conversation's, in either direction.
+    const held = setup({ access: "full-access", seatAccess: "read-only" });
+    yield* (yield* held.service).prepareTurn({ threadId, runId });
+    const [researcher, critic] = [...held.admissions.values()];
+    expect(researcher?.runtimeMode).toBe("approval-required");
+    expect(researcher?.interactionMode).toBe("plan");
+    expect(researcher?.task).toContain("You are read-only here");
+    expect(critic?.runtimeMode).toBe("full-access");
+    expect(critic?.interactionMode).toBe("default");
+    const lifted = setup({ seatAccess: "full-access" });
+    yield* (yield* lifted.service).prepareTurn({ threadId, runId });
+    const [builder, reader] = [...lifted.admissions.values()];
+    expect(builder?.runtimeMode).toBe("full-access");
+    expect(builder?.interactionMode).toBe("default");
+    expect(reader?.interactionMode).toBe("plan");
 
     const unheld = setup({ fullAccessOnly: true });
     const unheldError = yield* (yield* unheld.service)

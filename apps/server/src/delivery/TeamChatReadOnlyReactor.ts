@@ -1,4 +1,8 @@
-import { CommandId, type OrchestrationV2DomainEvent } from "@t3tools/contracts";
+import {
+  CommandId,
+  deliveryParticipantAccess,
+  type OrchestrationV2DomainEvent,
+} from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -16,7 +20,7 @@ export const READ_ONLY_FEEDBACK =
 /**
  * Holds discussion participants to read-only. A participant runs in the mode that asks before
  * anything is changed, and this declines every such request, so nothing is changed and nobody
- * is asked. Only a conversation whose participants' access is left at its default is covered.
+ * is asked. Only a participant whose access in the conversation is read-only is covered.
  */
 export class TeamChatReadOnlyReactor extends Context.Service<
   TeamChatReadOnlyReactor,
@@ -49,12 +53,10 @@ const make = Effect.gen(function* () {
       const parentThreadId = child.lineage.parentThreadId;
       if (parentThreadId === null) return;
       const parent = yield* projections.getThreadRecords(parentThreadId, ["subagents"]);
-      const participant = parent.subagents.some(
-        (task) => task.childThreadId === child.id && task.teamChat !== undefined,
-      );
-      if (!participant) return;
+      const seat = parent.subagents.find((task) => task.childThreadId === child.id)?.teamChat?.seat;
+      if (seat === undefined) return;
       const { lineup } = yield* delivery.threadState(parentThreadId);
-      if (lineup === undefined || lineup.access !== undefined) return;
+      if (lineup === undefined || deliveryParticipantAccess(lineup, seat) !== "read-only") return;
       yield* engine.dispatch({
         type: "runtime-request.respond",
         commandId: CommandId.make(`server:team-chat-read-only:${child.id}:${event.payload.id}`),
