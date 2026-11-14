@@ -53,7 +53,7 @@ const config = {
 } as unknown as ServerConfig;
 const current = { instanceId: ProviderInstanceId.make("pi_work"), model: "fast" };
 const reason =
-  "This thread is the development implementer on pi. Start a new thread to use another harness.";
+  "This thread is the development implementer on pi. In a team conversation, Chat 1:1 beside a participant talks to it alone. Otherwise start a new thread to use another harness.";
 
 describe("mobile delivery model options", () => {
   it.each([undefined, current.instanceId])(
@@ -102,7 +102,7 @@ describe("mobile delivery model options", () => {
     const differentOptions = buildModelOptions(config, current, undefined, null, false, different);
     expect(canCommitPendingModel(staged, groupByProvider(differentOptions))).toBe(false);
     expect(modelOptionSelectionRefusal(staged, differentOptions)).toBe(
-      "This thread is the review reviewer on claude. Start a new thread to use another harness.",
+      "This thread is the review reviewer on claude. In a team conversation, Chat 1:1 beside a participant talks to it alone. Otherwise start a new thread to use another harness.",
     );
     expect(canCommitPendingModel(staged, groupByProvider(unrestricted))).toBe(true);
   });

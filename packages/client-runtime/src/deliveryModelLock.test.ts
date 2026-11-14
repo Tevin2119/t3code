@@ -25,7 +25,7 @@ describe("delivery model lock", () => {
   it("matches the driver while explaining the engine harness alias", () => {
     expect(deliveryModelDisabledReason(binding, "claudeAgent")).toBeNull();
     expect(deliveryModelDisabledReason(binding, "claude")).toBe(
-      "This thread is the development implementer on claude. Start a new thread to use another harness.",
+      "This thread is the development implementer on claude. In a team conversation, Chat 1:1 beside a participant talks to it alone. Otherwise start a new thread to use another harness.",
     );
     expect(deliveryModelDisabledReason(null, "pi")).toBeNull();
   });
