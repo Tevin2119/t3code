@@ -1,3 +1,4 @@
+import { deriveTeamChatPhase } from "@t3tools/client-runtime/state/thread-workflows";
 import { ChildThreadApprovals } from "./chat/ChildThreadApprovals";
 import { Button } from "./ui/button";
 import { SquareKanbanIcon } from "lucide-react";
@@ -1512,8 +1513,14 @@ export default function ChatView(props: ChatViewProps) {
   const isCompacting =
     (isSendBusy || phase === "connecting" || phase === "running") &&
     (compactionRunning || (compactRequestIsActive && !compactionSettled));
+  const teamChatPhase = deriveTeamChatPhase(serverProjection, activeActivityRun?.runId);
+  const teamSeatsWorking = teamChatPhase === "contribution" || teamChatPhase === "critique";
   const isWorking =
-    phase === "running" || isSendBusy || isCompacting || runlessWorkStartedAt !== null;
+    teamSeatsWorking ||
+    phase === "running" ||
+    isSendBusy ||
+    isCompacting ||
+    runlessWorkStartedAt !== null;
   const activeContextWindow = deriveLatestContextWindowSnapshot(
     serverVisibleTurnItems ?? [],
     activeThreadLiveTokenUsage,
@@ -3183,6 +3190,20 @@ export default function ChatView(props: ChatViewProps) {
   const queuedRunsControl =
     isServerThread && activeThread ? (
       <>
+        {teamSeatsWorking ? (
+          <p
+            className="mx-auto w-full max-w-(--chat-content-max-width) pb-3 text-sm text-muted-foreground"
+            role="status"
+          >
+            {teamChatPhase === "critique"
+              ? "The team is reviewing its findings."
+              : "The team is gathering findings."}
+          </p>
+        ) : teamChatPhase === "lead" ? (
+          <p className="mx-auto w-full max-w-(--chat-content-max-width) pb-3 text-sm text-muted-foreground">
+            Steer reaches the lead only. The seats have finished.
+          </p>
+        ) : null}
         <QueuedRunsControl
           ref={queuedRunsControlRef}
           steerShortcutLabel={shortcutLabelForCommand(keybindings, "thread.steerQueuedMessage", {
