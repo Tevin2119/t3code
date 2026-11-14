@@ -167,6 +167,7 @@ interface FakePi {
   readonly failNextState: () => void;
   readonly deferNextLifecycle: (type: "switch_session" | "new_session" | "fork" | "abort") => void;
   readonly deferNextModelSelection: () => void;
+  readonly rejectNextModelProvider: (provider: string) => void;
   readonly queueModels: (models: ReadonlyArray<unknown>) => void;
   readonly vetoNextNewSession: () => void;
   readonly allRequests: () => ReadonlyArray<PiRpcRecord>;
@@ -216,6 +217,7 @@ const makeFakePi: Effect.Effect<FakePi> = Effect.gen(function* () {
   let vetoSwitch = false;
   let vetoNewSession = false;
   let deferredLifecycle: string | undefined;
+  let rejectedModelProvider: string | undefined;
   let sessionFile = FAKE_SESSION_FILE;
   let sessionGeneration = 0;
   let models: ReadonlyArray<unknown> = [];
@@ -274,6 +276,16 @@ const makeFakePi: Effect.Effect<FakePi> = Effect.gen(function* () {
         return base;
       case "get_available_models":
         return { ...base, data: { models } };
+      case "set_model":
+        if (record["provider"] === rejectedModelProvider) {
+          rejectedModelProvider = undefined;
+          return {
+            ...base,
+            success: false,
+            error: `Model not found: ${record["provider"]}/${record["modelId"]}`,
+          };
+        }
+        return { ...base, data: { provider: record["provider"], id: record["modelId"] } };
       case "new_session": {
         const cancelled = vetoNewSession;
         vetoNewSession = false;
@@ -394,6 +406,9 @@ const makeFakePi: Effect.Effect<FakePi> = Effect.gen(function* () {
     },
     deferNextModelSelection: () => {
       deferredLifecycle = "set_model";
+    },
+    rejectNextModelProvider: (provider) => {
+      rejectedModelProvider = provider;
     },
     queueModels: (value) => {
       models = value;
@@ -1049,6 +1064,42 @@ describe("PiAdapterV2", () => {
           resolved.runtimeRequest.status === "resolved",
       );
     }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+
+  it.effect.each([
+    { requested: "openai-codex", available: "openai" },
+    { requested: "openai", available: "openai-codex" },
+  ])(
+    "retries a ChatGPT model under Pi's $available provider namespace",
+    ({ requested, available }) =>
+      Effect.gen(function* () {
+        const fake = yield* makeFakePi;
+        fake.rejectNextModelProvider(requested);
+        const { runtime } = yield* openRuntime(fake);
+        const providerThread = yield* runtime.ensureThread({
+          threadId: THREAD_ID,
+          modelSelection: modelSelection("default"),
+          runtimePolicy,
+        });
+
+        yield* startTurn(
+          runtime,
+          providerThread,
+          "default",
+          [],
+          "Continue the review",
+          modelSelection(`${requested}/gpt-6-astra`),
+        );
+
+        const selections = fake
+          .allRequests()
+          .filter((request) => request["type"] === "set_model")
+          .map((request) => [request["provider"], request["modelId"]]);
+        assert.deepEqual(selections, [
+          [requested, "gpt-6-astra"],
+          [available, "gpt-6-astra"],
+        ]);
+      }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
 
   it.effect("adopts a completed native wake without sending a synthetic prompt", () =>

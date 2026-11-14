@@ -60,6 +60,7 @@ import { turnScopedSelectionTransition } from "@t3tools/provider-core/server/sel
 import {
   makePiRpcConnection,
   parsePiModelSlug,
+  selectPiModel,
   piRecordField as recordField,
   piRecordNumber as recordNumber,
   piRecordString as recordString,
@@ -2411,15 +2412,11 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
               `Pi model '${modelSelection.model}' must use provider/model format`,
             );
           }
-          const selectedModel = yield* request({
-            type: "set_model",
-            provider: parsed.provider,
-            modelId: parsed.modelId,
-          });
-          contextWindow = rememberModelContextWindow(selectedModel);
+          const selected = yield* selectPiModel(request, parsed);
+          contextWindow = rememberModelContextWindow(selected.response);
           appliedModel = modelSelection.model;
           const updatedAt = yield* DateTime.now;
-          sessionEntity = { ...sessionEntity, model: modelSelection.model, updatedAt };
+          sessionEntity = { ...sessionEntity, model: selected.model, updatedAt };
           yield* emit({
             type: "provider_session.updated",
             driver: PI_PROVIDER,
