@@ -293,7 +293,8 @@ it.effect("holds participants to read-only unless the conversation gives them mo
     yield* (yield* readOnly.service).prepareTurn({ threadId, runId });
     for (const command of readOnly.admissions.values()) {
       expect(command.runtimeMode).toBe("approval-required");
-      expect(command.interactionMode).toBe("plan");
+      // Held by access and the reactor, not by plan mode, which makes a harness ask for approval.
+      expect(command.interactionMode).toBe("default");
       expect(command.task).toContain("You are read-only here");
     }
 
@@ -311,7 +312,7 @@ it.effect("holds participants to read-only unless the conversation gives them mo
     yield* (yield* held.service).prepareTurn({ threadId, runId });
     const [researcher, critic] = [...held.admissions.values()];
     expect(researcher?.runtimeMode).toBe("approval-required");
-    expect(researcher?.interactionMode).toBe("plan");
+    expect(researcher?.interactionMode).toBe("default");
     expect(researcher?.task).toContain("You are read-only here");
     expect(critic?.runtimeMode).toBe("full-access");
     expect(critic?.interactionMode).toBe("default");
@@ -321,7 +322,7 @@ it.effect("holds participants to read-only unless the conversation gives them mo
     const [builder, reader] = [...lifted.admissions.values()];
     expect(builder?.runtimeMode).toBe("full-access");
     expect(builder?.interactionMode).toBe("default");
-    expect(reader?.interactionMode).toBe("plan");
+    expect(reader?.interactionMode).toBe("default");
     // The orchestrator is told who may be handed work that changes things.
     for (const task of lifted.tasks) task.status = "completed";
     const handed = (yield* liftedService.prepareTurn({ threadId, runId })).context;

@@ -100,12 +100,18 @@ const EngineRefusal = Schema.Struct({ error: Schema.String });
 const decodeRefusal = Schema.decodeUnknownOption(EngineRefusal);
 
 /** Two spellings of one folder compare equal: slashes, case on Windows, a trailing slash. */
+const normalFolder = (value: string, platform: NodeJS.Platform) => {
+  const slashed = value.replaceAll("\\", "/").replace(/\/+$/, "");
+  return platform === "win32" ? slashed.toLowerCase() : slashed;
+};
+
 export function sameFolder(a: string, b: string, platform: NodeJS.Platform): boolean {
-  const normal = (value: string) => {
-    const slashed = value.replaceAll("\\", "/").replace(/\/+$/, "");
-    return platform === "win32" ? slashed.toLowerCase() : slashed;
-  };
-  return normal(a) === normal(b);
+  return normalFolder(a, platform) === normalFolder(b, platform);
+}
+
+/** Whether `folder` lies below `parent`. */
+function insideFolder(folder: string, parent: string, platform: NodeJS.Platform): boolean {
+  return normalFolder(folder, platform).startsWith(`${normalFolder(parent, platform)}/`);
 }
 
 /** What a session is really started with, to be held against what the thread was bound with. */
@@ -434,7 +440,10 @@ const make = Effect.gen(function* () {
   });
 
   /** The root of the repository a folder is in, or the folder itself when it is in none. */
-  const workspaceOf = Effect.fn("DeliveryService.workspaceOf")(function* (folder: string) {
+  /** The root of the repository a folder is in, or `null` for a folder in none. */
+  const repositoryRootOf = Effect.fn("DeliveryService.repositoryRootOf")(function* (
+    folder: string,
+  ) {
     const response = yield* request("GET", `/api/repository?folder=${encodeURIComponent(folder)}`);
     const repository = yield* decodeRepository(response.body).pipe(
       Effect.mapError(
@@ -445,7 +454,11 @@ const make = Effect.gen(function* () {
           }),
       ),
     );
-    return repository.readable && repository.root ? repository.root : folder;
+    return repository.readable && repository.root ? repository.root : null;
+  });
+
+  const workspaceOf = Effect.fn("DeliveryService.workspaceOf")(function* (folder: string) {
+    return (yield* repositoryRootOf(folder)) ?? folder;
   });
 
   const stateOf = (threadId: ThreadId): DeliveryThreadState => {
@@ -705,8 +718,13 @@ const make = Effect.gen(function* () {
         detail: `This thread is bound to team ${binding.team} in ${binding.workspace}, and the session has no working folder to hold against it.`,
       });
     }
-    const workspace = yield* workspaceOf(actual.cwd);
-    if (!sameFolder(workspace, binding.workspace, hostPlatform)) {
+    const repository = yield* repositoryRootOf(actual.cwd);
+    const workspace = repository ?? actual.cwd;
+    // A Scratch conversation is bound in the Scratch folder, which is no repository, and
+    // then gets a folder of its own below it. That is the same place, not another one.
+    const ownFolderBelow =
+      repository === null && insideFolder(actual.cwd, binding.workspace, hostPlatform);
+    if (!sameFolder(workspace, binding.workspace, hostPlatform) && !ownFolderBelow) {
       return yield* new DeliveryError({
         reason: "mismatch",
         detail: `This thread is bound to team ${binding.team} in ${binding.workspace}. The session is starting in ${workspace}, which is another repository.`,

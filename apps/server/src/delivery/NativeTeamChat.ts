@@ -268,8 +268,10 @@ export const make = Effect.gen(function* () {
             }\n\nConversation:\n${conversation}${attached}${stage === "critique" ? `\n\nIndependent contributions:\n${contributions(initial)}` : ""}`,
             modelSelection: seat.modelSelection,
             runtimeMode: access,
-            // Plan mode makes a harness talk of approving a plan, so only read-only seats get it.
-            interactionMode: readOnly ? "plan" : "default",
+            // No seat gets plan mode: a harness in it writes a plan and asks for its approval,
+            // which a read-only seat is refused, and then asks the person what to revise. A
+            // read-only seat is held by its access and TeamChatReadOnlyReactor instead.
+            interactionMode: "default",
             completionWake: "settled_only",
           });
         }
