@@ -11,6 +11,7 @@ import "~/index.css";
 import { render } from "../../../test/render";
 import { deriveProviderInstanceEntries } from "../../providerInstances";
 import { OrchestratorLineup } from "./OrchestratorLineup";
+import { modelFamily } from "./OrchestratorSeatGlyphs";
 
 const testState = vi.hoisted(() => ({
   threadState: { data: null } as { data: unknown },
@@ -256,4 +257,103 @@ it("offers a 1:1 chat with a teamless participant's harness and model", async ()
     role: "reviewer",
     modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "codex-model" },
   });
+});
+
+it("sets a seat's access from its glyphs and names every icon-only control", async () => {
+  testState.threadState = {
+    data: { binding: RESEARCH_BINDING, lineup: LINEUP_OF_THREE, pending: null },
+  };
+  testState.setLineup.mockClear();
+  await page.viewport(1024, 768);
+  await using screen = await render(
+    <OrchestratorLineup
+      environmentId={"env-a" as never}
+      threadId={"t1" as never}
+      driver={ProviderDriverKind.make("codex")}
+      entries={ENTRIES}
+      models={MODELS}
+      onFocusChat={() => {}}
+    />,
+  );
+
+  // One row per seat: the harness logo, then the harness and configured model in words.
+  const scout = screen.container.querySelector('[data-orchestrator-seat="scout"]');
+  expect(scout?.querySelector('[data-orchestrator-seat-harness="claudeAgent"] svg')).not.toBeNull();
+  await expect
+    .element(page.getByRole("button", { name: "Choose provider and model for Scout" }))
+    .toHaveTextContent("Claude · claude-model");
+  // The orchestrator's seat is marked beside its name, not spelled out after a dash.
+  await expect.element(page.getByText("Critic", { exact: true })).toBeVisible();
+  expect(screen.container.textContent).not.toContain("—");
+
+  const access = page.getByRole("radiogroup", { name: "Access of Scout" });
+  await expect.element(access.getByRole("radio", { name: "Read-only" })).toBeChecked();
+  await access.getByRole("radio", { name: "Full access" }).click();
+  await vi.waitFor(() => {
+    expect(testState.setLineup).toHaveBeenCalledWith({
+      environmentId: "env-a",
+      input: {
+        threadId: "t1",
+        orchestration: {
+          participants: LINEUP_OF_THREE.participants.map((participant) =>
+            participant.seat === "scout" ? { ...participant, access: "full-access" } : participant,
+          ),
+        },
+      },
+    });
+  });
+
+  // The help that used to sit in the panel is one tap away.
+  await page.getByRole("button", { name: "About participants" }).click();
+  await expect.element(page.getByText(/A conversation keeps the team/)).toBeVisible();
+});
+
+it("collapses a seat's access to one glyph that opens the same choices on a narrow panel", async () => {
+  testState.threadState = {
+    data: { binding: RESEARCH_BINDING, lineup: LINEUP_OF_THREE, pending: null },
+  };
+  testState.setLineup.mockClear();
+  await page.viewport(340, 700);
+  await using _screen = await render(
+    <OrchestratorLineup
+      environmentId={"env-a" as never}
+      threadId={"t1" as never}
+      driver={ProviderDriverKind.make("codex")}
+      entries={ENTRIES}
+      models={MODELS}
+    />,
+  );
+
+  await expect
+    .element(page.getByRole("radiogroup", { name: "Access of Scout" }))
+    .not.toBeInTheDocument();
+  await page.getByRole("button", { name: "Access of Scout" }).click();
+  await page.getByRole("menuitemradio", { name: "Ask me before changes" }).click();
+  await vi.waitFor(() => {
+    expect(testState.setLineup).toHaveBeenCalledWith(
+      expect.objectContaining({
+        input: expect.objectContaining({
+          orchestration: {
+            participants: LINEUP_OF_THREE.participants.map((participant) =>
+              participant.seat === "scout"
+                ? { ...participant, access: "approval-required" }
+                : participant,
+            ),
+          },
+        }),
+      }),
+    );
+  });
+});
+
+it("badges a harness with its model's family only when T3 has that family's logo", () => {
+  const hermes = ProviderDriverKind.make("hermes");
+  const claude = ProviderDriverKind.make("claudeAgent");
+  const family = (harness: ProviderDriverKind, slug: string, name: string) =>
+    modelFamily(harness, { slug, name })?.id ?? null;
+  expect(family(hermes, "anthropic/claude-opus-5-5", "Opus 5.5")).toBe("claudeAgent");
+  expect(family(claude, "claude-fable-5-1", "Fable 5.1")).toBeNull();
+  // GLM is no harness of its own; its badge is the Z.AI mark the usage panel already shows.
+  expect(family(hermes, "glm-5.3", "GLM-5.3")).toBe("glm");
+  expect(family(hermes, "mystery-1", "Mystery 1")).toBeNull();
 });

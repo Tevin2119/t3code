@@ -20,6 +20,7 @@ import {
 import { useEnvironmentQuery } from "../../state/query";
 import { useAtomCommand } from "../../state/use-atom-command";
 import type { ModelEsque } from "../chat/providerIconUtils";
+import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { NO_TEAM } from "./OrchestratorChatSetup";
@@ -171,17 +172,20 @@ export function OrchestratorLineup(props: {
 
   return (
     <div className="flex max-h-96 flex-col gap-3 overflow-y-auto p-3" data-orchestrator-lineup>
-      <span className="text-sm font-medium">Orchestrator</span>
+      <div className="flex items-center gap-2">
+        <span className="text-sm font-medium">Orchestrator</span>
+        {binding ? (
+          <Badge variant="secondary" data-orchestrator-lineup-team={binding.team}>
+            Team {binding.team}
+          </Badge>
+        ) : null}
+      </div>
       <p className="text-xs text-muted-foreground">
         {lineup
           ? "Changes here join or leave from your next message on."
           : "Bring participants into this conversation. From your next message they contribute first and this chat's model brings the results together."}
       </p>
-      {binding ? (
-        <p className="text-xs text-muted-foreground">
-          Team {binding.team}. A conversation keeps the team it started with.
-        </p>
-      ) : (
+      {binding ? null : (
         <Select
           value={team?.team ?? NO_TEAM}
           onValueChange={(next) => {
@@ -220,16 +224,21 @@ export function OrchestratorLineup(props: {
         entries={props.entries}
         models={props.models}
         {...(props.onFocusChat ? { onFocus: props.onFocusChat } : {})}
+        {...(binding ? { about: "A conversation keeps the team it started with." } : {})}
+        {...(lineup && props.onLeaveToSingle
+          ? {
+              footer: (
+                <Button size="xs" variant="ghost" onClick={props.onLeaveToSingle}>
+                  Use ordinary chat
+                </Button>
+              ),
+            }
+          : {})}
       />
       {failure ? (
         <p role="alert" className="text-xs text-warning">
           {failure}
         </p>
-      ) : null}
-      {lineup && props.onLeaveToSingle ? (
-        <Button size="sm" variant="ghost" onClick={props.onLeaveToSingle}>
-          Use ordinary chat
-        </Button>
       ) : null}
     </div>
   );

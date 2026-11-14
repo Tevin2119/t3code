@@ -220,10 +220,12 @@ export function OrchestratorChatSetup(props: {
               },
             }
           : {})}
+        footer={
+          <Button size="xs" variant="ghost" onClick={props.onExit}>
+            Use ordinary chat
+          </Button>
+        }
       />
-      <Button size="sm" variant="ghost" onClick={props.onExit}>
-        Use ordinary chat
-      </Button>
     </div>
   );
 }
