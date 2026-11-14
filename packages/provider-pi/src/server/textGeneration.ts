@@ -7,7 +7,7 @@ import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import { TextGenerationError } from "@t3tools/contracts";
 import type { PiSettings } from "../settings.ts";
 
-import { makePiRpcConnection, parsePiModelSlug, piRecordString } from "./rpc.ts";
+import { makePiRpcConnection, parsePiModelSlug, piRecordString, selectPiModel } from "./rpc.ts";
 import { buildPiRpcLaunch, resolvePiLaunchArgs } from "./mcpInjection.ts";
 import * as TextGenerationOperations from "@t3tools/provider-core/server/textGenerationOperations";
 
@@ -68,24 +68,22 @@ export const makePiTextGeneration = Effect.fn("makePiTextGeneration")(function* 
             detail: `Pi model '${modelSelection.model}' must use provider/model format.`,
           });
         }
-        yield* connection
-          .request({ type: "set_model", provider: parsed.provider, modelId: parsed.modelId })
-          .pipe(
-            // Model discovery loads extensions that this background helper disables.
-            Effect.mapError((error) =>
-              error._tag === "PiRpcError" && error.operation === "set_model"
-                ? new TextGenerationError({
-                    operation,
-                    detail:
-                      `Pi rejected model '${modelSelection.model}': ${error.detail ?? "unknown error"}. ` +
-                      "If the model comes from a Pi extension or package, text generation cannot use it " +
-                      "because it runs Pi with --no-extensions. Pick a built-in Pi model or one defined " +
-                      "in Pi's models.json.",
-                    cause: error,
-                  })
-                : error,
-            ),
-          );
+        yield* selectPiModel(connection.request, parsed).pipe(
+          // Model discovery loads extensions that this background helper disables.
+          Effect.mapError((error) =>
+            error._tag === "PiRpcError" && error.operation === "set_model"
+              ? new TextGenerationError({
+                  operation,
+                  detail:
+                    `Pi rejected model '${modelSelection.model}': ${error.detail ?? "unknown error"}. ` +
+                    "If the model comes from a Pi extension or package, text generation cannot use it " +
+                    "because it runs Pi with --no-extensions. Pick a built-in Pi model or one defined " +
+                    "in Pi's models.json.",
+                  cause: error,
+                })
+              : error,
+          ),
+        );
       }
 
       yield* connection.request({ type: "prompt", message: prompt });
