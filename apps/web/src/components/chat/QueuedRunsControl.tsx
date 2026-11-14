@@ -1,4 +1,3 @@
-import { messageStateLabel } from "../../lib/deliveryBoard";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import {
   deriveTeamChatPhase,
@@ -37,6 +36,7 @@ import { useAtomCommand } from "../../state/use-atom-command";
 import { isImageAttachment, type ChatMessage } from "../../types";
 import { cn } from "~/lib/utils";
 import { Button, InlineButton } from "../ui/button";
+import { toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import type { TimestampFormat } from "@t3tools/contracts/settings";
 import { GuestMessageName } from "./guestMessageStyle";
@@ -118,6 +118,11 @@ export function QueuedRunsControl({
   const queued = workflow?.queuedRuns ?? [];
   const activeRun = workflow?.activeRun ?? null;
   const teamChatPhase = deriveTeamChatPhase(projection, activeRun?.id);
+  const steerBlockedReason =
+    teamChatPhase === "contribution" || teamChatPhase === "critique"
+      ? // oxlint-disable-next-line t3code/no-em-dash-copy -- Preserve the user's explicitly requested toast text.
+        "The team is still working — your message runs when this step finishes"
+      : null;
   const canSend = workflow?.canSendNow === true || workflow?.canPromoteToSteer === true;
   const queuedImageUrlById = new Map(
     queuedImageAttachmentUrls.flatMap((url, index) => {
@@ -190,7 +195,12 @@ export function QueuedRunsControl({
   useImperativeHandle(ref, () => ({
     steerNext(repeat) {
       const next = queued[0];
-      if (!next || !canSend) return false;
+      if (!next) return false;
+      if (steerBlockedReason !== null) {
+        if (!repeat) toastManager.add({ type: "info", title: steerBlockedReason });
+        return true;
+      }
+      if (!canSend) return false;
       if (!repeat && busyRunId === null) void sendQueuedMessage(next.run.id);
       return true;
     },
@@ -271,11 +281,6 @@ export function QueuedRunsControl({
                 timestampFormat={props.timestampFormat}
                 onOpenThread={props.onOpenThread}
               >
-                {!item.pending ? (
-                  <span className="px-1">
-                    {teamChatPhase === null ? "Waiting" : messageStateLabel("received", null)}
-                  </span>
-                ) : null}
                 {canSend && !isEditing ? (
                   <>
                     <Tooltip>

@@ -1,10 +1,12 @@
 import { createMemoryHistory } from "@tanstack/react-router";
 import { scopeProjectRef } from "@t3tools/client-runtime/environment";
-import { ThreadId } from "@t3tools/contracts";
+import { NodeId, ProviderDriverKind, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
 import { DEFAULT_CLIENT_SETTINGS } from "@t3tools/contracts/settings";
 import type * as Context from "effect/Context";
 import { expect, it, vi } from "vite-plus/test";
 import { page } from "vite-plus/test/browser";
+
+import "~/index.css";
 
 import { AppRoot } from "~/AppRoot";
 // The route loads ChatView lazily, and its first transform (React Compiler over ~4k lines)
@@ -17,9 +19,14 @@ import {
   ENVIRONMENT_ID,
   PROJECT_ID,
   installFakeEnvironment,
+  emitThreadEvent,
+  isThreadSubscribed,
+  runningRun,
+  threadWithHistory,
+  userItem,
   type FakeDriver,
 } from "../../test/fakeEnvironment";
-import { render } from "../../test/render";
+import { act, render } from "../../test/render";
 
 // The socket is the only fake layer; see test/appScenarios.renders.tsx.
 vi.mock("../../../../packages/client-runtime/src/connection/driver.ts", async (importOriginal) => {
@@ -64,4 +71,97 @@ it("a new draft does not load its reserved thread before the server lists it", a
     .filter((url) => url.includes(`/api/orchestration/threads/${threadId}/`));
   // A 404 here marks the thread deleted, and the view never loads it once the send creates it.
   expect(threadRequests).toEqual([]);
+});
+
+it("shows working activity during contributions and critiques before the lead starts", async () => {
+  await page.viewport(1400, 900);
+  const thread = threadWithHistory("team-working", 1);
+  const run = {
+    ...runningRun(thread.id, "team-run", 2, "team-question"),
+    status: "starting" as const,
+    startedAt: null,
+  };
+  using _environment = installFakeEnvironment([thread]);
+  __setClientSettingsForTests({
+    ...DEFAULT_CLIENT_SETTINGS,
+    onboardingCompletedAt: "2026-01-01T00:00:00.000Z",
+  });
+  const router = getRouter(
+    createMemoryHistory({ initialEntries: [`/${ENVIRONMENT_ID}/${thread.id}`] }),
+  );
+  await router.load();
+  const container = document.createElement("div");
+  container.style.cssText = "height: 900px; width: 1400px;";
+  await using screen = await render(<AppRoot router={router} />, {
+    // AppRoot brings its own router.
+    router: false,
+    container,
+  });
+  await expect.element(page.getByTestId("composer-editor")).toBeInTheDocument();
+  await vi.waitFor(() => expect(isThreadSubscribed(thread.id)).toBe(true));
+  const seat = {
+    id: NodeId.make("team-seat"),
+    threadId: thread.id,
+    runId: run.id,
+    parentNodeId: NodeId.make("team-root"),
+    origin: "app_owned" as const,
+    createdBy: "agent" as const,
+    driver: ProviderDriverKind.make("codex"),
+    providerInstanceId: ProviderInstanceId.make("codex"),
+    providerThreadId: null,
+    childThreadId: null,
+    nativeTaskRef: null,
+    prompt: "Assess this change",
+    title: "Researcher",
+    model: "gpt-5.4",
+    status: "running" as const,
+    result: null,
+    startedAt: run.requestedAt,
+    completedAt: null,
+    updatedAt: run.requestedAt,
+    teamChat: { sourceRunId: run.id, stage: "contribution" as const, seat: "researcher" },
+  };
+  await act(async () => {
+    await emitThreadEvent(thread.id, { type: "run.created", payload: run });
+    await emitThreadEvent(thread.id, {
+      type: "turn-item.updated",
+      payload: userItem(thread.id, run.id, "team-question", 2, "Assess this change"),
+    });
+    await emitThreadEvent(thread.id, { type: "subagent.updated", payload: seat });
+  });
+  await expect
+    .element(screen.getByText("The team is gathering findings.", { exact: true }))
+    .toBeVisible();
+  await expect.element(screen.getByText(/^Working/).first()).toBeVisible();
+  await act(() =>
+    emitThreadEvent(thread.id, {
+      type: "subagent.updated",
+      payload: { ...seat, teamChat: { ...seat.teamChat, stage: "critique" } },
+    }),
+  );
+  await expect
+    .element(screen.getByText("The team is reviewing its findings.", { exact: true }))
+    .toBeVisible();
+  await expect.element(screen.getByText(/^Working/).first()).toBeVisible();
+  await act(async () => {
+    await emitThreadEvent(thread.id, {
+      type: "subagent.updated",
+      payload: { ...seat, status: "completed", completedAt: run.requestedAt },
+    });
+    await emitThreadEvent(thread.id, {
+      type: "run.updated",
+      payload: { ...run, status: "running", startedAt: run.requestedAt },
+    });
+  });
+  const leadNotice = screen.getByText("Steer reaches the lead only. The seats have finished.", {
+    exact: true,
+  });
+  await expect.element(leadNotice).toBeVisible();
+  await act(() =>
+    emitThreadEvent(thread.id, {
+      type: "run.updated",
+      payload: { ...run, status: "completed", completedAt: run.requestedAt },
+    }),
+  );
+  await expect.element(leadNotice).not.toBeInTheDocument();
 });

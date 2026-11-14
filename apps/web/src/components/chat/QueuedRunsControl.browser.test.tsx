@@ -1,7 +1,7 @@
 import { EnvironmentId, MessageId, ThreadId } from "@t3tools/contracts";
 import { serializeAssistantCitation } from "@t3tools/shared/assistantCitations";
 import * as DateTime from "effect/DateTime";
-import type { ComponentProps } from "react";
+import { createRef, type ComponentProps } from "react";
 import { expect, it, vi } from "vite-plus/test";
 import { page } from "vite-plus/test/browser";
 
@@ -41,8 +41,9 @@ vi.mock(import("../../assets/assetUrls"), async (importOriginal) => ({
 }));
 
 import "~/index.css";
-import { render as renderUi } from "../../../test/render";
-import { QueuedRunsControl } from "./QueuedRunsControl";
+import { ToastProvider } from "../ui/toast";
+import { act, render as renderUi } from "../../../test/render";
+import { QueuedRunsControl, type QueuedRunsControlHandle } from "./QueuedRunsControl";
 
 function setup() {
   state.projection = null;
@@ -80,7 +81,7 @@ it("previews assistant quotes as readable text and preserves the citation when e
     suffix: "",
   });
   const quoteAndText = `${quote}\n\nWhy per worktree?`;
-  state.projection = { projection: { messages: [] } };
+  state.projection = { projection: { messages: [], runs: [], subagents: [] } };
   state.workflow = {
     activeRun: { id: "run:active" },
     canPromoteToSteer: true,
@@ -119,7 +120,7 @@ it("shows who sent a queued message and folds automation and agent prompts", asy
     createdAt: DateTime.makeUnsafe("2026-10-27T12:00:00.000Z"),
     ...fields,
   });
-  state.projection = { projection: { messages: [] } };
+  state.projection = { projection: { messages: [], runs: [], subagents: [] } };
   state.workflow = {
     activeRun: { id: "run:active" },
     canPromoteToSteer: true,
@@ -176,7 +177,7 @@ it("shows who sent a queued message and folds automation and agent prompts", asy
 
 it("stays inside the timeline scroller instead of growing the chat column", async () => {
   setup();
-  state.projection = { projection: { messages: [] } };
+  state.projection = { projection: { messages: [], runs: [], subagents: [] } };
   state.workflow = {
     activeRun: { id: "run:active" },
     canPromoteToSteer: true,
@@ -203,3 +204,54 @@ it("stays inside the timeline scroller instead of growing the chat column", asyn
   const column = screen.getByTestId("column").element();
   expect(column.scrollHeight).toBe(column.clientHeight);
 });
+
+it.each(["contribution", "critique"] as const)(
+  "explains unavailable steering during %s and keeps the queued bubble",
+  async (stage) => {
+    setup();
+    const activeRun = { id: "run:team", status: "starting" };
+    state.projection = {
+      projection: {
+        messages: [],
+        runs: [activeRun],
+        subagents: [{ teamChat: { sourceRunId: activeRun.id, stage } }],
+      },
+    };
+    state.workflow = {
+      activeRun,
+      canPromoteToSteer: false,
+      canSendNow: false,
+      queuedRuns: [
+        {
+          run: { id: "run:queued", userMessageId: "message:queued" },
+          text: "Follow up",
+          attachments: [],
+        },
+      ],
+    };
+    const ref = createRef<QueuedRunsControlHandle>();
+    await using screen = await renderUi(
+      <ToastProvider>
+        <QueuedRunsControl {...baseProps} ref={ref} />
+      </ToastProvider>,
+    );
+    const explanation = "The team is still working — your message runs when this step finishes";
+    await expect
+      .element(screen.getByRole("listitem", { name: "Queued message 1 of 1, not sent" }))
+      .toBeVisible();
+    await expect.element(screen.getByRole("button", { name: "Edit queued message" })).toBeVisible();
+    await expect
+      .element(screen.getByRole("button", { name: "Remove queued message" }))
+      .toBeVisible();
+    await expect.element(page.getByText(explanation, { exact: true })).not.toBeInTheDocument();
+    await act(() => {
+      expect(ref.current?.steerNext(false)).toBe(true);
+    });
+    await expect.element(page.getByText(explanation, { exact: true })).toBeVisible();
+    await act(() => {
+      expect(ref.current?.steerNext(true)).toBe(true);
+    });
+    expect(page.getByText(explanation, { exact: true }).elements()).toHaveLength(1);
+    await expect.element(screen.getByText("Follow up", { exact: true })).toBeVisible();
+  },
+);
