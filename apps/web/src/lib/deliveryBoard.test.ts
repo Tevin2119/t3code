@@ -155,7 +155,9 @@ describe("what a card is labelled with", () => {
   });
 
   it("says what became of a message", () => {
-    expect(messageStateLabel("received", null)).toBe("Sent. Not read by the team yet");
+    expect(messageStateLabel("received", null)).toBe(
+      "Waiting. The team reads it at its next turn and answers it then",
+    );
     expect(messageStateLabel("seen", null)).toBe("Seen by the team");
     expect(messageStateLabel("applied", 3)).toBe("Taken into the task as revision 3");
     expect(messageStateLabel("said", null)).toBeNull();
