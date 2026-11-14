@@ -27,7 +27,7 @@ export function deliveryModelDisabledReason(
   driver: string | null | undefined,
 ): string | null {
   return binding && binding.driver !== driver
-    ? `This thread is the ${binding.team} ${binding.role} on ${binding.harness}. Start a new thread to use another harness.`
+    ? `This thread is the ${binding.team} ${binding.role} on ${binding.harness}. In a team conversation, Chat 1:1 beside a participant talks to it alone. Otherwise start a new thread to use another harness.`
     : null;
 }
 

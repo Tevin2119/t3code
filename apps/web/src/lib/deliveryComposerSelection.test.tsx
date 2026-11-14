@@ -90,7 +90,7 @@ const thread = makeThreadFixture({
   },
 });
 const reason =
-  "This thread is the development implementer on pi. Start a new thread to use another harness.";
+  "This thread is the development implementer on pi. In a team conversation, Chat 1:1 beside a participant talks to it alone. Otherwise start a new thread to use another harness.";
 
 describe("delivery composer selection through both production integrations", () => {
   it.each([

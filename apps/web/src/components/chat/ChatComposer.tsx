@@ -1,3 +1,6 @@
+import { scopeThreadRef } from "@t3tools/client-runtime/environment";
+import { useNavigate } from "@tanstack/react-router";
+import { buildThreadRouteParams } from "../../threadRoutes";
 import { TeamBadge } from "../delivery/TeamBadge";
 import { TeamChatToggle } from "../delivery/TeamChatToggle";
 import { TeamPicker } from "../delivery/TeamPicker";
@@ -524,6 +527,7 @@ const NO_PROVIDER_SKILLS: ServerProvider["skills"] = [];
 const NO_PROVIDER_SLASH_COMMANDS: ServerProvider["slashCommands"] = [];
 
 export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps) {
+  const navigate = useNavigate();
   const {
     composerDraftTarget,
     environmentId,
@@ -2495,6 +2499,16 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
               environmentId={environmentId}
               threadId={activeThreadId}
               leadModelSelection={activeThread?.modelSelection ?? null}
+              forkedFromThreadId={
+                activeThread?.forkedFrom?.type === "run" ? activeThread.forkedFrom.threadId : null
+              }
+              onOpenForkSource={(threadId) => {
+                if (!environmentId) return;
+                void navigate({
+                  to: "/$environmentId/$threadId",
+                  params: buildThreadRouteParams(scopeThreadRef(environmentId, threadId)),
+                });
+              }}
               onRestoreLead={(modelSelection) =>
                 onProviderModelSelect(modelSelection.instanceId, modelSelection.model, {
                   focusComposer: false,
