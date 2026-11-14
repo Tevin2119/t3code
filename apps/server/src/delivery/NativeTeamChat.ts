@@ -18,6 +18,7 @@ import { resolveAttachmentPath } from "../attachmentStore.ts";
 import { ServerConfig } from "../config.ts";
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import * as DeliveryService from "./DeliveryService.ts";
+import { teamDiscussionContext } from "./teamDiscussionContext.ts";
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as ProviderAdapterRegistry from "../orchestration-v2/ProviderAdapterRegistry.ts";
@@ -51,6 +52,7 @@ export class NativeTeamChat extends Context.Service<
 >()("t3/delivery/NativeTeamChat") {}
 
 const isNativeTeamChatError = Schema.is(NativeTeamChatError);
+
 const terminal = (task: OrchestrationV2Subagent) =>
   ["completed", "failed", "cancelled", "interrupted"].includes(task.status);
 
@@ -155,19 +157,23 @@ export const make = Effect.gen(function* () {
             ? { readOnly: true, access: "approval-required" as const }
             : { readOnly: false, access };
         };
-        // The orchestrator alone hands out work, so it is told who each participant is.
-        const members = roster
-          .map((seat) => {
-            const { readOnly, access } = accessOf(seat);
-            return `- ${seat.seat} (${seat.role}): providerInstanceId ${seat.modelSelection.instanceId}, model ${seat.modelSelection.model}, ${readOnly ? "read-only: questions and reviews only" : `may change things (runtimeMode ${access})`}`;
-          })
-          .join("\n");
         const mode = lineup.critique ?? "first";
         const critiqueWanted = mode === "always" || (mode === "first" && !followUp);
         if (initialDone && (critiqueDone || !critiqueWanted)) {
           return {
             ready: true,
-            context: `<team_discussion>\nYou are the orchestrator for ${group}. The native participants have completed independent contributions${critiqueWanted ? " and a critique round" : ""}. Synthesize their evidence and disagreements into a response to the latest user message. Attribute useful insights to their seat/model, acknowledge failed or missing contributions, and distinguish consensus from unresolved disagreement. Do not launch these rounds again.\n\nYou decide who does what. The participants only discussed and were told to change nothing. When the user asks for work to be done, do it yourself in this thread under the project's own rules, or hand each piece to one participant with \`delegate_task\`: pass that participant's \`target\` (providerInstanceId and model) and \`runtimeMode\` from the list below, and a \`task\` that stands on its own, because the child sees none of this conversation. Give one piece of work to one participant. When more than one child would change files at the same time, give each \`isolation: 'worktree'\`. Hand work that changes anything only to a participant marked "may change things"; a read-only participant gets a question or a review with \`interactionMode: 'plan'\`. Check each result before you tell the user it is done.\n\nParticipants:\n${members}\n\nIndependent contributions:\n${contributions(initial)}${critiqueWanted ? `\n\nCritiques:\n${contributions(critiques)}` : ""}\n</team_discussion>`,
+            context: teamDiscussionContext({
+              group,
+              members: roster.map((seat) => ({
+                seat: seat.seat,
+                role: seat.role,
+                providerInstanceId: seat.modelSelection.instanceId,
+                model: seat.modelSelection.model,
+                access: deliveryParticipantAccess(lineup, seat.seat),
+              })),
+              contributions: contributions(initial),
+              ...(critiqueWanted ? { critiques: contributions(critiques) } : {}),
+            }),
           };
         }
         const stage = initialDone ? "critique" : "contribution";
