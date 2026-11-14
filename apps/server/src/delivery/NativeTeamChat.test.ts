@@ -302,7 +302,8 @@ it.effect("holds participants to read-only unless the conversation gives them mo
     for (const command of chosen.admissions.values()) {
       expect(command.runtimeMode).toBe("full-access");
       expect(command.interactionMode).toBe("default");
-      expect(command.task).not.toContain("You are read-only here");
+      // A round only discusses, whatever a seat's access: the orchestrator hands out the work.
+      expect(command.task).toContain("change nothing here");
     }
 
     // A seat's own access comes before the conversation's, in either direction.
@@ -314,12 +315,18 @@ it.effect("holds participants to read-only unless the conversation gives them mo
     expect(researcher?.task).toContain("You are read-only here");
     expect(critic?.runtimeMode).toBe("full-access");
     expect(critic?.interactionMode).toBe("default");
-    const lifted = setup({ seatAccess: "full-access" });
-    yield* (yield* lifted.service).prepareTurn({ threadId, runId });
+    const lifted = setup({ seatAccess: "full-access", critique: "never" });
+    const liftedService = yield* lifted.service;
+    yield* liftedService.prepareTurn({ threadId, runId });
     const [builder, reader] = [...lifted.admissions.values()];
     expect(builder?.runtimeMode).toBe("full-access");
     expect(builder?.interactionMode).toBe("default");
     expect(reader?.interactionMode).toBe("plan");
+    // The orchestrator is told who may be handed work that changes things.
+    for (const task of lifted.tasks) task.status = "completed";
+    const handed = (yield* liftedService.prepareTurn({ threadId, runId })).context;
+    expect(handed).toMatch(/- researcher \(.*may change things \(runtimeMode full-access\)/);
+    expect(handed).toMatch(/- critic \(.*read-only: questions and reviews only/);
 
     const unheld = setup({ fullAccessOnly: true });
     const unheldError = yield* (yield* unheld.service)

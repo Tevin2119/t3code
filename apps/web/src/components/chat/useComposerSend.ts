@@ -973,7 +973,7 @@ export function useComposerSend(input: ComposerSendInput) {
         })
       : null;
     const orchestrationSendDecision = decideOrchestrationForSend({
-      draftConfiguration: orchestrationRoster?.configuration ?? null,
+      draftConfiguration: orchestrationRoster?.configuration,
       heldOrchestration: heldTeamForSend?.orchestration,
       lineup: deliveryStateForSend.data?.lineup,
     });

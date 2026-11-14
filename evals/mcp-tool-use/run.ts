@@ -35,6 +35,7 @@ import { Tool } from "effect/ai";
 import * as McpSchema from "effect/ai/McpSchema";
 import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/http";
 
+import { teamDiscussionContext } from "../../apps/server/src/delivery/teamDiscussionContext.ts";
 import { taskPrompt } from "../../apps/server/src/mcp/delegatedTaskModes.ts";
 import * as McpInvocationContext from "../../apps/server/src/mcp/McpInvocationContext.ts";
 import { advertisedJsonSchema } from "../../apps/server/src/mcp/advertisedJsonSchema.ts";
@@ -288,6 +289,26 @@ export const McpToolUseCase = Schema.Struct({
     /** delegate_task `role` for a delegated child. T3 builds the child's first message from it. */
     delegateRole: Schema.optional(OrchestratorMcpTaskRole),
     context: Schema.optional(Schema.String),
+    /**
+     * The thread leads a team conversation whose rounds are in: T3 tells it who the
+     * participants are and what they said, as it does before the orchestrator's turn.
+     */
+    teamDiscussion: Schema.optional(
+      Schema.Struct({
+        group: Schema.String,
+        members: Schema.Array(
+          Schema.Struct({
+            seat: Schema.String,
+            role: Schema.String,
+            providerInstanceId: Schema.String,
+            model: Schema.String,
+            access: Schema.Literals(["read-only", "approval-required", "full-access"]),
+          }),
+        ),
+        contributions: Schema.String,
+        critiques: Schema.optional(Schema.String),
+      }),
+    ),
     priorTurns: Schema.optional(
       Schema.Array(
         Schema.Struct({
@@ -952,7 +973,7 @@ export const buildMessages = (sample: Sample) => {
     if (last?.role !== role) messages.push({ role, content: blocks });
     else messages[messages.length - 1] = { role, content: [...last.content, ...blocks] };
   };
-  const { role, context, delegateRole, priorTurns = [] } = testCase.setup;
+  const { role, context, delegateRole, teamDiscussion, priorTurns = [] } = testCase.setup;
   const sideChat = testCase.setup.sideChat;
   if (testCase.prompt === "" && (role !== "top" || sideChat !== undefined)) {
     throw new Error(
@@ -972,6 +993,7 @@ export const buildMessages = (sample: Sample) => {
       ? "You are a subagent started by the parent agent's Agent tool. Your final message goes to the parent agent, not to the user."
       : undefined,
     context,
+    teamDiscussion === undefined ? undefined : teamDiscussionContext(teamDiscussion),
   ];
   const reminders = base.reminders.toSpliced(base.gitStatusAt, 0, reminder(gitStatus(testCase)));
   push("user", ...reminders, ...notes.flatMap((note) => (note ? [reminder(note)] : [])));

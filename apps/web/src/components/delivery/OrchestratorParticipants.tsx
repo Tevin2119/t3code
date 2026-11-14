@@ -330,10 +330,10 @@ export function OrchestratorParticipants(props: {
           </SelectPopup>
         </Select>
         <p className="text-xs text-muted-foreground">
-          Read-only participants discuss and cannot change anything, so only the orchestrator acts.
-          With full access they can edit, commit, push and post like the orchestrator. A
-          participant's own access, set beside it, comes first, and a seat the team keeps read-only
-          stays read-only unless you change it here.
+          Participants discuss; the orchestrator decides who does what. It can hand work that
+          changes things only to a participant with access: full access lets that participant edit,
+          commit, push and post. A participant's own access, set beside it, comes first, and a seat
+          the team keeps read-only stays read-only unless you change it here.
         </p>
       </div>
       {roster.problem ? (

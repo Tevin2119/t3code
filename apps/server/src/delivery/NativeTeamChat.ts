@@ -18,6 +18,7 @@ import { resolveAttachmentPath } from "../attachmentStore.ts";
 import { ServerConfig } from "../config.ts";
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import * as DeliveryService from "./DeliveryService.ts";
+import { teamDiscussionContext } from "./teamDiscussionContext.ts";
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as ProviderAdapterRegistry from "../orchestration-v2/ProviderAdapterRegistry.ts";
@@ -51,6 +52,7 @@ export class NativeTeamChat extends Context.Service<
 >()("t3/delivery/NativeTeamChat") {}
 
 const isNativeTeamChatError = Schema.is(NativeTeamChatError);
+
 const terminal = (task: OrchestrationV2Subagent) =>
   ["completed", "failed", "cancelled", "interrupted"].includes(task.status);
 
@@ -155,19 +157,23 @@ export const make = Effect.gen(function* () {
             ? { readOnly: true, access: "approval-required" as const }
             : { readOnly: false, access };
         };
-        const readers = roster.filter((seat) => accessOf(seat).readOnly);
         const mode = lineup.critique ?? "first";
         const critiqueWanted = mode === "always" || (mode === "first" && !followUp);
         if (initialDone && (critiqueDone || !critiqueWanted)) {
           return {
             ready: true,
-            context: `<team_discussion>\nYou are the orchestrator for ${group}. The native participants have completed independent contributions${critiqueWanted ? " and a critique round" : ""}. Synthesize their evidence and disagreements into a response to the latest user message. Attribute useful insights to their seat/model, acknowledge failed or missing contributions, and distinguish consensus from unresolved disagreement. Do not launch these rounds again.${
-              readers.length === roster.length
-                ? " The participants are read-only and have changed nothing. When the user asks for work to be done, do it yourself in this thread under the project's own rules, or say plainly what should be handed to a team that builds."
-                : readers.length > 0
-                  ? ` These participants are read-only and have changed nothing: ${readers.map((seat) => seat.seat).join(", ")}. The others could act on the user's message; check what they did before you do more.`
-                  : ""
-            }\n\nIndependent contributions:\n${contributions(initial)}${critiqueWanted ? `\n\nCritiques:\n${contributions(critiques)}` : ""}\n</team_discussion>`,
+            context: teamDiscussionContext({
+              group,
+              members: roster.map((seat) => ({
+                seat: seat.seat,
+                role: seat.role,
+                providerInstanceId: seat.modelSelection.instanceId,
+                model: seat.modelSelection.model,
+                access: deliveryParticipantAccess(lineup, seat.seat),
+              })),
+              contributions: contributions(initial),
+              ...(critiqueWanted ? { critiques: contributions(critiques) } : {}),
+            }),
           };
         }
         const stage = initialDone ? "critique" : "contribution";
@@ -254,7 +260,7 @@ export const make = Effect.gen(function* () {
             task: `Participate as ${seat.role}, seat ${seat.seat}, in ${group}. ${
               readOnly
                 ? "You are read-only here: anything that would change a file, a branch, a pull request, a board or any other system is declined, even when the user's message asks for the work to be done. Say what should be done and why; the orchestrator acts."
-                : "This is a discussion: do not edit files, commit, push, or delegate unless the user's message asks you to."
+                : "This is a discussion: change nothing here, even when the user's message asks for the work to be done. Do not edit files, commit, push, post or delegate. Say what should be done, by whom and why; the orchestrator decides who does what and hands out the work afterwards."
             } ${
               stage === "contribution"
                 ? "Give your independent assessment of the latest user message, with evidence, assumptions, and objections."
@@ -262,7 +268,7 @@ export const make = Effect.gen(function* () {
             }\n\nConversation:\n${conversation}${attached}${stage === "critique" ? `\n\nIndependent contributions:\n${contributions(initial)}` : ""}`,
             modelSelection: seat.modelSelection,
             runtimeMode: access,
-            // Plan mode outranks the access a conversation gives, so only read-only seats get it.
+            // Plan mode makes a harness talk of approving a plan, so only read-only seats get it.
             interactionMode: readOnly ? "plan" : "default",
             completionWake: "settled_only",
           });
