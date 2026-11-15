@@ -1463,8 +1463,11 @@ export const layer = Layer.effect(EnvironmentAuth, make).pipe(
 
 const layerStorage = Layer.mergeAll(ServerSecretStore.layer, SqlitePersistence.layerConfig);
 
-export const layerRuntime = layer.pipe(
-  Layer.provideMerge(ManagedPolicy.layer),
-  Layer.provideMerge(layerStorage),
-  Layer.provideMerge(ServerEnvironment.layerIdentity),
+// ServerEnvironment reaches auth through checkout startup; compose only after module initialization.
+export const layerRuntime = Layer.suspend(() =>
+  layer.pipe(
+    Layer.provideMerge(ManagedPolicy.layer),
+    Layer.provideMerge(layerStorage),
+    Layer.provideMerge(ServerEnvironment.layerIdentity),
+  ),
 );
