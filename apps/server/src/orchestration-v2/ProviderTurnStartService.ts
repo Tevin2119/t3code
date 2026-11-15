@@ -28,6 +28,7 @@ import * as Schema from "effect/Schema";
 import * as ServerConfig from "../config.ts";
 import * as NativeTeamChat from "../delivery/NativeTeamChat.ts";
 import * as DeliveryService from "../delivery/DeliveryService.ts";
+import * as DeliveryThreadSession from "../delivery/DeliveryThreadSession.ts";
 import { withWorkspaceLease } from "../workspace/workspaceLease.ts";
 import * as GitWorkflowService from "../git/GitWorkflowService.ts";
 import * as ProjectService from "../project/ProjectService.ts";
@@ -829,23 +830,69 @@ export const layer: Layer.Layer<
         if (!repaired.committed) return;
       }
       const sessionResult = yield* Effect.result(
-        providerSessions.open({
-          threadId: projection.thread.id,
-          providerSessionId,
-          modelSelection: run.modelSelection,
-          runtimePolicy: resolvedRuntimePolicy,
-          ...(existingSessionProjection === undefined
-            ? {}
-            : { resumeFromSession: existingSessionProjection }),
-          ...(providerThread.nativeThreadRef?.nativeId == null
-            ? {}
-            : { initialNativeThreadId: providerThread.nativeThreadRef.nativeId }),
-          ...(providerThread.nativeMetadata?.itemIdentityVersion === undefined
-            ? {}
-            : {
-                initialProviderItemIdentityVersion:
-                  providerThread.nativeMetadata.itemIdentityVersion,
-              }),
+        Effect.gen(function* () {
+          const loadedSetup = DeliveryThreadSession.readDeliveryThreadSession(input.threadId);
+          if (Option.isSome(deliveryService)) {
+            const { binding } = yield* deliveryService.value.threadState(input.threadId);
+            if (binding !== null && binding.configuration !== loadedSetup?.configuration) {
+              if (providerThread.driver === "codex") {
+                yield* deliveryService.value.prepareThread(input.threadId, {
+                  driver: providerThread.driver,
+                  cwd: resolvedRuntimePolicy.cwd ?? undefined,
+                });
+              } else {
+                if (
+                  (yield* providerSessions.isLive(providerSessionId)) &&
+                  ((providerThread.pendingBackgroundTasks?.length ?? 0) > 0 ||
+                    (yield* providerSessions.otherWorkingThreads({
+                      providerSessionId,
+                      threadId: input.threadId,
+                    })).length > 0)
+                ) {
+                  return yield* new NativeTeamChat.NativeTeamChatError({
+                    runId,
+                    reason: "dispatch",
+                    detail:
+                      "The updated team setup will load after this provider's active work finishes. Continue in this conversation.",
+                  });
+                }
+                const releaseRequest = {
+                  providerSessionId,
+                  ownProviderThreadIds: [],
+                  throughRunOrdinal: run.ordinal,
+                  reason: "manual_shutdown" as const,
+                  detail: "Reloading the updated team setup in the same conversation.",
+                };
+                yield* providerSessions.releaseUnlessBusy(releaseRequest);
+                if (yield* providerSessions.isLive(providerSessionId)) {
+                  return yield* new NativeTeamChat.NativeTeamChatError({
+                    runId,
+                    reason: "dispatch",
+                    detail:
+                      "The updated team setup will load after this provider's active work finishes. Continue in this conversation.",
+                  });
+                }
+              }
+            }
+          }
+          return yield* providerSessions.open({
+            threadId: projection.thread.id,
+            providerSessionId,
+            modelSelection: run.modelSelection,
+            runtimePolicy: resolvedRuntimePolicy,
+            ...(existingSessionProjection === undefined
+              ? {}
+              : { resumeFromSession: existingSessionProjection }),
+            ...(providerThread.nativeThreadRef?.nativeId == null
+              ? {}
+              : { initialNativeThreadId: providerThread.nativeThreadRef.nativeId }),
+            ...(providerThread.nativeMetadata?.itemIdentityVersion === undefined
+              ? {}
+              : {
+                  initialProviderItemIdentityVersion:
+                    providerThread.nativeMetadata.itemIdentityVersion,
+                }),
+          });
         }),
       );
       if (sessionResult._tag === "Failure") {
