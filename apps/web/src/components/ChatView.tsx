@@ -1515,6 +1515,8 @@ export default function ChatView(props: ChatViewProps) {
     (compactionRunning || (compactRequestIsActive && !compactionSettled));
   const teamChatPhase = deriveTeamChatPhase(serverProjection, activeActivityRun?.runId);
   const teamSeatsWorking = teamChatPhase === "contribution" || teamChatPhase === "critique";
+  const teamLeadAnswering = teamChatPhase === "lead" && activeActivityRun?.status === "running";
+  const hasTeamChatActivity = teamSeatsWorking || teamLeadAnswering;
   const isWorking =
     teamSeatsWorking ||
     phase === "running" ||
@@ -3199,7 +3201,7 @@ export default function ChatView(props: ChatViewProps) {
               ? "The team is reviewing its findings."
               : "The team is gathering findings."}
           </p>
-        ) : teamChatPhase === "lead" ? (
+        ) : teamLeadAnswering ? (
           <p className="mx-auto w-full max-w-(--chat-content-max-width) pb-3 text-sm text-muted-foreground">
             Steer reaches the lead only. The seats have finished.
           </p>
@@ -3296,7 +3298,8 @@ export default function ChatView(props: ChatViewProps) {
     !hasThreadNow &&
     threadStatusLine === null &&
     pendingGuestMessageCount === 0 &&
-    !hasQueuedTurns ? null : (
+    !hasQueuedTurns &&
+    !hasTeamChatActivity ? null : (
       <>
         {pendingHandoff === null ? null : (
           <div className="chat-content-lane">
@@ -3323,7 +3326,7 @@ export default function ChatView(props: ChatViewProps) {
             onFileOpen={openFileAttachmentStable}
           />
         ) : null}
-        {hasQueuedTurns ? queuedRunsControl : null}
+        {hasQueuedTurns || hasTeamChatActivity ? queuedRunsControl : null}
       </>
     );
 
