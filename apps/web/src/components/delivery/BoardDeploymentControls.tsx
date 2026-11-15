@@ -97,7 +97,7 @@ export function BoardDeploymentControls(props: {
         <BoardDeliveryApproval
           environmentId={props.environmentId}
           title="Unlink deployment"
-          unavailable={props.stale || !props.link || !!props.link.problem}
+          unavailable={props.stale || !props.link}
           description="Future publications will not inherit a deployment project from this board. Existing publication environments, runs and history remain unchanged."
           path={path}
           body={{ deploymentProjectId: null }}

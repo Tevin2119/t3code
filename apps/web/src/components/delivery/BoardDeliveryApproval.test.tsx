@@ -117,6 +117,62 @@ it.each(["board", "catalog"] as const)(
   },
 );
 
+it("allows unlinking a fresh invalid link but requires a new review after stale data", async () => {
+  state.action.mockReset().mockResolvedValue({ ok: true });
+  const props = {
+    environmentId: "host" as never,
+    board: "work",
+    target: null,
+    link: {
+      deploymentProjectId: "removed-project",
+      state: "invalid" as const,
+      problem: "The linked deployment project is missing. Explicitly relink or unlink the board.",
+      project: null,
+      by: null,
+      at: null,
+    },
+    stale: false,
+    onDone: () => {},
+  };
+  let view!: ReturnType<typeof create>;
+  await act(() => {
+    view = create(<BoardDeploymentControls {...props} />);
+  });
+  try {
+    const button = (label: string) =>
+      view.root
+        .findAllByType("button")
+        .find(
+          (node) => node.children.filter((child) => typeof child === "string").join("") === label,
+        )!;
+    const key = () =>
+      view.root
+        .findAllByType("input")
+        .find((node) => node.props.type === "password")!
+        .props.onChange({ target: { value: "test-only-key" } });
+    await act(() => button("Unlink…").props.onClick());
+    await act(key);
+    expect(button("Unlink deployment").props.disabled).toBe(false);
+    await act(() => view.update(<BoardDeploymentControls {...props} stale />));
+    await act(() => view.update(<BoardDeploymentControls {...props} />));
+    expect(button("Unlink deployment").props.disabled).toBe(true);
+    await act(() => view.root.findByType("form").props.onSubmit({ preventDefault() {} }));
+    expect(state.action).not.toHaveBeenCalled();
+    await act(() => button("Cancel").props.onClick());
+    await act(() => button("Unlink…").props.onClick());
+    await act(key);
+    expect(button("Unlink deployment").props.disabled).toBe(false);
+    await act(() => view.root.findByType("form").props.onSubmit({ preventDefault() {} }));
+    expect(state.action).toHaveBeenCalledExactlyOnceWith("/api/boards/work/deployment", {
+      deploymentProjectId: null,
+      by: "QA person",
+      key: "test-only-key",
+    });
+  } finally {
+    await act(() => view.unmount());
+  }
+});
+
 it("invalidates an open merge approval when its snapshot becomes stale", async () => {
   state.action.mockReset().mockResolvedValue({ ok: true });
   const policy = {
