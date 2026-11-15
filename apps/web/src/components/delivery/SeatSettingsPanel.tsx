@@ -30,6 +30,7 @@ import {
 import { useEnvironmentProviders } from "../../state/environments";
 import { EMPTY_SERVER_PROVIDERS, serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
+import { HarnessTile } from "./OrchestratorSeatGlyphs";
 import { ProviderModelPicker } from "../chat/ProviderModelPicker";
 import type { ModelEsque } from "../chat/providerIconUtils";
 import { Badge } from "../ui/badge";
@@ -59,12 +60,13 @@ function Choice(props: {
   readonly baseLabel: string;
   readonly options: ReadonlyArray<string>;
   readonly why: string | null;
+  readonly kind: "Reasoning" | "Access";
   readonly onChange: (value: string) => void;
 }) {
   if (props.options.length <= 1) {
     return (
       <Fixed
-        value={props.baseValue ?? props.options[0] ?? "Not set from outside"}
+        value={`${props.kind}: ${props.value ?? props.baseValue ?? props.options[0] ?? "managed by harness"}`}
         why={props.why ?? "This harness takes one setting only."}
       />
     );
@@ -83,6 +85,7 @@ function Choice(props: {
     >
       <SelectTrigger aria-label={props.label} size="compact" variant="ghost" className="w-auto">
         <SelectValue>
+          {props.kind}:{" "}
           {props.value ?? (
             <span className="text-muted-foreground">
               {props.baseLabel}
@@ -165,14 +168,16 @@ export function SeatSettingsPanel(props: {
   const over = props.over ?? "task";
   const base = over === "task" ? "now" : "defined";
   const baseLabel = over === "task" ? "Team default" : "As defined";
-  const on = props.settings.filter((item) =>
+  const enabledSeats = props.settings.filter((item) =>
     locked ? item.effective.active !== "off" : seatIsOn(item, props.chosen[item.seat] ?? {}, base),
-  ).length;
+  );
+  const usedByFlow = enabledSeats.filter((item) => props.taking?.includes(item.seat)).length;
 
   return (
     <div className="flex flex-col gap-1" data-delivery-seat-settings>
       <p className="text-2xs text-muted-foreground" data-delivery-seats-on>
-        {on} of {props.settings.length} seats switched on
+        {enabledSeats.length} of {props.settings.length} seats enabled
+        {props.taking ? ` · ${usedByFlow} used by this flow` : ""}
       </p>
       {!locked && !props.switchesOnly ? (
         <div className="self-start">
@@ -185,6 +190,11 @@ export function SeatSettingsPanel(props: {
             {isRefreshing ? "Refreshing models…" : "Refresh models"}
           </Button>
         </div>
+      ) : null}
+      {!props.switchesOnly && !locked ? (
+        <p className="text-2xs text-muted-foreground">
+          Model context-window overrides are not supported by engine seat settings.
+        </p>
       ) : null}
       <div className="flex flex-col divide-y divide-border">
         {props.settings.map((item) => {
@@ -214,6 +224,10 @@ export function SeatSettingsPanel(props: {
               ];
             }),
           );
+          const selectedModel =
+            (entry ? options.get(entry.instanceId) : [])?.find(
+              (model) => model.slug === values.model,
+            ) ?? (values.model ? { slug: values.model, name: values.model } : null);
           const set = (choice: SeatChoice) => props.onChange?.(item.seat, choice);
 
           return (
@@ -245,10 +259,11 @@ export function SeatSettingsPanel(props: {
                   />
                   <TooltipPopup side="top">
                     {isOn
-                      ? `${item.title} takes part. Switched off, it keeps what is set for it and is asked nothing.`
+                      ? `${item.title} is enabled. The selected flow decides whether it receives work. Switched off, its settings are retained.`
                       : `${item.title} is switched off. It keeps what is set for it and is asked nothing.`}
                   </TooltipPopup>
                 </Tooltip>
+                <HarnessTile entry={entry ?? null} model={selectedModel} />
                 <span className="min-w-0 flex-1 text-xs">
                   <span className="font-medium">{item.title}</span>
                   <span className="text-muted-foreground">
@@ -264,7 +279,7 @@ export function SeatSettingsPanel(props: {
                         <Badge size="sm" variant="outline" className="shrink-0" tabIndex={0} />
                       }
                     >
-                      no part in this flow
+                      Enabled; unused in this flow
                     </TooltipTrigger>
                     <TooltipPopup side="top">
                       The flow that is chosen has no part for what this seat does. It is asked
@@ -302,7 +317,7 @@ export function SeatSettingsPanel(props: {
                   {values.access && values.access !== "full" ? `, ${values.access}` : ""}
                 </p>
               ) : (
-                <div className="flex flex-wrap items-center gap-x-1 gap-y-0.5 pl-10">
+                <div className="flex flex-wrap items-center gap-x-1 gap-y-1 pl-10">
                   {locked ? (
                     <span className="text-xs" data-seat-runs-on>
                       {harnessLabel(values.harness)}, {values.model ?? "its own model"}
@@ -357,6 +372,7 @@ export function SeatSettingsPanel(props: {
                   )}
 
                   <Choice
+                    kind="Reasoning"
                     label={`Reasoning for ${item.title}`}
                     value={locked ? values.reasoning : (chosen.reasoning ?? null)}
                     baseValue={locked ? values.reasoning : chosen.harness ? null : from.reasoning}
@@ -371,6 +387,7 @@ export function SeatSettingsPanel(props: {
                     onChange={(value) => set({ ...chosen, reasoning: value })}
                   />
                   <Choice
+                    kind="Access"
                     label={`Access for ${item.title}`}
                     value={locked ? values.access : (chosen.access ?? null)}
                     baseValue={
@@ -392,6 +409,29 @@ export function SeatSettingsPanel(props: {
                   />
                 </div>
               )}
+              {!locked && !props.switchesOnly && values.reasoning ? (
+                <p className="pl-10 text-xs text-warning" role="status">
+                  If this seat runs as a native build, its reasoning level ({values.reasoning})
+                  prevents it from starting, including when inherited from the team. Native builds
+                  require no reasoning level, an explicit model and full access. Other execution
+                  paths keep their harness-specific settings.
+                </p>
+              ) : null}
+              {!locked &&
+              !props.switchesOnly &&
+              entry &&
+              (!entry.enabled ||
+                !entry.installed ||
+                !entry.isAvailable ||
+                selectedModel?.isUnavailable) ? (
+                <p role="status" className="pl-10 text-xs text-warning">
+                  {entry.displayName}:{" "}
+                  {selectedModel?.isUnavailable
+                    ? "the selected model is unavailable"
+                    : "not ready in this environment"}
+                  . Refresh models or choose an available provider before starting native work.
+                </p>
+              ) : null}
               {over === "task" && !locked && seatSources(item).length > 0 ? (
                 <p className="pl-10 text-2xs text-muted-foreground" data-seat-source>
                   {baseLabel} set by {seatSources(item).join(" and ")}

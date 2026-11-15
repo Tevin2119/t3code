@@ -2454,6 +2454,7 @@ export function readsRefreshedBy(path: string): ReadonlyArray<string> {
   const route = path.split("?")[0] ?? "";
   if (/^\/api\/boards\/[\w-]+\/deployment$/.test(route)) return ["/api/boards", "/api/deployments"];
   if (route.endsWith("/merge-permission")) return [route, "/api/boards"];
+  if (route.startsWith("/api/delivery/")) return ["/api/delivery"];
   if (route === "/api/boards" || route.startsWith("/api/boards/")) return ["/api/boards"];
   if (route === "/api/views" || route.startsWith("/api/views/")) return ["/api/views"];
   if (route === "/api/repositories" || route.startsWith("/api/repositories/")) {

@@ -59,6 +59,7 @@ import { useBoardDesktop } from "./BoardToolbar";
 import { EnginePanel } from "./EnginePanel";
 import { EnvironmentPicker } from "./EnvironmentPicker";
 import { DeploymentRuntime } from "./DeploymentsPage.runtime";
+import { BoardDelivery } from "./BoardDelivery";
 
 const MODE_LABELS = {
   manual: "Manual",
@@ -794,6 +795,9 @@ function DeploymentsContent({ environmentId }: { environmentId: EnvironmentId | 
           </p>
         ) : null}
         <div className="flex min-w-0 flex-col gap-6">
+          {enabled && environmentId ? (
+            <BoardDelivery key={environmentId} environmentId={environmentId} />
+          ) : null}
           {snapshot?.projects.map((project) => {
             const candidates = snapshot.candidates.filter(
               (candidate) => candidate.projectId === project.id,

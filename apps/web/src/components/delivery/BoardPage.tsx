@@ -613,6 +613,7 @@ function EnvironmentBoardPage({ environmentId }: { readonly environmentId: Envir
   if (search.task) {
     return (
       <TaskWorkspace
+        key={JSON.stringify([active, search.task])}
         environmentId={active}
         taskId={search.task}
         from="Board"

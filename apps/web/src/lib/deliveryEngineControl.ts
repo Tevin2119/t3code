@@ -1,7 +1,16 @@
-import { DeliveryEngineUpdateReceipt, DeliveryEngineVersions } from "@t3tools/contracts";
+import {
+  DeliveryEngineCapabilities,
+  DeliveryEngineCheckout,
+  DeliveryEngineLifecycleReceipt,
+  DeliveryEngineUpdateReceipt,
+  DeliveryEngineVersions,
+} from "@t3tools/contracts";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
+const decodeCapabilities = Schema.decodeUnknownOption(DeliveryEngineCapabilities);
+const decodeLifecycleReceipt = Schema.decodeUnknownOption(DeliveryEngineLifecycleReceipt);
+const decodeCheckout = Schema.decodeUnknownOption(DeliveryEngineCheckout);
 const decodeVersions = Schema.decodeUnknownOption(DeliveryEngineVersions);
 const decodeUpdateReceipt = Schema.decodeUnknownOption(DeliveryEngineUpdateReceipt);
 
@@ -21,6 +30,8 @@ export function parseDeliveryEngineHealth(body: unknown, person?: string) {
   return {
     approvalWindow: parseApprovalWindow(field("approvalWindow"), person),
     fullAuto: parseFullAuto(field("fullAuto")),
+    launcherOwned:
+      Option.getOrNull(decodeCapabilities(field("capabilities")))?.launcherLifecycle === true,
     stopping: field("stopping") === true,
     profile: typeof profile === "string" ? profile : null,
     pid: typeof pid === "number" && Number.isInteger(pid) && pid > 0 ? pid : null,
@@ -70,6 +81,64 @@ export function minutesLeft(until: string | null, now: number): number {
   return until ? Math.max(0, Math.ceil((Date.parse(until) - now) / 60_000)) : 0;
 }
 
+export function deliveryEngineDiagnostics(body: unknown) {
+  const summary = parseDeliveryEngineHealth(body);
+  const checkout = Option.getOrNull(
+    decodeCheckout(
+      typeof body === "object" && body !== null && "checkout" in body ? body.checkout : null,
+    ),
+  );
+  const behind = checkout?.known && checkout.fetchedAt ? checkout.behind : null;
+  return {
+    checkout,
+    freshness:
+      behind === null
+        ? "Behind upstream: unknown"
+        : behind === 0
+          ? `Checkout is 0 commits behind ${checkout?.upstream ?? "its upstream"} as of ${checkout?.fetchedAt}`
+          : `Checkout is ${behind} commit${behind === 1 ? "" : "s"} behind ${checkout?.upstream ?? "its upstream"} as of ${checkout?.fetchedAt}`,
+    summary,
+  };
+}
+
+/** Allowlisted health facts only. Never serialize the raw health reply or approval input. */
+export function deliveryEngineFixPrompt(
+  body: unknown,
+  reading?: {
+    readonly reachable: boolean;
+    readonly error: string | null;
+    readonly readAt: string | null;
+  },
+) {
+  const { summary, checkout, freshness } = deliveryEngineDiagnostics(body);
+  const versions = summary.versions;
+  return [
+    "Diagnose and fix the PaperClip engine issue in this project. Inspect before editing.",
+    "Do not stop, restart, install an update, or launch another engine without explicit approval.",
+    "Preserve all tracked and untracked changes, including .worktrees. Do not infer that dirty paths are disposable.",
+    reading?.reachable === false
+      ? `Engine health unreachable: ${reading.error ?? "No health response"}. Last reading: ${reading.readAt ?? "never"}. The following snapshot may be stale.`
+      : `Initial health snapshot (read at ${reading?.readAt ?? "unknown time"}):`,
+    JSON.stringify(
+      {
+        launcherOwned: summary.launcherOwned,
+        stopping: summary.stopping,
+        profile: summary.profile,
+        pid: summary.pid,
+        commit: summary.commit,
+        versions,
+        checkout,
+      },
+      null,
+      2,
+    ),
+    freshness,
+    `Commit range to inspect: ${versions?.running?.commit ?? "unknown running commit"}..${versions?.available?.commit ?? versions?.installed?.commit ?? "unknown target commit"}`,
+    `Latest main-check diagnostic: ${versions?.mainCheck?.reason ?? "Not reported"}`,
+    "Health does not provide full failing-check output or dirty paths. Read the relevant engine check logs and git status in the selected project, report the failing output and commit-range diff before proposing a fix. Never include approval keys or credentials.",
+  ].join("\n");
+}
+
 export function requireDeliveryUpdateReceipt(body: unknown) {
   const receipt = decodeUpdateReceipt(body);
   if (Option.isNone(receipt)) {
@@ -107,23 +176,68 @@ export function deliveryUpdatePending(id: string | null, versions: DeliveryEngin
   return update.phase !== "complete" || versions?.running?.commit !== update.commit;
 }
 
+// CheckoutUpdate's phases and reload action describe T3 itself. Engine releases use
+// drain/snapshot/start receipts and must never reload T3 or infer completion from its build.
+export function deliveryEngineUpdateStatus(
+  versions: DeliveryEngineVersions | null,
+  id: string | null,
+) {
+  if (deliveryUpdatePending(id, versions)) {
+    return {
+      kind: "progress",
+      text: "Update acceptance recorded. Waiting for matching engine health confirmation.",
+    } as const;
+  }
+  if (!versions) return { kind: "unknown", text: "Release status is not reported." } as const;
+  if (versions.problem || versions.update?.phase === "failed") {
+    return {
+      kind: "error",
+      text:
+        versions.problem ??
+        versions.update?.problem ??
+        "The engine update failed. Inspect diagnostics before retrying.",
+    } as const;
+  }
+  if (versions.update && ["draining", "snapshotting", "starting"].includes(versions.update.phase)) {
+    return {
+      kind: "progress",
+      text: `Engine update: ${versions.update.phase}. Completion is not confirmed.`,
+    } as const;
+  }
+  if (versions.updateAvailable) {
+    return {
+      kind: "available",
+      text: versions.deferred
+        ? "Release update deferred. You can install it here later."
+        : "A release update is available.",
+    } as const;
+  }
+  return {
+    kind: "idle",
+    text: "No release update is currently offered. This does not mean the checkout is current.",
+  } as const;
+}
+
 export async function controlDeliveryEngine(
   action: "start" | "stop" | "restart",
   operations: {
-    readonly stop: () => Promise<unknown>;
+    readonly launcherOwned?: boolean;
+    readonly lifecycle?: (action: "stop" | "restart") => Promise<unknown>;
     readonly start: () => Promise<void>;
   },
 ): Promise<void> {
+  // Stop and restart require launcher ownership. Never stop before a terminal fallback.
   if (action !== "start") {
-    const receipt = await operations.stop();
-    if (
-      typeof receipt !== "object" ||
-      receipt === null ||
-      !("stopped" in receipt) ||
-      receipt.stopped !== true
-    ) {
-      throw new Error("The engine did not confirm a completed stop. Nothing else was started.");
+    if (operations.launcherOwned && operations.lifecycle) {
+      const receipt = decodeLifecycleReceipt(await operations.lifecycle(action));
+      if (Option.isNone(receipt) || receipt.value.action !== action) {
+        throw new Error("Launcher acceptance was not confirmed. Inspect health before retrying.");
+      }
+      return;
     }
+    throw new Error(
+      "This engine does not advertise launcher-owned stop or restart. Nothing was stopped. Update the engine launcher to enable these controls.",
+    );
   }
-  if (action !== "stop") await operations.start();
+  await operations.start();
 }

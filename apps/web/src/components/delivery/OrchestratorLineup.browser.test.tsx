@@ -284,7 +284,7 @@ it("sets a seat's access from its glyphs and names every icon-only control", asy
     .toHaveTextContent("Claude · claude-model");
   // The orchestrator's seat is marked beside its name, not spelled out after a dash.
   await expect.element(page.getByText("Critic", { exact: true })).toBeVisible();
-  expect(screen.container.textContent).not.toContain("—");
+  expect(screen.container.textContent).not.toContain("\u2014");
 
   const access = page.getByRole("radiogroup", { name: "Access of Scout" });
   await expect.element(access.getByRole("radio", { name: "Read-only" })).toBeChecked();
@@ -356,4 +356,90 @@ it("badges a harness with its model's family only when T3 has that family's logo
   // GLM is no harness of its own; its badge is the Z.AI mark the usage panel already shows.
   expect(family(hermes, "glm-5.3", "GLM-5.3")).toBe("glm");
   expect(family(hermes, "mystery-1", "Mystery 1")).toBeNull();
+});
+
+it("saves reasoning and context window together in the participant model selection", async () => {
+  testState.threadState = {
+    data: { binding: RESEARCH_BINDING, lineup: LINEUP_OF_THREE, pending: null },
+  };
+  testState.setLineup.mockClear();
+  const entries = ENTRIES.map((entry) => ({
+    ...entry,
+    models: [
+      {
+        slug: `${entry.driverKind === "claudeAgent" ? "claude" : "codex"}-model`,
+        name: "Test model",
+        isCustom: false,
+        capabilities: {
+          optionDescriptors: [
+            {
+              id: "effort",
+              label: "Reasoning",
+              type: "select" as const,
+              currentValue: "high",
+              options: [
+                { id: "high", label: "High", isDefault: true },
+                { id: "max", label: "Maximum" },
+              ],
+            },
+            {
+              id: "contextWindow",
+              label: "Context window",
+              type: "select" as const,
+              currentValue: "200k",
+              options: [
+                { id: "200k", label: "200k", isDefault: true },
+                { id: "1m", label: "1M" },
+              ],
+            },
+          ],
+        },
+      },
+    ],
+  }));
+  await using screen = await render(
+    <OrchestratorLineup
+      environmentId={"env-a" as never}
+      threadId={"t1" as never}
+      driver={ProviderDriverKind.make("codex")}
+      entries={entries}
+      models={new Map(entries.map((entry) => [entry.instanceId, entry.models]))}
+      onLeaveToSingle={() => {}}
+    />,
+  );
+  const scout = page.getByRole("group", { name: "Settings for Scout", exact: true });
+  await scout.getByRole("button", { name: /High/ }).click();
+  await page.getByRole("menuitemradio", { name: "1M", exact: true }).click();
+  await vi.waitFor(() => expect(testState.setLineup).toHaveBeenCalled());
+  await scout.getByRole("button", { name: /High/ }).click();
+  await page.getByRole("menuitemradio", { name: "Maximum", exact: true }).click();
+  await vi.waitFor(() => {
+    const last = testState.setLineup.mock.calls.at(-1)?.[0].input
+      .orchestration as DeliveryOrchestrationConfig;
+    expect(last.participants.find((p) => p.seat === "scout")?.modelSelection.options).toEqual(
+      expect.arrayContaining([
+        { id: "contextWindow", value: "1m" },
+        { id: "effort", value: "max" },
+      ]),
+    );
+  });
+  const saved = testState.threadState.data as { lineup: DeliveryOrchestrationConfig };
+  expect(saved.lineup.participants.find((p) => p.seat === "scout")?.modelSelection.options).toEqual(
+    expect.arrayContaining([
+      { id: "contextWindow", value: "1m" },
+      { id: "effort", value: "max" },
+    ]),
+  );
+  await screen.rerender(
+    <OrchestratorLineup
+      key="reloaded"
+      environmentId={"env-a" as never}
+      threadId={"t1" as never}
+      driver={ProviderDriverKind.make("codex")}
+      entries={entries}
+      models={new Map(entries.map((entry) => [entry.instanceId, entry.models]))}
+      onLeaveToSingle={() => {}}
+    />,
+  );
+  await expect.element(scout.getByRole("button", { name: /Maximum/ })).toBeVisible();
 });

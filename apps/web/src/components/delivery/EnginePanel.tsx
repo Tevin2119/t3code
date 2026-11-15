@@ -1,14 +1,20 @@
 import { ApprovalControls } from "./ApprovalControls";
 import { GlobalMergePermission } from "./MergePermissionControls";
 import { useAtomValue } from "@effect/atom-react";
-import { scopeThreadRef } from "@t3tools/client-runtime/environment";
+import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import { ThreadId, type EnvironmentId, type DeliveryReleaseChannel } from "@t3tools/contracts";
 import { useRef, useState } from "react";
 import { PowerIcon } from "lucide-react";
+import { useProjects } from "../../state/entities";
+import { useNewThreadHandler } from "../../hooks/useHandleNewThread";
+import { shortCommit } from "../CheckoutUpdate.logic";
 import { useEnvironmentSettings } from "../../hooks/useSettings";
 import {
   controlDeliveryEngine,
+  deliveryEngineDiagnostics,
+  deliveryEngineFixPrompt,
+  deliveryEngineUpdateStatus,
   deliveryUpdatePending,
   engineAttention,
   parseDeliveryEngineHealth,
@@ -45,7 +51,14 @@ export function EngineDownNotice(props: {
   );
 }
 
-export function EnginePanel({
+export function EnginePanel(props: {
+  readonly environmentId: EnvironmentId;
+  readonly compact?: boolean;
+}) {
+  return <EnvironmentEnginePanel key={props.environmentId} {...props} />;
+}
+
+function EnvironmentEnginePanel({
   environmentId,
   compact = false,
 }: {
@@ -93,7 +106,15 @@ export function EnginePanel({
  * The board's bar for an engine that needs a person, such as an update to install. It opens the
  * same engine controls as the Engine button, where the update is approved.
  */
-export function EngineAttentionBar({ environmentId }: { readonly environmentId: EnvironmentId }) {
+export function EngineAttentionBar(props: { readonly environmentId: EnvironmentId }) {
+  return <EnvironmentEngineAttentionBar key={props.environmentId} {...props} />;
+}
+
+function EnvironmentEngineAttentionBar({
+  environmentId,
+}: {
+  readonly environmentId: EnvironmentId;
+}) {
   const [open, setOpen] = useState(false);
   const [updateId, setUpdateId] = useState<string | null>(null);
   const health = useDeliveryRead(environmentId, "/api/health", { pollMs: 30_000 });
@@ -132,6 +153,34 @@ function EngineControl(props: {
 }) {
   const { environmentId } = props;
   const environment = useEnvironment(environmentId);
+  const projects = useProjects().filter((project) => project.environmentId === environmentId);
+  const newThread = useNewThreadHandler();
+  const [projectId, setProjectId] = useState<string | null>(null);
+  const fixing = useRef(false);
+  const [fixBusy, setFixBusy] = useState(false);
+  const fixInThread = async () => {
+    const project = projects.find((item) => item.id === projectId);
+    if (!project || fixing.current) return;
+    fixing.current = true;
+    setFixBusy(true);
+    const prompt = deliveryEngineFixPrompt(health.body, {
+      reachable: !health.error && health.body !== null,
+      error: health.error,
+      readAt: health.readAt,
+    });
+    const problem = await newThread(scopeProjectRef(environmentId, project.id), { prompt })
+      .then((opened) => {
+        if (!opened) return "The diagnostic thread was not opened.";
+        props.onClose();
+        return null;
+      })
+      .catch((error: unknown) =>
+        error instanceof Error ? error.message : "Could not open a diagnostic thread.",
+      );
+    if (problem !== null) setProblem(problem);
+    fixing.current = false;
+    setFixBusy(false);
+  };
   const command = useEnvironmentSettings(
     environmentId,
     (settings) => settings.delivery.engineCommand,
@@ -155,6 +204,7 @@ function EngineControl(props: {
   const stopping = reachable && summary.stopping;
   const versions = summary.versions;
   const awaitingUpdate = deliveryUpdatePending(props.updateId, versions);
+  const updateStatus = deliveryEngineUpdateStatus(versions, props.updateId);
 
   const releaseAction = async (
     action: "update" | "later" | "channel",
@@ -180,7 +230,7 @@ function EngineControl(props: {
           const receipt = requireDeliveryUpdateReceipt(result.body);
           props.onUpdateAccepted(receipt.id);
           setNotice(
-            `Update ${receipt.id} accepted for ${receipt.channel} ${receipt.commit.slice(0, 10)}. The supervisor drains work, snapshots state, then verifies the replacement. Acceptance is not completion.`,
+            `Update ${receipt.id} accepted for ${receipt.channel} ${shortCommit(receipt.commit)}. The supervisor drains work, snapshots state, then verifies the replacement. Acceptance is not completion.`,
           );
         } else
           setNotice(
@@ -209,8 +259,9 @@ function EngineControl(props: {
     setProblem(null);
     setNotice(null);
     const problem = await controlDeliveryEngine(action, {
-      stop: async () => {
-        const result = await act("/api/engine/stop", { key: approval });
+      launcherOwned: summary.launcherOwned,
+      lifecycle: async (action) => {
+        const result = await act("/api/engine/lifecycle", { key: approval, action });
         if (!result.ok) throw new Error(result.why);
         return result.body;
       },
@@ -238,8 +289,10 @@ function EngineControl(props: {
       .then(() => {
         setNotice(
           action === "stop"
-            ? "Engine stopped. Its work is kept for the next start."
-            : "Start command sent. Check the terminal and engine health; a command sent is not proof that it started.",
+            ? "Launcher accepted the stop request. Check health for completion."
+            : action === "restart"
+              ? "Launcher accepted the restart request. Check health for completion."
+              : "Start command sent. Check health to confirm it started.",
         );
         health.refresh();
         return null;
@@ -259,7 +312,7 @@ function EngineControl(props: {
     <Dialog
       open
       onOpenChange={(open) => {
-        if (!open && !busy) props.onClose();
+        if (!open && !busy && !fixBusy) props.onClose();
       }}
     >
       <DialogPopup className="max-w-3xl">
@@ -294,7 +347,7 @@ function EngineControl(props: {
                   <dt className="text-muted-foreground">Process</dt>
                   <dd>{summary.pid ?? "Not reported"}</dd>
                   <dt className="text-muted-foreground">Installed checkout</dt>
-                  <dd>{summary.commit?.slice(0, 10) ?? "Not reported"}</dd>
+                  <dd>{summary.commit ? shortCommit(summary.commit) : "Not reported"}</dd>
                   {versions ? (
                     <>
                       <dt className="text-muted-foreground">Release channel</dt>
@@ -307,17 +360,29 @@ function EngineControl(props: {
                       </dd>
                       <dt className="text-muted-foreground">Running version</dt>
                       <dd>
-                        {versions.running?.commit?.slice(0, 10) ?? "Unknown"}
+                        {versions.running?.commit
+                          ? shortCommit(versions.running.commit)
+                          : "Unknown"}
                         {versions.running?.changed ? " (modified)" : ""}
                       </dd>
                       <dt className="text-muted-foreground">Available version</dt>
                       <dd>
-                        {versions.available?.commit.slice(0, 10) ??
-                          "No published candidate for this channel"}
+                        {versions.available
+                          ? shortCommit(versions.available.commit)
+                          : "No published candidate for this channel"}
                       </dd>
                     </>
                   ) : null}
                 </dl>
+                <p>{deliveryEngineDiagnostics(health.body).freshness}</p>
+                {versions?.mainCheck ? (
+                  <p className="text-xs text-muted-foreground">
+                    Main check ({versions.mainCheck.at}): {versions.mainCheck.reason}
+                  </p>
+                ) : null}
+                {updateStatus.kind === "idle" || updateStatus.kind === "unknown" ? (
+                  <p role="status">{updateStatus.text}</p>
+                ) : null}
                 {versions?.restartRequired ? (
                   <p role="status" className="text-warning">
                     The checkout changed after this engine started. Restart when convenient; running
@@ -360,9 +425,9 @@ function EngineControl(props: {
               </>
             ) : null}
             <p className="text-xs text-muted-foreground">
-              This controls the task engine, not T3. Stop safely ends PaperClip and keeps its task
-              records. Restart starts it again only after a confirmed stop. A lost reply requires
-              checking its terminal before trying again.
+              {summary.launcherOwned
+                ? "Stop and restart are handled by the engine launcher."
+                : "This engine does not support launcher-owned stop or restart. The running engine is left untouched."}
             </p>
             {reachable ? (
               <>
@@ -414,7 +479,9 @@ function EngineControl(props: {
                   <Button
                     size="sm"
                     variant="outline"
-                    disabled={busy || awaitingUpdate || stopping || !approval}
+                    disabled={
+                      busy || awaitingUpdate || stopping || !approval || !summary.launcherOwned
+                    }
                     onClick={() => void control("stop")}
                   >
                     Stop engine
@@ -423,11 +490,11 @@ function EngineControl(props: {
                     size="sm"
                     variant="outline"
                     disabled={
-                      busy || awaitingUpdate || stopping || !approval || !command || !configuration
+                      busy || awaitingUpdate || stopping || !approval || !summary.launcherOwned
                     }
                     onClick={() => void control("restart")}
                   >
-                    Restart engine
+                    Restart installed version
                   </Button>
                 </>
               ) : null}
@@ -475,7 +542,8 @@ function EngineControl(props: {
                   <>
                     <p role="status">
                       {versions.deferred ? "Update deferred" : "Update available"}:{" "}
-                      {versions.available?.commit.slice(0, 10)}. Your engine home stays the same.{" "}
+                      {versions.available ? shortCommit(versions.available.commit) : "Unknown"}.
+                      Your engine home stays the same.{" "}
                       {summary.approval === "passphrase"
                         ? "Your approval passphrase is retained."
                         : "A new approval key is printed in the engine terminal after restart."}
@@ -516,6 +584,36 @@ function EngineControl(props: {
                 ) : null}
               </div>
             ) : null}
+            <div className="space-y-2 rounded border p-3">
+              <p>Fix in a thread</p>
+              <p className="text-xs text-muted-foreground">
+                Choose the engine project on this environment. Opens a diagnostic draft for you to
+                review and send, without starting an agent or changing the engine.
+              </p>
+              <Select value={projectId} onValueChange={setProjectId} disabled={fixBusy}>
+                <SelectTrigger aria-label="Engine diagnostic project">
+                  <SelectValue placeholder="Choose project" />
+                </SelectTrigger>
+                <SelectPopup>
+                  {projects.map((project) => (
+                    <SelectItem key={project.id} value={project.id}>
+                      {project.title} ({project.workspaceRoot})
+                    </SelectItem>
+                  ))}
+                </SelectPopup>
+              </Select>
+              {projects.length === 0 ? (
+                <p>No projects on this environment. Add one from the command palette.</p>
+              ) : null}
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={!projectId || fixBusy || busy}
+                onClick={() => void fixInThread()}
+              >
+                {fixBusy ? "Opening thread..." : "Fix in a thread"}
+              </Button>
+            </div>
             {!command ? (
               <p className="text-xs text-muted-foreground">
                 Set <code>delivery.engineCommand</code> in this environment's server settings, for
