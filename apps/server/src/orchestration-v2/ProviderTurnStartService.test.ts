@@ -1682,7 +1682,7 @@ effectIt.effect("starts the lead exactly once with a real roster fallback", () =
 );
 
 effectIt.effect.each(["roster", "state", "dispatch"] as const)(
-  "settles %s team preparation without holding the provider queue",
+  "settles %s team preparation with the appropriate queue failure class",
   (reason) =>
     Effect.gen(function* () {
       const message = "The conversation and its participants use different team revisions.";
@@ -1705,7 +1705,14 @@ effectIt.effect.each(["roster", "state", "dispatch"] as const)(
       expect(projection.attempts[0]).toMatchObject({ status: "failed", startedAt: null });
       expect(projection.nodes[0]).toMatchObject({ status: "failed", startedAt: null });
       expect(projection.turnItems).toMatchObject([
-        { type: "error", status: "failed", failure: { message, class: "validation_error" } },
+        {
+          type: "error",
+          status: "failed",
+          failure: {
+            message,
+            class: reason === "dispatch" ? "provider_error" : "validation_error",
+          },
+        },
       ]);
       expect(harness.settledRuns).toEqual(["failed"]);
       expect(harness.open).not.toHaveBeenCalled();

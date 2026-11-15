@@ -328,12 +328,7 @@ export const make = Effect.gen(function* () {
               .pipe(
                 Effect.catchTags({
                   DeliveryError: Effect.fn("NativeTeamChat.skipBindingFailure")(function* (error) {
-                    if (error.status === 401 || error.status === 403)
-                      return yield* new NativeTeamChatError({
-                        runId: input.runId,
-                        reason: "state",
-                        cause: error,
-                      });
+                    if (error.status === 401 || error.status === 403) return yield* error;
                     yield* recordSkip(seat.seat, `${seat.seat}: ${error.message}`);
                     return undefined;
                   }),

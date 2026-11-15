@@ -291,11 +291,25 @@ it.effect.each(["workspace", "roster"] as const)(
       const result = yield* service.prepareTurn({ threadId, runId });
       expect(result.ready).toBe(true);
       expect(result.context).toContain("team discussion could not run");
+      expect(result.context).not.toContain("hand each piece to one participant");
+      expect(result.context).not.toContain("Participants:");
+      expect(result.context).toContain("Independent contributions:");
       expect(result.context).toContain(problem === "workspace" ? "working folder" : "unique seats");
       expect((yield* service.prepareTurn({ threadId, runId })).context).toBe(result.context);
       expect(fixture.notices).toHaveLength(1);
       expect(fixture.admissions.size).toBe(0);
     }),
+);
+
+it.effect("fallback context does not tell a solo lead to delegate to nobody", () =>
+  Effect.gen(function* () {
+    const fixture = setup();
+    fixture.participants.splice(1);
+    const { context } = yield* (yield* fixture.service).prepareTurn({ threadId, runId });
+    expect(context).not.toContain("hand each piece to one participant");
+    expect(context).not.toContain("Participants:");
+    expect(context).not.toContain("Independent contributions:");
+  }),
 );
 
 it.effect("does not turn missing or obsolete state into a solo fallback", () =>
@@ -314,16 +328,18 @@ it.effect("does not turn missing or obsolete state into a solo fallback", () =>
   }),
 );
 
-it.effect.each([401, 403])("does not bypass binding access refusal %s", (bindStatus) =>
-  Effect.gen(function* () {
-    const fixture = setup({ bindFailures: ["researcher"], bindStatus });
-    const service = yield* fixture.service;
-    expect((yield* service.prepareTurn({ threadId, runId }).pipe(Effect.flip)).reason).toBe(
-      "state",
-    );
-    expect(fixture.admissions.size).toBe(0);
-    expect(fixture.notices).toHaveLength(0);
-  }),
+it.effect.each([401, 403])(
+  "keeps binding access refusal %s retryable without bypassing it",
+  (bindStatus) =>
+    Effect.gen(function* () {
+      const fixture = setup({ bindFailures: ["researcher"], bindStatus });
+      const service = yield* fixture.service;
+      expect((yield* service.prepareTurn({ threadId, runId }).pipe(Effect.flip)).reason).toBe(
+        "dispatch",
+      );
+      expect(fixture.admissions.size).toBe(0);
+      expect(fixture.notices).toHaveLength(0);
+    }),
 );
 
 it.effect("does not fall back when its notice cannot commit", () =>
