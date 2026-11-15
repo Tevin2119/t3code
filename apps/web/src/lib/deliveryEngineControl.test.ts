@@ -1,7 +1,10 @@
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
 import {
   minutesLeft,
   controlDeliveryEngine,
+  deliveryEngineDiagnostics,
+  deliveryEngineFixPrompt,
+  deliveryEngineUpdateStatus,
   deliveryUpdatePending,
   engineAttention,
   parseDeliveryEngineHealth,
@@ -20,6 +23,7 @@ describe("engine health summary", () => {
         unrelated: "private",
       }),
     ).toEqual({
+      launcherOwned: false,
       stopping: false,
       pid: 27290,
       profile: "team",
@@ -35,6 +39,7 @@ describe("engine health summary", () => {
     "handles old or unreadable health replies: %j",
     (body) => {
       expect(parseDeliveryEngineHealth(body)).toEqual({
+        launcherOwned: false,
         stopping: false,
         pid: null,
         profile: null,
@@ -66,6 +71,42 @@ describe("release facts and update receipts", () => {
     problem: null,
     update: null,
   };
+  it("presents idle, deferred, failed and in-progress facts without guessing completion", () => {
+    expect(deliveryEngineUpdateStatus(null, null).kind).toBe("unknown");
+    expect(deliveryEngineUpdateStatus(null, "request").kind).toBe("progress");
+    expect(deliveryEngineUpdateStatus({ ...versions, updateAvailable: false }, null).kind).toBe(
+      "idle",
+    );
+    expect(deliveryEngineUpdateStatus({ ...versions, deferred: true }, null).text).toContain(
+      "deferred",
+    );
+    expect(deliveryEngineUpdateStatus({ ...versions, problem: "broken catalogue" }, null)).toEqual({
+      kind: "error",
+      text: "broken catalogue",
+    });
+    const update = {
+      id: "request",
+      phase: "failed" as const,
+      channel: "qa" as const,
+      commit: "c".repeat(40),
+      at: "now",
+      problem: "failed check output",
+    };
+    expect(deliveryEngineUpdateStatus({ ...versions, update }, "request")).toEqual({
+      kind: "error",
+      text: "failed check output",
+    });
+    expect(
+      deliveryEngineUpdateStatus({ ...versions, update: { ...update, phase: "starting" } }, null)
+        .kind,
+    ).toBe("progress");
+    const prompt = deliveryEngineFixPrompt({
+      versions: { ...versions, update, mainCheck: { at: "now", reason: "test suite failed" } },
+    });
+    expect(prompt).toContain("failed check output");
+    expect(prompt).toContain("test suite failed");
+    expect(prompt).toContain(`${versions.running.commit}..${versions.available.commit}`);
+  });
   it("keeps running, installed and available distinct", () => {
     const parsed = parseDeliveryEngineHealth({ code: { commit: "b".repeat(40) }, versions });
     expect(parsed.versions).toEqual(versions);
@@ -128,64 +169,129 @@ describe("release facts and update receipts", () => {
 });
 
 describe("engine restart safety", () => {
-  it("does not start while stop is still draining", async () => {
-    let acknowledge: (value: unknown) => void = () => {};
-    const drained = new Promise<unknown>((resolve) => {
-      acknowledge = resolve;
-    });
-    let starts = 0;
-    const restart = controlDeliveryEngine("restart", {
-      stop: () => drained,
-      start: async () => {
-        starts++;
-      },
-    });
-    expect(starts).toBe(0);
-    acknowledge({ stopped: true });
-    await restart;
-    expect(starts).toBe(1);
-  });
-
-  it.each([null, {}, { stopping: true }, { stopped: false }, { stopped: "true" }])(
-    "does not treat an incomplete stop as permission to restart: %j",
-    async (receipt) => {
-      let starts = 0;
-      await expect(
-        controlDeliveryEngine("restart", {
-          stop: async () => receipt,
-          start: async () => {
-            starts++;
-          },
-        }),
-      ).rejects.toThrow("completed stop");
-      expect(starts).toBe(0);
+  it.each(["stop", "restart"] as const)(
+    "refuses unsupported %s without any side effects",
+    async (action) => {
+      const start = vi.fn();
+      const lifecycle = vi.fn();
+      await expect(controlDeliveryEngine(action, { start, lifecycle })).rejects.toThrow(
+        "Nothing was stopped",
+      );
+      expect(start).not.toHaveBeenCalled();
+      expect(lifecycle).not.toHaveBeenCalled();
     },
   );
-
-  it("a lost stop reply never launches another process", async () => {
-    let starts = 0;
+  it.each(["stop", "restart"] as const)(
+    "accepts launcher-owned %s without a terminal start",
+    async (action) => {
+      const start = vi.fn();
+      const lifecycle = vi.fn().mockResolvedValue({ accepted: true, id: "request-1", action });
+      const health = parseDeliveryEngineHealth({ capabilities: { launcherLifecycle: true } });
+      expect(health.launcherOwned).toBe(true);
+      await controlDeliveryEngine(action, {
+        start,
+        lifecycle,
+        launcherOwned: health.launcherOwned,
+      });
+      expect(lifecycle).toHaveBeenCalledExactlyOnceWith(action);
+      expect(start).not.toHaveBeenCalled();
+    },
+  );
+  it.each([
+    null,
+    {},
+    { accepted: true, action: "restart" },
+    { accepted: true, id: "", action: "restart" },
+    { accepted: true, id: "   ", action: "restart" },
+    { accepted: true, id: 1, action: "restart" },
+    { accepted: false, id: "1", action: "restart" },
+    { accepted: true, id: "1", action: "stop" },
+  ])("never falls back after an invalid receipt: %j", async (receipt) => {
+    const start = vi.fn();
+    const lifecycle = vi.fn().mockResolvedValue(receipt);
     await expect(
-      controlDeliveryEngine("restart", {
-        stop: async () => {
-          throw new Error("reply lost");
-        },
-        start: async () => {
-          starts++;
-        },
-      }),
-    ).rejects.toThrow("reply lost");
-    expect(starts).toBe(0);
+      controlDeliveryEngine("restart", { start, lifecycle, launcherOwned: true }),
+    ).rejects.toThrow("acceptance was not confirmed");
+    expect(lifecycle).toHaveBeenCalledTimes(1);
+    expect(start).not.toHaveBeenCalled();
   });
+  it("does not start or retry when the launcher reply is lost", async () => {
+    const start = vi.fn();
+    const lifecycle = vi.fn().mockRejectedValue(new Error("reply lost"));
+    await expect(
+      controlDeliveryEngine("restart", { start, lifecycle, launcherOwned: true }),
+    ).rejects.toThrow("reply lost");
+    expect(lifecycle).toHaveBeenCalledTimes(1);
+    expect(start).not.toHaveBeenCalled();
+  });
+  it.each([null, {}, { launcherLifecycle: "true" }, { launcherLifecycle: false }])(
+    "does not treat malformed capabilities as ownership",
+    (capabilities) => {
+      expect(parseDeliveryEngineHealth({ capabilities }).launcherOwned).toBe(false);
+    },
+  );
+  it("keeps explicit start separate", async () => {
+    const start = vi.fn();
+    const lifecycle = vi.fn();
+    await controlDeliveryEngine("start", { start, lifecycle, launcherOwned: true });
+    expect(start).toHaveBeenCalledTimes(1);
+    expect(lifecycle).not.toHaveBeenCalled();
+  });
+});
 
-  it("stop alone never restarts the engine", async () => {
-    let starts = 0;
-    await controlDeliveryEngine("stop", {
-      stop: async () => ({ stopped: true }),
-      start: async () => {
-        starts++;
-      },
+describe("engine diagnostics", () => {
+  const checkout = {
+    known: true,
+    behind: 3,
+    upstream: "origin/main",
+    fetchedAt: "today",
+    text: "behind",
+  };
+  it("only reports known behind counts, including zero", () => {
+    expect(deliveryEngineDiagnostics({ checkout }).freshness).toContain("3 commits behind");
+    expect(deliveryEngineDiagnostics({ checkout: { ...checkout, behind: 0 } }).freshness).toContain(
+      "0 commits behind",
+    );
+    for (const value of [
+      null,
+      { ...checkout, known: false },
+      { ...checkout, behind: null },
+      { ...checkout, behind: -1 },
+    ]) {
+      expect(deliveryEngineDiagnostics({ checkout: value }).freshness).toBe(
+        "Behind upstream: unknown",
+      );
+    }
+  });
+  it("seeds diagnostics without copying approval secrets or arbitrary health fields", () => {
+    const prompt = deliveryEngineFixPrompt({
+      checkout,
+      code: { commit: "abc" },
+      key: "SECRET",
+      approval: "SECRET",
+      arbitrary: { token: "SECRET" },
     });
-    expect(starts).toBe(0);
+    expect(prompt).not.toContain("SECRET");
+    expect(prompt).toContain("abc");
+    expect(prompt).toContain("3 commits behind");
+    expect(prompt).toContain("unknown running commit");
+    expect(prompt).toContain("full failing-check output or dirty paths");
+    expect(prompt).toContain("including .worktrees");
+  });
+});
+
+describe("diagnostic reading context", () => {
+  it("marks unreachable snapshots as potentially stale", () => {
+    expect(
+      deliveryEngineFixPrompt(null, { reachable: false, error: "Disconnected", readAt: null }),
+    ).toContain("Engine health unreachable: Disconnected");
+  });
+  it("does not claim freshness without a fetch timestamp", () => {
+    expect(
+      deliveryEngineDiagnostics({
+        checkout: { known: true, behind: 0, upstream: "origin/main", fetchedAt: null, text: "" },
+      }).freshness,
+    ).toBe("Behind upstream: unknown");
   });
 });
 
