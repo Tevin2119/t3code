@@ -1,3 +1,4 @@
+import { useThreadInspection } from "./chat/ThreadInspectionContext";
 import { deriveTeamChatPhase } from "@t3tools/client-runtime/state/thread-workflows";
 import { ChildThreadApprovals } from "./chat/ChildThreadApprovals";
 import { Button } from "./ui/button";
@@ -133,7 +134,15 @@ import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import { resolveThreadReferenceCopyTarget } from "@t3tools/client-runtime/thread-reference";
 import { resolveTerminalSessionLabel } from "@t3tools/shared/terminalLabels";
 import { useAtomValue } from "@effect/atom-react";
-import { type SetStateAction, use, useEffect, useLayoutEffect, useRef, useState } from "react";
+import {
+  type ReactNode,
+  type SetStateAction,
+  use,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 import { BackgroundThreadContext } from "./chat/backgroundThread";
 import { WorkspaceMutationIdContext } from "./chat/ChatMarkdownMedia";
 import { useLocation, useNavigate } from "@tanstack/react-router";
@@ -420,6 +429,7 @@ type ChatViewProps =
       forceExpandedMobileComposer?: boolean;
       /** A side chat in its parent's right panel; the parent keeps the keyboard and workspace UI. */
       embedded?: SideChatParentPanel;
+      unavailableContent?: ReactNode;
       routeKind: "server";
       draftId?: never;
     }
@@ -447,6 +457,7 @@ export default function ChatView(props: ChatViewProps) {
     embedded: parentPanel,
   } = props;
   const embedded = parentPanel !== undefined;
+  const inspectThread = useThreadInspection();
   const canOperateThread = useEnvironmentScope(environmentId, AuthOrchestrationOperateScope);
   const canOperateTerminal = useEnvironmentScope(environmentId, AuthTerminalOperateScope);
   const draftId = routeKind === "draft" ? props.draftId : null;
@@ -899,6 +910,10 @@ export default function ChatView(props: ChatViewProps) {
         title,
         sideChat: true,
         open: (): void => {
+          if (inspectThread) {
+            inspectThread(sideChatParentRef);
+            return;
+          }
           void navigate({
             to: "/$environmentId/$threadId",
             params: buildThreadRouteParams(sideChatParentRef),
@@ -910,6 +925,10 @@ export default function ChatView(props: ChatViewProps) {
       return {
         title: parentSubagentThread?.title ?? "Parent thread",
         open: (): void => {
+          if (inspectThread) {
+            inspectThread(parentSubagentThreadRef);
+            return;
+          }
           void navigate({
             to: "/$environmentId/$threadId",
             params: buildThreadRouteParams(parentSubagentThreadRef),
@@ -927,6 +946,10 @@ export default function ChatView(props: ChatViewProps) {
         ? {}
         : {
             open: (): void => {
+              if (inspectThread) {
+                inspectThread(parentRef);
+                return;
+              }
               void navigate({
                 to: "/$environmentId/$threadId",
                 params: buildThreadRouteParams(parentRef),
@@ -2632,7 +2655,9 @@ export default function ChatView(props: ChatViewProps) {
         <Button
           size="xs"
           variant="ghost"
-          onClick={() => void navigate({ to: "/board", search: { task: newest.id } })}
+          onClick={() =>
+            void navigate({ to: "/board", search: { task: newest.id, environment: environmentId } })
+          }
         >
           Open #{newest.number}
         </Button>
@@ -3396,7 +3421,11 @@ export default function ChatView(props: ChatViewProps) {
   };
 
   if (!activeThread) {
-    return embedded ? null : <NoActiveThreadState />;
+    return embedded ? null : routeKind === "server" && props.unavailableContent ? (
+      props.unavailableContent
+    ) : (
+      <NoActiveThreadState />
+    );
   }
 
   const rightPanelContent = activeThreadRef ? (

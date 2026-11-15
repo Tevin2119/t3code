@@ -1,3 +1,4 @@
+import { useThreadInspection } from "./ThreadInspectionContext";
 import { ThreadHoverCardPopup } from "../ThreadHoverCard";
 import { AgentElapsed } from "./AgentElapsed";
 import { projectedSubagentsToRuntime } from "@t3tools/client-runtime/state/subagentRuntime";
@@ -421,6 +422,7 @@ function SubagentTimelineLink(props: {
   );
   const remote = props.remote ?? agent?.remoteChild;
   const remoteEnvironment = useEnvironment(remote?.environmentId ?? null);
+  const inspectThread = useThreadInspection();
   const navigate = useNavigate();
   const threadId = props.threadId;
   // A task in a linked environment opens there, if this client is connected to it.
@@ -428,11 +430,15 @@ function SubagentTimelineLink(props: {
     threadId !== null
       ? () => props.onOpenThread(threadId)
       : remote !== undefined && remoteEnvironment !== null
-        ? () =>
-            void navigate({
-              to: "/$environmentId/$threadId",
-              params: buildThreadRouteParams(scopeThreadRef(remote.environmentId, remote.threadId)),
-            })
+        ? () => {
+            const ref = scopeThreadRef(remote.environmentId, remote.threadId);
+            if (inspectThread) inspectThread(ref);
+            else
+              void navigate({
+                to: "/$environmentId/$threadId",
+                params: buildThreadRouteParams(ref),
+              });
+          }
         : null;
   const liveStatus = agent?.status ?? props.status;
   const status = props.event ? props.event.status : liveStatus;
