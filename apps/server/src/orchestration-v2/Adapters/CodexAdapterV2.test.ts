@@ -73,6 +73,7 @@ import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter"
 import type * as ProviderContinuationRequests from "@t3tools/provider-core/server/ProviderContinuationRequests";
 import * as ModelManifest from "../../provider/ModelManifest.ts";
 import * as PortScanner from "../../preview/PortScanner.ts";
+import * as DeliveryThreadSession from "../../delivery/DeliveryThreadSession.ts";
 import { resolveProviderCompatibility } from "../../provider/providerCompatibility.ts";
 import * as CodexAdapterV2 from "./CodexAdapterV2.ts";
 import { withCodexReplayChildMetadata } from "./CodexAdapterV2.testkit.ts";
@@ -2640,11 +2641,15 @@ describe("CodexAdapterV2 post-settle continuation", () => {
       ),
   );
 
-  it.effect(
-    "reloads changed context windows, preserves unchanged sessions, and restores defaults",
-    () =>
+  it.effect.each(["window", "team"] as const)(
+    "reloads changed %s configuration, preserves unchanged sessions, and restores defaults",
+    (change) =>
       Effect.gen(function* () {
-        const scenario = "context-window-resume";
+        const scenario = `configuration-${change}-resume`;
+        const appThreadId = ThreadId.make(`thread-${scenario}`);
+        yield* Effect.addFinalizer(() =>
+          Effect.sync(() => DeliveryThreadSession.clearDeliveryThreadSession(appThreadId)),
+        );
         const nativeThreadId = "context-window-native";
         const entries = codexReplayPreamble({
           nativeThreadId,
@@ -2653,7 +2658,13 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         }).slice(0, 5);
         let id = 3;
         let previous: number | undefined;
-        const selections = [872000, 872000, 272000, undefined];
+        const selections =
+          change === "window" ? [872000, 872000, 272000, undefined] : [1, 1, 2, undefined];
+        const serverFor = (revision: number) => ({
+          command: "node",
+          args: [`team-${revision}.mjs`],
+          env: {},
+        });
         for (const tokens of selections) {
           if (tokens !== previous) {
             entries.push(
@@ -2676,7 +2687,11 @@ describe("CodexAdapterV2 post-settle continuation", () => {
                   excludeTurns: true,
                   config: {
                     ...CodexAdapterV2.CODEX_THREAD_CONFIG,
-                    ...(tokens === undefined ? {} : { model_context_window: tokens }),
+                    ...(tokens === undefined
+                      ? {}
+                      : change === "window"
+                        ? { model_context_window: tokens }
+                        : { "mcp_servers.delivery": serverFor(tokens) }),
                   },
                 },
               },
@@ -2693,11 +2708,26 @@ describe("CodexAdapterV2 post-settle continuation", () => {
           makeCodexReplayTranscript({ scenario, entries }),
         );
         for (const tokens of selections) {
+          if (change === "team") {
+            if (tokens === undefined) DeliveryThreadSession.clearDeliveryThreadSession(appThreadId);
+            else
+              DeliveryThreadSession.setDeliveryThreadSession({
+                threadId: appThreadId,
+                team: "research",
+                role: "researcher",
+                configuration: `research@${tokens}`,
+                instructions: `Research brief ${tokens}`,
+                servers: { delivery: serverFor(tokens) },
+              });
+          }
           const resumed = yield* harness.runtime.resumeThread({
             providerThread: harness.providerThread,
             modelSelection: {
               ...CODEX_TEST_MODEL_SELECTION,
-              options: tokens === undefined ? [] : [{ id: "contextWindow", value: String(tokens) }],
+              options:
+                tokens === undefined || change === "team"
+                  ? []
+                  : [{ id: "contextWindow", value: String(tokens) }],
             },
             runtimePolicy: CODEX_TEST_RUNTIME_POLICY,
           });

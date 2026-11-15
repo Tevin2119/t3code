@@ -48,6 +48,7 @@ interface Identity {
 }
 
 interface Engine {
+  revision?: string;
   readonly requests: Array<{ method: string; path: string; body: unknown }>;
   readonly sessions: Map<string, Identity>;
   down: boolean;
@@ -124,7 +125,7 @@ const layer = (
                 role: body?.role ?? ROLE_BY_HARNESS[harness] ?? "researcher",
                 seat: "developer",
                 harness,
-                configuration: `${team}@2#0123456789abcdef`,
+                configuration: fake.revision ?? `${team}@2#0123456789abcdef`,
                 requestedModel: "claude-fable-5-1",
                 memoryScope: `team:${team}`,
                 tools: ["delivery"],
@@ -505,6 +506,50 @@ describe("DeliveryService", () => {
     }).pipe(Effect.provide(layer(fake, { prefix: "t3-delivery-role-" })));
   });
 
+  it.effect(
+    "refreshes a thread's setup with a linked session and retains the binding on failure",
+    () => {
+      const fake = engine();
+      return Effect.gen(function* () {
+        const delivery = yield* DeliveryService.DeliveryService;
+        const id = threadId("thread-refresh");
+        const original = yield* bind(delivery, id);
+        fake.revision = "development@3#updated";
+        const refreshed = yield* delivery.refreshThread(id, fake.revision);
+        expect(refreshed).toMatchObject({
+          threadId: id,
+          team: original.team,
+          role: original.role,
+          driver: original.driver,
+          workspace: original.workspace,
+          configuration: fake.revision,
+        });
+        expect(refreshed.session).not.toBe(original.session);
+        expect(fake.sessions.get(original.session)?.configuration).toBe(original.configuration);
+        expect(
+          fake.requests.find(
+            (request) =>
+              request.method === "POST" && (request.body as { handoffFrom?: string })?.handoffFrom,
+          )?.body,
+        ).toMatchObject({ thread: id, handoffFrom: original.session });
+        expect(yield* delivery.prepareThread(id, CLAUDE_HERE)).toBe(true);
+        expect(DeliveryThreadSession.readDeliveryThreadSession(id)?.configuration).toBe(
+          fake.revision,
+        );
+        expect((yield* delivery.refreshThread(id, fake.revision)).session).toBe(refreshed.session);
+        fake.revision = "development@4#raced";
+        const refused = yield* delivery
+          .refreshThread(id, "development@4#expected")
+          .pipe(Effect.flip);
+        expect(refused.reason).toBe("mismatch");
+        expect((yield* delivery.threadState(id)).binding).toEqual(refreshed);
+        fake.down = true;
+        yield* delivery.refreshThread(id, fake.revision).pipe(Effect.flip);
+        expect(yield* delivery.threadState(id)).toEqual({ binding: refreshed, pending: null });
+      }).pipe(Effect.provide(layer(fake, { prefix: "t3-delivery-refresh-" })));
+    },
+  );
+
   it.effect("holds a thread whose team setup failed until it is retried or released", () => {
     const fake = engine();
     return Effect.gen(function* () {
@@ -757,6 +802,8 @@ describe("DeliveryService", () => {
           const plain = yield* delivery.setThreadLineup({ threadId: unbound, orchestration });
           expect([plain.binding, plain.lineup]).toEqual([null, orchestration]);
           yield* delivery.setThreadLineup({ threadId: bound, orchestration: changed });
+          fake.revision = "rnd@3#refreshed";
+          yield* delivery.refreshThread(bound, fake.revision);
           const one = { participants: orchestration.participants.slice(0, 1) };
           const refused = yield* delivery
             .setThreadLineup({ threadId: unbound, orchestration: one })
@@ -770,6 +817,7 @@ describe("DeliveryService", () => {
           const state = yield* delivery.threadState(bound);
           expect([state.binding?.team, state.binding?.role]).toEqual(["rnd", "lead-developer"]);
           expect(state.binding).toMatchObject({ orchestration });
+          expect(state.binding?.configuration).toBe("rnd@3#refreshed");
           expect(state.lineup).toEqual(changed);
           expect((yield* delivery.threadState(unbound)).lineup).toEqual(orchestration);
           // Null is the way back to an ordinary conversation, and it is remembered too.
@@ -955,6 +1003,12 @@ describe("DeliveryService", () => {
         expect((yield* delivery.threadState(id)).binding).toBeNull();
         // What was bound before is still bound.
         expect((yield* delivery.threadState(threadId("thread-saved"))).binding).toEqual(first);
+        fake.revision = "development@3#unsaved";
+        const refreshed = yield* delivery
+          .refreshThread(first.threadId, fake.revision)
+          .pipe(Effect.flip);
+        expect(refreshed.reason).toBe("storage");
+        expect((yield* delivery.threadState(first.threadId)).binding).toEqual(first);
       }).pipe(Effect.provide(layer(fake, { prefix: "unused-", config })));
     }).pipe(Effect.provide(shared("t3-delivery-unsaved-")));
   });

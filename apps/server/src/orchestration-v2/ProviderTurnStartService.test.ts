@@ -37,6 +37,7 @@ import * as Schema from "effect/Schema";
 import * as ServerConfig from "../config.ts";
 import * as NativeTeamChat from "../delivery/NativeTeamChat.ts";
 import * as DeliveryService from "../delivery/DeliveryService.ts";
+import * as DeliveryThreadSession from "../delivery/DeliveryThreadSession.ts";
 import * as ProjectStore from "./ProjectStore.ts";
 import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
 import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
@@ -285,6 +286,7 @@ function makeLocalCommandHarness(input: {
   readonly logoutFailure?: string;
   readonly openFailure?: unknown;
   readonly invalidTeamRoster?: boolean;
+  readonly refreshedTeam?: "idle" | "busy" | "background" | "shared";
   readonly teamPreparationFailure?: string;
   readonly teamPreparationReason?: "roster" | "state" | "dispatch";
   readonly ensureThreadFailure?: unknown;
@@ -920,9 +922,20 @@ function makeLocalCommandHarness(input: {
       ),
     }),
   );
+  const releaseUnlessBusy = vi.fn(() => Effect.succeed(input.refreshedTeam !== "busy"));
+  const prepareTeam = vi.fn(() => Effect.succeed(true));
   const layer = ProviderTurnStart.layer.pipe(
     Layer.provide(
       Layer.mergeAll(
+        Layer.mock(DeliveryService.DeliveryService)({
+          prepareThread: prepareTeam,
+          threadState: () =>
+            Effect.succeed({
+              binding:
+                input.refreshedTeam === undefined ? null : ({ configuration: "team@2" } as never),
+              pending: null,
+            }),
+        }),
         Layer.mock(ContextHandoffService.ContextHandoffServiceV2)({
           prepareProviderHandoff: (handoff) =>
             input.sideChat?.nativeForkFrom === undefined
@@ -990,6 +1003,13 @@ function makeLocalCommandHarness(input: {
         }),
         Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({
           open,
+          releaseUnlessBusy,
+          isLive: () =>
+            Effect.succeed(input.refreshedTeam !== undefined && input.refreshedTeam !== "idle"),
+          otherWorkingThreads: () =>
+            Effect.succeed(
+              input.refreshedTeam === "shared" ? [ThreadId.make("another-working-thread")] : [],
+            ),
           get: () =>
             Effect.succeed(
               input.previousTurn?.liveSession === false
@@ -1054,6 +1074,8 @@ function makeLocalCommandHarness(input: {
   );
   return {
     settledRuns,
+    releaseUnlessBusy,
+    prepareTeam,
     getThreadRecords,
     getTurnStartContext,
     setProjection: (next: OrchestrationV2ThreadProjection) => {
@@ -1086,6 +1108,82 @@ function makeLocalCommandHarness(input: {
     }).pipe(Effect.provide(layer)),
   };
 }
+
+effectIt.effect.each(["idle", "busy", "background", "shared"] as const)(
+  "reloads an updated team setup only when its provider is %s",
+  (state) =>
+    Effect.gen(function* () {
+      using _loaded = vi.spyOn(DeliveryThreadSession, "readDeliveryThreadSession").mockReturnValue({
+        configuration: "team@1",
+      } as DeliveryThreadSession.DeliveryThreadSession);
+      const harness = makeLocalCommandHarness({
+        text: "Continue the work",
+        previousNativeSession: true,
+        openFailure: "Stop after requesting the refreshed native session",
+        refreshedTeam: state,
+      });
+      const before = harness.projection();
+      harness.setProjection({
+        ...before,
+        providerThreads: before.providerThreads.map((thread) => ({
+          ...thread,
+          driver: ProviderDriverKind.make("claudeAgent"),
+          nativeThreadRef: {
+            driver: thread.driver,
+            nativeId: "preserved-native-history",
+            strength: "strong" as const,
+          },
+          ...(state === "background"
+            ? { pendingBackgroundTasks: [{ taskId: "active-command", kind: "command" as const }] }
+            : {}),
+        })),
+      });
+      yield* harness.start;
+      if (state === "background" || state === "shared") {
+        expect(harness.releaseUnlessBusy).not.toHaveBeenCalled();
+      } else {
+        expect(harness.releaseUnlessBusy).toHaveBeenCalledWith(
+          expect.objectContaining({ ownProviderThreadIds: [] }),
+        );
+      }
+      if (state !== "idle") {
+        expect(harness.open).not.toHaveBeenCalled();
+      } else {
+        expect(harness.open).toHaveBeenCalledWith(
+          expect.objectContaining({
+            threadId: harness.projection().thread.id,
+            initialNativeThreadId: "preserved-native-history",
+          }),
+        );
+      }
+    }),
+);
+
+effectIt.effect.each(["missing", "stale"] as const)(
+  "prepares a Codex team's %s setup while reusing a shared provider session",
+  (state) =>
+    Effect.gen(function* () {
+      using _loaded = vi
+        .spyOn(DeliveryThreadSession, "readDeliveryThreadSession")
+        .mockReturnValue(
+          state === "missing"
+            ? undefined
+            : ({ configuration: "team@1" } as DeliveryThreadSession.DeliveryThreadSession),
+        );
+      const harness = makeLocalCommandHarness({
+        text: "Continue with the team",
+        refreshedTeam: "shared",
+        openFailure: "Stop after requesting the shared native session",
+      });
+      yield* harness.start;
+      expect(harness.prepareTeam).toHaveBeenCalledWith(harness.projection().thread.id, {
+        driver: "codex",
+        cwd: "/tmp/native-account-command",
+      });
+      expect(harness.releaseUnlessBusy).not.toHaveBeenCalled();
+      expect(harness.open).toHaveBeenCalled();
+    }),
+);
 
 effectIt.effect(
   "recovers the local or pushed thread tip, else the current branch, remote default, or detached HEAD",
