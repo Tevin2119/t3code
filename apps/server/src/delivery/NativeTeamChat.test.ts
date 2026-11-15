@@ -41,6 +41,7 @@ function setup({
   /** A conversation bound to no team; `callsTeam` names one for its participants. */
   unbound = false,
   callsTeam = undefined as string | undefined,
+  participantConfiguration = "research@3#abc",
 } = {}) {
   const participants = [
     {
@@ -114,7 +115,7 @@ function setup({
       }),
     bindThread: (input: { threadId: ThreadId; team: string; role?: string; driver: string }) => {
       bindings.push(input);
-      return Effect.succeed({ configuration: binding.configuration });
+      return Effect.succeed({ configuration: participantConfiguration });
     },
   } as unknown as DeliveryService.DeliveryService["Service"];
   const projections = {
@@ -286,6 +287,17 @@ it.effect("critiques on the first message only unless the conversation asks othe
     settle(never);
     expect((yield* neverService.prepareTurn({ threadId, runId })).ready).toBe(true);
     expect(never.admissions.size).toBe(2);
+  }),
+);
+
+it.effect("explains a participant revision mismatch without dispatching the team", () =>
+  Effect.gen(function* () {
+    const fixture = setup({ participantConfiguration: "research@4#def" });
+    const service = yield* fixture.service;
+    const error = yield* Effect.flip(service.prepareTurn({ threadId, runId }));
+    expect(error.message).toContain("research@3#abc");
+    expect(error.message).toContain("research@4#def");
+    expect(fixture.admissions.size).toBe(0);
   }),
 );
 
