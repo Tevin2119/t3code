@@ -700,7 +700,7 @@ it.layer(layer)("OpenCodeDriver runtime selection", (it) => {
         );
         yield* Effect.yieldNow;
         yield* Deferred.succeed(releaseCatalog, undefined);
-        yield* TestClock.adjust("5 seconds");
+        yield* TestClock.adjust(initialCatalog === "empty" ? "30 seconds" : "5 seconds");
         const [failed] = Array.from(yield* Fiber.join(initial));
         assert.strictEqual(failed?.auth.status, "unknown");
         assert.deepStrictEqual(failed?.models, []);

@@ -42,6 +42,21 @@ const decodeOpenCodeSettings = Schema.decodeSync(OpenCodeSettings);
 
 const DEFAULT_VERSION_STDOUT = "opencode 1.14.19\n";
 
+it.effect("discovers models when a cold OpenCode server takes more than five seconds", () =>
+  Effect.gen(function* () {
+    const ready = yield* Deferred.make<void>();
+    const models: ReadonlyArray<OpenCode2Model> = [
+      { providerID: "zai-coding-plan", id: "glm-5.3", name: "GLM-5.3", variants: [] },
+    ];
+    const load = yield* makeOpenCode2ModelLoader(Deferred.await(ready).pipe(Effect.as(models)));
+    const loading = yield* load.pipe(Effect.forkChild);
+    yield* TestClock.adjust("6 seconds");
+    yield* Deferred.succeed(ready, undefined);
+    yield* TestClock.adjust("250 millis");
+    NodeAssert.deepEqual(yield* Fiber.join(loading), models);
+  }),
+);
+
 it.effect("reads Go limits with the instance's XDG credentials and preserves reset times", () =>
   Effect.gen(function* () {
     const resetsAt = "2026-09-17T12:00:00.000Z";

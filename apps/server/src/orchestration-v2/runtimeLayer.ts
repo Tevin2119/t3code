@@ -260,6 +260,7 @@ const layerThreadManagementProvided = ThreadManagementService.layerWithLegacyImp
 const layerNativeTeamChatProvided = NativeTeamChat.layer.pipe(
   Layer.provide(
     Layer.mergeAll(
+      layerEventSink,
       layerThreadManagementProvided,
       ProjectionStore.layer,
       ProjectStore.layer,

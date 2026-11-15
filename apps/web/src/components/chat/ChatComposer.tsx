@@ -2609,7 +2609,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
             onSeat={handleSeatForThread}
           />
         ) : activeThreadId && !orchestratorMode ? (
-          <span className="flex min-w-0 items-center gap-0.5">
+          <span className="flex min-w-0 flex-wrap items-center gap-0.5">
             <TeamBadge environmentId={environmentId} threadId={activeThreadId} />
             <TeamChatToggle
               environmentId={environmentId}
