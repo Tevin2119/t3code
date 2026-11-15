@@ -1143,7 +1143,7 @@ effectIt.effect.each(["idle", "busy", "background", "shared"] as const)(
         expect(harness.releaseUnlessBusy).not.toHaveBeenCalled();
       } else {
         expect(harness.releaseUnlessBusy).toHaveBeenCalledWith(
-          expect.objectContaining({ ownProviderThreadIds: [] }),
+          expect.objectContaining({ ownProviderThreadIds: [], throughRunOrdinal: 2 }),
         );
       }
       if (state !== "idle") {

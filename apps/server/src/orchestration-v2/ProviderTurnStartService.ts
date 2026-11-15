@@ -856,12 +856,14 @@ export const layer: Layer.Layer<
                       "The updated team setup will load after this provider's active work finishes. Continue in this conversation.",
                   });
                 }
-                yield* providerSessions.releaseUnlessBusy({
+                const releaseRequest = {
                   providerSessionId,
                   ownProviderThreadIds: [],
-                  reason: "manual_shutdown",
+                  throughRunOrdinal: run.ordinal,
+                  reason: "manual_shutdown" as const,
                   detail: "Reloading the updated team setup in the same conversation.",
-                });
+                };
+                yield* providerSessions.releaseUnlessBusy(releaseRequest);
                 if (yield* providerSessions.isLive(providerSessionId)) {
                   return yield* new NativeTeamChat.NativeTeamChatError({
                     runId,
