@@ -211,13 +211,15 @@ function setup({
       Effect.provideService(DeliveryService.DeliveryService, delivery),
       Effect.provideService(ProjectionStore.ProjectionStoreV2, projections),
       Effect.provideService(EventSink.EventSinkV2, {
-        writeIfRunCurrent: ({ events }) =>
+        writeIfRunCurrent: ({
+          events,
+        }: Parameters<EventSink.EventSinkV2["Service"]["writeIfRunCurrent"]>[0]) =>
           Effect.sync(() => {
             for (const event of events)
               if (event.type === "turn-item.updated") notices.push(event.payload);
             return { committed: true, storedEvents: [] };
           }),
-      } as EventSink.EventSinkV2["Service"]),
+      } as unknown as EventSink.EventSinkV2["Service"]),
       Effect.provideService(ThreadManagementService.ThreadManagementService, threads),
       Effect.provideService(ProviderAdapterRegistry.ProviderAdapterRegistryV2, adapters),
       Effect.provideService(ProviderInstanceRegistry.ProviderInstanceRegistry, instances),
