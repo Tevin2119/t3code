@@ -63,7 +63,8 @@ describe("thread workflows", () => {
         ...projection,
         providerThreads: [{ ...projection.providerThreads[0]!, nativeThreadRef: null }],
       }),
-    ).toBe(false);
+    ).toBe(true);
+    expect(threadSupportsProviderHandoff({ ...projection, providerThreads: [] })).toBe(false);
   });
 
   it("sorts queued messages and gates promotion from capabilities", () => {
@@ -306,7 +307,7 @@ describe("thread workflows", () => {
   });
 
   it.each(["preparing", "starting", "waiting"] as const)(
-    "does not promote queued work into a %s run",
+    "defers steering during setup and blocks it while waiting (%s)",
     (status) => {
       const state = deriveThreadQueueWorkflowState({
         thread: { id: "thread", activeProviderThreadId: "provider-thread" },
@@ -344,7 +345,7 @@ describe("thread workflows", () => {
         ],
       } as never);
 
-      expect(state.canPromoteToSteer).toBe(false);
+      expect(state.canPromoteToSteer).toBe(status !== "waiting");
     },
   );
 

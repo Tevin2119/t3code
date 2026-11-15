@@ -1,48 +1,164 @@
-import { assert, it } from "@effect/vitest";
+import { assert, describe, it } from "@effect/vitest";
 
-import { elicitationQuestions } from "./elicitationForm.ts";
+import { parseElicitationForm } from "./elicitationForm.ts";
 
-it("gives each question of a form its own text and its titled choices", () => {
-  const option = (label: string) => ({ const: label, title: label, description: `${label}.` });
-  const questions = elicitationQuestions(
-    "How should it reach master?\nWhat goes into the commit?",
-    {
-      q0: { type: "string", title: "Routing", oneOf: [option("Pipeline"), option("Hotfix")] },
-      q1: { type: "array", title: "Scope", minItems: 1, items: { anyOf: [option("Trim")] } },
-    },
-  );
-  assert.deepStrictEqual(questions, [
-    {
-      id: "q0",
-      header: "Routing",
-      question: "How should it reach master?",
-      options: [
-        { label: "Pipeline", description: "Pipeline.", value: "Pipeline" },
-        { label: "Hotfix", description: "Hotfix.", value: "Hotfix" },
+describe("parseElicitationForm", () => {
+  for (const type of ["string", "array"] as const) {
+    it.each([
+      { values: [" padded ", "", "plain"], labels: ["padded", '""', "plain"] },
+      { values: [" a", "a", "b"], labels: ['" a"', '"a"', "b"] },
+      { values: [" a", "a", '"a"'], labels: ['" a"', '"a"', '"\\"a\\""'] },
+    ])(
+      `preserves ${type} enum values with distinct readable labels: $values`,
+      ({ values, labels }) => {
+        const form = parseElicitationForm(
+          {
+            type: "object",
+            properties: {
+              answer:
+                type === "array"
+                  ? { type, items: { type: "string", enum: values } }
+                  : { type, enum: values },
+            },
+            required: ["answer"],
+          },
+          "Choose",
+        );
+        assert(form !== undefined);
+        const question = form.questions[0];
+        assert(question !== undefined);
+        assert.deepStrictEqual(
+          question.options.map((option) => option.label),
+          labels,
+        );
+        assert.deepStrictEqual(
+          question.options.map((option) => option.value),
+          values,
+        );
+        assert.strictEqual(question.allowCustomAnswer, false);
+        assert.strictEqual(question.multiSelect, type === "array" ? true : undefined);
+        for (const value of values) {
+          const answer = type === "array" ? [value] : value;
+          assert.deepStrictEqual(form.content({ answer }), { answer });
+        }
+      },
+    );
+  }
+
+  it("asks each question once when a choice has a free-text companion field", () => {
+    // OMP's ask dialog follows each choice `q<n>` with a free-text `q<n>__other` field.
+    const ask = (question: string, header: string) => ({
+      type: "string",
+      title: question,
+      description: header,
+      oneOf: [
+        { const: "Yes", title: "Yes" },
+        { const: "No", title: "No" },
       ],
-      allowCustomAnswer: false,
-    },
-    {
-      id: "q1",
-      header: "Scope",
-      question: "What goes into the commit?",
-      options: [{ label: "Trim", description: "Trim.", value: "Trim" }],
-      multiSelect: true,
-      allowCustomAnswer: false,
-    },
-  ]);
+    });
+    const form = parseElicitationForm(
+      {
+        type: "object",
+        properties: {
+          q0: ask("Use Postgres for the new service?", "Database"),
+          q0__other: { type: "string", title: "Other (type your own)" },
+          q1: ask("Deploy to staging first?", "Deploy"),
+          q1__other: { type: "string", title: "Other (type your own)" },
+        },
+      },
+      "Answer 2 questions",
+    );
+    assert(form !== undefined);
+    assert.deepStrictEqual(
+      form.questions.map((question) =>
+        [question.header, question.question].some((text) => text.endsWith("?")),
+      ),
+      [true, true],
+    );
+    assert.deepStrictEqual(form.content({ q0: "Yes", q1: "Only on Fridays" }), {
+      q0: "Yes",
+      q1__other: "Only on Fridays",
+    });
 
-  // A field's own description wins, and a message that is not one line a field is kept whole.
-  assert.deepStrictEqual(
-    elicitationQuestions("Fill in the release.", {
-      name: { type: "string", description: "Its name" },
-      draft: { type: "boolean" },
-      channel: { type: "string", enum: ["qa", "main"] },
-    }).map((question) => [question.question, question.options.map((item) => item.label)]),
-    [
-      ["Its name", []],
-      ["Fill in the release.", ["true", "false"]],
-      ["Fill in the release.", ["qa", "main"]],
-    ],
-  );
+    // A multi-select answer can carry options and free text together, so both fields stay.
+    const multi = parseElicitationForm(
+      {
+        type: "object",
+        properties: {
+          q0: { type: "array", title: "Databases?", items: { anyOf: [{ const: "Postgres" }] } },
+          q0__other: { type: "string", title: "Other (type your own)" },
+        },
+      },
+      "Databases?",
+    );
+    assert(multi !== undefined);
+    assert.deepStrictEqual(
+      multi.questions.map((question) => [question.id, question.required]),
+      [
+        ["q0", undefined],
+        ["q0__other", false],
+      ],
+    );
+    assert.deepStrictEqual(multi.content({ q0: ["Postgres"], q0__other: "SQLite" }), {
+      q0: ["Postgres"],
+      q0__other: "SQLite",
+    });
+  });
+
+  it("gives each question of a form its own text and its titled choices", () => {
+    const option = (label: string) => ({ const: label, title: label, description: `${label}.` });
+    const form = parseElicitationForm(
+      {
+        type: "object",
+        properties: {
+          q0: { type: "string", title: "Routing", oneOf: [option("Pipeline"), option("Hotfix")] },
+          q1: { type: "array", title: "Scope", minItems: 1, items: { anyOf: [option("Trim")] } },
+        },
+      },
+      "How should it reach master?\nWhat goes into the commit?",
+    );
+    assert.deepStrictEqual(form?.questions, [
+      {
+        id: "q0",
+        header: "Routing",
+        question: "How should it reach master?",
+        options: [
+          { label: "Pipeline", description: "Pipeline.", value: "Pipeline" },
+          { label: "Hotfix", description: "Hotfix.", value: "Hotfix" },
+        ],
+        allowCustomAnswer: false,
+      },
+      {
+        id: "q1",
+        header: "Scope",
+        question: "What goes into the commit?",
+        options: [{ label: "Trim", description: "Trim.", value: "Trim" }],
+        multiSelect: true,
+        allowCustomAnswer: false,
+      },
+    ]);
+
+    // A field's own description wins, and a message that is not one line a field is kept whole.
+    assert.deepStrictEqual(
+      parseElicitationForm(
+        {
+          type: "object",
+          properties: {
+            name: { type: "string", description: "Its name" },
+            draft: { type: "boolean" },
+            channel: { type: "string", enum: ["qa", "main"] },
+          },
+        },
+        "Fill in the release.",
+      )?.questions.map((question) => [
+        question.question,
+        question.options.map((item) => item.label),
+      ]),
+      [
+        ["Its name", []],
+        ["Fill in the release.", ["true", "false"]],
+        ["Fill in the release.", ["qa", "main"]],
+      ],
+    );
+  });
 });

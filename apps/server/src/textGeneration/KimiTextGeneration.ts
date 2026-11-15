@@ -254,11 +254,22 @@ export const makeKimiTextGeneration = Effect.fn("makeKimiTextGeneration")(functi
   const generateReviewGuide: TextGeneration.TextGeneration["Service"]["generateReviewGuide"] = () =>
     Effect.fail(investigationUnsupported("generateReviewGuide", "Kimi Code"));
 
+  // Cleaning up dictation is not offered through this harness.
+  const generateTranscriptionPostProcessing: TextGeneration.TextGeneration["Service"]["generateTranscriptionPostProcessing"] =
+    () =>
+      Effect.fail(
+        new TextGenerationError({
+          operation: "generateTranscriptionPostProcessing",
+          detail: "Kimi does not clean up dictated text.",
+        }),
+      );
+
   return {
     generateCommitMessage,
     generatePrContent,
     generateBranchName,
     generateThreadTitle,
     generateReviewGuide,
+    generateTranscriptionPostProcessing,
   } satisfies TextGeneration.TextGeneration["Service"];
 });

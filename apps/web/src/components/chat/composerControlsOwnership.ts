@@ -9,7 +9,6 @@ export function resolveComposerControlsOwnership(input: {
   readonly matchesDefault: boolean;
   /** Whether delivery team controls occupy the leading block. */
   readonly hasTeam: boolean;
-  readonly planModeUiEnabled: boolean;
   readonly collapsed: boolean;
   /** How many trailing blocks the width measurement moved into the overflow menu. */
   readonly measuredHiddenBlockCount: number;
@@ -19,7 +18,7 @@ export function resolveComposerControlsOwnership(input: {
     : input.collapsed
       ? ("icon" as const)
       : ("label" as const);
-  const showModeBlock = accessDisplay !== "hidden" || input.planModeUiEnabled;
+  const showModeBlock = accessDisplay !== "hidden";
   const blockIds = [
     ...(input.hasTeam ? ["team" as const] : []),
     ...(showModeBlock ? ["mode" as const] : []),
@@ -27,10 +26,7 @@ export function resolveComposerControlsOwnership(input: {
   const hiddenBlockCount = Math.min(input.measuredHiddenBlockCount, blockIds.length);
   const hiddenBlockIds = blockIds.slice(blockIds.length - hiddenBlockCount);
   const modeHidden = hiddenBlockIds.includes("mode");
-  // An overflowed chip needs a home for Permissions only when the Plan toggle is not there to fill
-  // the overflow menu; otherwise Permissions stay in the model picker.
-  const overflowShowsPermissions =
-    modeHidden && accessDisplay !== "hidden" && !input.planModeUiEnabled;
+  const overflowShowsPermissions = modeHidden;
   return {
     accessDisplay,
     showModeBlock,
