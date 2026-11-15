@@ -11,12 +11,14 @@ export const teamDiscussionContext = (input: {
     readonly model: string;
     readonly access: "read-only" | "approval-required" | "full-access";
   }>;
-  readonly skipped?: ReadonlyArray<{
-    readonly seat: string;
-    readonly role: string;
-    readonly reason: string;
-  }>;
-  readonly discussionDidNotRun?: boolean;
+  readonly skipped?:
+    | ReadonlyArray<{
+        readonly seat: string;
+        readonly role: string;
+        readonly reason: string;
+      }>
+    | undefined;
+  readonly discussionDidNotRun?: boolean | undefined;
   readonly contributions: string;
   /** Left out when the turn had no critique round. */
   readonly critiques?: string | undefined;
