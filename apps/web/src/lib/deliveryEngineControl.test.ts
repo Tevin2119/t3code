@@ -3,6 +3,7 @@ import {
   minutesLeft,
   controlDeliveryEngine,
   deliveryUpdatePending,
+  engineAttention,
   parseDeliveryEngineHealth,
   requireDeliveryUpdateReceipt,
 } from "./deliveryEngineControl";
@@ -255,5 +256,50 @@ it.each([
     on: true,
     by: fullAuto.by?.trim() ? fullAuto.by : null,
     since: fullAuto.since && fullAuto.since !== "oops" ? fullAuto.since : null,
+  });
+});
+
+describe("engine attention", () => {
+  const quiet = {
+    channel: "main" as const,
+    running: { commit: "a".repeat(40), changed: false },
+    installed: { commit: "a".repeat(40), changed: false },
+    available: null,
+    updateAvailable: false,
+    restartRequired: false,
+    deferred: false,
+    managed: true,
+    pinned: false,
+    problem: null,
+    update: null,
+  };
+  const ready = {
+    ...quiet,
+    available: { commit: "c".repeat(40), at: "2026-11-15T09:00:00Z" },
+    updateAvailable: true,
+  };
+
+  it("asks for nothing when the engine is current or unknown", () => {
+    expect(engineAttention(null)).toBeNull();
+    expect(engineAttention(quiet)).toBeNull();
+  });
+
+  it("names a ready update, and stays quiet once it is put off", () => {
+    expect(engineAttention(ready)).toBe("Engine update ready: ccccccc.");
+    expect(engineAttention({ ...ready, deferred: true })).toBeNull();
+  });
+
+  it("puts a failed update before a ready one", () => {
+    const failed = {
+      ...ready,
+      update: {
+        id: "u1",
+        phase: "failed" as const,
+        channel: "main" as const,
+        commit: "c".repeat(40),
+        at: "2026-11-15T09:00:00Z",
+      },
+    };
+    expect(engineAttention(failed)).toMatch(/failed/);
   });
 });

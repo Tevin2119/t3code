@@ -80,6 +80,25 @@ export function requireDeliveryUpdateReceipt(body: unknown) {
   return receipt.value;
 }
 
+/**
+ * What the engine needs a person for, or null: a failed update, a restart, a problem, or an
+ * update that is ready and not put off. The board badge, the Engine button and the board's
+ * update bar all read this one answer.
+ */
+export function engineAttention(versions: DeliveryEngineVersions | null): string | null {
+  if (!versions) return null;
+  if (versions.update?.phase === "failed")
+    return "The last engine update failed. Open the engine to see why.";
+  if (versions.restartRequired) return "The engine needs a restart to run its installed version.";
+  if (versions.problem) return versions.problem;
+  if (versions.updateAvailable && !versions.deferred) {
+    return versions.available
+      ? `Engine update ready: ${versions.available.commit.slice(0, 7)}.`
+      : "An engine update is ready.";
+  }
+  return null;
+}
+
 export function deliveryUpdatePending(id: string | null, versions: DeliveryEngineVersions | null) {
   if (id === null) return false;
   const update = versions?.update;

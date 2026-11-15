@@ -9,6 +9,7 @@ import { useEnvironmentSettings } from "../../hooks/useSettings";
 import {
   controlDeliveryEngine,
   deliveryUpdatePending,
+  engineAttention,
   parseDeliveryEngineHealth,
   requireDeliveryUpdateReceipt,
 } from "../../lib/deliveryEngineControl";
@@ -55,11 +56,7 @@ export function EnginePanel({
   const health = useDeliveryRead(environmentId, "/api/health", { pollMs: 30_000 });
   const versions = !health.error ? parseDeliveryEngineHealth(health.body).versions : null;
   const updateNotice =
-    deliveryUpdatePending(updateId, versions) ||
-    versions?.problem ||
-    versions?.update?.phase === "failed" ||
-    versions?.restartRequired ||
-    (versions?.updateAvailable && !versions.deferred);
+    deliveryUpdatePending(updateId, versions) || engineAttention(versions) !== null;
   return (
     <>
       <Button
@@ -79,6 +76,41 @@ export function EnginePanel({
         ) : null}
         <span className={compact ? "sr-only" : undefined}>Engine</span>
       </Button>
+      {open ? (
+        <EngineControl
+          environmentId={environmentId}
+          onClose={() => setOpen(false)}
+          updateId={updateId}
+          onUpdateAccepted={setUpdateId}
+        />
+      ) : null}
+    </>
+  );
+}
+
+/**
+ * The board's bar for an engine that needs a person, such as an update to install. It opens the
+ * same engine controls as the Engine button, where the update is approved.
+ */
+export function EngineAttentionBar({ environmentId }: { readonly environmentId: EnvironmentId }) {
+  const [open, setOpen] = useState(false);
+  const [updateId, setUpdateId] = useState<string | null>(null);
+  const health = useDeliveryRead(environmentId, "/api/health", { pollMs: 30_000 });
+  const attention = health.error
+    ? null
+    : engineAttention(parseDeliveryEngineHealth(health.body).versions);
+  if (attention === null && !open) return null;
+  return (
+    <>
+      {attention !== null ? (
+        <div className="mx-4 mt-2 flex items-center gap-2 rounded-lg bg-warning/12 px-3 py-1.5 text-xs text-warning-foreground">
+          <PowerIcon aria-hidden="true" className="size-3.5 shrink-0" />
+          <p className="min-w-0 flex-1">{attention}</p>
+          <Button size="xs" variant="outline" onClick={() => setOpen(true)}>
+            Open engine
+          </Button>
+        </div>
+      ) : null}
       {open ? (
         <EngineControl
           environmentId={environmentId}
