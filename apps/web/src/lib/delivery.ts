@@ -8,8 +8,12 @@ import {
   DELIVERY_DEFAULT_TEAM,
   DELIVERY_HARNESS_BY_DRIVER,
   type DeliveryThreadBinding,
+  type BoardDeploymentLink,
+  type MergePermissionView,
+  type TaskDeployment,
 } from "@t3tools/contracts";
 import { parseSuggestedBoard, type SuggestedBoard } from "./deliveryMove";
+import { parseBoardDeployment, parseMergePermission, parseTaskDeployment } from "./boardDelivery";
 
 type Json = Record<string, unknown>;
 const isRecord = (value: unknown): value is Json =>
@@ -1015,6 +1019,8 @@ export interface DeliveryCard {
   readonly set: string | null;
   /** What became of the approved change: pushed, a pull request, merged, or a failed attempt. */
   readonly publication: DeliveryPublication | null;
+  readonly deployment?: TaskDeployment | null;
+  readonly mergePermission?: MergePermissionView | null;
   readonly actions: ReadonlyArray<string>;
   /** Put first by a person for the next free slots (Do next). */
   readonly first: boolean;
@@ -1079,6 +1085,8 @@ export interface DeliveryBoard {
     readonly count: number;
     /** The repository and base branch its tasks are done in; null for a board that holds none. */
     readonly target: DeliveryTarget | null;
+    readonly deployment?: BoardDeploymentLink | null;
+    readonly mergePermission?: MergePermissionView | null;
   }>;
   /** Cards that wait for a person. */
   readonly waiting: number;
@@ -1194,6 +1202,8 @@ export const parseCard = (value: Json): DeliveryCard => {
     waitingOn: textOrNull(value.waitingOn),
     set: textOrNull(value.set),
     publication: parsePublication(value.publication),
+    deployment: parseTaskDeployment(value.deployment),
+    mergePermission: parseMergePermission(value.mergePermission),
     actions: strings(value.actions),
     first: flag(value.first),
     suggestedBoard: parseSuggestedBoard(value.suggestedBoard),
@@ -1220,6 +1230,8 @@ export function parseBoard(body: unknown): DeliveryBoard | null {
       kind: text(item.kind, "built-in"),
       count: count(item.count),
       target: parseTarget(item.target),
+      deployment: parseBoardDeployment(item.deployment),
+      mergePermission: parseMergePermission(item.mergePermission),
     })),
     lanes: records(body.lanes).map((lane) => ({
       lane: text(lane.lane),
@@ -2440,6 +2452,8 @@ export function environmentForBranch(branch: string): string {
 
 export function readsRefreshedBy(path: string): ReadonlyArray<string> {
   const route = path.split("?")[0] ?? "";
+  if (/^\/api\/boards\/[\w-]+\/deployment$/.test(route)) return ["/api/boards", "/api/deployments"];
+  if (route.endsWith("/merge-permission")) return [route, "/api/boards"];
   if (route.startsWith("/api/delivery/")) return ["/api/delivery"];
   if (route === "/api/boards" || route.startsWith("/api/boards/")) return ["/api/boards"];
   if (route === "/api/views" || route.startsWith("/api/views/")) return ["/api/views"];

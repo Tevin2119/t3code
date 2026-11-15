@@ -2,7 +2,7 @@ import * as Schema from "effect/Schema";
 
 import { TrimmedNonEmptyString } from "./baseSchemas.ts";
 
-export const DEPLOYMENT_STATES = [
+const DEPLOYMENT_STATES = [
   "merged",
   "qualifying",
   "ready",
