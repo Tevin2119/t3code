@@ -95,10 +95,9 @@ export function BoardDelivery({
       else read.refresh();
     } catch {
       setProblem("The engine could not confirm the request. Retry the same task to reconcile it.");
-    } finally {
-      setKey("");
-      setBusy(false);
     }
+    setKey("");
+    setBusy(false);
   };
   const requestTask = () => {
     if (!task || !routes.some((r) => r.id === route)) return;

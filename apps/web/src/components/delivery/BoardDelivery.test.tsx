@@ -55,6 +55,7 @@ function setup() {
 
 it("retries the same delivery request and clears the credential after refusal", async () => {
   setup();
+  mock.action.mockRejectedValueOnce(new Error("Connection interrupted"));
   const screen = await act(() =>
     create(
       <BoardDelivery
