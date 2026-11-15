@@ -1,5 +1,4 @@
 import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
-import { useMemo } from "react";
 
 import { type DeliveryCard, parseCards } from "../../lib/delivery";
 import { LANE_TITLE, queryValue } from "../../lib/deliveryBoard";
@@ -17,10 +16,10 @@ export function useThreadTasks(
   const origin = environmentId && threadId ? `thread:${environmentId}/${threadId}` : null;
   const read = useDeliveryRead(
     enabled && origin ? environmentId : null,
-    origin ? `/api/tasks?origin=${queryValue(origin)}&set=all&limit=10` : null,
-    { pollMs: 15_000 },
+    origin ? `/api/tasks?origin=${queryValue(origin)}&set=all&limit=500` : null,
+    { pollMs: 5_000 },
   );
-  return useMemo(() => [...parseCards(read.body)].sort((a, b) => b.number - a.number), [read.body]);
+  return [...parseCards(read.body)].sort((a, b) => b.number - a.number);
 }
 
 /** Where a task stands, as the Board's column names it. */

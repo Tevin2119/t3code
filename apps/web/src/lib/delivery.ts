@@ -1506,6 +1506,7 @@ export interface TaskView {
     readonly at: string;
     readonly by: string;
     readonly text: string;
+    readonly options?: ReadonlyArray<{ readonly label: string; readonly meaning: string }>;
   }>;
   readonly proposals: ReadonlyArray<{
     readonly seq: number;
@@ -1718,6 +1719,9 @@ export function parseTask(body: unknown): TaskView | null {
       at: text(question.at),
       by: text(question.by),
       text: text(question.text),
+      options: records(question.options)
+        .map((option) => ({ label: text(option.label), meaning: text(option.meaning) }))
+        .filter((option) => option.label.length > 0),
     })),
     proposals: records(body.proposals).map((proposal) => ({
       seq: count(proposal.seq),
