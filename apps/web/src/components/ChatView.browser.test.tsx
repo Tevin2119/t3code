@@ -21,8 +21,6 @@ import * as Effect from "effect/Effect";
 import { expect, it, vi } from "vite-plus/test";
 import { cdp, page, userEvent } from "vite-plus/test/browser";
 
-import "~/index.css";
-
 import { AppRoot } from "~/AppRoot";
 // The route loads ChatView lazily, and its first transform (React Compiler over ~4k lines)
 // takes 6-11s; importing it here keeps that out of the test's timeout.

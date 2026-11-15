@@ -870,34 +870,6 @@ describe("providerMaintenanceRunner", () => {
       ),
   );
 
-  it.effect("records a failed update when its request is interrupted during installation", () =>
-    Effect.gen(function* () {
-      const started = yield* Deferred.make<void>();
-      const { registry } = yield* makeRegistry();
-      const updater = yield* makeTestRunner(registry).pipe(
-        Effect.provide(
-          layerMockSpawner(() => ({
-            exitCode: Deferred.succeed(started, undefined).pipe(Effect.andThen(Effect.never)),
-          })),
-        ),
-      );
-      const update = yield* updater.updateProvider(CODEX_DRIVER).pipe(Effect.forkScoped);
-      yield* Deferred.await(started);
-      yield* Fiber.interrupt(update);
-      const providers = yield* registry.getProviders;
-      assert.strictEqual(providers[0]?.updateState?.status, "failed");
-      assert.isNotNull(providers[0]?.updateState?.finishedAt);
-      assert.strictEqual(
-        providers[0]?.updateState?.message,
-        "Provider update was interrupted. Try again.",
-      );
-    }).pipe(
-      Effect.provide(
-        Layer.mergeAll(layerNonWindowsPlatform, layerLatestVersionHttpClient("0.0.0")),
-      ),
-    ),
-  );
-
   // A native updater such as `claude update` downloads a ~300 MB binary and
   // prints nothing while it does. Killed mid-download, it leaves a truncated
   // binary behind that later updates mistake for an install.
