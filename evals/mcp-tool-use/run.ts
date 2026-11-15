@@ -308,6 +308,7 @@ export const McpToolUseCase = Schema.Struct({
         contributions: Schema.String,
         critiques: Schema.optional(Schema.String),
         discussionDidNotRun: Schema.optional(Schema.Boolean),
+        discussionFailureReason: Schema.optional(Schema.String),
         skipped: Schema.optional(
           Schema.Array(
             Schema.Struct({ seat: Schema.String, role: Schema.String, reason: Schema.String }),

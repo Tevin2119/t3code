@@ -5207,7 +5207,7 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
     }),
   );
 
-  it.effect.each(["usage_limit", "provider_error"] as const)(
+  it.effect.each(["usage_limit", "provider_error", "validation_error"] as const)(
     "handles a queued message after a %s failure",
     (failureClass) =>
       Effect.gen(function* () {
@@ -5319,6 +5319,12 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
           ],
         });
 
+        if (failureClass === "validation_error") {
+          assert.equal(yield* Queue.take(promotedRunIds), queuedRun.id);
+          const after = yield* orchestrator.getThreadProjection(threadId);
+          assert.isFalse(after.runs.find((run) => run.id === queuedRun.id)?.queueHeld === true);
+          return;
+        }
         if (failureClass === "provider_error") {
           assert.equal(yield* Queue.take(heldRunIds), queuedRun.id);
           const held = yield* orchestrator.getThreadProjection(threadId);
