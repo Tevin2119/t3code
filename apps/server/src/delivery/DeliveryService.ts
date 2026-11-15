@@ -712,7 +712,7 @@ const make = Effect.gen(function* () {
         team: existing.team,
         role: existing.role,
         driver: existing.driver,
-        cwd: existing.workspace,
+        cwd: existing.project,
         ...(existing.orchestration === undefined ? {} : { orchestration: existing.orchestration }),
       },
       configuration,

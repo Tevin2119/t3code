@@ -513,7 +513,8 @@ describe("DeliveryService", () => {
       return Effect.gen(function* () {
         const delivery = yield* DeliveryService.DeliveryService;
         const id = threadId("thread-refresh");
-        const original = yield* bind(delivery, id);
+        const cwd = `${REPO}/worktrees/feature`;
+        const original = yield* bind(delivery, id, { cwd });
         fake.revision = "development@3#updated";
         const refreshed = yield* delivery.refreshThread(id, fake.revision);
         expect(refreshed).toMatchObject({
@@ -531,7 +532,7 @@ describe("DeliveryService", () => {
             (request) =>
               request.method === "POST" && (request.body as { handoffFrom?: string })?.handoffFrom,
           )?.body,
-        ).toMatchObject({ thread: id, handoffFrom: original.session });
+        ).toMatchObject({ thread: id, handoffFrom: original.session, cwd });
         expect(yield* delivery.prepareThread(id, CLAUDE_HERE)).toBe(true);
         expect(DeliveryThreadSession.readDeliveryThreadSession(id)?.configuration).toBe(
           fake.revision,
