@@ -97,6 +97,8 @@ import {
 import { Age, Avatar, laneTone, PriorityPill, QaVotes, TagList, WaitingOn } from "./taskParts";
 import { TaskDisclosure } from "./TaskDisclosure";
 import { relatedTaskGroups } from "./relatedTaskGroups";
+import { TaskDeploymentDetails } from "./TaskDeploymentStatus";
+import { MergePermissionControls } from "./MergePermissionControls";
 
 const EVENT_ICON: Record<string, typeof CircleDotIcon> = {
   pass: CircleCheckIcon,
@@ -1392,6 +1394,7 @@ function Info(props: {
   readonly from: "Board" | "Orchestrator";
   readonly task: TaskView;
   readonly onChanged: () => void;
+  readonly stale: boolean;
   /** Takes the task to a column, by the step that leads there; see moveIntent. */
   readonly onMoveTo: (lane: string) => void;
   /** A request is out: nothing more is sent until it returns. */
@@ -1817,6 +1820,19 @@ function Info(props: {
             ) : null}
           </TaskDisclosure>
         </section>
+      ) : null}
+
+      <TaskDeploymentDetails card={card} stale={props.stale} />
+      {props.environmentId ? (
+        <TaskDisclosure title="Automatic merge permission" defaultOpen={false}>
+          <MergePermissionControls
+            environmentId={props.environmentId}
+            path={`/api/tasks/${task.id}/merge-permission`}
+            policy={card.mergePermission}
+            stale={props.stale}
+            onDone={props.onChanged}
+          />
+        </TaskDisclosure>
       ) : null}
 
       <section className="flex flex-col gap-1.5" data-task-related>
@@ -2316,6 +2332,7 @@ export function TaskWorkspace(props: {
                   from={props.from}
                   task={task}
                   onChanged={read.refresh}
+                  stale={stale || !!read.error}
                   onMoveTo={(lane) => actions.moveTo(task.card, lane, null)}
                   busy={actions.busy}
                 />
