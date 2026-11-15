@@ -36,6 +36,7 @@ function setup({
   uncertain = false,
   unavailable = false,
   disabled = false,
+  disabledSeats = () => new Set<string>(),
   mismatchSeat = undefined as string | undefined,
   third = false,
   critique = undefined as "first" | "always" | "never" | undefined,
@@ -67,7 +68,16 @@ function setup({
       ]),
     },
   ];
-  if (third) participants.push({ ...participants[0]!, seat: "builder", role: "developer" });
+  if (third)
+    participants.push({
+      ...participants[0]!,
+      seat: "builder",
+      role: "developer",
+      modelSelection: createModelSelection(
+        ProviderInstanceId.make("builder-work"),
+        "builder-model",
+      ),
+    });
   const binding = {
     team: "research",
     configuration: "research@3#abc",
@@ -176,7 +186,7 @@ function setup({
   const instances = {
     getInstance: (instanceId: ProviderInstanceId) =>
       Effect.succeed({
-        enabled: !(disabled && instanceId === "codex-work"),
+        enabled: !(disabled && instanceId === "codex-work") && !disabledSeats().has(instanceId),
         snapshot: {
           getSnapshot: Effect.succeed({
             installed: true,
@@ -312,6 +322,53 @@ it.effect.each(["disabled", "mismatch"] as const)(
     }),
 );
 
+it.effect("preserves contributions when a provider cannot join the critique round", () =>
+  Effect.gen(function* () {
+    const disabled = new Set<string>();
+    const fixture = setup({ disabledSeats: () => disabled });
+    const service = yield* fixture.service;
+    expect((yield* service.prepareTurn({ threadId, runId })).ready).toBe(false);
+    for (const task of fixture.tasks) {
+      task.status = "completed";
+      task.result = `Finding from ${task.teamChat?.seat}`;
+    }
+    disabled.add("codex-work");
+    const result = yield* service.prepareTurn({ threadId, runId });
+    expect(result.ready).toBe(true);
+    expect(result.context).not.toContain("discussion did not run");
+    expect(result.context).not.toContain("Answer alone");
+    expect(result.context).toContain(
+      "contribution round completed but the critique round could not run",
+    );
+    expect(result.context).toContain(
+      "critic (reviewer) contributed but could not join the critique round",
+    );
+    expect(result.context).toContain("provider is disabled");
+    expect(result.context).toContain("Synthesize their evidence");
+    expect(result.context).toContain("Finding from critic");
+    expect(result.context).toContain("Finding from researcher");
+    expect(result.context).not.toContain("providerInstanceId codex-work");
+    expect(fixture.admissions.size).toBe(2);
+    expect(fixture.bindings).toHaveLength(2);
+    expect((yield* service.prepareTurn({ threadId, runId })).context).toBe(result.context);
+  }),
+);
+
+it.effect("does not bind a lone survivor after provider preflight", () =>
+  Effect.gen(function* () {
+    const fixture = setup({
+      third: true,
+      disabledSeats: () => new Set(["claude-work", "codex-work"]),
+    });
+    const result = yield* (yield* fixture.service).prepareTurn({ threadId, runId });
+    expect(result.ready).toBe(true);
+    expect(result.context).toContain("discussion did not run");
+    expect(fixture.admissions.size).toBe(0);
+    expect(fixture.notices).toHaveLength(2);
+    expect(fixture.bindings).toHaveLength(0);
+  }),
+);
+
 it.effect("critiques on the first message only unless the conversation asks otherwise", () =>
   Effect.gen(function* () {
     const settle = (fixture: ReturnType<typeof setup>) => {
@@ -368,13 +425,12 @@ it.effect("explains a participant revision mismatch without dispatching the team
     expect(result.ready).toBe(true);
     expect(result.context).toContain("discussion did not run");
     expect(result.context).toContain("researcher");
-    expect(result.context).toContain("critic");
     expect(result.context).toContain("research@3#abc");
     expect(result.context).toContain("research@4#def");
     expect(result.context).toContain("new team conversation");
     yield* service.prepareTurn({ threadId, runId });
-    expect(fixture.bindings).toHaveLength(2);
-    expect(fixture.notices).toHaveLength(2);
+    expect(fixture.bindings).toHaveLength(1);
+    expect(fixture.notices).toHaveLength(1);
     expect(fixture.admissions.size).toBe(0);
   }),
 );

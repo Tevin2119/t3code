@@ -278,7 +278,7 @@ export const make = Effect.gen(function* () {
             return adapter;
           }),
         );
-        if (team !== undefined) {
+        if (team !== undefined && roster.length - skipped.size >= 2) {
           const cwd =
             parent.thread.worktreePath ??
             binding?.workspace ??
@@ -291,6 +291,7 @@ export const make = Effect.gen(function* () {
           if (cwd === undefined)
             return yield* new NativeTeamChatError({ runId: input.runId, reason: "state" });
           for (const [index, seat] of candidates.entries()) {
+            if (roster.length - skipped.size < 2) break;
             const adapter = available[index];
             if (adapter === undefined) continue;
             const member = yield* delivery.bindThread({
@@ -310,8 +311,9 @@ export const make = Effect.gen(function* () {
         }
       }
       const eligible = roster.filter((seat) => !skipped.has(seat.seat));
-      const discussionDidNotRun = eligible.length < 2;
-      if (discussionDidNotRun || (done(initial) && (done(critiques) || !critiqueWanted))) {
+      const insufficientSeats = eligible.length < 2;
+      const discussionDidNotRun = insufficientSeats && initial.length === 0;
+      if (insufficientSeats || (done(initial) && (done(critiques) || !critiqueWanted))) {
         return {
           ready: true,
           context: teamDiscussionContext({
@@ -325,11 +327,21 @@ export const make = Effect.gen(function* () {
             })),
             skipped: roster.flatMap((seat) => {
               const reason = skipped.get(seat.seat);
-              return reason === undefined ? [] : [{ seat: seat.seat, role: seat.role, reason }];
+              return reason === undefined
+                ? []
+                : [
+                    {
+                      seat: seat.seat,
+                      role: seat.role,
+                      reason,
+                      contributed: initial.some((task) => task.teamChat?.seat === seat.seat),
+                    },
+                  ];
             }),
             discussionDidNotRun,
+            critiqueDidNotRun: insufficientSeats && initial.length > 0 && critiqueWanted,
             contributions: contributions(initial),
-            ...(!discussionDidNotRun && critiqueWanted
+            ...(!insufficientSeats && critiqueWanted
               ? { critiques: contributions(critiques) }
               : {}),
           }),
