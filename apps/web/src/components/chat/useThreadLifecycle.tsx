@@ -1,3 +1,4 @@
+import { useThreadInspection } from "./ThreadInspectionContext";
 import type { EnvironmentServerConfig } from "@t3tools/client-runtime/connection";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 import type { Dispatch } from "react";
@@ -173,6 +174,7 @@ export function useThreadLifecycle(input: ThreadLifecycleInput) {
     persistThreadSettingsForNextTurn,
   } = input;
   const navigate = useNavigate();
+  const inspectThread = useThreadInspection();
   const router = useRouter();
   const { settleThread, pinThread, confirmAndUnpinThread } = useThreadActions();
   const canWriteSourceControl = useEnvironmentScope(environmentId, AuthSourceControlWriteScope);
@@ -485,6 +487,10 @@ export function useThreadLifecycle(input: ThreadLifecycleInput) {
     const shell = readThreadShell(threadRef);
     if (shell === null ? !shellOmitsChildren && isEnvironmentLive() : shell.deletedAt != null) {
       toastManager.add({ type: "info", title: "This thread is no longer available" });
+      return;
+    }
+    if (inspectThread) {
+      inspectThread(threadRef);
       return;
     }
     if (activeThreadRef && openSideChatTab(activeThreadRef, shell)) return;
