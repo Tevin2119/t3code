@@ -16,6 +16,7 @@ const mock = vi.hoisted(() => ({
 }));
 vi.mock("../../state/entities", () => ({ useProjects: () => mock.projects }));
 vi.mock("./EnginePanel", () => ({ EnginePanel: "engine-panel" }));
+vi.mock("./BoardDelivery", () => ({ BoardDelivery: "board-delivery" }));
 vi.mock("./BoardToolbar", () => ({ useBoardDesktop: () => true }));
 vi.mock("./BoardPicker.browse", () => ({ RepositoryBrowse: "repository-browse" }));
 vi.mock("@effect/atom-react", () => ({ useAtomValue: () => mock.allowed }));
