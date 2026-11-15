@@ -52,7 +52,28 @@ const DeliveryCodeVersion = Schema.Struct({
   changed: Schema.Boolean,
 });
 
+export const DeliveryEngineCapabilities = Schema.Struct({
+  launcherLifecycle: Schema.Boolean,
+});
+
+export const DeliveryEngineLifecycleReceipt = Schema.Struct({
+  accepted: Schema.Literal(true),
+  id: TrimmedNonEmptyString,
+  action: Schema.Literals(["stop", "restart"]),
+});
+
+export const DeliveryEngineCheckout = Schema.Struct({
+  known: Schema.Boolean,
+  behind: Schema.NullOr(Schema.Number.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(0))),
+  upstream: Schema.NullOr(Schema.String),
+  fetchedAt: Schema.NullOr(Schema.String),
+  text: Schema.String,
+});
+
 export const DeliveryEngineVersions = Schema.Struct({
+  mainCheck: Schema.optional(
+    Schema.NullOr(Schema.Struct({ at: Schema.String, reason: Schema.String })),
+  ),
   channel: DeliveryReleaseChannel,
   running: Schema.NullOr(DeliveryCodeVersion),
   installed: Schema.NullOr(DeliveryCodeVersion),
