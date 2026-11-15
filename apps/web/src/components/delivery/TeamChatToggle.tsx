@@ -58,6 +58,7 @@ export function TeamChatToggle(props: {
     (forkSource.data?.lineup || forkSource.data?.rememberedLineup)
       ? props.forkedFromThreadId
       : null;
+  if (lineup === null && remembered === null && teamElsewhere === null) return null;
 
   const toggle = async () => {
     if (!props.environmentId) return;
@@ -110,14 +111,7 @@ export function TeamChatToggle(props: {
       props.onOpenForkSource?.(teamElsewhere);
       return;
     }
-    if (!remembered) {
-      toastManager.add({
-        type: "info",
-        title: "This conversation has no team to bring back.",
-        description: "A team starts from a new thread: choose Orchestrator in its model picker.",
-      });
-      return;
-    }
+    if (!remembered) return;
     const result = await trackLineupMutation(
       props.threadId,
       setLineup({
