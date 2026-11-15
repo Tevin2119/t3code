@@ -1938,6 +1938,7 @@ it.effect("SQL list older settled threads below a cursor", () =>
     const createThread = (input: {
       readonly name: string;
       readonly settledDay: number | null;
+      readonly engineIntake?: boolean;
       readonly project?: string;
       readonly subagent?: boolean;
       readonly archived?: boolean;
@@ -1965,6 +1966,7 @@ it.effect("SQL list older settled threads below a cursor", () =>
             parentThreadId: input.subagent === true ? id("b") : null,
             relationshipToParent: input.subagent === true ? "subagent" : null,
             rootThreadId: input.subagent === true ? id("b") : id(input.name),
+            ...(input.engineIntake ? { engineIntake: "intake-background-job" } : {}),
           },
           forkedFrom: null,
           createdAt: now,
@@ -1986,6 +1988,7 @@ it.effect("SQL list older settled threads below a cursor", () =>
     yield* createThread({ name: "unsettled", settledDay: null });
     yield* createThread({ name: "child", settledDay: 1, subagent: true });
     yield* createThread({ name: "archived", settledDay: 1, archived: true });
+    yield* createThread({ name: "engine-intake", settledDay: 1, engineIntake: true });
 
     const list = (
       before: { readonly settledAt: string; readonly threadId?: ThreadId },
