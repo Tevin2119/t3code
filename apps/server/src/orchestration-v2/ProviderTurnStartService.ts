@@ -546,7 +546,10 @@ export const layer: Layer.Layer<
                     : typeof nestedCause === "string"
                       ? nestedCause
                       : failed.error.message),
-                class: "provider_error",
+                class:
+                  failed.signal === "team-preparation-failed"
+                    ? "validation_error"
+                    : "provider_error",
               }),
             },
           });
@@ -565,7 +568,11 @@ export const layer: Layer.Layer<
           : { ready: true, context: "" };
       }).pipe(Effect.result);
       if (preparedDiscussion._tag === "Failure") {
-        if (input.willRetry === true) return yield* preparedDiscussion.failure;
+        const failure = preparedDiscussion.failure;
+        const deterministic =
+          NativeTeamChat.isNativeTeamChatError(failure) &&
+          (failure.reason === "roster" || failure.reason === "state");
+        if (input.willRetry === true && !deterministic) return yield* failure;
         yield* settleStartFailure({
           signal: "team-preparation-failed",
           title: "Team discussion could not start",

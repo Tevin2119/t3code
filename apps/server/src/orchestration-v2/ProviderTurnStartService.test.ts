@@ -36,6 +36,11 @@ import * as Schema from "effect/Schema";
 
 import * as ServerConfig from "../config.ts";
 import * as NativeTeamChat from "../delivery/NativeTeamChat.ts";
+import * as DeliveryService from "../delivery/DeliveryService.ts";
+import * as ProjectStore from "./ProjectStore.ts";
+import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
+import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
+import * as ThreadManagementService from "./ThreadManagementService.ts";
 import { withWorkspaceLease } from "../workspace/workspaceLease.ts";
 import * as GitWorkflow from "../git/GitWorkflowService.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
@@ -279,7 +284,9 @@ function makeLocalCommandHarness(input: {
   readonly previousMessages?: ReadonlyArray<string>;
   readonly logoutFailure?: string;
   readonly openFailure?: unknown;
+  readonly invalidTeamRoster?: boolean;
   readonly teamPreparationFailure?: string;
+  readonly teamPreparationReason?: "roster" | "state" | "dispatch";
   readonly ensureThreadFailure?: unknown;
   readonly historyReadFailureAfterFallback?: unknown;
   readonly resumeFailure?: ProviderAdapter.ProviderAdapterV2Error;
@@ -805,7 +812,7 @@ function makeLocalCommandHarness(input: {
     startTurn,
   };
   const open = vi.fn(() =>
-    input.sideChat !== undefined
+    input.sideChat !== undefined || input.invalidTeamRoster
       ? Effect.succeed(sideChatSession as never)
       : input.interruptOpen === true
         ? Effect.interrupt
@@ -839,7 +846,7 @@ function makeLocalCommandHarness(input: {
   const startRootRun = vi.fn<
     (input: RunExecutionService.RunExecutionServiceV2StartRootRunInput) => Effect.Effect<void>
   >((runInput) =>
-    input.sideChat !== undefined
+    input.sideChat !== undefined || input.invalidTeamRoster
       ? runInput.session.startTurn(runInput as never).pipe(Effect.orDie)
       : input.failReadsAfterRunning === true || input.previousTurn !== undefined
         ? Effect.suspend(() =>
@@ -972,7 +979,7 @@ function makeLocalCommandHarness(input: {
               ),
             }),
           getTurnStartHistory: () =>
-            input.sideChat !== undefined
+            input.sideChat !== undefined || input.invalidTeamRoster
               ? Effect.succeed([])
               : Effect.fail(
                   new ProjectionStore.ProjectionStoreReadError({
@@ -997,16 +1004,42 @@ function makeLocalCommandHarness(input: {
         Layer.mock(ProviderAuthService.ProviderAuthService)({ tryHandlePromptCommand }),
         Layer.mock(RunExecutionService.RunExecutionServiceV2)({ startRootRun }),
         Layer.succeed(NativeTeamChat.NativeTeamChat, {
-          prepareTurn: () =>
-            input.teamPreparationFailure === undefined
-              ? Effect.succeed({ ready: true, context: "" })
-              : Effect.fail(
-                  new NativeTeamChat.NativeTeamChatError({
-                    runId,
-                    reason: "roster",
-                    detail: input.teamPreparationFailure,
-                  }),
-                ),
+          prepareTurn: (request) =>
+            input.invalidTeamRoster
+              ? NativeTeamChat.make.pipe(
+                  Effect.flatMap((service) => service.prepareTurn(request)),
+                  Effect.provide(
+                    Layer.mergeAll(
+                      Layer.mock(DeliveryService.DeliveryService)({
+                        threadState: () =>
+                          Effect.succeed({
+                            binding: null,
+                            pending: null,
+                            lineup: { participants: [] },
+                          }),
+                      }),
+                      Layer.mock(ProjectionStore.ProjectionStoreV2)({ getThreadRecords }),
+                      Layer.mock(EventSink.EventSinkV2)({ writeIfRunCurrent }),
+                      Layer.mock(ProjectStore.ProjectStoreV2)({}),
+                      Layer.mock(ProviderAdapterRegistry.ProviderAdapterRegistryV2)({}),
+                      Layer.mock(ProviderInstanceRegistry.ProviderInstanceRegistry)({}),
+                      Layer.mock(ThreadManagementService.ThreadManagementService)({}),
+                      Layer.mock(ServerConfig.ServerConfig)({
+                        attachmentsDir: "/tmp/attachments",
+                      } as ServerConfig.ServerConfig["Service"]),
+                      IdAllocator.layer,
+                    ),
+                  ),
+                )
+              : input.teamPreparationFailure === undefined
+                ? Effect.succeed({ ready: true, context: "" })
+                : Effect.fail(
+                    new NativeTeamChat.NativeTeamChatError({
+                      runId,
+                      reason: input.teamPreparationReason ?? "roster",
+                      detail: input.teamPreparationFailure,
+                    }),
+                  ),
         }),
         Layer.succeed(ProviderUsageAnalytics.ProviderTurnAnalytics, {
           runStarted: () => Effect.void,
@@ -1631,27 +1664,53 @@ effectIt.effect("starts another provider in the same checkout while a turn is pe
   }),
 );
 
-effectIt.effect("settles failed team preparation after retries without starting the provider", () =>
+effectIt.effect("starts the lead exactly once with a real roster fallback", () =>
   Effect.gen(function* () {
-    const message = "The conversation and its participants use different team revisions.";
-    const harness = makeLocalCommandHarness({ text: "Continue", teamPreparationFailure: message });
-
-    yield* Effect.flip(harness.startWithRetry);
-    expect(harness.projection().runs.at(-1)?.status).toBe("starting");
-    expect(harness.settledRuns).toEqual([]);
-
-    yield* harness.start;
-    const projection = harness.projection();
-    expect(projection.runs.at(-1)).toMatchObject({ status: "failed", startedAt: null });
-    expect(projection.attempts[0]).toMatchObject({ status: "failed", startedAt: null });
-    expect(projection.nodes[0]).toMatchObject({ status: "failed", startedAt: null });
-    expect(projection.turnItems).toMatchObject([
-      { type: "error", status: "failed", failure: { message } },
-    ]);
-    expect(harness.settledRuns).toEqual(["failed"]);
-    expect(harness.open).not.toHaveBeenCalled();
-    expect(harness.startRootRun).not.toHaveBeenCalled();
+    const harness = makeLocalCommandHarness({ text: "Continue", invalidTeamRoster: true });
+    yield* harness.startWithRetry;
+    yield* harness.startWithRetry;
+    expect(harness.startRootRun).toHaveBeenCalledOnce();
+    expect(harness.startTurn).toHaveBeenCalledOnce();
+    expect(harness.startTurn.mock.calls[0]?.[0].message.text).toContain(
+      "team discussion could not run",
+    );
+    expect(harness.startTurn.mock.calls[0]?.[0].message.text).toContain("unique seats");
+    expect(
+      harness.projection().turnItems.filter((item) => item.type === "system_notice"),
+    ).toHaveLength(1);
   }),
+);
+
+effectIt.effect.each(["roster", "state", "dispatch"] as const)(
+  "settles %s team preparation without holding the provider queue",
+  (reason) =>
+    Effect.gen(function* () {
+      const message = "The conversation and its participants use different team revisions.";
+      const harness = makeLocalCommandHarness({
+        text: "Continue",
+        teamPreparationFailure: message,
+        teamPreparationReason: reason,
+      });
+
+      if (reason === "dispatch") {
+        yield* Effect.flip(harness.startWithRetry);
+        expect(harness.projection().runs.at(-1)?.status).toBe("starting");
+        expect(harness.settledRuns).toEqual([]);
+        yield* harness.start;
+      } else {
+        yield* harness.startWithRetry;
+      }
+      const projection = harness.projection();
+      expect(projection.runs.at(-1)).toMatchObject({ status: "failed", startedAt: null });
+      expect(projection.attempts[0]).toMatchObject({ status: "failed", startedAt: null });
+      expect(projection.nodes[0]).toMatchObject({ status: "failed", startedAt: null });
+      expect(projection.turnItems).toMatchObject([
+        { type: "error", status: "failed", failure: { message, class: "validation_error" } },
+      ]);
+      expect(harness.settledRuns).toEqual(["failed"]);
+      expect(harness.open).not.toHaveBeenCalled();
+      expect(harness.startRootRun).not.toHaveBeenCalled();
+    }),
 );
 
 effectIt.effect("terminalizes a starting run when its provider session cannot open", () =>
