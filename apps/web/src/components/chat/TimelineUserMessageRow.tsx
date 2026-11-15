@@ -1,16 +1,18 @@
+import { deriveTeamChatPhase } from "@t3tools/client-runtime/state/thread-workflows";
 import { InlineAudioPreview } from "../files/InlineAudioPreview";
 import { filePreviewKind } from "@t3tools/shared/filePreview";
 import { findRevealRef } from "./markdownFindContext";
 import {
   type EnvironmentId,
   type MessageId,
+  type RunId,
   type ScheduledTaskId,
   type ServerProviderSkill,
   ThreadId,
 } from "@t3tools/contracts";
 import { resolveUserMessagePresentation } from "@t3tools/client-runtime/user-message";
 import { Link } from "@tanstack/react-router";
-import { useQuietThreadShell } from "../../state/entities";
+import { useQuietThreadShell, useQuietThreadProjection } from "../../state/entities";
 import { useEnvironmentQuery } from "../../state/query";
 import { serverEnvironment } from "../../state/server";
 import { replaceComposerContextReferences } from "@t3tools/shared/composerContextReferences";
@@ -295,7 +297,7 @@ function AutomationMessageRow({ row }: { row: Extract<TimelineRow, { kind: "mess
     <div className="group flex flex-col items-end gap-1" data-user-message-attribution="automation">
       {row.message.inputIntent === "steer" ||
       row.message.inputIntent === "promoted_queued_to_steer" ? (
-        <UserMessageIntentMarker intent={row.message.inputIntent} />
+        <UserMessageIntentMarker intent={row.message.inputIntent} runId={row.message.runId} />
       ) : null}
       <div
         className={cn(
@@ -844,7 +846,7 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
       {(row.message.inputIntent === "steer" ||
         row.message.inputIntent === "promoted_queued_to_steer") &&
       !row.continuesSteer ? (
-        <UserMessageIntentMarker intent={row.message.inputIntent} />
+        <UserMessageIntentMarker intent={row.message.inputIntent} runId={row.message.runId} />
       ) : null}
       {mediaAboveText ? (
         <div className="flex max-w-[80%] justify-end">
@@ -1047,9 +1049,14 @@ const ACTIONS_REVEAL_CLASS_NAME =
 
 function UserMessageIntentMarker({
   intent,
+  runId,
 }: {
   readonly intent: "steer" | "promoted_queued_to_steer";
+  readonly runId: RunId | null;
 }) {
+  const ctx = use(TimelineRowCtx);
+  const projection = useQuietThreadProjection(ctx.threadRef)?.projection;
+  const leadOnly = deriveTeamChatPhase(projection, runId) !== null;
   return (
     <Tooltip>
       <TooltipTrigger
@@ -1061,12 +1068,14 @@ function UserMessageIntentMarker({
         }
       >
         <Redo2Icon aria-hidden="true" className="size-3" />
-        Steer
+        {leadOnly ? "Steer · Lead only" : "Steer"}
       </TooltipTrigger>
       <TooltipPopup side="top">
-        {intent === "promoted_queued_to_steer"
-          ? "Originally queued, then promoted to steer the active turn"
-          : "Steered the active turn"}
+        {leadOnly
+          ? "Sent to the lead only. The seats had already finished."
+          : intent === "promoted_queued_to_steer"
+            ? "Originally queued, then promoted to steer the active turn"
+            : "Steered the active turn"}
       </TooltipPopup>
     </Tooltip>
   );

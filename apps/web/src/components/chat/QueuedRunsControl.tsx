@@ -1,5 +1,9 @@
+import { messageStateLabel } from "../../lib/deliveryBoard";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
-import { deriveThreadQueueWorkflowState } from "@t3tools/client-runtime/state/thread-workflows";
+import {
+  deriveTeamChatPhase,
+  deriveThreadQueueWorkflowState,
+} from "@t3tools/client-runtime/state/thread-workflows";
 import { assistantCitationsToPlainText } from "@t3tools/shared/assistantCitations";
 import {
   isAttachmentOnlyBootstrapPrompt,
@@ -113,6 +117,7 @@ export function QueuedRunsControl({
   const workflow = projection ? deriveThreadQueueWorkflowState(projection) : null;
   const queued = workflow?.queuedRuns ?? [];
   const activeRun = workflow?.activeRun ?? null;
+  const teamChatPhase = deriveTeamChatPhase(projection, activeRun?.id);
   const canSend = workflow?.canSendNow === true || workflow?.canPromoteToSteer === true;
   const queuedImageUrlById = new Map(
     queuedImageAttachmentUrls.flatMap((url, index) => {
@@ -266,6 +271,11 @@ export function QueuedRunsControl({
                 timestampFormat={props.timestampFormat}
                 onOpenThread={props.onOpenThread}
               >
+                {!item.pending ? (
+                  <span className="px-1">
+                    {teamChatPhase === null ? "Waiting" : messageStateLabel("received", null)}
+                  </span>
+                ) : null}
                 {canSend && !isEditing ? (
                   <>
                     <Tooltip>
@@ -281,7 +291,7 @@ export function QueuedRunsControl({
                           }}
                         >
                           <ArrowUpIcon />
-                          Send now
+                          {teamChatPhase === "lead" ? "Steer lead" : "Send now"}
                         </Button>
                       </TooltipTrigger>
                       <TooltipPopup>

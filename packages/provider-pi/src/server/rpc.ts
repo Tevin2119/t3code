@@ -82,6 +82,31 @@ export interface PiRpcConnection {
   readonly terminate: Effect.Effect<void>;
 }
 
+const alternateChatGptProvider = (provider: string) =>
+  provider === "openai-codex" ? "openai" : provider === "openai" ? "openai-codex" : undefined;
+
+export const selectPiModel = Effect.fnUntraced(function* (
+  request: PiRpcConnection["request"],
+  model: { readonly provider: string; readonly modelId: string },
+) {
+  const select = (provider: string) =>
+    request({ type: "set_model", provider, modelId: model.modelId }).pipe(
+      Effect.map((response) => ({ response, model: `${provider}/${model.modelId}` })),
+    );
+  const selected = select(model.provider);
+  const fallback = alternateChatGptProvider(model.provider);
+  if (fallback === undefined) return yield* selected;
+  return yield* selected.pipe(
+    Effect.catchIf(
+      (error) =>
+        error._tag === "PiRpcError" &&
+        error.operation === "set_model" &&
+        error.detail?.startsWith("Model not found:") === true,
+      () => select(fallback),
+    ),
+  );
+});
+
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
 const TERMINATION_GRACE = Duration.seconds(1);
 

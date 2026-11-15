@@ -46,7 +46,7 @@ import {
   useMinuteClock,
   useStaleReading,
 } from "../../state/delivery";
-import { BoardEngineNotice, BoardNotice } from "./BoardEngineNotice";
+import { BoardEngineNotice, BoardNotice, CloseNoticeButton } from "./BoardEngineNotice";
 import { BoardToolbar } from "./BoardToolbar";
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
 import { SidebarInset } from "../ui/sidebar";
@@ -813,9 +813,16 @@ function EnvironmentBoardPage({ environmentId }: { readonly environmentId: Envir
             ) : null}
             {parsed?.notices.map((notice) => (
               <BoardNotice key={notice.key} summary={notice.text}>
-                <p className="px-4 pt-2 text-xs text-warning">
-                  {notice.text} Seen {notice.count} time{notice.count === 1 ? "" : "s"}.
-                </p>
+                <div className="flex items-start gap-2 px-4 pt-2">
+                  <p className="min-w-0 flex-1 text-xs text-warning">
+                    {notice.text} Seen {notice.count} time{notice.count === 1 ? "" : "s"}.
+                  </p>
+                  <CloseNoticeButton
+                    environmentId={environmentId}
+                    notice={notice}
+                    onClosed={board.refresh}
+                  />
+                </div>
               </BoardNotice>
             ))}
             <BoardColumns

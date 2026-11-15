@@ -3,6 +3,7 @@ import type { OrchestrationV2ThreadProjection } from "@t3tools/contracts";
 
 import {
   canForkProjectedAssistantItem,
+  deriveTeamChatPhase,
   deriveThreadQueueWorkflowState,
   resolveLatestMergeBackRun,
   threadSupportsProviderHandoff,
@@ -400,3 +401,24 @@ describe("thread workflows", () => {
     },
   );
 });
+
+it.each(["contribution", "critique"] as const)(
+  "identifies the team's %s phase and its lead",
+  (stage) => {
+    const projection = {
+      runs: [
+        { id: "team", status: "starting" },
+        { id: "queued", status: "queued" },
+      ],
+      subagents: [{ teamChat: { sourceRunId: "team", stage }, status: "running" }],
+    } as unknown as OrchestrationV2ThreadProjection;
+    expect(deriveTeamChatPhase(projection, projection.runs[0]!.id)).toBe(stage);
+    expect(deriveTeamChatPhase(projection, projection.runs[1]!.id)).toBeNull();
+    expect(
+      deriveTeamChatPhase(
+        { ...projection, runs: [{ ...projection.runs[0]!, status: "running" }] },
+        projection.runs[0]!.id,
+      ),
+    ).toBe("lead");
+  },
+);
