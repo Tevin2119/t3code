@@ -1,18 +1,25 @@
 import { useAtomValue } from "@effect/atom-react";
 import {
-  DEPLOYMENT_STATES,
   type DeploymentCandidate,
   type DeploymentProject,
   type DeploymentsSnapshot,
   type EnvironmentId,
 } from "@t3tools/contracts";
+import {
+  GitBranchIcon,
+  GitCommitHorizontalIcon,
+  HistoryIcon,
+  PlusIcon,
+  RefreshCwIcon,
+  ServerIcon,
+  Settings2Icon,
+} from "lucide-react";
 import { useState } from "react";
 import { isElectron } from "../../env";
 import { type DeliveryRepository, environmentForBranch } from "../../lib/delivery";
 import {
   deploymentActions,
   deploymentRequestBody,
-  deploymentStatus,
   parseDeployments,
   parseDeploymentCommands,
 } from "../../lib/deployments";
@@ -28,6 +35,7 @@ import {
 } from "../../state/delivery";
 import { WorkspacePageHeader } from "../WorkspacePageHeader";
 import { Button } from "../ui/button";
+import { Badge } from "../ui/badge";
 import {
   Dialog,
   DialogDescription,
@@ -50,6 +58,7 @@ import { ADD_REPOSITORY, RepositoryPicker } from "./RepositoryPicker";
 import { useBoardDesktop } from "./BoardToolbar";
 import { EnginePanel } from "./EnginePanel";
 import { EnvironmentPicker } from "./EnvironmentPicker";
+import { DeploymentRuntime } from "./DeploymentsPage.runtime";
 
 const MODE_LABELS = {
   manual: "Manual",
@@ -57,7 +66,8 @@ const MODE_LABELS = {
   "full-auto": "Full auto",
 } as const;
 const short = (commit: string | null) => commit?.slice(0, 10) ?? "None";
-const when = (iso: string) => new Date(iso).toLocaleString();
+const when = (iso: string) =>
+  Number.isFinite(Date.parse(iso)) ? new Date(iso).toLocaleString() : "Unknown time";
 type SnapshotRepository = DeploymentsSnapshot["repositories"][number];
 type Request = { title: string; path: string; body: Record<string, unknown> };
 
@@ -174,15 +184,9 @@ function Configuration({
   const [repository, setRepository] = useState(project?.repository ?? "");
   const selected = registration.repositories.find((repo) => repo.id === repository);
   const [branch, setBranch] = useState(project?.branch ?? "");
-  // A repository's environments are its branches: develop, qa, master. A new deployment's
-  // environment follows the branch chosen; a saved one keeps the name it was saved with.
   const [releaseEnvironment, setReleaseEnvironment] = useState(
-    project?.environment ?? environmentForBranch(project?.branch ?? ""),
+    project?.environment ?? "production",
   );
-  const chooseBranch = (value: string) => {
-    setBranch(value);
-    if (!project && adapter !== "engine") setReleaseEnvironment(environmentForBranch(value));
-  };
   const [mode, setMode] = useState<string>(project?.mode ?? "manual");
   const [adapter, setAdapter] = useState<string>(project?.adapter ?? "command");
   // An existing engine deployment keeps its adapter; a new one needs the engine's own checkout.
@@ -191,7 +195,7 @@ function Configuration({
     snapshot.capabilities.engine && (selected?.engineAdapter === true || keepsEngine);
   const choose = (repo: SnapshotRepository) => {
     setRepository(repo.id);
-    chooseBranch(repo.defaultBase ?? "");
+    setBranch(repo.defaultBase ?? "");
     const eligible =
       snapshot.capabilities.engine &&
       (repo.engineAdapter === true ||
@@ -255,7 +259,7 @@ function Configuration({
               </p>
             ) : null}
             {registration.problem && !browsing ? (
-              <p role="alert" className="text-sm text-warning">
+              <p role="alert" className="text-sm text-warning-foreground">
                 {registration.problem}
               </p>
             ) : null}
@@ -279,7 +283,7 @@ function Configuration({
               label="Branch"
               value={branch}
               items={(selected?.branches ?? []).map((value) => ({ value, label: value }))}
-              onChange={chooseBranch}
+              onChange={setBranch}
             />
             <Choice
               label="Release environment"
@@ -288,6 +292,10 @@ function Configuration({
                 ? ["production"]
                 : [
                     ...new Set([
+                      "production",
+                      "staging",
+                      "qa",
+                      "development",
                       ...(selected?.branches ?? []).map(environmentForBranch),
                       ...snapshot.projects
                         .filter((item) => item.repository === repository)
@@ -298,6 +306,10 @@ function Configuration({
               ).map((value) => ({ value, label: value }))}
               onChange={setReleaseEnvironment}
             />
+            <p className="text-sm text-muted-foreground">
+              The release environment is independent of the watched branch. Changing a branch does
+              not change where it deploys.
+            </p>
             <Choice
               label="Mode"
               value={mode}
@@ -354,14 +366,14 @@ function Configuration({
                   }
                 />
                 {commandResult.problem ? (
-                  <p role="alert" className="text-sm text-warning">
+                  <p role="alert" className="text-sm text-warning-foreground">
                     {commandResult.problem}
                   </p>
                 ) : null}
               </div>
             ) : null}
             {!available ? (
-              <p role="status" className="text-sm text-warning">
+              <p role="status" className="text-sm text-warning-foreground">
                 This adapter is unavailable or unconfigured on this engine. Configure it before
                 running releases.
               </p>
@@ -407,11 +419,13 @@ function Configuration({
 function Approval({
   environmentId,
   request,
+  unavailable,
   onClose,
   onDone,
 }: {
   environmentId: EnvironmentId;
   request: Request;
+  unavailable: boolean;
   onClose: () => void;
   onDone: () => void;
 }) {
@@ -423,8 +437,10 @@ function Approval({
   const [key, setKey] = useState("");
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
+  const [invalidated, setInvalidated] = useState(unavailable);
+  if (unavailable && !invalidated) setInvalidated(true);
   const submit = async () => {
-    if (busy || !allowed) return;
+    if (busy || !allowed || unavailable || invalidated) return;
     setBusy(true);
     setProblem(null);
     await (async () => {
@@ -481,8 +497,8 @@ function Approval({
             <Input
               type="password"
               autoComplete="current-password"
-              aria-label="Approval passphrase or terminal key"
-              placeholder="Approval passphrase or terminal key"
+              aria-label="Approval passphrase"
+              placeholder="Approval passphrase"
               value={key}
               disabled={busy}
               onChange={(event) => setKey(event.target.value)}
@@ -490,8 +506,13 @@ function Approval({
             {!allowed ? (
               <p role="status">This connection does not have permission to change deployments.</p>
             ) : null}
+            {invalidated ? (
+              <p role="alert" className="text-sm text-warning-foreground">
+                The source snapshot became unavailable or stale. Cancel, refresh and review again.
+              </p>
+            ) : null}
             {problem ? (
-              <p role="alert" className="text-sm text-warning">
+              <p role="alert" className="text-sm text-warning-foreground">
                 {problem}
               </p>
             ) : null}
@@ -501,7 +522,10 @@ function Approval({
           <Button variant="outline" disabled={busy} onClick={onClose}>
             Cancel
           </Button>
-          <Button disabled={busy || !allowed || !by.trim() || !key} onClick={() => void submit()}>
+          <Button
+            disabled={busy || !allowed || unavailable || invalidated || !by.trim() || !key}
+            onClick={() => void submit()}
+          >
             {busy ? "Submitting" : "Confirm"}
           </Button>
         </DialogFooter>
@@ -512,12 +536,14 @@ function Approval({
 
 function Candidate({
   candidate,
+  unavailable,
   disabled,
   projectBusy,
   onRequest,
   onDependencies,
 }: {
   candidate: DeploymentCandidate;
+  unavailable: boolean;
   disabled: boolean;
   projectBusy: boolean;
   onRequest: (request: Request) => void;
@@ -525,17 +551,27 @@ function Candidate({
 }) {
   const attempts = candidate.attempts;
   return (
-    <article className="flex flex-col gap-3 rounded-lg border border-border bg-background p-3">
-      <div>
-        {candidate.subject ? (
-          <p className="break-words text-sm">
-            {candidate.seq !== undefined ? (
-              <span className="text-muted-foreground">#{candidate.seq} </span>
-            ) : null}
-            {candidate.subject}
-          </p>
+    <article className="flex min-w-0 flex-col gap-3 rounded-lg border border-border bg-background p-4">
+      <div className="flex flex-wrap items-center gap-2">
+        <Badge variant={candidate.state === "blocked" ? "warning" : "secondary"}>
+          {unavailable
+            ? `${candidate.state} · last known`
+            : candidate.state === "live"
+              ? "Live · recorded"
+              : candidate.state}
+        </Badge>
+        {candidate.seq !== undefined ? (
+          <span className="text-xs text-muted-foreground">Release #{candidate.seq}</span>
         ) : null}
-        <p className="text-xs text-muted-foreground">Pinned revision</p>
+      </div>
+      <div className="min-w-0">
+        <h4 className="break-words text-sm font-medium">
+          {candidate.subject || `Release ${short(candidate.commit)}`}
+        </h4>
+        <p className="mt-2 flex items-center gap-1 text-xs text-muted-foreground">
+          <GitCommitHorizontalIcon aria-hidden="true" className="size-3.5 shrink-0" />
+          Pinned revision
+        </p>
         <code className="break-all text-xs">{candidate.commit}</code>
       </div>
       <p className="text-xs text-muted-foreground">
@@ -545,7 +581,7 @@ function Candidate({
         {candidate.liveAt ? (
           <>
             <br />
-            Live since {when(candidate.liveAt)}
+            Verified live at {when(candidate.liveAt)}
           </>
         ) : null}
         {candidate.liveUntil ? (
@@ -559,7 +595,7 @@ function Candidate({
         <p className="text-xs text-muted-foreground">Phase: {candidate.phase}</p>
       ) : null}
       {candidate.state === "blocked" && candidate.failedPhase ? (
-        <p className="text-xs text-warning">Stopped during {candidate.failedPhase}</p>
+        <p className="text-xs text-warning-foreground">Stopped during {candidate.failedPhase}</p>
       ) : null}
       {attempts && (attempts.qualify > 0 || attempts.deploy > 0) ? (
         <p className="text-xs text-muted-foreground">
@@ -572,21 +608,22 @@ function Candidate({
         </p>
       ) : null}
       {candidate.needsVerify ? (
-        <p className="text-xs text-warning">
+        <p className="text-xs text-warning-foreground">
           Verification required before this release can be live.
         </p>
       ) : null}
-      {candidate.problem ? <p className="text-sm text-warning">{candidate.problem}</p> : null}
-      <Button
-        size="xs"
-        variant="ghost"
-        disabled={disabled || !["merged", "ready", "blocked"].includes(candidate.state)}
-        onClick={onDependencies}
-      >
-        Dependencies
-      </Button>
-      <details className="text-xs">
-        <summary className="cursor-pointer">Evidence and history</summary>
+      {candidate.state === "live" || candidate.liveAt ? (
+        <p className="text-xs text-muted-foreground">
+          Recorded candidate evidence, not a current runtime health check.
+        </p>
+      ) : null}
+      {candidate.problem ? (
+        <p className="break-words text-sm text-warning-foreground">{candidate.problem}</p>
+      ) : null}
+      <details className="min-w-0 text-xs">
+        <summary className="cursor-pointer rounded-sm py-1 focus-visible:outline-2 focus-visible:outline-ring">
+          Evidence, dependencies and history
+        </summary>
         <pre className="mt-2 max-h-72 overflow-auto whitespace-pre-wrap break-all">
           {JSON.stringify(
             {
@@ -599,11 +636,11 @@ function Candidate({
           )}
         </pre>
       </details>
-      <div className="flex flex-wrap gap-1">
+      <div className="mt-auto flex flex-wrap gap-2">
         {deploymentActions(candidate, projectBusy).map((action) => (
           <Button
             key={action}
-            size="xs"
+            size="sm"
             variant="outline"
             disabled={disabled}
             onClick={() =>
@@ -618,6 +655,14 @@ function Candidate({
             {action.slice(1)}
           </Button>
         ))}
+        <Button
+          size="sm"
+          variant="ghost"
+          disabled={disabled || !["merged", "ready", "blocked"].includes(candidate.state)}
+          onClick={onDependencies}
+        >
+          Dependencies
+        </Button>
       </div>
     </article>
   );
@@ -636,7 +681,12 @@ export function DeploymentsPage() {
             {environmentId ? (
               <EnginePanel environmentId={environmentId} compact={!desktop} />
             ) : null}
-            <EnvironmentPicker value={environmentId} onChoose={setEnvironment} />
+            <div className="flex min-w-0 items-center gap-2">
+              <span className="sr-only text-xs text-muted-foreground sm:not-sr-only">
+                T3 environment
+              </span>
+              <EnvironmentPicker value={environmentId} onChoose={setEnvironment} />
+            </div>
           </div>
         </WorkspacePageHeader>
         <DeploymentsContent key={environmentId} environmentId={environmentId} />
@@ -658,161 +708,198 @@ function DeploymentsContent({ environmentId }: { environmentId: EnvironmentId | 
   );
   const [dependencies, setDependencies] = useState<DeploymentCandidate | null>(null);
   const [request, setRequest] = useState<Request | null>(null);
-  const disabled = !allowed || stale || !!read.error || !snapshot || !!snapshot.problem;
+  const unavailable = !enabled || stale || !!read.error || !!snapshot?.problem;
+  const disabled = !allowed || unavailable || !snapshot;
   return (
-    <main className="min-h-0 flex-1 overflow-auto p-4 md:p-6">
-      <div className="mb-5 flex flex-wrap items-center gap-2">
-        <p className="min-w-0 flex-1 text-sm text-muted-foreground">
-          Merged revisions, qualified releases and what is running in each environment.
-        </p>
-        <Button size="sm" variant="outline" disabled={!enabled} onClick={read.refresh}>
-          Refresh
-        </Button>
-        <Button size="sm" disabled={disabled} onClick={() => setConfiguration({ project: null })}>
-          Add deployment
-        </Button>
-        <Button
-          size="sm"
-          variant="outline"
-          disabled={disabled || !snapshot?.projects.length}
-          onClick={() =>
-            setRequest({
-              title: "Discover merged commits",
-              path: "/api/deployments/discover",
-              body: {},
-            })
-          }
-        >
-          Discover commits
-        </Button>
-      </div>
-      {!enabled ? (
-        <p>Enable Delivery in this environment's settings to manage deployments.</p>
-      ) : read.error ? (
-        <p role="alert" className="text-warning">
-          Could not read deployments. {read.error} If this engine does not support deployments,
-          update it first.
-        </p>
-      ) : read.isPending && !snapshot ? (
-        <p>Reading deployments...</p>
-      ) : !snapshot ? (
-        <p role="alert">
-          This engine returned an unsupported deployment response. Update the engine and T3 to
-          compatible versions.
-        </p>
-      ) : null}
-      {snapshot?.problem ? (
-        <p role="alert" className="mb-4 text-warning">
-          {snapshot.problem}
-        </p>
-      ) : null}
-      {stale && snapshot ? (
-        <p role="status" className="mb-4 text-warning">
-          This reading is stale. Refresh before changing deployments.
-        </p>
-      ) : null}
-      {!allowed && enabled ? (
-        <p className="mb-4 text-sm text-muted-foreground">
-          Deployment changes require delivery permission.
-        </p>
-      ) : null}
-      {snapshot?.projects.length === 0 ? (
-        <p className="rounded-lg border border-dashed border-border p-6 text-sm">
-          No deployments configured. Add a repository and branch, then discover merged commits. New
-          deployments start in manual mode.
-        </p>
-      ) : null}
-      <div className="flex flex-col gap-8">
-        {snapshot?.projects.map((project) => (
-          <section
-            key={project.id}
-            className="flex min-w-0 flex-col gap-3"
-            aria-label={`${project.title} ${project.environment}`}
-          >
-            <div className="flex flex-wrap items-start gap-3">
-              <div className="min-w-0 flex-1">
-                <h2 className="font-medium">
-                  {project.title}{" "}
-                  <span className="text-sm text-muted-foreground">/ {project.environment}</span>
-                </h2>
-                <p className="break-all text-xs text-muted-foreground">
-                  {project.branch} · {MODE_LABELS[project.mode]} · {project.adapter}
-                </p>
-              </div>
-              <Button
-                size="xs"
-                variant="outline"
-                disabled={disabled}
-                onClick={() => setConfiguration({ project })}
-              >
-                Configure
-              </Button>
-            </div>
-            <p className="text-sm" data-deployment-status>
-              Latest merged <code>{short(project.latestCommit)}</code> · Running{" "}
-              <code>{short(project.liveCommit)}</code> ·{" "}
-              <span className={project.liveProblem ? "text-warning" : undefined}>
-                {deploymentStatus(project)}
-              </span>
-              {project.liveObservedAt ? (
-                <span className="text-muted-foreground">
-                  {" "}
-                  · Observed {when(project.liveObservedAt)}
-                </span>
-              ) : null}
+    <main className="scrollbar-gutter-both min-h-0 flex-1 overflow-auto p-4 md:p-6">
+      <div className="mx-auto flex max-w-7xl flex-col gap-6">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+          <div className="min-w-0">
+            <h2 className="text-lg font-semibold">Releases by environment</h2>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Compare runtime observations with pinned release candidates. New deployments start in
+              manual mode.
             </p>
-            {project.busy ? (
-              <p role="status" className="text-sm text-muted-foreground">
-                A release operation is running.
-              </p>
-            ) : null}
-            {project.problem ? <p className="text-sm text-warning">{project.problem}</p> : null}
-            {project.adapter === "command" && !project.commands ? (
-              <p className="text-sm text-warning">
-                Repository commands are not configured. Configure them before running a release.
-              </p>
-            ) : !snapshot.capabilities[project.adapter] ? (
-              <p className="text-sm text-warning">
-                This adapter is unavailable on this engine. Configure the engine before running a
-                release.
-              </p>
-            ) : null}
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
-              {DEPLOYMENT_STATES.map((state) => {
-                const candidates = snapshot.candidates.filter(
-                  (candidate) => candidate.projectId === project.id && candidate.state === state,
-                );
-                return (
-                  <section
-                    key={state}
-                    className="min-w-0 rounded-lg bg-muted/40 p-3"
-                    aria-label={`${project.title}: ${state}`}
-                  >
-                    <h3 className="mb-3 text-sm font-medium capitalize">
-                      {state} <span className="text-muted-foreground">{candidates.length}</span>
-                    </h3>
-                    <div className="flex flex-col gap-2">
-                      {candidates.length ? (
-                        candidates.map((candidate) => (
-                          <Candidate
-                            key={candidate.id}
-                            candidate={candidate}
-                            disabled={disabled}
-                            projectBusy={!!project.busy}
-                            onRequest={setRequest}
-                            onDependencies={() => setDependencies(candidate)}
-                          />
-                        ))
-                      ) : (
-                        <p className="text-xs text-muted-foreground">No releases</p>
-                      )}
+            <p className="mt-2 text-xs text-muted-foreground">
+              {read.readAt
+                ? `Snapshot read ${when(read.readAt)}`
+                : "No deployment snapshot read yet"}
+            </p>
+          </div>
+          <div className="flex shrink-0 flex-wrap gap-2">
+            <Button size="sm" variant="outline" disabled={!enabled} onClick={read.refresh}>
+              <RefreshCwIcon aria-hidden="true" />
+              Refresh
+            </Button>
+            <Button
+              size="sm"
+              disabled={disabled}
+              onClick={() => setConfiguration({ project: null })}
+            >
+              <PlusIcon aria-hidden="true" />
+              Add deployment
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={disabled || !snapshot?.projects.length}
+              onClick={() =>
+                setRequest({
+                  title: "Discover merged commits",
+                  path: "/api/deployments/discover",
+                  body: {},
+                })
+              }
+            >
+              <GitCommitHorizontalIcon aria-hidden="true" />
+              Discover commits
+            </Button>
+          </div>
+        </div>
+        {!enabled ? (
+          <p>Enable Delivery in this environment's settings to manage deployments.</p>
+        ) : read.error ? (
+          <p role="alert" className="break-words text-warning-foreground">
+            Could not read deployments. {read.error} Any releases shown below are last-known
+            evidence. If this engine does not support deployments, update it first.
+          </p>
+        ) : read.isPending && !snapshot ? (
+          <p>Reading deployments...</p>
+        ) : !snapshot ? (
+          <p role="alert">
+            This engine returned an unsupported deployment response. Update the engine and T3 to
+            compatible versions.
+          </p>
+        ) : null}
+        {snapshot?.problem ? (
+          <p role="alert" className="break-words text-warning-foreground">
+            {snapshot.problem}
+          </p>
+        ) : null}
+        {stale && snapshot ? (
+          <p role="status" className="break-words text-warning-foreground">
+            This reading is stale. Runtime and candidate states below are last-known evidence.
+            Refresh before changing deployments.
+          </p>
+        ) : null}
+        {!allowed && enabled ? (
+          <p className="mb-4 text-sm text-muted-foreground">
+            Deployment changes require delivery permission.
+          </p>
+        ) : null}
+        {snapshot?.projects.length === 0 ? (
+          <p className="rounded-lg border border-dashed border-border p-6 text-sm">
+            No deployments configured. Add a repository and branch, then discover merged commits.
+            New deployments start in manual mode.
+          </p>
+        ) : null}
+        <div className="flex min-w-0 flex-col gap-6">
+          {snapshot?.projects.map((project) => {
+            const candidates = snapshot.candidates.filter(
+              (candidate) => candidate.projectId === project.id,
+            );
+            const releases = candidates.filter((candidate) => candidate.state !== "superseded");
+            const history = candidates.filter((candidate) => candidate.state === "superseded");
+            const renderCandidate = (candidate: DeploymentCandidate) => (
+              <Candidate
+                key={candidate.id}
+                candidate={candidate}
+                unavailable={unavailable}
+                disabled={disabled}
+                projectBusy={!!project.busy}
+                onRequest={setRequest}
+                onDependencies={() => setDependencies(candidate)}
+              />
+            );
+            return (
+              <section
+                key={project.id}
+                className="flex min-w-0 flex-col gap-4 rounded-xl border border-border bg-card p-4 md:p-5"
+                aria-label={`${project.title} ${project.environment}`}
+              >
+                <div className="flex flex-wrap items-start gap-3">
+                  <div className="min-w-0 flex-1 basis-48">
+                    <p className="flex items-start gap-2 text-sm font-medium">
+                      <ServerIcon
+                        aria-hidden="true"
+                        className="mt-0.5 size-4 shrink-0 text-muted-foreground"
+                      />
+                      <span className="break-words">
+                        <span className="font-normal text-muted-foreground">
+                          Release environment:{" "}
+                        </span>
+                        {project.environment}
+                      </span>
+                    </p>
+                    <h2 className="mt-1 break-words text-lg font-semibold">{project.title}</h2>
+                    <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-2 text-xs text-muted-foreground">
+                      <span className="flex min-w-0 items-start gap-1">
+                        <GitBranchIcon aria-hidden="true" className="size-3.5 shrink-0" />
+                        <span className="break-all">{project.branch}</span>
+                      </span>
+                      <Badge variant="outline">{MODE_LABELS[project.mode]}</Badge>
+                      <span>
+                        {project.adapter === "command" ? "Repository commands" : "Built-in engine"}
+                      </span>
                     </div>
-                  </section>
-                );
-              })}
-            </div>
-          </section>
-        ))}
+                  </div>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={disabled}
+                    onClick={() => setConfiguration({ project })}
+                  >
+                    <Settings2Icon aria-hidden="true" />
+                    Configure
+                  </Button>
+                </div>
+                <DeploymentRuntime project={project} unavailable={unavailable} />
+                {project.busy ? (
+                  <p role="status" className="text-sm text-muted-foreground">
+                    A release operation is running. Other releases can only be cancelled until it
+                    finishes.
+                  </p>
+                ) : null}
+                {project.adapter === "command" && !project.commands ? (
+                  <p className="text-sm text-warning-foreground">
+                    Repository commands are not configured. Configure them before running a release.
+                  </p>
+                ) : !snapshot.capabilities[project.adapter] ? (
+                  <p className="text-sm text-warning-foreground">
+                    This adapter is unavailable on this engine. Configure the engine before running
+                    a release.
+                  </p>
+                ) : null}
+                <div>
+                  <h3 className="mb-3 text-sm font-medium">
+                    Release candidates{" "}
+                    <span className="text-muted-foreground">({releases.length})</span>
+                  </h3>
+                  {releases.length ? (
+                    <div className="grid min-w-0 grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
+                      {releases.map(renderCandidate)}
+                    </div>
+                  ) : (
+                    <p className="rounded-lg border border-dashed border-border p-4 text-sm text-muted-foreground">
+                      No active candidates. Discover commits to read the watched branch.
+                    </p>
+                  )}
+                </div>
+                {history.length ? (
+                  <details className="min-w-0 border-t border-border pt-3">
+                    <summary className="cursor-pointer rounded-sm py-1 text-sm focus-visible:outline-2 focus-visible:outline-ring">
+                      <HistoryIcon aria-hidden="true" className="mx-1 inline size-4" />
+                      Superseded releases ({history.length})
+                    </summary>
+                    <div className="mt-3 grid min-w-0 grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
+                      {history.map(renderCandidate)}
+                    </div>
+                  </details>
+                ) : null}
+              </section>
+            );
+          })}
+        </div>
       </div>
       {dependencies && snapshot ? (
         <Dependencies
@@ -850,6 +937,7 @@ function DeploymentsContent({ environmentId }: { environmentId: EnvironmentId | 
         <Approval
           environmentId={environmentId}
           request={request}
+          unavailable={unavailable || !snapshot}
           onClose={() => setRequest(null)}
           onDone={() => {
             setRequest(null);
@@ -908,6 +996,9 @@ function Dependencies({
                   <span>
                     {snapshot.projects.find((project) => project.id === other.projectId)?.title ??
                       other.projectId}{" "}
+                    ·{" "}
+                    {snapshot.projects.find((project) => project.id === other.projectId)
+                      ?.environment ?? "Unknown environment"}{" "}
                     · {short(other.commit)} · {other.state}
                   </span>
                 </label>

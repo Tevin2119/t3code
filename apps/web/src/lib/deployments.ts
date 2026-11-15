@@ -65,9 +65,20 @@ export function deploymentActions(
 
 /** What the running revision says, which is not the same as whether it is healthy. */
 export function deploymentStatus(
-  project: Pick<DeploymentProject, "latestCommit" | "liveCommit" | "liveProblem">,
+  project: Pick<
+    DeploymentProject,
+    "latestCommit" | "liveCommit" | "liveProblem" | "liveObservedAt" | "problem"
+  >,
+  unavailable = false,
 ): string {
   if (project.liveProblem) return `Running revision problem: ${project.liveProblem}`;
+  if (project.problem) return `Deployment problem: ${project.problem}`;
+  if (unavailable) return "Runtime status unavailable. Showing last reading.";
+  const observed = !!project.liveObservedAt && Number.isFinite(Date.parse(project.liveObservedAt));
+  if (project.liveCommit === null) {
+    return observed ? "No revision deployed at last observation" : "Running revision is unknown";
+  }
+  if (!observed) return "Runtime observation time is unknown";
   if (project.latestCommit === null) return "No merged revision discovered";
   return project.liveCommit === project.latestCommit
     ? "Running revision matches latest merge"
