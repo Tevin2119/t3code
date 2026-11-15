@@ -98,15 +98,24 @@ export const CompactComposerControlsMenu = memo(function CompactComposerControls
         </MenuPopup>
       </Menu>
       {teamOpen && props.teamControls ? (
-        <Dialog open onOpenChange={setTeamOpen}>
-          <DialogPopup>
-            <DialogHeader>
-              <DialogTitle>Team profile and role</DialogTitle>
-            </DialogHeader>
-            <DialogPanel className="overflow-x-auto">{props.teamControls}</DialogPanel>
-          </DialogPopup>
-        </Dialog>
+        <TeamControlsDialog onClose={() => setTeamOpen(false)}>
+          {props.teamControls}
+        </TeamControlsDialog>
       ) : null}
     </>
   );
 });
+
+/** The team controls at full width, opened from the compact team icon or the overflow menu. */
+export function TeamControlsDialog(props: { children: ReactNode; onClose: () => void }) {
+  return (
+    <Dialog open onOpenChange={(open) => (open ? undefined : props.onClose())}>
+      <DialogPopup>
+        <DialogHeader>
+          <DialogTitle>Team profile and role</DialogTitle>
+        </DialogHeader>
+        <DialogPanel data-team-controls-dialog>{props.children}</DialogPanel>
+      </DialogPopup>
+    </Dialog>
+  );
+}

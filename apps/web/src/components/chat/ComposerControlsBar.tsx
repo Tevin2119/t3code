@@ -1,12 +1,12 @@
-import { type ComponentProps, type ReactNode } from "react";
+import { type ComponentProps, type ReactNode, useState } from "react";
 import type { ProviderModelPicker } from "./ProviderModelPicker";
 import type { ChatComposerProps } from "./ChatComposer";
 import type { PromptUltrathink } from "./TraitsPicker";
 import type { ProviderInstanceEntry } from "../../providerInstances";
 import { type AppModelOption } from "../../modelSelection";
-import { CircleAlertIcon } from "lucide-react";
-import { CompactComposerControlsMenu } from "./CompactComposerControlsMenu";
-import { ComposerControl } from "./ComposerControl";
+import { CircleAlertIcon, UsersIcon } from "lucide-react";
+import { CompactComposerControlsMenu, TeamControlsDialog } from "./CompactComposerControlsMenu";
+import { ComposerControl, ComposerControlIcon, type ComposerControlSize } from "./ComposerControl";
 import {
   ComposerFooterModeControls,
   ComposerModelPicker,
@@ -182,7 +182,14 @@ export function ComposerControlsBar(props: {
   });
   const effort = describeComposerEffort(traitsInput, props.effortDisplay, controlSize);
   const restingBlockDefs = [
-    ...(props.teamControl ? [{ id: "team", content: props.teamControl }] : []),
+    ...(props.teamControl
+      ? [
+          {
+            id: "team",
+            content: <ComposerTeamBlock size={controlSize}>{props.teamControl}</ComposerTeamBlock>,
+          },
+        ]
+      : []),
     ...(showModeBlock
       ? [
           {
@@ -343,6 +350,33 @@ export function ComposerControlsBar(props: {
           </div>
         </>
       }
+    </>
+  );
+}
+
+/**
+ * The team controls in the row, which compact to one icon that opens them in a dialog before the
+ * row moves them into the overflow menu.
+ */
+function ComposerTeamBlock(props: { children: ReactNode; size: ComposerControlSize }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <span data-composer-control-label className="flex min-w-0 items-center gap-1">
+        {props.children}
+      </span>
+      <ComposerControl
+        data-composer-control-compact-icon
+        size={props.size}
+        className="invisible absolute"
+        aria-label="Team profile and role"
+        onClick={() => setOpen(true)}
+      >
+        <ComposerControlIcon icon={UsersIcon} size={props.size} />
+      </ComposerControl>
+      {open ? (
+        <TeamControlsDialog onClose={() => setOpen(false)}>{props.children}</TeamControlsDialog>
+      ) : null}
     </>
   );
 }

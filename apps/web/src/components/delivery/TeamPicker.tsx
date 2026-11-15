@@ -78,7 +78,7 @@ export function TeamPicker(props: {
   const chooseRole = !picker.loading && resolved.state === "choose-role";
 
   return (
-    <div className="flex min-w-0 items-center gap-0.5" data-delivery-team-picker>
+    <div className="flex min-w-0 flex-wrap items-center gap-0.5" data-delivery-team-picker>
       <Tooltip>
         <Select
           value={choice.team ?? NO_TEAM}
