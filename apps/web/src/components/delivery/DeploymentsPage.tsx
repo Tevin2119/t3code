@@ -50,6 +50,7 @@ import { ADD_REPOSITORY, RepositoryPicker } from "./RepositoryPicker";
 import { useBoardDesktop } from "./BoardToolbar";
 import { EnginePanel } from "./EnginePanel";
 import { EnvironmentPicker } from "./EnvironmentPicker";
+import { BoardDelivery } from "./BoardDelivery";
 
 const MODE_LABELS = {
   manual: "Manual",
@@ -723,6 +724,9 @@ function DeploymentsContent({ environmentId }: { environmentId: EnvironmentId | 
         </p>
       ) : null}
       <div className="flex flex-col gap-8">
+        {enabled && environmentId ? (
+          <BoardDelivery key={environmentId} environmentId={environmentId} />
+        ) : null}
         {snapshot?.projects.map((project) => (
           <section
             key={project.id}
