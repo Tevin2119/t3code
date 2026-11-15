@@ -1,5 +1,14 @@
+import * as Schema from "effect/Schema";
+import { RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY } from "../../rightPanelLayout";
+import { useLocalStorage } from "../../hooks/useLocalStorage";
+import {
+  EMPTY_REPLY,
+  replyDraftKey,
+  useDeliveryReplyDrafts,
+} from "../../state/deliveryReplyDrafts";
+import { TaskWorkspacePanels } from "./TaskWorkspacePanels";
 import { fullAutoAttribution } from "../../lib/delivery";
-import type { EnvironmentId } from "@t3tools/contracts";
+import { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import { SharedTaskAllocation } from "./SharedBoard";
 import {
   ArrowLeftIcon,
@@ -696,12 +705,28 @@ function Briefing(props: { readonly brief: TaskBriefing }) {
   );
 }
 
-function Composer(props: {
+const composerKindSchema = Schema.Literals(["message", "note", "change", "status", "answer"]);
+const replySequenceSchema = Schema.NullOr(Schema.Number);
+const draftFilesSchema = Schema.Array(
+  Schema.Struct({
+    id: Schema.String,
+    name: Schema.String,
+    type: Schema.String,
+    size: Schema.Number,
+    by: Schema.String,
+    at: Schema.String,
+    message: Schema.NullOr(Schema.Number),
+    path: Schema.String,
+  }),
+);
+
+export function TaskComposer(props: {
   readonly environmentId: EnvironmentId | null;
   readonly task: TaskView;
   readonly replyTo: TimelineEntry | null;
   readonly onReplyTo: (entry: TimelineEntry | null) => void;
   readonly onSent: () => void;
+  readonly onReplySent?: (seq: number) => void;
   readonly expanded: boolean;
   readonly onExpandedChange: (expanded: boolean) => void;
 }) {
@@ -710,19 +735,40 @@ function Composer(props: {
   const sendShortcut = usePrimarySettings((settings) => settings.sendShortcut);
   const act = useDeliveryAct(props.environmentId, "task message");
   const uploads = useTaskUploads(props.environmentId, person);
-  const [text, setText] = useState("");
-  const [chosen, setChosen] = useState<ComposerKind>("message");
-  const [files, setFiles] = useState<ReadonlyArray<TaskFile>>([]);
+  const [messageText, setMessageText] = useLocalStorage(
+    `t3code:task-message:${JSON.stringify([props.environmentId, task.id])}`,
+    "",
+    Schema.String,
+  );
+  const draftKey = replyDraftKey(props.environmentId ?? "", task.id, props.replyTo?.seq ?? -1);
+  const answerDraft = useDeliveryReplyDrafts((state) => state.drafts[draftKey] ?? EMPTY_REPLY);
+  const replyPending = useDeliveryReplyDrafts((state) => state.pending[draftKey] === true);
+  const updateDraft = useDeliveryReplyDrafts((state) => state.update);
+  const beginReply = useDeliveryReplyDrafts((state) => state.begin);
+  const finishReply = useDeliveryReplyDrafts((state) => state.finish);
+  const discardReply = useDeliveryReplyDrafts((state) => state.discard);
+  const text = props.replyTo ? answerDraft.text : messageText;
+  const setText = (value: string) =>
+    props.replyTo ? updateDraft(draftKey, { text: value }) : setMessageText(value);
+  const [chosen, setChosen] = useLocalStorage(
+    `t3code:task-message-kind:${JSON.stringify([props.environmentId, task.id])}`,
+    "message" as ComposerKind,
+    composerKindSchema,
+  );
+  const [files, setFiles] = useLocalStorage(
+    `t3code:task-draft-files:${JSON.stringify([props.environmentId, task.id, props.replyTo?.seq ?? null])}`,
+    [] as ReadonlyArray<TaskFile>,
+    draftFilesSchema,
+  );
   const [busy, setBusy] = useState(false);
   const sending = useRef(false);
-  const [problem, setProblem] = useState<string | null>(null);
+  const [problem, setProblem] = useState<{ target: number | null; text: string } | null>(null);
 
   const waits = task.questions.at(-1) ?? null;
-  // Answering is chosen by pressing Answer on the question, or here while a question waits.
-  const replying =
-    props.replyTo ??
-    (chosen === "answer" && waits ? { seq: waits.seq, by: waits.by, text: waits.text } : null);
+  const replying = props.replyTo;
   const kind: ComposerKind = replying ? "answer" : chosen === "answer" ? "message" : chosen;
+  const staleReply =
+    replying !== null && !task.questions.some((question) => question.seq === replying.seq);
   // A chat has nothing that is asked of the team to change: what is written is the conversation.
   const chat = task.workflow === "chat";
   const kinds: ReadonlyArray<ComposerKind> = [
@@ -743,31 +789,45 @@ function Composer(props: {
   };
   const intake = useFileIntake((picked) => void attach(picked));
   const uploading = uploads.transit.some((item) => item.problem === null);
-  const canSend = !busy && !uploading && !closed && (text.trim().length > 0 || files.length > 0);
+  const canSend =
+    props.environmentId !== null &&
+    !busy &&
+    !uploading &&
+    !closed &&
+    !staleReply &&
+    !(replying && (answerDraft.uncertain || replyPending)) &&
+    (text.trim().length > 0 || files.length > 0);
 
   const send = async () => {
     if (!canSend || sending.current) return;
+    if (replying && !beginReply(draftKey)) return;
     sending.current = true;
     setBusy(true);
     setProblem(null);
     const result = await act(`/api/tasks/${task.id}/messages`, {
       text: text.trim(),
       kind,
-      ...(replying?.seq ? { replyTo: replying.seq } : {}),
+      ...(replying ? { replyTo: replying.seq } : {}),
       files: files.map((file) => file.id),
       by: person,
     });
+    if (replying) {
+      const rejected =
+        !result.ok && result.status !== null && result.status >= 400 && result.status < 500;
+      finishReply(draftKey, result.ok ? "accepted" : rejected ? "rejected" : "unknown");
+    }
     sending.current = false;
     setBusy(false);
     props.onSent();
     if (!result.ok) {
-      setProblem(result.why);
+      setProblem({ target: replying?.seq ?? null, text: result.why });
       return;
     }
-    setText("");
+    if (!replying) setMessageText("");
     setFiles([]);
     setChosen("message");
-    props.onReplyTo(null);
+    if (replying && props.onReplySent) props.onReplySent(replying.seq!);
+    else props.onReplyTo(null);
   };
   const effect = COMPOSER_EFFECT[kind];
 
@@ -803,10 +863,30 @@ function Composer(props: {
           props.expanded ? "flex" : "hidden",
         )}
       >
-        {problem ? (
+        {problem && problem.target === (replying?.seq ?? null) ? (
           <p className="text-sm text-warning" data-delivery-problem>
-            {problem}
+            {problem.text}
           </p>
+        ) : null}
+        {staleReply || (replying && answerDraft.uncertain) ? (
+          <p role="alert" className="text-xs text-warning">
+            {staleReply
+              ? "This question is no longer waiting. Your draft is kept and cannot be sent."
+              : "Delivery is unconfirmed. Check the engine record before discarding this draft; it will not be sent again automatically."}
+          </p>
+        ) : null}
+        {replying && (answerDraft.uncertain || staleReply) && !replyPending ? (
+          <Button
+            size="xs"
+            variant="ghost"
+            onClick={() => {
+              discardReply(draftKey);
+              setFiles([]);
+              props.onReplyTo(null);
+            }}
+          >
+            Discard draft
+          </Button>
         ) : null}
         {replying ? (
           <p
@@ -823,7 +903,10 @@ function Composer(props: {
               type="button"
               aria-label="Do not answer this question"
               className="cursor-pointer"
-              onClick={() => props.onReplyTo(null)}
+              onClick={() => {
+                props.onReplyTo(null);
+                setChosen("message");
+              }}
             >
               <XIcon className="size-3" />
             </button>
@@ -849,7 +932,7 @@ function Composer(props: {
                       ? "A note for the record"
                       : "Write to the team. Paste or drop files here."
           }
-          disabled={closed}
+          disabled={closed || busy || replyPending}
           value={text}
           onChange={(event) => setText(event.target.value)}
           onKeyDown={(event) => {
@@ -879,7 +962,17 @@ function Composer(props: {
               {COMPOSER_KIND_LABEL.answer}
             </Badge>
           ) : (
-            <Select value={kind} onValueChange={(value) => setChosen(value as ComposerKind)}>
+            <Select
+              value={kind}
+              onValueChange={(value) => {
+                if (value === "answer") {
+                  const target = task.timeline.find(
+                    (entry) => entry.seq === waits?.seq && entry.kind === "question",
+                  );
+                  if (target) props.onReplyTo(target);
+                } else setChosen(value as ComposerKind);
+              }}
+            >
               <SelectTrigger
                 aria-label="What this message is"
                 size="compact"
@@ -1021,7 +1114,14 @@ function Communications(props: {
   const showDetail = useBoardStore((state) => state.showDetail);
   const setShowDetail = useBoardStore((state) => state.setShowDetail);
   const act = useDeliveryAct(props.environmentId, "task proposal");
-  const [replyTo, setReplyTo] = useState<TimelineEntry | null>(null);
+  const [replySeq, setReplySeq] = useLocalStorage(
+    `t3code:task-reply-target:${JSON.stringify([props.environmentId, task.id])}`,
+    null as number | null,
+    replySequenceSchema,
+  );
+  const replyTo =
+    task.timeline.find((entry) => entry.seq === replySeq && entry.kind === "question") ?? null;
+  const setReplyTo = (entry: TimelineEntry | null) => setReplySeq(entry?.seq ?? null);
   const [composerExpanded, setComposerExpanded] = useState(false);
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
@@ -1031,9 +1131,7 @@ function Communications(props: {
       .filter((entry) => entry.seq !== null)
       .map((entry) => [entry.seq as number, entry]),
   );
-  // A question that was answered meanwhile is not answered twice.
-  const replying =
-    replyTo && task.questions.some((question) => question.seq === replyTo.seq) ? replyTo : null;
+  const replying = replyTo;
 
   const scroller = useRef<HTMLDivElement>(null);
   const atEnd = useRef(true);
@@ -1116,13 +1214,14 @@ function Communications(props: {
         ) : null}
       </div>
       {problem ? <p className="px-3 pb-1 text-sm text-warning">{problem}</p> : null}
-      <Composer
+      <TaskComposer
         expanded={composerExpanded}
         onExpandedChange={setComposerExpanded}
         environmentId={props.environmentId}
         task={task}
         replyTo={replying}
         onReplyTo={setReplyTo}
+        onReplySent={(seq) => setReplySeq((current) => (current === seq ? null : current))}
         onSent={props.onChanged}
       />
     </section>
@@ -1918,57 +2017,6 @@ function Info(props: {
         />
       </TaskDisclosure>
 
-      <section className="flex flex-col gap-1.5" data-task-roster>
-        <TaskDisclosure
-          defaultOpen={false}
-          title={
-            <>
-              Team {task.team}
-              {task.defaults > 0 ? `, defaults r${task.defaults}` : ""}
-            </>
-          }
-        >
-          {task.council ? (
-            task.council.seats.map((seat) => (
-              <div key={seat.seat} className="flex items-start justify-between gap-2 text-xs">
-                <span className="min-w-0">
-                  {seat.seat}
-                  <span className="block text-3xs text-muted-foreground">
-                    {harnessLabel(seat.harness)}, {seat.requestedModel ?? "its own model"}
-                    {seat.reasoning ? `, ${seat.reasoning}` : ""}
-                    {seat.access && seat.access !== "full" ? `, ${seat.access}` : ""}
-                  </span>
-                  {seat.waitingWhy ? (
-                    <span className="block text-3xs text-muted-foreground" data-seat-waiting-why>
-                      {seat.waitingWhy}
-                    </span>
-                  ) : null}
-                  {seat.live && seat.live.items.length > 0 ? <SeatNow live={seat.live} /> : null}
-                </span>
-                <span className="shrink-0 text-right">
-                  <Badge size="sm" variant={ACTIVITY_VARIANT[seat.activity] ?? "secondary"}>
-                    {seat.activity}
-                  </Badge>
-                  <span className="block text-3xs text-muted-foreground">
-                    {seat.blockedBy
-                      ? `waits for ${seat.blockedBy}`
-                      : seat.verdict
-                        ? `verdict ${seat.verdict}`
-                        : (seat.stage ?? "")}
-                  </span>
-                </span>
-              </div>
-            ))
-          ) : (
-            <SeatSettingsPanel
-              environmentId={props.environmentId}
-              settings={task.settings}
-              chosen={{}}
-            />
-          )}
-        </TaskDisclosure>
-      </section>
-
       <section className="flex flex-col gap-1">
         <h3 className="text-xs font-medium text-muted-foreground">Your name</h3>
         <Input
@@ -1980,6 +2028,62 @@ function Info(props: {
         />
       </section>
     </aside>
+  );
+}
+
+function TaskTeamActivity(props: { environmentId: EnvironmentId | null; task: TaskView }) {
+  const { task } = props;
+  return (
+    <section className="flex flex-col gap-1.5" data-task-roster>
+      <TaskDisclosure
+        defaultOpen={true}
+        title={
+          <>
+            Team {task.team}
+            {task.defaults > 0 ? `, defaults r${task.defaults}` : ""}
+          </>
+        }
+      >
+        {task.council ? (
+          task.council.seats.map((seat) => (
+            <div key={seat.seat} className="flex items-start justify-between gap-2 text-xs">
+              <span className="min-w-0">
+                {seat.seat}
+                <span className="block text-3xs text-muted-foreground">
+                  {harnessLabel(seat.harness)}, {seat.requestedModel ?? "its own model"}
+                  {seat.reasoning ? `, ${seat.reasoning}` : ""}
+                  {seat.access && seat.access !== "full" ? `, ${seat.access}` : ""}
+                </span>
+                {seat.waitingWhy ? (
+                  <span className="block text-3xs text-muted-foreground" data-seat-waiting-why>
+                    {seat.waitingWhy}
+                  </span>
+                ) : null}
+                {seat.live && seat.live.items.length > 0 ? <SeatNow live={seat.live} /> : null}
+              </span>
+              <span className="shrink-0 text-right">
+                <Badge size="sm" variant={ACTIVITY_VARIANT[seat.activity] ?? "secondary"}>
+                  {seat.activity}
+                </Badge>
+                <span className="block text-3xs text-muted-foreground">
+                  {seat.blockedBy
+                    ? `waits for ${seat.blockedBy}`
+                    : seat.verdict
+                      ? `verdict ${seat.verdict}`
+                      : (seat.stage ?? "")}
+                </span>
+              </span>
+            </div>
+          ))
+        ) : (
+          <SeatSettingsPanel
+            environmentId={props.environmentId}
+            settings={task.settings}
+            chosen={{}}
+          />
+        )}
+      </TaskDisclosure>
+    </section>
   );
 }
 
@@ -2054,8 +2158,6 @@ function PublicationRows(props: { readonly task: TaskView }) {
 /** The value of the board choice for a task on no board. */
 const NO_BOARD = "__no_board__";
 
-type Tab = "details" | "history" | "info";
-
 /**
  * A task with everything about it in one place: what is asked, what was said
  * and what happened, and where it stands. The Board and the Orchestrator
@@ -2079,8 +2181,13 @@ export function TaskWorkspace(props: {
     onDone: read.refresh,
     onDiscarded: () => props.onClose(),
   });
-  const [tab, setTab] = useState<Tab>("history");
-  const [detailsOpen, setDetailsOpen] = useState(true);
+  const detailsSheet = useMediaQuery(RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY);
+  const [detailsOpen, setDetailsOpen] = useLocalStorage(
+    `t3code:task-details:${JSON.stringify([props.environmentId, props.taskId, detailsSheet ? "sheet" : "inline"])}`,
+    !detailsSheet,
+    Schema.Boolean,
+  );
+  const [briefOpen, setBriefOpen] = useState(true);
   const [taskBrief, setTaskBrief] = useState<string | null>(null);
   const [creatingTask, setCreatingTask] = useState(false);
   const [createProblem, setCreateProblem] = useState<string | null>(null);
@@ -2259,48 +2366,39 @@ export function TaskWorkspace(props: {
 
         {task ? (
           <>
-            <div
-              className="flex shrink-0 gap-1 border-b border-border px-3 py-1.5 xl:hidden"
-              role="tablist"
-            >
-              {(["details", "history", "info"] as const).map((item) => (
-                <Button
-                  key={item}
-                  size="xs"
-                  role="tab"
-                  aria-selected={tab === item}
-                  variant={tab === item ? "secondary" : "ghost"}
-                  onClick={() => setTab(item)}
-                  data-task-tab={item}
-                >
-                  {item === "details" ? "Task" : item === "history" ? "History" : "About"}
-                  {item === "history" && task.questions.length + task.proposals.length > 0
-                    ? ` (${task.questions.length + task.proposals.length})`
-                    : ""}
-                </Button>
-              ))}
-            </div>
-            <div className="grid min-h-0 flex-1 grid-cols-1 grid-rows-[minmax(0,1fr)] xl:grid-cols-[minmax(0,5fr)_minmax(0,6fr)_19rem] xl:divide-x xl:divide-border">
-              <div className={cn("min-h-0 xl:flex", tab === "details" ? "flex" : "hidden")}>
+            <TaskWorkspacePanels
+              key={`${props.environmentId}:${task.id}`}
+              owner={JSON.stringify([props.environmentId, task.id])}
+              source={
+                task.source
+                  ? {
+                      environmentId: EnvironmentId.make(task.source.environmentId),
+                      threadId: ThreadId.make(task.source.threadId),
+                    }
+                  : null
+              }
+              detailsOpen={detailsOpen}
+              onDetailsOpenChange={setDetailsOpen}
+              navigation={<TaskTeamActivity environmentId={props.environmentId} task={task} />}
+              details={
                 <Details
                   key={task.id}
                   environmentId={props.environmentId}
                   task={task}
                   onOpenTask={props.onOpenTask}
-                  open={detailsOpen}
-                  onOpenChange={setDetailsOpen}
+                  open={briefOpen}
+                  onOpenChange={setBriefOpen}
                 />
-              </div>
-              <div className={cn("min-h-0 xl:flex", tab === "history" ? "flex" : "hidden")}>
+              }
+              renderConversation={(showDetails) => (
                 <Communications
                   key={task.id}
                   environmentId={props.environmentId}
                   task={task}
                   onChanged={read.refresh}
                   onShow={(section) => {
-                    // On a narrow screen the task is behind its own tab.
-                    setTab("details");
-                    setDetailsOpen(true);
+                    showDetails();
+                    setBriefOpen(true);
                     requestAnimationFrame(() =>
                       document
                         .querySelector(`[data-task-section="${section}"]`)
@@ -2308,8 +2406,8 @@ export function TaskWorkspace(props: {
                     );
                   }}
                 />
-              </div>
-              <div className={cn("min-h-0 xl:flex", tab === "info" ? "flex" : "hidden")}>
+              )}
+              evidence={
                 <Info
                   key={task.id}
                   environmentId={props.environmentId}
@@ -2319,8 +2417,8 @@ export function TaskWorkspace(props: {
                   onMoveTo={(lane) => actions.moveTo(task.card, lane, null)}
                   busy={actions.busy}
                 />
-              </div>
-            </div>
+              }
+            />
             <DecisionBar
               task={task}
               actions={primary ?? []}

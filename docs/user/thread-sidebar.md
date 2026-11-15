@@ -290,6 +290,21 @@ To choose what the thread details card shows, right-click the card or open
 shortcuts, such as Open in editor and project scripts. **Reset to default** brings
 back the standard rows.
 
+## Inspect a board task's conversation
+
+Open a board task and choose **Inspect source workspace** to read the conversation
+that created it. Its agent lineage and parent links let you inspect related
+conversations without leaving the task. **Back to task conversation** returns to
+the engine history and its question-bound drafts.
+
+Native tools and terminals belong to the inspected conversation and its project,
+not to the engine run's working folder. Two tasks from the same conversation use
+the same native tool tabs. Task evidence and settings remain available separately.
+A task with no source conversation still has its own history, configuration and
+evidence, but has no native conversation workspace to open. Forking into new work,
+opening a citation or following an explicit Open link still uses its ordinary
+destination; these actions are not lineage inspection.
+
 ## Side chats
 
 A side chat lets you ask a question about a thread without adding to it. It starts

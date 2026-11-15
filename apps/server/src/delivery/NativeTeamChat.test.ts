@@ -46,7 +46,10 @@ function setup({
     {
       seat: "researcher",
       role: "researcher",
-      modelSelection: createModelSelection(ProviderInstanceId.make("claude-work"), "claude-model"),
+      modelSelection: createModelSelection(ProviderInstanceId.make("claude-work"), "claude-model", [
+        { id: "effort", value: "high" },
+        { id: "contextWindow", value: "1m" },
+      ]),
       ...(seatAccess ? { access: seatAccess } : {}),
     },
     {
