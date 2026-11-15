@@ -570,6 +570,83 @@ it.effect("joins without a team, calls one in, and survives a lineup changed mid
   }),
 );
 
+it.effect.each([
+  { name: "running contributions", critique: "first", settleBeforeChange: false },
+  { name: "running contributions without critique", critique: "never", settleBeforeChange: false },
+  {
+    name: "completed contributions with contribution-stage skips",
+    critique: "first",
+    settleBeforeChange: true,
+  },
+  { name: "running critiques", critique: "always", settleBeforeChange: false },
+] as const)("waits and preserves results for $name after losing seats", (scenario) =>
+  Effect.gen(function* () {
+    const disabled = new Set<string>();
+    const fixture = setup({
+      third: true,
+      disabledSeats: () => disabled,
+      critique: scenario.critique,
+    });
+    const service = yield* fixture.service;
+    expect((yield* service.prepareTurn({ threadId, runId })).ready).toBe(false);
+    expect(fixture.tasks.every((task) => task.status === "running")).toBe(true);
+    if (scenario.settleBeforeChange || scenario.critique === "always") {
+      for (const task of fixture.tasks) {
+        task.status = "completed";
+        task.result = "Original contribution.";
+      }
+    }
+    if (scenario.critique === "always") {
+      expect((yield* service.prepareTurn({ threadId, runId })).ready).toBe(false);
+      expect(fixture.tasks).toHaveLength(6);
+    }
+    disabled.add("codex-work");
+    disabled.add("builder-work");
+    fixture.lineup.current = {
+      ...fixture.lineup.current!,
+      participants: [
+        fixture.participants[0]!,
+        {
+          seat: "custom-1",
+          role: "reviewer",
+          modelSelection: createModelSelection(ProviderInstanceId.make("codex-work"), "other"),
+        },
+        {
+          seat: "custom-2",
+          role: "developer",
+          modelSelection: createModelSelection(ProviderInstanceId.make("builder-work"), "other"),
+        },
+      ],
+    };
+    if (!scenario.settleBeforeChange) {
+      expect(yield* service.prepareTurn({ threadId, runId })).toEqual({
+        ready: false,
+        context: "",
+      });
+      for (const task of fixture.tasks.slice(0, -1)) {
+        task.status = "completed";
+        task.result = "Preserved result.";
+      }
+      expect((yield* service.prepareTurn({ threadId, runId })).ready).toBe(false);
+    }
+    for (const task of fixture.tasks) {
+      task.status = "completed";
+      task.result = "Preserved result.";
+    }
+    const final = yield* service.prepareTurn({ threadId, runId });
+    expect(final.ready).toBe(true);
+    expect(final.context).toContain("Preserved result.");
+    expect(final.context).toContain(
+      "discussion stopped after the contributions below because fewer than two seats could continue",
+    );
+    expect(final.context).not.toContain("critique round could not run");
+    expect(final.context).not.toContain("No contribution was returned");
+    expect(final.context).not.toContain("custom-1 (reviewer) contributed");
+    if (scenario.critique === "always") expect(final.context).toContain("Critiques:");
+    expect(fixture.tasks).toHaveLength(scenario.critique === "always" ? 6 : 3);
+  }),
+);
+
 it.effect(
   "does not send compaction controls to the roster, and passes attachments as paths to read",
   () =>

@@ -312,6 +312,7 @@ export const make = Effect.gen(function* () {
       }
       const eligible = roster.filter((seat) => !skipped.has(seat.seat));
       const insufficientSeats = eligible.length < 2;
+      if (insufficientSeats && !tasks.every(terminal)) return { ready: false, context: "" };
       const discussionDidNotRun = insufficientSeats && initial.length === 0;
       if (insufficientSeats || (done(initial) && (done(critiques) || !critiqueWanted))) {
         return {
@@ -339,11 +340,9 @@ export const make = Effect.gen(function* () {
                   ];
             }),
             discussionDidNotRun,
-            critiqueDidNotRun: insufficientSeats && initial.length > 0 && critiqueWanted,
+            discussionStopped: insufficientSeats && initial.length > 0,
             contributions: contributions(initial),
-            ...(!insufficientSeats && critiqueWanted
-              ? { critiques: contributions(critiques) }
-              : {}),
+            ...(critiques.length > 0 ? { critiques: contributions(critiques) } : {}),
           }),
         };
       }
