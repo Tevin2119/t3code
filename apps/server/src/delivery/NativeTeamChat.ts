@@ -8,6 +8,8 @@ import {
   ThreadId,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
+import * as DateTime from "effect/DateTime";
+import * as EventSink from "../orchestration-v2/EventSink.ts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -73,6 +75,7 @@ const contributions = (tasks: ReadonlyArray<OrchestrationV2Subagent>) =>
 export const make = Effect.gen(function* () {
   const deliveryOption = yield* Effect.serviceOption(DeliveryService.DeliveryService);
   const projections = yield* ProjectionStore.ProjectionStoreV2;
+  const eventSink = yield* EventSink.EventSinkV2;
   const threads = yield* ThreadManagementService.ThreadManagementService;
   const ids = yield* IdAllocator.IdAllocatorV2;
   const adapters = yield* ProviderAdapterRegistry.ProviderAdapterRegistryV2;
@@ -80,144 +83,201 @@ export const make = Effect.gen(function* () {
   const projects = yield* ProjectStore.ProjectStoreV2;
   const { attachmentsDir } = yield* ServerConfig;
 
-  return NativeTeamChat.of({
-    prepareTurn: Effect.fn("NativeTeamChat.prepareTurn")(
-      function* (input) {
-        if (Option.isNone(deliveryOption)) return { ready: true, context: "" };
-        const delivery = deliveryOption.value;
-        const { binding, lineup } = yield* delivery.threadState(input.threadId);
-        if (lineup === undefined) return { ready: true, context: "" };
-        const roster = lineup.participants;
-        // Participants take a team's roles when there is one; with none they join as themselves.
-        const team = binding?.team ?? lineup.team;
-        const group = team === undefined ? "this conversation" : `team ${team}`;
-        if (
-          roster.length < 2 ||
-          roster.length > 12 ||
-          new Set(roster.map((seat) => seat.seat)).size !== roster.length
-        ) {
-          return yield* new NativeTeamChatError({ runId: input.runId, reason: "roster" });
-        }
-        const parent = yield* projections.getThreadRecords(input.threadId, ["runs", "subagents"]);
-        const run = parent.runs.find((candidate) => candidate.id === input.runId);
-        if (run === undefined || run.rootNodeId === null) {
-          return yield* new NativeTeamChatError({ runId: input.runId, reason: "state" });
-        }
-        if (run.status !== "starting") return { ready: false, context: "" };
-        const history = yield* projections.getThreadRecords(input.threadId, ["messages"], {
-          messageRunIds: parent.runs
-            .filter((candidate) => candidate.ordinal <= run.ordinal)
-            .toSorted((left, right) => right.ordinal - left.ordinal)
-            .slice(0, 6)
-            .map((candidate) => candidate.id),
+  const prepareTurn: NativeTeamChat["Service"]["prepareTurn"] = Effect.fn(
+    "NativeTeamChat.prepareTurn",
+  )(
+    function* (input) {
+      if (Option.isNone(deliveryOption)) return { ready: true, context: "" };
+      const delivery = deliveryOption.value;
+      const { binding, lineup } = yield* delivery.threadState(input.threadId);
+      if (lineup === undefined) return { ready: true, context: "" };
+      const roster = lineup.participants;
+      // Participants take a team's roles when there is one; with none they join as themselves.
+      const team = binding?.team ?? lineup.team;
+      const group = team === undefined ? "this conversation" : `team ${team}`;
+      if (
+        roster.length < 2 ||
+        roster.length > 12 ||
+        new Set(roster.map((seat) => seat.seat)).size !== roster.length
+      ) {
+        return yield* new NativeTeamChatError({ runId: input.runId, reason: "roster" });
+      }
+      const parent = yield* projections.getThreadRecords(input.threadId, [
+        "runs",
+        "subagents",
+        "turnItems",
+      ]);
+      const run = parent.runs.find((candidate) => candidate.id === input.runId);
+      if (run === undefined || run.rootNodeId === null || run.activeAttemptId === null) {
+        return yield* new NativeTeamChatError({ runId: input.runId, reason: "state" });
+      }
+      if (run.status !== "starting") return { ready: false, context: "" };
+      const { rootNodeId, activeAttemptId } = run;
+      const history = yield* projections.getThreadRecords(input.threadId, ["messages"], {
+        messageRunIds: parent.runs
+          .filter((candidate) => candidate.ordinal <= run.ordinal)
+          .toSorted((left, right) => right.ordinal - left.ordinal)
+          .slice(0, 6)
+          .map((candidate) => candidate.id),
+      });
+      const message = history.messages.find((candidate) => candidate.id === run.userMessageId);
+      if (message === undefined)
+        return yield* new NativeTeamChatError({ runId: input.runId, reason: "state" });
+      if (
+        isCompactionCommandMessage(message) ||
+        parseGoalCommand(message) !== null ||
+        message.idleCompaction !== undefined ||
+        message.notification !== undefined ||
+        message.delegatedCompletion !== undefined
+      ) {
+        return { ready: true, context: "" };
+      }
+      // Participants get the files as paths to read, not as content in their context.
+      const files = message.attachments.flatMap((attachment) => {
+        const path = resolveAttachmentPath({ attachmentsDir, attachment });
+        return path === null ? [] : [`- ${attachment.name}: ${path}`];
+      });
+      const attached =
+        files.length === 0
+          ? ""
+          : `\n\nFiles attached to the latest message, to read from these paths:\n${files.join("\n")}`;
+      const conversation = history.messages
+        .map((message) => `${message.role}: ${message.text}`)
+        .join("\n\n")
+        .slice(-24000);
+      const tasks = parent.subagents.filter((task) => task.teamChat?.sourceRunId === input.runId);
+      const initial = tasks.filter((task) => task.teamChat?.stage === "contribution");
+      const critiques = tasks.filter((task) => task.teamChat?.stage === "critique");
+      const skipId = (seat: string) =>
+        ids.derive.runSignalTurnItem({ runId: input.runId, signal: `team-seat-skipped:${seat}` });
+      const skipped = new Map<string, string>();
+      for (const seat of roster) {
+        const notice = parent.turnItems.find((item) => item.id === skipId(seat.seat));
+        if (notice?.type === "system_notice") skipped.set(seat.seat, notice.message);
+      }
+      // Notices preserve admission failures even when a provider or team changes on a later wake.
+      const recordSkip = Effect.fn("NativeTeamChat.recordSkip")(function* (
+        seat: string,
+        reason: string,
+      ) {
+        const now = yield* DateTime.now;
+        const written = yield* eventSink.writeIfRunCurrent({
+          threadId: input.threadId,
+          runId: input.runId,
+          activeAttemptId,
+          expectedStatus: "starting",
+          events: [
+            {
+              type: "turn-item.updated",
+              id: yield* ids.allocate.event({ threadId: input.threadId }),
+              threadId: input.threadId,
+              runId: input.runId,
+              nodeId: rootNodeId,
+              occurredAt: now,
+              payload: {
+                type: "system_notice",
+                id: skipId(seat),
+                threadId: input.threadId,
+                runId: input.runId,
+                nodeId: run.rootNodeId,
+                providerThreadId: null,
+                providerTurnId: null,
+                nativeItemRef: null,
+                parentItemId: null,
+                ordinal:
+                  Math.max(0, ...parent.turnItems.map((item) => item.ordinal)) + skipped.size + 1,
+                status: "failed",
+                title: `${seat} · skipped`,
+                message: reason,
+                startedAt: now,
+                completedAt: now,
+                updatedAt: now,
+              },
+            },
+          ],
         });
-        const message = history.messages.find((candidate) => candidate.id === run.userMessageId);
-        if (message === undefined)
+        if (!written.committed)
           return yield* new NativeTeamChatError({ runId: input.runId, reason: "state" });
-        if (
-          isCompactionCommandMessage(message) ||
-          parseGoalCommand(message) !== null ||
-          message.idleCompaction !== undefined ||
-          message.notification !== undefined ||
-          message.delegatedCompletion !== undefined
-        ) {
-          return { ready: true, context: "" };
-        }
-        // Participants get the files as paths to read, not as content in their context.
-        const files = message.attachments.flatMap((attachment) => {
-          const path = resolveAttachmentPath({ attachmentsDir, attachment });
-          return path === null ? [] : [`- ${attachment.name}: ${path}`];
-        });
-        const attached =
-          files.length === 0
-            ? ""
-            : `\n\nFiles attached to the latest message, to read from these paths:\n${files.join("\n")}`;
-        const conversation = history.messages
-          .map((message) => `${message.role}: ${message.text}`)
-          .join("\n\n")
-          .slice(-24000);
-        const tasks = parent.subagents.filter((task) => task.teamChat?.sourceRunId === input.runId);
-        const initial = tasks.filter((task) => task.teamChat?.stage === "contribution");
-        const critiques = tasks.filter((task) => task.teamChat?.stage === "critique");
-        // By seat, so a lineup changed while a round runs neither hangs it nor repeats it.
-        const done = (round: ReadonlyArray<OrchestrationV2Subagent>) =>
-          round.every(terminal) &&
-          roster.every((seat) => round.some((task) => task.teamChat?.seat === seat.seat));
-        const initialDone = done(initial);
-        const critiqueDone = done(critiques);
-        const followUp = parent.subagents.some(
-          (task) => task.teamChat !== undefined && task.teamChat.sourceRunId !== input.runId,
+        skipped.set(seat, reason);
+      });
+      const done = (round: ReadonlyArray<OrchestrationV2Subagent>) =>
+        round.every(terminal) &&
+        roster.every(
+          (seat) =>
+            skipped.has(seat.seat) || round.some((task) => task.teamChat?.seat === seat.seat),
         );
-        // Read-only by default: a participant asks before it changes anything, and
-        // TeamChatReadOnlyReactor declines what it asks.
-        const accessOf = (seat: (typeof roster)[number]) => {
-          const access = deliveryParticipantAccess(lineup, seat.seat);
-          // A read-only seat runs in the mode that asks, and every such request is declined.
-          return access === "read-only"
-            ? { readOnly: true, access: "approval-required" as const }
-            : { readOnly: false, access };
-        };
-        const mode = lineup.critique ?? "first";
-        const critiqueWanted = mode === "always" || (mode === "first" && !followUp);
-        if (initialDone && (critiqueDone || !critiqueWanted)) {
-          return {
-            ready: true,
-            context: teamDiscussionContext({
-              group,
-              members: roster.map((seat) => ({
-                seat: seat.seat,
-                role: seat.role,
-                providerInstanceId: seat.modelSelection.instanceId,
-                model: seat.modelSelection.model,
-                access: deliveryParticipantAccess(lineup, seat.seat),
-              })),
-              contributions: contributions(initial),
-              ...(critiqueWanted ? { critiques: contributions(critiques) } : {}),
-            }),
-          };
-        }
-        const stage = initialDone ? "critique" : "contribution";
-        const current = initialDone ? critiques : initial;
-        const missing = roster.filter(
-          (seat) => !current.some((task) => task.teamChat?.seat === seat.seat),
-        );
-        if (missing.length === 0) return { ready: false, context: "" };
+      const followUp = parent.subagents.some(
+        (task) => task.teamChat !== undefined && task.teamChat.sourceRunId !== input.runId,
+      );
+      // Read-only by default: a participant asks before it changes anything, and
+      // TeamChatReadOnlyReactor declines what it asks.
+      const accessOf = (seat: (typeof roster)[number]) => {
+        const access = deliveryParticipantAccess(lineup, seat.seat);
+        // A read-only seat runs in the mode that asks, and every such request is declined.
+        return access === "read-only"
+          ? { readOnly: true, access: "approval-required" as const }
+          : { readOnly: false, access };
+      };
+      const mode = lineup.critique ?? "first";
+      const critiqueWanted = mode === "always" || (mode === "first" && !followUp);
+      const stage = done(initial) ? "critique" : "contribution";
+      const current = stage === "critique" ? critiques : initial;
+      const commandFor = (seat: (typeof roster)[number]) =>
+        CommandId.make(`team-chat:${input.threadId}:${input.runId}:${stage}:${seat.seat}`);
+      const candidates = roster.filter(
+        (seat) =>
+          !skipped.has(seat.seat) && !current.some((task) => task.teamChat?.seat === seat.seat),
+      );
+      if (
+        roster.length - skipped.size >= 2 &&
+        !(done(initial) && (done(critiques) || !critiqueWanted))
+      ) {
         const available = yield* Effect.forEach(
-          roster,
+          candidates,
           Effect.fn("NativeTeamChat.preflight")(function* (seat) {
             const instance = yield* instances.getInstance(seat.modelSelection.instanceId);
             const enabled = yield* threads.isProviderInstanceEnabledForProject({
               projectId: parent.thread.projectId,
               instanceId: seat.modelSelection.instanceId,
             });
-            if (instance === undefined || !instance.enabled || !enabled) {
-              return yield* new NativeTeamChatError({ runId: input.runId, reason: "roster" });
+            let reason: string | undefined;
+            if (instance === undefined) reason = "provider is unavailable";
+            else if (!instance.enabled) reason = "provider is disabled";
+            else if (!enabled) reason = "provider is not enabled for this project";
+            if (reason !== undefined || instance === undefined) {
+              yield* recordSkip(seat.seat, `${seat.seat}: ${reason}.`);
+              return undefined;
             }
             const snapshot = yield* instance.snapshot.getSnapshot;
             if (!snapshot.installed) {
-              return yield* new NativeTeamChatError({ runId: input.runId, reason: "roster" });
+              yield* recordSkip(seat.seat, `${seat.seat}: provider is not installed.`);
+              return undefined;
             }
             const { readOnly, access } = accessOf(seat);
-            // A provider is never run in another mode than the one asked for, so say which seat.
             const refused =
               runtimeModeProblem(snapshot.runtimeModes, access) ??
               (snapshot.supportedRuntimeModes?.includes(access) === false
                 ? "This provider cannot run in this mode."
                 : undefined);
             if (refused !== undefined) {
-              return yield* new NativeTeamChatError({
-                runId: input.runId,
-                reason: "roster",
-                detail: readOnly
-                  ? `${seat.seat} cannot be held to read-only: ${refused} Leave ${seat.seat} out, or give ${seat.seat} full access.`
-                  : `${seat.seat} cannot join with ${access} access: ${refused} Change the access ${seat.seat} has in this conversation, or leave ${seat.seat} out.`,
-              });
+              yield* recordSkip(
+                seat.seat,
+                readOnly
+                  ? `${seat.seat} cannot be held to read-only: ${refused}`
+                  : `${seat.seat} cannot join with ${access} access: ${refused}`,
+              );
+              return undefined;
             }
-            return yield* adapters.get(seat.modelSelection.instanceId);
+            const adapter = yield* adapters.get(seat.modelSelection.instanceId).pipe(
+              Effect.catchTags({
+                ProviderAdapterRegistryLookupError: () => Effect.undefined,
+              }),
+            );
+            if (adapter === undefined)
+              yield* recordSkip(seat.seat, `${seat.seat}: provider is unavailable.`);
+            return adapter;
           }),
         );
-        const commandFor = (seat: (typeof roster)[number]) =>
-          CommandId.make(`team-chat:${input.threadId}:${input.runId}:${stage}:${seat.seat}`);
         if (team !== undefined) {
           const cwd =
             parent.thread.worktreePath ??
@@ -228,92 +288,122 @@ export const make = Effect.gen(function* () {
                 Effect.map(Option.map((project) => project.workspaceRoot)),
                 Effect.map(Option.getOrUndefined),
               ));
-          if (cwd === undefined) {
+          if (cwd === undefined)
             return yield* new NativeTeamChatError({ runId: input.runId, reason: "state" });
-          }
-          for (const seat of missing) {
+          for (const [index, seat] of candidates.entries()) {
+            const adapter = available[index];
+            if (adapter === undefined) continue;
             const member = yield* delivery.bindThread({
               threadId: ids.derive.delegatedTaskThread({ commandId: commandFor(seat) }),
               team,
               role: seat.role,
-              driver: available[roster.indexOf(seat)]!.driver,
+              driver: adapter.driver,
               cwd,
             });
             if (binding !== null && member.configuration !== binding.configuration) {
-              return yield* new NativeTeamChatError({
-                runId: input.runId,
-                reason: "roster",
-                detail: `This conversation uses team setup ${binding.configuration}, but ${seat.seat} uses ${member.configuration}. Switch to single chat to continue here, or start a new team conversation with the updated setup. Recorded contributions are preserved.`,
-              });
+              yield* recordSkip(
+                seat.seat,
+                `${seat.seat}: the team setup changed since this conversation started. This conversation uses team setup ${binding.configuration}, but ${seat.seat} uses ${member.configuration}. Start a new team conversation to use the updated setup. Recorded contributions are preserved.`,
+              );
             }
           }
         }
-        for (const seat of missing) {
-          const commandId = commandFor(seat);
-          const { readOnly, access } = accessOf(seat);
-          yield* threads.dispatch({
-            type: "delegated_task.request",
-            commandId,
-            createdBy: "system",
-            creationSource: "server",
-            parentThreadId: input.threadId,
-            parentRunId: input.runId,
-            parentNodeId: run.rootNodeId,
-            teamChat: { sourceRunId: input.runId, stage, seat: seat.seat },
-            title: `${seat.seat} · ${stage}`,
-            task: `Participate as ${seat.role}, seat ${seat.seat}, in ${group}. ${
-              readOnly
-                ? "You are read-only here: anything that would change a file, a branch, a pull request, a board or any other system is declined, even when the user's message asks for the work to be done. Say what should be done and why; the orchestrator acts."
-                : "This is a discussion: change nothing here, even when the user's message asks for the work to be done. Do not edit files, commit, push, post or delegate. Say what should be done, by whom and why; the orchestrator decides who does what and hands out the work afterwards."
-            } ${
-              stage === "contribution"
-                ? "Give your independent assessment of the latest user message, with evidence, assumptions, and objections."
-                : "Critique the independent contributions below. Identify errors, disagreements, overlooked alternatives, and evidence that changes your conclusion. Do not merely repeat the other participants."
-            }\n\nConversation:\n${conversation}${attached}${stage === "critique" ? `\n\nIndependent contributions:\n${contributions(initial)}` : ""}`,
-            modelSelection: seat.modelSelection,
-            runtimeMode: access,
-            // No seat gets plan mode: a harness in it writes a plan and asks for its approval,
-            // which a read-only seat is refused, and then asks the person what to revise. A
-            // read-only seat is held by its access and TeamChatReadOnlyReactor instead.
-            interactionMode: "default",
-            completionWake: "settled_only",
-          });
-        }
-        return { ready: false, context: "" };
-      },
-      (effect, input) =>
-        effect.pipe(
-          Effect.tapError(() =>
-            projections.getThreadRecords(input.threadId, ["subagents"]).pipe(
-              Effect.flatMap(({ subagents }) =>
-                Effect.forEach(
-                  subagents.filter(
-                    (task) => task.teamChat?.sourceRunId === input.runId && !terminal(task),
-                  ),
-                  (task) =>
-                    threads.dispatch({
-                      type: "subagent.stop",
-                      commandId: CommandId.make(`team-chat:${task.id}:admission-failed`),
-                      threadId: input.threadId,
-                      runId: input.runId,
-                      subagentId: task.id,
-                    }),
-                  { discard: true },
+      }
+      const eligible = roster.filter((seat) => !skipped.has(seat.seat));
+      const discussionDidNotRun = eligible.length < 2;
+      if (discussionDidNotRun || (done(initial) && (done(critiques) || !critiqueWanted))) {
+        return {
+          ready: true,
+          context: teamDiscussionContext({
+            group,
+            members: eligible.map((seat) => ({
+              seat: seat.seat,
+              role: seat.role,
+              providerInstanceId: seat.modelSelection.instanceId,
+              model: seat.modelSelection.model,
+              access: deliveryParticipantAccess(lineup, seat.seat),
+            })),
+            skipped: roster.flatMap((seat) => {
+              const reason = skipped.get(seat.seat);
+              return reason === undefined ? [] : [{ seat: seat.seat, role: seat.role, reason }];
+            }),
+            discussionDidNotRun,
+            contributions: contributions(initial),
+            ...(!discussionDidNotRun && critiqueWanted
+              ? { critiques: contributions(critiques) }
+              : {}),
+          }),
+        };
+      }
+      // Admission can finish a round without dispatching a child to wake the lead.
+      if (stage === "contribution" && done(initial)) return yield* prepareTurn(input);
+      const missing = candidates.filter((seat) => !skipped.has(seat.seat));
+      for (const seat of missing) {
+        const commandId = commandFor(seat);
+        const { readOnly, access } = accessOf(seat);
+        yield* threads.dispatch({
+          type: "delegated_task.request",
+          commandId,
+          createdBy: "system",
+          creationSource: "server",
+          parentThreadId: input.threadId,
+          parentRunId: input.runId,
+          parentNodeId: run.rootNodeId,
+          teamChat: { sourceRunId: input.runId, stage, seat: seat.seat },
+          title: `${seat.seat} · ${stage}`,
+          task: `Participate as ${seat.role}, seat ${seat.seat}, in ${group}. ${
+            readOnly
+              ? "You are read-only here: anything that would change a file, a branch, a pull request, a board or any other system is declined, even when the user's message asks for the work to be done. Say what should be done and why; the orchestrator acts."
+              : "This is a discussion: change nothing here, even when the user's message asks for the work to be done. Do not edit files, commit, push, post or delegate. Say what should be done, by whom and why; the orchestrator decides who does what and hands out the work afterwards."
+          } ${
+            stage === "contribution"
+              ? "Give your independent assessment of the latest user message, with evidence, assumptions, and objections."
+              : "Critique the independent contributions below. Identify errors, disagreements, overlooked alternatives, and evidence that changes your conclusion. Do not merely repeat the other participants."
+          }\n\nConversation:\n${conversation}${attached}${stage === "critique" ? `\n\nIndependent contributions:\n${contributions(initial)}` : ""}`,
+          modelSelection: seat.modelSelection,
+          runtimeMode: access,
+          // No seat gets plan mode: a harness in it writes a plan and asks for its approval,
+          // which a read-only seat is refused, and then asks the person what to revise. A
+          // read-only seat is held by its access and TeamChatReadOnlyReactor instead.
+          interactionMode: "default",
+          completionWake: "settled_only",
+        });
+      }
+      return { ready: false, context: "" };
+    },
+    (effect, input) =>
+      effect.pipe(
+        Effect.tapError(() =>
+          projections.getThreadRecords(input.threadId, ["subagents"]).pipe(
+            Effect.flatMap(({ subagents }) =>
+              Effect.forEach(
+                subagents.filter(
+                  (task) => task.teamChat?.sourceRunId === input.runId && !terminal(task),
                 ),
-              ),
-              Effect.catchCause((cause) =>
-                Effect.logError("Failed to stop a team discussion after admission failed", cause),
+                (task) =>
+                  threads.dispatch({
+                    type: "subagent.stop",
+                    commandId: CommandId.make(`team-chat:${task.id}:admission-failed`),
+                    threadId: input.threadId,
+                    runId: input.runId,
+                    subagentId: task.id,
+                  }),
+                { discard: true },
               ),
             ),
-          ),
-          Effect.mapError((cause) =>
-            isNativeTeamChatError(cause)
-              ? cause
-              : new NativeTeamChatError({ runId: input.runId, reason: "dispatch", cause }),
+            Effect.catchCause((cause) =>
+              Effect.logError("Failed to stop a team discussion after admission failed", cause),
+            ),
           ),
         ),
-    ),
-  });
+        Effect.mapError((cause) =>
+          isNativeTeamChatError(cause)
+            ? cause
+            : new NativeTeamChatError({ runId: input.runId, reason: "dispatch", cause }),
+        ),
+      ),
+  );
+  return NativeTeamChat.of({ prepareTurn });
 });
 
 export const layer = Layer.effect(NativeTeamChat, make);

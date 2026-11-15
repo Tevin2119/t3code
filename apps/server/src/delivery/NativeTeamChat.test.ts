@@ -5,6 +5,8 @@ import {
   ProviderInstanceId,
   RunId,
   ThreadId,
+  RunAttemptId,
+  type OrchestrationV2TurnItem,
   type ChatAttachment,
   type OrchestrationV2ServerCommand,
 } from "@t3tools/contracts";
@@ -15,6 +17,7 @@ import { createModelSelection } from "@t3tools/shared/model";
 import { ServerConfig } from "../config.ts";
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import * as DeliveryService from "./DeliveryService.ts";
+import * as EventSink from "../orchestration-v2/EventSink.ts";
 import * as NativeTeamChat from "./NativeTeamChat.ts";
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
@@ -32,6 +35,9 @@ function setup({
   plain = false,
   uncertain = false,
   unavailable = false,
+  disabled = false,
+  mismatchSeat = undefined as string | undefined,
+  third = false,
   critique = undefined as "first" | "always" | "never" | undefined,
   access = undefined as "approval-required" | "full-access" | undefined,
   /** The researcher's own access, over the conversation's. */
@@ -61,6 +67,7 @@ function setup({
       ]),
     },
   ];
+  if (third) participants.push({ ...participants[0]!, seat: "builder", role: "developer" });
   const binding = {
     team: "research",
     configuration: "research@3#abc",
@@ -93,6 +100,7 @@ function setup({
   const run = {
     id: runId,
     rootNodeId: NodeId.make("root"),
+    activeAttemptId: RunAttemptId.make("attempt"),
     ordinal: 1,
     status: "starting",
     userMessageId: message.id,
@@ -104,6 +112,7 @@ function setup({
     providerInstanceId: ProviderInstanceId;
     model: string;
   }> = [];
+  const notices: OrchestrationV2TurnItem[] = [];
   const admissions = new Map<string, Delegation>();
   const bindings: Array<{ threadId: ThreadId; team: string; role?: string; driver: string }> = [];
   const delivery = {
@@ -115,7 +124,12 @@ function setup({
       }),
     bindThread: (input: { threadId: ThreadId; team: string; role?: string; driver: string }) => {
       bindings.push(input);
-      return Effect.succeed({ configuration: participantConfiguration });
+      return Effect.succeed({
+        configuration:
+          mismatchSeat === undefined || input.role === mismatchSeat
+            ? participantConfiguration
+            : binding.configuration,
+      });
     },
   } as unknown as DeliveryService.DeliveryService["Service"];
   const projections = {
@@ -129,6 +143,7 @@ function setup({
         runs: [run],
         messages: [message],
         subagents: tasks,
+        turnItems: notices,
       }),
   } as unknown as ProjectionStore.ProjectionStoreV2["Service"];
   const threads = {
@@ -159,9 +174,9 @@ function setup({
         : Effect.succeed({ driver: instanceId === "claude-work" ? "claudeAgent" : "codex" }),
   } as unknown as ProviderAdapterRegistry.ProviderAdapterRegistryV2["Service"];
   const instances = {
-    getInstance: () =>
+    getInstance: (instanceId: ProviderInstanceId) =>
       Effect.succeed({
-        enabled: true,
+        enabled: !(disabled && instanceId === "codex-work"),
         snapshot: {
           getSnapshot: Effect.succeed({
             installed: true,
@@ -182,6 +197,7 @@ function setup({
     message,
     tasks,
     admissions,
+    notices,
     bindings,
     participants,
     lineup,
@@ -194,6 +210,14 @@ function setup({
       } as unknown as ProjectStore.ProjectStoreV2["Service"]),
       Effect.provideService(DeliveryService.DeliveryService, delivery),
       Effect.provideService(ProjectionStore.ProjectionStoreV2, projections),
+      Effect.provideService(EventSink.EventSinkV2, {
+        writeIfRunCurrent: ({ events }) =>
+          Effect.sync(() => {
+            for (const event of events)
+              if (event.type === "turn-item.updated") notices.push(event.payload);
+            return { committed: true, storedEvents: [] };
+          }),
+      } as EventSink.EventSinkV2["Service"]),
       Effect.provideService(ThreadManagementService.ThreadManagementService, threads),
       Effect.provideService(ProviderAdapterRegistry.ProviderAdapterRegistryV2, adapters),
       Effect.provideService(ProviderInstanceRegistry.ProviderInstanceRegistry, instances),
@@ -240,6 +264,50 @@ it.effect("recovers a lost dispatch receipt and shares independent results befor
     expect(final.context).toContain("codex-work/codex-model, failed");
     expect(fixture.admissions.size).toBe(4);
   }),
+);
+
+it.effect.each(["disabled", "mismatch"] as const)(
+  "skips one %s seat through both rounds and repeated preparation",
+  (problem) =>
+    Effect.gen(function* () {
+      const fixture = setup({
+        third: true,
+        disabled: problem === "disabled",
+        ...(problem === "mismatch"
+          ? { mismatchSeat: "reviewer", participantConfiguration: "research@4#def" }
+          : {}),
+      });
+      const service = yield* fixture.service;
+      expect((yield* service.prepareTurn({ threadId, runId })).ready).toBe(false);
+      const bindings = fixture.bindings.length;
+      yield* service.prepareTurn({ threadId, runId });
+      expect(fixture.bindings).toHaveLength(bindings);
+      expect(fixture.tasks).toHaveLength(2);
+      expect(fixture.notices).toHaveLength(1);
+      expect(fixture.notices[0]).toMatchObject({
+        type: "system_notice",
+        status: "failed",
+        message: expect.stringContaining(
+          problem === "disabled"
+            ? "critic: provider is disabled"
+            : "critic: the team setup changed",
+        ),
+      });
+      for (const task of fixture.tasks) task.status = "completed";
+      expect((yield* service.prepareTurn({ threadId, runId })).ready).toBe(false);
+      expect(fixture.tasks).toHaveLength(4);
+      for (const task of fixture.tasks) task.status = "completed";
+      const final = yield* service.prepareTurn({ threadId, runId });
+      expect(final.ready).toBe(true);
+      expect(final.context).toContain("critic");
+      expect(final.context).toContain(problem === "disabled" ? "disabled" : "team setup changed");
+      expect(final.context).toContain("Critiques:");
+      expect(final.context).toContain("stop and ask");
+      expect(fixture.tasks.every((task) => task.teamChat?.seat !== "critic")).toBe(true);
+      yield* (yield* fixture.service).prepareTurn({ threadId, runId });
+      expect(fixture.tasks).toHaveLength(4);
+      expect(fixture.notices).toHaveLength(1);
+    }),
 );
 
 it.effect("critiques on the first message only unless the conversation asks otherwise", () =>
@@ -294,9 +362,17 @@ it.effect("explains a participant revision mismatch without dispatching the team
   Effect.gen(function* () {
     const fixture = setup({ participantConfiguration: "research@4#def" });
     const service = yield* fixture.service;
-    const error = yield* Effect.flip(service.prepareTurn({ threadId, runId }));
-    expect(error.message).toContain("research@3#abc");
-    expect(error.message).toContain("research@4#def");
+    const result = yield* service.prepareTurn({ threadId, runId });
+    expect(result.ready).toBe(true);
+    expect(result.context).toContain("discussion did not run");
+    expect(result.context).toContain("researcher");
+    expect(result.context).toContain("critic");
+    expect(result.context).toContain("research@3#abc");
+    expect(result.context).toContain("research@4#def");
+    expect(result.context).toContain("new team conversation");
+    yield* service.prepareTurn({ threadId, runId });
+    expect(fixture.bindings).toHaveLength(2);
+    expect(fixture.notices).toHaveLength(2);
     expect(fixture.admissions.size).toBe(0);
   }),
 );
@@ -345,18 +421,14 @@ it.effect("holds participants to read-only unless the conversation gives them mo
     expect(handed).toMatch(/- critic \(.*read-only: questions and reviews only/);
 
     const unheld = setup({ fullAccessOnly: true });
-    const unheldError = yield* (yield* unheld.service)
-      .prepareTurn({ threadId, runId })
-      .pipe(Effect.flip);
-    expect(unheldError.message).toContain("researcher cannot be held to read-only");
-    expect(unheldError.message).toContain("It cannot ask.");
+    const unheldError = yield* (yield* unheld.service).prepareTurn({ threadId, runId });
+    expect(unheldError.context).toContain("researcher cannot be held to read-only");
+    expect(unheldError.context).toContain("It cannot ask.");
     expect(unheld.admissions.size).toBe(0);
 
     const refused = setup({ access: "approval-required", fullAccessOnly: true });
-    const error = yield* (yield* refused.service)
-      .prepareTurn({ threadId, runId })
-      .pipe(Effect.flip);
-    expect(error.message).toContain("researcher cannot join with approval-required access");
+    const error = yield* (yield* refused.service).prepareTurn({ threadId, runId });
+    expect(error.context).toContain("researcher cannot join with approval-required access");
     expect(refused.admissions.size).toBe(0);
   }),
 );
@@ -382,9 +454,15 @@ it.effect("refuses an unavailable selected provider before launching any partici
   Effect.gen(function* () {
     const fixture = setup({ unavailable: true });
     const service = yield* fixture.service;
-    yield* service.prepareTurn({ threadId, runId }).pipe(Effect.flip);
+    const result = yield* service.prepareTurn({ threadId, runId });
+    expect(result.ready).toBe(true);
+    expect(result.context).toContain("discussion did not run");
+    expect(result.context).toContain("critic");
+    const bindings = fixture.bindings.length;
+    yield* service.prepareTurn({ threadId, runId });
+    expect(fixture.bindings).toHaveLength(bindings);
+    expect(fixture.notices).toHaveLength(1);
     expect(fixture.admissions.size).toBe(0);
-    expect(fixture.bindings).toEqual([]);
   }),
 );
 it.effect("joins without a team, calls one in, and survives a lineup changed mid-round", () =>
