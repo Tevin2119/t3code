@@ -12,6 +12,7 @@ import { memo } from "react";
 import { Link, useLocation, useNavigate } from "@tanstack/react-router";
 
 import { useAtomValue } from "@effect/atom-react";
+import { useEngineAttention } from "../../hooks/useEngineAttention";
 import { useBoardAttention } from "../../hooks/useBoardAttention";
 import { useEnvironmentIdentificationMode } from "../../hooks/useSettings";
 import { shortcutLabelForCommand } from "../../keybindings";
@@ -219,6 +220,7 @@ function SidebarBrandMark({ onBackdrop }: { onBackdrop: boolean }) {
 
 function SidebarUtilityItem({
   badge,
+  attention = false,
   icon,
   isActive = false,
   label,
@@ -226,6 +228,8 @@ function SidebarUtilityItem({
 }: {
   /** A count shown on the icon's corner. Nothing is shown for zero or when it is not known. */
   badge?: number | null;
+  /** Turns the badge yellow, or shows a yellow dot when there is no count, for something waiting. */
+  attention?: boolean;
   icon: ReactNode;
   isActive?: boolean;
   label: string;
@@ -244,12 +248,18 @@ function SidebarUtilityItem({
         <TooltipPopup side="top">{label}</TooltipPopup>
       </Tooltip>
       {/* Beside the button, not in it: the button clips what it holds. The label carries the count. */}
-      {badge ? (
+      {badge || attention ? (
         <span
           aria-hidden
-          className="pointer-events-none absolute top-0 right-0 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-primary px-1 text-3xs leading-none font-medium text-primary-foreground tabular-nums"
+          // Attention pulses three times as it appears, then holds: a pulse that never stops keeps
+          // repainting.
+          className={`pointer-events-none absolute top-0 right-0 flex h-3.5 min-w-3.5 items-center justify-center rounded-full px-1 text-3xs leading-none font-medium tabular-nums ${
+            attention
+              ? "animate-attention-pulse bg-warning text-background"
+              : "bg-primary text-primary-foreground"
+          }`}
         >
-          {badge}
+          {badge || null}
         </span>
       ) : null}
     </SidebarMenuItem>
@@ -275,6 +285,11 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
   // Settings outlast a connection, so delivery being on does not say the count can be read.
   const primaryConnected = useEnvironment(primaryEnvironmentId)?.connection.phase === "connected";
   const boardAttention = useBoardAttention(primaryEnvironmentId, deliveryEnabled, primaryConnected);
+  const engineAttention = useEngineAttention(
+    primaryEnvironmentId,
+    deliveryEnabled,
+    primaryConnected,
+  );
   const pullRequestsSupported = usePullRequestsSupported();
   const closeMobileSidebar = () => {
     if (isMobile) {
@@ -351,13 +366,14 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
       {deliveryEnabled ? (
         <SidebarUtilityItem
           badge={boardAttention}
+          attention={engineAttention}
           icon={<BoardIcon />}
           isActive={deliveryPathname === "/board"}
-          label={
+          label={`${
             boardAttention
               ? `Board, ${boardAttention} ${boardAttention === 1 ? "task needs" : "tasks need"} you`
               : "Board"
-          }
+          }${engineAttention ? ". The engine needs you" : ""}`}
           onClick={handleBoardClick}
         />
       ) : null}

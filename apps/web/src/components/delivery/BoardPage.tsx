@@ -47,6 +47,7 @@ import {
   useStaleReading,
 } from "../../state/delivery";
 import { BoardEngineNotice, BoardNotice, CloseNoticeButton } from "./BoardEngineNotice";
+import { EngineAttentionBar } from "./EnginePanel";
 import { BoardToolbar } from "./BoardToolbar";
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
 import { SidebarInset } from "../ui/sidebar";
@@ -806,6 +807,7 @@ function EnvironmentBoardPage({ environmentId }: { readonly environmentId: Envir
                 onClose={() => setSeatsFor(null)}
               />
             ) : null}
+            <EngineAttentionBar environmentId={environmentId} />
             {parsed?.note ? (
               <BoardNotice summary={parsed.note}>
                 <p className="px-4 pt-2 text-xs text-muted-foreground">{parsed.note}</p>
