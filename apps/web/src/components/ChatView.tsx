@@ -13,7 +13,11 @@ import {
   useDraftTeamChoice,
   useHasDraftTeamChoice,
 } from "../state/delivery";
-import { taskStandsIn, useThreadTasks } from "./delivery/ThreadTaskLinks";
+import {
+  taskStandsIn,
+  useThreadTasks,
+  useThreadDeliveryProgress,
+} from "./delivery/ThreadTaskLinks";
 import { ThreadTaskQuestions } from "./delivery/ThreadTaskQuestions";
 import {
   useChatViewComposerProviderSelection,
@@ -2624,6 +2628,10 @@ export default function ChatView(props: ChatViewProps) {
     environmentId,
     isServerThread ? (activeThread?.id ?? null) : null,
   );
+  const threadDeliveryProgress = useThreadDeliveryProgress(
+    environmentId,
+    isServerThread ? (activeThread?.id ?? null) : null,
+  );
   const threadTasksBannerItem = ((): ComposerBannerStackItem | null => {
     const newest = threadTasks[0];
     if (!newest) return null;
@@ -2639,10 +2647,10 @@ export default function ChatView(props: ChatViewProps) {
             : `${threadTasks.length} tasks were made from this conversation`}
         </span>
       ),
-      description: threadTasks
-        .slice(0, 3)
-        .map((task) => `#${task.number} ${taskStandsIn(task)}`)
-        .join(" · "),
+      description: [
+        ...threadTasks.slice(0, 3).map((task) => `#${task.number} ${taskStandsIn(task)}`),
+        ...threadDeliveryProgress,
+      ].join(" · "),
       actions: (
         <Button
           size="xs"

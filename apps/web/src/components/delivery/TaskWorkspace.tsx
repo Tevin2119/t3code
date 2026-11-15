@@ -106,6 +106,7 @@ import {
 import { Age, Avatar, laneTone, PriorityPill, QaVotes, TagList, WaitingOn } from "./taskParts";
 import { TaskDisclosure } from "./TaskDisclosure";
 import { relatedTaskGroups } from "./relatedTaskGroups";
+import { BoardDelivery } from "./BoardDelivery";
 
 const EVENT_ICON: Record<string, typeof CircleDotIcon> = {
   pass: CircleCheckIcon,
@@ -2366,6 +2367,20 @@ export function TaskWorkspace(props: {
 
         {task ? (
           <>
+            {props.environmentId && task.origin.startsWith(`thread:${props.environmentId}/`) ? (
+              <BoardDelivery
+                key={`${props.environmentId}:${task.id}`}
+                environmentId={props.environmentId}
+                task={{
+                  id: task.id,
+                  origin: task.origin,
+                  held: task.held,
+                  state: task.state,
+                  repository: task.target?.repository ?? null,
+                  base: task.target?.base ?? null,
+                }}
+              />
+            ) : null}
             <TaskWorkspacePanels
               key={`${props.environmentId}:${task.id}`}
               owner={JSON.stringify([props.environmentId, task.id])}

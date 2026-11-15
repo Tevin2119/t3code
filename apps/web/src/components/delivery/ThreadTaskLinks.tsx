@@ -2,7 +2,24 @@ import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
 
 import { type DeliveryCard, parseCards } from "../../lib/delivery";
 import { LANE_TITLE, queryValue } from "../../lib/deliveryBoard";
-import { useDeliveryEnabled, useDeliveryRead } from "../../state/delivery";
+import { useDeliveryEnabled, useDeliveryRead, useStaleReading } from "../../state/delivery";
+import { deliveryProgress, parseBoardDelivery } from "../../lib/boardDelivery";
+
+export function useThreadDeliveryProgress(
+  environmentId: EnvironmentId | null,
+  threadId: ThreadId | null,
+) {
+  const enabled = useDeliveryEnabled(environmentId);
+  const origin = environmentId && threadId ? `thread:${environmentId}/${threadId}` : null;
+  const read = useDeliveryRead(enabled && origin ? environmentId : null, "/api/delivery", {
+    pollMs: 10_000,
+  });
+  const stale = useStaleReading(read.readAt);
+  if (read.error || stale || !enabled) return [];
+  return (parseBoardDelivery(read.body)?.tracking ?? [])
+    .filter((row) => row.request?.origin === origin)
+    .map((row) => deliveryProgress(row));
+}
 
 /**
  * The tasks a person made from this conversation, newest first. Empty when none was made,

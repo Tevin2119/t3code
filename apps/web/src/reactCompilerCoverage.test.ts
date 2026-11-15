@@ -14,6 +14,7 @@ const webSourceFiles = NodeFS.readdirSync(NodePath.join(repoRoot, "apps/web/src"
   recursive: true,
 })
   .map(String)
+  .map((file) => file.split(NodePath.sep).join("/"))
   .filter((file) => /\.tsx?$/.test(file) && !/\.(test|browser)\.tsx?$/.test(file))
   .filter((file) => !file.endsWith(".gen.ts"))
   .map((file) => `apps/web/src/${file}`);
