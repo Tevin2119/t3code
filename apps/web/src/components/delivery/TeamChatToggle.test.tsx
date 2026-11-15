@@ -158,21 +158,19 @@ describe("the single/team toggle of a started conversation", () => {
     expect(testState.refreshed).toBe(1);
   });
 
-  it("says where teams start instead of failing for a conversation that was never a team", async () => {
-    testState.threadState = { data: { binding: null, lineup: null } };
-    await render();
+  it.each([null, { team: "development", role: "team-lead" }])(
+    "hides the toggle for a conversation that was never a team (binding: %j)",
+    async (binding) => {
+      testState.threadState = { data: { binding, lineup: null } };
+      await render();
 
-    await act(async () => {
-      toggleButton("single").props.onClick();
-    });
-    await flush();
+      expect(renderer!.toJSON()).toBeNull();
 
-    expect(testState.setLineup).not.toHaveBeenCalled();
-    expect(testState.refreshed).toBe(0);
-    expect(toastManager.add).toHaveBeenCalledWith(
-      expect.objectContaining({ type: "info", title: expect.stringContaining("no team") }),
-    );
-  });
+      expect(testState.setLineup).not.toHaveBeenCalled();
+      expect(testState.refreshed).toBe(0);
+      expect(toastManager.add).not.toHaveBeenCalled();
+    },
+  );
 
   it("goes back to the team conversation from a 1:1 fork that has no team of its own", async () => {
     const onOpenForkSource = vi.fn();

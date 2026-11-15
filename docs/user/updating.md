@@ -281,6 +281,34 @@ adapter is offered only for the engine's own checkout in production, when the
 engine has it configured. A missing command configuration or a failed check
 appears on the deployment rather than being reported as a successful release.
 
+### Link a board and follow a task's deployment
+
+On a custom repository-bound board, open **Board delivery settings → Link deployment**.
+Choose the exact deployment project for the repository and release environment; its watched
+branch must match the board target. Linking an existing project leaves its mode unchanged.
+**Create a new project and link** defaults to auto-qualify, with deployment still manual.
+If creation fails, inspect Deployments before retrying: the project may have been created
+without the board link being saved. Link that existing project's ID rather than creating it again.
+
+An invalid link explains what changed. Explicitly relink or unlink it; T3 never substitutes
+another environment. Existing publications retain their original project, environment and run,
+even after a board move, retarget or unlink. Open a task's **About → Deployment** for its
+host-observed merge commit, candidate, evidence and history. An earlier run's publication is
+history, not proof that the current run shipped. Queued, unknown, blocked and stale readings
+are not live deployments.
+
+### Automatic merge permission
+
+Use **Engine → Global automatic merge permission**, **Board delivery settings**, or a saved
+task's **About → Automatic merge permission** to set On, Off or Inherit. Drafts offer the same
+control in their editor. The effective source is shown: exact task, nearest triage ancestor,
+board, global, or the default Off. Built-in board summaries are read-only.
+
+Every change requires a saved approval passphrase and your name; On also requires explicit
+confirmation. Inherit removes only that override and can reveal inherited On permission.
+Policy eligibility is not merge readiness: full-auto mode and the engine's independent merge
+checks still apply. Merge permission never enables automatic deployment.
+
 ## Fork baseline: nightly integration for delivery work
 
 The `integrate/nightly-20261028-deployment-board` branch combines the fork's deployment

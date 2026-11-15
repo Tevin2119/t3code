@@ -15,6 +15,7 @@ import type {
 } from "../../lib/orchestratorChat";
 import { NO_PROVIDER_MODEL_SELECTION, type ProviderInstanceEntry } from "../../providerInstances";
 import { resolveModelPickerSelectedModel } from "../chat/ModelPickerContent";
+import { TraitsPicker } from "../chat/TraitsPicker";
 import { ProviderModelPicker } from "../chat/ProviderModelPicker";
 import { getTriggerDisplayModelName, type ModelEsque } from "../chat/providerIconUtils";
 import { Button } from "../ui/button";
@@ -157,6 +158,19 @@ export function OrchestratorParticipants(props: {
                 model.isUnavailable ? " (Unavailable)" : ""
               }`
             : null;
+          const setModel = (modelSelection: ModelSelection) =>
+            row.extra
+              ? setExtras(
+                  extras.map((extra) =>
+                    extra.id === row.seat ? { ...extra, modelSelection } : extra,
+                  ),
+                )
+              : props.onChange({
+                  participantChoices: {
+                    ...value.participantChoices,
+                    [row.seat]: { ...value.participantChoices?.[row.seat], modelSelection },
+                  },
+                });
           const setAccess = (access: OrchestratorParticipantAccess) =>
             row.extra
               ? setExtras(
@@ -173,6 +187,8 @@ export function OrchestratorParticipants(props: {
               key={row.seat}
               className="flex flex-col gap-1 py-1.5"
               data-orchestrator-seat={row.seat}
+              role="group"
+              aria-label={`Settings for ${row.title}`}
             >
               <div className="flex items-center gap-2">
                 {row.extra ? (
@@ -233,35 +249,34 @@ export function OrchestratorParticipants(props: {
                       }
                       isComposerOwned={false}
                       onInstanceModelChange={(instanceId, picked) =>
-                        row.extra
-                          ? setExtras(
-                              extras.map((extra) =>
-                                extra.id === row.seat
-                                  ? {
-                                      ...extra,
-                                      modelSelection: createModelSelection(instanceId, picked),
-                                    }
-                                  : extra,
-                              ),
-                            )
-                          : props.onChange({
-                              participantChoices: {
-                                ...value.participantChoices,
-                                [row.seat]: {
-                                  ...value.participantChoices?.[row.seat],
-                                  modelSelection: createModelSelection(
-                                    instanceId,
-                                    picked,
-                                    instanceId === selection.instanceId &&
-                                      picked === selection.model
-                                      ? selection.options
-                                      : undefined,
-                                  ),
-                                },
-                              },
-                            })
+                        setModel(
+                          createModelSelection(
+                            instanceId,
+                            picked,
+                            instanceId === selection.instanceId && picked === selection.model
+                              ? selection.options
+                              : undefined,
+                          ),
+                        )
                       }
                     />
+                    {entry && row.modelSelection ? (
+                      <TraitsPicker
+                        provider={entry.driverKind}
+                        instanceId={entry.instanceId}
+                        models={entry.models}
+                        model={selection.model}
+                        modelOptions={selection.options}
+                        allowPromptInjectedEffort={false}
+                        disabled={!row.included || !entry.isAvailable}
+                        size="xs"
+                        onModelOptionsChange={(options) =>
+                          setModel(
+                            createModelSelection(selection.instanceId, selection.model, options),
+                          )
+                        }
+                      />
+                    ) : null}
                     {row.extra && team ? (
                       <Select
                         items={team.roles.map((role) => ({ value: role.role, label: role.title }))}

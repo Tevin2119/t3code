@@ -54,6 +54,7 @@ interface Engine {
   /** Changes what the engine says a session is, as a team edited behind a thread's back would. */
   tamper: ((identity: Identity) => Identity) | null;
   health?: { profile: string | null; home: string };
+  replies?: Readonly<Record<string, unknown>>;
 }
 
 const engine = (): Engine => ({ requests: [], sessions: new Map(), down: false, tamper: null });
@@ -99,9 +100,18 @@ const layer = (
               request.body._tag === "Uint8Array"
                 ? decodeBody(new TextDecoder().decode(request.body.body))
                 : undefined;
-            fake.requests.push({ method: request.method, path: url.pathname, body });
+            fake.requests.push({
+              method: request.method,
+              path: url.pathname,
+              body:
+                request.body._tag === "Uint8Array"
+                  ? JSON.parse(new TextDecoder().decode(request.body.body))
+                  : undefined,
+            });
             const json = (value: unknown, status = 200) =>
               Effect.succeed(HttpClientResponse.fromWeb(request, Response.json(value, { status })));
+            if (fake.replies && Object.hasOwn(fake.replies, url.pathname))
+              return json(fake.replies[url.pathname]);
             if (url.pathname === "/api/health" && fake.health)
               return json({ engine: "delivery", ok: true, ...fake.health });
             if (request.method === "POST" && url.pathname === "/api/sessions") {
@@ -177,6 +187,63 @@ const bind = (
 const CLAUDE_HERE = { driver: "claudeAgent", cwd: REPO };
 
 describe("DeliveryService", () => {
+  it.effect(
+    "forwards one board snapshot and keyed link/policy writes without projecting or fanning out",
+    () => {
+      const fake = engine();
+      const deployment = {
+        current: {
+          run: "original-run",
+          project: { environment: "staging" },
+          state: "queued",
+          problem: "Awaiting reconciliation",
+          history: [{ state: "live" }],
+        },
+        history: [],
+      };
+      const snapshot = {
+        sets: [{ deployment: { state: "invalid", problem: "Watch changed" } }],
+        lanes: [
+          {
+            cards: Array.from({ length: 50 }, (_, index) => ({
+              id: `task-${index}`,
+              deployment,
+              mergePermission: { resolved: "on", eligible: false, source: "ancestor" },
+            })),
+          },
+        ],
+      };
+      const writes = [
+        {
+          path: "/api/boards/work/deployment",
+          body: { deploymentProjectId: "deploy-staging", by: "Sam", key: "test-only-key" },
+        },
+        {
+          path: "/api/boards/work/deployment",
+          body: { deploymentProjectId: null, by: "Sam", key: "test-only-key" },
+        },
+        ...["engine", "boards/work", "tasks/task-1"].map((scope) => ({
+          path: `/api/${scope}/merge-permission`,
+          body: { mergePermission: "on", confirmed: true, by: "Sam", key: "test-only-key" },
+        })),
+      ];
+      fake.replies = {
+        "/api/lanes": snapshot,
+        ...Object.fromEntries(writes.map((write) => [write.path, { accepted: true }])),
+      };
+      return Effect.gen(function* () {
+        const delivery = yield* DeliveryService.DeliveryService;
+        expect(
+          (yield* delivery.read({ path: "/api/lanes?view=development&set=work" })).body,
+        ).toEqual(snapshot);
+        expect(fake.requests).toHaveLength(1);
+        for (const write of writes) yield* delivery.act(write);
+        expect(fake.requests.slice(1)).toEqual(
+          writes.map((write) => ({ method: "POST", ...write })),
+        );
+      }).pipe(Effect.provide(layer(fake, { prefix: "board-delivery-relay-" })));
+    },
+  );
   it.effect(
     "refuses native completion through the public relay before contacting the engine",
     () => {

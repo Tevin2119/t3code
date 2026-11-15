@@ -10,9 +10,13 @@ const mock = vi.hoisted(() => ({
   refresh: vi.fn(),
   snapshot: {} as unknown,
   projects: [] as unknown[],
+  stale: false,
+  error: null as string | null,
+  reads: vi.fn(),
 }));
 vi.mock("../../state/entities", () => ({ useProjects: () => mock.projects }));
 vi.mock("./EnginePanel", () => ({ EnginePanel: "engine-panel" }));
+vi.mock("./BoardDelivery", () => ({ BoardDelivery: "board-delivery" }));
 vi.mock("./BoardToolbar", () => ({ useBoardDesktop: () => true }));
 vi.mock("./BoardPicker.browse", () => ({ RepositoryBrowse: "repository-browse" }));
 vi.mock("@effect/atom-react", () => ({ useAtomValue: () => mock.allowed }));
@@ -22,22 +26,25 @@ vi.mock("../../state/delivery", () => ({
   useDeliveryEnvironmentId: () => "host",
   useDeliveryEnabled: () => true,
   useDeliveryAct: () => mock.action,
-  useDeliveryRead: (_env: string, path: string) => ({
-    body:
-      path === "/api/health"
-        ? {
-            approvalWindow: {
-              open: true,
-              windows: [{ by: "Sam", expiresAt: "2026-10-28T10:10:00Z" }],
-            },
-          }
-        : mock.snapshot,
-    error: null,
-    isPending: false,
-    readAt: "2026-10-28T10:00:00Z",
-    refresh: mock.refresh,
-  }),
-  useStaleReading: () => false,
+  useDeliveryRead: (env: string, path: string, options: unknown) => {
+    mock.reads(env, path, options);
+    return {
+      body:
+        path === "/api/health"
+          ? {
+              approvalWindow: {
+                open: true,
+                windows: [{ by: "Sam", expiresAt: "2026-10-28T10:10:00Z" }],
+              },
+            }
+          : mock.snapshot,
+      error: mock.error,
+      isPending: false,
+      readAt: "2026-10-28T10:00:00Z",
+      refresh: mock.refresh,
+    };
+  },
+  useStaleReading: () => mock.stale,
   usePersonName: () => "Sam",
   useBoardStore: (select: (state: unknown) => unknown) =>
     select({ setPerson: vi.fn(), setDeliveryEnvironment: vi.fn() }),
@@ -80,6 +87,9 @@ async function setup() {
   mock.action.mockReset().mockResolvedValue({ ok: true });
   mock.refresh.mockReset();
   mock.projects = [];
+  mock.stale = false;
+  mock.error = null;
+  mock.reads.mockReset();
   mock.snapshot = {
     version: 1,
     projects: [],
@@ -105,7 +115,11 @@ async function setup() {
   return {
     renderer,
     button: (label: string) =>
-      renderer.root.findAllByType("button").find((node) => node.children.join("") === label)!,
+      renderer.root
+        .findAllByType("button")
+        .find(
+          (node) => node.children.filter((child) => typeof child === "string").join("") === label,
+        )!,
     async [Symbol.asyncDispose]() {
       await act(() => renderer.unmount());
     },
@@ -115,6 +129,9 @@ async function setup() {
 it("reads without discovering automatically and disables mutation controls without permission", async () => {
   await using view = await setup();
   expect(mock.action).not.toHaveBeenCalled();
+  expect(mock.reads).toHaveBeenCalledExactlyOnceWith("host", "/api/deployments", {
+    pollMs: 10_000,
+  });
   mock.allowed = false;
   await act(() => view.renderer.update(<DeploymentsPage />));
   expect(view.button("Add deployment").props.disabled).toBe(true);
@@ -160,7 +177,7 @@ it("requires full-auto consent, uses listed repository and branch, and submits t
   expect(mock.refresh).toHaveBeenCalled();
 });
 
-it("preserves a saved environment and command arrays when editing", async () => {
+it("preserves a saved environment, mode and command arrays when editing", async () => {
   await using view = await setup();
   const commands = {
     qualify: ["npm", "test"],
@@ -176,7 +193,7 @@ it("preserves a saved environment and command arrays when editing", async () => 
         title: "Repository",
         branch: "main",
         environment: "staging",
-        mode: "manual",
+        mode: "auto-qualify",
         adapter: "command",
         commands,
         latestCommit: null,
@@ -201,10 +218,13 @@ it("preserves a saved environment and command arrays when editing", async () => 
   await act(() => view.button("Configure").props.onClick());
   const environment = view.renderer.root.findAllByType("select")[1]!;
   expect(environment.props.value).toBe("staging");
-  // The repository's branches are its environments; the saved name stays offered beside them.
+  // Saved release environments stay offered independently of the watched branch.
   expect(environment.props.items.map((item: { value: string }) => item.value)).toEqual([
-    "main",
+    "production",
     "staging",
+    "qa",
+    "development",
+    "main",
   ]);
   expect(JSON.parse(view.renderer.root.findByType("textarea").props.value)).toEqual(commands);
   await act(() =>
@@ -216,7 +236,7 @@ it("preserves a saved environment and command arrays when editing", async () => 
     repository: "repo",
     branch: "main",
     environment: "staging",
-    mode: "manual",
+    mode: "auto-qualify",
     adapter: "command",
     commands,
     by: "Sam",
@@ -274,7 +294,13 @@ it("starts new deployments on repository commands and offers the engine only whe
   await act(() => view.renderer.update(<DeploymentsPage />));
   await act(() => view.button("Add deployment").props.onClick());
   await act(() => view.renderer.root.findByType(RepositoryPicker).props.onChoose("repo"));
-  expect(view.renderer.root.findAllByType("select")[3]!.props.value).toBe("command");
+  const selects = () => view.renderer.root.findAllByType("select");
+  expect(selects()[3]!.props.value).toBe("command");
+  expect(selects()[2]!.props.value).toBe("manual");
+  expect(selects()[1]!.props.value).toBe("production");
+  await act(() => selects()[1]!.props.onValueChange("staging"));
+  await act(() => selects()[0]!.props.onValueChange("main"));
+  expect(selects()[1]!.props.value).toBe("staging");
   expect(adapterChoices(view)).toEqual(["command"]);
   // Repository commands need their arrays before they can be saved.
   expect(view.button("Review settings").props.disabled).toBe(true);
@@ -406,6 +432,78 @@ it("warns about missing commands and offers only cancel while the environment is
   expect(view.button("Deploy")).toBeUndefined();
   expect(view.button("Cancel")).toBeDefined();
 });
+
+it("uses one snapshot subscription for many releases and blocks actions when the reading fails or goes stale", async () => {
+  await using view = await setup();
+  mock.snapshot = {
+    ...(mock.snapshot as object),
+    projects: [projectRow()],
+    candidates: Array.from({ length: 30 }, (_, index) => ({
+      id: `release-${index}`,
+      projectId: "project",
+      commit: "a".repeat(40),
+      baseCommit: null,
+      state: index === 0 ? "ready" : "superseded",
+      createdAt: "2026-10-28T00:00:00Z",
+      updatedAt: "2026-10-28T00:00:00Z",
+      evidence: { passed: true },
+      events: [],
+    })),
+  };
+  mock.reads.mockClear();
+  await act(() => view.renderer.update(<DeploymentsPage />));
+  expect(mock.reads).toHaveBeenCalledExactlyOnceWith("host", "/api/deployments", {
+    pollMs: 10_000,
+  });
+  expect(view.button("Deploy").props.disabled).toBe(false);
+  for (const condition of ["stale", "error"] as const) {
+    mock.stale = condition === "stale";
+    mock.error = condition === "error" ? "Disconnected" : null;
+    await act(() => view.renderer.update(<DeploymentsPage />));
+    expect(view.button("Deploy").props.disabled).toBe(true);
+    expect(view.button("Configure").props.disabled).toBe(true);
+    expect(view.button("Discover commits").props.disabled).toBe(true);
+  }
+  expect(mock.action).not.toHaveBeenCalled();
+});
+
+it.each(["stale", "error", "missing", "problem"] as const)(
+  "invalidates an open deployment approval after a %s reading, including recovery",
+  async (condition) => {
+    await using view = await setup();
+    const snapshot = mock.snapshot;
+    await act(() => view.button("Discover commits").props.onClick());
+    await act(() =>
+      view.renderer.root
+        .findAllByType("input")
+        .find((node) => node.props.type === "password")!
+        .props.onChange({ target: { value: "test-only-key" } }),
+    );
+    expect(view.button("Confirm").props.disabled).toBe(false);
+    mock.stale = condition === "stale";
+    mock.error = condition === "error" ? "Disconnected" : null;
+    mock.snapshot =
+      condition === "missing"
+        ? null
+        : condition === "problem"
+          ? { ...(snapshot as object), problem: "Unavailable" }
+          : snapshot;
+    await act(() => view.renderer.update(<DeploymentsPage />));
+    expect(view.button("Confirm").props.disabled).toBe(true);
+    await act(() => view.button("Confirm").props.onClick());
+    mock.stale = false;
+    mock.error = null;
+    mock.snapshot = snapshot;
+    await act(() => view.renderer.update(<DeploymentsPage />));
+    expect(view.button("Confirm").props.disabled).toBe(true);
+    await act(() => view.button("Confirm").props.onClick());
+    expect(mock.action).not.toHaveBeenCalled();
+    await act(() => view.button("Cancel").props.onClick());
+    await act(() => view.button("Discover commits").props.onClick());
+    await confirmWithKey(view);
+    expect(mock.action).toHaveBeenCalledTimes(1);
+  },
+);
 
 it("asks for delivery permission without declaring the connection read-only", async () => {
   await using view = await setup();

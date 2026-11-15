@@ -1,3 +1,4 @@
+import { useThreadInspection } from "./ThreadInspectionContext";
 import { useAtomValue } from "@effect/atom-react";
 import { threadKey } from "@t3tools/client-runtime/state/entities";
 import { ThreadDetailsControl } from "./ThreadDetailsControl";
@@ -267,6 +268,7 @@ function RemoteSubagentRow(props: {
   readonly anyInstanceBadge: boolean;
 }) {
   const navigate = useNavigate();
+  const inspectThread = useThreadInspection();
   const environment = useEnvironment(props.agent.remoteChild.environmentId);
   const { remoteChild } = props.agent;
   const status = props.agent.status;
@@ -288,6 +290,10 @@ function RemoteSubagentRow(props: {
               aria-disabled={environment === null || undefined}
               onClick={() => {
                 if (environment === null) return;
+                if (inspectThread) {
+                  inspectThread(scopeThreadRef(remoteChild.environmentId, remoteChild.threadId));
+                  return;
+                }
                 void navigate({
                   to: "/$environmentId/$threadId",
                   params: buildThreadRouteParams(
@@ -344,6 +350,7 @@ function DelegatedFromRow(props: {
 }) {
   const navigate = useNavigate();
   const router = useRouter();
+  const inspectThread = useThreadInspection();
   const { delegatedFrom } = props;
   const environment = useEnvironment(delegatedFrom.environmentId);
   const parentRef = scopeThreadRef(delegatedFrom.environmentId, delegatedFrom.threadId);
@@ -393,6 +400,10 @@ function DelegatedFromRow(props: {
               aria-disabled={environment === null || undefined}
               onClick={() => {
                 if (environment === null) return;
+                if (inspectThread) {
+                  inspectThread(parentRef);
+                  return;
+                }
                 void openParent();
               }}
             />
@@ -465,6 +476,7 @@ export function ThreadRelationshipsPanel(props: {
       : null;
   const parentProjection = useQuietThreadProjection(parentRef)?.projection;
   const navigate = useNavigate();
+  const inspectThread = useThreadInspection();
   const mergeBack = useAtomCommand(threadEnvironment.mergeBack);
   const stopSession = useAtomCommand(threadEnvironment.stopSession);
   const interruptTurn = useAtomCommand(threadEnvironment.interruptTurn);
@@ -638,6 +650,10 @@ export function ThreadRelationshipsPanel(props: {
 
   // Idle children can be omitted from the shell; opening one loads its own detail.
   const openThread = (threadId: ThreadId) => {
+    if (inspectThread) {
+      inspectThread(scopeThreadRef(props.environmentId, threadId));
+      return;
+    }
     const routeRef = resolveThreadOpenRoute(
       scopeThreadRef(props.environmentId, threadId),
       graph.nodes.get(threadId)?.thread ?? null,

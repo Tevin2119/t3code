@@ -432,17 +432,6 @@ export const layer: Layer.Layer<
         return;
       }
       captureStartingRun(run);
-      if (
-        Option.isNone(teamChat) &&
-        Option.isSome(deliveryService) &&
-        (yield* deliveryService.value.threadState(input.threadId)).lineup !== undefined
-      ) {
-        return yield* new NativeTeamChat.NativeTeamChatError({ runId, reason: "state" });
-      }
-      const discussion = Option.isSome(teamChat)
-        ? yield* teamChat.value.prepareTurn({ threadId: input.threadId, runId })
-        : { ready: true, context: "" };
-      if (!discussion.ready) return;
       const rootNode = projection.nodes.find((candidate) => candidate.id === run.rootNodeId);
       const attempt = projection.attempts.find((candidate) => candidate.id === run.activeAttemptId);
       const providerThread = projection.providerThreads.find(
@@ -554,6 +543,29 @@ export const layer: Layer.Layer<
           });
         },
       );
+      const preparedDiscussion = yield* Effect.gen(function* () {
+        if (
+          Option.isNone(teamChat) &&
+          Option.isSome(deliveryService) &&
+          (yield* deliveryService.value.threadState(input.threadId)).lineup !== undefined
+        ) {
+          return yield* new NativeTeamChat.NativeTeamChatError({ runId, reason: "state" });
+        }
+        return Option.isSome(teamChat)
+          ? yield* teamChat.value.prepareTurn({ threadId: input.threadId, runId })
+          : { ready: true, context: "" };
+      }).pipe(Effect.result);
+      if (preparedDiscussion._tag === "Failure") {
+        if (input.willRetry === true) return yield* preparedDiscussion.failure;
+        yield* settleStartFailure({
+          signal: "team-preparation-failed",
+          title: "Team discussion could not start",
+          error: preparedDiscussion.failure,
+        });
+        return;
+      }
+      const discussion = preparedDiscussion.success;
+      if (!discussion.ready) return;
       if (
         providerMessage.attachments.length === 0 &&
         providerMessage.text.trimStart().startsWith("/")

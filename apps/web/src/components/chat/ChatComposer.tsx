@@ -2647,6 +2647,13 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   entries={providerInstanceEntries}
                   models={modelOptionsByInstance}
                   getLeadDisabledReason={getModelDisabledReason}
+                  onLeadOptionsChange={(options) =>
+                    setSeatModelOptions(composerDraftTarget, selectedProvider, options, {
+                      instanceId: selectedInstanceId,
+                      model: selectedModel,
+                      persistSticky: true,
+                    })
+                  }
                   onLeadChange={(instanceId, model) =>
                     onProviderModelSelect(instanceId, model, { focusComposer: false })
                   }

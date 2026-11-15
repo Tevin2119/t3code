@@ -1,3 +1,4 @@
+import { ThreadInspectionContext } from "./chat/ThreadInspectionContext";
 import { createMemoryHistory } from "@tanstack/react-router";
 import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environment";
 import {
@@ -762,4 +763,29 @@ it("shows working activity during contributions and critiques before the lead st
     }),
   );
   await expect.element(leadNotice).not.toBeInTheDocument();
+});
+
+it("opens a timeline parent through the containing workspace", async () => {
+  await page.viewport(1400, 900);
+  const parent = threadWithHistory("inspected-parent", 1);
+  const child = { ...threadWithHistory("inspected-child", 1), sideChatOf: parent.id };
+  using _environment = installFakeEnvironment([parent, child]);
+  __setClientSettingsForTests({
+    ...DEFAULT_CLIENT_SETTINGS,
+    onboardingCompletedAt: "2026-01-01T00:00:00.000Z",
+  });
+  const path = `/${ENVIRONMENT_ID}/${child.id}`;
+  const router = getRouter(createMemoryHistory({ initialEntries: [path] }));
+  await router.load();
+  const inspect = vi.fn();
+  await using screen = await render(
+    <ThreadInspectionContext value={inspect}>
+      <AppRoot router={router} />
+    </ThreadInspectionContext>,
+    { router: false },
+  );
+  await expect.element(page.getByTestId("composer-editor")).toBeVisible();
+  await screen.getByRole("button", { name: "Open parent thread", exact: true }).click();
+  expect(inspect).toHaveBeenCalledWith({ environmentId: ENVIRONMENT_ID, threadId: parent.id });
+  expect(router.state.location.pathname).toBe(path);
 });

@@ -46,6 +46,7 @@ import {
   withCheckpointRestoreReservation,
   withWorkspaceLease,
 } from "../workspace/workspaceLease.ts";
+import * as NativeTeamChat from "../delivery/NativeTeamChat.ts";
 import * as GitWorkflow from "../git/GitWorkflowService.ts";
 import {
   layerThreadWorktreeRestore,
@@ -404,6 +405,7 @@ function makeLocalCommandHarness(input: {
   readonly previousMessages?: ReadonlyArray<string>;
   readonly logoutFailure?: string;
   readonly openFailure?: unknown;
+  readonly teamPreparationFailure?: string;
   readonly ensureThreadFailure?: unknown;
   readonly historyReadFailureAfterFallback?: unknown;
   readonly resumeFailure?: ProviderAdapter.ProviderAdapterV2Error;
@@ -1305,6 +1307,18 @@ function makeLocalCommandHarness(input: {
         Layer.mock(RunExecutionService.RunExecutionServiceV2)({
           startRootRun,
           forkBaseline: () => Effect.succeed(Effect.void),
+        }),
+        Layer.succeed(NativeTeamChat.NativeTeamChat, {
+          prepareTurn: () =>
+            input.teamPreparationFailure === undefined
+              ? Effect.succeed({ ready: true, context: "" })
+              : Effect.fail(
+                  new NativeTeamChat.NativeTeamChatError({
+                    runId,
+                    reason: "roster",
+                    detail: input.teamPreparationFailure,
+                  }),
+                ),
         }),
         Layer.succeed(ProviderUsageAnalytics.ProviderTurnAnalytics, {
           runStarted: () => Effect.void,
@@ -2721,6 +2735,29 @@ effectIt.effect("fails a starting run when its recovery state cannot be read", (
     expect(projection.attempts[0]).toMatchObject({ status: "failed", startedAt: null });
     expect(projection.nodes[0]).toMatchObject({ status: "failed", startedAt: null });
     expect(projection.turnItems).toMatchObject([{ type: "error", status: "failed" }]);
+  }),
+);
+
+effectIt.effect("settles failed team preparation after retries without starting the provider", () =>
+  Effect.gen(function* () {
+    const message = "The conversation and its participants use different team revisions.";
+    const harness = makeLocalCommandHarness({ text: "Continue", teamPreparationFailure: message });
+
+    yield* Effect.flip(harness.startWithRetry);
+    expect(harness.projection().runs.at(-1)?.status).toBe("starting");
+    expect(harness.settledRuns).toEqual([]);
+
+    yield* harness.start;
+    const projection = harness.projection();
+    expect(projection.runs.at(-1)).toMatchObject({ status: "failed", startedAt: null });
+    expect(projection.attempts[0]).toMatchObject({ status: "failed", startedAt: null });
+    expect(projection.nodes[0]).toMatchObject({ status: "failed", startedAt: null });
+    expect(projection.turnItems).toMatchObject([
+      { type: "error", status: "failed", failure: { message } },
+    ]);
+    expect(harness.settledRuns).toEqual(["failed"]);
+    expect(harness.open).not.toHaveBeenCalled();
+    expect(harness.startRootRun).not.toHaveBeenCalled();
   }),
 );
 

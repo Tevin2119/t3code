@@ -17,6 +17,7 @@ vi.mock("./BoardPicker.browse", () => ({ RepositoryBrowse: () => null }));
 vi.mock("./BoardPicker.branches", () => ({ BaseBranchPicker: () => null }));
 vi.mock("../../state/entities", () => ({ useProjects: () => [] }));
 vi.mock("@tanstack/react-router", () => ({ useNavigate: () => vi.fn() }));
+vi.mock("../../hooks/useHandleNewThread", () => ({ useNewThreadHandler: () => vi.fn() }));
 
 const mock = vi.hoisted(() => ({
   read: { body: null as unknown, error: null, isPending: false, refresh: vi.fn() },

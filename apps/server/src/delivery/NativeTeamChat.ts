@@ -240,7 +240,11 @@ export const make = Effect.gen(function* () {
               cwd,
             });
             if (binding !== null && member.configuration !== binding.configuration) {
-              return yield* new NativeTeamChatError({ runId: input.runId, reason: "roster" });
+              return yield* new NativeTeamChatError({
+                runId: input.runId,
+                reason: "roster",
+                detail: `This conversation uses team setup ${binding.configuration}, but ${seat.seat} uses ${member.configuration}. Switch to single chat to continue here, or start a new team conversation with the updated setup. Recorded contributions are preserved.`,
+              });
             }
           }
         }

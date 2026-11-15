@@ -67,6 +67,7 @@ export * from "./resourceTelemetry.ts";
 export * from "./usage.ts";
 export * from "./delivery.ts";
 export * from "./deployments.ts";
+export * from "./boardDelivery.ts";
 export * from "./scheduledTask.ts";
 export * from "./worktreeMcp.ts";
 export * from "./rpc.ts";

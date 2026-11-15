@@ -17,6 +17,7 @@ import {
   useOrchestratorDraft,
   useOrchestratorDraftStore,
 } from "../../state/delivery";
+import { TraitsPicker } from "../chat/TraitsPicker";
 import { ProviderModelPicker } from "../chat/ProviderModelPicker";
 import type { ModelEsque } from "../chat/providerIconUtils";
 import { Button } from "../ui/button";
@@ -32,6 +33,7 @@ export function OrchestratorChatSetup(props: {
   readonly lead: ModelSelection;
   readonly entries: ReadonlyArray<ProviderInstanceEntry>;
   readonly models: ReadonlyMap<ProviderInstanceId, ReadonlyArray<ModelEsque>>;
+  readonly onLeadOptionsChange: (options: ModelSelection["options"]) => void;
   readonly onLeadChange: (instanceId: ProviderInstanceId, model: string) => void;
   readonly getLeadDisabledReason: (instanceId: ProviderInstanceId, model: string) => string | null;
   readonly onExit: () => void;
@@ -104,6 +106,19 @@ export function OrchestratorChatSetup(props: {
           triggerAriaLabel="Choose orchestrator provider and model"
           isComposerOwned={false}
         />
+        {leadEntry ? (
+          <TraitsPicker
+            provider={leadEntry.driverKind}
+            instanceId={leadEntry.instanceId}
+            models={leadEntry.models}
+            model={props.lead.model}
+            modelOptions={props.lead.options}
+            allowPromptInjectedEffort={false}
+            disabled={!leadEntry.isAvailable}
+            size="xs"
+            onModelOptionsChange={props.onLeadOptionsChange}
+          />
+        ) : null}
       </div>
       <p className="text-xs text-muted-foreground">
         Participants contribute independently, discuss each other's findings, then the orchestrator
