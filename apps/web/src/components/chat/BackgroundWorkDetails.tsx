@@ -4,8 +4,6 @@ import type {
   ThreadId,
 } from "@t3tools/contracts";
 import type { ThreadStructure } from "@t3tools/client-runtime/state/shell";
-import { useState } from "react";
-
 import { InlineButton } from "../ui/button";
 import {
   Dialog,
@@ -23,12 +21,10 @@ export function BackgroundWorkDetails(props: {
   readonly threadId: ThreadId;
   readonly tasks: ReadonlyArray<OrchestrationV2PendingBackgroundTask>;
   readonly turnItems: ThreadStructure["turnItems"];
-  readonly onOpenThread: (threadId: ThreadId) => void;
 }) {
-  const [open, setOpen] = useState(false);
   const streamsOutput = useCommandOutputStreaming(props.environmentId);
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
+    <Dialog>
       <DialogTrigger render={<InlineButton />}>Details</DialogTrigger>
       <DialogPopup>
         <DialogHeader>
@@ -53,7 +49,6 @@ export function BackgroundWorkDetails(props: {
                     : task.kind.replaceAll("_", " ");
               const itemId =
                 task.itemId ?? (item?.type === "command_execution" ? item.id : undefined);
-              const childThreadId = task.kind === "subagent" ? task.childThreadId : undefined;
               return (
                 <section key={task.taskId} className="space-y-2 text-sm">
                   <div className="flex items-baseline justify-between gap-3">
@@ -75,16 +70,6 @@ export function BackgroundWorkDetails(props: {
                         itemId={itemId}
                       />
                     </div>
-                  ) : null}
-                  {childThreadId ? (
-                    <InlineButton
-                      onClick={() => {
-                        setOpen(false);
-                        props.onOpenThread(childThreadId);
-                      }}
-                    >
-                      Open subagent
-                    </InlineButton>
                   ) : null}
                 </section>
               );
