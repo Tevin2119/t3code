@@ -191,11 +191,7 @@ const layer = (
             }
             if (url.pathname === "/api/lanes") return json({ lanes: [], view: "development" });
             return json({ error: "not found" }, 404);
-          }).pipe(
-            Effect.andThen((response) =>
-              (fake.beforeRequest?.(new URL(request.url)) ?? Effect.void).pipe(Effect.as(response)),
-            ),
-          ),
+          }).pipe(Effect.tap(() => fake.beforeRequest?.(new URL(request.url)) ?? Effect.void)),
         ),
       ),
     ),
@@ -517,7 +513,7 @@ describe("DeliveryService", () => {
         yield* Deferred.await(cancelled);
         expect(result.diagnostics).toEqual(["unreachable"]);
         expect(result.boards).toEqual([]);
-        fake.beforeRequest = undefined;
+        delete fake.beforeRequest;
         expect(
           (yield* service.discover({ folder: REPO, fresh: true }, ordinaryCaller)).boards,
         ).toHaveLength(1);
@@ -547,7 +543,7 @@ describe("DeliveryService", () => {
       yield* Deferred.await(started);
       yield* Fiber.interrupt(pending);
       yield* Deferred.await(cancelled);
-      fake.beforeRequest = undefined;
+      delete fake.beforeRequest;
       expect((yield* service.discover({ folder: REPO }, ordinaryCaller)).boards).toHaveLength(1);
     }).pipe(
       Effect.provide(
