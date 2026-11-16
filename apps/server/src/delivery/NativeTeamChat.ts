@@ -7,6 +7,7 @@ import {
   RunId,
   ThreadId,
 } from "@t3tools/contracts";
+import { projectComposerContextForProvider } from "@t3tools/shared/composerContextReferences";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as EventSink from "../orchestration-v2/EventSink.ts";
@@ -137,7 +138,10 @@ export const make = Effect.gen(function* () {
           ? ""
           : `\n\nFiles attached to the latest message, to read from these paths:\n${files.join("\n")}`;
       const conversation = history.messages
-        .map((message) => `${message.role}: ${message.text}`)
+        .map(
+          (message) =>
+            `${message.role}: ${projectComposerContextForProvider({ text: message.text, records: message.context?.records ?? [] })}`,
+        )
         .join("\n\n")
         .slice(-24000);
       const tasks = parent.subagents.filter((task) => task.teamChat?.sourceRunId === input.runId);

@@ -21,6 +21,22 @@ import { resolveInteractionMode, resolveRuntimeMode } from "./delegatedTaskModes
 import { fencingLinkOrigin } from "./linkOrigin.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 
+/** Exact ids, including deleted threads, take precedence; context ids fall back only to live threads. */
+export const resolveThreadReference = Effect.fn("mcp.resolveThreadReference")(function* (
+  threads: Pick<ThreadManagement.ThreadManagementService["Service"], "getThreadShell">,
+  threadId: ThreadId,
+) {
+  const shell = yield* threads.getThreadShell(threadId);
+  if (shell !== null || !threadId.startsWith("thread_") || threadId === "thread_") {
+    return { threadId, shell };
+  }
+  const referencedId = ThreadId.make(threadId.slice("thread_".length));
+  const referenced = yield* threads.getThreadShell(referencedId);
+  return referenced !== null && referenced.deletedAt === null
+    ? { threadId: referencedId, shell: referenced }
+    : { threadId, shell: null };
+});
+
 const delegatedTaskPrefix = "thread:delegated-task:";
 
 const suggestedThreadId = (threadId: ThreadId) => {
@@ -32,12 +48,7 @@ const suggestedThreadId = (threadId: ThreadId) => {
   return encoded === rest ? null : ThreadId.make(`${delegatedTaskPrefix}${encoded}`);
 };
 
-/**
- * Agents paste bare uuids for `mcp:<uuid>` threads and unencoded delegated-task ids.
- * The id is never rewritten, so permission checks keyed on it still hold; the miss
- * only names a live thread the caller could read by its full id. Ids from another
- * machine miss here too. The link hint is static: listing links probes peers.
- */
+/** Access checks and handlers share resolution; misses only suggest live alternative ids and linked environments. */
 export const threadNotFound = Effect.fn("OrchestratorMcpService.threadNotFound")(function* (
   threads: Pick<ThreadManagement.ThreadManagementService["Service"], "getThreadShell">,
   scope: McpInvocationContext.McpInvocationScope,
@@ -222,7 +233,10 @@ export const readThread = Effect.fn("mcp.readThread")(function* <
 >(threadId?: ThreadId, fields: ReadonlyArray<K> = [], filter?: ProjectionRecordFilter) {
   const context = yield* readCaller();
   const targetId = yield* resolveThreadId(context, threadId);
-  const shell = yield* context.threads.getThreadShell(targetId).pipe(Effect.mapError(unavailable));
+  const { threadId: resolvedId, shell } = yield* resolveThreadReference(
+    context.threads,
+    targetId,
+  ).pipe(Effect.mapError(unavailable));
   if (shell === null || shell.deletedAt !== null) {
     return yield* threadNotFound(
       context.threads,
@@ -232,7 +246,7 @@ export const readThread = Effect.fn("mcp.readThread")(function* <
     );
   }
   const projection = yield* context.threads
-    .getProjectThreadRecords({ projectId: shell.projectId, threadId: targetId }, fields, {
+    .getProjectThreadRecords({ projectId: shell.projectId, threadId: resolvedId }, fields, {
       turnItemTypes: ["user_input_request"],
       ...filter,
     })

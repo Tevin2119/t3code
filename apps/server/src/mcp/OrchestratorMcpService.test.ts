@@ -4490,19 +4490,149 @@ describe("OrchestratorMcpService thread lookup", () => {
         ),
       ),
     );
-  const failuresFor = (shells: ReadonlyArray<OrchestrationV2ThreadShell>) =>
+  const failuresFor = (shells: ReadonlyArray<OrchestrationV2ThreadShell>, threadId = bareId) =>
     Effect.gen(function* () {
       const sent = yield* Ref.make(0);
       return yield* Effect.gen(function* () {
         const mcp = yield* OrchestratorMcpService.OrchestratorMcpService;
-        const read = yield* mcp.readThread(client, { threadId: bareId }).pipe(Effect.flip);
+        const read = yield* mcp.readThread(client, { threadId }).pipe(Effect.flip);
         const send = yield* mcp
-          .sendToThread(client, { threadId: bareId, message: "hello" })
+          .sendToThread(client, { threadId, message: "hello" })
           .pipe(Effect.flip);
-        const wait = yield* mcp.waitForThread(client, { threadId: bareId }).pipe(Effect.flip);
+        const wait = yield* mcp.waitForThread(client, { threadId }).pipe(Effect.flip);
         return { read, send, wait, sends: yield* Ref.get(sent) };
       }).pipe(Effect.provide(service(shells, sent)));
     });
+
+  it.effect.each([
+    [ThreadId.make(`thread_${bareId}`), bareId, [bareId]],
+    [
+      ThreadId.make(`thread_${bareId}`),
+      ThreadId.make(`thread_${bareId}`),
+      [bareId, ThreadId.make(`thread_${bareId}`)],
+    ],
+    [bareId, bareId, [bareId]],
+    [launched.id, launched.id, [launched.id]],
+  ] as const)("reads, sends and waits using the resolved id: %s", ([threadId, resolvedId, ids]) =>
+    Effect.gen(function* () {
+      const sent = yield* Ref.make(0);
+      const shell = liveThreadShell(resolvedId);
+      const projection = idleThreadProjection(shell);
+      const seen: ThreadId[] = [];
+      yield* Effect.gen(function* () {
+        const mcp = yield* OrchestratorMcpService.OrchestratorMcpService;
+        const read = yield* mcp.readThread(client, { threadId });
+        const send = yield* mcp.sendToThread(client, { threadId, message: "hello" });
+        const wait = yield* mcp.waitForThread(client, { threadId });
+        assert.equal(read.thread.threadId, resolvedId);
+        assert.equal(send.threadId, resolvedId);
+        assert.include(send.link, `/${resolvedId})`);
+        assert.equal(wait.threadId, resolvedId);
+        assert.deepEqual(seen, [
+          resolvedId,
+          resolvedId,
+          resolvedId,
+          resolvedId,
+          resolvedId,
+          resolvedId,
+        ]);
+      }).pipe(
+        Effect.provide(
+          service(
+            ids.map((id) => liveThreadShell(id)),
+            sent,
+            {
+              getProjectThreadRecords: (input) => {
+                seen.push(input.threadId);
+                return Effect.succeed(projection);
+              },
+              getTimelinePage: (id) => {
+                seen.push(id);
+                return Effect.succeed({
+                  items: [],
+                  totalItems: 0,
+                  hasMore: false,
+                  hasEarlier: false,
+                });
+              },
+              sendToThread: (input) => {
+                seen.push(input.threadId);
+                return Effect.succeed({
+                  run: {
+                    id: RunId.make("run:sent"),
+                    status: "running",
+                  } as OrchestrationV2ThreadProjection["runs"][number],
+                  delivery: "started" as const,
+                  dispatch: { sequence: 1, storedEvents: [] },
+                  projection,
+                  message: {
+                    id: MessageId.make("sent"),
+                    role: "user" as const,
+                    createdBy: "agent" as const,
+                    creationSource: "mcp" as const,
+                    threadId: resolvedId,
+                    runId: null,
+                    nodeId: null,
+                    streaming: false,
+                    text: "hello",
+                    attachments: [],
+                    createdAt: shell.createdAt,
+                    updatedAt: shell.updatedAt,
+                  },
+                  turnItem: null,
+                });
+              },
+              waitForThread: (input) => {
+                seen.push(input.threadId);
+                return Effect.succeed({ threadId: input.threadId, run: null, timedOut: false });
+              },
+            },
+          ),
+        ),
+      );
+    }),
+  );
+
+  it.effect.each(["unknown", "deleted", "deleted-exact", "empty", "malformed"] as const)(
+    "keeps the original not-found wording for a prefixed %s id",
+    (kind) =>
+      Effect.gen(function* () {
+        const threadId = ThreadId.make(
+          kind === "empty"
+            ? "thread_"
+            : kind === "malformed"
+              ? "thread_/missing"
+              : `thread_${bareId}`,
+        );
+        const deleted = { ...liveThreadShell(bareId), deletedAt: deletedLaunched.deletedAt };
+        const shells =
+          kind === "deleted"
+            ? [deleted]
+            : kind === "deleted-exact"
+              ? [liveThreadShell(bareId), { ...deleted, id: threadId }]
+              : [];
+        const { read, send, wait, sends } = yield* failuresFor(shells, threadId);
+        assert.equal(read.code, "thread_not_found");
+        assert.equal(read.message, `Thread ${threadId} is no longer available.`);
+        for (const error of [send, wait]) {
+          assert.equal(error.code, "thread_not_found");
+          assert.equal(error.message, `Thread ${threadId} was not found.`);
+        }
+        assert.equal(sends, 0);
+      }),
+  );
+
+  it.effect("keeps interrupt exact-only for a context reference", () =>
+    Effect.gen(function* () {
+      const sent = yield* Ref.make(0);
+      const threadId = ThreadId.make(`thread_${bareId}`);
+      yield* Effect.gen(function* () {
+        const mcp = yield* OrchestratorMcpService.OrchestratorMcpService;
+        const error = yield* mcp.interruptThread(client, { threadId }).pipe(Effect.flip);
+        assert.equal(error.code, "thread_not_found");
+      }).pipe(Effect.provide(service([liveThreadShell(bareId)], sent)));
+    }),
+  );
 
   it.effect("points a bare uuid at the mcp: thread it belongs to", () =>
     Effect.gen(function* () {

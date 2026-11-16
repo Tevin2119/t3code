@@ -1,4 +1,5 @@
 import {
+  EnvironmentId,
   NodeId,
   DeliveryError,
   MessageId,
@@ -14,6 +15,10 @@ import {
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
+import {
+  threadContextRecord,
+  formatComposerContextReference,
+} from "@t3tools/shared/composerContextReferences";
 import { createModelSelection } from "@t3tools/shared/model";
 import { ServerConfig } from "../config.ts";
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
@@ -107,10 +112,18 @@ function setup({
           ...(callsTeam ? { team: callsTeam } : {}),
         },
   };
+  const attachedThread = threadContextRecord(
+    {
+      environmentId: EnvironmentId.make("reference-environment"),
+      threadId: ThreadId.make("0c0750fe-1234"),
+    },
+    "Earlier discussion",
+  );
   const message = {
     id: MessageId.make("question"),
     role: "user",
-    text: "Assess the migration risk.",
+    text: `Assess the migration risk. ${formatComposerContextReference(attachedThread)}`,
+    context: { records: [attachedThread] },
     attachments: [] as ChatAttachment[],
   };
   const run = {
@@ -371,6 +384,12 @@ it.effect("recovers a lost dispatch receipt and shares independent results befor
     yield* service.prepareTurn({ threadId, runId }).pipe(Effect.flip);
     expect((yield* service.prepareTurn({ threadId, runId })).ready).toBe(false);
     expect(fixture.admissions.size).toBe(2);
+    for (const command of fixture.admissions.values()) {
+      expect(command.task).toContain("threadId: 0c0750fe-1234");
+      expect(command.task).toContain(
+        't3_thread_read({"threadId":"0c0750fe-1234","environmentId":"reference-environment"})',
+      );
+    }
     expect([...fixture.admissions.values()].map((command) => command.modelSelection)).toEqual(
       fixture.participants.map((seat) => seat.modelSelection),
     );

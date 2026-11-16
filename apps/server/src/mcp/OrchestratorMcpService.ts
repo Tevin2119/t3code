@@ -132,7 +132,12 @@ import {
   runtimeModeRank,
   taskPrompt,
 } from "./delegatedTaskModes.ts";
-import { assertTargetWithinLimits, isLiveCallerShell, threadNotFound } from "./threadAccess.ts";
+import {
+  assertTargetWithinLimits,
+  isLiveCallerShell,
+  resolveThreadReference,
+  threadNotFound,
+} from "./threadAccess.ts";
 import * as SecretRequests from "../secrets/SecretRequests.ts";
 import * as PeerForwarding from "../peer/PeerForwarding.ts";
 import * as RemoteDelegation from "../peer/RemoteDelegation.ts";
@@ -1370,10 +1375,15 @@ const make = Effect.gen(function* () {
   const loadTargetThread = Effect.fn("OrchestratorMcpService.loadTargetThread")(function* (
     scope: McpInvocationScope,
     threadId: ThreadId,
+    resolveContextReference = true,
   ) {
-    const shell = yield* threadManagement
-      .getThreadShell(threadId)
-      .pipe(Effect.mapError(threadManagementFailure));
+    const { threadId: resolvedId, shell } = yield* (
+      resolveContextReference
+        ? resolveThreadReference(threadManagement, threadId)
+        : threadManagement
+            .getThreadShell(threadId)
+            .pipe(Effect.map((shell) => ({ threadId, shell })))
+    ).pipe(Effect.mapError(threadManagementFailure));
     if (shell === null || shell.deletedAt !== null) {
       return yield* threadNotFound(
         threadManagement,
@@ -1384,19 +1394,24 @@ const make = Effect.gen(function* () {
     }
     // Keeps legacy import and project validation; callers read only the thread row.
     return yield* threadManagement
-      .getProjectThreadRecords({ projectId: shell.projectId, threadId }, [])
+      .getProjectThreadRecords({ projectId: shell.projectId, threadId: resolvedId }, [])
       .pipe(Effect.mapError(threadManagementFailure));
   });
 
   const loadScopedThread = Effect.fn("OrchestratorMcpService.loadScopedThread")(function* <
     K extends "runs",
-  >(scope: McpInvocationScope, threadId: ThreadId, callerFields: ReadonlyArray<K>) {
+  >(
+    scope: McpInvocationScope,
+    threadId: ThreadId,
+    callerFields: ReadonlyArray<K>,
+    resolveContextReference = true,
+  ) {
     const caller = yield* loadCaller(scope, callerFields);
     // Only the thread row: the caller's own record holds just its active runs.
     const target: Pick<OrchestrationV2ThreadProjection, "thread"> =
       caller.parent !== undefined && threadId === caller.parent.thread.id
         ? caller.parent
-        : yield* loadTargetThread(scope, threadId);
+        : yield* loadTargetThread(scope, threadId, resolveContextReference);
     return { ...caller, target } as const;
   });
 
@@ -1451,9 +1466,10 @@ const make = Effect.gen(function* () {
     threadId: ThreadId,
   ) {
     const { parent } = yield* loadCaller(scope, []);
-    const shell = yield* threadManagement
-      .getThreadShell(threadId)
-      .pipe(Effect.mapError(threadManagementFailure));
+    const { threadId: resolvedId, shell } = yield* resolveThreadReference(
+      threadManagement,
+      threadId,
+    ).pipe(Effect.mapError(threadManagementFailure));
     if (shell === null || shell.deletedAt !== null) {
       return yield* threadNotFound(
         threadManagement,
@@ -1462,7 +1478,7 @@ const make = Effect.gen(function* () {
         `Thread ${threadId} is no longer available.`,
       );
     }
-    const input = { projectId: shell.projectId, threadId };
+    const input = { projectId: shell.projectId, threadId: resolvedId };
     // Transfers are needed only to acknowledge a caller's child-task result.
     const records =
       parent === undefined
@@ -3286,7 +3302,7 @@ const make = Effect.gen(function* () {
         input.beforePosition !== undefined ||
         (input.afterPosition === undefined && scope.thread !== undefined);
       const timeline = yield* threadManagement
-        .getTimelinePage(input.threadId, {
+        .getTimelinePage(target.thread.id, {
           ...(input.afterPosition === undefined ? {} : { afterPosition: input.afterPosition }),
           ...(newestFirst
             ? { beforePosition: input.beforePosition ?? Number.POSITIVE_INFINITY }
@@ -3417,7 +3433,7 @@ const make = Effect.gen(function* () {
             requestKey: key,
             operation: "thread-send",
           }),
-          threadId: input.threadId,
+          threadId: target.thread.id,
           ...(parent === undefined ? {} : { senderThreadId: parent.thread.id }),
           // A linked environment's agent has no thread here; the link names it.
           ...(parent === undefined && scope.client?.senderThread !== undefined
@@ -3442,8 +3458,8 @@ const make = Effect.gen(function* () {
           ),
         );
       return {
-        threadId: input.threadId,
-        link: threadLinkFor(scope, input.threadId, target.thread.title),
+        threadId: target.thread.id,
+        link: threadLinkFor(scope, target.thread.id, target.thread.title),
         messageId,
         runId: result.run.id,
         ...(result.run.delegatedTaskId === undefined ? {} : { taskId: result.run.delegatedTaskId }),
@@ -3456,7 +3472,7 @@ const make = Effect.gen(function* () {
       const result = yield* threadManagement
         .waitForThread({
           projectId: target.thread.projectId,
-          threadId: input.threadId,
+          threadId: target.thread.id,
           ...(input.runId === undefined ? {} : { runId: input.runId }),
           timeoutMs: Math.min(
             MAX_WAIT_TIMEOUT_MS,
@@ -3477,19 +3493,19 @@ const make = Effect.gen(function* () {
             task.id === taskId &&
             task.origin === "app_owned" &&
             task.threadId === parent.thread.id &&
-            task.childThreadId === input.threadId &&
+            task.childThreadId === target.thread.id &&
             task.completionDelivery?.state !== "disposed",
         );
       // A child waiting on a question or approval needs an answer, not a wake.
       const childRequests = ownedTask
         ? (yield* threadManagement
-            .getThreadRecords(input.threadId, ["runtimeRequests"])
+            .getThreadRecords(target.thread.id, ["runtimeRequests"])
             .pipe(Effect.mapError(threadManagementFailure))).runtimeRequests
         : [];
       const wakesCaller =
         ownedTask && !childRequests.some((request) => request.status === "pending");
       return {
-        threadId: input.threadId,
+        threadId: target.thread.id,
         runId: result.run?.id ?? null,
         status,
         timedOut: result.timedOut,
@@ -3502,7 +3518,12 @@ const make = Effect.gen(function* () {
       } satisfies OrchestratorMcpThreadWaitResult;
     }),
     interruptThread: Effect.fn("OrchestratorMcpService.interruptThread")(function* (scope, input) {
-      const { parent, limits, target } = yield* loadScopedThread(scope, input.threadId, ["runs"]);
+      const { parent, limits, target } = yield* loadScopedThread(
+        scope,
+        input.threadId,
+        ["runs"],
+        false,
+      );
       yield* assertLiveCallerForOtherThread(scope, parent, target);
       yield* assertTargetWithinLimits(limits, target.thread);
       const key = yield* requestKey(input.clientRequestId);

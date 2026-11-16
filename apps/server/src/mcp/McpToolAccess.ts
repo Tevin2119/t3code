@@ -33,6 +33,7 @@ import {
   type Caller,
   loadCaller,
   readCaller,
+  resolveThreadReference,
   unavailable,
 } from "./threadAccess.ts";
 
@@ -206,9 +207,9 @@ export const writesThreads = <P, A, E, R>(
         const caller = yield* writingCaller;
         for (const threadId of threads(params)) {
           if (threadId === undefined || threadId === caller.scope.thread?.threadId) continue;
-          const target = yield* caller.threads
-            .getThreadShell(threadId)
-            .pipe(Effect.mapError(unavailable));
+          const { shell: target } = yield* resolveThreadReference(caller.threads, threadId).pipe(
+            Effect.mapError(unavailable),
+          );
           if (target !== null && target.deletedAt === null) {
             yield* assertTargetWithinLimits(caller.limits, target);
             yield* assertSameLink(caller, target);
