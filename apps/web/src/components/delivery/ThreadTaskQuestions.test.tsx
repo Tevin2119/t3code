@@ -216,3 +216,25 @@ it("shows a later matching engine answer beside the retained uncertain draft", a
   expect(renderer.root.findByType("textarea").props.value).toBe("Keep it");
   expect(mock.action).toHaveBeenCalledTimes(1);
 });
+it("keeps a settled question as one collapsed line until opened", async () => {
+  mock.body = task(true);
+  await mount();
+  const json = JSON.stringify(renderer.toJSON());
+  expect(json).toContain("Answered");
+  expect(json).toContain("Question 1");
+  expect(json).not.toContain("Keep it");
+  expect(json).not.toContain("Reply to Q");
+  const trigger = renderer.root
+    .findAllByType("button")
+    .find((entry) => entry.props["data-slot"] === "collapsible-trigger")!;
+  // Base UI reads the native event when reporting the toggle reason.
+  const press = () => trigger.props.onClick({ nativeEvent: { type: "click" } });
+  await act(() => press());
+  expect(JSON.stringify(renderer.toJSON())).toContain("Keep it");
+  await act(() => press());
+  expect(
+    renderer.root
+      .findAllByType("button")
+      .find((entry) => entry.props["data-slot"] === "collapsible-trigger")!.props["aria-expanded"],
+  ).toBe(false);
+});
