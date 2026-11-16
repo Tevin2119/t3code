@@ -6,6 +6,8 @@ import {
   formatComposerContextReference,
   toComposerContextId,
 } from "@t3tools/shared/composerContextReferences";
+import type { AtomCommandResult } from "@t3tools/client-runtime/state/runtime";
+import * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
 import * as Option from "effect/Option";
 import { AsyncResult, type Atom, AtomRegistry } from "effect/reactivity";
@@ -16,6 +18,10 @@ import { page } from "vite-plus/test/browser";
 const state = vi.hoisted(() => ({
   threadState: null as unknown as Atom.Writable<AsyncResult.AsyncResult<EnvironmentThreadState>>,
   workflow: null as unknown,
+  calls: [] as Array<{ command: unknown; value: unknown }>,
+  result: null as unknown as () =>
+    | AtomCommandResult<void, Error>
+    | Promise<AtomCommandResult<void, Error>>,
 }));
 
 vi.mock(import("@t3tools/client-runtime/state/thread-workflows"), async (importOriginal) => ({
@@ -66,7 +72,10 @@ vi.mock(import("../../state/threads"), async (importOriginal) => {
 
 vi.mock(import("../../state/use-atom-command"), async (importOriginal) => ({
   ...(await importOriginal()),
-  useAtomCommand: (() => async () => undefined) as never,
+  useAtomCommand: ((command: unknown) => async (value: unknown) => {
+    state.calls.push({ command, value });
+    return state.result();
+  }) as never,
 }));
 
 vi.mock(import("../../assets/assetUrls"), async (importOriginal) => ({
@@ -80,6 +89,7 @@ import { EMPTY_ENVIRONMENT_THREAD_STATE } from "@t3tools/client-runtime/state/th
 
 import { act, render as renderUi } from "../../../test/render";
 import { makeStreamingTimelineFixture, makeThreadProjectionFixture } from "../../test-fixtures";
+import { threadEnvironment } from "../../state/threads";
 import { ToastProvider } from "../ui/toast";
 import { QueuedRunsControl, type QueuedRunsControlHandle } from "./QueuedRunsControl";
 import { ExpandedImageDialog } from "./ExpandedImageDialog";
@@ -87,6 +97,8 @@ import type { ExpandedImagePreview } from "./ExpandedImagePreview";
 
 function setup() {
   state.workflow = null;
+  state.calls = [];
+  state.result = () => AsyncResult.success(undefined);
 }
 
 const baseProps = {
@@ -460,4 +472,126 @@ it("does not re-render while assistant text streams into the thread", async () =
 
   await act(() => registry.set(state.threadState, thread("Hello there", true)));
   expect(renders).toBeGreaterThan(settled);
+});
+
+it("resumes a held queue with only the thread id and follows server workflow updates", async () => {
+  setup();
+  const queuedRuns = [
+    {
+      run: { id: "run:queued", userMessageId: "message:queued" },
+      text: "Later",
+      attachments: [],
+    },
+  ];
+  state.workflow = { isHeld: true, queuedRuns, canSendNow: false };
+  await using screen = await renderQueue();
+  await expect.element(page.getByText("Queue paused", { exact: true })).toBeVisible();
+  await screen.getByRole("button", { name: "Resume queue", exact: true }).click();
+  expect(state.calls).toEqual([
+    {
+      command: threadEnvironment.resumeThreadQueue,
+      value: { environmentId: "environment:test", input: { threadId: "thread:test" } },
+    },
+  ]);
+  await expect.element(page.getByText("Queue paused", { exact: true })).toBeVisible();
+  state.workflow = { isHeld: false, queuedRuns, canSendNow: false };
+  await screen.rerender(<QueuedRunsControl {...baseProps} />);
+  await expect.element(page.getByText("Queue paused", { exact: true })).not.toBeInTheDocument();
+  await expect.element(page.getByRole("button", { name: "Resume queue" })).not.toBeInTheDocument();
+  state.workflow = { isHeld: true, queuedRuns: [] };
+  await screen.rerender(
+    <QueuedRunsControl
+      {...baseProps}
+      optimisticMessages={[
+        {
+          id: MessageId.make("message:pending"),
+          inputIntent: "queued_turn",
+          text: "Saving",
+          attachments: [],
+        },
+      ]}
+    />,
+  );
+  await expect.element(page.getByText("Queue paused", { exact: true })).not.toBeInTheDocument();
+  await expect.element(page.getByRole("button", { name: "Resume queue" })).not.toBeInTheDocument();
+});
+
+it.each(["Resume queue", "Send now"])(
+  "disables queue resume while %s is pending",
+  async (action) => {
+    setup();
+    state.workflow = {
+      isHeld: true,
+      canSendNow: true,
+      queuedRuns: [
+        {
+          run: { id: "run:queued", userMessageId: "message:queued" },
+          text: "Later",
+          attachments: [],
+        },
+      ],
+    };
+    await using screen = await renderQueue();
+    let resolve!: (value: AtomCommandResult<void, Error>) => void;
+    const pending = new Promise<AtomCommandResult<void, Error>>((complete) => {
+      resolve = complete;
+    });
+    state.result = () => pending;
+    await screen.getByRole("button", { name: action, exact: true }).click();
+    await expect
+      .element(screen.getByRole("button", { name: "Resume queue", exact: true }))
+      .toBeDisabled();
+    expect(state.calls).toEqual([
+      {
+        command: threadEnvironment.resumeThreadQueue,
+        value: {
+          environmentId: "environment:test",
+          input: {
+            threadId: "thread:test",
+            ...(action === "Send now" ? { runId: "run:queued" } : {}),
+          },
+        },
+      },
+    ]);
+    await act(() => resolve(AsyncResult.success(undefined)));
+    await expect
+      .element(screen.getByRole("button", { name: "Resume queue", exact: true }))
+      .toBeEnabled();
+  },
+);
+
+it.each([false, true])("reports resume failures unless interrupted=%s", async (interrupted) => {
+  setup();
+  state.workflow = {
+    isHeld: true,
+    canSendNow: false,
+    queuedRuns: [
+      {
+        run: { id: "run:queued", userMessageId: "message:queued" },
+        text: "Later",
+        attachments: [],
+      },
+    ],
+  };
+  state.result = () =>
+    AsyncResult.failure(
+      interrupted ? Cause.interrupt() : Cause.fail(new Error("Queue unavailable")),
+    );
+  await using screen = await renderUi(
+    <ToastProvider>
+      <QueuedRunsControl {...baseProps} />
+    </ToastProvider>,
+  );
+  await screen.getByRole("button", { name: "Resume queue", exact: true }).click();
+  await expect
+    .element(screen.getByRole("button", { name: "Resume queue", exact: true }))
+    .toBeEnabled();
+  if (interrupted) {
+    await expect
+      .element(page.getByText("Could not resume queue", { exact: true }))
+      .not.toBeInTheDocument();
+  } else {
+    await expect.element(page.getByText("Could not resume queue", { exact: true })).toBeVisible();
+    await expect.element(page.getByText("Queue unavailable", { exact: true })).toBeVisible();
+  }
 });

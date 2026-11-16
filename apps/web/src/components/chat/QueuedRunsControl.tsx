@@ -1,5 +1,9 @@
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import {
+  isAtomCommandInterrupted,
+  squashAtomCommandFailure,
+} from "@t3tools/client-runtime/state/runtime";
+import {
   deriveTeamChatPhase,
   deriveThreadQueueWorkflowState,
 } from "@t3tools/client-runtime/state/thread-workflows";
@@ -99,6 +103,11 @@ export function QueuedRunsControl({
   )?.projection;
   const promote = useAtomCommand(threadEnvironment.promoteQueuedRun);
   const resume = useAtomCommand(threadEnvironment.resumeThreadQueue);
+  const resumeHeldQueue = useAtomCommand(threadEnvironment.resumeThreadQueue, {
+    label: "resume queue",
+    reportFailure: false,
+  });
+  const [resumingQueue, setResumingQueue] = useState(false);
   const cancel = useAtomCommand(threadEnvironment.cancelQueuedRun);
   const [showAll, setShowAll] = useState(false);
   const queueListId = useId();
@@ -193,6 +202,26 @@ export function QueuedRunsControl({
     setBusyRunId(null);
   };
 
+  const resumeQueue = async () => {
+    if (steerInFlightRef.current) return;
+    steerInFlightRef.current = true;
+    setResumingQueue(true);
+    const result = await resumeHeldQueue({
+      environmentId: props.environmentId,
+      input: { threadId: props.threadId },
+    });
+    steerInFlightRef.current = false;
+    setResumingQueue(false);
+    if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+      const error = squashAtomCommandFailure(result);
+      toastManager.add({
+        type: "error",
+        title: "Could not resume queue",
+        description: error instanceof Error ? error.message : "Try again.",
+      });
+    }
+  };
+
   useImperativeHandle(ref, () => ({
     steerNext(repeat) {
       const next = queued[0];
@@ -254,6 +283,19 @@ export function QueuedRunsControl({
       <span className="sr-only" aria-live="polite">
         {items.length} queued
       </span>
+      {workflow?.isHeld === true && queued.length > 0 ? (
+        <div className="flex items-center gap-2 self-end">
+          <span className="text-sm text-muted-foreground">Queue paused</span>
+          <Button
+            size="xs"
+            variant="outline"
+            disabled={resumingQueue || busyRunId !== null}
+            onClick={() => void resumeQueue()}
+          >
+            Resume queue
+          </Button>
+        </div>
+      ) : null}
       <ol className="flex flex-col items-end gap-3" id={queueListId}>
         {visibleItems.map((item, position) => {
           const previewText = isAttachmentOnlyBootstrapPrompt(item.text)
