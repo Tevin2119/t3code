@@ -39,7 +39,19 @@ const backgroundShell = (threadId: ThreadId, providerInstanceId: ProviderInstanc
   ],
 });
 
+const foreignThreadId = ThreadId.make("thread:foreign-link");
 const shells = new Map([
+  [
+    foreignThreadId,
+    {
+      ...liveThreadShell(foreignThreadId, { runtimeMode: "approval-required" }),
+      linkOrigin: {
+        sessionId: "foreign",
+        label: "Other link",
+        access: "approval-required" as const,
+      },
+    },
+  ],
   [supervisedThreadId, liveThreadShell(supervisedThreadId, { runtimeMode: "approval-required" })],
   [
     planThreadId,
@@ -299,6 +311,27 @@ it.effect.each([
     "runtime_mode_escalation_denied",
   ],
   ["writes_threads", supervised, { threadId: "thread:missing" }, "ran"],
+  [
+    "writes_threads",
+    supervised,
+    { threadId: `thread_${fullAccessThreadId}` },
+    "runtime_mode_escalation_denied",
+  ],
+  [
+    "writes_threads",
+    supervisedClient,
+    { threadId: `thread_${fullAccessThreadId}` },
+    "runtime_mode_escalation_denied",
+  ],
+  [
+    "writes_threads",
+    plan,
+    { threadId: `thread_${supervisedThreadId}` },
+    "interaction_mode_escalation_denied",
+  ],
+  ["writes_threads", linkedClient, { threadId: foreignThreadId }, "capability_denied"],
+  ["writes_threads", linkedClient, { threadId: `thread_${foreignThreadId}` }, "capability_denied"],
+  ["writes_threads", supervised, { threadId: "thread_thread:missing" }, "ran"],
 
   ["starts_threads", supervised, {}, "approval-required/default"],
   ["starts_threads", supervised, { runtimeMode: "full-access" }, "runtime_mode_escalation_denied"],
