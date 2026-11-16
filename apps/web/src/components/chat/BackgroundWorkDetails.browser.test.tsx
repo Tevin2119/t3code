@@ -1,5 +1,11 @@
 import "~/index.css";
-import { EnvironmentId, ProviderDriverKind, ThreadId, TurnItemId } from "@t3tools/contracts";
+import {
+  EnvironmentId,
+  ProviderDriverKind,
+  ProviderInstanceId,
+  ThreadId,
+  TurnItemId,
+} from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import { expect, it, vi } from "vite-plus/test";
 import { page } from "vite-plus/test/browser";
@@ -94,4 +100,39 @@ it("opens full command details for short labels and keeps pending tasks current"
   await expect.element(page.getByText("Command output stream")).toBeVisible();
   await page.getByRole("button", { name: "Close", exact: true }).click();
   await expect.element(page.getByRole("dialog")).not.toBeInTheDocument();
+});
+
+it("opens a background subagent from its provider icon without a details dialog", async () => {
+  const onOpenThread = vi.fn();
+  const childThreadId = ThreadId.make("child-thread");
+  await using screen = await render(
+    <ThreadNow
+      attention={null}
+      syncPhase={null}
+      goal={null}
+      work={backgroundWorkNowItem({
+        environmentId: EnvironmentId.make("test"),
+        threadId: ThreadId.make("thread"),
+        tasks: [
+          {
+            taskId: "sub-1",
+            kind: "subagent",
+            description: "Audit fixtures",
+            providerInstanceId: ProviderInstanceId.make("codex"),
+            childThreadId,
+          },
+        ],
+        turnItems: [],
+        stopDisabled: false,
+        stopping: false,
+        onStop: async () => undefined,
+        onOpenThread,
+      })}
+    />,
+  );
+  await screen.getByRole("button", { name: "Open subagent: Audit fixtures" }).click();
+  expect(onOpenThread).toHaveBeenCalledWith(childThreadId);
+  await expect
+    .element(screen.getByRole("button", { name: "Details", exact: true }))
+    .not.toBeInTheDocument();
 });

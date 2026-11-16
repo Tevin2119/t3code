@@ -3,6 +3,7 @@ import type {
   OrchestrationV2PendingBackgroundTask,
   OrchestrationV2ProviderGoal,
   OrchestrationV2ProviderSession,
+  ProviderInstanceId,
   ThreadId,
 } from "@t3tools/contracts";
 import type { EnvironmentThreadShell, ThreadStructure } from "@t3tools/client-runtime/state/shell";
@@ -13,7 +14,10 @@ import {
 } from "@t3tools/client-runtime/state/thread-execution";
 import { childThreadInputsTitle } from "@t3tools/client-runtime/state/threads";
 import { commandDisplayText } from "@t3tools/client-runtime/work-log/command-label";
+import { scopeThreadRef } from "@t3tools/client-runtime/environment";
+import { formatModelSlugName } from "@t3tools/shared/model";
 import { formatDuration } from "@t3tools/shared/orchestrationTiming";
+import { useQuietThreadShell } from "../../state/entities";
 import * as DateTime from "effect/DateTime";
 import {
   CircleDashedIcon,
@@ -33,6 +37,7 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import type { ComposerBannerStackItem } from "./ComposerBannerStack";
 import type { ThreadNowItem } from "./ThreadNow";
+import { EnvironmentSubagentAvatar } from "./V2LifecycleRow";
 
 export function extensionStatusBannerItem(
   statuses: NonNullable<OrchestrationV2ProviderSession["extensionStatuses"]>,
@@ -175,6 +180,49 @@ export function runStopNowItem(input: {
   };
 }
 
+/** A background subagent as its provider's icon; clicking opens its thread. */
+function BackgroundSubagentButton(props: {
+  readonly environmentId: EnvironmentId;
+  readonly label: string;
+  readonly providerInstanceId: ProviderInstanceId;
+  readonly subagent:
+    | Extract<ThreadStructure["turnItems"][number], { type: "subagent" }>
+    | undefined;
+  readonly childThreadId: ThreadId | undefined;
+  readonly onOpenThread: (threadId: ThreadId) => void;
+}) {
+  const { childThreadId, onOpenThread } = props;
+  const child = useQuietThreadShell(
+    childThreadId === undefined ? null : scopeThreadRef(props.environmentId, childThreadId),
+  );
+  const model = child?.modelSelection.model;
+  const name = model ? `${props.label} · ${formatModelSlugName(model)}` : props.label;
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <button
+            type="button"
+            aria-label={childThreadId ? `Open subagent: ${name}` : name}
+            disabled={childThreadId === undefined}
+            onClick={() => childThreadId && onOpenThread(childThreadId)}
+            className="-my-1 self-center rounded-full outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring enabled:cursor-pointer"
+          />
+        }
+      >
+        <EnvironmentSubagentAvatar
+          environmentId={props.environmentId}
+          providerInstanceId={props.providerInstanceId}
+          driver={props.subagent?.driver}
+          remote={props.subagent?.remoteChild}
+          className="size-5"
+        />
+      </TooltipTrigger>
+      <TooltipPopup side="top">{name}</TooltipPopup>
+    </Tooltip>
+  );
+}
+
 /** Background commands and subagents, for the end of the timeline. */
 export function backgroundWorkNowItem(input: {
   readonly environmentId: EnvironmentId;
@@ -190,8 +238,8 @@ export function backgroundWorkNowItem(input: {
   const presentation = presentPendingBackgroundWork(input.tasks);
   if (presentation === null) return null;
   const rows = presentation.items.map((task) => {
-    const itemKey =
-      input.tasks.find((pending) => pending.taskId === task.taskId)?.nativeItemId ?? task.taskId;
+    const pending = input.tasks.find((candidate) => candidate.taskId === task.taskId);
+    const itemKey = pending?.nativeItemId ?? task.taskId;
     // Same key derivePendingBackgroundWork gives turn-item tasks; subagent items carry progress.
     const item = input.turnItems.findLast(
       (candidate) => (candidate.nativeItemRef?.nativeId || candidate.id) === itemKey,
@@ -199,6 +247,10 @@ export function backgroundWorkNowItem(input: {
     const subagent = item?.type === "subagent" ? item : undefined;
     return {
       task,
+      subagent,
+      providerInstanceId:
+        subagent?.providerInstanceId ??
+        (pending?.kind === "subagent" ? pending.providerInstanceId : undefined),
       label:
         item?.type === "command_execution" && commandDisplayText(item.input) === task.label ? (
           <span className="font-mono in-data-[slot=popover-popup]:whitespace-pre-wrap">
@@ -220,6 +272,8 @@ export function backgroundWorkNowItem(input: {
     .toSorted((left, right) => right.updatedAtMs - left.updatedAtMs)[0];
   const isCommand = (row: (typeof rows)[number]) => row.task.kind !== "subagent";
   const startedAtMs = only?.startedAtMs ?? null;
+  // A subagent opens from its own icon; the dialog only earns its place for command output.
+  const commandTasks = input.tasks.filter((task) => task.kind !== "subagent");
   return {
     id: `background-work:${input.threadId}`,
     icon: rows.every(isCommand) ? <TerminalIcon /> : <CircleDashedIcon />,
@@ -256,13 +310,27 @@ export function backgroundWorkNowItem(input: {
             className="tabular-nums"
           />
         )}
-        <BackgroundWorkDetails
-          environmentId={input.environmentId}
-          threadId={input.threadId}
-          tasks={input.tasks}
-          turnItems={input.turnItems}
-          onOpenThread={onOpenThread}
-        />
+        {rows.map((row) =>
+          row.task.kind !== "subagent" || row.providerInstanceId === undefined ? null : (
+            <BackgroundSubagentButton
+              key={row.task.taskId}
+              environmentId={input.environmentId}
+              label={row.task.label}
+              providerInstanceId={row.providerInstanceId}
+              subagent={row.subagent}
+              childThreadId={row.task.childThreadId ?? row.subagent?.childThreadId ?? undefined}
+              onOpenThread={onOpenThread}
+            />
+          ),
+        )}
+        {commandTasks.length === 0 ? null : (
+          <BackgroundWorkDetails
+            environmentId={input.environmentId}
+            threadId={input.threadId}
+            tasks={commandTasks}
+            turnItems={input.turnItems}
+          />
+        )}
         <InlineButton disabled={input.stopDisabled} onClick={() => void input.onStop()}>
           {input.stopping ? "Stopping..." : "Stop"}
         </InlineButton>
