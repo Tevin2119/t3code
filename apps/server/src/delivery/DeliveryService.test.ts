@@ -268,6 +268,101 @@ const discoveryEngine = () => {
 };
 
 describe("DeliveryService", () => {
+  it.effect.each([
+    { status: 400, expected: undefined, calls: 2 },
+    { status: 404, expected: undefined, calls: 2 },
+    { status: 401, expected: "unauthorized", calls: 1 },
+    { status: 403, expected: "unauthorized", calls: 1 },
+    { status: 200, expected: "unsupported-server", calls: 1 },
+  ])("bounds repository compatibility for HTTP $status", (entry) => {
+    const fake = discoveryEngine();
+    fake.replies = { ...fake.replies, "/api/repositories?discovery=1": {} };
+    fake.statuses = { "/api/repositories?discovery=1": entry.status };
+    return Effect.gen(function* () {
+      const service = yield* DeliveryService.DeliveryService;
+      const result = yield* service.discover({ folder: REPO, fresh: true }, ordinaryCaller);
+      expect(fake.requests.filter((request) => request.path === "/api/repositories")).toHaveLength(
+        entry.calls,
+      );
+      if (entry.expected) expect(result.diagnostics).toEqual([entry.expected]);
+      else expect(result.repository?.id).toBe("repo");
+    }).pipe(
+      Effect.provide(
+        layer(fake, { prefix: "repository-compatibility-", environment: discoveryProfile }),
+      ),
+    );
+  });
+  it.effect("shares the repository deadline with the legacy fallback", () => {
+    const fake = discoveryEngine();
+    fake.replies = { ...fake.replies, "/api/repositories?discovery=1": {} };
+    fake.statuses = { "/api/repositories?discovery=1": 404 };
+    return Effect.gen(function* () {
+      const started = yield* Deferred.make<void>();
+      const fallback = yield* Deferred.make<void>();
+      const cancelled = yield* Deferred.make<void>();
+      fake.beforeRequest = (url) =>
+        url.pathname !== "/api/repositories"
+          ? Effect.void
+          : url.search
+            ? Deferred.succeed(started, undefined).pipe(Effect.andThen(Effect.sleep("1500 millis")))
+            : Deferred.succeed(fallback, undefined).pipe(
+                Effect.andThen(Effect.never),
+                Effect.onInterrupt(() => Deferred.succeed(cancelled, undefined)),
+              );
+      const service = yield* DeliveryService.DeliveryService;
+      const pending = yield* service
+        .discover({ folder: REPO, fresh: true }, ordinaryCaller)
+        .pipe(Effect.forkChild);
+      yield* Deferred.await(started);
+      yield* TestClock.adjust("1500 millis");
+      yield* Deferred.await(fallback);
+      yield* TestClock.adjust("500 millis");
+      yield* Deferred.await(cancelled);
+      expect((yield* Fiber.join(pending)).diagnostics).toEqual(["unreachable"]);
+      delete fake.beforeRequest;
+      expect(
+        (yield* service.discover({ folder: REPO, fresh: true }, ordinaryCaller)).repository?.id,
+      ).toBe("repo");
+    }).pipe(
+      Effect.provide(
+        layer(fake, { prefix: "repository-fallback-deadline-", environment: discoveryProfile }),
+      ),
+    );
+  });
+  it.effect("observes registrations without promoting them to preflight readiness", () => {
+    const fake = discoveryEngine();
+    fake.replies = {
+      ...fake.replies,
+      "/api/repositories?discovery=1": [
+        { id: "repo", title: "Repository", path: REPO, defaultBase: "master", kind: "own" },
+      ],
+      "/api/repositories": [{ id: "repo", path: REPO, kind: "own", ok: false }],
+    };
+    return Effect.gen(function* () {
+      const service = yield* DeliveryService.DeliveryService;
+      const observed = yield* service.discover({ folder: REPO, fresh: true }, ordinaryCaller);
+      expect(observed.repository?.id).toBe("repo");
+      expect(observed.preflight).toBe("not-requested");
+      expect(
+        fake.requests
+          .filter((request) => request.path === "/api/repositories")
+          .map((request) => request.search),
+      ).toEqual(["?discovery=1"]);
+      const preflight = yield* service.discover(
+        { folder: REPO, board: "work", team: "development", preflight: true },
+        ordinaryCaller,
+      );
+      expect(preflight.preflight).toBe("blocked");
+      expect(preflight.diagnostics).toContain("unregistered-repository");
+      expect(
+        fake.requests
+          .filter((request) => request.path === "/api/repositories")
+          .map((request) => request.search),
+      ).toEqual(["?discovery=1", ""]);
+    }).pipe(
+      Effect.provide(layer(fake, { prefix: "registration-only-", environment: discoveryProfile })),
+    );
+  });
   it.effect(
     "preflights an explicit delivery launch before any write and rejects changed setup",
     () => {
