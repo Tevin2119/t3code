@@ -31,6 +31,8 @@ import * as Schema from "effect/Schema";
 import * as ServerConfig from "../config.ts";
 import * as NativeTeamChat from "../delivery/NativeTeamChat.ts";
 import * as DeliveryService from "../delivery/DeliveryService.ts";
+import { deliveryTurnContext } from "../delivery/deliveryDiscovery.ts";
+import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import {
   CLAUDE_PROVIDER,
   CLAUDE_QUERY_ENDED_BEFORE_TURN_DETAIL,
@@ -202,6 +204,7 @@ export const layer: Layer.Layer<
     const runtimePolicy = yield* RuntimePolicy.RuntimePolicyV2;
     const teamChat = yield* Effect.serviceOption(NativeTeamChat.NativeTeamChat);
     const deliveryService = yield* Effect.serviceOption(DeliveryService.DeliveryService);
+    const environment = yield* Effect.serviceOption(ServerEnvironment.ServerEnvironment);
     const restoreMissingWorktree = yield* makeRestoreMissingWorktree;
     const turnItemPositions = yield* TurnItemPositionStore.TurnItemPositionStoreV2;
 
@@ -1819,7 +1822,28 @@ export const layer: Layer.Layer<
             sideChatHandoff === undefined || compact || goalCommand
               ? ""
               : sideChatHandoff.summaryText;
-          const context = [delivery.context, sideChatContext, restartNote, discussion.context]
+          const boardContext =
+            compact || goalCommand || Option.isNone(deliveryService) || Option.isNone(environment)
+              ? ""
+              : deliveryTurnContext(
+                  yield* deliveryService.value.discover(
+                    { folder: resolvedRuntimePolicy.cwd ?? "" },
+                    {
+                      environmentId: yield* environment.value.getEnvironmentId,
+                      threadId: input.threadId,
+                      driver: session.driver,
+                      toolsSupported: session.providerSession.capabilities.tools.supportsMcpTools,
+                    },
+                  ),
+                );
+          if (!(yield* isCurrentAttemptInStatus("running"))) return;
+          const context = [
+            delivery.context,
+            sideChatContext,
+            restartNote,
+            discussion.context,
+            boardContext,
+          ]
             .filter((part) => part !== "")
             .join("\n\n");
           const { restartContinuationOfRunId: _resumedRunId, ...promptedInput } = turnInput;
@@ -1898,6 +1922,7 @@ export const layer: Layer.Layer<
         retryHandoff.length === 0 &&
         sideChatHandoff === undefined &&
         discussion.context === "" &&
+        (Option.isNone(deliveryService) || Option.isNone(environment)) &&
         restartNote === "" &&
         !noteContinuation
           ? session

@@ -14,6 +14,13 @@ import * as ThreadMetadataMcpService from "../../ThreadMetadataMcpService.ts";
 import * as NativeBuildExecution from "../../../delivery/NativeBuildExecution.ts";
 
 const handlers = {
+  delivery_read: McpToolAccess.reads(({ environmentId, ...input }) =>
+    Effect.gen(function* () {
+      const scope = yield* McpInvocationContext.McpInvocationContext;
+      const forwarding = yield* PeerForwarding.PeerForwarding;
+      return yield* forwarding.readDelivery(scope, input, environmentId);
+    }),
+  ),
   delivery_native_build_step: McpToolAccess.actsAsCaller((input) =>
     Effect.gen(function* () {
       const scope = yield* McpInvocationContext.McpInvocationContext;
