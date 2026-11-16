@@ -6,6 +6,7 @@ import {
   PreviewAutomationUnavailableError,
   type ProviderInstanceId,
   type ProviderInteractionMode,
+  type OrchestrationV2LinkedSender,
   type RuntimeMode,
   type ThreadId,
 } from "@t3tools/contracts";
@@ -45,6 +46,8 @@ export interface McpClientCaller {
    * another environment passing on the limits of the agent it calls for.
    */
   readonly narrowedTo?: ClientModes | undefined;
+  /** A linked environment's thread this request is made for (`T3-Sender-Thread`). */
+  readonly senderThread?: OrchestrationV2LinkedSender | undefined;
   /** An outside client's thread links go through this hosted app, as Copy thread's do. */
   readonly hostedAppUrl?: string | undefined;
 }
@@ -56,6 +59,13 @@ export interface McpClientCaller {
  * `clientModeCeiling`), so a client gains nothing by sending a broad one.
  */
 export const MODE_LIMIT_HEADER = "t3-mode-limit";
+
+/**
+ * `T3-Sender-Thread: <environmentId>/<threadId>/<title>`, each URI-encoded: the
+ * thread another environment makes a request for, so what it sends here can name
+ * it. Read only from a linked client.
+ */
+export const SENDER_THREAD_HEADER = "t3-sender-thread";
 
 export interface ClientModes {
   readonly runtimeMode: RuntimeMode;
@@ -133,19 +143,28 @@ export interface McpInvocationScope {
   readonly linkedEnvironments?: boolean;
   /** False while Delivery is off here; `/mcp` reads it per request. */
   readonly delivery?: boolean;
+  /**
+   * The origin this `/mcp` request reached, e.g. a T3 Connect tunnel. Hosted clients cannot
+   * see the URL they were configured with, so links they must fetch carry it. Unset in-process.
+   */
+  readonly origin?: string | undefined;
 }
 
 /**
  * T3 Code renders `t3-thread://` links as thread chips. Other MCP clients cannot open them, so
  * they get the hosted link Copy thread copies, which opens the thread in either app or a browser.
+ * A known `title` labels the chip for clients that cannot load this environment's threads.
  */
 export const threadLinkFor = (
   scope: Pick<McpInvocationScope, "environmentId" | "client">,
   threadId: ThreadId,
+  title?: string,
 ): string => {
   const hostedAppUrl = scope.client?.hostedAppUrl;
   const ref = { environmentId: scope.environmentId, threadId };
-  return hostedAppUrl === undefined ? formatThreadLink(ref) : hostedThreadLink(ref, hostedAppUrl);
+  return hostedAppUrl === undefined
+    ? formatThreadLink(ref, title)
+    : hostedThreadLink(ref, hostedAppUrl);
 };
 
 export class McpInvocationContext extends Context.Service<
@@ -163,6 +182,17 @@ export const hiddenFromSubagents = (): boolean => {
   return scope?.thread?.subagent !== true;
 };
 
+/**
+ * `McpSchema.EnabledWhen` for tools that act as the calling thread: a client
+ * from outside has none. Discovery only; `McpToolAccess` still refuses the
+ * call, and `toLayer` requires this on every thread-bound declaration.
+ */
+export const hiddenFromOutsideClients = (): boolean => {
+  const fiber = Fiber.getCurrent();
+  const scope = fiber && Context.getOrUndefined(fiber.context, McpInvocationContext);
+  return scope === undefined || scope.thread !== undefined;
+};
+
 /** `McpSchema.EnabledWhen` for tools that only serve links, hidden while the beta is off. */
 export const hiddenWhileLinksOff = (): boolean => {
   const fiber = Fiber.getCurrent();
@@ -170,11 +200,14 @@ export const hiddenWhileLinksOff = (): boolean => {
   return scope?.linkedEnvironments !== false;
 };
 
-/** `McpSchema.EnabledWhen` for tools that only serve Delivery, hidden while it is off. */
+/**
+ * `McpSchema.EnabledWhen` for tools that only serve Delivery: hidden while it is off, and from
+ * outside clients, since these tools act as their calling thread.
+ */
 export const hiddenWhileDeliveryOff = (): boolean => {
   const fiber = Fiber.getCurrent();
   const scope = fiber && Context.getOrUndefined(fiber.context, McpInvocationContext);
-  return scope?.delivery !== false;
+  return scope?.delivery !== false && hiddenFromOutsideClients();
 };
 
 export type McpCapabilityError<C extends McpCapability> = C extends "preview"

@@ -3,7 +3,7 @@ import type { EnvironmentId } from "@t3tools/contracts";
 import { type Ref, useDeferredValue, useEffect, useRef, useState } from "react";
 
 import { eligibleMoveBases } from "../../lib/deliveryMove";
-import { shouldLoadNextBranchPageAfterScroll } from "../../state/paginatedBranches";
+import { shouldLoadNextBranchPageAfterScroll } from "./branchScroll";
 import { usePaginatedBranches } from "../../state/queries";
 import { Button } from "../ui/button";
 import {

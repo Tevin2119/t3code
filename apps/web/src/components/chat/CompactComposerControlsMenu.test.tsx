@@ -43,13 +43,11 @@ it("lets a hidden team be selected through overflow without changing access", as
   await act(() => {
     renderer = create(
       <CompactComposerControlsMenu
-        interactionMode="default"
         runtimeMode="full-access"
         runtimeModeSupport={undefined}
         runtimeModeOptions={[]}
-        showInteractionModeToggle={false}
+        showPermissions
         teamControls={<TeamControls />}
-        onToggleInteractionMode={() => {}}
         onRuntimeModeChange={changeAccess}
       />,
     );

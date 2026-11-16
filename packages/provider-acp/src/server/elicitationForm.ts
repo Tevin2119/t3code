@@ -1,57 +1,260 @@
-import type { OrchestrationV2UserInputQuestion } from "@t3tools/contracts";
+import type {
+  OrchestrationV2UserInputQuestion,
+  ProviderUserInputAnswers,
+} from "@t3tools/contracts";
+import type * as EffectAcpSchema from "effect-acp/compat";
 
 import { unknownRecord } from "./clientPolicy.ts";
 
-const text = (value: unknown): string | undefined =>
-  typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+type Field =
+  | { readonly kind: "text" }
+  | { readonly kind: "number"; readonly integer: boolean }
+  | { readonly kind: "boolean" }
+  | { readonly kind: "choice"; readonly values: ReadonlySet<string> }
+  | {
+      readonly kind: "multiChoice";
+      readonly values: ReadonlySet<string>;
+      readonly minItems: number;
+      readonly maxItems: number;
+    };
 
 type Option = OrchestrationV2UserInputQuestion["options"][number];
 
-/** The choices of one field: a plain `enum`, or the titled form (`oneOf`/`anyOf` of `const`). */
-function choices(field: Record<string, unknown> | undefined): ReadonlyArray<Option> {
-  if (Array.isArray(field?.enum)) {
-    return field.enum.flatMap((value): Option[] =>
-      typeof value === "string" ? [{ label: value, description: value }] : [],
-    );
-  }
-  const titled = Array.isArray(field?.oneOf) ? field.oneOf : field?.anyOf;
-  if (!Array.isArray(titled)) return [];
-  return titled.flatMap((entry): Option[] => {
-    const record = unknownRecord(entry);
-    if (typeof record?.const !== "string") return [];
-    const label = text(record.title) ?? record.const;
-    return [{ label, description: text(record.description) ?? label, value: record.const }];
-  });
+export interface ElicitationForm {
+  readonly questions: ReadonlyArray<OrchestrationV2UserInputQuestion>;
+  /**
+   * Types answers as the schema declares them. Unknown keys and options are
+   * dropped, as is an answer that does not fit its field. Returns undefined
+   * when a required field is left without a valid answer.
+   */
+  readonly content: (
+    answers: ProviderUserInputAnswers,
+  ) => Record<string, EffectAcpSchema.ElicitationContentValue> | undefined;
 }
 
-/** The questions of a form elicitation, one per property of its schema. */
-export function elicitationQuestions(
+function text(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+/** All of `entries` as options, or undefined when any entry cannot be one. */
+function choiceOptions(
+  entries: unknown,
+  toOption: (entry: unknown) => Option | undefined,
+): Option[] | undefined {
+  if (!Array.isArray(entries) || entries.length === 0) return undefined;
+  const options = entries.map(toOption);
+  return options.every((option) => option !== undefined) ? options : undefined;
+}
+
+function enumOptions(entries: unknown): Option[] | undefined {
+  if (
+    !Array.isArray(entries) ||
+    entries.length === 0 ||
+    !entries.every((value): value is string => typeof value === "string")
+  )
+    return undefined;
+  const counts = new Map<string, number>();
+  for (const value of entries) counts.set(value.trim(), (counts.get(value.trim()) ?? 0) + 1);
+  const options = entries.map((value) => {
+    const plain = value.trim();
+    const label = plain !== "" && counts.get(plain) === 1 ? plain : JSON.stringify(value);
+    return { label, description: label, value };
+  });
+  // A quoted fallback can collide with a literal label; quote every value in that case.
+  return new Set(options.map((option) => option.label)).size === options.length
+    ? options
+    : options.map((option) => {
+        const label = JSON.stringify(option.value);
+        return { ...option, label, description: label };
+      });
+}
+
+/** Titled entries (`oneOf` on strings, `anyOf` on array items) carry a title for their `const`. */
+function titledOption(entry: unknown): Option | undefined {
+  const option = unknownRecord(entry);
+  const label = text(option?.title) ?? text(option?.const);
+  return typeof option?.const === "string" && label !== undefined
+    ? { label, description: text(option.description) ?? label, value: option.const }
+    : undefined;
+}
+
+function parseField(
+  property: Readonly<Record<string, unknown>>,
+): { readonly field: Field; readonly options: Option[] } | undefined {
+  switch (property.type) {
+    case "string": {
+      // ACP treats a null `enum` or `oneOf` like an omitted one.
+      if ((property.enum ?? property.oneOf ?? undefined) === undefined) {
+        return { field: { kind: "text" }, options: [] };
+      }
+      const options = Array.isArray(property.oneOf)
+        ? choiceOptions(property.oneOf, titledOption)
+        : enumOptions(property.enum);
+      return options === undefined
+        ? undefined
+        : {
+            field: { kind: "choice", values: new Set(options.map(optionValue)) },
+            options,
+          };
+    }
+    case "array": {
+      // String items list plain values in `enum`; titled items list `{ const, title }` in `anyOf`.
+      const items = unknownRecord(property.items);
+      const options =
+        items?.type === "string"
+          ? enumOptions(items.enum)
+          : items !== undefined && items.type === undefined
+            ? choiceOptions(items.anyOf, titledOption)
+            : undefined;
+      if (options === undefined) return undefined;
+      // The schema decode already limits counts to non-negative integers.
+      const values = new Set(options.map(optionValue));
+      const minItems = typeof property.minItems === "number" ? property.minItems : 0;
+      const maxItems = typeof property.maxItems === "number" ? property.maxItems : Infinity;
+      // Clients require a selection, so empty-only questions cannot be answered.
+      if (maxItems === 0 || minItems > maxItems || minItems > values.size) return undefined;
+      return { field: { kind: "multiChoice", values, minItems, maxItems }, options };
+    }
+    case "boolean":
+      return {
+        field: { kind: "boolean" },
+        options: [
+          { label: "true", description: "Yes", value: "true" },
+          { label: "false", description: "No", value: "false" },
+        ],
+      };
+    case "number":
+    case "integer":
+      return { field: { kind: "number", integer: property.type === "integer" }, options: [] };
+    default:
+      return undefined;
+  }
+}
+
+function optionValue(option: Option): string {
+  return option.value ?? option.label;
+}
+
+function typedAnswer(
+  field: Field,
+  answer: unknown,
+): EffectAcpSchema.ElicitationContentValue | undefined {
+  switch (field.kind) {
+    case "text":
+      return typeof answer === "string" ? answer : undefined;
+    case "boolean":
+      if (typeof answer === "boolean") return answer;
+      return answer === "true" ? true : answer === "false" ? false : undefined;
+    case "number": {
+      const parsed =
+        typeof answer === "number"
+          ? answer
+          : typeof answer === "string" && answer.trim().length > 0
+            ? Number(answer.trim())
+            : Number.NaN;
+      if (!Number.isFinite(parsed)) return undefined;
+      return field.integer && !Number.isInteger(parsed) ? undefined : parsed;
+    }
+    case "choice":
+      return typeof answer === "string" && field.values.has(answer) ? answer : undefined;
+    case "multiChoice": {
+      if (!Array.isArray(answer)) return undefined;
+      const selected = [
+        ...new Set(
+          answer.filter(
+            (entry): entry is string => typeof entry === "string" && field.values.has(entry),
+          ),
+        ),
+      ];
+      // `[]` is an explicit empty selection, but a selection of only unknown
+      // options is not one.
+      if (selected.length === 0 && answer.length > 0) return undefined;
+      return selected.length >= field.minItems && selected.length <= field.maxItems
+        ? selected
+        : undefined;
+    }
+  }
+}
+
+// Decline unaskable forms; validate types and selection counts, leaving other constraints to the agent.
+export function parseElicitationForm(
+  requestedSchema: unknown,
   message: string,
-  properties: Record<string, unknown>,
-): ReadonlyArray<OrchestrationV2UserInputQuestion> {
-  const fields = Object.entries(properties);
+): ElicitationForm | undefined {
+  const schema = unknownRecord(requestedSchema);
+  const required = new Set(
+    Array.isArray(schema?.required)
+      ? schema.required.filter((key): key is string => typeof key === "string")
+      : [],
+  );
+  const fields = new Map<string, Field>();
+  const parsedFields: Array<{
+    readonly id: string;
+    readonly property: Readonly<Record<string, unknown>>;
+    readonly options: Option[];
+  }> = [];
+  for (const [id, value] of Object.entries(unknownRecord(schema?.properties) ?? {})) {
+    const property = unknownRecord(value);
+    const parsed = property === undefined ? undefined : parseField(property);
+    // Question ids must survive the contract's trim to round-trip answers.
+    if (property === undefined || parsed === undefined || text(id) !== id) return undefined;
+    fields.set(id, parsed.field);
+    parsedFields.push({ id, property, options: parsed.options });
+  }
+  // An optional `<id>__other` text field (OMP's ask dialog) is the free-text answer to
+  // optional single choice `<id>`: ask them as one question and send custom text to the
+  // companion. Multi-select keeps both fields, since it can answer with options and text.
+  const companions = new Map<string, string>();
+  for (const [id, field] of fields) {
+    const companionId = `${id}__other`;
+    if (
+      field.kind === "choice" &&
+      fields.get(companionId)?.kind === "text" &&
+      !required.has(id) &&
+      !required.has(companionId)
+    ) {
+      companions.set(id, companionId);
+    }
+  }
+  const folded = new Set(companions.values());
   // An agent with no per-field text sends every question in the message, one a line.
   const lines = message.split("\n").flatMap((line) => text(line) ?? []);
-  const lineOf = (index: number) => (lines.length === fields.length ? lines[index] : undefined);
-  return fields.map(([id, property], index): OrchestrationV2UserInputQuestion => {
-    const field = unknownRecord(property);
-    const many = field?.type === "array";
-    const options = many
-      ? choices(unknownRecord(field.items))
-      : field?.type === "boolean"
-        ? [
-            { label: "true", description: "Yes" },
-            { label: "false", description: "No" },
-          ]
-        : choices(field);
-    return {
+  const questions: OrchestrationV2UserInputQuestion[] = [];
+  for (const [index, { id, property, options }] of parsedFields.entries()) {
+    if (folded.has(id)) continue;
+    const kind = fields.get(id)?.kind;
+    questions.push({
       id,
-      header: text(field?.title) ?? `Question ${index + 1}`,
-      question: text(field?.description) ?? lineOf(index) ?? text(message) ?? "Question",
+      header: text(property.title) ?? `Question ${questions.length + 1}`,
+      question:
+        text(property.description) ??
+        (lines.length === parsedFields.length ? lines[index] : undefined) ??
+        message,
       options,
-      ...(many && options.length > 0 ? { multiSelect: true } : {}),
-      // A field that lists its values takes nothing else, so a typed answer would be dropped.
-      ...(options.length > 0 ? { allowCustomAnswer: false } : {}),
-    };
-  });
+      ...(kind === "text" || kind === "number" || companions.has(id)
+        ? {}
+        : { allowCustomAnswer: false }),
+      ...(kind === "multiChoice" ? { multiSelect: true } : {}),
+      ...(kind === "text" && !required.has(id) ? { required: false } : {}),
+    });
+  }
+  return {
+    questions,
+    content: (answers) => {
+      const entries: Array<[string, EffectAcpSchema.ElicitationContentValue]> = [];
+      for (const [id, field] of fields) {
+        if (folded.has(id)) continue;
+        const answer = Object.hasOwn(answers, id) ? answers[id] : undefined;
+        const typed = answer === undefined ? undefined : typedAnswer(field, answer);
+        const companionId = companions.get(id);
+        if (typed !== undefined) entries.push([id, typed]);
+        else if (companionId !== undefined && typeof answer === "string") {
+          entries.push([companionId, answer]);
+        } else if (required.has(id)) return undefined;
+      }
+      // Own properties for every field, `__proto__` included; assigning to
+      // `{}` would hit its inherited setter instead.
+      return Object.fromEntries(entries);
+    },
+  };
 }

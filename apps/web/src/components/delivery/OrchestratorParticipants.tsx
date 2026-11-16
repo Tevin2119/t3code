@@ -267,7 +267,6 @@ export function OrchestratorParticipants(props: {
                         models={entry.models}
                         model={selection.model}
                         modelOptions={selection.options}
-                        planModeEnabled={false}
                         allowPromptInjectedEffort={false}
                         disabled={!row.included || !entry.isAvailable}
                         size="xs"
