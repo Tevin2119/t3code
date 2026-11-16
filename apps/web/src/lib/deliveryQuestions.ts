@@ -45,6 +45,7 @@ export function taskQuestions(task: TaskView) {
         ),
         options: open?.options ?? [],
         canReply,
+        pending,
         status,
       };
     });

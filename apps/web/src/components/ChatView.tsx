@@ -1,7 +1,6 @@
 import { useThreadInspection } from "./chat/ThreadInspectionContext";
 import { deriveTeamChatPhase } from "@t3tools/client-runtime/state/thread-workflows";
 import { ChildThreadApprovals } from "./chat/ChildThreadApprovals";
-import { Button } from "./ui/button";
 import { SquareKanbanIcon } from "lucide-react";
 import { SessionStatusFooter } from "./chat/SessionStatusFooter";
 import { resolveDraftTeam, selectableTeams, teamListStatus } from "../lib/delivery";
@@ -15,6 +14,7 @@ import {
 } from "../state/delivery";
 import {
   taskStandsIn,
+  ThreadTaskOpenActions,
   useThreadTasks,
   useThreadDeliveryProgress,
 } from "./delivery/ThreadTaskLinks";
@@ -2697,17 +2697,7 @@ export default function ChatView(props: ChatViewProps) {
         ...threadTasks.slice(0, 3).map((task) => `#${task.number} ${taskStandsIn(task)}`),
         ...threadDeliveryProgress,
       ].join(" · "),
-      actions: (
-        <Button
-          size="xs"
-          variant="ghost"
-          onClick={() =>
-            void navigate({ to: "/board", search: { task: newest.id, environment: environmentId } })
-          }
-        >
-          Open #{newest.number}
-        </Button>
-      ),
+      actions: <ThreadTaskOpenActions tasks={threadTasks} environmentId={environmentId} />,
     };
   })();
   const threadTaskItems = threadTasksBannerItem === null ? [] : [threadTasksBannerItem];
