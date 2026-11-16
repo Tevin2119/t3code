@@ -194,6 +194,18 @@ function withoutExplicitExtensions(args: ReadonlyArray<string>): ReadonlyArray<s
   return filtered;
 }
 
+function hasProjectTrustChoice(args: ReadonlyArray<string>): boolean {
+  return args.some(
+    (arg) =>
+      arg === "--approve" ||
+      arg === "-a" ||
+      arg === "--no-approve" ||
+      arg === "-na" ||
+      arg.startsWith("--approve=") ||
+      arg.startsWith("--no-approve="),
+  );
+}
+
 function withoutToolSelectionArgs(args: ReadonlyArray<string>): ReadonlyArray<string> {
   const filtered: string[] = [];
   for (let index = 0; index < args.length; index += 1) {
@@ -271,6 +283,14 @@ export function buildPiRpcLaunch(input: {
       : input.launchArgs;
   const launchArgs =
     input.disableTools === true ? withoutToolSelectionArgs(extensionSafeArgs) : extensionSafeArgs;
+  // T3 launches pi only in projects the user added, so their project-local files
+  // are trusted for interactive runs; an explicit approve flag in launch args wins.
+  const projectTrust =
+    input.disableExtensions === true ||
+    input.disableTools === true ||
+    hasProjectTrustChoice(launchArgs)
+      ? []
+      : ["--approve"];
   const args = [
     "--mode",
     "rpc",
@@ -280,6 +300,7 @@ export function buildPiRpcLaunch(input: {
         ? ["--session", input.sessionPath]
         : []),
     ...launchArgs,
+    ...projectTrust,
     ...(input.shortLived === true && !launchArgs.includes("--offline") ? ["--offline"] : []),
     // Restrictions must follow launch args so user flags cannot re-enable unattended tools/extensions.
     ...(input.disableExtensions === true ? ["--no-extensions"] : []),
