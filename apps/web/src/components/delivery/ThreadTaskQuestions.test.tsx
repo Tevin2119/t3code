@@ -216,15 +216,21 @@ it("shows a later matching engine answer beside the retained uncertain draft", a
   expect(renderer.root.findByType("textarea").props.value).toBe("Keep it");
   expect(mock.action).toHaveBeenCalledTimes(1);
 });
-it("keeps a settled question as one collapsed line until opened", async () => {
-  mock.body = task(true);
+it("keeps settled questions collapsed after questions that still need the person", async () => {
+  const settled = task(true);
+  mock.body = { ...settled, questions: [{ seq: 4 }], timeline: [...settled.timeline, question(4)] };
   await mount();
+  expect(
+    renderer.root.findAllByType("article").map((entry) => entry.props["data-engine-question"]),
+  ).toEqual([4, 1, 2]);
   const json = JSON.stringify(renderer.toJSON());
   expect(json).toContain("Answered");
   expect(json).toContain("Question 1");
   expect(json).not.toContain("Keep it");
-  expect(json).not.toContain("Reply to Q");
-  const trigger = renderer.root
+  const settledCard = renderer.root
+    .findAllByType("article")
+    .find((entry) => entry.props["data-engine-question"] === 1)!;
+  const trigger = settledCard
     .findAllByType("button")
     .find((entry) => entry.props["data-slot"] === "collapsible-trigger")!;
   // Base UI reads the native event when reporting the toggle reason.
@@ -233,7 +239,7 @@ it("keeps a settled question as one collapsed line until opened", async () => {
   expect(JSON.stringify(renderer.toJSON())).toContain("Keep it");
   await act(() => press());
   expect(
-    renderer.root
+    settledCard
       .findAllByType("button")
       .find((entry) => entry.props["data-slot"] === "collapsible-trigger")!.props["aria-expanded"],
   ).toBe(false);

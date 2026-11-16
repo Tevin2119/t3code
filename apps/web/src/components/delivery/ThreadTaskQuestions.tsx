@@ -27,20 +27,32 @@ import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collapsible";
 import { Textarea } from "../ui/textarea";
+import { questionNeedsAttention, taskHasReplyDraft } from "./ThreadTaskQuestions.logic";
 
-/** Engine-backed rows in the native timeline footer, not fabricated provider messages. */
 export function ThreadTaskQuestions({
   environmentId,
   tasks,
+  summaryTaskIds = [],
 }: {
   environmentId: EnvironmentId;
   tasks: ReadonlyArray<DeliveryCard>;
+  summaryTaskIds?: ReadonlyArray<string>;
 }) {
   const [visible, setVisible] = useState(10);
+  const drafts = useDeliveryReplyDrafts((state) => state.drafts);
+  const pending = useDeliveryReplyDrafts((state) => state.pending);
+  const needsAttention = (task: DeliveryCard) =>
+    task.questions > 0 || taskHasReplyDraft(environmentId, task.id, drafts, pending);
+  const ordered = [...tasks].sort((a, b) => Number(needsAttention(b)) - Number(needsAttention(a)));
   return (
-    <div className="chat-content-lane space-y-4" data-thread-task-questions>
-      {tasks.slice(0, visible).map((task) => (
-        <TaskQuestions key={task.id} environmentId={environmentId} card={task} />
+    <div className="space-y-4" data-thread-task-questions>
+      {ordered.slice(0, visible).map((task) => (
+        <TaskQuestions
+          key={task.id}
+          environmentId={environmentId}
+          card={task}
+          summaryManaged={summaryTaskIds.includes(task.id)}
+        />
       ))}
       {tasks.length > visible ? (
         <Button variant="ghost" size="sm" onClick={() => setVisible(visible + 10)}>
@@ -60,19 +72,18 @@ export function ThreadTaskQuestions({
 function TaskQuestions({
   environmentId,
   card,
+  summaryManaged,
 }: {
   environmentId: EnvironmentId;
   card: DeliveryCard;
+  summaryManaged: boolean;
 }) {
-  const read = useDeliveryRead(
-    environmentId,
-    `/api/tasks/${card.id}`,
-    card.questions > 0 ? { pollMs: 5_000 } : {},
-  );
+  const read = useDeliveryRead(environmentId, `/api/tasks/${card.id}`);
   const { refresh } = read;
   const summaryVersion = JSON.stringify([
     card.updated,
     card.questions,
+    card.unanswered,
     card.state,
     card.revision,
     card.run?.state,
@@ -82,10 +93,12 @@ function TaskQuestions({
   useEffect(() => {
     if (lastSummary.current !== summaryVersion) {
       lastSummary.current = summaryVersion;
-      refresh();
+      if (!summaryManaged) refresh();
     }
-  }, [summaryVersion, refresh]);
+  }, [summaryVersion, refresh, summaryManaged]);
   const task = parseTask(read.body);
+  const drafts = useDeliveryReplyDrafts((state) => state.drafts);
+  const pending = useDeliveryReplyDrafts((state) => state.pending);
   if (!task) {
     return read.error ? (
       <div className="space-y-2">
@@ -98,7 +111,13 @@ function TaskQuestions({
       </div>
     ) : null;
   }
-  const rows = taskQuestions(task);
+  const needsAttention = (row: ReturnType<typeof taskQuestions>[number]) => {
+    const key = replyDraftKey(environmentId, task.id, row.question.seq!);
+    return questionNeedsAttention(row, drafts[key], pending[key]);
+  };
+  const rows = taskQuestions(task).sort(
+    (a, b) => Number(needsAttention(b)) - Number(needsAttention(a)),
+  );
   if (rows.length === 0) return null;
   return (
     <section className="space-y-3" aria-label={`Questions for task ${task.number}`}>
@@ -163,8 +182,7 @@ function QuestionCard({
   const [userOpen, setUserOpen] = useState<boolean | null>(null);
   const canReply = row.canReply && allowed && !unavailable && !accepted;
   const hasDraft = draft.text.length > 0 || draft.option !== null || draft.uncertain;
-  // A settled question stays in the thread as one collapsed line until opened.
-  const expanded = userOpen ?? (row.canReply || row.pending || accepted || editing || hasDraft);
+  const expanded = userOpen ?? (questionNeedsAttention(row, draft, pending) || accepted || editing);
   const matchingAnswer =
     draft.uncertain &&
     row.replies.some(
