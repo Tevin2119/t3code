@@ -292,7 +292,12 @@ describe("responsive board control ownership", () => {
       "Open Engine beside the environment picker",
     );
     await click("Close");
-    expect(element('[data-slot="dialog-popup"]').hasAttribute("data-closed")).toBe(true);
+    // Base UI unmounts the popup when its exit settles; either the data-closed
+    // exit state or the completed unmount proves the dialog is no longer open.
+    await vi.waitFor(() => {
+      const popup = document.querySelector('[data-slot="dialog-popup"]');
+      expect(popup === null || popup.hasAttribute("data-closed")).toBe(true);
+    });
   });
   it("opens a collapsed board notice with its full original content", async () => {
     await act(async () =>
