@@ -62,6 +62,7 @@ describe("pi T3 MCP injection", () => {
       "--name",
       "-review",
       "--extension-flag=kept",
+      "--approve",
       "--extension",
       "/tmp/cache/pi-t3-mcp-extension.ts",
     ]);
@@ -85,6 +86,7 @@ describe("pi T3 MCP injection", () => {
     assert.deepEqual(permissionOnly.args, [
       "--mode",
       "rpc",
+      "--approve",
       "--extension",
       "/tmp/cache/pi-t3-mcp-extension.ts",
     ]);
@@ -135,7 +137,13 @@ describe("pi T3 MCP injection", () => {
       ephemeral: true,
       shortLived: true,
     });
-    assert.deepEqual(alreadyOffline.args, ["--mode", "rpc", "--no-session", "--offline"]);
+    assert.deepEqual(alreadyOffline.args, [
+      "--mode",
+      "rpc",
+      "--no-session",
+      "--offline",
+      "--approve",
+    ]);
     assert.deepInclude(resolvePiLaunchArgs("--mode text"), {
       ok: false,
       message: "Pi launch argument '--mode' is controlled by T3 Code and cannot be overridden.",
@@ -143,6 +151,24 @@ describe("pi T3 MCP injection", () => {
     assert.deepInclude(resolvePiLaunchArgs("--session old.jsonl"), { ok: false });
     assert.deepInclude(resolvePiLaunchArgs("prompt pi immediately"), { ok: false });
     assert.deepInclude(resolvePiLaunchArgs("--plan @instructions.md"), { ok: false });
+  });
+
+  it("lets explicit approve flags in launch args override the default project trust", () => {
+    for (const choice of ["--approve", "-a", "--no-approve", "-na"]) {
+      const launch = buildPiRpcLaunch({
+        launchArgs: [choice],
+        environment: {},
+        mcpSession: undefined,
+        extensionPath: "/tmp/cache/pi-t3-mcp-extension.ts",
+      });
+      assert.deepEqual(launch.args, [
+        "--mode",
+        "rpc",
+        choice,
+        "--extension",
+        "/tmp/cache/pi-t3-mcp-extension.ts",
+      ]);
+    }
   });
 
   it("rejects --provider without --model, which Pi 1.0 refuses at startup", () => {
