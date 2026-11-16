@@ -53,7 +53,7 @@ export class NativeTeamChat extends Context.Service<
   }
 >()("t3/delivery/NativeTeamChat") {}
 
-const isNativeTeamChatError = Schema.is(NativeTeamChatError);
+export const isNativeTeamChatError = Schema.is(NativeTeamChatError);
 
 const terminal = (task: OrchestrationV2Subagent) =>
   ["completed", "failed", "cancelled", "interrupted"].includes(task.status);
@@ -89,19 +89,14 @@ export const make = Effect.gen(function* () {
     function* (input) {
       if (Option.isNone(deliveryOption)) return { ready: true, context: "" };
       const delivery = deliveryOption.value;
-      const { binding, lineup } = yield* delivery.threadState(input.threadId);
+      const state = yield* delivery.threadState(input.threadId);
+      let binding = state.binding;
+      const lineup = state.lineup;
       if (lineup === undefined) return { ready: true, context: "" };
       const roster = lineup.participants;
       // Participants take a team's roles when there is one; with none they join as themselves.
       const team = binding?.team ?? lineup.team;
       const group = team === undefined ? "this conversation" : `team ${team}`;
-      if (
-        roster.length < 2 ||
-        roster.length > 12 ||
-        new Set(roster.map((seat) => seat.seat)).size !== roster.length
-      ) {
-        return yield* new NativeTeamChatError({ runId: input.runId, reason: "roster" });
-      }
       const parent = yield* projections.getThreadRecords(input.threadId, [
         "runs",
         "subagents",
@@ -150,6 +145,10 @@ export const make = Effect.gen(function* () {
       const critiques = tasks.filter((task) => task.teamChat?.stage === "critique");
       const skipId = (seat: string) =>
         ids.derive.runSignalTurnItem({ runId: input.runId, signal: `team-seat-skipped:${seat}` });
+      const fallbackId = ids.derive.runSignalTurnItem({
+        runId: input.runId,
+        signal: "team-setup-fallback",
+      });
       const skipped = new Map<string, string>();
       for (const seat of roster) {
         const notice = parent.turnItems.find((item) => item.id === skipId(seat.seat));
@@ -159,6 +158,7 @@ export const make = Effect.gen(function* () {
       const recordSkip = Effect.fn("NativeTeamChat.recordSkip")(function* (
         seat: string,
         reason: string,
+        noticeId = skipId(seat),
       ) {
         const now = yield* DateTime.now;
         const written = yield* eventSink.writeIfRunCurrent({
@@ -176,7 +176,7 @@ export const make = Effect.gen(function* () {
               occurredAt: now,
               payload: {
                 type: "system_notice",
-                id: skipId(seat),
+                id: noticeId,
                 threadId: input.threadId,
                 runId: input.runId,
                 nodeId: run.rootNodeId,
@@ -200,6 +200,31 @@ export const make = Effect.gen(function* () {
           return yield* new NativeTeamChatError({ runId: input.runId, reason: "state" });
         skipped.set(seat, reason);
       });
+      const fallback = Effect.fn("NativeTeamChat.fallback")(function* (reason: string) {
+        if (!tasks.every(terminal)) return { ready: false, context: "" };
+        const notice = parent.turnItems.find((item) => item.id === fallbackId);
+        if (notice?.type !== "system_notice")
+          yield* recordSkip("Team discussion", reason, fallbackId);
+        return {
+          ready: true,
+          context: teamDiscussionContext({
+            group,
+            members: [],
+            discussionDidNotRun: true,
+            discussionFailureReason: notice?.type === "system_notice" ? notice.message : reason,
+            contributions: contributions(initial),
+          }),
+        };
+      });
+      const previousFallback = parent.turnItems.find((item) => item.id === fallbackId);
+      if (previousFallback?.type === "system_notice")
+        return yield* fallback(previousFallback.message);
+      if (
+        roster.length < 2 ||
+        roster.length > 12 ||
+        new Set(roster.map((seat) => seat.seat)).size !== roster.length
+      )
+        return yield* fallback("The team roster must contain between two and twelve unique seats.");
       const done = (round: ReadonlyArray<OrchestrationV2Subagent>) =>
         round.every(terminal) &&
         roster.every(
@@ -289,22 +314,49 @@ export const make = Effect.gen(function* () {
                 Effect.map(Option.getOrUndefined),
               ));
           if (cwd === undefined)
-            return yield* new NativeTeamChatError({ runId: input.runId, reason: "state" });
+            return yield* fallback("No working folder is available for the team.");
+          const configurations = new Map<string, string>();
           for (const [index, seat] of candidates.entries()) {
             if (roster.length - skipped.size < 2) break;
             const adapter = available[index];
             if (adapter === undefined) continue;
-            const member = yield* delivery.bindThread({
-              threadId: ids.derive.delegatedTaskThread({ commandId: commandFor(seat) }),
-              team,
-              role: seat.role,
-              driver: adapter.driver,
-              cwd,
-            });
-            if (binding !== null && member.configuration !== binding.configuration) {
+            const member = yield* delivery
+              .bindThread({
+                threadId: ids.derive.delegatedTaskThread({ commandId: commandFor(seat) }),
+                team,
+                role: seat.role,
+                driver: adapter.driver,
+                cwd,
+              })
+              .pipe(
+                Effect.catchTags({
+                  DeliveryError: Effect.fn("NativeTeamChat.skipBindingFailure")(function* (error) {
+                    if (error.status === 401 || error.status === 403) return yield* error;
+                    yield* recordSkip(seat.seat, `${seat.seat}: ${error.message}`);
+                    return undefined;
+                  }),
+                }),
+              );
+            if (member === undefined) continue;
+            configurations.set(seat.seat, member.configuration);
+          }
+          const revisions = new Set(configurations.values());
+          const revision = revisions.values().next().value;
+          if (
+            binding !== null &&
+            tasks.length === 0 &&
+            configurations.size >= 2 &&
+            revisions.size === 1 &&
+            revision !== undefined &&
+            revision !== binding.configuration
+          ) {
+            binding = yield* delivery.refreshThread(input.threadId, revision);
+          }
+          for (const [seat, configuration] of configurations) {
+            if (binding !== null && configuration !== binding.configuration) {
               yield* recordSkip(
-                seat.seat,
-                `${seat.seat}: the team setup changed since this conversation started. This conversation uses team setup ${binding.configuration}, but ${seat.seat} uses ${member.configuration}. Start a new team conversation to use the updated setup. Recorded contributions are preserved.`,
+                seat,
+                `${seat}: the team setup changed while this discussion was being prepared. This turn uses ${binding.configuration}, but this participant uses ${configuration}. The next turn can adopt the updated setup in this conversation. Recorded contributions are preserved.`,
               );
             }
           }

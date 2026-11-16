@@ -59,6 +59,11 @@ participants into an ordinary conversation that has already started, from a team
 seats or of your own choosing, and **Use ordinary chat** sends them away again. A
 conversation keeps the team it started with.
 
+When that team's setup changes, the next discussion adopts the updated setup
+automatically in the same conversation. Messages, context and recorded contributions
+stay in place. A discussion already in progress keeps its original setup; a
+participant whose setup changed waits for the next message.
+
 While a team conversation runs, the badge beside the composer says who receives the
 next message. Use the **Team chat / Single chat** switch beside it to narrow the
 conversation to the lead alone and to bring the team back: the team, lead model

@@ -36,6 +36,7 @@ import {
   CLAUDE_QUERY_ENDED_BEFORE_TURN_DETAIL,
 } from "./Adapters/ClaudeAdapterV2.ts";
 import { withTurnStartReservation, withWorkspaceLease } from "../workspace/workspaceLease.ts";
+import * as DeliveryThreadSession from "../delivery/DeliveryThreadSession.ts";
 import * as GitWorkflowService from "../git/GitWorkflowService.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as ProviderAuthService from "../provider/ProviderAuthService.ts";
@@ -517,6 +518,7 @@ export const layer: Layer.Layer<
       const settleStartFailure = Effect.fn("ProviderTurnStartService.settleStartFailure")(
         function* (failed: {
           readonly signal: string;
+          readonly class: "validation_error" | "provider_error";
           readonly title: string;
           readonly error: Error;
           readonly message?: string;
@@ -537,7 +539,7 @@ export const layer: Layer.Layer<
               failure: makeProviderFailure({
                 cause: failed.error,
                 message: failed.message ?? startFailureMessage(failed.error),
-                class: "provider_error",
+                class: failed.class,
               }),
             },
           });
@@ -556,9 +558,14 @@ export const layer: Layer.Layer<
           : { ready: true, context: "" };
       }).pipe(Effect.result);
       if (preparedDiscussion._tag === "Failure") {
-        if (input.willRetry === true) return yield* preparedDiscussion.failure;
+        const failure = preparedDiscussion.failure;
+        const deterministic =
+          NativeTeamChat.isNativeTeamChatError(failure) &&
+          (failure.reason === "roster" || failure.reason === "state");
+        if (input.willRetry === true && !deterministic) return yield* failure;
         yield* settleStartFailure({
           signal: "team-preparation-failed",
+          class: deterministic ? "validation_error" : "provider_error",
           title: "Team discussion could not start",
           error: preparedDiscussion.failure,
         });
@@ -663,6 +670,7 @@ export const layer: Layer.Layer<
         if (input.willRetry === true) return yield* recreateResult.failure;
         yield* settleStartFailure({
           signal: "worktree-recreate-failure",
+          class: "provider_error",
           title: "Couldn't recreate thread workspace",
           error: recreateResult.failure,
           message: recreateResult.failure.message,
@@ -686,6 +694,7 @@ export const layer: Layer.Layer<
         if (input.willRetry === true) return yield* recoveryResult.failure;
         yield* settleStartFailure({
           signal: "runtime-recovery-read-failure",
+          class: "provider_error",
           title: "Couldn't read thread state",
           error: recoveryResult.failure,
         });
@@ -715,6 +724,7 @@ export const layer: Layer.Layer<
         if (error._tag !== "RuntimePolicyAboveCeilingError") return yield* error;
         yield* settleStartFailure({
           signal: "runtime-mode-above-ceiling",
+          class: "provider_error",
           title: "Thread mode is above the policy limit",
           error,
           message: error.message,
@@ -772,6 +782,7 @@ export const layer: Layer.Layer<
             if (input.willRetry === true) return yield* recovered.failure;
             yield* settleStartFailure({
               signal: "provider-turn-recovery-failure",
+              class: "provider_error",
               title: "Provider turn recovery failed",
               error: recovered.failure,
             });
@@ -808,23 +819,69 @@ export const layer: Layer.Layer<
         checkpointScope,
       });
       const sessionResult = yield* Effect.result(
-        providerSessions.open({
-          threadId: projection.thread.id,
-          providerSessionId,
-          modelSelection: run.modelSelection,
-          runtimePolicy: resolvedRuntimePolicy,
-          ...(existingSessionProjection === undefined
-            ? {}
-            : { resumeFromSession: existingSessionProjection }),
-          ...(providerThread.nativeThreadRef?.nativeId == null
-            ? {}
-            : { initialNativeThreadId: providerThread.nativeThreadRef.nativeId }),
-          ...(providerThread.nativeMetadata?.itemIdentityVersion === undefined
-            ? {}
-            : {
-                initialProviderItemIdentityVersion:
-                  providerThread.nativeMetadata.itemIdentityVersion,
-              }),
+        Effect.gen(function* () {
+          const loadedSetup = DeliveryThreadSession.readDeliveryThreadSession(input.threadId);
+          if (Option.isSome(deliveryService)) {
+            const { binding } = yield* deliveryService.value.threadState(input.threadId);
+            if (binding !== null && binding.configuration !== loadedSetup?.configuration) {
+              if (providerThread.driver === "codex") {
+                yield* deliveryService.value.prepareThread(input.threadId, {
+                  driver: providerThread.driver,
+                  cwd: resolvedRuntimePolicy.cwd ?? undefined,
+                });
+              } else {
+                if (
+                  (yield* providerSessions.isLive(providerSessionId)) &&
+                  ((providerThread.pendingBackgroundTasks?.length ?? 0) > 0 ||
+                    (yield* providerSessions.otherWorkingThreads({
+                      providerSessionId,
+                      threadId: input.threadId,
+                    })).length > 0)
+                ) {
+                  return yield* new NativeTeamChat.NativeTeamChatError({
+                    runId,
+                    reason: "dispatch",
+                    detail:
+                      "The updated team setup will load after this provider's active work finishes. Continue in this conversation.",
+                  });
+                }
+                const releaseRequest = {
+                  providerSessionId,
+                  ownProviderThreadIds: [],
+                  throughRunOrdinal: run.ordinal,
+                  reason: "manual_shutdown" as const,
+                  detail: "Reloading the updated team setup in the same conversation.",
+                };
+                yield* providerSessions.releaseUnlessBusy(releaseRequest);
+                if (yield* providerSessions.isLive(providerSessionId)) {
+                  return yield* new NativeTeamChat.NativeTeamChatError({
+                    runId,
+                    reason: "dispatch",
+                    detail:
+                      "The updated team setup will load after this provider's active work finishes. Continue in this conversation.",
+                  });
+                }
+              }
+            }
+          }
+          return yield* providerSessions.open({
+            threadId: projection.thread.id,
+            providerSessionId,
+            modelSelection: run.modelSelection,
+            runtimePolicy: resolvedRuntimePolicy,
+            ...(existingSessionProjection === undefined
+              ? {}
+              : { resumeFromSession: existingSessionProjection }),
+            ...(providerThread.nativeThreadRef?.nativeId == null
+              ? {}
+              : { initialNativeThreadId: providerThread.nativeThreadRef.nativeId }),
+            ...(providerThread.nativeMetadata?.itemIdentityVersion === undefined
+              ? {}
+              : {
+                  initialProviderItemIdentityVersion:
+                    providerThread.nativeMetadata.itemIdentityVersion,
+                }),
+          });
         }),
       );
       if (sessionResult._tag === "Failure") {
@@ -836,6 +893,7 @@ export const layer: Layer.Layer<
         if (input.willRetry === true && !requiresSignIn) return yield* failure;
         yield* settleStartFailure({
           signal: "provider-session-open-failure",
+          class: "provider_error",
           title: "Provider session failed to open",
           error: sessionResult.failure,
         });
@@ -851,6 +909,7 @@ export const layer: Layer.Layer<
         if (input.willRetry === true) return yield* loaded.failure;
         yield* settleStartFailure({
           signal: "provider-thread-load-failure",
+          class: "provider_error",
           title: "Provider turn failed to start",
           error: loaded.failure,
         });
@@ -1555,6 +1614,7 @@ export const layer: Layer.Layer<
       if (manualResume && unsentResumeMessage === undefined && session.resumeTurn === undefined) {
         yield* settleStartFailure({
           signal: "resume-unsupported",
+          class: "provider_error",
           title: "Native resume is unavailable",
           error: new ProviderAdapter.ProviderResumeUnsupportedError({
             driver: session.driver,

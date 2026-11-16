@@ -2122,6 +2122,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
         const mcpStartupFailures = new Map<string, Map<string, string>>();
         const turnTokenUsageByThread = new Map<string, CodexTurnTokenUsageState>();
         const contextWindowByThread = new Map<string, number | undefined>();
+        const teamSetupByThread = new Map<string, string | undefined>();
         const usageStateForThread = (nativeThreadId: string) => {
           let state = turnTokenUsageByThread.get(nativeThreadId);
           if (!state) {
@@ -7953,6 +7954,11 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                   response.thread.id,
                   codexContextWindowConfig(threadInput.modelSelection).model_context_window,
                 );
+                teamSetupByThread.set(
+                  response.thread.id,
+                  DeliveryThreadSession.readDeliveryThreadSession(threadInput.threadId)
+                    ?.configuration,
+                );
                 return providerThreadFromCodexThread({
                   appThreadId: threadInput.threadId,
                   idAllocator,
@@ -7975,22 +7981,28 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             function* (threadInput) {
               const nativeThreadId = yield* getNativeThreadId(threadInput.providerThread);
               const previousWindow = contextWindowByThread.get(nativeThreadId);
+              const appThreadId = threadInput.threadId ?? threadInput.providerThread.appThreadId;
+              const teamSetup =
+                appThreadId === null
+                  ? undefined
+                  : DeliveryThreadSession.readDeliveryThreadSession(appThreadId)?.configuration;
               const contextWindow =
                 threadInput.modelSelection === undefined
                   ? previousWindow
                   : codexContextWindowConfig(threadInput.modelSelection).model_context_window;
-              // Codex ignores config overrides on an already loaded thread. Reload only
-              // when the window changes, and never interrupt retained agent/terminal work.
-              if (contextWindow !== previousWindow) {
+              // Codex ignores config overrides on a loaded thread; reload that thread, not the shared process.
+              if (
+                contextWindow !== previousWindow ||
+                teamSetup !== teamSetupByThread.get(nativeThreadId)
+              ) {
                 if (yield* runtime.hasPendingBackgroundWorkForThread!(threadInput.providerThread)) {
                   return yield* toProtocolError(
-                    "Wait for this thread's background work to finish before changing its context window.",
+                    "Wait for this thread's background work to finish before changing its context window or team setup.",
                   );
                 }
                 yield* ensureInitialized;
                 yield* client.request("thread/unsubscribe", { threadId: nativeThreadId });
               }
-              const appThreadId = threadInput.threadId ?? threadInput.providerThread.appThreadId;
               const resume = resumeNativeThread(nativeThreadId, {
                 excludeTurns: true,
                 ...codexThreadRuntimeParams({
@@ -8009,6 +8021,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 Effect.flatMap(decodeCodexResumeMetadata),
               );
               contextWindowByThread.set(nativeThreadId, contextWindow);
+              teamSetupByThread.set(nativeThreadId, teamSetup);
               return {
                 ...threadInput.providerThread,
                 providerSessionId: input.providerSessionId,
@@ -8915,6 +8928,11 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               contextWindowByThread.set(
                 forkedThread.id,
                 codexContextWindowConfig(threadInput.modelSelection).model_context_window,
+              );
+              teamSetupByThread.set(
+                forkedThread.id,
+                DeliveryThreadSession.readDeliveryThreadSession(threadInput.targetThreadId)
+                  ?.configuration,
               );
               if (boundary.rollbackTurnCount > 0) {
                 const { historyMode } = yield* ensureInitialized.pipe(

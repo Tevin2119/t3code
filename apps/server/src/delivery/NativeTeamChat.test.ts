@@ -1,5 +1,6 @@
 import {
   NodeId,
+  DeliveryError,
   MessageId,
   ProjectId,
   ProviderInstanceId,
@@ -39,6 +40,11 @@ function setup({
   disabledSeats = () => new Set<string>(),
   mismatchSeat = undefined as string | undefined,
   third = false,
+  bindFailures = [] as string[],
+  noWorkspace = false,
+  noticeCommitted = true,
+  missingRun = false,
+  bindStatus = undefined as number | undefined,
   critique = undefined as "first" | "always" | "never" | undefined,
   access = undefined as "approval-required" | "full-access" | undefined,
   /** The researcher's own access, over the conversation's. */
@@ -81,7 +87,7 @@ function setup({
   const binding = {
     team: "research",
     configuration: "research@3#abc",
-    workspace: "C:/workspace",
+    workspace: noWorkspace ? undefined : "C:/workspace",
     ...(plain
       ? {}
       : {
@@ -125,7 +131,14 @@ function setup({
   const notices: OrchestrationV2TurnItem[] = [];
   const admissions = new Map<string, Delegation>();
   const bindings: Array<{ threadId: ThreadId; team: string; role?: string; driver: string }> = [];
+  const refreshed: string[] = [];
   const delivery = {
+    refreshThread: (_id: ThreadId, configuration: string) =>
+      Effect.sync(() => {
+        refreshed.push(configuration);
+        binding.configuration = configuration;
+        return binding;
+      }),
     threadState: () =>
       Effect.succeed({
         binding: unbound ? null : binding,
@@ -134,6 +147,14 @@ function setup({
       }),
     bindThread: (input: { threadId: ThreadId; team: string; role?: string; driver: string }) => {
       bindings.push(input);
+      if (bindFailures.includes(input.role ?? ""))
+        return Effect.fail(
+          new DeliveryError({
+            reason: "invalid",
+            detail: "Engine cannot bind this role",
+            ...(bindStatus === undefined ? {} : { status: bindStatus }),
+          }),
+        );
       return Effect.succeed({
         configuration:
           mismatchSeat === undefined || input.role === mismatchSeat
@@ -150,7 +171,7 @@ function setup({
           projectId: ProjectId.make("project"),
           runtimeMode: threadAccess,
         },
-        runs: [run],
+        runs: missingRun ? [] : [run],
         messages: [message],
         subagents: tasks,
         turnItems: notices,
@@ -209,6 +230,10 @@ function setup({
     admissions,
     notices,
     bindings,
+    refreshed,
+    updateConfiguration: (configuration: string) => {
+      participantConfiguration = configuration;
+    },
     participants,
     lineup,
     service: NativeTeamChat.make.pipe(
@@ -216,7 +241,8 @@ function setup({
         attachmentsDir: "C:/state/attachments",
       } as unknown as ServerConfig["Service"]),
       Effect.provideService(ProjectStore.ProjectStoreV2, {
-        get: () => Effect.succeedSome({ workspaceRoot: "C:/project" }),
+        get: () =>
+          noWorkspace ? Effect.succeedNone : Effect.succeedSome({ workspaceRoot: "C:/project" }),
       } as unknown as ProjectStore.ProjectStoreV2["Service"]),
       Effect.provideService(DeliveryService.DeliveryService, delivery),
       Effect.provideService(ProjectionStore.ProjectionStoreV2, projections),
@@ -227,7 +253,7 @@ function setup({
           Effect.sync(() => {
             for (const event of events)
               if (event.type === "turn-item.updated") notices.push(event.payload);
-            return { committed: true, storedEvents: [] };
+            return { committed: noticeCommitted, storedEvents: [] };
           }),
       } as unknown as EventSink.EventSinkV2["Service"]),
       Effect.provideService(ThreadManagementService.ThreadManagementService, threads),
@@ -237,6 +263,106 @@ function setup({
     ),
   };
 }
+
+it.effect.each([{ bindFailures: ["researcher"] }, { bindFailures: ["researcher", "reviewer"] }])(
+  "skips binding failures $bindFailures without repeating notices",
+  ({ bindFailures }) =>
+    Effect.gen(function* () {
+      const fixture = setup({ third: true, bindFailures });
+      const service = yield* fixture.service;
+      const result = yield* service.prepareTurn({ threadId, runId });
+      expect(result.ready).toBe(bindFailures.length === 2);
+      expect(fixture.notices).toHaveLength(bindFailures.length);
+      expect(fixture.notices[0]).toMatchObject({
+        message: expect.stringContaining("Engine cannot bind this role"),
+      });
+      expect(fixture.bindings).toHaveLength(bindFailures.length === 2 ? 2 : 3);
+      expect(fixture.admissions.size).toBe(bindFailures.length === 2 ? 0 : 2);
+      yield* service.prepareTurn({ threadId, runId });
+      expect(fixture.notices).toHaveLength(bindFailures.length);
+    }),
+);
+
+it.effect.each(["workspace", "roster"] as const)(
+  "falls back for missing %s only after team tasks finish",
+  (problem) =>
+    Effect.gen(function* () {
+      const fixture = setup({ noWorkspace: problem === "workspace" });
+      if (problem === "roster") fixture.participants[1]!.seat = "researcher";
+      const service = yield* fixture.service;
+      fixture.tasks.push({
+        teamChat: { sourceRunId: runId, stage: "contribution", seat: "old" },
+        status: "running",
+        result: null,
+        providerInstanceId: ProviderInstanceId.make("codex-work"),
+        model: "codex-model",
+      });
+      expect((yield* service.prepareTurn({ threadId, runId })).ready).toBe(false);
+      fixture.tasks[0]!.status = "completed";
+      const result = yield* service.prepareTurn({ threadId, runId });
+      expect(result.ready).toBe(true);
+      expect(result.context).toContain("team discussion could not run");
+      expect(result.context).not.toContain("hand each piece to one participant");
+      expect(result.context).not.toContain("Participants:");
+      expect(result.context).toContain("Independent contributions:");
+      expect(result.context).toContain(problem === "workspace" ? "working folder" : "unique seats");
+      expect((yield* service.prepareTurn({ threadId, runId })).context).toBe(result.context);
+      expect(fixture.notices).toHaveLength(1);
+      expect(fixture.admissions.size).toBe(0);
+    }),
+);
+
+it.effect("fallback context does not tell a solo lead to delegate to nobody", () =>
+  Effect.gen(function* () {
+    const fixture = setup();
+    fixture.participants.splice(1);
+    const { context } = yield* (yield* fixture.service).prepareTurn({ threadId, runId });
+    expect(context).not.toContain("hand each piece to one participant");
+    expect(context).not.toContain("Participants:");
+    expect(context).not.toContain("Independent contributions:");
+  }),
+);
+
+it.effect("does not turn missing or obsolete state into a solo fallback", () =>
+  Effect.gen(function* () {
+    const missing = setup({ missingRun: true, noWorkspace: true });
+    const missingService = yield* missing.service;
+    expect((yield* missingService.prepareTurn({ threadId, runId }).pipe(Effect.flip)).reason).toBe(
+      "state",
+    );
+    expect(missing.notices).toHaveLength(0);
+    const obsolete = setup({ noWorkspace: true });
+    obsolete.run.status = "interrupted";
+    const obsoleteService = yield* obsolete.service;
+    expect((yield* obsoleteService.prepareTurn({ threadId, runId })).ready).toBe(false);
+    expect(obsolete.notices).toHaveLength(0);
+  }),
+);
+
+it.effect.each([401, 403])(
+  "keeps binding access refusal %s retryable without bypassing it",
+  (bindStatus) =>
+    Effect.gen(function* () {
+      const fixture = setup({ bindFailures: ["researcher"], bindStatus });
+      const service = yield* fixture.service;
+      expect((yield* service.prepareTurn({ threadId, runId }).pipe(Effect.flip)).reason).toBe(
+        "dispatch",
+      );
+      expect(fixture.admissions.size).toBe(0);
+      expect(fixture.notices).toHaveLength(0);
+    }),
+);
+
+it.effect("does not fall back when its notice cannot commit", () =>
+  Effect.gen(function* () {
+    const fixture = setup({ noWorkspace: true, noticeCommitted: false });
+    const service = yield* fixture.service;
+    expect((yield* service.prepareTurn({ threadId, runId }).pipe(Effect.flip)).reason).toBe(
+      "state",
+    );
+    expect(fixture.admissions.size).toBe(0);
+  }),
+);
 
 it.effect("recovers a lost dispatch receipt and shares independent results before synthesis", () =>
   Effect.gen(function* () {
@@ -417,21 +543,53 @@ it.effect("critiques on the first message only unless the conversation asks othe
   }),
 );
 
-it.effect("explains a participant revision mismatch without dispatching the team", () =>
+it.effect("continues the same thread when all participants use an updated team setup", () =>
   Effect.gen(function* () {
     const fixture = setup({ participantConfiguration: "research@4#def" });
+    const earlier = {
+      teamChat: {
+        sourceRunId: RunId.make("earlier-turn"),
+        stage: "contribution" as const,
+        seat: "researcher",
+      },
+      status: "completed",
+      result: "Keep this earlier finding.",
+      providerInstanceId: ProviderInstanceId.make("claude-work"),
+      model: "claude-model",
+    };
+    fixture.tasks.push(earlier);
     const service = yield* fixture.service;
     const result = yield* service.prepareTurn({ threadId, runId });
-    expect(result.ready).toBe(true);
-    expect(result.context).toContain("discussion did not run");
-    expect(result.context).toContain("researcher");
-    expect(result.context).toContain("research@3#abc");
-    expect(result.context).toContain("research@4#def");
-    expect(result.context).toContain("new team conversation");
+    expect(result.ready).toBe(false);
+    expect(fixture.admissions.size).toBe(2);
+    expect(fixture.refreshed).toEqual(["research@4#def"]);
+    expect(fixture.tasks[0]).toBe(earlier);
+    for (const command of fixture.admissions.values()) {
+      expect(command.parentThreadId).toBe(threadId);
+    }
     yield* service.prepareTurn({ threadId, runId });
-    expect(fixture.bindings).toHaveLength(1);
-    expect(fixture.notices).toHaveLength(1);
-    expect(fixture.admissions.size).toBe(0);
+    expect(fixture.bindings).toHaveLength(2);
+    expect(fixture.notices).toHaveLength(0);
+    expect(fixture.admissions.size).toBe(2);
+  }),
+);
+
+it.effect("keeps the setup of a discussion that has already received contributions", () =>
+  Effect.gen(function* () {
+    const fixture = setup({ critique: "always" });
+    const service = yield* fixture.service;
+    yield* service.prepareTurn({ threadId, runId });
+    for (const task of fixture.tasks) {
+      task.status = "completed";
+      task.result = "Finding from the original setup.";
+    }
+    fixture.updateConfiguration("research@4#def");
+    const result = yield* service.prepareTurn({ threadId, runId });
+    expect(result.ready).toBe(true);
+    expect(result.context).toContain("Finding from the original setup.");
+    expect(result.context).toContain("next turn");
+    expect(fixture.refreshed).toEqual([]);
+    expect(fixture.admissions.size).toBe(2);
   }),
 );
 

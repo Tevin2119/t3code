@@ -136,6 +136,10 @@ export class DeliveryService extends Context.Service<
     readonly bindThread: (
       input: DeliveryBindThreadInput,
     ) => Effect.Effect<DeliveryThreadBinding, DeliveryError>;
+    readonly refreshThread: (
+      threadId: ThreadId,
+      configuration: string,
+    ) => Effect.Effect<DeliveryThreadBinding, DeliveryError>;
     readonly threadState: (threadId: ThreadId) => Effect.Effect<DeliveryThreadState, DeliveryError>;
     /** Gives up a team choice whose setup never completed. A bound thread cannot be released. */
     readonly releaseThread: (
@@ -171,6 +175,7 @@ export const layerTest = Layer.succeed(
     nativeBuildAct: disabled,
     nativeIntakeAct: disabled,
     bindThread: disabled,
+    refreshThread: disabled,
     threadState: Effect.fn("DeliveryService.threadState")(() =>
       Effect.succeed({ binding: null, pending: null }),
     ),
@@ -536,6 +541,7 @@ const make = Effect.gen(function* () {
 
   const bindThread = Effect.fn("DeliveryService.bindThread")(function* (
     input: DeliveryBindThreadInput,
+    configuration?: string,
   ) {
     yield* storeReadable;
     if (input.orchestration !== undefined) {
@@ -543,7 +549,6 @@ const make = Effect.gen(function* () {
     }
     const existing = bindings.get(input.threadId);
     if (existing) {
-      // A thread keeps what it started with. Anything else is another thread.
       const same =
         existing.team === input.team &&
         existing.driver === input.driver &&
@@ -561,11 +566,13 @@ const make = Effect.gen(function* () {
               );
             })) &&
         (input.role === undefined || existing.role === input.role);
-      if (same) return existing;
-      return yield* new DeliveryError({
-        reason: "refused",
-        detail: `This thread is bound to team ${existing.team} as ${existing.role} on ${existing.harness}. Start a new thread to work with another team, role or harness.`,
-      });
+      if (same && (configuration === undefined || configuration === existing.configuration))
+        return existing;
+      if (!same)
+        return yield* new DeliveryError({
+          reason: "refused",
+          detail: `This thread is bound to team ${existing.team} as ${existing.role} on ${existing.harness}. Start a new thread to work with another team, role or harness.`,
+        });
     }
     const harness = DELIVERY_HARNESS_BY_DRIVER[input.driver];
     if (!harness) {
@@ -592,10 +599,13 @@ const make = Effect.gen(function* () {
         () => new DeliveryError({ reason: "invalid", detail: "The team choice is not complete." }),
       ),
     );
-    pending.set(input.threadId, intent);
-    yield* persist.pipe(Effect.tapError(() => Effect.sync(() => pending.delete(input.threadId))));
+    if (!existing) {
+      pending.set(input.threadId, intent);
+      yield* persist.pipe(Effect.tapError(() => Effect.sync(() => pending.delete(input.threadId))));
+    }
 
     const held = Effect.fn("held")(function* (error: DeliveryError) {
+      if (existing) return yield* error;
       pending.set(input.threadId, { ...intent, why: error.detail });
       yield* persist.pipe(Effect.ignore);
       return yield* error;
@@ -607,6 +617,7 @@ const make = Effect.gen(function* () {
       cwd: input.cwd,
       mode: "chat",
       thread: input.threadId,
+      ...(existing ? { handoffFrom: existing.session } : {}),
       ...(input.role ? { role: input.role } : {}),
     }).pipe(Effect.catch(held));
     const workspace = yield* workspaceOf(input.cwd).pipe(Effect.catch(held));
@@ -657,18 +668,55 @@ const make = Effect.gen(function* () {
       );
     }
 
+    if (configuration !== undefined && binding.configuration !== configuration) {
+      return yield* held(
+        new DeliveryError({
+          reason: "mismatch",
+          detail:
+            "The team setup changed again while preparing this turn. Send again to retry in this conversation.",
+        }),
+      );
+    }
     bindings.set(input.threadId, binding);
     pending.delete(input.threadId);
     yield* persist.pipe(
       // What is not on disk is not bound: the thread stays held.
       Effect.tapError((error) =>
         Effect.sync(() => {
+          if (existing) {
+            bindings.set(input.threadId, existing);
+            return;
+          }
           bindings.delete(input.threadId);
           pending.set(input.threadId, { ...intent, why: error.detail });
         }),
       ),
     );
     return binding;
+  });
+
+  const refreshThread = Effect.fn("DeliveryService.refreshThread")(function* (
+    threadId: ThreadId,
+    configuration: string,
+  ) {
+    yield* storeReadable;
+    const existing = bindings.get(threadId);
+    if (!existing)
+      return yield* new DeliveryError({
+        reason: "refused",
+        detail: "This thread has no team setup to refresh.",
+      });
+    return yield* bindThread(
+      {
+        threadId,
+        team: existing.team,
+        role: existing.role,
+        driver: existing.driver,
+        cwd: existing.project,
+        ...(existing.orchestration === undefined ? {} : { orchestration: existing.orchestration }),
+      },
+      configuration,
+    );
   });
 
   const releaseThread = Effect.fn("DeliveryService.releaseThread")(function* (threadId: ThreadId) {
@@ -868,6 +916,7 @@ const make = Effect.gen(function* () {
           ),
     ),
     bindThread,
+    refreshThread,
     threadState: Effect.fn("DeliveryService.threadState")((threadId) =>
       storeReadable.pipe(Effect.as(stateOf(threadId))),
     ),

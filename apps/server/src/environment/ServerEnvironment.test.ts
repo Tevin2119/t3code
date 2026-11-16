@@ -8,6 +8,8 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
+import * as ChildProcess from "effect/process/ChildProcess";
+import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
 import { DEFAULT_SIGNAL_EXPORT } from "@t3tools/shared/observability";
 import * as HostProcess from "@t3tools/shared/HostProcess";
@@ -21,6 +23,21 @@ import {
 } from "../cloud/config.ts";
 import * as ServerConfig from "../config.ts";
 import * as ServerEnvironment from "./ServerEnvironment.ts";
+
+it.live("loads environment before auth in a fresh Node module graph", () =>
+  Effect.gen(function* () {
+    const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+    // Vitest's transformed module cache does not reproduce Node's ESM initialization order.
+    const child = yield* spawner.spawn(
+      ChildProcess.make(process.execPath, [
+        "--input-type=module",
+        "--eval",
+        `await import(${JSON.stringify(new URL("./ServerEnvironment.ts", import.meta.url).href)});`,
+      ]),
+    );
+    expect(Number(yield* child.exitCode)).toBe(0);
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
 
 const layerServerEnvironment = (baseDir: string) =>
   ServerEnvironment.layer.pipe(

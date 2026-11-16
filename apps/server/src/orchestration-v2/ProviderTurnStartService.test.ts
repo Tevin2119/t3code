@@ -47,6 +47,11 @@ import {
   withWorkspaceLease,
 } from "../workspace/workspaceLease.ts";
 import * as NativeTeamChat from "../delivery/NativeTeamChat.ts";
+import * as DeliveryService from "../delivery/DeliveryService.ts";
+import * as DeliveryThreadSession from "../delivery/DeliveryThreadSession.ts";
+import * as ProjectStore from "./ProjectStore.ts";
+import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
+import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
 import * as GitWorkflow from "../git/GitWorkflowService.ts";
 import {
   layerThreadWorktreeRestore,
@@ -405,7 +410,10 @@ function makeLocalCommandHarness(input: {
   readonly previousMessages?: ReadonlyArray<string>;
   readonly logoutFailure?: string;
   readonly openFailure?: unknown;
+  readonly invalidTeamRoster?: boolean;
+  readonly refreshedTeam?: "idle" | "busy" | "background" | "shared";
   readonly teamPreparationFailure?: string;
+  readonly teamPreparationReason?: "roster" | "state" | "dispatch";
   readonly ensureThreadFailure?: unknown;
   readonly historyReadFailureAfterFallback?: unknown;
   readonly resumeFailure?: ProviderAdapter.ProviderAdapterV2Error;
@@ -1086,7 +1094,7 @@ function makeLocalCommandHarness(input: {
           startTurn(ProviderAdapter.resumeTurnInput(input)),
   };
   const open = vi.fn(() =>
-    input.sideChat !== undefined
+    input.sideChat !== undefined || input.invalidTeamRoster
       ? Effect.succeed(sideChatSession as never)
       : input.interruptOpen === true
         ? Effect.interrupt
@@ -1122,7 +1130,7 @@ function makeLocalCommandHarness(input: {
       input: RunExecutionService.RunExecutionServiceV2StartRootRunInput,
     ) => Effect.Effect<void, RunExecutionService.RunExecutionServiceV2Error>
   >((runInput) =>
-    input.sideChat !== undefined
+    input.sideChat !== undefined || input.invalidTeamRoster
       ? (runInput.resume
           ? runInput.session.resumeTurn!({
               ...runInput,
@@ -1228,9 +1236,20 @@ function makeLocalCommandHarness(input: {
       projection.runs.find((candidate) => candidate.id === id),
     ),
   );
+  const releaseUnlessBusy = vi.fn(() => Effect.succeed(input.refreshedTeam !== "busy"));
+  const prepareTeam = vi.fn(() => Effect.succeed(true));
   const layer = ProviderTurnStart.layer.pipe(
     Layer.provide(
       Layer.mergeAll(
+        Layer.mock(DeliveryService.DeliveryService)({
+          prepareThread: prepareTeam,
+          threadState: () =>
+            Effect.succeed({
+              binding:
+                input.refreshedTeam === undefined ? null : ({ configuration: "team@2" } as never),
+              pending: null,
+            }),
+        }),
         Layer.mock(ContextHandoffService.ContextHandoffServiceV2)({
           prepareProviderHandoff: (handoff) =>
             input.sideChat?.nativeForkFrom === undefined
@@ -1281,7 +1300,7 @@ function makeLocalCommandHarness(input: {
           getRuntimeRecoveryProjection,
           getRun,
           getTurnStartHistory: () =>
-            input.sideChat !== undefined
+            input.sideChat !== undefined || input.invalidTeamRoster
               ? Effect.succeed([])
               : Effect.fail(
                   new ProjectionStore.ProjectionStoreReadError({
@@ -1292,6 +1311,13 @@ function makeLocalCommandHarness(input: {
         }),
         Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({
           open,
+          releaseUnlessBusy,
+          isLive: () =>
+            Effect.succeed(input.refreshedTeam !== undefined && input.refreshedTeam !== "idle"),
+          otherWorkingThreads: () =>
+            Effect.succeed(
+              input.refreshedTeam === "shared" ? [ThreadId.make("another-working-thread")] : [],
+            ),
           get: () =>
             Effect.succeed(
               input.previousTurn?.liveSession === false
@@ -1309,16 +1335,42 @@ function makeLocalCommandHarness(input: {
           forkBaseline: () => Effect.succeed(Effect.void),
         }),
         Layer.succeed(NativeTeamChat.NativeTeamChat, {
-          prepareTurn: () =>
-            input.teamPreparationFailure === undefined
-              ? Effect.succeed({ ready: true, context: "" })
-              : Effect.fail(
-                  new NativeTeamChat.NativeTeamChatError({
-                    runId,
-                    reason: "roster",
-                    detail: input.teamPreparationFailure,
-                  }),
-                ),
+          prepareTurn: (request) =>
+            input.invalidTeamRoster
+              ? NativeTeamChat.make.pipe(
+                  Effect.flatMap((service) => service.prepareTurn(request)),
+                  Effect.provide(
+                    Layer.mergeAll(
+                      Layer.mock(DeliveryService.DeliveryService)({
+                        threadState: () =>
+                          Effect.succeed({
+                            binding: null,
+                            pending: null,
+                            lineup: { participants: [] },
+                          }),
+                      }),
+                      Layer.mock(ProjectionStore.ProjectionStoreV2)({ getThreadRecords }),
+                      Layer.mock(EventSink.EventSinkV2)({ writeIfRunCurrent }),
+                      Layer.mock(ProjectStore.ProjectStoreV2)({}),
+                      Layer.mock(ProviderAdapterRegistry.ProviderAdapterRegistryV2)({}),
+                      Layer.mock(ProviderInstanceRegistry.ProviderInstanceRegistry)({}),
+                      Layer.mock(ThreadManagementService.ThreadManagementService)({}),
+                      Layer.mock(ServerConfig.ServerConfig)({
+                        attachmentsDir: "/tmp/attachments",
+                      } as ServerConfig.ServerConfig["Service"]),
+                      IdAllocator.layer,
+                    ),
+                  ),
+                )
+              : input.teamPreparationFailure === undefined
+                ? Effect.succeed({ ready: true, context: "" })
+                : Effect.fail(
+                    new NativeTeamChat.NativeTeamChatError({
+                      runId,
+                      reason: input.teamPreparationReason ?? "roster",
+                      detail: input.teamPreparationFailure,
+                    }),
+                  ),
         }),
         Layer.succeed(ProviderUsageAnalytics.ProviderTurnAnalytics, {
           runStarted: () => Effect.void,
@@ -1335,6 +1387,8 @@ function makeLocalCommandHarness(input: {
     layer,
     interruptRun,
     settledRuns,
+    releaseUnlessBusy,
+    prepareTeam,
     getThreadRecords,
     getTurnStartContext,
     getRuntimeRecoveryProjection,
@@ -1826,6 +1880,82 @@ effectIt.effect("preserves a replacement committed before exhausted start settle
       expect(harness.projection()).toEqual(protectedProjection);
     }).pipe(Effect.provide(layerStartEffectWorker(harness)));
   }),
+);
+
+effectIt.effect.each(["idle", "busy", "background", "shared"] as const)(
+  "reloads an updated team setup only when its provider is %s",
+  (state) =>
+    Effect.gen(function* () {
+      using _loaded = vi.spyOn(DeliveryThreadSession, "readDeliveryThreadSession").mockReturnValue({
+        configuration: "team@1",
+      } as DeliveryThreadSession.DeliveryThreadSession);
+      const harness = makeLocalCommandHarness({
+        text: "Continue the work",
+        previousNativeSession: true,
+        openFailure: "Stop after requesting the refreshed native session",
+        refreshedTeam: state,
+      });
+      const before = harness.projection();
+      harness.setProjection({
+        ...before,
+        providerThreads: before.providerThreads.map((thread) => ({
+          ...thread,
+          driver: ProviderDriverKind.make("claudeAgent"),
+          nativeThreadRef: {
+            driver: thread.driver,
+            nativeId: "preserved-native-history",
+            strength: "strong" as const,
+          },
+          ...(state === "background"
+            ? { pendingBackgroundTasks: [{ taskId: "active-command", kind: "command" as const }] }
+            : {}),
+        })),
+      });
+      yield* harness.start;
+      if (state === "background" || state === "shared") {
+        expect(harness.releaseUnlessBusy).not.toHaveBeenCalled();
+      } else {
+        expect(harness.releaseUnlessBusy).toHaveBeenCalledWith(
+          expect.objectContaining({ ownProviderThreadIds: [], throughRunOrdinal: 2 }),
+        );
+      }
+      if (state !== "idle") {
+        expect(harness.open).not.toHaveBeenCalled();
+      } else {
+        expect(harness.open).toHaveBeenCalledWith(
+          expect.objectContaining({
+            threadId: harness.projection().thread.id,
+            initialNativeThreadId: "preserved-native-history",
+          }),
+        );
+      }
+    }),
+);
+
+effectIt.effect.each(["missing", "stale"] as const)(
+  "prepares a Codex team's %s setup while reusing a shared provider session",
+  (state) =>
+    Effect.gen(function* () {
+      using _loaded = vi
+        .spyOn(DeliveryThreadSession, "readDeliveryThreadSession")
+        .mockReturnValue(
+          state === "missing"
+            ? undefined
+            : ({ configuration: "team@1" } as DeliveryThreadSession.DeliveryThreadSession),
+        );
+      const harness = makeLocalCommandHarness({
+        text: "Continue with the team",
+        refreshedTeam: "shared",
+        openFailure: "Stop after requesting the shared native session",
+      });
+      yield* harness.start;
+      expect(harness.prepareTeam).toHaveBeenCalledWith(harness.projection().thread.id, {
+        driver: "codex",
+        cwd: "/tmp/native-account-command",
+      });
+      expect(harness.releaseUnlessBusy).not.toHaveBeenCalled();
+      expect(harness.open).toHaveBeenCalled();
+    }),
 );
 
 effectIt.effect(
@@ -2738,27 +2868,60 @@ effectIt.effect("fails a starting run when its recovery state cannot be read", (
   }),
 );
 
-effectIt.effect("settles failed team preparation after retries without starting the provider", () =>
+effectIt.effect("starts the lead exactly once with a real roster fallback", () =>
   Effect.gen(function* () {
-    const message = "The conversation and its participants use different team revisions.";
-    const harness = makeLocalCommandHarness({ text: "Continue", teamPreparationFailure: message });
-
-    yield* Effect.flip(harness.startWithRetry);
-    expect(harness.projection().runs.at(-1)?.status).toBe("starting");
-    expect(harness.settledRuns).toEqual([]);
-
-    yield* harness.start;
-    const projection = harness.projection();
-    expect(projection.runs.at(-1)).toMatchObject({ status: "failed", startedAt: null });
-    expect(projection.attempts[0]).toMatchObject({ status: "failed", startedAt: null });
-    expect(projection.nodes[0]).toMatchObject({ status: "failed", startedAt: null });
-    expect(projection.turnItems).toMatchObject([
-      { type: "error", status: "failed", failure: { message } },
-    ]);
-    expect(harness.settledRuns).toEqual(["failed"]);
-    expect(harness.open).not.toHaveBeenCalled();
-    expect(harness.startRootRun).not.toHaveBeenCalled();
+    const harness = makeLocalCommandHarness({ text: "Continue", invalidTeamRoster: true });
+    yield* harness.startWithRetry;
+    yield* harness.startWithRetry;
+    expect(harness.startRootRun).toHaveBeenCalledOnce();
+    expect(harness.startTurn).toHaveBeenCalledOnce();
+    expect(harness.startTurn.mock.calls[0]?.[0].message.text).toContain(
+      "team discussion could not run",
+    );
+    expect(harness.startTurn.mock.calls[0]?.[0].message.text).toContain("unique seats");
+    expect(
+      harness.projection().turnItems.filter((item) => item.type === "system_notice"),
+    ).toHaveLength(1);
   }),
+);
+
+effectIt.effect.each(["roster", "state", "dispatch"] as const)(
+  "settles %s team preparation with the appropriate queue failure class",
+  (reason) =>
+    Effect.gen(function* () {
+      const message = "The conversation and its participants use different team revisions.";
+      const harness = makeLocalCommandHarness({
+        text: "Continue",
+        teamPreparationFailure: message,
+        teamPreparationReason: reason,
+      });
+
+      if (reason === "dispatch") {
+        yield* Effect.flip(harness.startWithRetry);
+        expect(harness.projection().runs.at(-1)?.status).toBe("starting");
+        expect(harness.settledRuns).toEqual([]);
+        yield* harness.start;
+      } else {
+        yield* harness.startWithRetry;
+      }
+      const projection = harness.projection();
+      expect(projection.runs.at(-1)).toMatchObject({ status: "failed", startedAt: null });
+      expect(projection.attempts[0]).toMatchObject({ status: "failed", startedAt: null });
+      expect(projection.nodes[0]).toMatchObject({ status: "failed", startedAt: null });
+      expect(projection.turnItems).toMatchObject([
+        {
+          type: "error",
+          status: "failed",
+          failure: {
+            message,
+            class: reason === "dispatch" ? "provider_error" : "validation_error",
+          },
+        },
+      ]);
+      expect(harness.settledRuns).toEqual(["failed"]);
+      expect(harness.open).not.toHaveBeenCalled();
+      expect(harness.startRootRun).not.toHaveBeenCalled();
+    }),
 );
 
 effectIt.effect("terminalizes a starting run when its provider session cannot open", () =>
