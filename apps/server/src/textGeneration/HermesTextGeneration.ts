@@ -252,11 +252,22 @@ export const makeHermesTextGeneration = Effect.fn("makeHermesTextGeneration")(fu
   const generateReviewGuide: TextGeneration.TextGeneration["Service"]["generateReviewGuide"] = () =>
     Effect.fail(investigationUnsupported("generateReviewGuide", "Hermes"));
 
+  // Cleaning up dictation is not offered through this harness.
+  const generateTranscriptionPostProcessing: TextGeneration.TextGeneration["Service"]["generateTranscriptionPostProcessing"] =
+    () =>
+      Effect.fail(
+        new TextGenerationError({
+          operation: "generateTranscriptionPostProcessing",
+          detail: "Hermes does not clean up dictated text.",
+        }),
+      );
+
   return {
     generateCommitMessage,
     generatePrContent,
     generateBranchName,
     generateThreadTitle,
     generateReviewGuide,
+    generateTranscriptionPostProcessing,
   } satisfies TextGeneration.TextGeneration["Service"];
 });

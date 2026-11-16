@@ -17,7 +17,6 @@ import {
   type ModelSelection,
   type ProviderDriverKind,
   type ProviderInstanceId,
-  type ProviderInteractionMode,
   type RuntimeMode,
   type ServerProvider,
 } from "@t3tools/contracts";
@@ -25,6 +24,8 @@ import type { EffortDisplay } from "@t3tools/contracts/settings";
 import { cn } from "~/lib/utils";
 import { resolveComposerTraitsInput } from "./composerProviderState";
 import { runtimeModeUnavailableReason } from "./runtimeModeConfig";
+import { useApplyThreadModelPick } from "./useApplyThreadModelPick";
+import { useStableCallback } from "../../hooks/useStableCallback";
 import {
   ComposerEffortColumn,
   ComposerPickerFooter,
@@ -47,6 +48,7 @@ export function ComposerControlsBar(props: {
   orchestrator: ComponentProps<typeof ProviderModelPicker>["orchestrator"];
   runtimeModeSupport: ServerProvider["runtimeModes"];
   environmentId: EnvironmentId;
+  workspaceCwd: string | null;
   routeKind: ChatComposerProps["routeKind"];
   routeThreadRef: ChatComposerProps["routeThreadRef"];
   draftId: ChatComposerProps["draftId"];
@@ -58,16 +60,12 @@ export function ComposerControlsBar(props: {
   reportedModelSelection: ChatComposerProps["reportedModelSelection"];
   promptUltrathink: PromptUltrathink;
   onPromptEdit: (edit: (prompt: string) => string) => void;
-  planModeEnabled: boolean;
-  planModeUiEnabled: boolean;
   effortDisplay: EffortDisplay;
   /** The strip under a new thread names the permissions, so the row does not repeat them. */
   permissionsShownInStrip: boolean;
-  interactionMode: ProviderInteractionMode;
   compatibleRuntimeMode: RuntimeMode;
   defaultRuntimeMode: RuntimeMode | undefined;
   compatibleRuntimeModeOptions: ReadonlyArray<RuntimeModeOption>;
-  toggleInteractionMode: () => void;
   handleRuntimeModeChange: (mode: RuntimeMode) => void;
   composerControlsCollapsed: boolean;
   composerControlsHidden: boolean;
@@ -109,13 +107,9 @@ export function ComposerControlsBar(props: {
     reportedModelSelection,
     promptUltrathink,
     onPromptEdit,
-    planModeEnabled,
-    planModeUiEnabled,
-    interactionMode,
     compatibleRuntimeMode,
     defaultRuntimeMode,
     compatibleRuntimeModeOptions,
-    toggleInteractionMode,
     handleRuntimeModeChange,
     composerControlsCollapsed,
     composerControlsHidden,
@@ -162,15 +156,18 @@ export function ComposerControlsBar(props: {
   } = resolveComposerControlsOwnership({
     matchesDefault: accessMatchesDefault || props.permissionsShownInStrip,
     hasTeam: Boolean(props.teamControl),
-    planModeUiEnabled,
     collapsed: composerControlsCollapsed,
     measuredHiddenBlockCount,
   });
   const controlSize = composerControlsCollapsed ? "xs" : "sm";
+  const applyThreadModelPick = useApplyThreadModelPick();
+  const applyRouteThreadModelPick = useStableCallback(() => applyThreadModelPick(routeThreadRef));
   const traitsInput = resolveComposerTraitsInput({
     provider: selectedProvider,
     instanceId: selectedInstanceId,
-    ...(routeKind === "server" ? { threadRef: routeThreadRef } : {}),
+    ...(routeKind === "server"
+      ? { threadRef: routeThreadRef, onDraftModelOptionsChange: applyRouteThreadModelPick }
+      : {}),
     ...(routeKind === "draft" && draftId ? { draftId } : {}),
     model: selectedModel,
     models: selectedProviderModels,
@@ -178,7 +175,6 @@ export function ComposerControlsBar(props: {
     reportedModelSelection,
     promptUltrathink,
     onPromptEdit,
-    planModeEnabled,
   });
   const effort = describeComposerEffort(traitsInput, props.effortDisplay, controlSize);
   const restingBlockDefs = [
@@ -196,8 +192,6 @@ export function ComposerControlsBar(props: {
             id: "mode",
             content: (
               <ComposerFooterModeControls
-                showInteractionModeToggle={planModeUiEnabled}
-                interactionMode={interactionMode}
                 runtimeMode={compatibleRuntimeMode}
                 runtimeModeSupport={runtimeModeSupport}
                 runtimeModeOptions={compatibleRuntimeModeOptions}
@@ -205,7 +199,6 @@ export function ComposerControlsBar(props: {
                 hidden={composerControlsHidden || restingHiddenBlockCount > 0}
                 accessDisplay={accessDisplay}
                 emphasized={!accessMatchesDefault}
-                onToggleInteractionMode={toggleInteractionMode}
                 onRuntimeModeChange={handleRuntimeModeChange}
               />
             ),
@@ -217,6 +210,7 @@ export function ComposerControlsBar(props: {
   const composerModelPicker = (
     <ComposerModelPicker
       environmentId={environmentId}
+      workspaceCwd={props.workspaceCwd}
       compact={false}
       isComposerOwned
       // The trigger grows away from this edge when its model or effort label changes.
@@ -298,58 +292,51 @@ export function ComposerControlsBar(props: {
     <>
       {composerModelPicker}
 
-      {
-        <>
-          {restingBlockDefs.map((def, index) => {
-            const hidden = index >= restingBlockDefs.length - restingHiddenBlockCount;
-            return (
-              <div
-                key={def.id}
-                data-resting-block={def.id}
-                data-composer-block-icon-only={
-                  index >= restingBlockDefs.length - iconOnlyBlockCount ? "true" : "false"
-                }
-                aria-hidden={hidden || undefined}
-                inert={hidden || undefined}
-                className={cn(
-                  "flex w-max min-w-max shrink-0 items-center gap-1",
-                  hidden && "pointer-events-none invisible absolute",
-                  index >= restingBlockDefs.length - iconOnlyBlockCount &&
-                    "[&_[data-composer-control-label]]:pointer-events-none [&_[data-composer-control-label]]:invisible [&_[data-composer-control-label]]:absolute [&_[data-composer-control-label]]:w-max [&_[data-composer-control-label]]:max-w-none [&_[data-composer-control-compact-icon]]:[visibility:inherit] [&_[data-composer-control-compact-icon]]:relative",
-                )}
-              >
-                {def.content}
-              </div>
-            );
-          })}
-          <div
-            data-resting-controls-overflow
-            aria-hidden={hiddenRestingBlockIds.length === 0 || undefined}
-            inert={hiddenRestingBlockIds.length === 0 || undefined}
-            className={cn(
-              "min-w-0 shrink-0",
-              hiddenRestingBlockIds.length === 0 && "pointer-events-none invisible absolute",
-            )}
-          >
-            <CompactComposerControlsMenu
-              interactionMode={interactionMode}
-              runtimeMode={compatibleRuntimeMode}
-              runtimeModeSupport={runtimeModeSupport}
-              runtimeModeOptions={compatibleRuntimeModeOptions}
-              size={controlSize}
-              hidden={composerControlsHidden || hiddenRestingBlockIds.length === 0}
-              showInteractionModeToggle={
-                planModeUiEnabled && hiddenRestingBlockIds.includes("mode")
+      <>
+        {restingBlockDefs.map((def, index) => {
+          const hidden = index >= restingBlockDefs.length - restingHiddenBlockCount;
+          return (
+            <div
+              key={def.id}
+              data-resting-block={def.id}
+              data-composer-block-icon-only={
+                index >= restingBlockDefs.length - iconOnlyBlockCount ? "true" : "false"
               }
-              teamControls={hiddenRestingBlockIds.includes("team") ? props.teamControl : undefined}
-              // Permissions join the overflow only when their normal home is in it.
-              showPermissions={overflowShowsPermissions}
-              onToggleInteractionMode={toggleInteractionMode}
-              onRuntimeModeChange={handleRuntimeModeChange}
-            />
-          </div>
-        </>
-      }
+              aria-hidden={hidden || undefined}
+              inert={hidden || undefined}
+              className={cn(
+                "flex w-max min-w-max shrink-0 items-center gap-1",
+                hidden && "pointer-events-none invisible absolute",
+                index >= restingBlockDefs.length - iconOnlyBlockCount &&
+                  "[&_[data-composer-control-label]]:pointer-events-none [&_[data-composer-control-label]]:invisible [&_[data-composer-control-label]]:absolute [&_[data-composer-control-label]]:w-max [&_[data-composer-control-label]]:max-w-none [&_[data-composer-control-compact-icon]]:[visibility:inherit] [&_[data-composer-control-compact-icon]]:relative",
+              )}
+            >
+              {def.content}
+            </div>
+          );
+        })}
+        <div
+          data-resting-controls-overflow
+          aria-hidden={hiddenRestingBlockIds.length === 0 || undefined}
+          inert={hiddenRestingBlockIds.length === 0 || undefined}
+          className={cn(
+            "min-w-0 shrink-0",
+            hiddenRestingBlockIds.length === 0 && "pointer-events-none invisible absolute",
+          )}
+        >
+          <CompactComposerControlsMenu
+            runtimeMode={compatibleRuntimeMode}
+            runtimeModeSupport={runtimeModeSupport}
+            runtimeModeOptions={compatibleRuntimeModeOptions}
+            size={controlSize}
+            hidden={composerControlsHidden || hiddenRestingBlockIds.length === 0}
+            teamControls={hiddenRestingBlockIds.includes("team") ? props.teamControl : undefined}
+            // Permissions join the overflow only when their normal home is in it.
+            showPermissions={overflowShowsPermissions}
+            onRuntimeModeChange={handleRuntimeModeChange}
+          />
+        </div>
+      </>
     </>
   );
 }

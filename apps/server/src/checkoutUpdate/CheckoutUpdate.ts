@@ -13,7 +13,6 @@
  * @module CheckoutUpdate
  */
 import { CheckoutUpdateError, CheckoutUpdateState } from "@t3tools/contracts";
-import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -24,35 +23,10 @@ import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 
 import * as ServerRuntimeStartup from "../serverRuntimeStartup.ts";
-import {
-  CHECKOUT_SUPERVISOR_ENV,
-  isSupervisorMessage,
-  type ServerMessage,
-  type SupervisorMessage,
-} from "./protocol.ts";
+import { CheckoutUpdateHostChannel, isCheckoutSupervised } from "./hostChannel.ts";
+import { isSupervisorMessage, type ServerMessage, type SupervisorMessage } from "./protocol.ts";
 
-/** The supervisor's channel: this process's own IPC channel. */
-export interface CheckoutUpdateChannel {
-  readonly connected: () => boolean;
-  readonly send: (message: ServerMessage) => void;
-  readonly listen: (listener: (message: unknown) => void) => () => void;
-}
-
-export const CheckoutUpdateHostChannel = Context.Reference<CheckoutUpdateChannel>(
-  "t3/checkoutUpdate/hostChannel",
-  {
-    defaultValue: () => ({
-      connected: () => process.connected && process.send !== undefined,
-      send: (message) => {
-        if (process.connected) process.send?.(message);
-      },
-      listen: (listener) => {
-        process.on("message", listener);
-        return () => process.off("message", listener);
-      },
-    }),
-  },
-);
+export { CheckoutUpdateHostChannel, type CheckoutUpdateChannel } from "./hostChannel.ts";
 
 export class CheckoutUpdate extends Context.Service<
   CheckoutUpdate,
@@ -70,13 +44,6 @@ const decodeState = Schema.decodeUnknownOption(CheckoutUpdateState);
 
 const notSupervised = new CheckoutUpdateError({
   reason: "This server is not run by the checkout supervisor, so it is updated by hand.",
-});
-
-/** True when this process was started by the checkout supervisor with its channel open. */
-export const isCheckoutSupervised = Effect.gen(function* () {
-  const environment = yield* HostProcess.Environment;
-  const channel = yield* CheckoutUpdateHostChannel;
-  return environment[CHECKOUT_SUPERVISOR_ENV] === "1" && channel.connected();
 });
 
 export const make = Effect.gen(function* () {

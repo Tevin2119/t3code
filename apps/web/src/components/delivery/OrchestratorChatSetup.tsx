@@ -113,7 +113,6 @@ export function OrchestratorChatSetup(props: {
             models={leadEntry.models}
             model={props.lead.model}
             modelOptions={props.lead.options}
-            planModeEnabled={false}
             allowPromptInjectedEffort={false}
             disabled={!leadEntry.isAvailable}
             size="xs"

@@ -144,7 +144,14 @@ function setup({
   const notices: OrchestrationV2TurnItem[] = [];
   const admissions = new Map<string, Delegation>();
   const bindings: Array<{ threadId: ThreadId; team: string; role?: string; driver: string }> = [];
+  const refreshed: string[] = [];
   const delivery = {
+    refreshThread: (_id: ThreadId, configuration: string) =>
+      Effect.sync(() => {
+        refreshed.push(configuration);
+        binding.configuration = configuration;
+        return binding;
+      }),
     threadState: () =>
       Effect.succeed({
         binding: unbound ? null : binding,
@@ -236,6 +243,10 @@ function setup({
     admissions,
     notices,
     bindings,
+    refreshed,
+    updateConfiguration: (configuration: string) => {
+      participantConfiguration = configuration;
+    },
     participants,
     lineup,
     service: NativeTeamChat.make.pipe(
@@ -551,21 +562,53 @@ it.effect("critiques on the first message only unless the conversation asks othe
   }),
 );
 
-it.effect("explains a participant revision mismatch without dispatching the team", () =>
+it.effect("continues the same thread when all participants use an updated team setup", () =>
   Effect.gen(function* () {
     const fixture = setup({ participantConfiguration: "research@4#def" });
+    const earlier = {
+      teamChat: {
+        sourceRunId: RunId.make("earlier-turn"),
+        stage: "contribution" as const,
+        seat: "researcher",
+      },
+      status: "completed",
+      result: "Keep this earlier finding.",
+      providerInstanceId: ProviderInstanceId.make("claude-work"),
+      model: "claude-model",
+    };
+    fixture.tasks.push(earlier);
     const service = yield* fixture.service;
     const result = yield* service.prepareTurn({ threadId, runId });
-    expect(result.ready).toBe(true);
-    expect(result.context).toContain("discussion did not run");
-    expect(result.context).toContain("researcher");
-    expect(result.context).toContain("research@3#abc");
-    expect(result.context).toContain("research@4#def");
-    expect(result.context).toContain("new team conversation");
+    expect(result.ready).toBe(false);
+    expect(fixture.admissions.size).toBe(2);
+    expect(fixture.refreshed).toEqual(["research@4#def"]);
+    expect(fixture.tasks[0]).toBe(earlier);
+    for (const command of fixture.admissions.values()) {
+      expect(command.parentThreadId).toBe(threadId);
+    }
     yield* service.prepareTurn({ threadId, runId });
-    expect(fixture.bindings).toHaveLength(1);
-    expect(fixture.notices).toHaveLength(1);
-    expect(fixture.admissions.size).toBe(0);
+    expect(fixture.bindings).toHaveLength(2);
+    expect(fixture.notices).toHaveLength(0);
+    expect(fixture.admissions.size).toBe(2);
+  }),
+);
+
+it.effect("keeps the setup of a discussion that has already received contributions", () =>
+  Effect.gen(function* () {
+    const fixture = setup({ critique: "always" });
+    const service = yield* fixture.service;
+    yield* service.prepareTurn({ threadId, runId });
+    for (const task of fixture.tasks) {
+      task.status = "completed";
+      task.result = "Finding from the original setup.";
+    }
+    fixture.updateConfiguration("research@4#def");
+    const result = yield* service.prepareTurn({ threadId, runId });
+    expect(result.ready).toBe(true);
+    expect(result.context).toContain("Finding from the original setup.");
+    expect(result.context).toContain("next turn");
+    expect(fixture.refreshed).toEqual([]);
+    expect(fixture.admissions.size).toBe(2);
   }),
 );
 

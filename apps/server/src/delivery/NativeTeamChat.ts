@@ -90,7 +90,9 @@ export const make = Effect.gen(function* () {
     function* (input) {
       if (Option.isNone(deliveryOption)) return { ready: true, context: "" };
       const delivery = deliveryOption.value;
-      const { binding, lineup } = yield* delivery.threadState(input.threadId);
+      const state = yield* delivery.threadState(input.threadId);
+      let binding = state.binding;
+      const lineup = state.lineup;
       if (lineup === undefined) return { ready: true, context: "" };
       const roster = lineup.participants;
       // Participants take a team's roles when there is one; with none they join as themselves.
@@ -317,6 +319,7 @@ export const make = Effect.gen(function* () {
               ));
           if (cwd === undefined)
             return yield* fallback("No working folder is available for the team.");
+          const configurations = new Map<string, string>();
           for (const [index, seat] of candidates.entries()) {
             if (roster.length - skipped.size < 2) break;
             const adapter = available[index];
@@ -339,10 +342,25 @@ export const make = Effect.gen(function* () {
                 }),
               );
             if (member === undefined) continue;
-            if (binding !== null && member.configuration !== binding.configuration) {
+            configurations.set(seat.seat, member.configuration);
+          }
+          const revisions = new Set(configurations.values());
+          const revision = revisions.values().next().value;
+          if (
+            binding !== null &&
+            tasks.length === 0 &&
+            configurations.size >= 2 &&
+            revisions.size === 1 &&
+            revision !== undefined &&
+            revision !== binding.configuration
+          ) {
+            binding = yield* delivery.refreshThread(input.threadId, revision);
+          }
+          for (const [seat, configuration] of configurations) {
+            if (binding !== null && configuration !== binding.configuration) {
               yield* recordSkip(
-                seat.seat,
-                `${seat.seat}: the team setup changed since this conversation started. This conversation uses team setup ${binding.configuration}, but ${seat.seat} uses ${member.configuration}. Start a new team conversation to use the updated setup. Recorded contributions are preserved.`,
+                seat,
+                `${seat}: the team setup changed while this discussion was being prepared. This turn uses ${binding.configuration}, but this participant uses ${configuration}. The next turn can adopt the updated setup in this conversation. Recorded contributions are preserved.`,
               );
             }
           }
