@@ -3,7 +3,10 @@ import { EnvironmentId, ProviderInstanceId, ThreadId } from "@t3tools/contracts"
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import { createModelSelection } from "@t3tools/shared/model";
 import { describe, expect, it } from "@effect/vitest";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
+import * as TestClock from "effect/testing/TestClock";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
@@ -51,7 +54,7 @@ interface Identity {
 
 interface Engine {
   revision?: string;
-  readonly requests: Array<{ method: string; path: string; body: unknown }>;
+  readonly requests: Array<{ method: string; path: string; search: string; body: unknown }>;
   readonly sessions: Map<string, Identity>;
   down: boolean;
   /** Changes what the engine says a session is, as a team edited behind a thread's back would. */
@@ -59,6 +62,7 @@ interface Engine {
   health?: { profile: string | null; home: string };
   replies?: Readonly<Record<string, unknown>>;
   statuses?: Readonly<Record<string, number>>;
+  beforeRequest?: (url: URL) => Effect.Effect<void>;
 }
 
 const engine = (): Engine => ({ requests: [], sessions: new Map(), down: false, tamper: null });
@@ -107,6 +111,7 @@ const layer = (
             fake.requests.push({
               method: request.method,
               path: url.pathname,
+              search: url.search,
               body:
                 request.body._tag === "Uint8Array"
                   ? JSON.parse(new TextDecoder().decode(request.body.body))
@@ -125,6 +130,11 @@ const layer = (
                     },
                   }),
                 ),
+              );
+            if (fake.replies && Object.hasOwn(fake.replies, url.pathname + url.search))
+              return json(
+                fake.replies[url.pathname + url.search],
+                fake.statuses?.[url.pathname + url.search] ?? 200,
               );
             if (fake.replies && Object.hasOwn(fake.replies, url.pathname))
               return json(fake.replies[url.pathname], fake.statuses?.[url.pathname] ?? 200);
@@ -181,7 +191,11 @@ const layer = (
             }
             if (url.pathname === "/api/lanes") return json({ lanes: [], view: "development" });
             return json({ error: "not found" }, 404);
-          }),
+          }).pipe(
+            Effect.andThen((response) =>
+              (fake.beforeRequest?.(new URL(request.url)) ?? Effect.void).pipe(Effect.as(response)),
+            ),
+          ),
         ),
       ),
     ),
@@ -206,6 +220,12 @@ const ordinaryCaller = {
   threadId: threadId("ordinary"),
   driver: "pi",
   toolsSupported: true,
+};
+const discoveryProfile = {
+  T3_WORKSPACE_PROFILE_ID: "fixture",
+  T3_WORKSPACE_ENGINE_URL: "http://127.0.0.1:4320",
+  POLYMANIA_ACCOUNTS: "fixture",
+  T3_WORKSPACE_ENGINE_HOME: "C:/fixture/engine",
 };
 const discoveryEngine = () => {
   const fake = engine();
@@ -363,9 +383,213 @@ describe("DeliveryService", () => {
         expect(fake.sessions.size).toBe(0);
         expect(fake.requests.every((request) => request.method === "GET")).toBe(true);
         expect((yield* delivery.threadState(threadId("ordinary"))).binding).toBeNull();
-      }).pipe(Effect.provide(layer(fake, { prefix: "ordinary-discovery-" })));
+        expect(fake.requests.filter((request) => request.path === "/api/health")).toHaveLength(1);
+        fake.health = { profile: "another", home: "C:/fixture/engine" };
+        const changed = yield* delivery.discover({ folder: REPO, fresh: true }, ordinaryCaller);
+        expect(changed.diagnostics).toEqual(["profile-mismatch"]);
+        expect(changed.boards).toEqual([]);
+        expect(fake.requests).toHaveLength(7);
+      }).pipe(
+        Effect.provide(
+          layer(fake, { prefix: "ordinary-discovery-", environment: discoveryProfile }),
+        ),
+      );
     },
   );
+  it.effect(
+    "fits profile discovery into its existing bound with independent metadata reads",
+    () => {
+      const fake = discoveryEngine();
+      return Effect.gen(function* () {
+        const started = yield* Deferred.make<void>();
+        fake.beforeRequest = (url) =>
+          Deferred.succeed(started, undefined).pipe(
+            Effect.andThen(
+              Effect.sleep(url.pathname === "/api/health" ? "500 millis" : "1 second"),
+            ),
+          );
+        const service = yield* DeliveryService.DeliveryService;
+        const pending = yield* service
+          .discover({ folder: REPO, fresh: true }, ordinaryCaller)
+          .pipe(Effect.forkChild);
+        yield* Deferred.await(started);
+        yield* TestClock.adjust("3 seconds");
+        const result = yield* Fiber.join(pending);
+        expect(result.repository).toEqual({ id: "repo", root: REPO });
+        expect(result.boards).toEqual([{ id: "work", branch: "master" }]);
+        expect(fake.requests.filter((request) => request.path === "/api/health")).toHaveLength(1);
+      }).pipe(
+        Effect.provide(layer(fake, { prefix: "discovery-budget-", environment: discoveryProfile })),
+      );
+    },
+  );
+  it.effect.each([
+    { name: "cheap identity", status: 200, expected: null, calls: 1 },
+    { name: "legacy query", status: 404, expected: null, calls: 2 },
+    { name: "legacy bad query", status: 400, expected: null, calls: 2 },
+    { name: "refused identity", status: 403, expected: "unauthorized", calls: 1 },
+    {
+      name: "foreign identity",
+      status: 200,
+      profile: "foreign",
+      expected: "profile-mismatch",
+      calls: 1,
+    },
+    {
+      name: "foreign legacy identity",
+      status: 404,
+      profile: "foreign",
+      expected: "profile-mismatch",
+      calls: 2,
+    },
+    {
+      name: "malformed identity",
+      status: 200,
+      malformed: true,
+      expected: "unsupported-server",
+      calls: 1,
+    },
+  ])("validates $name without relaxing the profile guard", (entry) => {
+    const fake = discoveryEngine();
+    fake.health = { profile: entry.profile ?? "fixture", home: "C:/fixture/engine" };
+    fake.replies = {
+      ...fake.replies,
+      "/api/health?identity=1": entry.malformed
+        ? { ok: true }
+        : { engine: "delivery", ok: true, ...fake.health },
+    };
+    fake.statuses = { "/api/health?identity=1": entry.status };
+    return Effect.gen(function* () {
+      const service = yield* DeliveryService.DeliveryService;
+      const result = yield* service.discover(
+        { folder: REPO, board: "work", team: "development", preflight: true },
+        ordinaryCaller,
+      );
+      expect(
+        fake.requests
+          .filter((request) => request.path === "/api/health")
+          .map((request) => request.search),
+      ).toEqual(entry.calls === 1 ? ["?identity=1"] : ["?identity=1", ""]);
+      if (entry.expected) {
+        expect(result.diagnostics).toEqual([entry.expected]);
+        expect(result.preflight).toBe("blocked");
+        expect(fake.requests).toHaveLength(entry.calls);
+      } else {
+        expect(result.preflight).toBe("ready");
+        expect(fake.requests.some((request) => request.path === "/api/delivery")).toBe(true);
+      }
+    }).pipe(
+      Effect.provide(
+        layer(fake, { prefix: "discovery-health-contract-", environment: discoveryProfile }),
+      ),
+    );
+  });
+  it.effect.each(["identity", "metadata", "fallback"] as const)(
+    "cancels stalled %s and permits a fresh observation",
+    (stage) => {
+      const fake = discoveryEngine();
+      if (stage === "fallback") {
+        fake.replies = { ...fake.replies, "/api/health?identity=1": {} };
+        fake.statuses = { "/api/health?identity=1": 404 };
+      }
+      return Effect.gen(function* () {
+        const started = yield* Deferred.make<void>();
+        const cancelled = yield* Deferred.make<void>();
+        fake.beforeRequest = (url) => {
+          const stall =
+            stage === "metadata"
+              ? url.pathname === "/api/teams"
+              : url.pathname === "/api/health" && (stage !== "fallback" || !url.search);
+          return stall
+            ? Deferred.succeed(started, undefined).pipe(
+                Effect.andThen(Effect.never),
+                Effect.onInterrupt(() => Deferred.succeed(cancelled, undefined)),
+              )
+            : Effect.void;
+        };
+        const service = yield* DeliveryService.DeliveryService;
+        const pending = yield* service
+          .discover({ folder: REPO, fresh: true }, ordinaryCaller)
+          .pipe(Effect.forkChild);
+        yield* Deferred.await(started);
+        yield* TestClock.adjust("3 seconds");
+        const result = yield* Fiber.join(pending);
+        yield* Deferred.await(cancelled);
+        expect(result.diagnostics).toEqual(["unreachable"]);
+        expect(result.boards).toEqual([]);
+        fake.beforeRequest = undefined;
+        expect(
+          (yield* service.discover({ folder: REPO, fresh: true }, ordinaryCaller)).boards,
+        ).toHaveLength(1);
+      }).pipe(
+        Effect.provide(
+          layer(fake, { prefix: "discovery-cancellation-", environment: discoveryProfile }),
+        ),
+      );
+    },
+  );
+  it.effect("evicts an interrupted identity read without poisoning the next caller", () => {
+    const fake = discoveryEngine();
+    return Effect.gen(function* () {
+      const started = yield* Deferred.make<void>();
+      const cancelled = yield* Deferred.make<void>();
+      fake.beforeRequest = (url) =>
+        url.pathname === "/api/health"
+          ? Deferred.succeed(started, undefined).pipe(
+              Effect.andThen(Effect.never),
+              Effect.onInterrupt(() => Deferred.succeed(cancelled, undefined)),
+            )
+          : Effect.void;
+      const service = yield* DeliveryService.DeliveryService;
+      const pending = yield* service
+        .discover({ folder: REPO }, ordinaryCaller)
+        .pipe(Effect.forkChild);
+      yield* Deferred.await(started);
+      yield* Fiber.interrupt(pending);
+      yield* Deferred.await(cancelled);
+      fake.beforeRequest = undefined;
+      expect((yield* service.discover({ folder: REPO }, ordinaryCaller)).boards).toHaveLength(1);
+    }).pipe(
+      Effect.provide(
+        layer(fake, { prefix: "discovery-caller-interruption-", environment: discoveryProfile }),
+      ),
+    );
+  });
+  it.effect("discards an observation when settings change during metadata reads", () => {
+    const fake = discoveryEngine();
+    return Effect.gen(function* () {
+      const service = yield* DeliveryService.DeliveryService;
+      const settings = yield* ServerSettings.ServerSettingsService;
+      const started = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      let metadataStarted = 0;
+      fake.beforeRequest = (url) => {
+        if (
+          !["/api/repository", "/api/repositories", "/api/teams", "/api/delivery"].includes(
+            url.pathname,
+          )
+        )
+          return Effect.void;
+        metadataStarted++;
+        return (metadataStarted === 4 ? Deferred.succeed(started, undefined) : Effect.void).pipe(
+          Effect.andThen(Deferred.await(release)),
+        );
+      };
+      const pending = yield* service
+        .discover({ folder: REPO, fresh: true }, ordinaryCaller)
+        .pipe(Effect.forkChild);
+      yield* Deferred.await(started);
+      yield* settings.updateSettings({ delivery: { enabled: false } });
+      yield* Deferred.succeed(release, undefined);
+      const result = yield* Fiber.join(pending);
+      expect(result.diagnostics).toEqual(["configuration-changed"]);
+      expect(result.boards).toEqual([]);
+    }).pipe(
+      Effect.provide(
+        layer(fake, { prefix: "discovery-settings-race-", environment: discoveryProfile }),
+      ),
+    );
+  });
   it.effect(
     "refreshes cached observations after configuration changes and never exposes arbitrary engine fields",
     () => {
@@ -604,7 +828,7 @@ describe("DeliveryService", () => {
         expect(fake.requests).toHaveLength(1);
         for (const write of writes) yield* delivery.act(write);
         expect(fake.requests.slice(1)).toEqual(
-          writes.map((write) => ({ method: "POST", ...write })),
+          writes.map((write) => ({ method: "POST", search: "", ...write })),
         );
       }).pipe(Effect.provide(layer(fake, { prefix: "board-delivery-relay-" })));
     },

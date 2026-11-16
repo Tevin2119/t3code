@@ -336,8 +336,82 @@ const make = Effect.gen(function* () {
     discoveryCache.clear();
   };
 
+  const readHealth = Effect.fn("DeliveryService.readHealth")(
+    function* (engineUrl: string, bounded: boolean) {
+      let response = yield* httpClient.execute(
+        HttpClientRequest.get(
+          new URL(bounded ? "/api/health?identity=1" : "/api/health", engineUrl).toString(),
+        ),
+      );
+      // Older engines may reject the identity query; fallback shares the same deadline.
+      if (bounded && (response.status === 400 || response.status === 404)) {
+        response = yield* httpClient.execute(
+          HttpClientRequest.get(new URL("/api/health", engineUrl).toString()),
+        );
+      }
+      if (bounded && (response.status === 401 || response.status === 403)) {
+        return yield* new DeliveryError({
+          reason: "refused",
+          status: response.status,
+          detail: "Engine identity check was not authorized.",
+        });
+      }
+      if (bounded && Number(response.headers["content-length"]) > 1_048_576) {
+        return yield* new DeliveryError({
+          reason: "invalid",
+          status: 413,
+          detail: "Discovery response exceeds its size limit.",
+        });
+      }
+      if (response.status !== 200) {
+        return yield* new DeliveryError({
+          reason: "invalid",
+          detail: bounded
+            ? "The engine identity check was refused."
+            : `The engine at ${engineUrl} answered /api/health with HTTP ${response.status}. No task data was requested or changed.`,
+        });
+      }
+      const body = yield* (
+        bounded
+          ? response.json.pipe(
+              Effect.provideService(HttpIncomingMessage.MaxBodySize, ByteSize.bytes(1_048_576)),
+            )
+          : response.json
+      ).pipe(
+        Effect.mapError(
+          () =>
+            new DeliveryError({
+              reason: "invalid",
+              detail: bounded
+                ? "The engine identity response is incompatible."
+                : `The endpoint at ${engineUrl} did not answer /api/health as a delivery engine (expected engine "delivery", ok true, profile and home). No task data was requested or changed.`,
+            }),
+        ),
+      );
+      return { body, readAt: DateTime.formatIso(yield* DateTime.now) } satisfies DeliveryResponse;
+    },
+    (effect, _engineUrl, bounded) =>
+      effect.pipe(
+        Effect.timeout(bounded ? "2 seconds" : "30 seconds"),
+        Effect.mapError((error) =>
+          error._tag === "DeliveryError"
+            ? error
+            : new DeliveryError({
+                reason: "unreachable",
+                detail: "The profile's bound engine did not answer its identity check.",
+              }),
+        ),
+      ),
+  );
+
   const request = Effect.fn("DeliveryService.request")(
-    function* (method: "GET" | "POST", enginePath: string, body?: unknown, bounded = false) {
+    function* (
+      method: "GET" | "POST",
+      enginePath: string,
+      body?: unknown,
+      bounded = false,
+      observedHealth?: { engineUrl: string; response: DeliveryResponse },
+    ) {
       const settings = yield* delivery;
       if (method === "POST") invalidateDiscovery();
       const hostEnvironment = yield* HostProcess.Environment;
@@ -391,32 +465,11 @@ const make = Effect.gen(function* () {
         }
         const expectedProfile = hostEnvironment.POLYMANIA_ACCOUNTS;
         const expectedHome = hostEnvironment.T3_WORKSPACE_ENGINE_HOME;
-        const healthResponse = yield* httpClient
-          .execute(HttpClientRequest.get(new URL("/api/health", settings.engineUrl).toString()))
-          .pipe(
-            Effect.timeout(bounded ? "2 seconds" : "30 seconds"),
-            Effect.mapError(
-              () =>
-                new DeliveryError({
-                  reason: "unreachable",
-                  detail: "The profile's bound engine did not answer its identity check.",
-                }),
-            ),
-          );
-        if (bounded && (healthResponse.status === 401 || healthResponse.status === 403)) {
-          return yield* new DeliveryError({
-            reason: "refused",
-            status: healthResponse.status,
-            detail: "Engine identity check was not authorized.",
-          });
-        }
-        const health = yield* (
-          bounded
-            ? healthResponse.json.pipe(
-                Effect.provideService(HttpIncomingMessage.MaxBodySize, ByteSize.bytes(1_048_576)),
-              )
-            : healthResponse.json
-        ).pipe(
+        const healthResponse =
+          observedHealth?.engineUrl === settings.engineUrl
+            ? observedHealth.response
+            : yield* readHealth(settings.engineUrl, bounded);
+        const health = yield* Effect.succeed(healthResponse.body).pipe(
           Effect.flatMap(
             Schema.decodeUnknownEffect(
               Schema.Struct({
@@ -439,14 +492,6 @@ const make = Effect.gen(function* () {
               }),
           ),
         );
-        if (healthResponse.status !== 200) {
-          return yield* new DeliveryError({
-            reason: "invalid",
-            detail: bounded
-              ? "The engine identity check was refused."
-              : `The engine at ${settings.engineUrl} answered /api/health with HTTP ${healthResponse.status}. No task data was requested or changed.`,
-          });
-        }
         if (health.profile === null) {
           return yield* new DeliveryError({
             reason: bounded ? "mismatch" : "invalid",
@@ -471,6 +516,10 @@ const make = Effect.gen(function* () {
               : `The engine at ${settings.engineUrl} belongs to another account profile or engine home: ${differences}. No task data was requested or changed.`,
           });
         }
+        if (bounded && method === "GET" && enginePath === "/api/health") return healthResponse;
+      }
+      if (bounded && method === "GET" && enginePath === "/api/health") {
+        return yield* readHealth(settings.engineUrl, true);
       }
       const base = method === "GET" ? HttpClientRequest.get(url) : HttpClientRequest.post(url);
       const prepared =
@@ -822,6 +871,7 @@ const make = Effect.gen(function* () {
   const discoveryRead = Effect.fn("DeliveryService.discoveryRead")(function* (
     configuration: string,
     enginePath: string,
+    observedHealth?: { engineUrl: string; response: DeliveryResponse },
   ) {
     const key = `${configuration}:${enginePath}`;
     const read = yield* discoveryLock.withPermits(1)(
@@ -830,7 +880,7 @@ const make = Effect.gen(function* () {
         const cached = discoveryCache.get(key);
         if (cached && cached.until > now) return cached.read;
         const shared: Effect.Effect<DeliveryResponse, DeliveryError> = yield* Effect.cached(
-          request("GET", enginePath, undefined, true).pipe(
+          request("GET", enginePath, undefined, true, observedHealth).pipe(
             Effect.onInterrupt(() =>
               Effect.sync(() => {
                 if (discoveryCache.get(key)?.read === shared) discoveryCache.delete(key);
@@ -901,11 +951,14 @@ const make = Effect.gen(function* () {
     if (!settings.enabled) return { ...snapshot, diagnostics: ["disabled"] };
     if (input.fresh || input.preflight) discoveryCache.clear();
     const readTimes: string[] = [];
+    let observedHealth: { engineUrl: string; response: DeliveryResponse } | undefined;
     const read = Effect.fn("DeliveryService.discoveryEndpoint")(function* <A>(
       enginePath: string,
       schema: Schema.Decoder<A>,
     ) {
-      const response = yield* discoveryRead(configuration, enginePath);
+      const response = yield* discoveryRead(configuration, enginePath, observedHealth);
+      if (enginePath === "/api/health")
+        observedHealth = { engineUrl: settings.engineUrl, response };
       readTimes.push(response.readAt);
       return yield* Schema.decodeUnknownEffect(schema)(response.body).pipe(
         Effect.mapError(
@@ -920,15 +973,20 @@ const make = Effect.gen(function* () {
     const result = yield* Effect.gen(function* () {
       const health = yield* read("/api/health", Discovery.DiscoveryHealth);
       if (!health.ok) return { ...snapshot, diagnostics: ["unreachable" as const] };
-      const repository = yield* read(
-        `/api/repository?folder=${encodeURIComponent(input.folder)}`,
-        Discovery.DiscoveryRepository,
-      );
-      const repositories = yield* read("/api/repositories", Discovery.DiscoveryRepositories);
-      const teams = yield* read("/api/teams", Discovery.DiscoveryTeams);
-      const data = yield* read(
-        input.task ? `/api/delivery?task=${encodeURIComponent(input.task)}` : "/api/delivery",
-        Discovery.DiscoveryDelivery,
+      const [repository, repositories, teams, data] = yield* Effect.all(
+        [
+          read(
+            `/api/repository?folder=${encodeURIComponent(input.folder)}`,
+            Discovery.DiscoveryRepository,
+          ),
+          read("/api/repositories", Discovery.DiscoveryRepositories),
+          read("/api/teams", Discovery.DiscoveryTeams),
+          read(
+            input.task ? `/api/delivery?task=${encodeURIComponent(input.task)}` : "/api/delivery",
+            Discovery.DiscoveryDelivery,
+          ),
+        ],
+        { concurrency: 4 },
       );
       const matching = data.boards.filter((board) =>
         repositories.some(
