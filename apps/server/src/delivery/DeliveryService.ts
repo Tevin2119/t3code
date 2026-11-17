@@ -975,7 +975,7 @@ const make = Effect.fn("DeliveryService.make")(function* (
                       ? request("GET", "/api/repositories", undefined, true, observedHealth)
                       : Effect.fail(error),
                 }),
-                Effect.timeout("2 seconds"),
+                Effect.timeout("4 seconds"),
                 Effect.catchTags({
                   TimeoutError: () =>
                     Effect.fail(
@@ -1071,7 +1071,6 @@ const make = Effect.fn("DeliveryService.make")(function* (
         ),
       );
     });
-    // Allow three round trips without exceeding discovery's ten-second freshness window.
     const result = yield* Effect.gen(function* () {
       const health = yield* read("/api/health", Discovery.DiscoveryHealth);
       if (!health.ok) return { ...snapshot, diagnostics: ["unreachable" as const] };
