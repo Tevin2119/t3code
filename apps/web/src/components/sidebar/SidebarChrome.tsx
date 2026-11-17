@@ -1,4 +1,3 @@
-import { isSidebarUtilityPage, useNavigateToMainApp } from "./mainAppLocation";
 import { SidebarApprovalControls } from "../delivery/ApprovalControls";
 import {
   ArrowLeftIcon,
@@ -26,6 +25,7 @@ import { cn } from "../../lib/utils";
 import { useDeliveryEnabled } from "../../state/delivery";
 import {
   useEnvironment,
+  useIssuesSupported,
   usePrimaryEnvironmentId,
   usePullRequestsSupported,
 } from "../../state/environments";
@@ -49,6 +49,9 @@ import {
 } from "../ui/sidebar";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { readPullRequestListPreferences } from "../pullRequest/pullRequestListPreferences";
+import { readIssueListPreferences } from "../issue/issueListPreferences";
+import { IssueGlyph } from "../issue/issuePresentation";
+import { isSidebarUtilityPage, useNavigateToMainApp } from "./mainAppLocation";
 import { SidebarThreadUndoNotice } from "./SidebarThreadUndoNotice";
 import { SidebarCheckoutUpdatePill } from "./SidebarCheckoutUpdatePill";
 import { SidebarProviderUpdatePill } from "./SidebarProviderUpdatePill";
@@ -291,6 +294,7 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
     primaryConnected,
   );
   const pullRequestsSupported = usePullRequestsSupported();
+  const issuesSupported = useIssuesSupported();
   const closeMobileSidebar = () => {
     if (isMobile) {
       setOpenMobile(false);
@@ -307,6 +311,10 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
       to: "/pull-requests",
       search: readPullRequestListPreferences(),
     });
+  };
+  const handleIssuesClick = () => {
+    closeMobileSidebar();
+    void navigate({ to: "/issues", search: readIssueListPreferences() });
   };
   const handleSettingsClick = () => {
     closeMobileSidebar();
@@ -354,6 +362,13 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
               icon={<PullRequestGlyph.pullRequest />}
               label="Pull requests"
               onClick={handlePullRequestsClick}
+            />
+          ) : null}
+          {issuesSupported ? (
+            <SidebarUtilityItem
+              icon={<IssueGlyph.issue />}
+              label="Issues"
+              onClick={handleIssuesClick}
             />
           ) : null}
           <SidebarUtilityItem
