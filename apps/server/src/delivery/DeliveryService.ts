@@ -921,6 +921,16 @@ const make = Effect.fn("DeliveryService.make")(function* (
         true,
         observedHealth,
         expectedConfiguration,
+      ).pipe(
+        Effect.mapError((error) =>
+          error.reason === "refused" && error.status === 504
+            ? new DeliveryError({
+                reason: "unreachable",
+                status: error.status,
+                detail: "The engine timed out checking the repository.",
+              })
+            : error,
+        ),
       );
       const checked = yield* decodeRepositoryCheck(response.body).pipe(
         Effect.mapError(

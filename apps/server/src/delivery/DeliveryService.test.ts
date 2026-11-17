@@ -380,6 +380,8 @@ describe("DeliveryService", () => {
     { name: "missing registration", body: { code: "repository-not-found" }, status: 404 },
     { name: "changed registration", body: { code: "registration-changed" }, status: 409 },
     { name: "unsupported", body: { error: "not found" }, status: 404 },
+    { name: "gateway timeout", body: {}, status: 504 },
+    { name: "server refusal", body: {}, status: 500 },
     { name: "bad request", body: {}, status: 400 },
     { name: "unauthorized", body: {}, status: 401 },
     { name: "forbidden", body: {}, status: 403 },
@@ -390,18 +392,30 @@ describe("DeliveryService", () => {
     fake.statuses = { "/api/repositories/repo/discovery-check": entry.status };
     return Effect.gen(function* () {
       const service = yield* DeliveryService.DeliveryService;
-      expect(
-        (yield* service.discover(
-          { folder: REPO, board: "work", team: "development", preflight: true },
-          ordinaryCaller,
-        )).preflight,
-      ).toBe("blocked");
-      yield* service
+      const observation = yield* service.discover(
+        { folder: REPO, board: "work", team: "development", preflight: true },
+        ordinaryCaller,
+      );
+      expect(observation.preflight).toBe("blocked");
+      const expected =
+        entry.status === 504
+          ? "unreachable"
+          : entry.status === 401 || entry.status === 403
+            ? "unauthorized"
+            : entry.status !== 200 || entry.name === "malformed"
+              ? "unsupported-server"
+              : "unregistered-repository";
+      expect(observation.diagnostics).toContain(expected);
+      const refusal = yield* service
         .act({
           path: "/api/delivery/requests",
           body: { id: "request", route: "release", team: "development" },
         })
         .pipe(Effect.flip);
+      if (entry.status === 504) {
+        expect(refusal.reason).toBe("unreachable");
+        expect(refusal.status).toBe(504);
+      }
       expect(fake.requests.every((request) => request.method === "GET")).toBe(true);
       expect(
         fake.requests
