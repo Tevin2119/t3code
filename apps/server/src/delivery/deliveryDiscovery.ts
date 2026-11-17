@@ -38,6 +38,9 @@ export const DiscoveryRepository = Schema.Struct({
 export const DiscoveryRepositories = rows(
   Schema.Struct({ id: Text, path: Text, kind: Text, ok: Schema.Boolean }),
 );
+export const DiscoveryRegistrations = rows(
+  Schema.Struct({ id: Text, path: Text, kind: Schema.Literals(["own", "qualification"]) }),
+);
 export const DiscoveryTeams = rows(
   Schema.Struct({
     team: Text,
@@ -125,7 +128,7 @@ export function projectDiscovery(
   snapshot: DeliveryDiscoverySnapshot,
   data: {
     root: string | null;
-    repositories: typeof DiscoveryRepositories.Type;
+    repositories: typeof DiscoveryRegistrations.Type;
     teams: typeof DiscoveryTeams.Type;
     delivery: typeof DiscoveryDelivery.Type;
     sameFolder: (a: string, b: string) => boolean;
@@ -136,8 +139,7 @@ export function projectDiscovery(
   if (input.preflight && snapshot.boardDeployment.capability === "unavailable")
     diagnostics.push("unreachable");
   const repository = data.repositories.find(
-    (repo) =>
-      repo.kind === "own" && repo.ok && data.root !== null && data.sameFolder(repo.path, data.root),
+    (repo) => repo.kind === "own" && data.root !== null && data.sameFolder(repo.path, data.root),
   );
   const boards = repository
     ? data.delivery.boards.filter((board) => board.repository === repository.id)

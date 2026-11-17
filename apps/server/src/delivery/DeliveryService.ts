@@ -879,8 +879,30 @@ const make = Effect.gen(function* () {
         const now = yield* Clock.currentTimeMillis;
         const cached = discoveryCache.get(key);
         if (cached && cached.until > now) return cached.read;
+        const endpoint = request("GET", enginePath, undefined, true, observedHealth);
+        const compatible =
+          enginePath === "/api/repositories?discovery=1"
+            ? endpoint.pipe(
+                Effect.catchTags({
+                  DeliveryError: (error) =>
+                    error.status === 400 || error.status === 404
+                      ? request("GET", "/api/repositories", undefined, true, observedHealth)
+                      : Effect.fail(error),
+                }),
+                Effect.timeout("2 seconds"),
+                Effect.catchTags({
+                  TimeoutError: () =>
+                    Effect.fail(
+                      new DeliveryError({
+                        reason: "unreachable",
+                        detail: "The delivery engine did not answer.",
+                      }),
+                    ),
+                }),
+              )
+            : endpoint;
         const shared: Effect.Effect<DeliveryResponse, DeliveryError> = yield* Effect.cached(
-          request("GET", enginePath, undefined, true, observedHealth).pipe(
+          compatible.pipe(
             Effect.onInterrupt(() =>
               Effect.sync(() => {
                 if (discoveryCache.get(key)?.read === shared) discoveryCache.delete(key);
@@ -979,7 +1001,15 @@ const make = Effect.gen(function* () {
             `/api/repository?folder=${encodeURIComponent(input.folder)}`,
             Discovery.DiscoveryRepository,
           ),
-          read("/api/repositories", Discovery.DiscoveryRepositories),
+          input.preflight
+            ? read("/api/repositories", Discovery.DiscoveryRepositories).pipe(
+                Effect.map((rows) =>
+                  rows
+                    .filter((row) => row.ok && row.kind === "own")
+                    .map((row) => ({ ...row, kind: "own" as const })),
+                ),
+              )
+            : read("/api/repositories?discovery=1", Discovery.DiscoveryRegistrations),
           read("/api/teams", Discovery.DiscoveryTeams),
           read(
             input.task ? `/api/delivery?task=${encodeURIComponent(input.task)}` : "/api/delivery",
