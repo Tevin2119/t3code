@@ -600,7 +600,10 @@ jobs:
     name: Mobile Native Static Analysis
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.mobile_native != 'false' }}
-    runs-on: ${{ github.repository == 'pingdotgg/t3code' && 'blacksmith-6vcpu-macos-27' || 'macos-15' }}
+    # The fork's macos-15 hosted pool dropped the job twice without ever assigning a
+    # runner (queued exactly 15 minutes, cancelled, no steps); macos-latest (macos-26)
+    # is where GitHub directed capacity after the macos-14 retirement.
+    runs-on: ${{ github.repository == 'pingdotgg/t3code' && 'blacksmith-6vcpu-macos-27' || 'macos-latest' }}
     timeout-minutes: 10
     steps:
       - name: Checkout
