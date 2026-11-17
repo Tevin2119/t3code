@@ -36,6 +36,7 @@ import { HttpClient, HttpClientRequest, HttpIncomingMessage } from "effect/http"
 import { writeFileStringAtomically } from "@t3tools/shared/atomicWrite";
 import { ServerConfig } from "../config.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import type { deriveProviderInstanceConfigMap } from "../provider/ProviderInstanceRegistryHydration.ts";
 import type * as DeliveryEffective from "./DeliveryEffective.ts";
 import * as DeliveryThreadSession from "./DeliveryThreadSession.ts";
 import * as Discovery from "./deliveryDiscovery.ts";
@@ -230,7 +231,9 @@ export const layerTest = Layer.succeed(
   }),
 );
 
-const make = Effect.gen(function* () {
+const make = Effect.fn("DeliveryService.make")(function* (
+  deriveConfigMap: typeof deriveProviderInstanceConfigMap,
+) {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const config = yield* ServerConfig;
@@ -404,7 +407,7 @@ const make = Effect.gen(function* () {
     },
     (effect, _engineUrl, bounded) =>
       effect.pipe(
-        Effect.timeout(bounded ? "2 seconds" : "30 seconds"),
+        Effect.timeout(bounded ? "4 seconds" : "30 seconds"),
         Effect.mapError((error) =>
           error._tag === "DeliveryError"
             ? error
@@ -562,7 +565,7 @@ const make = Effect.gen(function* () {
         });
       }
       const response = yield* httpClient.execute(prepared).pipe(
-        Effect.timeout(bounded ? "2 seconds" : "30 seconds"),
+        Effect.timeout(bounded ? "4 seconds" : "30 seconds"),
         Effect.mapError(
           () =>
             new DeliveryError({
@@ -1009,7 +1012,7 @@ const make = Effect.gen(function* () {
         ? undefined
         : yield* settingsService.getSettings.pipe(
             Effect.map(
-              (settings) => settings.providerInstances[suppliedCaller.providerInstanceId!]?.driver,
+              (settings) => deriveConfigMap(settings)[suppliedCaller.providerInstanceId!]?.driver,
             ),
             Effect.orElseSucceed(() => undefined),
           );
@@ -1068,6 +1071,7 @@ const make = Effect.gen(function* () {
         ),
       );
     });
+    // Allow three round trips without exceeding discovery's ten-second freshness window.
     const result = yield* Effect.gen(function* () {
       const health = yield* read("/api/health", Discovery.DiscoveryHealth);
       if (!health.ok) return { ...snapshot, diagnostics: ["unreachable" as const] };
@@ -1176,7 +1180,7 @@ const make = Effect.gen(function* () {
           sameFolder: (a, b) => sameFolder(a, b, hostPlatform),
         },
       );
-    }).pipe(Effect.timeout("3 seconds"), Effect.result);
+    }).pipe(Effect.timeout("10 seconds"), Effect.result);
     if (result._tag === "Success") return result.success;
     const error = result.failure;
     const code: DeliveryDiscoveryDiagnostic =
@@ -1533,4 +1537,5 @@ const make = Effect.gen(function* () {
   });
 });
 
-export const layer = Layer.effect(DeliveryService, make);
+export const layer = (deriveConfigMap: typeof deriveProviderInstanceConfigMap) =>
+  Layer.effect(DeliveryService, make(deriveConfigMap));

@@ -20,6 +20,13 @@ import {
 } from "./delivery/ThreadTaskLinks";
 import { ThreadTaskQuestions } from "./delivery/ThreadTaskQuestions";
 import {
+  resolveDismissedQuestionKeys,
+  threadTaskBannerDismissed,
+} from "./delivery/ThreadTaskQuestions.logic";
+import { useThreadTaskQuestionSummary } from "./delivery/useThreadTaskQuestionSummary";
+import { ComposerBanner } from "./chat/ComposerBanner";
+import { Button } from "./ui/button";
+import {
   useChatViewComposerProviderSelection,
   useDeliveryThreadModelBinding,
 } from "../lib/deliveryComposerSelection";
@@ -2678,9 +2685,31 @@ export default function ChatView(props: ChatViewProps) {
     environmentId,
     isServerThread ? (activeThread?.id ?? null) : null,
   );
+  const { waitingKeys, waitingCount, loadedTaskKeys, summaryTaskIds } =
+    useThreadTaskQuestionSummary(environmentId, threadTasks);
+  const [dismissedTaskQuestionsByThread, setDismissedTaskQuestionsByThread] = useState<
+    Record<string, ReadonlyArray<string>>
+  >({});
+  const dismissedQuestions = dismissedTaskQuestionsByThread[routeThreadKey];
+  if (dismissedQuestions) {
+    const resolved = resolveDismissedQuestionKeys(dismissedQuestions, waitingKeys, loadedTaskKeys);
+    if (resolved !== dismissedQuestions) {
+      setDismissedTaskQuestionsByThread({
+        ...dismissedTaskQuestionsByThread,
+        [routeThreadKey]: resolved,
+      });
+    }
+  }
+  const [taskQuestionsOpenThread, setTaskQuestionsOpenThread] = useState<string | null>(null);
+  const taskQuestionsOpen = taskQuestionsOpenThread === routeThreadKey;
+  const taskQuestionsPanelId = `thread-task-questions:${routeThreadKey}`;
   const threadTasksBannerItem = ((): ComposerBannerStackItem | null => {
     const newest = threadTasks[0];
-    if (!newest) return null;
+    if (
+      !newest ||
+      threadTaskBannerDismissed(dismissedTaskQuestionsByThread[routeThreadKey], waitingKeys)
+    )
+      return null;
     return {
       id: `thread-tasks:${activeThread?.id ?? "unknown"}`,
       variant: "info",
@@ -2688,6 +2717,9 @@ export default function ChatView(props: ChatViewProps) {
       icon: <SquareKanbanIcon />,
       title: (
         <span data-thread-task-links>
+          {waitingCount > 0
+            ? `${waitingCount} ${waitingCount === 1 ? "question waits" : "questions wait"} on you · `
+            : ""}
           {threadTasks.length === 1
             ? `Task #${newest.number} was made from this conversation`
             : `${threadTasks.length} tasks were made from this conversation`}
@@ -2697,7 +2729,40 @@ export default function ChatView(props: ChatViewProps) {
         ...threadTasks.slice(0, 3).map((task) => `#${task.number} ${taskStandsIn(task)}`),
         ...threadDeliveryProgress,
       ].join(" · "),
-      actions: <ThreadTaskOpenActions tasks={threadTasks} environmentId={environmentId} />,
+      actions: (
+        <>
+          <Button
+            size="xs"
+            variant="ghost"
+            aria-expanded={taskQuestionsOpen}
+            aria-controls={taskQuestionsOpen ? taskQuestionsPanelId : undefined}
+            onClick={() => setTaskQuestionsOpenThread(taskQuestionsOpen ? null : routeThreadKey)}
+          >
+            {taskQuestionsOpen ? "Hide questions" : "Show questions"}
+          </Button>
+          <ThreadTaskOpenActions tasks={threadTasks} environmentId={environmentId} />
+        </>
+      ),
+      children: taskQuestionsOpen ? (
+        <div id={taskQuestionsPanelId} className="min-w-0">
+          <ComposerBanner.Scroll>
+            <ThreadTaskQuestions
+              key={routeThreadKey}
+              environmentId={environmentId}
+              tasks={threadTasks}
+              summaryTaskIds={summaryTaskIds}
+            />
+          </ComposerBanner.Scroll>
+        </div>
+      ) : null,
+      dismissLabel: "Dismiss tasks from this conversation",
+      onDismiss: () => {
+        setDismissedTaskQuestionsByThread((current) => ({
+          ...current,
+          [routeThreadKey]: waitingKeys,
+        }));
+        setTaskQuestionsOpenThread(null);
+      },
     };
   })();
   const threadTaskItems = threadTasksBannerItem === null ? [] : [threadTasksBannerItem];
@@ -3359,16 +3424,8 @@ export default function ChatView(props: ChatViewProps) {
     threadStatusLine === null &&
     pendingGuestMessageCount === 0 &&
     !hasQueuedTurns &&
-    !hasTeamChatActivity &&
-    threadTasks.length === 0 ? null : (
+    !hasTeamChatActivity ? null : (
       <>
-        {environmentId && threadTasks.length > 0 ? (
-          <ThreadTaskQuestions
-            key={routeThreadKey}
-            environmentId={environmentId}
-            tasks={threadTasks}
-          />
-        ) : null}
         {pendingHandoff === null ? null : (
           <div className="chat-content-lane">
             <HandoffRow
