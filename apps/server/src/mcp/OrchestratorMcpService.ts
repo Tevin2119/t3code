@@ -3557,6 +3557,14 @@ const make = Effect.gen(function* () {
         })
         .pipe(Effect.mapError(threadManagementFailure));
       const status = result.run === null ? "idle" : runOutcome(result.run);
+      const failureItem =
+        status === "failed" && result.run?.startedAt === null
+          ? (yield* threadManagement
+              .getThreadRecords(target.thread.id, ["turnItems"])
+              .pipe(Effect.mapError(threadManagementFailure))).turnItems.find(
+              (item) => item.type === "error" && item.runId === result.run?.id,
+            )
+          : undefined;
       const taskId = result.run?.delegatedTaskId;
       const ownedTask =
         result.timedOut &&
@@ -3583,6 +3591,7 @@ const make = Effect.gen(function* () {
         threadId: target.thread.id,
         runId: result.run?.id ?? null,
         status,
+        ...(failureItem?.type === "error" ? { failureReason: failureItem.failure.message } : {}),
         timedOut: result.timedOut,
         ...(wakesCaller ? { next: ORCHESTRATOR_MCP_RUNNING_TASK_NEXT } : {}),
         ...(result.resultRun === undefined

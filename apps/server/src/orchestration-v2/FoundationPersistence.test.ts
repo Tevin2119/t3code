@@ -1,3 +1,5 @@
+import * as SendFailureNotice from "./SendFailureNotice.ts";
+import * as SendFailureNoticeFixture from "./SendFailureNotice.testkit.ts";
 import type * as NodeWorkerThreads from "node:worker_threads";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
@@ -3550,6 +3552,7 @@ it.layer(layerTest)("orchestration V2 foundation persistence", (it) => {
 
   it.effect.each([
     { type: "terminal.cleanup" },
+    { type: "send-failure-notice", runId: RunId.make("run:notice-replay") },
     { type: "provider-runtime.continue", sourceRunId: RunId.make("run:restart-replay") },
   ] as const)(
     "retires live provider effects and requeues $type after process loss",
@@ -4439,4 +4442,86 @@ it.effect.each(["cancel transaction", "fail transaction", "cancel publication"] 
         ),
       );
     }).pipe(Effect.provide(layerDatabase)),
+);
+
+it.effect.each([false, true])(
+  "recovers a sender notice across a SQLite restart (committed: %s)",
+  (committed) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const filename = path.join(yield* fs.makeTempDirectoryScoped(), "notice.sqlite");
+      const serviceLayer = () => {
+        const stores = Layer.mergeAll(
+          EventStore.layer,
+          ProjectionStore.layer,
+          EffectOutbox.layer,
+          IdAllocator.layer,
+        );
+        const infra = EventSink.layer.pipe(Layer.provideMerge(stores));
+        return SendFailureNotice.layer.pipe(
+          Layer.provideMerge(infra),
+          Layer.provideMerge(SqlitePersistence.layerFromPath(filename)),
+        );
+      };
+      const fixture = yield* Effect.gen(function* () {
+        const f = yield* SendFailureNoticeFixture.seed();
+        const outbox = yield* EffectOutbox.EffectOutboxV2;
+        yield* outbox.enqueue([
+          {
+            id: `effect:send-failure-notice:${f.run.id}`,
+            commandId: CommandId.make("notice-crash"),
+            threadId: f.target.id,
+            request: { type: "send-failure-notice", runId: f.run.id },
+          },
+        ]);
+        if (committed) {
+          assert.isTrue(Option.isSome(yield* outbox.claimNext({ workerId: "crashed" })));
+          yield* (yield* SendFailureNotice.SendFailureNotice).notify({
+            threadId: f.target.id,
+            runId: f.run.id,
+          });
+        }
+        return f;
+      }).pipe(Effect.provide(serviceLayer()));
+      const executor = Layer.effect(
+        EffectWorker.OrchestrationEffectExecutorV2,
+        Effect.gen(function* () {
+          const notices = yield* SendFailureNotice.SendFailureNotice;
+          return EffectWorker.OrchestrationEffectExecutorV2.of({
+            execute: (effect) => {
+              assert.equal(effect.request.type, "send-failure-notice");
+              return notices.notify({ threadId: effect.threadId, runId: fixture.run.id }).pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new EffectWorker.OrchestrationEffectExecutionError({
+                      effectId: effect.id,
+                      effectType: effect.request.type,
+                      cause,
+                    }),
+                ),
+              );
+            },
+          });
+        }),
+      );
+      const worker = EffectWorker.layer.pipe(
+        Layer.provideMerge(executor.pipe(Layer.provideMerge(serviceLayer()))),
+      );
+      yield* Effect.gen(function* () {
+        const outbox = yield* EffectOutbox.EffectOutboxV2;
+        assert.deepEqual(yield* outbox.reconcileAfterProcessLoss, {
+          cancelled: 0,
+          requeued: committed ? 1 : 0,
+        });
+        assert.equal(yield* (yield* EffectWorker.OrchestrationEffectWorkerV2).drain(), 1);
+        const source = yield* (yield* ProjectionStore.ProjectionStoreV2).getThreadRecords(
+          fixture.sender.id,
+          ["turnItems", "runs"],
+        );
+        assert.lengthOf(source.turnItems, 1);
+        assert.isNull(source.turnItems[0]!.runId);
+        assert.deepEqual(source.runs, []);
+      }).pipe(Effect.provide(worker));
+    }).pipe(Effect.provide(NodeServices.layer)),
 );

@@ -12,6 +12,17 @@ const decodeDelegateTaskResult = Schema.decodeUnknownSync(OrchestratorMcpDelegat
 const decodeThreadWaitResult = Schema.decodeUnknownSync(OrchestratorMcpThreadWaitResult);
 
 describe("orchestrator MCP contracts", () => {
+  it("decodes a failed thread wait with its failure reason", () => {
+    const result = decodeThreadWaitResult({
+      threadId: "target",
+      runId: "failed-run",
+      status: "failed",
+      timedOut: false,
+      failureReason: "The provider could not start.",
+    });
+    expect(result).toHaveProperty("failureReason", "The provider could not start.");
+  });
+
   it("decodes cross-provider delegated task requests and durable results", () => {
     const request = decodeDelegateTaskInput({
       task: "Inspect the workspace and report the result.",
