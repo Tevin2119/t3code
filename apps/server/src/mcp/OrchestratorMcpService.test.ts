@@ -5297,7 +5297,6 @@ describe("OrchestratorMcpService thread stop", () => {
           type: "thread.stop",
           commandId: CommandId.make("hold"),
           threadId,
-          holdQueue: true,
         });
         assert.deepEqual((yield* queue("list")).structuredContent, {
           items: [{ queuedRunId: first.runId, text: "later", truncated: false, held: true }],
