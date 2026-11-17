@@ -54,6 +54,7 @@ describe("engine question projection", () => {
     expect(answerState(rows[0]!.replies[0]!)).toBe("Applied as revision 2");
     expect(rows[0]!.continuation[0]!.text).toBe("The task is back in triage.");
     expect(rows[1]!.status).toContain("Closed by the engine");
+    expect(rows.map((row) => row.tag)).toEqual(["Auto-answered", "Closed"]);
   });
   it("binds an older question explicitly and sends strict options without free text", () => {
     const rows = taskQuestions(
@@ -63,6 +64,7 @@ describe("engine question projection", () => {
       ),
     );
     expect(rows[0]!.canReply).toBe(true);
+    expect(rows[0]!.tag).toBe("Needs you");
     expect(rows[0]!.options).toEqual([{ label: "Keep", meaning: "Keep native navigation" }]);
     expect(engineAnswer(rows[0]!.question.seq!, "Sam", "ignored", "Keep")).toEqual({
       kind: "answer",
@@ -83,6 +85,7 @@ describe("engine question projection", () => {
     );
     expect(row!.canReply).toBe(false);
     expect(row!.status).toContain("waiting to be applied");
+    expect(row!.tag).toBe("Sent");
     expect(answerState(row!.replies[0]!)).toBe("Recorded; not yet applied");
   });
   it("keeps superseded full-auto answers without treating them as applied", () => {

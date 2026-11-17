@@ -1,6 +1,6 @@
 import { useAtomValue } from "@effect/atom-react";
 import type { EnvironmentId } from "@t3tools/contracts";
-import { ChevronDownIcon } from "lucide-react";
+import { ChevronDownIcon, XIcon } from "lucide-react";
 import { Link } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
 
@@ -27,6 +27,7 @@ import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collapsible";
 import { Textarea } from "../ui/textarea";
+import { taskIsDone, taskStandsIn } from "./ThreadTaskLinks";
 import { questionNeedsAttention, taskHasReplyDraft } from "./ThreadTaskQuestions.logic";
 
 export function ThreadTaskQuestions({
@@ -43,10 +44,13 @@ export function ThreadTaskQuestions({
   const pending = useDeliveryReplyDrafts((state) => state.pending);
   const needsAttention = (task: DeliveryCard) =>
     task.questions > 0 || taskHasReplyDraft(environmentId, task.id, drafts, pending);
-  const ordered = [...tasks].sort((a, b) => Number(needsAttention(b)) - Number(needsAttention(a)));
+  // Only work in play is listed here; finished tasks live on the board.
+  const listed = tasks
+    .filter((task) => !taskIsDone(task) || needsAttention(task))
+    .sort((a, b) => Number(needsAttention(b)) - Number(needsAttention(a)));
   return (
-    <div className="space-y-4" data-thread-task-questions>
-      {ordered.slice(0, visible).map((task) => (
+    <div className="min-w-0 space-y-1" data-thread-task-questions>
+      {listed.slice(0, visible).map((task) => (
         <TaskQuestions
           key={task.id}
           environmentId={environmentId}
@@ -54,17 +58,27 @@ export function ThreadTaskQuestions({
           summaryManaged={summaryTaskIds.includes(task.id)}
         />
       ))}
-      {tasks.length > visible ? (
-        <Button variant="ghost" size="sm" onClick={() => setVisible(visible + 10)}>
-          Show questions from {Math.min(10, tasks.length - visible)} more linked tasks
-        </Button>
-      ) : null}
-      {tasks.length === 500 ? (
-        <p className="text-xs text-muted-foreground">
-          The engine returned its limit of 500 linked tasks. Older tasks remain available on the
-          Board.
+      {listed.length === 0 ? (
+        <p className="px-2 py-1.5 text-xs text-muted-foreground">
+          Every task from this conversation is done.
         </p>
       ) : null}
+      <div className="flex flex-wrap gap-1">
+        {listed.length > visible ? (
+          <Button variant="ghost" size="xs" onClick={() => setVisible(visible + 10)}>
+            Show {Math.min(10, listed.length - visible)} more
+          </Button>
+        ) : null}
+        {tasks.length > listed.length ? (
+          <Button
+            variant="ghost"
+            size="xs"
+            render={<Link to="/board" search={{ environment: environmentId }} />}
+          >
+            All tasks on the board
+          </Button>
+        ) : null}
+      </div>
     </div>
   );
 }
@@ -99,55 +113,77 @@ function TaskQuestions({
   const task = parseTask(read.body);
   const drafts = useDeliveryReplyDrafts((state) => state.drafts);
   const pending = useDeliveryReplyDrafts((state) => state.pending);
-  if (!task) {
-    return read.error ? (
-      <div className="space-y-2">
-        <p className="text-xs text-muted-foreground" role="status">
-          Task #{card.number} questions unavailable: {read.error}
-        </p>
-        <Button size="xs" variant="ghost" onClick={refresh}>
-          Retry reading task
-        </Button>
-      </div>
-    ) : null;
-  }
-  const needsAttention = (row: ReturnType<typeof taskQuestions>[number]) => {
-    const key = replyDraftKey(environmentId, task.id, row.question.seq!);
-    return questionNeedsAttention(row, drafts[key], pending[key]);
-  };
-  const rows = taskQuestions(task).sort(
-    (a, b) => Number(needsAttention(b)) - Number(needsAttention(a)),
-  );
-  if (rows.length === 0) return null;
+  const removed = useDeliveryReplyDrafts((state) => state.removed);
+  const rows = task
+    ? taskQuestions(task)
+        .map((row) => {
+          const key = replyDraftKey(environmentId, task.id, row.question.seq!);
+          return { row, key, attention: questionNeedsAttention(row, drafts[key], pending[key]) };
+        })
+        // Answered and closed rounds stay on the board; "later" hides a waiting one until reload.
+        .filter(({ key, attention }) => attention && removed[key] !== "later")
+    : [];
+  const [open, setOpen] = useState(true);
   return (
-    <section className="space-y-3" aria-label={`Questions for task ${task.number}`}>
-      <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-        <Link to="/board" search={{ environment: environmentId, task: task.id }}>
-          Task #{task.number}: {task.title}
+    <Collapsible
+      open={open && rows.length > 0}
+      onOpenChange={setOpen}
+      render={<section className="min-w-0 space-y-1" aria-label={`Task ${card.number}`} />}
+    >
+      <div className="flex min-w-0 items-center gap-1">
+        <Link
+          to="/board"
+          search={{ environment: environmentId, task: card.id }}
+          className="flex min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-accent/50 focus-visible:outline-2 focus-visible:outline-ring"
+        >
+          <span className="shrink-0 text-muted-foreground tabular-nums">#{card.number}</span>
+          <span className="min-w-0 flex-1 truncate">{card.title}</span>
+          <Badge variant="outline" size="sm" className="shrink-0">
+            {taskStandsIn(card)}
+          </Badge>
         </Link>
-        <span>
-          {card.questions > 0 ? "Engine record · refreshes every 5 seconds" : "Engine record"}
-        </span>
-        <Button size="xs" variant="ghost" onClick={refresh}>
-          Refresh
-        </Button>
+        {rows.length > 0 ? (
+          <CollapsibleTrigger
+            render={
+              <Button
+                size="icon-xs"
+                variant="ghost"
+                aria-label={`${open ? "Fold" : "Unfold"} questions on task ${card.number}`}
+              />
+            }
+          >
+            <ChevronDownIcon className={open ? "rotate-180" : undefined} />
+          </CollapsibleTrigger>
+        ) : null}
       </div>
       {read.error ? (
-        <p role="alert" className="text-xs text-warning">
-          The record could not refresh. Replies are unavailable until it reconnects.
-        </p>
+        <div className="flex min-w-0 items-center gap-2 ps-4">
+          <p role="alert" className="min-w-0 flex-1 truncate text-xs text-warning">
+            {task ? "Could not refresh; replies paused." : "Questions unavailable."}
+          </p>
+          <Button size="xs" variant="ghost" onClick={refresh}>
+            Retry
+          </Button>
+        </div>
       ) : null}
-      {rows.map((row) => (
-        <QuestionCard
-          key={row.question.id}
-          environmentId={environmentId}
-          task={task}
-          row={row}
-          unavailable={Boolean(read.error)}
-          refresh={read.refresh}
-        />
-      ))}
-    </section>
+      {task && rows.length > 0 ? (
+        <CollapsiblePanel animate={false}>
+          <div className="min-w-0 space-y-2 ps-4">
+            {rows.map(({ row, key }) => (
+              <QuestionCard
+                key={row.question.id}
+                environmentId={environmentId}
+                task={task}
+                row={row}
+                unavailable={Boolean(read.error)}
+                refresh={read.refresh}
+                onRemove={() => useDeliveryReplyDrafts.getState().remove(key, "later")}
+              />
+            ))}
+          </div>
+        </CollapsiblePanel>
+      ) : null}
+    </Collapsible>
   );
 }
 
@@ -157,12 +193,14 @@ function QuestionCard({
   row,
   unavailable,
   refresh,
+  onRemove,
 }: {
   environmentId: EnvironmentId;
   task: TaskView;
   row: ReturnType<typeof taskQuestions>[number];
   unavailable: boolean;
   refresh: () => void;
+  onRemove: () => void;
 }) {
   const person = usePersonName();
   const act = useDeliveryAct(environmentId, "answer task question");
@@ -228,23 +266,36 @@ function QuestionCard({
       data-engine-question={row.question.seq}
     >
       <Collapsible open={expanded} onOpenChange={setUserOpen}>
-        <CollapsibleTrigger className="group flex w-full items-center gap-2 rounded-lg px-4 py-3 text-left hover:bg-accent/50 focus-visible:outline-2 focus-visible:outline-ring">
-          <ChevronDownIcon
-            aria-hidden
-            className="size-4 shrink-0 text-muted-foreground transition-transform group-data-panel-open:rotate-180"
-          />
-          <span className="shrink-0 text-xs text-muted-foreground">
-            {row.question.by} asked · Q{row.question.seq}
-          </span>
-          <Badge variant="outline" size="sm" className="shrink-0">
-            {row.status}
-          </Badge>
-          <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground group-data-panel-open:hidden">
-            {excerpt}
-          </span>
-        </CollapsibleTrigger>
+        <div className="flex min-w-0 items-center gap-1 pe-1">
+          <CollapsibleTrigger className="group flex min-w-0 flex-1 items-center gap-2 rounded-lg py-2 ps-3 text-left hover:bg-accent/50 focus-visible:outline-2 focus-visible:outline-ring">
+            <ChevronDownIcon
+              aria-hidden
+              className="size-4 shrink-0 text-muted-foreground transition-transform group-data-panel-open:rotate-180"
+            />
+            <span className="shrink-0 text-xs text-muted-foreground">Q{row.question.seq}</span>
+            <Badge variant="outline" size="sm" className="shrink-0">
+              {row.tag}
+            </Badge>
+            <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground group-data-panel-open:hidden">
+              {excerpt}
+            </span>
+          </CollapsibleTrigger>
+          {pending ? null : (
+            <Button
+              size="icon-xs"
+              variant="ghost"
+              aria-label={`Hide Q${row.question.seq} until later`}
+              onClick={onRemove}
+            >
+              <XIcon />
+            </Button>
+          )}
+        </div>
         <CollapsiblePanel animate={false}>
-          <div className="space-y-3 px-4 pb-4">
+          <div className="min-w-0 space-y-3 px-3 pb-3 wrap-anywhere">
+            <p className="text-xs text-muted-foreground">
+              {row.question.by} asked · {row.status}
+            </p>
             <ChatMarkdown
               text={row.question.text}
               cwd={undefined}

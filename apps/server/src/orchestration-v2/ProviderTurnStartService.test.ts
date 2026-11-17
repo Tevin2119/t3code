@@ -2004,9 +2004,14 @@ effectIt.effect.each(["idle", "busy", "background", "shared"] as const)(
     }),
 );
 
-effectIt.effect.each(["missing", "stale"] as const)(
-  "prepares a Codex team's %s setup while reusing a shared provider session",
-  (state) =>
+effectIt.effect.each([
+  ["codex", "missing"],
+  ["codex", "stale"],
+  ["opencode", "missing"],
+  ["opencode", "stale"],
+] as const)(
+  "prepares a %s team's %s setup while reusing a shared provider session",
+  ([driver, state]) =>
     Effect.gen(function* () {
       using _loaded = vi
         .spyOn(DeliveryThreadSession, "readDeliveryThreadSession")
@@ -2020,9 +2025,17 @@ effectIt.effect.each(["missing", "stale"] as const)(
         refreshedTeam: "shared",
         openFailure: "Stop after requesting the shared native session",
       });
+      const before = harness.projection();
+      harness.setProjection({
+        ...before,
+        providerThreads: before.providerThreads.map((thread) => ({
+          ...thread,
+          driver: ProviderDriverKind.make(driver),
+        })),
+      });
       yield* harness.start;
       expect(harness.prepareTeam).toHaveBeenCalledWith(harness.projection().thread.id, {
-        driver: "codex",
+        driver,
         cwd: "/tmp/native-account-command",
       });
       expect(harness.releaseUnlessBusy).not.toHaveBeenCalled();
