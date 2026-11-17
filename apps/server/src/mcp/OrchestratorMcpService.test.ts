@@ -2567,6 +2567,10 @@ describe("OrchestratorMcpService provider resolution", () => {
               { slug: "claude-opus-4-1", isLegacy: true },
               ...Array.from({ length: 9 }, (_, index) => ({ slug: `claude-opus-5-${index + 1}` })),
             ].map((model) => ({ ...model, name: model.slug, isCustom: false, capabilities: null })),
+            version: "2.1.302",
+            updateRequiredModels: [
+              { slug: "claude-fable-5-2", name: "Claude Fable 5.2", minVersion: "2.1.321" },
+            ],
           },
         ]),
         adapterRegistryLayer([codexInstanceId]),
@@ -2604,6 +2608,11 @@ describe("OrchestratorMcpService provider resolution", () => {
             "claude-opus-5-6, claude-opus-5-7, claude-opus-5-8 and 2 more; " +
             "orchestrator_capabilities with search finds them.",
         );
+
+        const updateRequired = yield* refuse("claude-fable-5-2");
+        assert.equal(updateRequired.code, "model_unavailable");
+        assert.include(updateRequired.message, "v2.1.302");
+        assert.include(updateRequired.message, "2.1.321");
       }).pipe(Effect.provide(layerOrchestratorService.pipe(Layer.provide(layerDependencies))));
     }),
   );
@@ -2912,7 +2921,7 @@ describe("OrchestratorMcpService provider resolution", () => {
             projectId,
             title: "MCP parent",
             modelSelection: { instanceId: codexInstanceId, model: "gpt-5.4" },
-            runtimeMode: "full-access",
+            runtimeMode: "approval-required",
             interactionMode: "default",
             branch: null,
             worktreePath: cwd,
@@ -2956,6 +2965,23 @@ describe("OrchestratorMcpService provider resolution", () => {
             ...request,
             clientRequestId: "empty",
           });
+          const raised = yield* service.createThreads(scope, {
+            ...request,
+            clientRequestId: "raised",
+          });
+          const raisedId = raised.threads[0]!.threadId;
+          yield* orchestrator.dispatch({
+            type: "thread.runtime-mode.set",
+            commandId: CommandId.make("raise-created-thread"),
+            threadId: raisedId,
+            runtimeMode: "full-access",
+          });
+          const rejected = yield* service
+            .createThreads(scope, { ...withPrompt, clientRequestId: "raised" })
+            .pipe(Effect.flip);
+          assert.equal(rejected.code, "runtime_mode_escalation_denied");
+          assert.equal((yield* orchestrator.getThreadProjection(raisedId)).runs.length, 0);
+
           const emojiAtLimit = yield* service.createThreads(scope, {
             threads: [{ ...request.threads[0]!, prompt: `${"a".repeat(76)}😀 and more work.` }],
             clientRequestId: "emoji-title",
@@ -3701,6 +3727,10 @@ describe("OrchestratorMcpService provider resolution", () => {
       saved: Ref.Ref<ReadonlyArray<ScheduledTask["workspaceStrategy"]>>,
       task: ScheduledTask = existing,
       inputs?: Ref.Ref<ReadonlyArray<ScheduledTaskUpsertInput>>,
+      defaults: {
+        readonly project: ScheduledTask["modelSelection"] | null;
+        readonly environment?: ScheduledTask["modelSelection"];
+      } = { project: existing.modelSelection },
     ) =>
       OrchestratorMcpService.layer.pipe(
         Layer.provide(Layer.mock(ThreadLaunchService.ThreadLaunchService)({})),
@@ -3712,7 +3742,11 @@ describe("OrchestratorMcpService provider resolution", () => {
             Layer.mock(ThreadManagementService.ThreadManagementService)({
               getThreadShell: () => Effect.succeed(null),
             }),
-            ServerSettings.layerTest(),
+            ServerSettings.layerTest(
+              defaults.environment === undefined
+                ? {}
+                : { defaultModelSelection: defaults.environment },
+            ),
             Layer.mock(ProviderRegistry.ProviderRegistry)({ getProviders: Effect.succeed([]) }),
             Layer.mock(ProviderAdapterRegistry.ProviderAdapterRegistryV2)({
               list: () => Effect.succeed([]),
@@ -3722,7 +3756,7 @@ describe("OrchestratorMcpService provider resolution", () => {
                 Effect.succeedSome({
                   id: projectId,
                   workspaceRoot,
-                  defaultModelSelection: existing.modelSelection,
+                  defaultModelSelection: defaults.project,
                 } as never),
             }),
             Layer.mock(SecretRequests.SecretRequests)({}),
@@ -3760,6 +3794,32 @@ describe("OrchestratorMcpService provider resolution", () => {
         assert.deepEqual(yield* Ref.get(saved), [
           { type: "worktree", baseRef: "origin/master", startFromOrigin: true },
         ]);
+      }),
+    );
+
+    it.effect("uses the environment's default model when the project inherits it", () =>
+      Effect.gen(function* () {
+        const environmentDefault = {
+          instanceId: ProviderInstanceId.make("claudeAgent"),
+          model: "claude-opus-5-5",
+        };
+        const inputs = yield* Ref.make<ReadonlyArray<ScheduledTaskUpsertInput>>([]);
+        const mcp = yield* OrchestratorMcpService.OrchestratorMcpService.pipe(
+          Effect.provide(
+            service(
+              masterRepository,
+              yield* Ref.make<ReadonlyArray<ScheduledTask["workspaceStrategy"]>>([]),
+              existing,
+              inputs,
+              { project: null, environment: environmentDefault },
+            ),
+          ),
+        );
+        yield* mcp.scheduleTask(client, { projectId, prompt: "Check the build", schedule });
+        assert.deepEqual(
+          (yield* Ref.get(inputs)).map((input) => input.modelSelection),
+          [environmentDefault],
+        );
       }),
     );
 
@@ -4536,14 +4596,11 @@ describe("OrchestratorMcpService thread lookup", () => {
         assert.equal(send.threadId, resolvedId);
         assert.include(send.link, `/${resolvedId})`);
         assert.equal(wait.threadId, resolvedId);
-        assert.deepEqual(seen, [
-          resolvedId,
-          resolvedId,
-          resolvedId,
-          resolvedId,
-          resolvedId,
-          resolvedId,
-        ]);
+        // A read looks up runs, active provider turns and the run count; send and wait follow.
+        assert.deepEqual(
+          seen,
+          Array.from({ length: 8 }, () => resolvedId),
+        );
       }).pipe(
         Effect.provide(
           service(
@@ -4553,6 +4610,10 @@ describe("OrchestratorMcpService thread lookup", () => {
               getProjectThreadRecords: (input) => {
                 seen.push(input.threadId);
                 return Effect.succeed(projection);
+              },
+              getRunCount: (id) => {
+                seen.push(id);
+                return Effect.succeed(projection.runs.length);
               },
               getTimelinePage: (id) => {
                 seen.push(id);

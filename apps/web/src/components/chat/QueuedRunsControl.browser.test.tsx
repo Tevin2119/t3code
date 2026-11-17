@@ -1,6 +1,12 @@
 import { RegistryContext } from "@effect/atom-react";
 import type { EnvironmentThreadState } from "@t3tools/client-runtime/state/threads";
-import { EnvironmentId, MessageId, ThreadId } from "@t3tools/contracts";
+import {
+  CommandId,
+  EnvironmentId,
+  MessageId,
+  OrchestrationV2DispatchCommandError,
+  ThreadId,
+} from "@t3tools/contracts";
 import { serializeAssistantCitation } from "@t3tools/shared/assistantCitations";
 import {
   formatComposerContextReference,
@@ -594,4 +600,39 @@ it.each([false, true])("reports resume failures unless interrupted=%s", async (i
     await expect.element(page.getByText("Could not resume queue", { exact: true })).toBeVisible();
     await expect.element(page.getByText("Queue unavailable", { exact: true })).toBeVisible();
   }
+});
+
+it("tells the user why Send now was rejected", async () => {
+  setup();
+  const reason = "Target run run:active is stopping and cannot be steered.";
+  state.workflow = {
+    activeRun: { id: "run:active" },
+    canPromoteToSteer: true,
+    queuedRuns: [
+      {
+        run: { id: "run:queued", userMessageId: "message:queued" },
+        text: "Follow up",
+        attachments: [],
+      },
+    ],
+  };
+  state.result = () =>
+    AsyncResult.failure(
+      Cause.fail(
+        new OrchestrationV2DispatchCommandError({
+          commandId: CommandId.make("command:promote"),
+          commandType: "queued-message.promote-to-steer",
+          message: reason,
+          detail: reason,
+        }),
+      ),
+    );
+  await using _screen = await renderUi(
+    <ToastProvider timeout={0}>
+      <QueuedRunsControl {...baseProps} />
+    </ToastProvider>,
+  );
+
+  await page.getByRole("button", { name: "Send now" }).click();
+  await vi.waitFor(() => expect(page.getByText(reason).element()).toBeVisible());
 });

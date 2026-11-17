@@ -7,6 +7,9 @@ import {
   DeliveryRememberedLineup,
   DeliveryThreadBinding,
   DeliveryThreadPending,
+  DeliveryDiscoveryInput,
+  type DeliveryDiscoverySnapshot,
+  type DeliveryDiscoveryDiagnostic,
   type DeliveryActInput,
   type DeliveryBindThreadInput,
   type DeliveryReadInput,
@@ -17,6 +20,8 @@ import {
 } from "@t3tools/contracts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import { modelSelectionsEqual } from "@t3tools/shared/model";
+import * as ByteSize from "effect/ByteSize";
+import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -26,13 +31,15 @@ import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
-import { HttpClient, HttpClientRequest } from "effect/http";
+import { HttpClient, HttpClientRequest, HttpIncomingMessage } from "effect/http";
 
 import { writeFileStringAtomically } from "@t3tools/shared/atomicWrite";
 import { ServerConfig } from "../config.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import type { deriveProviderInstanceConfigMap } from "../provider/ProviderInstanceRegistryHydration.ts";
 import type * as DeliveryEffective from "./DeliveryEffective.ts";
 import * as DeliveryThreadSession from "./DeliveryThreadSession.ts";
+import * as Discovery from "./deliveryDiscovery.ts";
 
 const BindingsFile = Schema.fromJsonString(
   Schema.Struct({
@@ -98,6 +105,26 @@ const decodeRepository = Schema.decodeUnknownEffect(Repository);
 
 const EngineRefusal = Schema.Struct({ error: Schema.String });
 const decodeRefusal = Schema.decodeUnknownOption(EngineRefusal);
+const decodeDiscoveryInput = Schema.decodeEffect(DeliveryDiscoveryInput);
+const configurationKey = (enabled: boolean, url: string, environment: NodeJS.ProcessEnv) =>
+  JSON.stringify([
+    enabled,
+    url,
+    environment.T3_WORKSPACE_PROFILE_ID,
+    environment.POLYMANIA_ACCOUNTS,
+    environment.T3_WORKSPACE_ENGINE_HOME,
+    environment.T3_WORKSPACE_ENGINE_URL,
+  ]);
+
+const decodeDiscoveryHealth = Schema.decodeUnknownEffect(Discovery.DiscoveryHealth);
+const decodeRepositoryCheck = Schema.decodeUnknownEffect(Discovery.DiscoveryRepositoryCheck);
+const decodeDeliveryRequest = Schema.decodeUnknownEffect(
+  Schema.Struct({
+    route: Schema.String.check(Schema.isPattern(/^[A-Za-z0-9_-]{1,100}$/)),
+    task: Schema.optional(Schema.String.check(Schema.isPattern(/^[A-Za-z0-9_-]{1,100}$/))),
+    team: Schema.optional(Schema.String.check(Schema.isPattern(/^[A-Za-z0-9_-]{1,100}$/))),
+  }),
+);
 
 /** Two spellings of one folder compare equal: slashes, case on Windows, a trailing slash. */
 const normalFolder = (value: string, platform: NodeJS.Platform) => {
@@ -125,6 +152,10 @@ export class DeliveryService extends Context.Service<
   DeliveryService,
   {
     readonly read: (input: DeliveryReadInput) => Effect.Effect<DeliveryResponse, DeliveryError>;
+    readonly discover: (
+      input: DeliveryDiscoveryInput,
+      caller: Discovery.DiscoveryCaller,
+    ) => Effect.Effect<DeliveryDiscoverySnapshot>;
     readonly act: (input: DeliveryActInput) => Effect.Effect<DeliveryResponse, DeliveryError>;
     /** Internal coordinator writes. Never expose this method as a generic client relay. */
     readonly nativeBuildAct: (
@@ -171,6 +202,18 @@ export const layerTest = Layer.succeed(
   DeliveryService,
   DeliveryService.of({
     read: disabled,
+    discover: Effect.fn("DeliveryService.discover")(function* (input, caller) {
+      return {
+        ...Discovery.emptyDiscovery(
+          input,
+          caller,
+          "disabled",
+          DateTime.formatIso(yield* DateTime.now),
+          null,
+        ),
+        diagnostics: ["disabled" as const],
+      };
+    }),
     act: disabled,
     nativeBuildAct: disabled,
     nativeIntakeAct: disabled,
@@ -188,7 +231,9 @@ export const layerTest = Layer.succeed(
   }),
 );
 
-const make = Effect.gen(function* () {
+const make = Effect.fn("DeliveryService.make")(function* (
+  deriveConfigMap: typeof deriveProviderInstanceConfigMap,
+) {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const config = yield* ServerConfig;
@@ -294,159 +339,286 @@ const make = Effect.gen(function* () {
     })),
   );
 
-  const request = Effect.fn("DeliveryService.request")(function* (
-    method: "GET" | "POST",
-    enginePath: string,
-    body?: unknown,
-  ) {
-    const settings = yield* delivery;
-    const hostEnvironment = yield* HostProcess.Environment;
-    if (!settings.enabled) {
-      return yield* new DeliveryError({
-        reason: "disabled",
-        detail: "Delivery is turned off in settings.",
-      });
-    }
-    if (
-      hostEnvironment.T3_WORKSPACE_PROFILE_ID &&
-      (!hostEnvironment.T3_WORKSPACE_ENGINE_URL ||
-        settings.engineUrl !== hostEnvironment.T3_WORKSPACE_ENGINE_URL)
-    ) {
-      return yield* new DeliveryError({
-        reason: "invalid",
-        detail:
-          "This account profile's Delivery settings do not match its bound engine endpoint. Correct them in native Settings; no other profile's engine was contacted.",
-      });
-    }
-    const url = yield* Effect.try({
-      try: () => {
-        const base = new URL(settings.engineUrl);
-        // The engine holds approvals. It is only ever reached on this host.
-        if (!["127.0.0.1", "localhost", "[::1]"].includes(base.hostname)) {
-          throw new Error("not loopback");
-        }
-        return new URL(enginePath, base).toString();
-      },
-      catch: () =>
-        new DeliveryError({
-          reason: "invalid",
-          detail: "The engine address must be a loopback URL, such as http://127.0.0.1:4320.",
-        }),
-    });
-    if (hostEnvironment.T3_WORKSPACE_PROFILE_ID) {
-      // A bound profile needs T3's own side of the identity before the engine is asked for its.
-      // Saying which variable is missing beats a generic refusal: both halves come from the same
-      // profile launcher, and a half-set launcher is the common way to land here.
-      if (!hostEnvironment.POLYMANIA_ACCOUNTS || !hostEnvironment.T3_WORKSPACE_ENGINE_HOME) {
-        const missing = [
-          ...(hostEnvironment.POLYMANIA_ACCOUNTS ? [] : ["POLYMANIA_ACCOUNTS"]),
-          ...(hostEnvironment.T3_WORKSPACE_ENGINE_HOME ? [] : ["T3_WORKSPACE_ENGINE_HOME"]),
-        ].join(" and ");
+  const discoveryCache = new Map<
+    string,
+    { until: number; read: Effect.Effect<DeliveryResponse, DeliveryError> }
+  >();
+  const discoveryLock = yield* Semaphore.make(1);
+  let discoveryGeneration = 0;
+  let discoveryConfiguration = "";
+  const invalidateDiscovery = () => {
+    discoveryGeneration++;
+    discoveryCache.clear();
+  };
+
+  const readHealth = Effect.fn("DeliveryService.readHealth")(
+    function* (engineUrl: string, bounded: boolean) {
+      let response = yield* httpClient.execute(
+        HttpClientRequest.get(
+          new URL(bounded ? "/api/health?identity=1" : "/api/health", engineUrl).toString(),
+        ),
+      );
+      // Older engines may reject the identity query; fallback shares the same deadline.
+      if (bounded && (response.status === 400 || response.status === 404)) {
+        response = yield* httpClient.execute(
+          HttpClientRequest.get(new URL("/api/health", engineUrl).toString()),
+        );
+      }
+      if (bounded && (response.status === 401 || response.status === 403)) {
         return yield* new DeliveryError({
-          reason: "invalid",
-          detail: `This T3 runs workspace profile '${hostEnvironment.T3_WORKSPACE_PROFILE_ID}' but was started without ${missing}, so it cannot verify its engine. Start T3 through the profile launcher that sets them.`,
+          reason: "refused",
+          status: response.status,
+          detail: "Engine identity check was not authorized.",
         });
       }
-      const expectedProfile = hostEnvironment.POLYMANIA_ACCOUNTS;
-      const expectedHome = hostEnvironment.T3_WORKSPACE_ENGINE_HOME;
-      const healthResponse = yield* httpClient
-        .execute(HttpClientRequest.get(new URL("/api/health", settings.engineUrl).toString()))
-        .pipe(
-          Effect.timeout("30 seconds"),
-          Effect.mapError(
-            () =>
-              new DeliveryError({
-                reason: "unreachable",
-                detail: "The profile's bound engine did not answer its identity check.",
-              }),
-          ),
-        );
-      const health = yield* healthResponse.json.pipe(
-        Effect.flatMap(
-          Schema.decodeUnknownEffect(
-            Schema.Struct({
-              engine: Schema.Literal("delivery"),
-              ok: Schema.Literal(true),
-              // null is how the engine reports "POLYMANIA_ACCOUNTS was not set": a distinct, common
-              // failure that deserves its own message rather than a decode error.
-              profile: Schema.NullOr(Schema.String),
-              home: Schema.String,
-            }),
-          ),
-        ),
+      if (bounded && Number(response.headers["content-length"]) > 1_048_576) {
+        return yield* new DeliveryError({
+          reason: "invalid",
+          status: 413,
+          detail: "Discovery response exceeds its size limit.",
+        });
+      }
+      if (response.status !== 200) {
+        return yield* new DeliveryError({
+          reason: "invalid",
+          detail: bounded
+            ? "The engine identity check was refused."
+            : `The engine at ${engineUrl} answered /api/health with HTTP ${response.status}. No task data was requested or changed.`,
+        });
+      }
+      const body = yield* (
+        bounded
+          ? response.json.pipe(
+              Effect.provideService(HttpIncomingMessage.MaxBodySize, ByteSize.bytes(1_048_576)),
+            )
+          : response.json
+      ).pipe(
         Effect.mapError(
           () =>
             new DeliveryError({
               reason: "invalid",
-              detail: `The endpoint at ${settings.engineUrl} did not answer /api/health as a delivery engine (expected engine "delivery", ok true, profile and home). No task data was requested or changed.`,
+              detail: bounded
+                ? "The engine identity response is incompatible."
+                : `The endpoint at ${engineUrl} did not answer /api/health as a delivery engine (expected engine "delivery", ok true, profile and home). No task data was requested or changed.`,
             }),
         ),
       );
-      if (healthResponse.status !== 200) {
-        return yield* new DeliveryError({
-          reason: "invalid",
-          detail: `The engine at ${settings.engineUrl} answered /api/health with HTTP ${healthResponse.status}. No task data was requested or changed.`,
-        });
-      }
-      if (health.profile === null) {
-        return yield* new DeliveryError({
-          reason: "invalid",
-          detail: `The engine at ${settings.engineUrl} is running without POLYMANIA_ACCOUNTS (its health reports profile null); this T3 expects profile '${expectedProfile}'. Start the engine through the same profile launcher. No task data was requested or changed.`,
-        });
-      }
-      if (health.profile !== expectedProfile || health.home !== expectedHome) {
-        const differences = [
-          ...(health.profile === expectedProfile
-            ? []
-            : [`profile '${health.profile}' (expected '${expectedProfile}')`]),
-          ...(health.home === expectedHome
-            ? []
-            : [`home '${health.home}' (expected '${expectedHome}')`]),
-        ].join(", ");
-        return yield* new DeliveryError({
-          reason: "invalid",
-          detail: `The engine at ${settings.engineUrl} belongs to another account profile or engine home: ${differences}. No task data was requested or changed.`,
-        });
-      }
-    }
-    const base = method === "GET" ? HttpClientRequest.get(url) : HttpClientRequest.post(url);
-    const prepared =
-      method === "GET" ? base : base.pipe(HttpClientRequest.bodyJsonUnsafe(body ?? {}));
-    const response = yield* httpClient.execute(prepared).pipe(
-      Effect.timeout("30 seconds"),
-      Effect.mapError(
-        () =>
-          new DeliveryError({
-            reason: "unreachable",
-            detail: `The delivery engine did not answer at ${settings.engineUrl}.`,
-          }),
+      return { body, readAt: DateTime.formatIso(yield* DateTime.now) } satisfies DeliveryResponse;
+    },
+    (effect, _engineUrl, bounded) =>
+      effect.pipe(
+        Effect.timeout(bounded ? "4 seconds" : "30 seconds"),
+        Effect.mapError((error) =>
+          error._tag === "DeliveryError"
+            ? error
+            : new DeliveryError({
+                reason: "unreachable",
+                detail: "The profile's bound engine did not answer its identity check.",
+              }),
+        ),
       ),
-    );
-    const parsed = yield* response.json.pipe(
-      Effect.mapError(
-        () =>
+  );
+
+  const readConfiguration = Effect.fn("DeliveryService.readConfiguration")(function* () {
+    const settings = yield* delivery;
+    const environment = yield* HostProcess.Environment;
+    return configurationKey(settings.enabled, settings.engineUrl, environment);
+  });
+  const assertConfiguration = Effect.fn("DeliveryService.assertConfiguration")(function* (
+    expected: string,
+  ) {
+    if ((yield* readConfiguration()) !== expected)
+      return yield* new DeliveryError({
+        reason: "invalid",
+        status: 409,
+        detail: "Delivery launch blocked: configuration-changed. No work was submitted.",
+      });
+  });
+  const request = Effect.fn("DeliveryService.request")(
+    function* (
+      method: "GET" | "POST",
+      enginePath: string,
+      body?: unknown,
+      bounded = false,
+      observedHealth?: { engineUrl: string; response: DeliveryResponse },
+      expectedConfiguration?: string,
+      dispatchDeadline?: number,
+    ) {
+      if (expectedConfiguration !== undefined) yield* assertConfiguration(expectedConfiguration);
+      const settings = yield* delivery;
+      if (method === "POST") invalidateDiscovery();
+      const hostEnvironment = yield* HostProcess.Environment;
+      if (!settings.enabled) {
+        return yield* new DeliveryError({
+          reason: "disabled",
+          detail: "Delivery is turned off in settings.",
+        });
+      }
+      if (
+        hostEnvironment.T3_WORKSPACE_PROFILE_ID &&
+        (!hostEnvironment.T3_WORKSPACE_ENGINE_URL ||
+          settings.engineUrl !== hostEnvironment.T3_WORKSPACE_ENGINE_URL)
+      ) {
+        return yield* new DeliveryError({
+          reason: bounded ? "mismatch" : "invalid",
+          detail:
+            "This account profile's Delivery settings do not match its bound engine endpoint. Correct them in native Settings; no other profile's engine was contacted.",
+        });
+      }
+      const url = yield* Effect.try({
+        try: () => {
+          const base = new URL(settings.engineUrl);
+          // The engine holds approvals. It is only ever reached on this host.
+          if (!["127.0.0.1", "localhost", "[::1]"].includes(base.hostname)) {
+            throw new Error("not loopback");
+          }
+          return new URL(enginePath, base).toString();
+        },
+        catch: () =>
           new DeliveryError({
             reason: "invalid",
-            detail: "The delivery engine answered with something that is not JSON.",
-            status: response.status,
+            detail: "The engine address must be a loopback URL, such as http://127.0.0.1:4320.",
           }),
-      ),
-    );
-    if (response.status < 200 || response.status >= 300) {
-      const refusal = decodeRefusal(parsed);
-      return yield* new DeliveryError({
-        reason: "refused",
-        detail: (refusal._tag === "Some" ? refusal.value.error : `HTTP ${response.status}`).slice(
-          0,
-          500,
-        ),
-        status: response.status,
-        body: parsed,
       });
-    }
-    const readAt = DateTime.formatIso(yield* DateTime.now);
-    return { readAt, body: parsed } satisfies DeliveryResponse;
-  });
+      if (hostEnvironment.T3_WORKSPACE_PROFILE_ID) {
+        // A bound profile needs T3's own side of the identity before the engine is asked for its.
+        // Saying which variable is missing beats a generic refusal: both halves come from the same
+        // profile launcher, and a half-set launcher is the common way to land here.
+        if (!hostEnvironment.POLYMANIA_ACCOUNTS || !hostEnvironment.T3_WORKSPACE_ENGINE_HOME) {
+          const missing = [
+            ...(hostEnvironment.POLYMANIA_ACCOUNTS ? [] : ["POLYMANIA_ACCOUNTS"]),
+            ...(hostEnvironment.T3_WORKSPACE_ENGINE_HOME ? [] : ["T3_WORKSPACE_ENGINE_HOME"]),
+          ].join(" and ");
+          return yield* new DeliveryError({
+            reason: bounded ? "mismatch" : "invalid",
+            detail: bounded
+              ? "The workspace profile identity is incomplete."
+              : `This T3 runs workspace profile '${hostEnvironment.T3_WORKSPACE_PROFILE_ID}' but was started without ${missing}, so it cannot verify its engine. Start T3 through the profile launcher that sets them.`,
+          });
+        }
+        const expectedProfile = hostEnvironment.POLYMANIA_ACCOUNTS;
+        const expectedHome = hostEnvironment.T3_WORKSPACE_ENGINE_HOME;
+        const healthResponse =
+          observedHealth?.engineUrl === settings.engineUrl
+            ? observedHealth.response
+            : yield* readHealth(settings.engineUrl, bounded || expectedConfiguration !== undefined);
+        const health = yield* Effect.succeed(healthResponse.body).pipe(
+          Effect.flatMap(
+            Schema.decodeUnknownEffect(
+              Schema.Struct({
+                engine: Schema.Literal("delivery"),
+                ok: Schema.Literal(true),
+                // null is how the engine reports "POLYMANIA_ACCOUNTS was not set": a distinct, common
+                // failure that deserves its own message rather than a decode error.
+                profile: Schema.NullOr(Schema.String),
+                home: Schema.String,
+              }),
+            ),
+          ),
+          Effect.mapError(
+            () =>
+              new DeliveryError({
+                reason: "invalid",
+                detail: bounded
+                  ? "The engine identity response is incompatible."
+                  : `The endpoint at ${settings.engineUrl} did not answer /api/health as a delivery engine (expected engine "delivery", ok true, profile and home). No task data was requested or changed.`,
+              }),
+          ),
+        );
+        if (health.profile === null) {
+          return yield* new DeliveryError({
+            reason: bounded ? "mismatch" : "invalid",
+            detail: bounded
+              ? "The engine profile identity is missing."
+              : `The engine at ${settings.engineUrl} is running without POLYMANIA_ACCOUNTS (its health reports profile null); this T3 expects profile '${expectedProfile}'. Start the engine through the same profile launcher. No task data was requested or changed.`,
+          });
+        }
+        if (health.profile !== expectedProfile || health.home !== expectedHome) {
+          const differences = [
+            ...(health.profile === expectedProfile
+              ? []
+              : [`profile '${health.profile}' (expected '${expectedProfile}')`]),
+            ...(health.home === expectedHome
+              ? []
+              : [`home '${health.home}' (expected '${expectedHome}')`]),
+          ].join(", ");
+          return yield* new DeliveryError({
+            reason: bounded ? "mismatch" : "invalid",
+            detail: bounded
+              ? "The engine belongs to another workspace profile."
+              : `The engine at ${settings.engineUrl} belongs to another account profile or engine home: ${differences}. No task data was requested or changed.`,
+          });
+        }
+        if (bounded && method === "GET" && enginePath === "/api/health") return healthResponse;
+      }
+      if (bounded && method === "GET" && enginePath === "/api/health") {
+        return yield* readHealth(settings.engineUrl, true);
+      }
+      const base = method === "GET" ? HttpClientRequest.get(url) : HttpClientRequest.post(url);
+      const prepared =
+        method === "GET" ? base : base.pipe(HttpClientRequest.bodyJsonUnsafe(body ?? {}));
+      if (expectedConfiguration !== undefined) yield* assertConfiguration(expectedConfiguration);
+      if (dispatchDeadline !== undefined && (yield* Clock.currentTimeMillis) >= dispatchDeadline) {
+        return yield* new DeliveryError({
+          reason: "unreachable",
+          detail: "Delivery preflight timed out. No work was submitted.",
+        });
+      }
+      const response = yield* httpClient.execute(prepared).pipe(
+        Effect.timeout(bounded ? "4 seconds" : "30 seconds"),
+        Effect.mapError(
+          () =>
+            new DeliveryError({
+              reason: "unreachable",
+              detail: bounded
+                ? "The delivery engine did not answer."
+                : `The delivery engine did not answer at ${settings.engineUrl}.`,
+            }),
+        ),
+      );
+      if (bounded && Number(response.headers["content-length"]) > 1_048_576) {
+        return yield* new DeliveryError({
+          reason: "invalid",
+          status: 413,
+          detail: "Discovery response exceeds its size limit.",
+        });
+      }
+      const parsed = yield* (
+        bounded
+          ? response.json.pipe(
+              Effect.provideService(HttpIncomingMessage.MaxBodySize, ByteSize.bytes(1_048_576)),
+            )
+          : response.json
+      ).pipe(
+        Effect.mapError(
+          () =>
+            new DeliveryError({
+              reason: "invalid",
+              detail: "The delivery engine answered with something that is not JSON.",
+              status: response.status,
+            }),
+        ),
+      );
+      if (response.status < 200 || response.status >= 300) {
+        const refusal = decodeRefusal(parsed);
+        return yield* new DeliveryError({
+          reason: "refused",
+          detail: bounded
+            ? "The engine refused a discovery read."
+            : (refusal._tag === "Some" ? refusal.value.error : `HTTP ${response.status}`).slice(
+                0,
+                500,
+              ),
+          status: response.status,
+          ...(bounded ? {} : { body: parsed }),
+        });
+      }
+      const readAt = DateTime.formatIso(yield* DateTime.now);
+      return { readAt, body: parsed } satisfies DeliveryResponse;
+    },
+    (effect, method) =>
+      method === "POST" ? effect.pipe(Effect.ensuring(Effect.sync(invalidateDiscovery))) : effect,
+  );
 
   /** The root of the repository a folder is in, or the folder itself when it is in none. */
   /** The root of the repository a folder is in, or `null` for a folder in none. */
@@ -736,6 +908,465 @@ const make = Effect.gen(function* () {
 
   const hostPlatform = yield* HostProcess.Platform;
 
+  const checkRepository = Effect.fn("DeliveryService.checkRepository")(
+    function* (
+      registration: (typeof Discovery.DiscoveryRegistrations.Type)[number],
+      observedHealth?: { engineUrl: string; response: DeliveryResponse },
+      expectedConfiguration?: string,
+    ) {
+      const response = yield* request(
+        "GET",
+        `/api/repositories/${encodeURIComponent(registration.id)}/discovery-check`,
+        undefined,
+        true,
+        observedHealth,
+        expectedConfiguration,
+      ).pipe(
+        Effect.mapError((error) =>
+          error.reason === "refused" && error.status === 504
+            ? new DeliveryError({
+                reason: "unreachable",
+                status: error.status,
+                detail: "The engine timed out checking the repository.",
+              })
+            : error,
+        ),
+      );
+      const checked = yield* decodeRepositoryCheck(response.body).pipe(
+        Effect.mapError(
+          () =>
+            new DeliveryError({
+              reason: "invalid",
+              detail: "The repository check response is incompatible.",
+            }),
+        ),
+      );
+      return (
+        checked.ok &&
+        checked.kind === "own" &&
+        registration.kind === "own" &&
+        checked.id === registration.id &&
+        sameFolder(checked.path, registration.path, hostPlatform)
+      );
+    },
+    (effect) =>
+      effect.pipe(
+        Effect.timeout("4 seconds"),
+        Effect.catchTags({
+          TimeoutError: () =>
+            Effect.fail(
+              new DeliveryError({
+                reason: "unreachable",
+                detail: "The repository check did not answer.",
+              }),
+            ),
+        }),
+      ),
+  );
+
+  const discoveryRead = Effect.fn("DeliveryService.discoveryRead")(function* (
+    configuration: string,
+    enginePath: string,
+    observedHealth?: { engineUrl: string; response: DeliveryResponse },
+  ) {
+    const key = `${configuration}:${enginePath}`;
+    const read = yield* discoveryLock.withPermits(1)(
+      Effect.gen(function* () {
+        const now = yield* Clock.currentTimeMillis;
+        const cached = discoveryCache.get(key);
+        if (cached && cached.until > now) return cached.read;
+        const endpoint = request("GET", enginePath, undefined, true, observedHealth);
+        const compatible =
+          enginePath === "/api/repositories?discovery=1"
+            ? endpoint.pipe(
+                Effect.catchTags({
+                  DeliveryError: (error) =>
+                    error.status === 400 || error.status === 404
+                      ? request("GET", "/api/repositories", undefined, true, observedHealth)
+                      : Effect.fail(error),
+                }),
+                Effect.timeout("4 seconds"),
+                Effect.catchTags({
+                  TimeoutError: () =>
+                    Effect.fail(
+                      new DeliveryError({
+                        reason: "unreachable",
+                        detail: "The delivery engine did not answer.",
+                      }),
+                    ),
+                }),
+              )
+            : endpoint;
+        const shared: Effect.Effect<DeliveryResponse, DeliveryError> = yield* Effect.cached(
+          compatible.pipe(
+            Effect.onInterrupt(() =>
+              Effect.sync(() => {
+                if (discoveryCache.get(key)?.read === shared) discoveryCache.delete(key);
+              }),
+            ),
+          ),
+        );
+        if (discoveryCache.size >= 64) discoveryCache.delete(discoveryCache.keys().next().value!);
+        discoveryCache.set(key, { until: now + 10_000, read: shared });
+        return shared;
+      }),
+    );
+    return yield* read;
+  });
+  const discover = Effect.fn("DeliveryService.discover")(function* (
+    input: DeliveryDiscoveryInput,
+    suppliedCaller: Discovery.DiscoveryCaller,
+  ): Effect.fn.Return<DeliveryDiscoverySnapshot> {
+    const providerDriver =
+      suppliedCaller.providerInstanceId === undefined
+        ? undefined
+        : yield* settingsService.getSettings.pipe(
+            Effect.map(
+              (settings) => deriveConfigMap(settings)[suppliedCaller.providerInstanceId!]?.driver,
+            ),
+            Effect.orElseSucceed(() => undefined),
+          );
+    const driver = suppliedCaller.driver ?? providerDriver;
+    const caller = { ...suppliedCaller, ...(driver === undefined ? {} : { driver }) };
+    const settings = yield* delivery;
+    const environment = yield* HostProcess.Environment;
+    const key = configurationKey(settings.enabled, settings.engineUrl, environment);
+    if (key !== discoveryConfiguration) {
+      discoveryConfiguration = key;
+      invalidateDiscovery();
+    }
+    const generation = discoveryGeneration;
+    const configuration = `local:${generation}`;
+    const snapshot = Discovery.emptyDiscovery(
+      input,
+      caller,
+      configuration,
+      DateTime.formatIso(yield* DateTime.now),
+      environment.T3_WORKSPACE_PROFILE_ID ?? null,
+    );
+    const valid = yield* decodeDiscoveryInput(input).pipe(Effect.result);
+    if (suppliedCaller.authorized === false)
+      return {
+        ...Discovery.emptyDiscovery(
+          input,
+          { environmentId: caller.environmentId },
+          "unavailable",
+          snapshot.checkedAt,
+          null,
+        ),
+        diagnostics: ["unauthorized"],
+      };
+    if (valid._tag === "Failure") return { ...snapshot, diagnostics: ["invalid-request"] };
+    if (!settings.enabled) return { ...snapshot, diagnostics: ["disabled"] };
+    if (input.fresh || input.preflight) discoveryCache.clear();
+    const readTimes: string[] = [];
+    let observedHealth: { engineUrl: string; response: DeliveryResponse } | undefined;
+    const read = Effect.fn("DeliveryService.discoveryEndpoint")(function* <A>(
+      enginePath: string,
+      schema: Schema.Decoder<A>,
+    ) {
+      const response = yield* input.preflight && enginePath === "/api/repositories?discovery=1"
+        ? request("GET", enginePath, undefined, true, observedHealth)
+        : discoveryRead(configuration, enginePath, observedHealth);
+      if (enginePath === "/api/health")
+        observedHealth = { engineUrl: settings.engineUrl, response };
+      readTimes.push(response.readAt);
+      return yield* Schema.decodeUnknownEffect(schema)(response.body).pipe(
+        Effect.mapError(
+          () =>
+            new DeliveryError({
+              reason: "invalid",
+              detail: "The engine discovery response is incompatible.",
+            }),
+        ),
+      );
+    });
+    const result = yield* Effect.gen(function* () {
+      const health = yield* read("/api/health", Discovery.DiscoveryHealth);
+      if (!health.ok) return { ...snapshot, diagnostics: ["unreachable" as const] };
+      const [[repository, repositories, data, link], teams] = yield* Effect.all(
+        [
+          Effect.gen(function* () {
+            const [repository, registrations, delivery] = yield* Effect.all(
+              [
+                read(
+                  `/api/repository?folder=${encodeURIComponent(input.folder)}`,
+                  Discovery.DiscoveryRepository,
+                ),
+                read("/api/repositories?discovery=1", Discovery.DiscoveryRegistrations),
+                read(
+                  input.task
+                    ? `/api/delivery?task=${encodeURIComponent(input.task)}`
+                    : "/api/delivery",
+                  Discovery.DiscoveryDelivery,
+                ),
+              ],
+              { concurrency: 3 },
+            );
+            const candidates = input.preflight
+              ? registrations.filter(
+                  (row) =>
+                    row.kind === "own" &&
+                    repository.readable &&
+                    repository.root !== undefined &&
+                    sameFolder(row.path, repository.root, hostPlatform),
+                )
+              : registrations;
+            const registered =
+              input.preflight && candidates.length === 1 ? candidates[0]! : undefined;
+            // The targeted check runs beside the board link read so preflight keeps three rounds.
+            const [checked, link] = yield* Effect.all(
+              [
+                registered === undefined
+                  ? Effect.succeed(false)
+                  : checkRepository(registered, observedHealth),
+                Effect.gen(function* () {
+                  const matching = delivery.boards.filter((board) =>
+                    candidates.some(
+                      (repo) =>
+                        repo.id === board.repository &&
+                        repository.root !== undefined &&
+                        sameFolder(repo.path, repository.root, hostPlatform),
+                    ),
+                  );
+                  const selected = input.board
+                    ? matching.find((board) => board.id === input.board)
+                    : matching.length === 1
+                      ? matching[0]
+                      : undefined;
+                  let boardDeployment = snapshot.boardDeployment;
+                  const linkDiagnostics: DeliveryDiscoveryDiagnostic[] = [];
+                  if (selected && /^[A-Za-z0-9_-]{1,100}$/.test(selected.id)) {
+                    const deployment = yield* read(
+                      `/api/boards/${selected.id}/deployment`,
+                      Discovery.DiscoveryBoardDeployment,
+                    ).pipe(Effect.result);
+                    if (
+                      deployment._tag === "Failure" &&
+                      (deployment.failure.status === 401 || deployment.failure.status === 403)
+                    )
+                      linkDiagnostics.push("unauthorized");
+                    boardDeployment =
+                      deployment._tag === "Success"
+                        ? {
+                            capability: "available",
+                            board: Discovery.observationText(selected.id),
+                            projectId:
+                              deployment.success.deploymentProjectId === null
+                                ? null
+                                : Discovery.observationText(deployment.success.deploymentProjectId),
+                            state: deployment.success.state,
+                          }
+                        : {
+                            capability:
+                              deployment.failure.reason === "invalid" ||
+                              deployment.failure.status === 404
+                                ? "unsupported"
+                                : "unavailable",
+                            board: Discovery.observationText(selected.id),
+                            projectId: null,
+                            state: null,
+                          };
+                  }
+                  return { selected, boardDeployment, linkDiagnostics };
+                }),
+              ],
+              { concurrency: 2 },
+            );
+            return [
+              repository,
+              input.preflight
+                ? registered !== undefined && checked
+                  ? [registered]
+                  : []
+                : registrations,
+              delivery,
+              link,
+            ] as const;
+          }),
+          read("/api/teams", Discovery.DiscoveryTeams),
+        ],
+        { concurrency: 2 },
+      );
+      const selected = repositories.length > 0 ? link.selected : undefined;
+      const current = yield* delivery;
+      if (
+        generation !== discoveryGeneration ||
+        key !== configurationKey(current.enabled, current.engineUrl, environment)
+      )
+        return { ...snapshot, diagnostics: ["configuration-changed" as const] };
+      const readAt = readTimes.toSorted()[0]!;
+      return Discovery.projectDiscovery(
+        input,
+        caller,
+        {
+          ...snapshot,
+          diagnostics: selected === undefined ? [] : link.linkDiagnostics,
+          boardDeployment: selected === undefined ? snapshot.boardDeployment : link.boardDeployment,
+          profile:
+            snapshot.profile ??
+            (health.profile === null ? null : Discovery.observationText(health.profile)),
+          readAt,
+          expiresAt: DateTime.formatIso(DateTime.add(DateTime.makeUnsafe(readAt), { seconds: 10 })),
+        },
+        {
+          root: repository.readable ? (repository.root ?? null) : null,
+          repositories,
+          teams,
+          delivery: data,
+          sameFolder: (a, b) => sameFolder(a, b, hostPlatform),
+        },
+      );
+    }).pipe(Effect.timeout("10 seconds"), Effect.result);
+    if (result._tag === "Success") return result.success;
+    const error = result.failure;
+    const code: DeliveryDiscoveryDiagnostic =
+      error._tag === "DeliveryError"
+        ? error.status === 401 || error.status === 403
+          ? "unauthorized"
+          : error.status === 413
+            ? "response-too-large"
+            : error.reason === "disabled"
+              ? "disabled"
+              : error.reason === "mismatch"
+                ? "profile-mismatch"
+                : error.reason === "unreachable"
+                  ? "unreachable"
+                  : "unsupported-server"
+        : error._tag === "TimeoutError"
+          ? "unreachable"
+          : "unsupported-server";
+    return { ...snapshot, diagnostics: [code] };
+  });
+
+  const preflightDeliveryRequest = Effect.fn("DeliveryService.preflightDeliveryRequest")(
+    function* (body: unknown) {
+      const dispatchDeadline = (yield* Clock.currentTimeMillis) + 3000;
+      const refuse = (code: DeliveryDiscoveryDiagnostic) =>
+        new DeliveryError({
+          reason: "invalid",
+          status: 409,
+          detail: `Delivery launch blocked: ${code}. No work was submitted.`,
+        });
+      const input = yield* decodeDeliveryRequest(body).pipe(
+        Effect.mapError(() => refuse("invalid-request")),
+      );
+      const configuration = yield* readConfiguration();
+      const settings = yield* delivery;
+      let observedHealth: { engineUrl: string; response: DeliveryResponse } | undefined;
+      const read = Effect.fn("DeliveryService.launchPreflightRead")(function* <A>(
+        path: string,
+        schema: Schema.Decoder<A>,
+      ): Effect.fn.Return<A, DeliveryError> {
+        const response = yield* request(
+          "GET",
+          path,
+          undefined,
+          true,
+          observedHealth,
+          configuration,
+        );
+        if (path === "/api/health") observedHealth = { engineUrl: settings.engineUrl, response };
+        return yield* Schema.decodeEffect(schema)(response.body).pipe(
+          Effect.mapError(() => refuse("unsupported-server")),
+        );
+      });
+      const health = yield* read("/api/health", Discovery.DiscoveryHealth);
+      if (!health.ok) return yield* refuse("unreachable");
+      const [route, teams, task] = yield* Effect.all(
+        [
+          Effect.gen(function* () {
+            const [data, registrations] = yield* Effect.all(
+              [
+                read("/api/delivery", Discovery.DiscoveryDelivery),
+                read("/api/repositories?discovery=1", Discovery.DiscoveryRegistrations),
+              ],
+              { concurrency: 2 },
+            );
+            const route = data.routes.find((item) => item.id === input.route);
+            if (!route) return yield* refuse("missing-target");
+            const board = data.boards.find((item) => item.id === route.board);
+            if (!board?.base || board.repository !== route.repository || board.base !== route.base)
+              return yield* refuse("missing-target");
+            const project = data.projects.find((item) => item.id === route.project);
+            if (
+              !project ||
+              project.repository !== route.repository ||
+              project.branch !== route.base
+            )
+              return yield* refuse("missing-deployment");
+            const matches = registrations.filter(
+              (item) => item.id === route.repository && item.kind === "own",
+            );
+            if (
+              matches.length !== 1 ||
+              !(yield* checkRepository(matches[0]!, observedHealth, configuration))
+            )
+              return yield* refuse("unregistered-repository");
+            return route;
+          }),
+          read("/api/teams", Discovery.DiscoveryTeams),
+          input.task === undefined
+            ? Effect.undefined
+            : read(
+                `/api/tasks/${input.task}`,
+                Schema.Struct({
+                  id: Schema.String,
+                  team: Schema.NullOr(Schema.String),
+                  repository: Schema.NullOr(Schema.String),
+                  base: Schema.NullOr(Schema.String),
+                }),
+              ).pipe(
+                Effect.mapError((error) =>
+                  error.status === 404 ? refuse("task-not-found") : error,
+                ),
+              ),
+        ],
+        { concurrency: 4 },
+      );
+      if (
+        task &&
+        (task.id !== input.task || task.repository !== route.repository || task.base !== route.base)
+      )
+        return yield* refuse("missing-target");
+      const team = teams.find((item) => item.team === (task?.team ?? input.team));
+      if (!team?.available || !team.takesTasks) return yield* refuse("missing-team");
+      if (!team.seats.some((seat) => seat.available && seat.tools.includes("delivery")))
+        return yield* refuse("unsupported-provider-tools");
+      const finalHealth = yield* request(
+        "GET",
+        "/api/health",
+        undefined,
+        true,
+        undefined,
+        configuration,
+      );
+      const identity = yield* decodeDiscoveryHealth(finalHealth.body).pipe(
+        Effect.mapError(() => refuse("unsupported-server")),
+      );
+      if (!identity.ok) return yield* refuse("unreachable");
+      yield* assertConfiguration(configuration);
+      return {
+        configuration,
+        observedHealth: { engineUrl: settings.engineUrl, response: finalHealth },
+        dispatchDeadline,
+      };
+    },
+    (effect) =>
+      effect.pipe(
+        Effect.timeout("3 seconds"),
+        Effect.catchTags({
+          TimeoutError: () =>
+            Effect.fail(
+              new DeliveryError({
+                reason: "unreachable",
+                detail: "Delivery preflight timed out. No work was submitted.",
+              }),
+            ),
+        }),
+      ),
+  );
+
   const prepareThread = Effect.fn("DeliveryService.prepareThread")(function* (
     threadId: ThreadId,
     actual: DeliveryActualSession,
@@ -858,9 +1489,10 @@ const make = Effect.gen(function* () {
   DeliveryThreadSession.setDeliveryTerminalEntryScript(entryScriptOf(yield* delivery));
   yield* settingsService.streamChanges.pipe(
     Stream.runForEach((settings) =>
-      Effect.sync(() =>
-        DeliveryThreadSession.setDeliveryTerminalEntryScript(entryScriptOf(settings.delivery)),
-      ),
+      Effect.sync(() => {
+        invalidateDiscovery();
+        DeliveryThreadSession.setDeliveryTerminalEntryScript(entryScriptOf(settings.delivery));
+      }),
     ),
     Effect.forkScoped,
   );
@@ -880,6 +1512,7 @@ const make = Effect.gen(function* () {
 
   return DeliveryService.of({
     read: Effect.fn("DeliveryService.read")((input) => request("GET", input.path)),
+    discover,
     act: Effect.fn("DeliveryService.act")((input) =>
       /^\/api\/native-(builds|intakes)\//.test(
         new URL(input.path, "http://delivery.invalid").pathname,
@@ -891,7 +1524,21 @@ const make = Effect.gen(function* () {
                 "Native build receipts can only be written by the server's native coordinator.",
             }),
           )
-        : request("POST", input.path, input.body),
+        : new URL(input.path, "http://delivery.invalid").pathname === "/api/delivery/requests"
+          ? preflightDeliveryRequest(input.body).pipe(
+              Effect.flatMap(({ configuration, observedHealth, dispatchDeadline }) =>
+                request(
+                  "POST",
+                  input.path,
+                  input.body,
+                  false,
+                  observedHealth,
+                  configuration,
+                  dispatchDeadline,
+                ),
+              ),
+            )
+          : request("POST", input.path, input.body),
     ),
     nativeBuildAct: Effect.fn("DeliveryService.nativeBuildAct")((input) =>
       /^\/api\/native-builds\/att-[A-Za-z0-9-]+\/(claim|attach|complete)$/.test(input.path)
@@ -927,4 +1574,5 @@ const make = Effect.gen(function* () {
   });
 });
 
-export const layer = Layer.effect(DeliveryService, make);
+export const layer = (deriveConfigMap: typeof deriveProviderInstanceConfigMap) =>
+  Layer.effect(DeliveryService, make(deriveConfigMap));

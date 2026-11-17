@@ -15,6 +15,7 @@ import * as PlatformNodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   ComposerContextRecord,
+  DeliveryDiscoverySnapshot,
   DeviceOperationError,
   DeviceSummary,
   OrchestratorMcpTaskRole,
@@ -39,6 +40,7 @@ import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/http";
 
 import * as DeliveryService from "../../apps/server/src/delivery/DeliveryService.ts";
 import { teamDiscussionContext } from "../../apps/server/src/delivery/teamDiscussionContext.ts";
+import { deliveryTurnContext } from "../../apps/server/src/delivery/deliveryDiscovery.ts";
 import { taskPrompt } from "../../apps/server/src/mcp/delegatedTaskModes.ts";
 import * as McpInvocationContext from "../../apps/server/src/mcp/McpInvocationContext.ts";
 import { advertisedJsonSchema } from "../../apps/server/src/mcp/advertisedJsonSchema.ts";
@@ -50,6 +52,7 @@ import {
   ThreadId,
 } from "@t3tools/contracts";
 import { projectComposerContextForProvider } from "@t3tools/shared/composerContextReferences";
+import { THEME_GUIDE } from "@t3tools/shared/themeCss";
 import { formatThreadLink } from "@t3tools/shared/threadLinks";
 import { buildCodexAdditionalContext } from "../../apps/server/src/provider/CodexDeveloperInstructions.ts";
 import { makeSideChatContext } from "../../apps/server/src/orchestration-v2/ContextHandoffService.ts";
@@ -314,6 +317,7 @@ export const McpToolUseCase = Schema.Struct({
     /** delegate_task `role` for a delegated child. T3 builds the child's first message from it. */
     delegateRole: Schema.optional(OrchestratorMcpTaskRole),
     context: Schema.optional(Schema.String),
+    deliveryDiscovery: Schema.optional(DeliveryDiscoverySnapshot),
     /**
      * The thread leads a team conversation whose rounds are in: T3 tells it who the
      * participants are and what they said, as it does before the orchestrator's turn.
@@ -1081,6 +1085,9 @@ export const buildMessages = (sample: Sample) => {
       ? "You are a subagent started by the parent agent's Agent tool. Your final message goes to the parent agent, not to the user."
       : undefined,
     context,
+    testCase.setup.deliveryDiscovery === undefined
+      ? undefined
+      : deliveryTurnContext(testCase.setup.deliveryDiscovery),
     teamDiscussion === undefined ? undefined : teamDiscussionContext(teamDiscussion),
   ];
   const reminders = base.reminders.toSpliced(base.gitStatusAt, 0, reminder(gitStatus(testCase)));
@@ -1401,6 +1408,8 @@ const unsavedSecretNote = (Contracts as Record<string, unknown>).SECRET_REQUEST_
 /** Fields T3 adds to real thread and task results, applied to mocks and defaults alike. */
 const withProductFields = (name: string, value: unknown, child: boolean): unknown => {
   if (!isRecord(value)) return value;
+  // The guide is the checkout's text, so a case's mock cannot go stale.
+  if (name === "t3_theme_read") return { ...value, guide: THEME_GUIDE };
   const linked = (thread: unknown, idKey = "threadId") => {
     if (!isRecord(thread) || thread.link !== undefined) return thread;
     const id = thread[idKey] ?? thread.id;

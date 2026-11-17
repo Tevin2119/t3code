@@ -4,6 +4,7 @@ import { expect, it, vi } from "vite-plus/test";
 import { it as effectIt } from "@effect/vitest";
 import {
   CheckpointScopeId,
+  EnvironmentId,
   CommandId,
   ContextHandoffId,
   ContextTransferId,
@@ -48,6 +49,8 @@ import {
 } from "../workspace/workspaceLease.ts";
 import * as NativeTeamChat from "../delivery/NativeTeamChat.ts";
 import * as DeliveryService from "../delivery/DeliveryService.ts";
+import { emptyDiscovery } from "../delivery/deliveryDiscovery.ts";
+import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as DeliveryThreadSession from "../delivery/DeliveryThreadSession.ts";
 import * as ProjectStore from "./ProjectStore.ts";
 import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
@@ -397,6 +400,8 @@ it.each([
 function makeLocalCommandHarness(input: {
   readonly text: string;
   readonly manualContinuation?: boolean;
+  readonly deliveryDiscovery?: boolean;
+  readonly cancelDuringDiscovery?: boolean;
   readonly nativeResumeUnsupported?: boolean;
   readonly steeringRestart?: boolean;
   readonly nativeGoals?: boolean;
@@ -1038,19 +1043,6 @@ function makeLocalCommandHarness(input: {
     ),
   );
   const fallbackEnsureThread = vi.fn(() => Effect.succeed(providerThread));
-  const resumeFallbackSession = {
-    driver: providerThread.driver,
-    resumeThread: () =>
-      Effect.fail(
-        input.resumeFailure ??
-          new ProviderAdapter.ProviderAdapterEventStreamError({
-            driver: providerThread.driver,
-            providerSessionId,
-            cause: "native thread is gone",
-          }),
-      ),
-    ensureThread: fallbackEnsureThread,
-  };
   const providerSession = {
     id: providerSessionId,
     driver: providerThread.driver,
@@ -1068,6 +1060,20 @@ function makeLocalCommandHarness(input: {
     createdAt: now,
     updatedAt: now,
     lastError: null,
+  };
+  const resumeFallbackSession = {
+    driver: providerThread.driver,
+    providerSession,
+    resumeThread: () =>
+      Effect.fail(
+        input.resumeFailure ??
+          new ProviderAdapter.ProviderAdapterEventStreamError({
+            driver: providerThread.driver,
+            providerSessionId,
+            cause: "native thread is gone",
+          }),
+      ),
+    ensureThread: fallbackEnsureThread,
   };
   const startTurn = vi.fn((_turn: ProviderAdapter.ProviderAdapterV2TurnInput) => Effect.void);
   const sideChatThread = {
@@ -1094,7 +1100,7 @@ function makeLocalCommandHarness(input: {
           startTurn(ProviderAdapter.resumeTurnInput(input)),
   };
   const open = vi.fn(() =>
-    input.sideChat !== undefined || input.invalidTeamRoster
+    input.sideChat !== undefined || input.invalidTeamRoster || input.deliveryDiscovery
       ? Effect.succeed(sideChatSession as never)
       : input.interruptOpen === true
         ? Effect.interrupt
@@ -1130,7 +1136,7 @@ function makeLocalCommandHarness(input: {
       input: RunExecutionService.RunExecutionServiceV2StartRootRunInput,
     ) => Effect.Effect<void, RunExecutionService.RunExecutionServiceV2Error>
   >((runInput) =>
-    input.sideChat !== undefined || input.invalidTeamRoster
+    input.sideChat !== undefined || input.invalidTeamRoster || input.deliveryDiscovery
       ? (runInput.resume
           ? runInput.session.resumeTurn!({
               ...runInput,
@@ -1238,10 +1244,26 @@ function makeLocalCommandHarness(input: {
   );
   const releaseUnlessBusy = vi.fn(() => Effect.succeed(input.refreshedTeam !== "busy"));
   const prepareTeam = vi.fn(() => Effect.succeed(true));
+  const discover = vi.fn<DeliveryService.DeliveryService["Service"]["discover"]>(
+    (request, caller) =>
+      Effect.sync(() => {
+        if (input.cancelDuringDiscovery) interruptRun();
+        return {
+          ...emptyDiscovery(request, caller, "fixture-config", "2026-11-16T00:00:00Z", "fixture"),
+          diagnostics: ["unreachable" as const],
+        };
+      }),
+  );
   const layer = ProviderTurnStart.layer.pipe(
     Layer.provide(
       Layer.mergeAll(
+        input.deliveryDiscovery
+          ? Layer.mock(ServerEnvironment.ServerEnvironment)({
+              getEnvironmentId: Effect.succeed(EnvironmentId.make("local")),
+            })
+          : Layer.empty,
         Layer.mock(DeliveryService.DeliveryService)({
+          discover,
           prepareThread: prepareTeam,
           threadState: () =>
             Effect.succeed({
@@ -1389,6 +1411,7 @@ function makeLocalCommandHarness(input: {
     settledRuns,
     releaseUnlessBusy,
     prepareTeam,
+    discover,
     getThreadRecords,
     getTurnStartContext,
     getRuntimeRecoveryProjection,
@@ -1880,6 +1903,55 @@ effectIt.effect("preserves a replacement committed before exhausted start settle
       expect(harness.projection()).toEqual(protectedProjection);
     }).pipe(Effect.provide(layerStartEffectWorker(harness)));
   }),
+);
+
+effectIt.effect.each(["ordinary", "reused", "resumed", "delegated", "cancelled"] as const)(
+  "adds current delivery diagnostics to the provider's %s turn without requiring a team",
+  (kind) =>
+    Effect.gen(function* () {
+      const harness = makeLocalCommandHarness({
+        text: kind === "resumed" ? "" : "Explain the parser",
+        deliveryDiscovery: true,
+        cancelDuringDiscovery: kind === "cancelled",
+        previousNativeSession: kind !== "ordinary",
+        manualContinuation: kind === "resumed",
+      });
+      if (kind === "delegated") {
+        const projection = harness.projection();
+        harness.setProjection({
+          ...projection,
+          thread: {
+            ...projection.thread,
+            lineage: {
+              parentThreadId: ThreadId.make("parent"),
+              rootThreadId: ThreadId.make("parent"),
+              relationshipToParent: "subagent",
+            },
+          },
+        });
+      }
+      yield* harness.start;
+      if (kind === "cancelled") {
+        expect(harness.startTurn).not.toHaveBeenCalled();
+        return;
+      }
+      expect(harness.startTurn).toHaveBeenCalled();
+      expect(harness.startTurn.mock.calls[0]?.[0].message.text).toContain(
+        "t3_delivery_observation",
+      );
+      expect(harness.startTurn.mock.calls[0]?.[0].message.text).toContain(
+        '"diagnostics":["unreachable"]',
+      );
+      expect(harness.discover).toHaveBeenCalledWith(
+        { folder: "/tmp/native-account-command" },
+        expect.objectContaining({
+          environmentId: "local",
+          threadId: harness.projection().thread.id,
+          driver: "codex",
+        }),
+      );
+      expect(harness.prepareTeam).not.toHaveBeenCalled();
+    }),
 );
 
 effectIt.effect.each(["idle", "busy", "background", "shared"] as const)(
