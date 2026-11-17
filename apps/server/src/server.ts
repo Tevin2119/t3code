@@ -318,7 +318,9 @@ const layerUsage = UsageService.layer.pipe(
   Layer.provide(layerServerSettings),
 );
 
-const layerDelivery = DeliveryService.layer.pipe(Layer.provide(layerServerSettings));
+const layerDelivery = DeliveryService.layer(
+  ProviderInstanceRegistryHydration.deriveProviderInstanceConfigMap,
+).pipe(Layer.provide(layerServerSettings));
 
 const layerResourceDiagnostics = Layer.mergeAll(
   HostResources.layer,
