@@ -34,6 +34,21 @@ export function taskQuestions(task: TaskView) {
                   ? "Automatic answer waiting; you can reply instead"
                   : "Waiting for your answer"
                 : "Not waiting for an answer";
+      const answeredByAuto = replies.some(
+        (entry) => entry.state === "applied" && fullAutoAttribution(entry),
+      );
+      // A one- or two-word label for narrow rows; `status` carries the full sentence.
+      const tag = pending
+        ? "Sent"
+        : applied || question.state === "answered"
+          ? answeredByAuto
+            ? "Auto-answered"
+            : "Answered"
+          : question.state === "closed" || closedTask
+            ? "Closed"
+            : canReply
+              ? "Needs you"
+              : "Settled";
       const replyIds = new Set(replies.map((entry) => entry.seq));
       return {
         question,
@@ -47,6 +62,7 @@ export function taskQuestions(task: TaskView) {
         canReply,
         pending,
         status,
+        tag,
       };
     });
 }
