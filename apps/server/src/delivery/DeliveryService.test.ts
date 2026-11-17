@@ -1,5 +1,10 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { EnvironmentId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
+import {
+  EnvironmentId,
+  ProviderDriverKind,
+  ProviderInstanceId,
+  ThreadId,
+} from "@t3tools/contracts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import { createModelSelection } from "@t3tools/shared/model";
 import { describe, expect, it } from "@effect/vitest";
@@ -15,6 +20,7 @@ import { HttpClient, HttpClientResponse } from "effect/http";
 
 import * as ServerConfig from "../config.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import { deriveProviderInstanceConfigMap } from "../provider/ProviderInstanceRegistryHydration.ts";
 import { buildRuntimeInstructions } from "@t3tools/provider-core/server/runtimeInstructions";
 import * as DeliveryService from "./DeliveryService.ts";
 import * as DeliveryThreadSession from "./DeliveryThreadSession.ts";
@@ -80,7 +86,7 @@ const layer = (
   },
 ) =>
   // Fresh, so that a second service in one test is a second start and not the first again.
-  Layer.fresh(DeliveryService.layer).pipe(
+  Layer.fresh(DeliveryService.layer(deriveProviderInstanceConfigMap)).pipe(
     Layer.provideMerge(Layer.succeed(HostProcess.Environment, options.environment ?? {})),
     Layer.provideMerge(
       options.config
@@ -392,33 +398,77 @@ describe("DeliveryService", () => {
       );
     },
   );
-  it.effect(
-    "fits profile discovery into its existing bound with independent metadata reads",
-    () => {
-      const fake = discoveryEngine();
-      return Effect.gen(function* () {
-        const started = yield* Deferred.make<void>();
-        fake.beforeRequest = (url) =>
-          Deferred.succeed(started, undefined).pipe(
-            Effect.andThen(
-              Effect.sleep(url.pathname === "/api/health" ? "500 millis" : "1 second"),
-            ),
-          );
-        const service = yield* DeliveryService.DeliveryService;
-        const pending = yield* service
-          .discover({ folder: REPO, fresh: true }, ordinaryCaller)
-          .pipe(Effect.forkChild);
-        yield* Deferred.await(started);
-        yield* TestClock.adjust("3 seconds");
-        const result = yield* Fiber.join(pending);
+  it.effect.each([
+    { delay: "2700 millis" as const, succeeds: true },
+    { delay: "3500 millis" as const, succeeds: false },
+  ])("bounds all discovery phases with $delay responses", ({ delay, succeeds }) => {
+    const fake = discoveryEngine();
+    fake.replies = {
+      ...fake.replies,
+      "/api/boards/work/deployment": { deploymentProjectId: "staging", state: "linked" },
+    };
+    return Effect.gen(function* () {
+      const started = yield* Deferred.make<void>();
+      fake.beforeRequest = () =>
+        Deferred.succeed(started, undefined).pipe(Effect.andThen(Effect.sleep(delay)));
+      const service = yield* DeliveryService.DeliveryService;
+      const pending = yield* service
+        .discover(
+          { folder: REPO, board: "work", team: "development", fresh: true, preflight: true },
+          ordinaryCaller,
+        )
+        .pipe(Effect.forkChild);
+      yield* Deferred.await(started);
+      yield* TestClock.adjust("10 seconds");
+      const result = yield* Fiber.join(pending);
+      if (succeeds) {
         expect(result.repository).toEqual({ id: "repo", root: REPO });
-        expect(result.boards).toEqual([{ id: "work", branch: "master" }]);
-        expect(fake.requests.filter((request) => request.path === "/api/health")).toHaveLength(1);
-      }).pipe(
-        Effect.provide(layer(fake, { prefix: "discovery-budget-", environment: discoveryProfile })),
+        expect(result.boardDeployment).toMatchObject({ capability: "available", state: "linked" });
+        expect(result.preflight).toBe("ready");
+      } else {
+        expect(result.diagnostics).toEqual(["unreachable"]);
+        expect(result.preflight).toBe("blocked");
+        expect(result.repository).toBeNull();
+      }
+      expect(fake.requests.filter((request) => request.path === "/api/health")).toHaveLength(1);
+    }).pipe(
+      Effect.provide(layer(fake, { prefix: "discovery-budget-", environment: discoveryProfile })),
+    );
+  });
+  it.effect.each([
+    { id: "codex", configured: undefined, expected: "codex" },
+    { id: "claudeAgent", configured: undefined, expected: "claudeAgent" },
+    { id: "custom", configured: "codex", expected: "codex" },
+    { id: "codex", configured: "pi", expected: "pi" },
+    { id: "unknown", configured: undefined, expected: null },
+  ])("resolves scoped provider $id with configuration $configured", (entry) => {
+    const fake = discoveryEngine();
+    return Effect.gen(function* () {
+      const settings = yield* ServerSettings.ServerSettingsService;
+      if (entry.configured) {
+        yield* settings.updateProviderInstance({
+          operation: "upsert",
+          instanceId: ProviderInstanceId.make(entry.id),
+          instance: { driver: ProviderDriverKind.make(entry.configured) },
+        });
+      }
+      const service = yield* DeliveryService.DeliveryService;
+      const result = yield* service.discover(
+        { folder: REPO, fresh: true },
+        {
+          environmentId: ordinaryCaller.environmentId,
+          threadId: ordinaryCaller.threadId,
+          providerInstanceId: ProviderInstanceId.make(entry.id),
+          toolsSupported: true,
+          authorized: true,
+        },
       );
-    },
-  );
+      expect(result.provider.driver).toBe(entry.expected);
+      expect(result.provider.teamHarness).toBe(
+        entry.expected === "claudeAgent" ? "claude" : entry.expected,
+      );
+    }).pipe(Effect.provide(layer(fake, { prefix: "discovery-provider-" })));
+  });
   it.effect.each([
     { name: "cheap identity", status: 200, expected: null, calls: 1 },
     { name: "legacy query", status: 404, expected: null, calls: 2 },
@@ -508,7 +558,7 @@ describe("DeliveryService", () => {
           .discover({ folder: REPO, fresh: true }, ordinaryCaller)
           .pipe(Effect.forkChild);
         yield* Deferred.await(started);
-        yield* TestClock.adjust("3 seconds");
+        yield* TestClock.adjust("4 seconds");
         const result = yield* Fiber.join(pending);
         yield* Deferred.await(cancelled);
         expect(result.diagnostics).toEqual(["unreachable"]);
