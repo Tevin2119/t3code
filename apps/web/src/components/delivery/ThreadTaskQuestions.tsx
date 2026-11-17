@@ -40,15 +40,13 @@ export function ThreadTaskQuestions({
   summaryTaskIds?: ReadonlyArray<string>;
 }) {
   const [visible, setVisible] = useState(10);
-  const [showDone, setShowDone] = useState(false);
   const drafts = useDeliveryReplyDrafts((state) => state.drafts);
   const pending = useDeliveryReplyDrafts((state) => state.pending);
   const needsAttention = (task: DeliveryCard) =>
     task.questions > 0 || taskHasReplyDraft(environmentId, task.id, drafts, pending);
-  // A finished task leaves the list unless something on it still waits on the person.
-  const done = tasks.filter((task) => taskIsDone(task) && !needsAttention(task));
+  // Only work in play is listed here; finished tasks live on the board.
   const listed = tasks
-    .filter((task) => showDone || !done.includes(task))
+    .filter((task) => !taskIsDone(task) || needsAttention(task))
     .sort((a, b) => Number(needsAttention(b)) - Number(needsAttention(a)));
   return (
     <div className="min-w-0 space-y-1" data-thread-task-questions>
@@ -71,9 +69,13 @@ export function ThreadTaskQuestions({
             Show {Math.min(10, listed.length - visible)} more
           </Button>
         ) : null}
-        {done.length > 0 ? (
-          <Button variant="ghost" size="xs" onClick={() => setShowDone(!showDone)}>
-            {showDone ? "Hide done" : `Show ${done.length} done`}
+        {tasks.length > listed.length ? (
+          <Button
+            variant="ghost"
+            size="xs"
+            render={<Link to="/board" search={{ environment: environmentId }} />}
+          >
+            All tasks on the board
           </Button>
         ) : null}
       </div>
@@ -118,26 +120,42 @@ function TaskQuestions({
           const key = replyDraftKey(environmentId, task.id, row.question.seq!);
           return { row, key, attention: questionNeedsAttention(row, drafts[key], pending[key]) };
         })
-        // "Seen" never hides a question that waits on the person; "later" hides it until reload.
-        .filter(
-          ({ key, attention }) =>
-            removed[key] === undefined || (removed[key] === "seen" && attention),
-        )
-        .sort((a, b) => Number(b.attention) - Number(a.attention))
+        // Answered and closed rounds stay on the board; "later" hides a waiting one until reload.
+        .filter(({ key, attention }) => attention && removed[key] !== "later")
     : [];
+  const [open, setOpen] = useState(true);
   return (
-    <section className="min-w-0 space-y-1" aria-label={`Task ${card.number}`}>
-      <Link
-        to="/board"
-        search={{ environment: environmentId, task: card.id }}
-        className="flex min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-accent/50 focus-visible:outline-2 focus-visible:outline-ring"
-      >
-        <span className="shrink-0 text-muted-foreground tabular-nums">#{card.number}</span>
-        <span className="min-w-0 flex-1 truncate">{card.title}</span>
-        <Badge variant="outline" size="sm" className="shrink-0">
-          {taskStandsIn(card)}
-        </Badge>
-      </Link>
+    <Collapsible
+      open={open && rows.length > 0}
+      onOpenChange={setOpen}
+      render={<section className="min-w-0 space-y-1" aria-label={`Task ${card.number}`} />}
+    >
+      <div className="flex min-w-0 items-center gap-1">
+        <Link
+          to="/board"
+          search={{ environment: environmentId, task: card.id }}
+          className="flex min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-accent/50 focus-visible:outline-2 focus-visible:outline-ring"
+        >
+          <span className="shrink-0 text-muted-foreground tabular-nums">#{card.number}</span>
+          <span className="min-w-0 flex-1 truncate">{card.title}</span>
+          <Badge variant="outline" size="sm" className="shrink-0">
+            {taskStandsIn(card)}
+          </Badge>
+        </Link>
+        {rows.length > 0 ? (
+          <CollapsibleTrigger
+            render={
+              <Button
+                size="icon-xs"
+                variant="ghost"
+                aria-label={`${open ? "Fold" : "Unfold"} questions on task ${card.number}`}
+              />
+            }
+          >
+            <ChevronDownIcon className={open ? "rotate-180" : undefined} />
+          </CollapsibleTrigger>
+        ) : null}
+      </div>
       {read.error ? (
         <div className="flex min-w-0 items-center gap-2 ps-4">
           <p role="alert" className="min-w-0 flex-1 truncate text-xs text-warning">
@@ -149,24 +167,23 @@ function TaskQuestions({
         </div>
       ) : null}
       {task && rows.length > 0 ? (
-        <div className="min-w-0 space-y-2 ps-4">
-          {rows.map(({ row, key, attention }) => (
-            <QuestionCard
-              key={row.question.id}
-              environmentId={environmentId}
-              task={task}
-              row={row}
-              unavailable={Boolean(read.error)}
-              refresh={read.refresh}
-              removeUntilReload={attention}
-              onRemove={() =>
-                useDeliveryReplyDrafts.getState().remove(key, attention ? "later" : "seen")
-              }
-            />
-          ))}
-        </div>
+        <CollapsiblePanel animate={false}>
+          <div className="min-w-0 space-y-2 ps-4">
+            {rows.map(({ row, key }) => (
+              <QuestionCard
+                key={row.question.id}
+                environmentId={environmentId}
+                task={task}
+                row={row}
+                unavailable={Boolean(read.error)}
+                refresh={read.refresh}
+                onRemove={() => useDeliveryReplyDrafts.getState().remove(key, "later")}
+              />
+            ))}
+          </div>
+        </CollapsiblePanel>
       ) : null}
-    </section>
+    </Collapsible>
   );
 }
 
@@ -176,7 +193,6 @@ function QuestionCard({
   row,
   unavailable,
   refresh,
-  removeUntilReload,
   onRemove,
 }: {
   environmentId: EnvironmentId;
@@ -184,7 +200,6 @@ function QuestionCard({
   row: ReturnType<typeof taskQuestions>[number];
   unavailable: boolean;
   refresh: () => void;
-  removeUntilReload: boolean;
   onRemove: () => void;
 }) {
   const person = usePersonName();
@@ -269,11 +284,7 @@ function QuestionCard({
             <Button
               size="icon-xs"
               variant="ghost"
-              aria-label={
-                removeUntilReload
-                  ? `Hide Q${row.question.seq} until later`
-                  : `Remove Q${row.question.seq}, seen`
-              }
+              aria-label={`Hide Q${row.question.seq} until later`}
               onClick={onRemove}
             >
               <XIcon />

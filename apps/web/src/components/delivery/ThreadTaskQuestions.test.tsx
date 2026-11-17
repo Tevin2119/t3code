@@ -105,7 +105,7 @@ it("keeps a losing draft and shows the winning answer and sibling closure after 
   expect(renderer.root.findByType("textarea").props.value).toBe("My answer");
   expect(renderer.root.findByType("textarea").props.readOnly).toBe(true);
   expect(JSON.stringify(renderer.toJSON())).toContain("Full auto");
-  expect(JSON.stringify(renderer.toJSON())).toContain("Closed by the engine");
+  expect(JSON.stringify(renderer.toJSON())).not.toContain("Closed by the engine");
   expect(button("Send reply")).toBeUndefined();
 });
 it("guards overlapping submits and records receipt without claiming the team resumed", async () => {
@@ -220,72 +220,48 @@ it("shows a later matching engine answer beside the retained uncertain draft", a
   expect(renderer.root.findByType("textarea").props.value).toBe("Keep it");
   expect(mock.action).toHaveBeenCalledTimes(1);
 });
-it("keeps settled questions collapsed after questions that still need the person", async () => {
+it("lists only questions that still wait, and folds them under their task", async () => {
   const settled = task(true);
   mock.body = { ...settled, questions: [{ seq: 4 }], timeline: [...settled.timeline, question(4)] };
   await mount();
-  expect(
-    renderer.root.findAllByType("article").map((entry) => entry.props["data-engine-question"]),
-  ).toEqual([4, 1, 2]);
-  const json = JSON.stringify(renderer.toJSON());
-  expect(json).toContain("Auto-answered");
-  expect(json).toContain("Question 1");
-  expect(json).not.toContain("Keep it");
-  const settledCard = renderer.root
-    .findAllByType("article")
-    .find((entry) => entry.props["data-engine-question"] === 1)!;
-  const trigger = settledCard
-    .findAllByType("button")
-    .find((entry) => entry.props["data-slot"] === "collapsible-trigger")!;
+  const asked = () =>
+    renderer.root.findAllByType("article").map((entry) => entry.props["data-engine-question"]);
+  expect(asked()).toEqual([4]);
+  expect(JSON.stringify(renderer.toJSON())).not.toContain("Auto-answered");
+  const fold = () =>
+    buttons().find((entry) => entry.props["aria-label"]?.endsWith("questions on task 1"))!;
   // Base UI reads the native event when reporting the toggle reason.
-  const press = () => trigger.props.onClick({ nativeEvent: { type: "click" } });
-  await act(() => press());
-  expect(JSON.stringify(renderer.toJSON())).toContain("Keep it");
-  await act(() => press());
-  expect(
-    settledCard
-      .findAllByType("button")
-      .find((entry) => entry.props["data-slot"] === "collapsible-trigger")!.props["aria-expanded"],
-  ).toBe(false);
+  await act(() => fold().props.onClick({ nativeEvent: { type: "click" } }));
+  expect(fold().props["aria-label"]).toBe("Unfold questions on task 1");
+  expect(fold().props["aria-expanded"]).toBe(false);
+  await act(() => fold().props.onClick({ nativeEvent: { type: "click" } }));
+  expect(asked()).toEqual([4]);
 });
 
-it("removes a seen question for good but hides a waiting one only until reload", async () => {
-  const settled = task(true);
-  mock.body = { ...settled, questions: [{ seq: 4 }], timeline: [...settled.timeline, question(4)] };
+it("hides a waiting question until reload", async () => {
   await mount();
-  const remove = (label: string) =>
-    act(() =>
-      buttons()
-        .find((entry) => entry.props["aria-label"] === label)!
-        .props.onClick(),
-    );
-  await remove("Remove Q1, seen");
-  await remove("Hide Q4 until later");
+  await act(() =>
+    buttons()
+      .find((entry) => entry.props["aria-label"] === "Hide Q1 until later")!
+      .props.onClick(),
+  );
   expect(
     renderer.root.findAllByType("article").map((entry) => entry.props["data-engine-question"]),
   ).toEqual([2]);
-  expect(persistedReplyState(useDeliveryReplyDrafts.getState()).removed).toEqual({
-    [replyDraftKey(env, "task-a", 1)]: "seen",
-  });
+  expect(persistedReplyState(useDeliveryReplyDrafts.getState()).removed).toEqual({});
 });
-it("folds done tasks away unless a question on them still waits", async () => {
-  const done = parseCards([
-    { id: "task-a", number: 1, title: "Task", lane: "completed" },
-    { id: "task-b", number: 2, title: "Shipped", lane: "completed" },
-  ]);
-  const waiting = parseCards([
+it("leaves done tasks to the board unless a question on them still waits", async () => {
+  const tasks = parseCards([
     { id: "task-a", number: 1, title: "Task", lane: "completed", questions: 1 },
     { id: "task-b", number: 2, title: "Shipped", lane: "completed" },
+    { id: "task-c", number: 3, title: "Building", lane: "in-progress" },
   ]);
-  const labels = () =>
-    renderer.root.findAllByType("section").map((entry) => entry.props["aria-label"]);
   await act(() => {
-    renderer = create(<ThreadTaskQuestions environmentId={env} tasks={done} />);
+    renderer = create(<ThreadTaskQuestions environmentId={env} tasks={tasks} />);
   });
-  expect(labels()).toEqual([]);
-  await act(() => button("Show 2 done").props.onClick());
-  expect(labels()).toEqual(["Task 1", "Task 2"]);
-  await act(() => renderer.update(<ThreadTaskQuestions environmentId={env} tasks={waiting} />));
-  await act(() => button("Hide done").props.onClick());
-  expect(labels()).toEqual(["Task 1"]);
+  expect(renderer.root.findAllByType("section").map((entry) => entry.props["aria-label"])).toEqual([
+    "Task 1",
+    "Task 3",
+  ]);
+  expect(button("All tasks on the board")).toBeDefined();
 });
