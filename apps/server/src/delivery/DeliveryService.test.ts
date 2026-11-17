@@ -322,7 +322,7 @@ describe("DeliveryService", () => {
       yield* Deferred.await(started);
       yield* TestClock.adjust("1500 millis");
       yield* Deferred.await(fallback);
-      yield* TestClock.adjust("500 millis");
+      yield* TestClock.adjust("2500 millis");
       yield* Deferred.await(cancelled);
       expect((yield* Fiber.join(pending)).diagnostics).toEqual(["unreachable"]);
       delete fake.beforeRequest;
@@ -494,42 +494,49 @@ describe("DeliveryService", () => {
     },
   );
   it.effect.each([
-    { delay: "2700 millis" as const, succeeds: true },
-    { delay: "3500 millis" as const, succeeds: false },
-  ])("bounds all discovery phases with $delay responses", ({ delay, succeeds }) => {
-    const fake = discoveryEngine();
-    fake.replies = {
-      ...fake.replies,
-      "/api/boards/work/deployment": { deploymentProjectId: "staging", state: "linked" },
-    };
-    return Effect.gen(function* () {
-      const started = yield* Deferred.make<void>();
-      fake.beforeRequest = () =>
-        Deferred.succeed(started, undefined).pipe(Effect.andThen(Effect.sleep(delay)));
-      const service = yield* DeliveryService.DeliveryService;
-      const pending = yield* service
-        .discover(
-          { folder: REPO, board: "work", team: "development", fresh: true, preflight: true },
-          ordinaryCaller,
-        )
-        .pipe(Effect.forkChild);
-      yield* Deferred.await(started);
-      yield* TestClock.adjust("10 seconds");
-      const result = yield* Fiber.join(pending);
-      if (succeeds) {
-        expect(result.repository).toEqual({ id: "repo", root: REPO });
-        expect(result.boardDeployment).toMatchObject({ capability: "available", state: "linked" });
-        expect(result.preflight).toBe("ready");
-      } else {
-        expect(result.diagnostics).toEqual(["unreachable"]);
-        expect(result.preflight).toBe("blocked");
-        expect(result.repository).toBeNull();
-      }
-      expect(fake.requests.filter((request) => request.path === "/api/health")).toHaveLength(1);
-    }).pipe(
-      Effect.provide(layer(fake, { prefix: "discovery-budget-", environment: discoveryProfile })),
-    );
-  });
+    { delay: "2700 millis" as const, preflight: true, succeeds: true },
+    { delay: "2700 millis" as const, preflight: false, succeeds: true },
+    { delay: "3500 millis" as const, preflight: true, succeeds: false },
+  ])(
+    "bounds all discovery phases with $delay responses (preflight: $preflight)",
+    ({ delay, preflight, succeeds }) => {
+      const fake = discoveryEngine();
+      fake.replies = {
+        ...fake.replies,
+        "/api/boards/work/deployment": { deploymentProjectId: "staging", state: "linked" },
+      };
+      return Effect.gen(function* () {
+        const started = yield* Deferred.make<void>();
+        fake.beforeRequest = () =>
+          Deferred.succeed(started, undefined).pipe(Effect.andThen(Effect.sleep(delay)));
+        const service = yield* DeliveryService.DeliveryService;
+        const pending = yield* service
+          .discover(
+            { folder: REPO, board: "work", team: "development", fresh: true, preflight },
+            ordinaryCaller,
+          )
+          .pipe(Effect.forkChild);
+        yield* Deferred.await(started);
+        yield* TestClock.adjust("10 seconds");
+        const result = yield* Fiber.join(pending);
+        if (succeeds) {
+          expect(result.repository).toEqual({ id: "repo", root: REPO });
+          expect(result.boardDeployment).toMatchObject({
+            capability: "available",
+            state: "linked",
+          });
+          expect(result.preflight).toBe(preflight ? "ready" : "not-requested");
+        } else {
+          expect(result.diagnostics).toEqual(["unreachable"]);
+          expect(result.preflight).toBe("blocked");
+          expect(result.repository).toBeNull();
+        }
+        expect(fake.requests.filter((request) => request.path === "/api/health")).toHaveLength(1);
+      }).pipe(
+        Effect.provide(layer(fake, { prefix: "discovery-budget-", environment: discoveryProfile })),
+      );
+    },
+  );
   it.effect.each([
     { id: "codex", configured: undefined, expected: "codex" },
     { id: "claudeAgent", configured: undefined, expected: "claudeAgent" },
