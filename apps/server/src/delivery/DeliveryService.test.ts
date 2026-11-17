@@ -227,6 +227,7 @@ const discoveryEngine = () => {
   const fake = engine();
   fake.health = { profile: "fixture", home: "C:/fixture/engine" };
   fake.replies = {
+    "/api/repositories/repo/discovery-check": { id: "repo", path: REPO, kind: "own", ok: true },
     "/api/repositories": [{ id: "repo", path: REPO, kind: "own", ok: true }],
     "/api/teams": [
       {
@@ -268,6 +269,235 @@ const discoveryEngine = () => {
 };
 
 describe("DeliveryService", () => {
+  it.effect(
+    "keeps final launch identity inside the original three-second preparation deadline",
+    () => {
+      const fake = discoveryEngine();
+      fake.replies = { ...fake.replies, "/api/delivery/requests": { id: "request" } };
+      return Effect.gen(function* () {
+        const checking = yield* Deferred.make<void>();
+        const identity = yield* Deferred.make<void>();
+        const cancelled = yield* Deferred.make<void>();
+        let healthReads = 0;
+        fake.beforeRequest = (url) => {
+          if (url.pathname.endsWith("/discovery-check"))
+            return Deferred.succeed(checking, undefined).pipe(
+              Effect.andThen(Effect.sleep("1500 millis")),
+            );
+          if (url.pathname === "/api/health" && ++healthReads === 2)
+            return Deferred.succeed(identity, undefined).pipe(
+              Effect.andThen(Effect.never),
+              Effect.onInterrupt(() => Deferred.succeed(cancelled, undefined)),
+            );
+          return Effect.void;
+        };
+        const service = yield* DeliveryService.DeliveryService;
+        const input = {
+          path: "/api/delivery/requests",
+          body: { route: "release", team: "development" },
+        };
+        const pending = yield* service.act(input).pipe(Effect.flip, Effect.forkChild);
+        yield* Deferred.await(checking);
+        yield* TestClock.adjust("1500 millis");
+        yield* Deferred.await(identity);
+        yield* TestClock.adjust("1500 millis");
+        yield* Deferred.await(cancelled);
+        expect((yield* Fiber.join(pending)).reason).toBe("unreachable");
+        expect(fake.requests.every((request) => request.method === "GET")).toBe(true);
+        delete fake.beforeRequest;
+        yield* service.act(input);
+        expect(fake.requests.filter((request) => request.method === "POST")).toHaveLength(1);
+      }).pipe(
+        Effect.provide(
+          layer(fake, { prefix: "launch-total-deadline-", environment: discoveryProfile }),
+        ),
+      );
+    },
+  );
+  it.effect("checks configuration again after POST identity validation and before dispatch", () => {
+    const fake = discoveryEngine();
+    return Effect.gen(function* () {
+      const settings = yield* ServerSettings.ServerSettingsService;
+      let healthReads = 0;
+      fake.beforeRequest = (url) => {
+        if (url.pathname !== "/api/health" || ++healthReads !== 2) return Effect.void;
+        return settings
+          .updateSettings({ delivery: { engineUrl: "http://localhost:4321" } })
+          .pipe(Effect.asVoid, Effect.orDie);
+      };
+      const service = yield* DeliveryService.DeliveryService;
+      const result = yield* service
+        .act({ path: "/api/delivery/requests", body: { route: "release", team: "development" } })
+        .pipe(Effect.flip);
+      expect(result.detail).toContain("configuration-changed");
+      expect(healthReads).toBe(2);
+      expect(fake.requests.every((request) => request.method === "GET")).toBe(true);
+    }).pipe(
+      Effect.provide(
+        layer(fake, { prefix: "launch-dispatch-fence-", environment: discoveryProfile }),
+      ),
+    );
+  });
+  it.effect("validates fresh profile identity at the launch POST boundary", () => {
+    const fake = discoveryEngine();
+    fake.beforeRequest = (url) =>
+      Effect.sync(() => {
+        if (url.pathname.endsWith("/discovery-check"))
+          fake.health = { profile: "foreign", home: "C:/fixture/engine" };
+      });
+    return Effect.gen(function* () {
+      const service = yield* DeliveryService.DeliveryService;
+      const result = yield* service
+        .act({ path: "/api/delivery/requests", body: { route: "release", team: "development" } })
+        .pipe(Effect.flip);
+      expect(result.detail).toContain("another workspace profile");
+      expect(fake.requests.every((request) => request.method === "GET")).toBe(true);
+    }).pipe(
+      Effect.provide(
+        layer(fake, { prefix: "launch-profile-fence-", environment: discoveryProfile }),
+      ),
+    );
+  });
+  it.effect.each([
+    { name: "nonzero Git", body: { id: "repo", path: REPO, kind: "own", ok: false }, status: 200 },
+    { name: "another id", body: { id: "other", path: REPO, kind: "own", ok: true }, status: 200 },
+    {
+      name: "changed path",
+      body: { id: "repo", path: "C:/other", kind: "own", ok: true },
+      status: 200,
+    },
+    {
+      name: "qualification",
+      body: { id: "repo", path: REPO, kind: "qualification", ok: true },
+      status: 200,
+    },
+    { name: "missing registration", body: { code: "repository-not-found" }, status: 404 },
+    { name: "changed registration", body: { code: "registration-changed" }, status: 409 },
+    { name: "unsupported", body: { error: "not found" }, status: 404 },
+    { name: "bad request", body: {}, status: 400 },
+    { name: "unauthorized", body: {}, status: 401 },
+    { name: "forbidden", body: {}, status: 403 },
+    { name: "malformed", body: { ok: true }, status: 200 },
+  ])("blocks targeted $name without rich-list fallback or writes", (entry) => {
+    const fake = discoveryEngine();
+    fake.replies = { ...fake.replies, "/api/repositories/repo/discovery-check": entry.body };
+    fake.statuses = { "/api/repositories/repo/discovery-check": entry.status };
+    return Effect.gen(function* () {
+      const service = yield* DeliveryService.DeliveryService;
+      expect(
+        (yield* service.discover(
+          { folder: REPO, board: "work", team: "development", preflight: true },
+          ordinaryCaller,
+        )).preflight,
+      ).toBe("blocked");
+      yield* service
+        .act({
+          path: "/api/delivery/requests",
+          body: { id: "request", route: "release", team: "development" },
+        })
+        .pipe(Effect.flip);
+      expect(fake.requests.every((request) => request.method === "GET")).toBe(true);
+      expect(
+        fake.requests
+          .filter((request) => request.path === "/api/repositories")
+          .every((request) => request.search === "?discovery=1"),
+      ).toBe(true);
+    }).pipe(
+      Effect.provide(layer(fake, { prefix: "targeted-refusal-", environment: discoveryProfile })),
+    );
+  });
+  it.effect.each(["observation", "launch"] as const)(
+    "starts the %s target check before unrelated metadata finishes",
+    (mode) => {
+      const fake = discoveryEngine();
+      fake.replies = { ...fake.replies, "/api/delivery/requests": { id: "request" } };
+      return Effect.gen(function* () {
+        const checked = yield* Deferred.make<void>();
+        fake.beforeRequest = (url) =>
+          url.pathname.endsWith("/discovery-check")
+            ? Deferred.succeed(checked, undefined).pipe(Effect.asVoid)
+            : url.pathname === "/api/teams"
+              ? Deferred.await(checked)
+              : Effect.void;
+        const service = yield* DeliveryService.DeliveryService;
+        if (mode === "observation")
+          expect(
+            (yield* service.discover(
+              { folder: REPO, board: "work", team: "development", preflight: true },
+              ordinaryCaller,
+            )).preflight,
+          ).toBe("ready");
+        else
+          yield* service.act({
+            path: "/api/delivery/requests",
+            body: { id: "request", route: "release", team: "development" },
+          });
+        expect(
+          fake.requests.filter((request) => request.path.endsWith("/discovery-check")),
+        ).toHaveLength(1);
+      }).pipe(
+        Effect.provide(layer(fake, { prefix: "targeted-order-", environment: discoveryProfile })),
+      );
+    },
+  );
+  it.effect.each([0, 1500])(
+    "cancels a target check within the remaining observation budget after %sms",
+    (delay) => {
+      const fake = discoveryEngine();
+      return Effect.gen(function* () {
+        const folder = yield* Deferred.make<void>();
+        const started = yield* Deferred.make<void>();
+        const cancelled = yield* Deferred.make<void>();
+        fake.beforeRequest = (url) =>
+          url.pathname === "/api/repository"
+            ? Deferred.succeed(folder, undefined).pipe(
+                Effect.andThen(Effect.sleep(`${delay} millis`)),
+              )
+            : url.pathname.endsWith("/discovery-check")
+              ? Deferred.succeed(started, undefined).pipe(
+                  Effect.andThen(Effect.never),
+                  Effect.onInterrupt(() => Deferred.succeed(cancelled, undefined)),
+                )
+              : Effect.void;
+        const service = yield* DeliveryService.DeliveryService;
+        const input = { folder: REPO, board: "work", team: "development", preflight: true };
+        const pending = yield* service.discover(input, ordinaryCaller).pipe(Effect.forkChild);
+        yield* Deferred.await(folder);
+        yield* TestClock.adjust(`${delay} millis`);
+        yield* Deferred.await(started);
+        yield* TestClock.adjust(`${Math.min(2000, 3000 - delay)} millis`);
+        yield* Deferred.await(cancelled);
+        expect((yield* Fiber.join(pending)).diagnostics).toEqual(["unreachable"]);
+        delete fake.beforeRequest;
+        expect((yield* service.discover(input, ordinaryCaller)).preflight).toBe("ready");
+      }).pipe(
+        Effect.provide(
+          layer(fake, { prefix: "targeted-deadline-", environment: discoveryProfile }),
+        ),
+      );
+    },
+  );
+  it.effect("refuses launch when configuration changes while its target check completes", () => {
+    const fake = discoveryEngine();
+    return Effect.gen(function* () {
+      const settings = yield* ServerSettings.ServerSettingsService;
+      fake.beforeRequest = (url) =>
+        url.pathname.endsWith("/discovery-check")
+          ? settings
+              .updateSettings({ delivery: { engineUrl: "http://localhost:4321" } })
+              .pipe(Effect.asVoid, Effect.orDie)
+          : Effect.void;
+      const service = yield* DeliveryService.DeliveryService;
+      const result = yield* service
+        .act({
+          path: "/api/delivery/requests",
+          body: { id: "request", route: "release", team: "development" },
+        })
+        .pipe(Effect.flip);
+      expect(result.detail).toContain("configuration-changed");
+      expect(fake.requests.every((request) => request.method === "GET")).toBe(true);
+    }).pipe(Effect.provide(layer(fake, { prefix: "targeted-launch-fence-" })));
+  });
   it.effect.each([
     { status: 400, expected: undefined, calls: 2 },
     { status: 404, expected: undefined, calls: 2 },
@@ -336,7 +566,7 @@ describe("DeliveryService", () => {
       "/api/repositories?discovery=1": [
         { id: "repo", title: "Repository", path: REPO, defaultBase: "master", kind: "own" },
       ],
-      "/api/repositories": [{ id: "repo", path: REPO, kind: "own", ok: false }],
+      "/api/repositories/repo/discovery-check": { id: "repo", path: REPO, kind: "own", ok: false },
     };
     return Effect.gen(function* () {
       const service = yield* DeliveryService.DeliveryService;
@@ -358,7 +588,7 @@ describe("DeliveryService", () => {
         fake.requests
           .filter((request) => request.path === "/api/repositories")
           .map((request) => request.search),
-      ).toEqual(["?discovery=1", ""]);
+      ).toEqual(["?discovery=1", "?discovery=1"]);
     }).pipe(
       Effect.provide(layer(fake, { prefix: "registration-only-", environment: discoveryProfile })),
     );
