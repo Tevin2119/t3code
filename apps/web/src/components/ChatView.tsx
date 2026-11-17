@@ -1,7 +1,7 @@
 import { useThreadInspection } from "./chat/ThreadInspectionContext";
 import { deriveTeamChatPhase } from "@t3tools/client-runtime/state/thread-workflows";
 import { ChildThreadApprovals } from "./chat/ChildThreadApprovals";
-import { SquareKanbanIcon } from "lucide-react";
+import { ChevronDownIcon, ChevronUpIcon, SquareKanbanIcon } from "lucide-react";
 import { SessionStatusFooter } from "./chat/SessionStatusFooter";
 import { resolveDraftTeam, selectableTeams, teamListStatus } from "../lib/delivery";
 import {
@@ -12,12 +12,7 @@ import {
   useDraftTeamChoice,
   useHasDraftTeamChoice,
 } from "../state/delivery";
-import {
-  taskStandsIn,
-  ThreadTaskOpenActions,
-  useThreadTasks,
-  useThreadDeliveryProgress,
-} from "./delivery/ThreadTaskLinks";
+import { useThreadTasks, useThreadDeliveryProgress } from "./delivery/ThreadTaskLinks";
 import { ThreadTaskQuestions } from "./delivery/ThreadTaskQuestions";
 import {
   resolveDismissedQuestionKeys,
@@ -2715,37 +2710,39 @@ export default function ChatView(props: ChatViewProps) {
       variant: "info",
       group: "attention",
       icon: <SquareKanbanIcon />,
+      // Kept to a few words so the row never truncates into a details popover on a phone.
       title: (
         <span data-thread-task-links>
           {waitingCount > 0
-            ? `${waitingCount} ${waitingCount === 1 ? "question waits" : "questions wait"} on you · `
+            ? `${waitingCount} ${waitingCount === 1 ? "question" : "questions"} · `
             : ""}
-          {threadTasks.length === 1
-            ? `Task #${newest.number} was made from this conversation`
-            : `${threadTasks.length} tasks were made from this conversation`}
+          {threadTasks.length === 1 ? `Task #${newest.number}` : `${threadTasks.length} tasks`}
         </span>
       ),
-      description: [
-        ...threadTasks.slice(0, 3).map((task) => `#${task.number} ${taskStandsIn(task)}`),
-        ...threadDeliveryProgress,
-      ].join(" · "),
       actions: (
-        <>
-          <Button
-            size="xs"
-            variant="ghost"
-            aria-expanded={taskQuestionsOpen}
-            aria-controls={taskQuestionsOpen ? taskQuestionsPanelId : undefined}
-            onClick={() => setTaskQuestionsOpenThread(taskQuestionsOpen ? null : routeThreadKey)}
-          >
-            {taskQuestionsOpen ? "Hide questions" : "Show questions"}
-          </Button>
-          <ThreadTaskOpenActions tasks={threadTasks} environmentId={environmentId} />
-        </>
+        <Button
+          size="icon-xs"
+          variant="ghost"
+          aria-label={
+            taskQuestionsOpen
+              ? "Hide tasks from this conversation"
+              : "Show tasks from this conversation"
+          }
+          aria-expanded={taskQuestionsOpen}
+          aria-controls={taskQuestionsOpen ? taskQuestionsPanelId : undefined}
+          onClick={() => setTaskQuestionsOpenThread(taskQuestionsOpen ? null : routeThreadKey)}
+        >
+          {taskQuestionsOpen ? <ChevronDownIcon /> : <ChevronUpIcon />}
+        </Button>
       ),
       children: taskQuestionsOpen ? (
         <div id={taskQuestionsPanelId} className="min-w-0">
           <ComposerBanner.Scroll>
+            {threadDeliveryProgress.map((line) => (
+              <p key={line} className="truncate px-2 py-1 text-xs text-muted-foreground">
+                {line}
+              </p>
+            ))}
             <ThreadTaskQuestions
               key={routeThreadKey}
               environmentId={environmentId}

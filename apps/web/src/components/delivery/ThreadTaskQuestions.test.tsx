@@ -3,7 +3,11 @@ import { act } from "../../../test/act";
 import { create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
 import { parseCards } from "../../lib/delivery";
-import { replyDraftKey, useDeliveryReplyDrafts } from "../../state/deliveryReplyDrafts";
+import {
+  persistedReplyState,
+  replyDraftKey,
+  useDeliveryReplyDrafts,
+} from "../../state/deliveryReplyDrafts";
 import { ThreadTaskQuestions } from "./ThreadTaskQuestions";
 
 const mock = vi.hoisted(() => ({ action: vi.fn(), refresh: vi.fn(), body: null as unknown }));
@@ -76,7 +80,7 @@ async function edit(text: string) {
   await act(() => renderer.root.findByType("textarea").props.onChange({ target: { value: text } }));
 }
 beforeEach(() => {
-  useDeliveryReplyDrafts.setState({ drafts: {}, pending: {} });
+  useDeliveryReplyDrafts.setState({ drafts: {}, pending: {}, removed: {} });
   mock.body = task();
   mock.action.mockReset();
   mock.refresh.mockReset();
@@ -224,7 +228,7 @@ it("keeps settled questions collapsed after questions that still need the person
     renderer.root.findAllByType("article").map((entry) => entry.props["data-engine-question"]),
   ).toEqual([4, 1, 2]);
   const json = JSON.stringify(renderer.toJSON());
-  expect(json).toContain("Answered");
+  expect(json).toContain("Auto-answered");
   expect(json).toContain("Question 1");
   expect(json).not.toContain("Keep it");
   const settledCard = renderer.root
@@ -243,4 +247,45 @@ it("keeps settled questions collapsed after questions that still need the person
       .findAllByType("button")
       .find((entry) => entry.props["data-slot"] === "collapsible-trigger")!.props["aria-expanded"],
   ).toBe(false);
+});
+
+it("removes a seen question for good but hides a waiting one only until reload", async () => {
+  const settled = task(true);
+  mock.body = { ...settled, questions: [{ seq: 4 }], timeline: [...settled.timeline, question(4)] };
+  await mount();
+  const remove = (label: string) =>
+    act(() =>
+      buttons()
+        .find((entry) => entry.props["aria-label"] === label)!
+        .props.onClick(),
+    );
+  await remove("Remove Q1, seen");
+  await remove("Hide Q4 until later");
+  expect(
+    renderer.root.findAllByType("article").map((entry) => entry.props["data-engine-question"]),
+  ).toEqual([2]);
+  expect(persistedReplyState(useDeliveryReplyDrafts.getState()).removed).toEqual({
+    [replyDraftKey(env, "task-a", 1)]: "seen",
+  });
+});
+it("folds done tasks away unless a question on them still waits", async () => {
+  const done = parseCards([
+    { id: "task-a", number: 1, title: "Task", lane: "completed" },
+    { id: "task-b", number: 2, title: "Shipped", lane: "completed" },
+  ]);
+  const waiting = parseCards([
+    { id: "task-a", number: 1, title: "Task", lane: "completed", questions: 1 },
+    { id: "task-b", number: 2, title: "Shipped", lane: "completed" },
+  ]);
+  const labels = () =>
+    renderer.root.findAllByType("section").map((entry) => entry.props["aria-label"]);
+  await act(() => {
+    renderer = create(<ThreadTaskQuestions environmentId={env} tasks={done} />);
+  });
+  expect(labels()).toEqual([]);
+  await act(() => button("Show 2 done").props.onClick());
+  expect(labels()).toEqual(["Task 1", "Task 2"]);
+  await act(() => renderer.update(<ThreadTaskQuestions environmentId={env} tasks={waiting} />));
+  await act(() => button("Hide done").props.onClick());
+  expect(labels()).toEqual(["Task 1"]);
 });

@@ -18,7 +18,16 @@ interface ReplyDraftState {
   begin: (key: string) => boolean;
   finish: (key: string, outcome: "accepted" | "rejected" | "unknown") => void;
   discard: (key: string) => void;
+  /** Questions the person removed from the thread: "seen" once settled, "later" while waiting. */
+  removed: Record<string, "seen" | "later">;
+  remove: (key: string, how: "seen" | "later") => void;
 }
+
+/** A waiting question removed "later" comes back on the next load; a seen one stays gone. */
+export const persistedReplyState = (state: Pick<ReplyDraftState, "drafts" | "removed">) => ({
+  drafts: state.drafts,
+  removed: Object.fromEntries(Object.entries(state.removed).filter(([, how]) => how === "seen")),
+});
 
 /** Only unsent input/receipt uncertainty is local. Q/A history always comes from the engine. */
 export const useDeliveryReplyDrafts = create<ReplyDraftState>()(
@@ -26,6 +35,8 @@ export const useDeliveryReplyDrafts = create<ReplyDraftState>()(
     (set, get) => ({
       drafts: {},
       pending: {},
+      removed: {},
+      remove: (key, how) => set((state) => ({ removed: { ...state.removed, [key]: how } })),
       update: (key, patch) =>
         set((state) => ({
           drafts: { ...state.drafts, [key]: { ...(state.drafts[key] ?? EMPTY_REPLY), ...patch } },
@@ -64,6 +75,9 @@ export const useDeliveryReplyDrafts = create<ReplyDraftState>()(
           return { drafts };
         }),
     }),
-    { name: "t3code:delivery-reply-drafts:v1", partialize: (state) => ({ drafts: state.drafts }) },
+    {
+      name: "t3code:delivery-reply-drafts:v1",
+      partialize: (state) => persistedReplyState(state),
+    },
   ),
 );
