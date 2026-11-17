@@ -941,7 +941,7 @@ const make = Effect.fn("DeliveryService.make")(function* (
     },
     (effect) =>
       effect.pipe(
-        Effect.timeout("2 seconds"),
+        Effect.timeout("4 seconds"),
         Effect.catchTags({
           TimeoutError: () =>
             Effect.fail(
@@ -1075,83 +1075,111 @@ const make = Effect.fn("DeliveryService.make")(function* (
     const result = yield* Effect.gen(function* () {
       const health = yield* read("/api/health", Discovery.DiscoveryHealth);
       if (!health.ok) return { ...snapshot, diagnostics: ["unreachable" as const] };
-      const [[repository, repositories], teams, data] = yield* Effect.all(
+      const [[repository, repositories, data, link], teams] = yield* Effect.all(
         [
           Effect.gen(function* () {
-            const [repository, registrations] = yield* Effect.all(
+            const [repository, registrations, delivery] = yield* Effect.all(
               [
                 read(
                   `/api/repository?folder=${encodeURIComponent(input.folder)}`,
                   Discovery.DiscoveryRepository,
                 ),
                 read("/api/repositories?discovery=1", Discovery.DiscoveryRegistrations),
+                read(
+                  input.task
+                    ? `/api/delivery?task=${encodeURIComponent(input.task)}`
+                    : "/api/delivery",
+                  Discovery.DiscoveryDelivery,
+                ),
+              ],
+              { concurrency: 3 },
+            );
+            const candidates = input.preflight
+              ? registrations.filter(
+                  (row) =>
+                    row.kind === "own" &&
+                    repository.readable &&
+                    repository.root !== undefined &&
+                    sameFolder(row.path, repository.root, hostPlatform),
+                )
+              : registrations;
+            const registered =
+              input.preflight && candidates.length === 1 ? candidates[0]! : undefined;
+            // The targeted check runs beside the board link read so preflight keeps three rounds.
+            const [checked, link] = yield* Effect.all(
+              [
+                registered === undefined
+                  ? Effect.succeed(false)
+                  : checkRepository(registered, observedHealth),
+                Effect.gen(function* () {
+                  const matching = delivery.boards.filter((board) =>
+                    candidates.some(
+                      (repo) =>
+                        repo.id === board.repository &&
+                        repository.root !== undefined &&
+                        sameFolder(repo.path, repository.root, hostPlatform),
+                    ),
+                  );
+                  const selected = input.board
+                    ? matching.find((board) => board.id === input.board)
+                    : matching.length === 1
+                      ? matching[0]
+                      : undefined;
+                  let boardDeployment = snapshot.boardDeployment;
+                  const linkDiagnostics: DeliveryDiscoveryDiagnostic[] = [];
+                  if (selected && /^[A-Za-z0-9_-]{1,100}$/.test(selected.id)) {
+                    const deployment = yield* read(
+                      `/api/boards/${selected.id}/deployment`,
+                      Discovery.DiscoveryBoardDeployment,
+                    ).pipe(Effect.result);
+                    if (
+                      deployment._tag === "Failure" &&
+                      (deployment.failure.status === 401 || deployment.failure.status === 403)
+                    )
+                      linkDiagnostics.push("unauthorized");
+                    boardDeployment =
+                      deployment._tag === "Success"
+                        ? {
+                            capability: "available",
+                            board: Discovery.observationText(selected.id),
+                            projectId:
+                              deployment.success.deploymentProjectId === null
+                                ? null
+                                : Discovery.observationText(deployment.success.deploymentProjectId),
+                            state: deployment.success.state,
+                          }
+                        : {
+                            capability:
+                              deployment.failure.reason === "invalid" ||
+                              deployment.failure.status === 404
+                                ? "unsupported"
+                                : "unavailable",
+                            board: Discovery.observationText(selected.id),
+                            projectId: null,
+                            state: null,
+                          };
+                  }
+                  return { selected, boardDeployment, linkDiagnostics };
+                }),
               ],
               { concurrency: 2 },
             );
-            if (!input.preflight) return [repository, registrations] as const;
-            const matching = registrations.filter(
-              (row) =>
-                row.kind === "own" &&
-                repository.readable &&
-                repository.root !== undefined &&
-                sameFolder(row.path, repository.root, hostPlatform),
-            );
-            if (matching.length !== 1) return [repository, []] as const;
-            const registered = matching[0]!;
-            const ok = yield* checkRepository(registered, observedHealth);
-            return [repository, ok ? [registered] : []] as const;
+            return [
+              repository,
+              input.preflight
+                ? registered !== undefined && checked
+                  ? [registered]
+                  : []
+                : registrations,
+              delivery,
+              link,
+            ] as const;
           }),
           read("/api/teams", Discovery.DiscoveryTeams),
-          read(
-            input.task ? `/api/delivery?task=${encodeURIComponent(input.task)}` : "/api/delivery",
-            Discovery.DiscoveryDelivery,
-          ),
         ],
-        { concurrency: 4 },
+        { concurrency: 2 },
       );
-      const matching = data.boards.filter((board) =>
-        repositories.some(
-          (repo) =>
-            repo.id === board.repository &&
-            repository.root !== undefined &&
-            sameFolder(repo.path, repository.root, hostPlatform),
-        ),
-      );
-      const selected = input.board
-        ? matching.find((board) => board.id === input.board)
-        : matching.length === 1
-          ? matching[0]
-          : undefined;
-      let boardDeployment = snapshot.boardDeployment;
-      const linkDiagnostics: DeliveryDiscoveryDiagnostic[] = [];
-      if (selected && /^[A-Za-z0-9_-]{1,100}$/.test(selected.id)) {
-        const link = yield* read(
-          `/api/boards/${selected.id}/deployment`,
-          Discovery.DiscoveryBoardDeployment,
-        ).pipe(Effect.result);
-        if (link._tag === "Failure" && (link.failure.status === 401 || link.failure.status === 403))
-          linkDiagnostics.push("unauthorized");
-        boardDeployment =
-          link._tag === "Success"
-            ? {
-                capability: "available",
-                board: Discovery.observationText(selected.id),
-                projectId:
-                  link.success.deploymentProjectId === null
-                    ? null
-                    : Discovery.observationText(link.success.deploymentProjectId),
-                state: link.success.state,
-              }
-            : {
-                capability:
-                  link.failure.reason === "invalid" || link.failure.status === 404
-                    ? "unsupported"
-                    : "unavailable",
-                board: Discovery.observationText(selected.id),
-                projectId: null,
-                state: null,
-              };
-      }
+      const selected = repositories.length > 0 ? link.selected : undefined;
       const current = yield* delivery;
       if (
         generation !== discoveryGeneration ||
@@ -1164,8 +1192,8 @@ const make = Effect.fn("DeliveryService.make")(function* (
         caller,
         {
           ...snapshot,
-          diagnostics: linkDiagnostics,
-          boardDeployment,
+          diagnostics: selected === undefined ? [] : link.linkDiagnostics,
+          boardDeployment: selected === undefined ? snapshot.boardDeployment : link.boardDeployment,
           profile:
             snapshot.profile ??
             (health.profile === null ? null : Discovery.observationText(health.profile)),

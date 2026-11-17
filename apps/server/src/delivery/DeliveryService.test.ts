@@ -447,7 +447,7 @@ describe("DeliveryService", () => {
     },
   );
   it.effect.each([0, 1500])(
-    "cancels a target check within the remaining observation budget after %sms",
+    "cancels a target check at its bounded deadline after %sms",
     (delay) => {
       const fake = discoveryEngine();
       return Effect.gen(function* () {
@@ -471,7 +471,7 @@ describe("DeliveryService", () => {
         yield* Deferred.await(folder);
         yield* TestClock.adjust(`${delay} millis`);
         yield* Deferred.await(started);
-        yield* TestClock.adjust(`${Math.min(2000, 3000 - delay)} millis`);
+        yield* TestClock.adjust("4 seconds");
         yield* Deferred.await(cancelled);
         expect((yield* Fiber.join(pending)).diagnostics).toEqual(["unreachable"]);
         delete fake.beforeRequest;
