@@ -1,3 +1,11 @@
+import { McpSchema, McpServer } from "effect/ai";
+import * as McpHttpServer from "./McpHttpServer.ts";
+import * as McpInvocationContext from "./McpInvocationContext.ts";
+import * as ThreadSearch from "../orchestration-v2/ThreadSearch.ts";
+import * as PeerForwarding from "../peer/PeerForwarding.ts";
+import * as PeerLinkRequests from "../peer/PeerLinkRequests.ts";
+import * as PeerLinks from "../peer/PeerLinks.ts";
+import * as AnalyticsService from "../telemetry/AnalyticsService.ts";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
@@ -5006,7 +5014,10 @@ describe("OrchestratorMcpService thread stop", () => {
   };
 
   // A provider whose turns run until they are interrupted.
-  const liveAdapter = (cwd: string): ProviderAdapter.ProviderAdapterV2["Service"] => ({
+  const liveAdapter = (
+    cwd: string,
+    interruptions?: Queue.Queue<Effect.Effect<void>>,
+  ): ProviderAdapter.ProviderAdapterV2["Service"] => ({
     instanceId,
     driver,
     getCapabilities: () => Effect.succeed(CodexProviderCapabilitiesV2),
@@ -5015,6 +5026,7 @@ describe("OrchestratorMcpService thread stop", () => {
       Effect.gen(function* () {
         const now = yield* DateTime.now;
         const events = yield* Queue.unbounded<ProviderAdapter.ProviderAdapterV2Event>();
+        const terminals = new Map<ProviderTurnId, Effect.Effect<void>>();
         return {
           instanceId,
           driver,
@@ -5051,24 +5063,49 @@ describe("OrchestratorMcpService thread stop", () => {
               updatedAt: now,
             }),
           resumeThread: ({ providerThread }) => Effect.succeed(providerThread),
-          startTurn: (turn) =>
-            Queue.offer(events, {
+          startTurn: (turn) => {
+            const providerTurn = {
+              id: ProviderTurnId.make(`provider-turn:${turn.attemptId}`),
+              providerThreadId: turn.providerThread.id,
+              nodeId: turn.rootNodeId,
+              runAttemptId: turn.attemptId,
+              nativeTurnRef: null,
+              ordinal: turn.providerTurnOrdinal,
+              status: "running" as const,
+              startedAt: now,
+              completedAt: null,
+            };
+            terminals.set(
+              providerTurn.id,
+              Queue.offerAll(events, [
+                {
+                  type: "provider_turn.updated",
+                  driver,
+                  providerTurn: { ...providerTurn, status: "interrupted", completedAt: now },
+                },
+                {
+                  type: "turn.terminal",
+                  driver,
+                  providerThreadId: turn.providerThread.id,
+                  providerTurnId: providerTurn.id,
+                  runOrdinal: turn.runOrdinal,
+                  status: "interrupted",
+                  failure: null,
+                  threadDisposition: "reusable",
+                },
+              ]).pipe(Effect.asVoid),
+            );
+            return Queue.offer(events, {
               type: "provider_turn.updated",
               driver,
-              providerTurn: {
-                id: ProviderTurnId.make(`provider-turn:${turn.attemptId}`),
-                providerThreadId: turn.providerThread.id,
-                nodeId: turn.rootNodeId,
-                runAttemptId: turn.attemptId,
-                nativeTurnRef: null,
-                ordinal: turn.providerTurnOrdinal,
-                status: "running",
-                startedAt: now,
-                completedAt: null,
-              },
-            }).pipe(Effect.asVoid),
+              providerTurn,
+            }).pipe(Effect.asVoid);
+          },
           steerTurn: () => Effect.die("unused"),
-          interruptTurn: () => Effect.void,
+          interruptTurn: ({ providerTurnId }) =>
+            interruptions === undefined
+              ? Effect.void
+              : Queue.offer(interruptions, terminals.get(providerTurnId)!).pipe(Effect.asVoid),
           respondToRuntimeRequest: () => Effect.die("unused"),
           readThreadSnapshot: () => Effect.die("unused"),
           rollbackThread: () => Effect.die("unused"),
@@ -5076,6 +5113,157 @@ describe("OrchestratorMcpService thread stop", () => {
         };
       }),
   });
+
+  it.effect("held queued sends can be released through t3_queue resume", () =>
+    Effect.gen(function* () {
+      const cwd = yield* checkpointWorkspace("mcp-thread-stop");
+      const interruptions = yield* Queue.unbounded<Effect.Effect<void>>();
+      const layerAdapters = ProviderAdapterRegistry.layerSingle(liveAdapter(cwd, interruptions));
+      const layerDatabase = SqlitePersistence.layerMemory;
+      const layerOrchestrator = ProviderReplayHarness.layerWithRegistry(
+        { name: "mcp-thread-stop" },
+        layerAdapters,
+        { databaseLayer: layerDatabase, runEffectWorker: false },
+      );
+      const layerThreads = ThreadManagementService.layer.pipe(
+        Layer.provideMerge(layerOrchestrator),
+        Layer.provide(ServerSettings.layerTest()),
+        Layer.provide(CommandReceiptStore.layer.pipe(Layer.provide(layerDatabase))),
+      );
+      const layerToolkit = McpHttpServer.layerThreadToolkit.pipe(
+        Layer.provide(Layer.mock(ThreadSearch.ThreadSearch)({})),
+        Layer.provide(Layer.mock(ScheduledTaskService.ScheduledTaskService)({})),
+        Layer.provide(Layer.mock(PeerForwarding.PeerForwarding)({})),
+        Layer.provide(Layer.mock(PeerLinkRequests.PeerLinkRequests)({})),
+        Layer.provide(Layer.mock(PeerLinks.PeerLinks)({})),
+        Layer.provide(
+          Layer.succeed(AnalyticsService.AnalyticsService, {
+            record: () => Effect.void,
+            flush: Effect.void,
+            recordOwners: () => Effect.void,
+          }),
+        ),
+        Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
+      );
+      const layerTest = Layer.mergeAll(layerOrchestratorService, layerToolkit).pipe(
+        Layer.provideMerge(layerThreads),
+        Layer.provide(
+          Layer.mergeAll(
+            NodeServices.layer,
+            NodeCrypto.layer,
+            layerAdapters,
+            ServerSettings.layerTest(),
+            Layer.mock(ProviderRegistry.ProviderRegistry)({ getProviders: Effect.succeed([]) }),
+            Layer.mock(ProjectService.ProjectService)({}),
+            Layer.mock(SecretRequests.SecretRequests)({}),
+            Layer.mock(RemoteDelegation.RemoteDelegation)({}),
+            Layer.mock(ScheduledTaskService.ScheduledTaskService)({}),
+          ),
+        ),
+      );
+      yield* Effect.gen(function* () {
+        const orchestrator = yield* Orchestrator.OrchestratorV2;
+        const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
+        const service = yield* OrchestratorMcpService.OrchestratorMcpService;
+        const server = yield* McpServer.McpServer;
+        const mcpClient = McpSchema.McpServerClient.of({
+          clientId: 1,
+          protocolVersion: "2025-06-18",
+          clientCapabilities: {},
+          clientInfo: { name: "queue-test", version: "1" },
+          initializePayload: {
+            protocolVersion: "2025-06-18",
+            capabilities: {},
+            clientInfo: { name: "queue-test", version: "1" },
+          },
+          getClient: Effect.die("unused"),
+        });
+        const queue = (action: string) =>
+          server
+            .callTool({
+              name: "t3_queue",
+              arguments: { action, threadId },
+            })
+            .pipe(
+              Effect.provideService(McpInvocationContext.McpInvocationContext, client),
+              Effect.provideService(McpSchema.McpServerClient, mcpClient),
+            );
+        const milestone = (status: "running" | "interrupted") =>
+          orchestrator.streamDomainEvents.pipe(
+            Stream.filter(
+              (event) =>
+                event.type === "provider-turn.updated" &&
+                event.threadId === threadId &&
+                event.payload.status === status,
+            ),
+            Stream.take(1),
+            Stream.runDrain,
+            Effect.forkScoped,
+          );
+        yield* orchestrator.dispatch({
+          type: "thread.create",
+          commandId: CommandId.make("create"),
+          threadId,
+          projectId: ProjectId.make("project:mcp-stop"),
+          title: "Queue",
+          modelSelection,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: cwd,
+          createdBy: "user",
+          creationSource: "web",
+        });
+        const running = yield* milestone("running");
+        const started = yield* service.sendToThread(client, { threadId, message: "work" });
+        assert.equal(started.delivery, "started");
+        assert.isUndefined(started.held);
+        yield* worker.drain();
+        yield* Fiber.join(running);
+        const first = yield* service.sendToThread(client, {
+          threadId,
+          message: "later",
+          mode: "queue",
+        });
+        assert.equal(first.delivery, "queued");
+        assert.equal(first.held, false);
+        assert.deepEqual((yield* queue("list")).structuredContent, {
+          items: [{ queuedRunId: first.runId, text: "later", truncated: false, held: false }],
+          nextCursor: null,
+        });
+        const interrupted = yield* milestone("interrupted");
+        yield* orchestrator.dispatch({
+          type: "thread.stop",
+          commandId: CommandId.make("hold"),
+          threadId,
+          holdQueue: true,
+        });
+        assert.deepEqual((yield* queue("list")).structuredContent, {
+          items: [{ queuedRunId: first.runId, text: "later", truncated: false, held: true }],
+          nextCursor: null,
+        });
+        const second = yield* service.sendToThread(client, {
+          threadId,
+          message: "last",
+          mode: "queue",
+        });
+        assert.equal(second.delivery, "queued");
+        assert.equal(second.held, true);
+        const stopping = yield* worker.drain().pipe(Effect.forkScoped);
+        yield* Queue.take(interruptions).pipe(Effect.flatten);
+        yield* Fiber.join(interrupted);
+        yield* Fiber.join(stopping);
+        yield* worker.drain();
+        const resumed = yield* milestone("running");
+        assert.isFalse((yield* queue("resume")).isError === true);
+        yield* worker.drain();
+        yield* Fiber.join(resumed);
+        const after = yield* orchestrator.getThreadProjection(threadId);
+        assert.equal(after.runs.find((run) => run.id === first.runId)?.status, "running");
+        assert.isFalse(after.runs.some((run) => run.status === "queued" && run.queueHeld === true));
+      }).pipe(Effect.provide(layerTest));
+    }),
+  );
 
   it.effect.each([
     {

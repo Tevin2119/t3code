@@ -77,6 +77,7 @@ const commandTool = {
 };
 const queueEntry = Schema.Struct({
   queuedRunId: RunId,
+  held: Schema.Boolean,
   text: Schema.String,
   truncated: Schema.Boolean,
 });
@@ -84,7 +85,7 @@ const QUEUE_READ_ACTIONS = ["list", "read"] as const;
 const QueueTool = Tool.make("t3_queue", {
   ...commandTool,
   description:
-    "Manage a thread's queued messages. Omit `threadId` for this thread. list: send order, paged by `cursor` and `limit`. read: up to 16,000 chars of one. edit: replace its `text`; attachments stay. cancel. reorder: before `beforeRunId`, or to the end with null. promote_to_steer: send it now as steering to active `targetRunId`. Writes fail once the run is no longer queued.",
+    "Manage a thread's queued messages. Omit `threadId` for this thread. list: send order, paged by `cursor` and `limit`. read: up to 16,000 chars of one. edit: replace its `text`; attachments stay. cancel. reorder: before `beforeRunId`, or to the end with null. promote_to_steer: send it now as steering to active `targetRunId`. resume: release a held queue (entries with held: true) so its first message runs; fails while worktree setup is pending. Other writes fail once the run is no longer queued.",
   parameters: Schema.Struct({
     action: Schema.Literals([
       ...QUEUE_READ_ACTIONS,
@@ -92,6 +93,7 @@ const QueueTool = Tool.make("t3_queue", {
       "cancel",
       "reorder",
       "promote_to_steer",
+      "resume",
     ]),
     environmentId: OrchestratorMcpEnvironmentTarget,
     threadId: Schema.optional(ThreadId),

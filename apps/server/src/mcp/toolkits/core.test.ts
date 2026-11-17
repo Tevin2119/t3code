@@ -532,6 +532,69 @@ it.effect("t3_queue list and read load only the queued runs and their messages",
   );
 });
 
+it.effect("t3_queue reports held state and resumes without a queued run id", () => {
+  const dispatched: Array<OrchestrationV2ServerCommand> = [];
+  const projection = McpToolAccessTestkit.idleThreadProjection(
+    McpToolAccessTestkit.liveThreadShell(threadId),
+  );
+  const runs = [
+    {
+      id: RunId.make("run:held"),
+      status: "queued",
+      userMessageId: "message:held",
+      queueHeld: true,
+    },
+    { id: RunId.make("run:ready"), status: "queued", userMessageId: "message:ready" },
+  ];
+  const messages = new Map([
+    ["message:held", { id: "message:held", text: "held message" }],
+    ["message:ready", { id: "message:ready", text: "ready message" }],
+  ]);
+  return Effect.gen(function* () {
+    const server = yield* McpServer.McpServer;
+    const call = (args: Record<string, unknown>) =>
+      server
+        .callTool({ name: "t3_queue", arguments: args })
+        .pipe(
+          Effect.provideService(McpInvocationContext.McpInvocationContext, scope),
+          Effect.provideService(McpSchema.McpServerClient, client),
+        );
+    const listed = yield* call({ action: "list" });
+    expect(listed.structuredContent).toMatchObject({
+      items: [
+        { queuedRunId: "run:held", held: true },
+        { queuedRunId: "run:ready", held: false },
+      ],
+    });
+    expect(
+      (yield* call({ action: "read", queuedRunId: "run:held" })).structuredContent,
+    ).toMatchObject({ held: true });
+    for (const action of ["edit", "cancel"]) {
+      expect(declaredFailure(yield* call({ action }))).toMatchObject({ code: "invalid_request" });
+    }
+    expect((yield* call({ action: "resume" })).structuredContent).toEqual({ sequence: 1 });
+    expect(dispatched).toEqual([{ type: "queue.resume", threadId, commandId: expect.any(String) }]);
+  }).pipe(
+    Effect.provide(
+      layerThreadToolkit.pipe(
+        Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
+        Layer.provide(NodeCrypto.layer),
+        Layer.provide(
+          Layer.mock(ThreadManagement.ThreadManagementService)({
+            getThreadShell: (id) => Effect.succeed(McpToolAccessTestkit.liveThreadShell(id)),
+            getProjectThreadRecords: () => Effect.succeed({ ...projection, runs } as never),
+            getMessagesById: () => Effect.succeed(messages as never),
+            dispatch: (command) => {
+              dispatched.push(command);
+              return Effect.succeed({ sequence: 1 } as never);
+            },
+          }),
+        ),
+      ),
+    ),
+  );
+});
+
 it.effect("handoff analytics read only the caller's active run and its message", () => {
   const reads: Array<string> = [];
   const recorded = Deferred.makeUnsafe<void>();
