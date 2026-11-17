@@ -4588,14 +4588,11 @@ describe("OrchestratorMcpService thread lookup", () => {
         assert.equal(send.threadId, resolvedId);
         assert.include(send.link, `/${resolvedId})`);
         assert.equal(wait.threadId, resolvedId);
-        assert.deepEqual(seen, [
-          resolvedId,
-          resolvedId,
-          resolvedId,
-          resolvedId,
-          resolvedId,
-          resolvedId,
-        ]);
+        // A read looks up runs, active provider turns and the run count; send and wait follow.
+        assert.deepEqual(
+          seen,
+          Array.from({ length: 8 }, () => resolvedId),
+        );
       }).pipe(
         Effect.provide(
           service(
@@ -4605,6 +4602,10 @@ describe("OrchestratorMcpService thread lookup", () => {
               getProjectThreadRecords: (input) => {
                 seen.push(input.threadId);
                 return Effect.succeed(projection);
+              },
+              getRunCount: (id) => {
+                seen.push(id);
+                return Effect.succeed(projection.runs.length);
               },
               getTimelinePage: (id) => {
                 seen.push(id);
