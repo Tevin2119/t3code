@@ -35,9 +35,12 @@ export const DiscoveryRepository = Schema.Struct({
   readable: Schema.Boolean,
   root: Schema.optional(Text),
 });
-export const DiscoveryRepositories = rows(
-  Schema.Struct({ id: Text, path: Text, kind: Text, ok: Schema.Boolean }),
-);
+export const DiscoveryRepositoryCheck = Schema.Struct({
+  id: Text,
+  path: Text,
+  kind: Schema.Literals(["own", "qualification"]),
+  ok: Schema.Boolean,
+});
 export const DiscoveryRegistrations = rows(
   Schema.Struct({ id: Text, path: Text, kind: Schema.Literals(["own", "qualification"]) }),
 );
