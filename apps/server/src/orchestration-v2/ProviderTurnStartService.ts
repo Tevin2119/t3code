@@ -889,7 +889,15 @@ export const layer: Layer.Layer<
           if (Option.isSome(deliveryService)) {
             const { binding } = yield* deliveryService.value.threadState(input.threadId);
             if (binding !== null && binding.configuration !== loadedSetup?.configuration) {
-              if (providerThread.driver === "codex") {
+              // Codex and OpenCode read a thread's team setup on each turn, so a process
+              // other seats are working in is reused rather than reloaded.
+              const sharedWithWorkingSeats =
+                providerThread.driver === "opencode" &&
+                (yield* providerSessions.otherWorkingThreads({
+                  providerSessionId,
+                  threadId: input.threadId,
+                })).length > 0;
+              if (providerThread.driver === "codex" || sharedWithWorkingSeats) {
                 yield* deliveryService.value.prepareThread(input.threadId, {
                   driver: providerThread.driver,
                   cwd: resolvedRuntimePolicy.cwd ?? undefined,
