@@ -196,6 +196,22 @@ it("gives a seat with no model its provider's default, and leaves out the orches
       orchestrator: { harness: "codex", role: "reviewer" },
     }).configuration?.participants,
   ).toHaveLength(3);
+  // Moved to another harness, the orchestrator keeps its role's only seat and shows its own model.
+  const moved = resolveOrchestratorRoster({
+    team,
+    entries,
+    choices: {
+      critic: { modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "stale" } },
+    },
+    orchestrator: {
+      harness: "claude",
+      role: "reviewer",
+      modelSelection: { instanceId: ProviderInstanceId.make("claudeAgent"), model: "lead-model" },
+    },
+  });
+  expect(moved.rows.filter((row) => row.orchestrator).map((row) => row.seat)).toEqual(["critic"]);
+  expect(moved.rows.find((row) => row.seat === "critic")?.modelSelection?.model).toBe("lead-model");
+  expect(moved.configuration?.participants.map((seat) => seat.seat)).toEqual(["scout", "checker"]);
 });
 
 it("says why a seat's provider cannot be used and what to do about it", () => {

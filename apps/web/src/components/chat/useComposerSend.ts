@@ -919,6 +919,7 @@ export function useComposerSend(input: ComposerSendInput) {
               ? (DELIVERY_HARNESS_BY_DRIVER[ctxSelectedProvider] ?? null)
               : null,
             role: teamForSend.action === "bind" ? teamForSend.role : null,
+            modelSelection: ctxSelectedModelSelection,
           },
         })
       : null;
