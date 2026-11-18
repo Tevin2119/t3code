@@ -1464,13 +1464,29 @@ describe("DeliveryService", () => {
       expect((yield* bind(delivery, id)).session).toBe(binding.session);
       expect(fake.sessions.size).toBe(sessions);
 
-      // Another team, another role or another harness is another thread.
-      for (const other of [{ team: "rnd" }, { role: "qa-attack" }, { driver: "codex" }]) {
+      // Another team or role is another thread.
+      for (const other of [{ team: "rnd" }, { role: "qa-attack" }]) {
         const refused = yield* bind(delivery, id, other).pipe(Effect.flip);
         expect(refused.reason).toBe("refused");
         expect(refused.detail).toContain("Start a new thread");
       }
-      expect((yield* delivery.threadState(id)).binding).toEqual(binding);
+
+      // Another harness is a successor session for the same team and role.
+      const followed = yield* bind(delivery, id, { driver: "codex", role: "lead-developer" });
+      expect([followed.team, followed.role, followed.driver, followed.workspace]).toEqual([
+        "development",
+        "lead-developer",
+        "codex",
+        REPO,
+      ]);
+      expect(followed.session).not.toBe(binding.session);
+      expect(
+        fake.requests.find(
+          (request) =>
+            request.method === "POST" && (request.body as { handoffFrom?: string })?.handoffFrom,
+        )?.body,
+      ).toMatchObject({ thread: id, handoffFrom: binding.session, harness: "codex" });
+      expect((yield* delivery.threadState(id)).binding).toEqual(followed);
       const released = yield* delivery.releaseThread(id).pipe(Effect.flip);
       expect(released.detail).toContain("a bound thread keeps its team");
     }).pipe(Effect.provide(layer(fake, { prefix: "t3-delivery-bind-" })));
@@ -1672,9 +1688,19 @@ describe("DeliveryService", () => {
       expect(yield* start({ driver: "claudeAgent", cwd: `${REPO}/worktrees/other` })).toBe(true);
       expect(yield* start({ driver: "claudeAgent", cwd: "c:\\WORK\\repo\\" })).toBe(true);
 
-      const harness = yield* start({ driver: "codex", cwd: REPO }).pipe(Effect.flip);
-      expect(harness.reason).toBe("mismatch");
-      expect(harness.detail).toContain("It cannot continue on codex");
+      // A thread whose provider was switched follows its binding onto the new harness,
+      // through a successor session, and back again when it is switched back.
+      expect(yield* start({ driver: "codex", cwd: REPO })).toBe(true);
+      expect((yield* delivery.threadState(id)).binding).toMatchObject({
+        team: "development",
+        role: "lead-developer",
+        driver: "codex",
+      });
+      expect(yield* start(CLAUDE_HERE)).toBe(true);
+      expect((yield* delivery.threadState(id)).binding).toMatchObject({ driver: "claudeAgent" });
+      const withoutTeams = yield* start({ driver: "cursor", cwd: REPO }).pipe(Effect.flip);
+      expect(withoutTeams.reason).toBe("mismatch");
+      expect(withoutTeams.detail).toContain("It cannot continue on cursor");
       const workspace = yield* start({ driver: "claudeAgent", cwd: "C:/other" }).pipe(Effect.flip);
       expect(workspace.reason).toBe("mismatch");
       expect(workspace.detail).toContain("another repository");

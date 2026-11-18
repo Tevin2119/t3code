@@ -142,7 +142,11 @@ import {
   scopeProjectRef,
   scopeThreadRef,
 } from "@t3tools/client-runtime/environment";
-import { formatModelSlugName, resolveSelectableModel } from "@t3tools/shared/model";
+import {
+  formatModelSlugName,
+  modelSelectionsEqual,
+  resolveSelectableModel,
+} from "@t3tools/shared/model";
 import { projectScriptCwd, resolveProjectScripts } from "@t3tools/shared/projectScripts";
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import { orchestrationV2WorktreePending } from "@t3tools/shared/orchestrationV2ThreadError";
@@ -1066,6 +1070,19 @@ export default function ChatView(props: ChatViewProps) {
   })();
   const activeThreadRef = useActiveThreadRef(activeThread);
   const activeThreadKey = activeThreadRef ? scopedThreadKey(activeThreadRef) : null;
+  const lastThreadSelectionRef = useRef<{ key: string; selection: ModelSelection } | null>(null);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- the thread's selection is server state outside React; a switch from any surface must retire an explicit composer pick left on the old provider, which would otherwise pin the picker and revert the next send
+  useEffect(() => {
+    const selection = activeThread?.modelSelection;
+    if (!activeThreadRef || !activeThreadKey || !selection) {
+      lastThreadSelectionRef.current = null;
+      return;
+    }
+    const last = lastThreadSelectionRef.current;
+    lastThreadSelectionRef.current = { key: activeThreadKey, selection };
+    if (last?.key !== activeThreadKey || modelSelectionsEqual(last.selection, selection)) return;
+    useComposerDraftStore.getState().reconcileModelSelection(activeThreadRef, selection);
+  }, [activeThread?.modelSelection, activeThreadKey, activeThreadRef]);
   const activeEnvironmentServerBrowser = useEnvironmentSupportsServerBrowser(
     activeThreadRef?.environmentId ?? null,
   );
