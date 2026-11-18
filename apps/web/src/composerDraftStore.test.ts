@@ -91,6 +91,7 @@ import {
   subscribeDraftThreadPromotion,
   type ComposerFileAttachment,
   type ComposerImageAttachment,
+  carriedModelSelection,
   composerFileNeedsReattach,
   hydrateImagesFromPersisted,
   partializeComposerDraftStoreState,
@@ -2011,6 +2012,58 @@ describe("composerDraftStore modelSelection", () => {
       draftFor(threadId, TEST_ENVIRONMENT_ID)?.modelSelectionByProvider[CODEX_SECONDARY_INSTANCE]
         ?.model,
     ).toBe("gpt-5.3");
+  });
+
+  it("drops an explicit pick the thread's selection has moved away from", () => {
+    const store = useComposerDraftStore.getState();
+    const pick = modelSelection(CODEX_DRIVER, "gpt-5.5");
+    store.setPrompt(threadRef, "keep this follow-up");
+    store.setModelSelection(threadRef, pick, { explicit: true });
+    store.reconcileModelSelection(threadRef, modelSelection(CURSOR_DRIVER, "composer-2.5"));
+    const after = draftFor(threadId, TEST_ENVIRONMENT_ID);
+    expect(after?.activeProvider ?? null).toBeNull();
+    expect(after?.modelSelectionByProvider ?? {}).toEqual({});
+    expect(after?.prompt).toBe("keep this follow-up");
+  });
+
+  it("keeps an explicit pick that still matches the thread's selection", () => {
+    const store = useComposerDraftStore.getState();
+    const pick = modelSelection(CODEX_DRIVER, "gpt-5.5");
+    store.setModelSelection(threadRef, pick, { explicit: true });
+    store.reconcileModelSelection(threadRef, pick);
+    const after = draftFor(threadId, TEST_ENVIRONMENT_ID);
+    expect(after?.modelSelectionExplicit).toBe(true);
+    expect(after?.modelSelectionByProvider[pick.instanceId]).toEqual(pick);
+  });
+
+  it("leaves a draft without an explicit pick alone", () => {
+    const store = useComposerDraftStore.getState();
+    store.setPrompt(threadRef, "keep this follow-up");
+    store.reconcileModelSelection(threadRef, modelSelection(CURSOR_DRIVER, "composer-2.5"));
+    expect(draftFor(threadId, TEST_ENVIRONMENT_ID)?.prompt).toBe("keep this follow-up");
+  });
+});
+
+describe("carriedModelSelection", () => {
+  const threadSelection = modelSelection(CODEX_DRIVER, "gpt-5.5");
+  const stalePick = modelSelection(CURSOR_DRIVER, "composer-2.5");
+
+  it("drops a stale non-explicit pick that disagrees with a started thread", () => {
+    expect(carriedModelSelection(true, false, stalePick, threadSelection)).toBeUndefined();
+  });
+
+  it("carries an explicit pick onto a started thread", () => {
+    expect(carriedModelSelection(true, true, stalePick, threadSelection)).toEqual(stalePick);
+  });
+
+  it("carries a selection that already matches the started thread", () => {
+    expect(carriedModelSelection(true, false, threadSelection, threadSelection)).toEqual(
+      threadSelection,
+    );
+  });
+
+  it("carries any selection for a thread that has not started", () => {
+    expect(carriedModelSelection(false, false, stalePick, threadSelection)).toEqual(stalePick);
   });
 });
 

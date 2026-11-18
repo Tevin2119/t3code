@@ -46,6 +46,7 @@ import { DeepMutable } from "effect/Types";
 import {
   createModelSelection,
   draftModelPickMatchesThread,
+  modelSelectionsEqual,
   normalizeCustomModelSlug,
   normalizeModelSlug,
 } from "@t3tools/shared/model";
@@ -123,6 +124,21 @@ export type DraftThreadEnvMode = typeof DraftThreadEnvModeSchema.Type;
 
 export const DraftId = Schema.String.pipe(Schema.brand("DraftId"));
 export type DraftId = typeof DraftId.Type;
+
+/**
+ * A started thread keeps the selection its last accepted switch chose. A composer pick the
+ * user never made explicit must not ride a send and revert the thread onto a provider it was
+ * moved off of, so it is dropped instead of sent whenever it disagrees with the thread.
+ */
+export function carriedModelSelection(
+  threadStarted: boolean,
+  explicit: boolean,
+  selection: ModelSelection,
+  threadSelection: ModelSelection,
+): ModelSelection | undefined {
+  if (!threadStarted || explicit) return selection;
+  return modelSelectionsEqual(selection, threadSelection) ? selection : undefined;
+}
 
 const COMPOSER_PERSIST_DEBOUNCE_MS = 300;
 
@@ -648,6 +664,8 @@ interface ComposerDraftStoreState {
   ) => void;
   /** Lets the thread's model show again once the server accepted this exact pick. */
   releaseModelSelection: (threadRef: ScopedThreadRef, modelSelection: ModelSelection) => void;
+  /** Drops an explicit pick the thread's own selection has moved away from. */
+  reconcileModelSelection: (threadRef: ScopedThreadRef, threadSelection: ModelSelection) => void;
   applyStickyState: (threadRef: ComposerThreadTarget) => void;
   setProviderModelOptions: (
     threadRef: ComposerThreadTarget,
@@ -3375,6 +3393,23 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
             ) {
               return state;
             }
+            const { modelSelectionExplicit: _explicit, ...retained } = draft;
+            const next = { ...retained, activeProvider: null, modelSelectionByProvider: {} };
+            const draftsByThreadKey = { ...state.draftsByThreadKey };
+            if (shouldRemoveDraft(next)) delete draftsByThreadKey[threadKey];
+            else draftsByThreadKey[threadKey] = next;
+            return { draftsByThreadKey };
+          });
+        },
+        reconcileModelSelection: (threadRef, threadSelection) => {
+          const threadKey = scopedThreadKey(threadRef);
+          set((state) => {
+            const draft = state.draftsByThreadKey[threadKey];
+            if (draft?.modelSelectionExplicit !== true || !draft.activeProvider) return state;
+            const pick = draft.modelSelectionByProvider[draft.activeProvider];
+            // A pick that still matches the thread is kept; the caller fires this only when
+            // the thread's selection itself changed, so a pick waiting for its send survives.
+            if (!pick || modelSelectionsEqual(pick, threadSelection)) return state;
             const { modelSelectionExplicit: _explicit, ...retained } = draft;
             const next = { ...retained, activeProvider: null, modelSelectionByProvider: {} };
             const draftsByThreadKey = { ...state.draftsByThreadKey };

@@ -15,11 +15,7 @@ import {
   useOrchestratorDraftStore,
 } from "../../state/delivery";
 import { decideOrchestrationForSend, resolveOrchestratorRoster } from "../../lib/orchestratorChat";
-import {
-  carriedModelSelection,
-  hasExplicitComposerModelSelection,
-  threadHasStarted,
-} from "../../lib/chatThreadActions";
+import { hasExplicitComposerModelSelection, threadHasStarted } from "../../lib/chatThreadActions";
 import { useEnvironmentQuery } from "../../state/query";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { useAtomQueryRunner } from "../../state/use-atom-query-runner";
@@ -96,6 +92,7 @@ import {
   markPromotedDraftThreadByRef,
   restoreFailedDraftThread,
   checkoutPullRequestUrlToLink,
+  carriedModelSelection,
   composerDraftHasUserContent,
   type ComposerFileAttachment,
   type ComposerImageAttachment,
