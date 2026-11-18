@@ -1502,6 +1502,126 @@ it.layer(layerTest)("OrchestrationV2LayerLive", (it) => {
       }),
   );
 
+  it.effect.each(["with-sender", "without-sender"] as const)(
+    "notifies the sender when a queued send fails at start (%s)",
+    (outcome) =>
+      Effect.gen(function* () {
+        const orchestrator = yield* Orchestrator.OrchestratorV2;
+        const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
+        const outbox = yield* EffectOutbox.EffectOutboxV2;
+        const sender = ThreadId.make(`send-failure-queued-sender:${outcome}`);
+        const target = ThreadId.make(`send-failure-queued-target:${outcome}`);
+        for (const threadId of [sender, target]) {
+          yield* orchestrator.dispatch({
+            type: "thread.create",
+            commandId: CommandId.make(`create:${threadId}`),
+            threadId,
+            projectId: ProjectId.make(`send-failure-queued-project:${outcome}`),
+            title: threadId,
+            modelSelection,
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            branch: null,
+            worktreePath: "/tmp/send-failure-queued",
+            createdBy: "user",
+            creationSource: "web",
+          });
+        }
+        yield* orchestrator.dispatch({
+          type: "message.dispatch",
+          commandId: CommandId.make(`send-failure-queued-active:${outcome}`),
+          threadId: target,
+          messageId: MessageId.make(`send-failure-queued-active:${outcome}`),
+          text: "Active work",
+          attachments: [],
+          createdBy: "user",
+          creationSource: "web",
+          dispatchMode: { type: "start_immediately" },
+        });
+        yield* orchestrator.dispatch({
+          type: "message.dispatch",
+          commandId: CommandId.make(`send-failure-queued-message:${outcome}`),
+          threadId: target,
+          messageId: MessageId.make(`send-failure-queued-message:${outcome}`),
+          text: "/goal pause",
+          attachments: [],
+          ...(outcome === "with-sender" ? { senderThreadId: sender } : {}),
+          scheduledTaskId: ScheduledTaskId.make(`send-failure-queued-task:${outcome}`),
+          createdBy: "agent",
+          creationSource: "mcp",
+          dispatchMode: { type: "queue_after_active" },
+        });
+        const queued = yield* orchestrator.getThreadProjection(target);
+        assert.deepEqual(
+          queued.runs.map((run) => run.status),
+          ["starting", "queued"],
+        );
+        yield* orchestrator.dispatch({
+          type: "run.interrupt",
+          commandId: CommandId.make(`send-failure-queued-interrupt:${outcome}`),
+          threadId: target,
+          runId: queued.runs[0]!.id,
+          holdQueue: true,
+        });
+        yield* worker.drain();
+        const interrupted = yield* orchestrator.getThreadProjection(target);
+        assert.equal(interrupted.runs[0]!.status, "interrupted");
+        assert.equal(interrupted.runs[1]!.status, "queued");
+        yield* orchestrator.dispatch({
+          type: "thread.model-selection.set",
+          commandId: CommandId.make(`send-failure-queued-select:${outcome}`),
+          threadId: target,
+          modelSelection: { ...modelSelection, instanceId: claudeInstanceId },
+        });
+        yield* orchestrator.dispatch({
+          type: "queue.resume",
+          commandId: CommandId.make(`send-failure-queued-resume:${outcome}`),
+          threadId: target,
+        });
+        yield* orchestrator.resumeQueuedRuns;
+        yield* orchestrator.streamStoredEvents.pipe(
+          Stream.filter(
+            (stored) =>
+              stored.event.type === "run.updated" &&
+              stored.event.runId === queued.runs[1]!.id &&
+              stored.event.payload.status === "failed",
+          ),
+          Stream.runHead,
+        );
+        yield* worker.drain();
+        yield* worker.drain();
+        const failed = yield* orchestrator.getThreadProjection(target);
+        const failedRun = failed.runs.find((run) => run.id === queued.runs[1]!.id);
+        assert.equal(failedRun?.status, "failed");
+        assert.isNull(failedRun?.startedAt);
+        const failure = failed.turnItems.find(
+          (item) => item.type === "error" && item.runId === queued.runs[1]!.id,
+        );
+        assert.isDefined(failure);
+        if (failure?.type !== "error") return;
+        assert.equal(failure.title, "Queued provider could not start");
+        assert.equal(
+          (yield* outbox.get(`effect:send-failure-notice:${queued.runs[1]!.id}`))._tag,
+          outcome === "with-sender" ? "Some" : "None",
+        );
+        const source = yield* orchestrator.getThreadProjection(sender);
+        const notices = source.turnItems.filter((item) => item.type === "system_notice");
+        if (outcome === "without-sender") {
+          assert.deepEqual(notices, []);
+          assert.deepEqual(source.runs, []);
+          return;
+        }
+        assert.lengthOf(notices, 1);
+        assert.equal(notices[0]!.runId, null);
+        if (notices[0]!.type !== "system_notice") return;
+        assert.include(notices[0]!.message, failure.failure.message);
+        assert.include(notices[0]!.message, "/goal pause");
+        assert.include(notices[0]!.message, target);
+        assert.deepEqual(source.runs, []);
+        assert.deepEqual(source.providerTurns, []);
+      }),
+  );
+
   const seedFailingRollbackThread = (name: string) =>
     Effect.gen(function* () {
       const orchestrator = yield* Orchestrator.OrchestratorV2;
