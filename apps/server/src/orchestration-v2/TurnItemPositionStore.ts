@@ -141,12 +141,31 @@ export const layer: Layer.Layer<TurnItemPositionStoreV2, never, SqlClient.SqlCli
       allocate,
       // Per-event normalization shares the enclosing orchestration span.
       normalize: Effect.fnUntraced(function* (item, runOrdinal) {
+        const isRunlessNotice = item.runId === null && item.type === "system_notice";
+        if (isRunlessNotice) {
+          // Runless notices follow current history without belonging to or starting a run.
+          const runs = yield* sql<{ readonly ordinal: number | null }>`
+            SELECT MAX(ordinal) AS ordinal
+            FROM orchestration_v2_projection_runs
+            WHERE thread_id = ${item.threadId}
+          `.pipe(
+            Effect.mapError(
+              (cause) =>
+                new TurnItemPositionStoreError({
+                  threadId: item.threadId,
+                  turnItemId: item.id,
+                  cause,
+                }),
+            ),
+          );
+          runOrdinal = runs[0]?.ordinal ?? undefined;
+        }
         return yield* allocate({
           threadId: item.threadId,
           turnItemId: item.id,
           runId: item.runId,
           // Queued steers keep their submission order until their run starts (see Orchestrator).
-          keepExisting: item.status === "pending",
+          keepExisting: item.status === "pending" || isRunlessNotice,
           ...(runOrdinal === undefined ? {} : { runOrdinal }),
         }).pipe(Effect.map((ordinal) => (item.ordinal === ordinal ? item : { ...item, ordinal })));
       }),

@@ -5583,6 +5583,11 @@ it.layer(layerTest)("delegated tasks across a server restart", (it) => {
         const task = recovered.subagents.find((row) => row.id === child.taskId);
         assert.equal(task?.status, "failed");
         assert.equal(task?.result, "Child task ended with status failed.");
+        assert.isFalse(
+          recovered.turnItems.some(
+            (item) => item.type === "system_notice" && item.id.includes("send-failed"),
+          ),
+        );
         assert.equal(task?.completionDelivery?.state, "disposed");
         assert.lengthOf(recovered.runs, 1);
         assert.lengthOf(

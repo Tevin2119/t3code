@@ -594,6 +594,7 @@ export const OrchestratorMcpThreadWaitInput = Schema.Struct({
 export type OrchestratorMcpThreadWaitInput = typeof OrchestratorMcpThreadWaitInput.Type;
 
 export const OrchestratorMcpThreadWaitResult = Schema.Struct({
+  failureReason: Schema.optional(Schema.String),
   threadId: ThreadId,
   runId: Schema.NullOr(RunId),
   status: OrchestratorMcpThreadStatus,
