@@ -46,14 +46,21 @@ export function resolveOrchestratorRoster(input: {
   readonly access?: OrchestratorAccess | undefined;
   readonly extras?: ReadonlyArray<OrchestratorExtraParticipant> | undefined;
   /** The harness and role the orchestrator itself runs as, when known. */
-  readonly orchestrator?: { readonly harness: string | null; readonly role: string | null };
+  readonly orchestrator?: {
+    readonly harness: string | null;
+    readonly role: string | null;
+    /** What the orchestrator runs on, shown on the seat it holds. */
+    readonly modelSelection?: ModelSelection | undefined;
+  };
 }) {
   const harnessOf = (seat: DeliveryTeam["seats"][number]) =>
     input.team?.settings.find((item) => item.seat === seat.seat)?.now.harness ?? seat.harness;
   // The orchestrator already speaks for the seat it holds, so that seat sits out unless asked in.
-  const ownSeat = input.team?.seats.find(
-    (seat) =>
-      seat.role === input.orchestrator?.role && harnessOf(seat) === input.orchestrator?.harness,
+  const inRole = (input.team?.seats ?? []).filter((seat) => seat.role === input.orchestrator?.role);
+  // An orchestrator moved to another harness still holds its role's seat when only one seat has it.
+  const ownSeat = (
+    inRole.find((seat) => harnessOf(seat) === input.orchestrator?.harness) ??
+    (inRole.length === 1 ? inRole[0] : undefined)
   )?.seat;
   const selectionProblem = (
     title: string,
@@ -103,6 +110,7 @@ export function resolveOrchestratorRoster(input: {
       seatModel ?? (configured ? defaultModelOfProviderInstanceEntry(configured) : undefined);
     const option = configured ? REASONING_OPTION_BY_DRIVER[configured.driverKind] : undefined;
     const modelSelection =
+      (seat.seat === ownSeat ? input.orchestrator?.modelSelection : undefined) ??
       choice?.modelSelection ??
       (configured && model
         ? createModelSelection(

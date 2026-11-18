@@ -72,6 +72,7 @@ export function OrchestratorChatSetup(props: {
     orchestrator: {
       harness: leadEntry ? (DELIVERY_HARNESS_BY_DRIVER[leadEntry.driverKind] ?? null) : null,
       role: resolved.state === "ready" ? resolved.role : null,
+      modelSelection: props.lead,
     },
   });
   // The role is only a question when the orchestrator's provider holds no one seat in the team.
