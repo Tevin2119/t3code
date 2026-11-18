@@ -949,7 +949,7 @@ const HANDOFF_TOOLS: ReadonlySet<string> = new Set([
 
 /** Tool actions that hand work over with only a `{ sequence }` result; the input names the thread. */
 const INPUT_TARGET_ACTIONS: Readonly<Record<string, ReadonlySet<string>>> = {
-  t3_queue: new Set(["edit", "promote_to_steer"]),
+  t3_queue: new Set(["edit", "promote_to_steer", "resume"]),
   t3_pending_request: new Set(["respond"]),
 };
 
