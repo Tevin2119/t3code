@@ -6,6 +6,7 @@ import type {
   ProjectId,
   ScopedProjectRef,
 } from "@t3tools/contracts";
+import { modelSelectionsEqual } from "@t3tools/shared/model";
 import type { ComposerThreadDraftState, DraftThreadEnvMode } from "../composerDraftStore";
 
 type ComposerModelSelectionState = Pick<
@@ -84,6 +85,21 @@ export function draftModelSelectionApplies(
   threadStarted: boolean,
 ): boolean {
   return !threadStarted || draft?.modelSelectionExplicit === true;
+}
+
+/**
+ * A started thread keeps the selection its last accepted switch chose. A composer pick the
+ * user never made explicit must not ride a send and revert the thread onto a provider it was
+ * moved off of, so it is dropped instead of sent whenever it disagrees with the thread.
+ */
+export function carriedModelSelection(
+  threadStarted: boolean,
+  explicit: boolean,
+  selection: ModelSelection,
+  threadSelection: ModelSelection,
+): ModelSelection | undefined {
+  if (!threadStarted || explicit) return selection;
+  return modelSelectionsEqual(selection, threadSelection) ? selection : undefined;
 }
 
 export function resolveThreadActionProjectRef(

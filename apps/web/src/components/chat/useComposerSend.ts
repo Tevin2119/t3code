@@ -15,6 +15,11 @@ import {
   useOrchestratorDraftStore,
 } from "../../state/delivery";
 import { decideOrchestrationForSend, resolveOrchestratorRoster } from "../../lib/orchestratorChat";
+import {
+  carriedModelSelection,
+  hasExplicitComposerModelSelection,
+  threadHasStarted,
+} from "../../lib/chatThreadActions";
 import { useEnvironmentQuery } from "../../state/query";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { useAtomQueryRunner } from "../../state/use-atom-query-runner";
@@ -655,6 +660,16 @@ export function useComposerSend(input: ComposerSendInput) {
       selectedPromptEffort: ctxSelectedPromptEffort,
       selectedModelSelection: ctxSelectedModelSelection,
     } = sendCtx;
+    // A stale, never-explicit composer pick must not ride the send and switch a started
+    // thread back onto a provider it was moved off of.
+    const turnModelSelection = carriedModelSelection(
+      threadHasStarted(activeThread),
+      hasExplicitComposerModelSelection(
+        useComposerDraftStore.getState().getComposerDraft(composerDraftTarget),
+      ),
+      ctxSelectedModelSelection,
+      activeThread?.modelSelection ?? ctxSelectedModelSelection,
+    );
     const { images: composerImages, previewAnnotations: composerPreviewAnnotations } =
       mergeDirectPreviewAnnotation({
         images: sendContextImages,
@@ -1484,7 +1499,7 @@ export function useComposerSend(input: ComposerSendInput) {
             attachments: [],
             idleCompaction: "onReturn",
           },
-          modelSelection: ctxSelectedModelSelection,
+          ...(turnModelSelection === undefined ? {} : { modelSelection: turnModelSelection }),
           runtimeMode,
           interactionMode: DEFAULT_INTERACTION_MODE,
         },
@@ -1553,7 +1568,7 @@ export function useComposerSend(input: ComposerSendInput) {
               ),
             }),
           },
-          modelSelection: ctxSelectedModelSelection,
+          ...(turnModelSelection === undefined ? {} : { modelSelection: turnModelSelection }),
           titleSeed: title,
           runtimeMode,
           interactionMode: DEFAULT_INTERACTION_MODE,
