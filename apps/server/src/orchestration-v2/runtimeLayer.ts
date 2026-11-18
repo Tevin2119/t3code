@@ -1,3 +1,4 @@
+import * as SendFailureNotice from "./SendFailureNotice.ts";
 import * as WorktreeBranchSync from "./WorktreeBranchSync.ts";
 import * as GuestShareService from "../guest/GuestShareService.ts";
 import * as NativeTeamChat from "../delivery/NativeTeamChat.ts";
@@ -348,6 +349,9 @@ const layerThreadTitleRegenerationProvided = ThreadTitleRegenerationService.laye
 const layerEffectExecutorProvided = EffectWorker.layerExecutor.pipe(
   Layer.provide(
     Layer.mergeAll(
+      SendFailureNotice.layer.pipe(
+        Layer.provide(Layer.mergeAll(ProjectionStore.layer, layerEventSink, IdAllocator.layer)),
+      ),
       layerRunFinalizationServiceProvided,
       layerCheckpointRollbackServiceProvided,
       layerProviderSessionManagerProvided,

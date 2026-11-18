@@ -2200,85 +2200,109 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       code: handoffUnsupported ? "context_handoff_unsupported" : "queued_start_failed",
       class: handoffUnsupported ? "validation_error" : "unknown",
     });
-    yield* writeSystemEvents([
-      ...retainedUserItems.map((item) => ({
-        type: "turn-item.updated" as const,
-        threadId,
-        runId: queuedRun.id,
-        ...(rootNode === undefined ? {} : { nodeId: rootNode.id }),
-        providerInstanceId: queuedRun.providerInstanceId,
-        occurredAt: now,
-        payload: { ...item, status: "failed" as const, completedAt: now, updatedAt: now },
-      })),
-      ...(attempt !== undefined && rootNode !== undefined
-        ? [
-            {
-              type: "run-attempt.updated" as const,
-              threadId,
-              runId: queuedRun.id,
-              nodeId: rootNode.id,
-              providerInstanceId: queuedRun.providerInstanceId,
-              occurredAt: now,
-              payload: { ...attempt, status: "failed" as const, completedAt: now },
-            },
-          ]
-        : []),
-      ...(rootNode === undefined
-        ? []
-        : [
-            {
-              type: "node.updated" as const,
-              threadId,
-              runId: queuedRun.id,
-              nodeId: rootNode.id,
-              providerInstanceId: queuedRun.providerInstanceId,
-              occurredAt: now,
-              payload: { ...rootNode, status: "failed" as const, completedAt: now },
-            },
-          ]),
-      ...(rootNode === undefined || providerThread === undefined
-        ? []
-        : [
-            {
-              type: "turn-item.updated" as const,
-              threadId,
-              runId: queuedRun.id,
-              nodeId: rootNode.id,
-              providerInstanceId: queuedRun.providerInstanceId,
-              occurredAt: now,
-              payload: {
-                id: idAllocator.derive.turnItemFromProviderItem({
-                  driver: providerThread.driver,
-                  nativeItemId: `queued-start-failure:${queuedRun.id}`,
-                }),
+    const senderThreadId = projection.messages.find(
+      (candidate) => candidate.id === queuedRun.userMessageId,
+    )?.senderThreadId;
+    const notifySender =
+      senderThreadId !== undefined &&
+      senderThreadId !== threadId &&
+      queuedRun.startedAt === null &&
+      queuedRun.delegatedTaskId === undefined &&
+      !(
+        projection.thread.lineage.relationshipToParent === "subagent" &&
+        projection.thread.lineage.parentThreadId === senderThreadId
+      );
+    yield* writeSystemEvents(
+      [
+        ...retainedUserItems.map((item) => ({
+          type: "turn-item.updated" as const,
+          threadId,
+          runId: queuedRun.id,
+          ...(rootNode === undefined ? {} : { nodeId: rootNode.id }),
+          providerInstanceId: queuedRun.providerInstanceId,
+          occurredAt: now,
+          payload: { ...item, status: "failed" as const, completedAt: now, updatedAt: now },
+        })),
+        ...(attempt !== undefined && rootNode !== undefined
+          ? [
+              {
+                type: "run-attempt.updated" as const,
                 threadId,
                 runId: queuedRun.id,
                 nodeId: rootNode.id,
-                providerThreadId: providerThread.id,
-                providerTurnId: null,
-                nativeItemRef: null,
-                parentItemId: null,
-                ordinal: yield* nextTurnItemOrdinal(projection),
-                status: "failed" as const,
-                title: "Queued provider could not start",
-                startedAt: now,
-                completedAt: now,
-                updatedAt: now,
-                type: "error" as const,
-                failure,
+                providerInstanceId: queuedRun.providerInstanceId,
+                occurredAt: now,
+                payload: { ...attempt, status: "failed" as const, completedAt: now },
               },
+            ]
+          : []),
+        ...(rootNode === undefined
+          ? []
+          : [
+              {
+                type: "node.updated" as const,
+                threadId,
+                runId: queuedRun.id,
+                nodeId: rootNode.id,
+                providerInstanceId: queuedRun.providerInstanceId,
+                occurredAt: now,
+                payload: { ...rootNode, status: "failed" as const, completedAt: now },
+              },
+            ]),
+        ...(rootNode === undefined || providerThread === undefined
+          ? []
+          : [
+              {
+                type: "turn-item.updated" as const,
+                threadId,
+                runId: queuedRun.id,
+                nodeId: rootNode.id,
+                providerInstanceId: queuedRun.providerInstanceId,
+                occurredAt: now,
+                payload: {
+                  id: idAllocator.derive.turnItemFromProviderItem({
+                    driver: providerThread.driver,
+                    nativeItemId: `queued-start-failure:${queuedRun.id}`,
+                  }),
+                  threadId,
+                  runId: queuedRun.id,
+                  nodeId: rootNode.id,
+                  providerThreadId: providerThread.id,
+                  providerTurnId: null,
+                  nativeItemRef: null,
+                  parentItemId: null,
+                  ordinal: yield* nextTurnItemOrdinal(projection),
+                  status: "failed" as const,
+                  title: "Queued provider could not start",
+                  startedAt: now,
+                  completedAt: now,
+                  updatedAt: now,
+                  type: "error" as const,
+                  failure,
+                },
+              },
+            ]),
+        {
+          type: "run.updated",
+          threadId,
+          runId: queuedRun.id,
+          ...(rootNode === undefined ? {} : { nodeId: rootNode.id }),
+          providerInstanceId: queuedRun.providerInstanceId,
+          occurredAt: now,
+          payload: { ...queuedRun, status: "failed", queuePosition: null, completedAt: now },
+        },
+      ],
+      notifySender
+        ? [
+            {
+              id: `effect:send-failure-notice:${queuedRun.id}`,
+              commandId: CommandId.make(`command:send-failure-notice:${queuedRun.id}`),
+              threadId,
+              request: { type: "send-failure-notice" as const, runId: queuedRun.id },
             },
-          ]),
-      {
-        type: "run.updated",
-        threadId,
-        runId: queuedRun.id,
-        ...(rootNode === undefined ? {} : { nodeId: rootNode.id }),
-        providerInstanceId: queuedRun.providerInstanceId,
-        occurredAt: now,
-        payload: { ...queuedRun, status: "failed", queuePosition: null, completedAt: now },
-      },
-    ]);
+          ]
+        : [],
+    );
   });
 
   const isStaleQuestionWake = Effect.fn("Orchestrator.isStaleQuestionWake")(function* (

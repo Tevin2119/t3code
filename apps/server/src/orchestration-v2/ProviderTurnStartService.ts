@@ -395,6 +395,7 @@ export const layer: Layer.Layer<
         readonly status: "completed" | "failed";
         readonly now: DateTime.Utc;
         readonly startedAt?: DateTime.Utc;
+        readonly senderThreadId?: ThreadId;
         readonly providerInstanceId: OrchestrationV2Run["providerInstanceId"];
         readonly itemProviderThreadId: OrchestrationV2ProviderThread["id"] | null;
         readonly item:
@@ -467,6 +468,22 @@ export const layer: Layer.Layer<
           activeAttemptId: attempt.id,
           expectedStatus: "starting",
           events,
+          effects:
+            status === "failed" &&
+            input.startedAt === undefined &&
+            run.startedAt === null &&
+            input.senderThreadId !== undefined &&
+            input.senderThreadId !== run.threadId &&
+            run.delegatedTaskId === undefined
+              ? [
+                  {
+                    id: `effect:send-failure-notice:${runId}`,
+                    commandId: CommandId.make(`command:send-failure-notice:${runId}`),
+                    threadId: run.threadId,
+                    request: { type: "send-failure-notice", runId },
+                  },
+                ]
+              : [],
         });
         // A steering restart that cannot start still ends a run whose earlier turns counted.
         if (written.committed) {
@@ -593,6 +610,11 @@ export const layer: Layer.Layer<
             rootNode,
             attempt,
             turnItems: projection.turnItems,
+            ...(message.senderThreadId === undefined ||
+            (projection.thread.lineage.relationshipToParent === "subagent" &&
+              projection.thread.lineage.parentThreadId === message.senderThreadId)
+              ? {}
+              : { senderThreadId: message.senderThreadId }),
             signal: failed.signal,
             status: "failed",
             now: yield* DateTime.now,
@@ -2204,11 +2226,19 @@ export const layer: Layer.Layer<
           if (rootNode === undefined || attempt === undefined) {
             return yield* new ProviderTurnStartRunStateMissingError({ runId });
           }
+          const senderThreadId = projection.messages.find(
+            (message) => message.id === run.userMessageId,
+          )?.senderThreadId;
           yield* settleRunBeforeStart({
             run,
             rootNode,
             attempt,
             turnItems: projection.turnItems,
+            ...(senderThreadId === undefined ||
+            (projection.thread.lineage.relationshipToParent === "subagent" &&
+              projection.thread.lineage.parentThreadId === senderThreadId)
+              ? {}
+              : { senderThreadId }),
             signal: "provider-turn-start-failure",
             status: "failed",
             now: yield* DateTime.now,

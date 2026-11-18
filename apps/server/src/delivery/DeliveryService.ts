@@ -721,8 +721,9 @@ const make = Effect.fn("DeliveryService.make")(function* (
     }
     const existing = bindings.get(input.threadId);
     if (existing) {
-      const sameSetup =
+      const same =
         existing.team === input.team &&
+        existing.driver === input.driver &&
         (existing.orchestration === undefined
           ? input.orchestration === undefined
           : input.orchestration !== undefined &&
@@ -737,18 +738,12 @@ const make = Effect.fn("DeliveryService.make")(function* (
               );
             })) &&
         (input.role === undefined || existing.role === input.role);
-      // A thread that keeps its team and role may follow its session onto another
-      // harness: the successor session opened below rebuilds the role's setup for it.
-      if (
-        sameSetup &&
-        existing.driver === input.driver &&
-        (configuration === undefined || configuration === existing.configuration)
-      )
+      if (same && (configuration === undefined || configuration === existing.configuration))
         return existing;
-      if (!sameSetup)
+      if (!same)
         return yield* new DeliveryError({
           reason: "refused",
-          detail: `This thread is bound to team ${existing.team} as ${existing.role} on ${existing.harness}. Start a new thread to work with another team or role.`,
+          detail: `This thread is bound to team ${existing.team} as ${existing.role} on ${existing.harness}. Start a new thread to work with another team, role or harness.`,
         });
     }
     const harness = DELIVERY_HARNESS_BY_DRIVER[input.driver];
@@ -1394,30 +1389,16 @@ const make = Effect.fn("DeliveryService.make")(function* (
     const binding = bindings.get(threadId);
     if (!binding) return false;
 
-    let bound = binding;
-    if (actual.driver !== bound.driver) {
-      // The thread switched harness after it was bound. The engine rebuilds the role's
-      // setup for the harness the thread now runs on, so the binding follows the switch
-      // instead of dead-ending against a provider the person moved off of.
-      if (!actual.cwd || DELIVERY_HARNESS_BY_DRIVER[actual.driver] === undefined) {
-        return yield* new DeliveryError({
-          reason: "mismatch",
-          detail: `This thread is bound to team ${bound.team} as ${bound.role} on ${bound.driver}. It cannot continue on ${actual.driver}: the role's instructions and tools were set up for the other harness. Switch back, or start a new thread.`,
-        });
-      }
-      bound = yield* bindThread({
-        threadId,
-        team: bound.team,
-        role: bound.role,
-        driver: actual.driver,
-        cwd: actual.cwd,
-        ...(bound.orchestration === undefined ? {} : { orchestration: bound.orchestration }),
+    if (actual.driver !== binding.driver) {
+      return yield* new DeliveryError({
+        reason: "mismatch",
+        detail: `This thread is bound to team ${binding.team} as ${binding.role} on ${binding.driver}. It cannot continue on ${actual.driver}: the role's instructions and tools were set up for the other harness. Switch back, or start a new thread.`,
       });
     }
     if (!actual.cwd) {
       return yield* new DeliveryError({
         reason: "mismatch",
-        detail: `This thread is bound to team ${bound.team} in ${bound.workspace}, and the session has no working folder to hold against it.`,
+        detail: `This thread is bound to team ${binding.team} in ${binding.workspace}, and the session has no working folder to hold against it.`,
       });
     }
     const repository = yield* repositoryRootOf(actual.cwd);
@@ -1425,15 +1406,15 @@ const make = Effect.fn("DeliveryService.make")(function* (
     // A Scratch conversation is bound in the Scratch folder, which is no repository, and
     // then gets a folder of its own below it. That is the same place, not another one.
     const ownFolderBelow =
-      repository === null && insideFolder(actual.cwd, bound.workspace, hostPlatform);
-    if (!sameFolder(workspace, bound.workspace, hostPlatform) && !ownFolderBelow) {
+      repository === null && insideFolder(actual.cwd, binding.workspace, hostPlatform);
+    if (!sameFolder(workspace, binding.workspace, hostPlatform) && !ownFolderBelow) {
       return yield* new DeliveryError({
         reason: "mismatch",
-        detail: `This thread is bound to team ${bound.team} in ${bound.workspace}. The session is starting in ${workspace}, which is another repository.`,
+        detail: `This thread is bound to team ${binding.team} in ${binding.workspace}. The session is starting in ${workspace}, which is another repository.`,
       });
     }
 
-    const launch = yield* request("GET", `/api/sessions/${bound.session}/launch`).pipe(
+    const launch = yield* request("GET", `/api/sessions/${binding.session}/launch`).pipe(
       Effect.flatMap((response) =>
         decodeLaunch(response.body).pipe(
           Effect.mapError(
@@ -1449,11 +1430,11 @@ const make = Effect.fn("DeliveryService.make")(function* (
     const given = launch.identity;
     const differs = (
       [
-        ["team", given.team, bound.team],
-        ["role", given.role, bound.role],
-        ["seat", given.seat, bound.seat],
-        ["harness", given.harness, bound.harness],
-        ["setup", given.configuration, bound.configuration],
+        ["team", given.team, binding.team],
+        ["role", given.role, binding.role],
+        ["seat", given.seat, binding.seat],
+        ["harness", given.harness, binding.harness],
+        ["setup", given.configuration, binding.configuration],
       ] as const
     ).filter(([, now, bound]) => now !== bound);
     if (differs.length > 0) {
@@ -1465,9 +1446,9 @@ const make = Effect.fn("DeliveryService.make")(function* (
 
     DeliveryThreadSession.setDeliveryThreadSession({
       threadId,
-      team: bound.team,
-      role: bound.role,
-      configuration: bound.configuration,
+      team: binding.team,
+      role: binding.role,
+      configuration: binding.configuration,
       instructions: launch.instructions,
       instructionsFile: launch.instructionsFile,
       skillFolder: launch.skillFolder ?? undefined,

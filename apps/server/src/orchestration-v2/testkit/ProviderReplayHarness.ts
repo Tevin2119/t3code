@@ -1,3 +1,4 @@
+import * as SendFailureNotice from "../SendFailureNotice.ts";
 import * as OtelEnvironment from "@t3tools/shared/otelEnvironment";
 import { DEFAULT_SIGNAL_EXPORT } from "@t3tools/shared/observability";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
@@ -543,6 +544,9 @@ export function layerWithRegistry<Error>(
   const layerEffectExecutorProvided = EffectWorker.layerExecutor.pipe(
     Layer.provide(
       Layer.mergeAll(
+        SendFailureNotice.layer.pipe(
+          Layer.provide(Layer.mergeAll(layerStores, layerEventSinkProvided, IdAllocator.layer)),
+        ),
         layerRunFinalizationServiceProvided,
         layerCheckpointRollbackServiceProvided,
         layerProviderSessionManagerProvided,

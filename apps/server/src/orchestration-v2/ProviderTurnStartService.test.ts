@@ -1,3 +1,4 @@
+import * as SendFailureNotice from "./SendFailureNotice.ts";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it, vi } from "vite-plus/test";
@@ -399,6 +400,7 @@ it.each([
 
 function makeLocalCommandHarness(input: {
   readonly text: string;
+  readonly senderThreadId?: ThreadId;
   readonly manualContinuation?: boolean;
   readonly deliveryDiscovery?: boolean;
   readonly cancelDuringDiscovery?: boolean;
@@ -512,6 +514,7 @@ function makeLocalCommandHarness(input: {
     nodeId: rootNodeId,
     role: "user",
     text: input.text,
+    ...(input.senderThreadId === undefined ? {} : { senderThreadId: input.senderThreadId }),
     attachments: [],
     streaming: false,
     createdBy: "user",
@@ -1455,11 +1458,13 @@ function makeLocalCommandHarness(input: {
 function layerStartEffectWorker(
   harness: ReturnType<typeof makeLocalCommandHarness>,
   control: Partial<ProviderTurnControlService.ProviderTurnControlServiceV2["Service"]> = {},
+  maxAttempts = 2,
 ) {
   const executor = EffectWorker.layerExecutor.pipe(
     Layer.provide(
       Layer.mergeAll(
         harness.layer,
+        Layer.mock(SendFailureNotice.SendFailureNotice)({ notify: () => Effect.void }),
         Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({}),
         Layer.mock(ProviderTurnControlService.ProviderTurnControlServiceV2)(control),
         Layer.mock(RunFinalizationService.RunFinalizationService)({}),
@@ -1472,7 +1477,7 @@ function layerStartEffectWorker(
       ),
     ),
   );
-  return EffectWorker.layerWithOptions({ maxAttempts: 2 }).pipe(
+  return EffectWorker.layerWithOptions({ maxAttempts }).pipe(
     Layer.provideMerge(
       Layer.merge(executor, EffectOutbox.layer.pipe(Layer.provide(SqlitePersistence.layerMemory))),
     ),
@@ -2983,6 +2988,82 @@ effectIt.effect("starts the lead exactly once with a real roster fallback", () =
   }),
 );
 
+effectIt.effect.each([1, 2, 3, 4])(
+  "does not notify when starting succeeds after %s retries",
+  (retries) => {
+    const harness = makeLocalCommandHarness({
+      text: "Continue",
+      senderThreadId: ThreadId.make("sending-orchestrator"),
+      missingProviderSession: true,
+      previousTurn: { runStatus: "completed", turnStatus: "completed" },
+    });
+    return Effect.gen(function* () {
+      const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
+      const { storedEffect } = yield* enqueueStart(harness.projection());
+      for (let retry = 0; retry < retries; retry++) {
+        yield* worker.drain();
+        expect(harness.projection().runs.at(-1)?.status).toBe("starting");
+        yield* TestClock.adjust("30 seconds");
+      }
+      const projection = harness.projection();
+      harness.setProjection({
+        ...projection,
+        providerThreads: projection.providerThreads.map((thread) => ({
+          ...thread,
+          providerSessionId: ProviderSessionId.make("new-provider-session"),
+        })),
+      });
+      yield* worker.drain();
+      expect(yield* storedEffect).toMatchObject({ status: "succeeded", attemptCount: retries + 1 });
+      expect(harness.projection().runs.at(-1)?.status).toBe("running");
+      expect(
+        harness.writeIfRunCurrent.mock.calls.flatMap(([input]) => input.effects ?? []),
+      ).toEqual([]);
+    }).pipe(Effect.provide(layerStartEffectWorker(harness, {}, 5)));
+  },
+);
+
+effectIt.effect.each(["user", "self", "delegated", "started", "child"] as const)(
+  "does not enqueue a failure notice for %s",
+  (kind) =>
+    Effect.gen(function* () {
+      const harness = makeLocalCommandHarness({
+        text: "Continue",
+        teamPreparationFailure: "Roster unavailable",
+      });
+      const projection = harness.projection();
+      const senderThreadId =
+        kind === "self" ? projection.thread.id : ThreadId.make("sending-orchestrator");
+      harness.setProjection({
+        ...projection,
+        thread:
+          kind === "child"
+            ? {
+                ...projection.thread,
+                lineage: {
+                  ...projection.thread.lineage,
+                  parentThreadId: senderThreadId,
+                  relationshipToParent: "subagent",
+                },
+              }
+            : projection.thread,
+        messages: projection.messages.map((message) => ({
+          ...message,
+          ...(kind === "user" ? {} : { senderThreadId }),
+        })),
+        runs: projection.runs.map((run) => ({
+          ...run,
+          ...(kind === "delegated" ? { delegatedTaskId: NodeId.make("delegated-task") } : {}),
+          ...(kind === "started" ? { startedAt: projection.updatedAt } : {}),
+        })),
+      });
+      yield* harness.start;
+      expect(
+        harness.writeIfRunCurrent.mock.calls.flatMap(([input]) => input.effects ?? []),
+      ).toEqual([]);
+    }),
+);
+
 effectIt.effect.each(["roster", "state", "dispatch"] as const)(
   "settles %s team preparation with the appropriate queue failure class",
   (reason) =>
@@ -2990,6 +3071,7 @@ effectIt.effect.each(["roster", "state", "dispatch"] as const)(
       const message = "The conversation and its participants use different team revisions.";
       const harness = makeLocalCommandHarness({
         text: "Continue",
+        senderThreadId: ThreadId.make("sending-orchestrator"),
         teamPreparationFailure: message,
         teamPreparationReason: reason,
       });
@@ -3016,6 +3098,18 @@ effectIt.effect.each(["roster", "state", "dispatch"] as const)(
           },
         },
       ]);
+      expect(harness.writeIfRunCurrent).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          effects: [
+            {
+              id: `effect:send-failure-notice:${projection.runs.at(-1)!.id}`,
+              commandId: expect.any(String),
+              threadId: projection.thread.id,
+              request: { type: "send-failure-notice", runId: projection.runs.at(-1)!.id },
+            },
+          ],
+        }),
+      );
       expect(harness.settledRuns).toEqual(["failed"]);
       expect(harness.open).not.toHaveBeenCalled();
       expect(harness.startRootRun).not.toHaveBeenCalled();
@@ -3217,7 +3311,11 @@ effectIt.effect(
   "signs out the existing native provider before opening the newly selected provider",
   () =>
     Effect.gen(function* () {
-      const harness = makeLocalCommandHarness({ text: "/logout", previousNativeSession: true });
+      const harness = makeLocalCommandHarness({
+        text: "/logout",
+        senderThreadId: ThreadId.make("sending-orchestrator"),
+        previousNativeSession: true,
+      });
 
       yield* harness.start;
       yield* harness.start;
@@ -3243,6 +3341,9 @@ effectIt.effect(
       ]);
       expect(projection.providerTurns).toEqual([]);
       expect(projection.checkpoints).toEqual([]);
+      expect(
+        harness.writeIfRunCurrent.mock.calls.flatMap(([input]) => input.effects ?? []),
+      ).toEqual([]);
     }),
 );
 
@@ -3251,7 +3352,11 @@ for (const previousMessages of [[], ["/compact", " /COMPACT "]]) {
     `rejects compaction without conversation context after ${previousMessages.length} prior compactions`,
     () =>
       Effect.gen(function* () {
-        const harness = makeLocalCommandHarness({ text: "/compact", previousMessages });
+        const harness = makeLocalCommandHarness({
+          text: "/compact",
+          senderThreadId: ThreadId.make("sending-orchestrator"),
+          previousMessages,
+        });
 
         yield* harness.start;
 
@@ -3259,6 +3364,9 @@ for (const previousMessages of [[], ["/compact", " /COMPACT "]]) {
         expect(harness.tryHandlePromptCommand).not.toHaveBeenCalled();
         expect(harness.startRootRun).not.toHaveBeenCalled();
         expect(harness.projection().runs.at(-1)?.status).toBe("failed");
+        expect(
+          harness.writeIfRunCurrent.mock.calls.flatMap(([input]) => input.effects ?? []),
+        ).toEqual([]);
         expect(harness.projection().turnItems).toMatchObject([
           {
             type: "error",

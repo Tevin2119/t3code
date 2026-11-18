@@ -4939,6 +4939,45 @@ describe("OrchestratorMcpService thread lookup", () => {
     }),
   );
 
+  it.effect.each(["failed", "completed", "running"] as const)(
+    "returns the selected run's failure reason only when failed before start (%s)",
+    (status) =>
+      Effect.gen(function* () {
+        const sent = yield* Ref.make(0);
+        const runId = RunId.make("wait-failed-before-start");
+        const message = "T3 Code could not start this turn.";
+        yield* Effect.gen(function* () {
+          const mcp = yield* OrchestratorMcpService.OrchestratorMcpService;
+          const result = yield* mcp.waitForThread(client, { threadId: launched.id });
+          assert.equal(result.failureReason, status === "failed" ? message : undefined);
+        }).pipe(
+          Effect.provide(
+            service([launched], sent, {
+              getProjectThreadRecords: () => Effect.succeed(idleThreadProjection(launched)),
+              getThreadRecords: () =>
+                Effect.succeed({
+                  ...idleThreadProjection(launched),
+                  turnItems: [
+                    {
+                      type: "error",
+                      runId: RunId.make("other-run"),
+                      failure: { message: "Wrong error" },
+                    },
+                    { type: "error", runId, failure: { message } },
+                  ],
+                } as never),
+              waitForThread: () =>
+                Effect.succeed({
+                  threadId: launched.id,
+                  run: { id: runId, status, startedAt: null } as never,
+                  timedOut: false,
+                }),
+            }),
+          ),
+        );
+      }),
+  );
+
   it.effect("waits on the caller's own thread without a separate shell lookup", () =>
     Effect.gen(function* () {
       const sent = yield* Ref.make(0);

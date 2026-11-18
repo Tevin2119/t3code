@@ -1,3 +1,4 @@
+import * as SendFailureNotice from "./SendFailureNotice.ts";
 import { assert, it } from "@effect/vitest";
 import {
   CheckpointId,
@@ -173,6 +174,7 @@ function layerExecutorFor(input: {
     Layer.provide(
       Layer.mergeAll(
         layerDependencies,
+        Layer.mock(SendFailureNotice.SendFailureNotice)({}),
         Layer.mock(ThreadManagementService.ThreadManagementService)(input.threads ?? {}),
         Layer.mock(ProjectionStore.ProjectionStoreV2)({}),
         ServerSettings.layerTest(
