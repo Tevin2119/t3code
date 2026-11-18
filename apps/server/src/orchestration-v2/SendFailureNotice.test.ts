@@ -1,5 +1,5 @@
 import { assert, it } from "@effect/vitest";
-import { EventId, NodeId } from "@t3tools/contracts";
+import { EventId, NodeId, RunId, TurnItemId } from "@t3tools/contracts";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import { formatThreadLink } from "@t3tools/shared/threadLinks";
 import * as Effect from "effect/Effect";
@@ -63,6 +63,85 @@ it.layer(layer)("SendFailureNotice", (it) => {
       assert.deepEqual(sender.messages, []);
       assert.deepEqual(sender.providerTurns, []);
       assert.deepEqual(yield* sql`SELECT effect_id FROM orchestration_v2_effect_outbox`, []);
+    }),
+  );
+
+  it.effect("appends the notice after sender history and preserves its position on replay", () =>
+    Effect.gen(function* () {
+      const f = yield* Fixture.seed("ordered");
+      const sink = yield* EventSink.EventSinkV2;
+      const projections = yield* ProjectionStore.ProjectionStoreV2;
+      const notice = yield* SendFailureNotice.SendFailureNotice;
+      const senderRun = {
+        ...f.run,
+        id: RunId.make("ordered:sender-run"),
+        threadId: f.sender.id,
+        status: "completed" as const,
+        startedAt: f.now,
+      };
+      yield* sink.write({
+        events: [
+          {
+            id: EventId.make("ordered:sender-run-event"),
+            type: "run.updated",
+            threadId: f.sender.id,
+            occurredAt: f.now,
+            payload: senderRun,
+          },
+          {
+            id: EventId.make("ordered:sender-history-event"),
+            type: "turn-item.updated",
+            threadId: f.sender.id,
+            occurredAt: f.now,
+            payload: {
+              ...f.error,
+              id: TurnItemId.make("ordered:sender-history"),
+              threadId: f.sender.id,
+              runId: senderRun.id,
+            },
+          },
+        ],
+      });
+      yield* notice.notify({ threadId: f.target.id, runId: f.run.id });
+      const sender = yield* projections.getThreadRecords(f.sender.id, ["turnItems"]);
+      assert.lengthOf(sender.turnItems, 2);
+      const history = sender.turnItems.find((item) => item.runId === senderRun.id)!;
+      const item = sender.turnItems.find((item) => item.type === "system_notice")!;
+      assert.isAbove(item.ordinal, history.ordinal);
+      assert.equal(sender.turnItems.at(-1)!.id, item.id);
+      assert.isNull(item.runId);
+      assert.isNull(item.nodeId);
+      yield* notice.notify({ threadId: f.target.id, runId: f.run.id });
+      assert.deepEqual(
+        (yield* projections.getThreadRecords(f.sender.id, ["turnItems"])).turnItems,
+        sender.turnItems,
+      );
+      yield* sink.write({
+        events: [
+          {
+            id: EventId.make("ordered:later-run-event"),
+            type: "run.updated",
+            threadId: f.sender.id,
+            occurredAt: f.now,
+            payload: { ...senderRun, id: RunId.make("ordered:later-run"), ordinal: 2 },
+          },
+        ],
+      });
+      yield* sink.write({
+        events: [
+          {
+            id: EventId.make("ordered:replayed-notice-event"),
+            type: "turn-item.updated",
+            threadId: f.sender.id,
+            occurredAt: f.now,
+            payload: item,
+          },
+        ],
+      });
+      assert.deepEqual(
+        (yield* projections.getThreadRecords(f.sender.id, ["turnItems"])).turnItems,
+        sender.turnItems,
+      );
     }),
   );
 
