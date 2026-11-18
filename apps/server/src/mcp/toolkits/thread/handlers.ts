@@ -37,6 +37,7 @@ function queueEntry(
   const characters = Array.from(message.text);
   return {
     queuedRunId: run.id,
+    held: run.queueHeld === true,
     text: characters.slice(0, limit).join(""),
     truncated: characters.length > limit,
   };
@@ -320,6 +321,9 @@ export const layer = McpToolAccess.toLayer(ThreadToolkit, {
     ),
     writesThread((input) =>
       Effect.gen(function* () {
+        if (input.action === "resume") {
+          return yield* dispatch(input.threadId, (common) => ({ ...common, type: "queue.resume" }));
+        }
         const runId = yield* required(input.queuedRunId, "queuedRunId");
         switch (input.action) {
           case "edit": {
