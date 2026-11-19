@@ -58,6 +58,7 @@ export function BoardDeploymentControls(props: {
           variant="outline"
           disabled={
             !allowed ||
+            !props.link ||
             props.stale ||
             !props.target?.repository ||
             !props.target.base ||
@@ -84,7 +85,7 @@ export function BoardDeploymentControls(props: {
         <LinkEditor
           environmentId={props.environmentId}
           target={props.target}
-          stale={props.stale}
+          stale={props.stale || !props.link}
           path={path}
           onClose={() => setEditing(false)}
           onDone={() => {
