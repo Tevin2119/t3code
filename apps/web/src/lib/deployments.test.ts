@@ -223,17 +223,40 @@ describe("deployment contract", () => {
   it("reports whether the running revision matches without calling it healthy", () => {
     const latest = "a".repeat(40);
     const hotfix = "b".repeat(40);
-    expect(deploymentStatus({ latestCommit: latest, liveCommit: latest })).toBe(
+    const liveObservedAt = "2026-10-28T00:00:00Z";
+    expect(deploymentStatus({ latestCommit: latest, liveCommit: latest, liveObservedAt })).toBe(
       "Running revision matches latest merge",
     );
-    expect(deploymentStatus({ latestCommit: latest, liveCommit: hotfix })).toBe(
+    expect(deploymentStatus({ latestCommit: latest, liveCommit: hotfix, liveObservedAt })).toBe(
       "Running revision differs from latest merge",
     );
     expect(
       deploymentStatus({ latestCommit: latest, liveCommit: latest, liveProblem: "Health failed" }),
     ).toBe("Running revision problem: Health failed");
-    expect(deploymentStatus({ latestCommit: null, liveCommit: hotfix })).toBe(
+    expect(deploymentStatus({ latestCommit: null, liveCommit: hotfix, liveObservedAt })).toBe(
       "No merged revision discovered",
     );
+    expect(deploymentStatus({ latestCommit: latest, liveCommit: null })).toBe(
+      "Running revision is unknown",
+    );
+    expect(deploymentStatus({ latestCommit: latest, liveCommit: null, liveObservedAt })).toBe(
+      "No revision deployed at last observation",
+    );
+    for (const observed of [undefined, "", "invalid date"]) {
+      expect(
+        deploymentStatus({ latestCommit: latest, liveCommit: latest, liveObservedAt: observed }),
+      ).toBe("Runtime observation time is unknown");
+    }
+    expect(
+      deploymentStatus({
+        latestCommit: latest,
+        liveCommit: latest,
+        liveObservedAt,
+        problem: "Discovery failed",
+      }),
+    ).toBe("Deployment problem: Discovery failed");
+    expect(
+      deploymentStatus({ latestCommit: latest, liveCommit: latest, liveObservedAt }, true),
+    ).toBe("Runtime status unavailable. Showing last reading.");
   });
 });

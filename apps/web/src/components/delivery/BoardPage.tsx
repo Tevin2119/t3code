@@ -74,6 +74,10 @@ import { unifiedBoardChoices } from "../../lib/deliveryBoardSelection";
 import { HowItFits } from "./HowItFits";
 import { SharedBoard } from "./SharedBoard";
 
+import { BoardDeploymentControls } from "./BoardDeploymentControls";
+import { MergePermissionControls, MergePermissionSummary } from "./MergePermissionControls";
+import { DeploymentSnapshotStale, TaskDeploymentBadge } from "./TaskDeploymentStatus";
+
 const CardFace = memo(function CardFace(props: {
   readonly card: DeliveryCard;
   readonly now: number;
@@ -128,6 +132,7 @@ const CardFace = memo(function CardFace(props: {
         </span>
         <CardPeople card={card} />
       </div>
+      <TaskDeploymentBadge card={card} />
     </div>
   );
 });
@@ -807,6 +812,41 @@ function EnvironmentBoardPage({ environmentId }: { readonly environmentId: Envir
                 onClose={() => setSeatsFor(null)}
               />
             ) : null}
+            {chosenBoard?.kind === "own" ? (
+              <details
+                key={chosenBoard.id}
+                className="mx-4 mt-2 shrink-0 rounded-lg border border-border p-3"
+              >
+                <summary className="cursor-pointer text-xs">
+                  Board delivery settings · {chosenBoard.deployment?.state ?? "link unknown"}
+                  {chosenBoard.deployment?.problem ? `: ${chosenBoard.deployment.problem}` : ""}
+                </summary>
+                <div className="mt-3 grid max-h-80 min-w-0 gap-4 overflow-y-auto md:grid-cols-2">
+                  <BoardDeploymentControls
+                    environmentId={environmentId}
+                    board={chosenBoard.id}
+                    target={chosenBoard.target}
+                    link={chosenBoard.deployment}
+                    stale={stale}
+                    onDone={board.refresh}
+                  />
+                  <MergePermissionControls
+                    environmentId={environmentId}
+                    path={`/api/boards/${chosenBoard.id}/merge-permission`}
+                    policy={chosenBoard.mergePermission}
+                    stale={stale}
+                    onDone={board.refresh}
+                  />
+                </div>
+              </details>
+            ) : chosenBoard?.mergePermission ? (
+              <details className="mx-4 mt-2 shrink-0 text-xs">
+                <summary className="cursor-pointer">
+                  Automatic merge permission (read-only board)
+                </summary>
+                <MergePermissionSummary policy={chosenBoard.mergePermission} />
+              </details>
+            ) : null}
             <EngineAttentionBar environmentId={environmentId} />
             {parsed?.note ? (
               <BoardNotice summary={parsed.note}>
@@ -827,15 +867,17 @@ function EnvironmentBoardPage({ environmentId }: { readonly environmentId: Envir
                 </div>
               </BoardNotice>
             ))}
-            <BoardColumns
-              environmentId={environmentId}
-              lanes={lanes}
-              all={parsed?.lanes ?? []}
-              busy={actions.busy}
-              onOpen={(card) => open(card.id)}
-              onAction={actions.run}
-              onMove={(card, lane, before) => actions.moveTo(card, lane, before)}
-            />
+            <DeploymentSnapshotStale value={stale}>
+              <BoardColumns
+                environmentId={environmentId}
+                lanes={lanes}
+                all={parsed?.lanes ?? []}
+                busy={actions.busy}
+                onOpen={(card) => open(card.id)}
+                onAction={actions.run}
+                onMove={(card, lane, before) => actions.moveTo(card, lane, before)}
+              />
+            </DeploymentSnapshotStale>
           </>
         )}
       </div>

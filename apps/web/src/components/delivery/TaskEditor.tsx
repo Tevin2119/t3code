@@ -44,6 +44,7 @@ import {
   useDeliveryAct,
   useDeliveryRead,
   usePersonName,
+  useStaleReading,
   withSeatChoice,
 } from "../../state/delivery";
 import { Button } from "../ui/button";
@@ -67,6 +68,7 @@ import {
 import { BoardDialog, BoardPicker, type PickerItem } from "./BoardPicker";
 import { PriorityPill } from "./taskParts";
 import { TeamDefaultsDialog } from "./TeamDefaultsDialog";
+import { MergePermissionControls } from "./MergePermissionControls";
 
 interface Form {
   readonly title: string;
@@ -173,6 +175,7 @@ export function TaskEditor(props: {
     props.taskId ? `/api/tasks/${props.taskId}` : null,
   );
   const saved = useMemo(() => parseTask(taskRead.body), [taskRead.body]);
+  const policyStale = useStaleReading(taskRead.readAt);
 
   const [form, setForm] = useState<Form>(EMPTY);
   const [clean, setClean] = useState<Form>(EMPTY);
@@ -679,6 +682,21 @@ export function TaskEditor(props: {
             </div>
 
             <aside className="flex min-w-0 flex-col gap-4">
+              {saved?.card.mergePermission && props.environmentId ? (
+                <details>
+                  <summary className="cursor-pointer text-xs">Automatic merge permission</summary>
+                  <MergePermissionControls
+                    environmentId={props.environmentId}
+                    path={`/api/tasks/${saved.id}/merge-permission`}
+                    policy={saved.card.mergePermission}
+                    stale={policyStale || !!taskRead.error}
+                    onDone={taskRead.refresh}
+                  />
+                  <Button size="xs" variant="ghost" onClick={taskRead.refresh}>
+                    Refresh permission
+                  </Button>
+                </details>
+              ) : null}
               <Field
                 label="Your name"
                 hint="Written on what you do: saves, submissions, decisions."
