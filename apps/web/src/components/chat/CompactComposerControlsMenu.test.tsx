@@ -1,3 +1,4 @@
+import { GTProvider } from "gt-react";
 import { act, useState } from "react";
 import { create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, expect, it, vi } from "vite-plus/test";
@@ -42,14 +43,16 @@ it("lets a hidden team be selected through overflow without changing access", as
   const changeAccess = vi.fn();
   await act(() => {
     renderer = create(
-      <CompactComposerControlsMenu
-        runtimeMode="full-access"
-        runtimeModeSupport={undefined}
-        runtimeModeOptions={[]}
-        showPermissions
-        teamControls={<TeamControls />}
-        onRuntimeModeChange={changeAccess}
-      />,
+      <GTProvider locale="en" translations={{}}>
+        <CompactComposerControlsMenu
+          runtimeMode="full-access"
+          runtimeModeSupport={undefined}
+          runtimeModeOptions={[]}
+          showPermissions
+          teamControls={<TeamControls />}
+          onRuntimeModeChange={changeAccess}
+        />
+      </GTProvider>,
     );
   });
   expect(renderer!.root.findAllByType("dialog" as never)).toHaveLength(0);

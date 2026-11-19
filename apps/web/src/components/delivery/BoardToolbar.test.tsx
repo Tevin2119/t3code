@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 
 import { EnvironmentId } from "@t3tools/contracts";
-import { act, useRef, useState } from "react";
+import { GTProvider } from "gt-react";
+import { act, type ReactNode, useRef, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { Sheet, SheetPopup, SheetTitle } from "../ui/sheet";
@@ -101,7 +102,17 @@ beforeEach(() => {
   mediaListeners.clear();
   container = document.createElement("div");
   document.body.append(container);
-  root = createRoot(container);
+  const mounted = createRoot(container);
+  // Dialogs and menus read translations from a provider.
+  root = {
+    render: (node: ReactNode) =>
+      mounted.render(
+        <GTProvider locale="en" translations={{}}>
+          {node}
+        </GTProvider>,
+      ),
+    unmount: () => mounted.unmount(),
+  };
   mock.action.mockReset();
 });
 

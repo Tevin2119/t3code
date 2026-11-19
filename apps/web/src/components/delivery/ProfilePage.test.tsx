@@ -1,3 +1,4 @@
+import { GTProvider } from "gt-react";
 import { act, type ReactNode } from "react";
 import { create, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
@@ -208,8 +209,13 @@ let renderer: ReactTestRenderer | undefined;
 
 async function render() {
   await act(() => {
-    if (renderer) renderer.update(<ProfilePage />);
-    else renderer = create(<ProfilePage />);
+    const page = (
+      <GTProvider locale="en" translations={{}}>
+        <ProfilePage />
+      </GTProvider>
+    );
+    if (renderer) renderer.update(page);
+    else renderer = create(page);
   });
 }
 

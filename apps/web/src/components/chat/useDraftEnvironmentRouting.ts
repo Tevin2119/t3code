@@ -1,5 +1,8 @@
 import type { EnvironmentServerConfig } from "@t3tools/client-runtime/connection";
 import { sameWorkspaceProfile } from "@t3tools/contracts";
+import { msg, useGT } from "gt-react";
+import { thrownErrorMessage } from "@t3tools/client-runtime/errors";
+import { m } from "~/i18n/messages";
 import { useLoadBalancedEnvironment } from "../../hooks/useLoadBalancedEnvironment";
 import { useLogicalProjectEnvironments } from "../../hooks/useLogicalProjectEnvironments";
 import { useScratchProject } from "../../hooks/useScratchProject";
@@ -83,6 +86,7 @@ function carryFanoutSelections(
  * target machine prepares one, and the playbook link follows.
  */
 export function useDraftEnvironmentRouting(input: DraftEnvironmentRoutingInput) {
+  const gt = useGT();
   const {
     draftId,
     draftThread,
@@ -240,9 +244,12 @@ export function useDraftEnvironmentRouting(input: DraftEnvironmentRoutingInput) 
       toastManager.add({
         type: "warning",
         id: "load-balancing-attachments",
-        title: "Keep attachments on this machine",
-        description:
-          "Remove attachments before choosing automatic routing, then attach them on the selected machine.",
+        title: m(msg("Keep attachments on this machine")),
+        description: m(
+          msg(
+            "Remove attachments before choosing automatic routing, then attach them on the selected machine.",
+          ),
+        ),
       });
       return;
     }
@@ -259,12 +266,12 @@ export function useDraftEnvironmentRouting(input: DraftEnvironmentRoutingInput) 
   const onAutoEnvironmentStable = useStableCallback(onAutoEnvironment);
   const autoEnvironmentLabel = automaticEnvironment
     ? draftThread?.loadBalancedEnvironmentId
-      ? "Auto balance"
+      ? gt("Auto balance")
       : loadBalancing.pending
-        ? "Checking machines…"
+        ? gt("Checking machines…")
         : loadBalancing.failed
-          ? "Auto balance unavailable"
-          : "Auto balance"
+          ? gt("Auto balance unavailable")
+          : gt("Auto balance")
     : undefined;
 
   // A change in flight belongs to the draft and project it started on.
@@ -374,8 +381,8 @@ export function useDraftEnvironmentRouting(input: DraftEnvironmentRoutingInput) 
         toastManager.add(
           stackedThreadToast({
             type: "error",
-            title: "Could not switch machine",
-            description: error instanceof Error ? error.message : "An error occurred.",
+            title: m(msg("Could not switch machine")),
+            description: thrownErrorMessage(error, m) ?? m(msg("An error occurred.")),
           }),
         );
       }
@@ -386,7 +393,7 @@ export function useDraftEnvironmentRouting(input: DraftEnvironmentRoutingInput) 
       if (triagePrompt === null) return;
       const project =
         knownProject ??
-        (await openScratchProject(target.environmentId, "Could not switch machine"));
+        (await openScratchProject(target.environmentId, m(msg("Could not switch machine"))));
       if (project) retarget(project, triagePrompt);
     };
     setBusyEnvironmentChange(request);
