@@ -63,6 +63,31 @@ export function WizardFooter({
   );
 }
 
+/** A step's numbered marker: a check once done, tinted while current, muted ahead. */
+export function WizardStepMarker({
+  index,
+  currentStep,
+}: {
+  readonly index: number;
+  readonly currentStep: number;
+}) {
+  return (
+    <span
+      className={cn(
+        "grid size-5 shrink-0 place-items-center rounded-full text-sm font-medium ring-1",
+        index < currentStep
+          ? "bg-primary text-primary-foreground ring-primary"
+          : index === currentStep
+            ? "bg-primary/10 text-primary ring-primary/30"
+            : "bg-card text-muted-foreground ring-black/10 dark:bg-white/5 dark:ring-white/10",
+      )}
+      aria-hidden
+    >
+      {index < currentStep ? <CheckIcon className="size-4 shrink-0" /> : index + 1}
+    </span>
+  );
+}
+
 export function WizardSteps({
   steps,
   currentStep,
@@ -111,19 +136,7 @@ export function WizardSteps({
             }
             onClick={onStepChange ? () => onStepChange(index) : undefined}
           >
-            <span
-              className={cn(
-                "grid size-5 shrink-0 place-items-center rounded-full text-sm font-medium ring-1",
-                index < currentStep
-                  ? "bg-primary text-primary-foreground ring-primary"
-                  : index === currentStep
-                    ? "bg-primary/10 text-primary ring-primary/30"
-                    : "bg-card text-muted-foreground ring-black/10 dark:bg-white/5 dark:ring-white/10",
-              )}
-              aria-hidden
-            >
-              {index < currentStep ? <CheckIcon className="size-4 shrink-0" /> : index + 1}
-            </span>
+            <WizardStepMarker index={index} currentStep={currentStep} />
             <span
               className={cn(
                 "min-w-0 truncate text-sm font-medium max-sm:hidden",
