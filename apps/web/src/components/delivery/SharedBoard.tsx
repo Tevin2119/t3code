@@ -5,6 +5,7 @@ import { useDeliveryAct, useDeliveryRead } from "../../state/delivery";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Dialog, DialogHeader, DialogPanel, DialogPopup, DialogTitle } from "../ui/dialog";
+import { TaskDisclosure } from "./TaskDisclosure";
 
 type SharedBoardProps = {
   environmentId: EnvironmentId | null;
@@ -236,59 +237,65 @@ function SharedBoardContent(props: SharedBoardProps) {
         Connected through {view.machine}
       </p>
       {board ? (
-        <details
-          className="rounded border p-2 text-xs"
-          onToggle={(event) => {
-            if (!event.currentTarget.open) setPolicyKey("");
-          }}
-        >
-          <summary className="cursor-pointer">Allocation policy</summary>
-          <p className="py-2">
-            {board.policy.automatic ? "Automatic allocation" : "Manual allocation"}. Arriving tasks{" "}
-            {board.policy.startOnArrival ? "can resume ready work" : "stay paused"}.
-          </p>
-          <Input
-            aria-label="Approval passphrase or terminal key for board policy"
-            placeholder="Approval passphrase or terminal key"
-            name="delivery-policy-approval"
-            type="password"
-            value={policyKey}
-            onChange={(e) => setPolicyKey(e.target.value)}
-            autoComplete="current-password"
-          />
-          <div className="mt-2 flex flex-wrap gap-2">
-            <Button
-              size="sm"
-              disabled={busy || !policyKey}
-              onClick={() => {
-                void run(
-                  "/api/shared/boards",
-                  { ...board, policy: { ...board.policy, automatic: !board.policy.automatic } },
-                  "policy",
-                );
-              }}
-            >
-              Use {board.policy.automatic ? "manual" : "automatic"} allocation
-            </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={busy || !policyKey}
-              onClick={() => {
-                void run(
-                  "/api/shared/boards",
-                  {
-                    ...board,
-                    policy: { ...board.policy, startOnArrival: !board.policy.startOnArrival },
-                  },
-                  "policy",
-                );
-              }}
-            >
-              {board.policy.startOnArrival ? "Pause arrivals" : "Allow ready arrivals to resume"}
-            </Button>
-          </div>
-        </details>
+        <div className="rounded border p-2 text-xs">
+          <TaskDisclosure
+            title="Allocation policy"
+            defaultOpen={false}
+            onOpenChange={(open) => {
+              if (!open) setPolicyKey("");
+            }}
+          >
+            <div>
+              <p className="py-2">
+                {board.policy.automatic ? "Automatic allocation" : "Manual allocation"}. Arriving
+                tasks {board.policy.startOnArrival ? "can resume ready work" : "stay paused"}.
+              </p>
+              <Input
+                aria-label="Approval passphrase or terminal key for board policy"
+                placeholder="Approval passphrase or terminal key"
+                name="delivery-policy-approval"
+                type="password"
+                value={policyKey}
+                onChange={(e) => setPolicyKey(e.target.value)}
+                autoComplete="current-password"
+              />
+              <div className="mt-2 flex flex-wrap gap-2">
+                <Button
+                  size="sm"
+                  disabled={busy || !policyKey}
+                  onClick={() => {
+                    void run(
+                      "/api/shared/boards",
+                      { ...board, policy: { ...board.policy, automatic: !board.policy.automatic } },
+                      "policy",
+                    );
+                  }}
+                >
+                  Use {board.policy.automatic ? "manual" : "automatic"} allocation
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={busy || !policyKey}
+                  onClick={() => {
+                    void run(
+                      "/api/shared/boards",
+                      {
+                        ...board,
+                        policy: { ...board.policy, startOnArrival: !board.policy.startOnArrival },
+                      },
+                      "policy",
+                    );
+                  }}
+                >
+                  {board.policy.startOnArrival
+                    ? "Pause arrivals"
+                    : "Allow ready arrivals to resume"}
+                </Button>
+              </div>
+            </div>
+          </TaskDisclosure>
+        </div>
       ) : null}
       <div className="flex min-h-0 gap-3 overflow-x-auto pb-2">
         {sharedLanes(tasks).map((lane) => (

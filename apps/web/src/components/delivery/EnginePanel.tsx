@@ -30,6 +30,8 @@ import { Button } from "../ui/button";
 import { Dialog, DialogHeader, DialogPanel, DialogPopup, DialogTitle } from "../ui/dialog";
 import { Input } from "../ui/input";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
+import { Alert, AlertAction, AlertDescription } from "../ui/alert";
+import { TaskDisclosure } from "./TaskDisclosure";
 
 const ENGINE_THREAD = ThreadId.make("delivery-engine");
 const ENGINE_TERMINAL = "engine";
@@ -125,12 +127,16 @@ function EnvironmentEngineAttentionBar({
   return (
     <>
       {attention !== null ? (
-        <div className="mx-4 mt-2 flex items-center gap-2 rounded-lg bg-warning/12 px-3 py-1.5 text-xs text-warning-foreground">
-          <PowerIcon aria-hidden="true" className="size-3.5 shrink-0" />
-          <p className="min-w-0 flex-1">{attention}</p>
-          <Button size="xs" variant="outline" onClick={() => setOpen(true)}>
-            Open engine
-          </Button>
+        <div className="mx-4 mt-2">
+          <Alert variant="warning">
+            <PowerIcon aria-hidden="true" />
+            <AlertDescription>{attention}</AlertDescription>
+            <AlertAction>
+              <Button size="xs" variant="outline" onClick={() => setOpen(true)}>
+                Open engine
+              </Button>
+            </AlertAction>
+          </Alert>
         </div>
       ) : null}
       {open ? (
@@ -331,16 +337,17 @@ function EngineControl(props: {
             {reachable ? (
               <>
                 <ApprovalControls environmentId={environmentId} health={health} />
-                <details onToggle={(event) => setMergePermissionOpen(event.currentTarget.open)}>
-                  <summary className="cursor-pointer text-sm">
-                    Global automatic merge permission
-                  </summary>
+                <TaskDisclosure
+                  title="Global automatic merge permission"
+                  open={mergePermissionOpen}
+                  onOpenChange={setMergePermissionOpen}
+                >
                   {mergePermissionOpen ? (
                     <div className="mt-3">
                       <GlobalMergePermission environmentId={environmentId} />
                     </div>
                   ) : null}
-                </details>
+                </TaskDisclosure>
                 <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-xs">
                   <dt className="text-muted-foreground">Account profile</dt>
                   <dd>{summary.profile ?? "Not reported"}</dd>
@@ -414,14 +421,13 @@ function EngineControl(props: {
                         : "Inspect the engine terminal if progress stops.")}
                   </p>
                 ) : null}
-                <details className="text-xs">
-                  <summary className="cursor-pointer text-muted-foreground">
-                    Technical details
-                  </summary>
-                  <pre className="mt-2 max-h-40 overflow-auto rounded border p-2 text-xs">
-                    {JSON.stringify(health.body, null, 2)}
-                  </pre>
-                </details>
+                <div className="text-xs">
+                  <TaskDisclosure title="Technical details" defaultOpen={false}>
+                    <pre className="mt-2 max-h-40 overflow-auto rounded border p-2 text-xs">
+                      {JSON.stringify(health.body, null, 2)}
+                    </pre>
+                  </TaskDisclosure>
+                </div>
               </>
             ) : null}
             <p className="text-xs text-muted-foreground">
