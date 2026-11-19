@@ -1,5 +1,7 @@
 import {
   type EnvironmentId,
+  DeliveryDiscoveryInput,
+  DeliveryDiscoverySnapshot,
   OrchestratorMcpFailure,
   type OrchestratorMcpEnvironmentLinksResult,
   OrchestratorMcpThreadInterruptInput,
@@ -28,6 +30,8 @@ import { readCaller, unavailable } from "../mcp/threadAccess.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import * as PeerLinks from "./PeerLinks.ts";
 import * as PeerMcpClient from "./PeerMcpClient.ts";
+import * as DeliveryService from "../delivery/DeliveryService.ts";
+import { emptyDiscovery } from "../delivery/deliveryDiscovery.ts";
 
 // Match local waits: return before MCP client timeouts and T3 Connect's ~100 s idle drop.
 const DEFAULT_WAIT_TIMEOUT_MS = 30_000;
@@ -54,6 +58,12 @@ export class PeerForwarding extends Context.Service<
       environmentId: EnvironmentId,
       params: Tool.Parameters<T>,
     ) => Effect.Effect<Tool.Success<T>, OrchestratorMcpFailure>;
+    /** Discovery keeps routing failures as bounded diagnostics, not peer-supplied error text. */
+    readonly readDelivery: (
+      scope: Scope,
+      input: DeliveryDiscoveryInput,
+      environmentId?: EnvironmentId,
+    ) => Effect.Effect<DeliveryDiscoverySnapshot, never, DeliveryService.DeliveryService>;
     /** `t3_thread_read` there. */
     readonly readThread: (
       scope: Scope,
@@ -191,6 +201,64 @@ const make = Effect.gen(function* () {
     });
   });
 
+  const readDelivery = Effect.fn("PeerForwarding.readDelivery")(function* (
+    scope: Scope,
+    input: DeliveryDiscoveryInput,
+    environmentId?: EnvironmentId,
+  ): Effect.fn.Return<DeliveryDiscoverySnapshot, never, DeliveryService.DeliveryService> {
+    const target = remoteTarget(scope, environmentId);
+    const caller = {
+      environmentId: target ?? scope.environmentId,
+      authorized: scope.capabilities.has("orchestration"),
+      ...(scope.thread === undefined
+        ? {}
+        : { threadId: scope.thread.threadId, providerInstanceId: scope.thread.providerInstanceId }),
+      toolsSupported: true,
+    };
+    if (target === undefined) {
+      const delivery = yield* DeliveryService.DeliveryService;
+      return yield* delivery.discover(input, caller);
+    }
+    const empty = emptyDiscovery(
+      input,
+      { environmentId: target },
+      "remote",
+      DateTime.formatIso(yield* DateTime.now),
+      null,
+    );
+    if (!caller.authorized) return { ...empty, diagnostics: ["unauthorized"] };
+    if (scope.linkedEnvironments === false) return { ...empty, diagnostics: ["remote-unpaired"] };
+    const result = yield* Effect.gen(function* () {
+      yield* forwardingCaller(scope);
+      if (!(yield* links.enabled)) return { ...empty, diagnostics: ["remote-unpaired" as const] };
+      const link = yield* links.get(target).pipe(Effect.mapError(linkStorageFailure));
+      if (Option.isNone(link)) return { ...empty, diagnostics: ["remote-unpaired" as const] };
+      const snapshot = yield* forward<DeliveryDiscoverySnapshot>(
+        scope,
+        "delivery_read",
+        DeliveryDiscoveryInput,
+        DeliveryDiscoverySnapshot,
+        target,
+        input,
+      );
+      return snapshot.environmentId === target
+        ? snapshot
+        : { ...empty, diagnostics: ["environment-mismatch" as const] };
+    }).pipe(Effect.timeout("15 seconds"), Effect.result);
+    if (result._tag === "Success") return result.success;
+    const error = result.failure;
+    return {
+      ...empty,
+      diagnostics: [
+        error._tag === "OrchestratorMcpFailure" && error.code === "capability_denied"
+          ? "unauthorized"
+          : error._tag === "OrchestratorMcpFailure" && error.code === "invalid_request"
+            ? "unsupported-server"
+            : "unreachable",
+      ],
+    };
+  });
+
   const readThread: PeerForwarding["Service"]["readThread"] = (scope, environmentId, input) =>
     forward<OrchestratorMcpThreadReadResult>(
       scope,
@@ -280,6 +348,7 @@ const make = Effect.gen(function* () {
 
   return PeerForwarding.of({
     call,
+    readDelivery,
     readThread,
     interruptThread,
     waitForThread,

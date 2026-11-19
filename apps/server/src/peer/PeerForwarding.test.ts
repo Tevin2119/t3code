@@ -5,6 +5,7 @@ import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   EnvironmentId,
+  OrchestratorMcpFailure,
   type OrchestrationV2Run,
   type OrchestrationV2ThreadShell,
   type SourceControlCloneRepositoryInput,
@@ -42,9 +43,105 @@ import * as McpHttpServer from "../mcp/McpHttpServer.ts";
 import * as McpInvocationContext from "../mcp/McpInvocationContext.ts";
 import { liveThreadShell } from "../mcp/McpToolAccess.testkit.ts";
 import * as PeerForwarding from "./PeerForwarding.ts";
+import * as PeerMcpClient from "./PeerMcpClient.ts";
+import { emptyDiscovery } from "../delivery/deliveryDiscovery.ts";
 import * as PeerLinks from "./PeerLinks.ts";
 import * as PeerLinkRequests from "./PeerLinkRequests.ts";
 import { descriptorOf, layerLinkingEnvironment, linkTo, servePeer } from "./PeerLinks.testkit.ts";
+
+it.effect.each(["local", "unpaired", "links-off", "linked", "old", "denied"] as const)(
+  "delivery reads keep scoped auth and sanitize %s routing",
+  (mode) => {
+    const local = EnvironmentId.make("local");
+    const remote = EnvironmentId.make("remote");
+    const callerId = ThreadId.make("ordinary");
+    const scope: McpInvocationContext.McpInvocationScope = {
+      environmentId: local,
+      capabilities: new Set(["orchestration"]),
+      issuedAt: 1,
+      requestNamespace: "fixture",
+      client: undefined,
+      linkedEnvironments: mode !== "links-off",
+      thread: {
+        threadId: callerId,
+        providerSessionId: "fixture",
+        providerInstanceId: ProviderInstanceId.make("pi"),
+      },
+    };
+    const input = { folder: "/workspace/repo" };
+    const remoteSnapshot = emptyDiscovery(
+      input,
+      { environmentId: remote },
+      "remote-config",
+      "2026-11-16T00:00:00Z",
+      "remote-profile",
+    );
+    const calls: string[] = [];
+    return Effect.gen(function* () {
+      const forwarding = yield* PeerForwarding.PeerForwarding;
+      const result = yield* forwarding.readDelivery(
+        scope,
+        input,
+        mode === "local" ? undefined : remote,
+      );
+      expect(result.environmentId).toBe(mode === "local" ? local : remote);
+      expect(result.diagnostics).toEqual(
+        mode === "local"
+          ? ["disabled"]
+          : mode === "unpaired" || mode === "links-off"
+            ? ["remote-unpaired"]
+            : mode === "old"
+              ? ["unsupported-server"]
+              : mode === "denied"
+                ? ["unauthorized"]
+                : [],
+      );
+      expect(calls).toEqual(
+        ["local", "unpaired", "links-off"].includes(mode) ? [] : ["delivery_read"],
+      );
+      expect(JSON.stringify(result)).not.toContain("private-fixture");
+    }).pipe(
+      Effect.provide([
+        PeerForwarding.layer.pipe(
+          Layer.provide(
+            Layer.mergeAll(
+              NodeCrypto.layer,
+              Layer.mock(PeerLinks.PeerLinks)({
+                enabled: Effect.succeed(true),
+                get: () =>
+                  mode === "local"
+                    ? Effect.die("Local scoped reads must never request a peer link")
+                    : Effect.succeed(
+                        mode === "unpaired"
+                          ? Option.none()
+                          : Option.some({ environmentId: remote } as never),
+                      ),
+              }),
+              Layer.mock(PeerMcpClient.PeerMcpClient)({
+                call: (request) => {
+                  calls.push(request.tool);
+                  return mode === "old" || mode === "denied"
+                    ? Effect.fail(
+                        new OrchestratorMcpFailure({
+                          code: mode === "old" ? "invalid_request" : "capability_denied",
+                          message: "Bearer private-fixture",
+                        }),
+                      )
+                    : Effect.succeed(remoteSnapshot as never);
+                },
+              }),
+              Layer.mock(ThreadManagement.ThreadManagementService)({
+                getThreadShell: () =>
+                  Effect.succeed(liveThreadShell(callerId, { runtimeMode: "full-access" })),
+              }),
+            ),
+          ),
+        ),
+        DeliveryService.layerTest,
+      ]),
+    );
+  },
+);
 
 const laptop = descriptorOf("environment-laptop", "Laptop");
 const box = descriptorOf("environment-box", "Box");

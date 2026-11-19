@@ -15,6 +15,7 @@ import * as PlatformNodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   ComposerContextRecord,
+  DeliveryDiscoverySnapshot,
   DeviceOperationError,
   DeviceSummary,
   OrchestratorMcpTaskRole,
@@ -39,6 +40,7 @@ import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/http";
 
 import * as DeliveryService from "../../apps/server/src/delivery/DeliveryService.ts";
 import { teamDiscussionContext } from "../../apps/server/src/delivery/teamDiscussionContext.ts";
+import { deliveryTurnContext } from "../../apps/server/src/delivery/deliveryDiscovery.ts";
 import { taskPrompt } from "../../apps/server/src/mcp/delegatedTaskModes.ts";
 import * as McpInvocationContext from "../../apps/server/src/mcp/McpInvocationContext.ts";
 import { advertisedJsonSchema } from "../../apps/server/src/mcp/advertisedJsonSchema.ts";
@@ -314,6 +316,7 @@ export const McpToolUseCase = Schema.Struct({
     /** delegate_task `role` for a delegated child. T3 builds the child's first message from it. */
     delegateRole: Schema.optional(OrchestratorMcpTaskRole),
     context: Schema.optional(Schema.String),
+    deliveryDiscovery: Schema.optional(DeliveryDiscoverySnapshot),
     /**
      * The thread leads a team conversation whose rounds are in: T3 tells it who the
      * participants are and what they said, as it does before the orchestrator's turn.
@@ -1081,6 +1084,9 @@ export const buildMessages = (sample: Sample) => {
       ? "You are a subagent started by the parent agent's Agent tool. Your final message goes to the parent agent, not to the user."
       : undefined,
     context,
+    testCase.setup.deliveryDiscovery === undefined
+      ? undefined
+      : deliveryTurnContext(testCase.setup.deliveryDiscovery),
     teamDiscussion === undefined ? undefined : teamDiscussionContext(teamDiscussion),
   ];
   const reminders = base.reminders.toSpliced(base.gitStatusAt, 0, reminder(gitStatus(testCase)));
