@@ -153,6 +153,42 @@ describe("taskPipelineStage", () => {
     expect(stage.detail).toBe("Deployment evidence is missing.");
   });
 
+  it("does not settle at Merged on an earlier run's merge while the task is back at work", () => {
+    // The engine's task payload carries the last publication across runs, with no run id: a
+    // merged publication from an earlier run stays beside a rework run that merged nothing yet.
+    expect(view(task("rework", { publications: ["merged"] }))).toEqual([
+      "Building",
+      "Rework",
+      "warning",
+      false,
+    ]);
+    expect(view(task("implementation", { publications: ["merged"] }))).toEqual([
+      "Building",
+      null,
+      "info",
+      false,
+    ]);
+    expect(view(task("planning", { publications: ["merged"] }))).toEqual([
+      "Planning",
+      null,
+      "info",
+      false,
+    ]);
+    // Outside the work lanes a merge still settles the task.
+    expect(view(task("completed", { publications: ["merged"] }))).toEqual([
+      "Merged",
+      null,
+      "success",
+      true,
+    ]);
+    expect(view(task("approved", { publications: ["merged"] }))).toEqual([
+      "Merged",
+      null,
+      "success",
+      true,
+    ]);
+  });
+
   it("ignores a deployment of an earlier run while a new run builds", () => {
     expect(
       view(
