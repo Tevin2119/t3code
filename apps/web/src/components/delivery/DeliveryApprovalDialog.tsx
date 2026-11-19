@@ -145,7 +145,7 @@ export function DeliveryApprovalDialog(props: {
               <Input
                 ref={keyInput}
                 type="password"
-                autoComplete="off"
+                autoComplete="new-password"
                 aria-label={props.keyLabel}
                 placeholder={props.keyPlaceholder ?? props.keyLabel}
                 autoFocus={!props.nameField}
