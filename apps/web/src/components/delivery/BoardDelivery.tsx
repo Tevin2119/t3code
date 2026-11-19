@@ -1,7 +1,12 @@
 import { useAtomValue } from "@effect/atom-react";
 import type { EnvironmentId } from "@t3tools/contracts";
 import { useState } from "react";
-import { deliveryProgress, deliveryTaskRequest, parseBoardDelivery } from "../../lib/boardDelivery";
+import {
+  deliveryProgress,
+  deliveryTaskRequest,
+  parseBoardDelivery,
+  validBoardDeliveryRoutes,
+} from "../../lib/boardDelivery";
 import {
   deliveryEnvironment,
   useDeliveryAct,
@@ -47,14 +52,30 @@ export function BoardDelivery({
   const [autoMerge, setAutoMerge] = useState(false);
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
-  const selectedBoard = snapshot?.boards.find((b) => b.id === board);
-  const routes =
-    snapshot?.routes.filter(
-      (r) => !task || (r.repository === task.repository && r.base === task.base),
+  const routes = snapshot
+    ? validBoardDeliveryRoutes(snapshot).filter(
+        (route) => !task || (route.repository === task.repository && route.base === task.base),
+      )
+    : [];
+  const projects =
+    snapshot?.projects.filter(
+      (project) =>
+        project.identityProblem === null &&
+        !!project.path &&
+        !!project.environment.trim() &&
+        !!project.branch.trim() &&
+        snapshot.projects.filter((row) => row.id === project.id).length === 1,
     ) ?? [];
+  const selectedBoard = snapshot?.boards.filter((item) => item.id === board);
+  const canConfigure =
+    selectedBoard?.length === 1 &&
+    !!selectedBoard[0]?.repository &&
+    !!selectedBoard[0]?.base &&
+    projects.some((item) => item.id === project);
   const linked = snapshot?.tracking.find((t) => t.request?.task === task?.id);
   const paused = task?.held || task?.state === "moving" || task?.state === "moved";
-  const disabled = !allowed || stale || busy || !snapshot || !!read.error || !!paused;
+  const disabled =
+    !allowed || stale || busy || !snapshot || snapshot.version !== 1 || !!read.error || !!paused;
   const submit = async (path: string, body: Record<string, unknown>) => {
     if (disabled || !key || !by.trim()) return;
     setBusy(true);
@@ -84,7 +105,7 @@ export function BoardDelivery({
         defaultOpen={false}
       >
         <div className="mt-3 flex flex-col gap-3">
-          {read.error || (!snapshot && !read.isPending) ? (
+          {read.error || ((!snapshot || snapshot.version !== 1) && !read.isPending) ? (
             <p role="status">
               This engine does not provide board delivery routes. Update the engine before
               configuring delivery.
@@ -123,16 +144,10 @@ export function BoardDelivery({
               <Choice
                 label="Deployment destination"
                 value={project}
-                items={snapshot.projects
-                  .filter(
-                    (p) =>
-                      p.repository === selectedBoard?.repository &&
-                      p.branch === selectedBoard?.base,
-                  )
-                  .map((p) => ({
-                    value: p.id,
-                    label: `${p.environment} / ${p.branch} / ${p.mode}`,
-                  }))}
+                items={projects.map((p) => ({
+                  value: p.id,
+                  label: `${p.repository} / ${p.environment} / ${p.branch} / ${p.mode}`,
+                }))}
                 onChange={setProject}
               />
               <label className="flex items-center gap-2 text-sm">
@@ -143,8 +158,8 @@ export function BoardDelivery({
                 Allow this route to merge approved PRs after host checks
               </label>
               <p className="text-sm text-muted-foreground">
-                If no destination matches, configure a deployment above with the board's repository
-                and target branch.
+                Choose the exact project and environment. The engine verifies its registered
+                repository and target branch before saving this route.
               </p>
               {snapshot.routes.map((r) => (
                 <div key={r.id} className="flex items-center justify-between gap-2 text-sm">
@@ -217,12 +232,15 @@ export function BoardDelivery({
                   disabled ||
                   !key ||
                   !by.trim() ||
-                  (task ? !route : !board || !project || !/^[\w-]{1,80}$/.test(route))
+                  (task
+                    ? !routes.some((item) => item.id === route)
+                    : !canConfigure || !/^[\w-]{1,80}$/.test(route))
                 }
                 onClick={() =>
                   task
                     ? requestTask()
-                    : void submit("/api/delivery/routes", {
+                    : canConfigure &&
+                      void submit("/api/delivery/routes", {
                         id: route,
                         board,
                         project,

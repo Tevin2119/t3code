@@ -1,5 +1,8 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
+  DeliveryActInput,
+  DeliveryDiscoveryInput,
+  DeliveryReadInput,
   EnvironmentId,
   ProviderDriverKind,
   ProviderInstanceId,
@@ -24,7 +27,12 @@ import { deriveProviderInstanceConfigMap } from "../provider/ProviderInstanceReg
 import { buildRuntimeInstructions } from "@t3tools/provider-core/server/runtimeInstructions";
 import * as DeliveryService from "./DeliveryService.ts";
 import * as DeliveryThreadSession from "./DeliveryThreadSession.ts";
-import { DiscoveryDelivery } from "./deliveryDiscovery.ts";
+import {
+  DiscoveryDelivery,
+  discoveryTarget,
+  verifiedProjectRepository,
+} from "./deliveryDiscovery.ts";
+import { loadDeliveryCaptures } from "./deliveryCapture.testkit.ts";
 const decodeDiscoveryDelivery = Schema.decodeUnknownSync(DiscoveryDelivery);
 
 const REPO = "C:/work/repo";
@@ -59,6 +67,14 @@ interface Identity {
 }
 
 interface Engine {
+  captures?: Array<{
+    path: string;
+    status: number;
+    bytes: Uint8Array<ArrayBuffer>;
+    headers: Readonly<Record<string, string>>;
+    remaining: number;
+  }>;
+  unexpectedCaptures?: string[];
   revision?: string;
   readonly requests: Array<{ method: string; path: string; search: string; body: unknown }>;
   readonly sessions: Map<string, Identity>;
@@ -123,6 +139,29 @@ const layer = (
                   ? JSON.parse(new TextDecoder().decode(request.body.body))
                   : undefined,
             });
+            if (fake.captures) {
+              const capture = fake.captures.find(
+                (entry) => entry.path === url.pathname + url.search && entry.remaining > 0,
+              );
+              if (request.method !== "GET" || !capture) {
+                fake.unexpectedCaptures?.push(`${request.method} ${url.pathname}${url.search}`);
+                return Effect.fail(
+                  new Error(
+                    "Uncaptured request; network and mock fallback are forbidden.",
+                  ) as never,
+                );
+              }
+              capture.remaining--;
+              return Effect.succeed(
+                HttpClientResponse.fromWeb(
+                  request,
+                  new Response(capture.bytes.length ? capture.bytes : null, {
+                    status: capture.status,
+                    headers: capture.headers,
+                  }),
+                ),
+              );
+            }
             const json = (value: unknown, status = 200) =>
               Effect.succeed(
                 HttpClientResponse.fromWeb(
@@ -142,8 +181,46 @@ const layer = (
                 fake.replies[url.pathname + url.search],
                 fake.statuses?.[url.pathname + url.search] ?? 200,
               );
-            if (fake.replies && Object.hasOwn(fake.replies, url.pathname))
-              return json(fake.replies[url.pathname], fake.statuses?.[url.pathname] ?? 200);
+            if (fake.replies && Object.hasOwn(fake.replies, url.pathname)) {
+              const value = fake.replies[url.pathname];
+              if (
+                url.pathname === "/api/delivery" &&
+                url.search &&
+                value &&
+                typeof value === "object" &&
+                "version" in value
+              ) {
+                const data = decodeDiscoveryDelivery(value);
+                const routeId = url.searchParams.get("route");
+                const board =
+                  url.searchParams.get("board") ??
+                  data.routes.find((r) => r.id === routeId)?.board ??
+                  null;
+                const routes = data.routes.filter(
+                  (r) => (!board || r.board === board) && (!routeId || r.id === routeId),
+                );
+                const selected = board && routes.length === 1 ? routes[0] : undefined;
+                return json(
+                  {
+                    ...data,
+                    scope: { board, route: routeId, project: null },
+                    selection: {
+                      state: selected
+                        ? "selected"
+                        : board && routes.length > 1
+                          ? "ambiguous"
+                          : "unconfigured",
+                      routeId: selected?.id ?? null,
+                      projectId: selected?.project ?? null,
+                      problem: null,
+                    },
+                    routes,
+                  },
+                  fake.statuses?.[url.pathname] ?? 200,
+                );
+              }
+              return json(value, fake.statuses?.[url.pathname] ?? 200);
+            }
             if (url.pathname === "/api/health" && fake.health)
               return json({ engine: "delivery", ok: true, ...fake.health });
             if (request.method === "POST" && url.pathname === "/api/sessions") {
@@ -175,7 +252,12 @@ const layer = (
                 .replaceAll("\\", "/")
                 .toLowerCase()
                 .startsWith(REPO.toLowerCase());
-              return json({ readable: true, root: inside ? REPO : folder });
+              return json({
+                readable: true,
+                root: inside ? REPO : folder,
+                canonicalPath: inside ? REPO : folder,
+                identityProblem: null,
+              });
             }
             const launch = /^\/api\/sessions\/([\w-]+)\/launch$/.exec(url.pathname);
             if (launch) {
@@ -233,8 +315,17 @@ const discoveryEngine = () => {
   const fake = engine();
   fake.health = { profile: "fixture", home: "C:/fixture/engine" };
   fake.replies = {
-    "/api/repositories/repo/discovery-check": { id: "repo", path: REPO, kind: "own", ok: true },
-    "/api/repositories": [{ id: "repo", path: REPO, kind: "own", ok: true }],
+    "/api/repositories/repo/discovery-check": {
+      id: "repo",
+      path: REPO,
+      canonicalPath: REPO,
+      identityProblem: null,
+      kind: "own",
+      ok: true,
+    },
+    "/api/repositories": [
+      { id: "repo", path: REPO, canonicalPath: REPO, identityProblem: null, kind: "own", ok: true },
+    ],
     "/api/teams": [
       {
         team: "development",
@@ -244,6 +335,9 @@ const discoveryEngine = () => {
       },
     ],
     "/api/delivery": {
+      version: 1,
+      scope: { board: null, route: null, project: null },
+      selection: { state: "unconfigured", routeId: null, projectId: null, problem: null },
       boards: [{ id: "work", repository: "repo", base: "master" }],
       routes: [
         {
@@ -253,6 +347,7 @@ const discoveryEngine = () => {
           base: "master",
           project: "staging",
           auto_merge: 0,
+          identityProblem: null,
           updated: "2026-11-16T00:00:00Z",
         },
       ],
@@ -263,6 +358,8 @@ const discoveryEngine = () => {
           branch: "master",
           environment: "staging",
           mode: "manual",
+          path: REPO,
+          identityProblem: null,
           liveCommit: null,
           liveObservedAt: null,
           liveProblem: null,
@@ -274,7 +371,451 @@ const discoveryEngine = () => {
   return fake;
 };
 
+const aliasDiscoveryEngine = () => {
+  const fake = discoveryEngine();
+  const data = decodeDiscoveryDelivery(fake.replies?.["/api/delivery"]);
+  fake.replies = {
+    ...fake.replies,
+    "/api/repositories": [
+      { id: "alias", path: REPO, canonicalPath: REPO, identityProblem: null, kind: "own" },
+      { id: "repo", path: REPO, canonicalPath: REPO, identityProblem: null, kind: "own" },
+    ],
+    "/api/delivery": {
+      ...data,
+      projects: data.projects.map((project) => ({ ...project, repository: "alias" })),
+    },
+    "/api/delivery/requests": { id: "request" },
+  };
+  return fake;
+};
+
 describe("DeliveryService", () => {
+  it.effect("keeps endpoint provenance when repository 409 competes with scoped 404", () => {
+    const fake = discoveryEngine();
+    fake.replies = { ...fake.replies, "/api/delivery?board=work": { error: "Missing board" } };
+    fake.statuses = {
+      "/api/repositories/repo/discovery-check": 409,
+      "/api/delivery?board=work": 404,
+    };
+    return Effect.gen(function* () {
+      const repositoryStarted = yield* Deferred.make<void>();
+      const snapshotStarted = yield* Deferred.make<void>();
+      fake.beforeRequest = (url) => {
+        if (url.pathname.endsWith("/discovery-check"))
+          return Effect.gen(function* () {
+            yield* Deferred.succeed(repositoryStarted, undefined);
+            yield* Deferred.await(snapshotStarted);
+          }).pipe(Effect.uninterruptible);
+        if (url.pathname === "/api/delivery" && url.search === "?board=work")
+          return Effect.gen(function* () {
+            yield* Deferred.succeed(snapshotStarted, undefined);
+            yield* Deferred.await(repositoryStarted);
+          }).pipe(Effect.uninterruptible);
+        return Effect.void;
+      };
+      const service = yield* DeliveryService.DeliveryService;
+      const result = yield* service.discover(
+        { folder: REPO, board: "work", team: "development", preflight: true },
+        ordinaryCaller,
+      );
+      // Either propagated failure is unsupported; only a snapshot 409 is invalid-request.
+      expect(result.diagnostics).toEqual(["unsupported-server"]);
+      expect(fake.requests.some((r) => r.search === "?board=work")).toBe(true);
+      expect(fake.requests.some((r) => r.path.endsWith("/discovery-check"))).toBe(true);
+      expect(fake.requests.every((r) => r.method === "GET")).toBe(true);
+    }).pipe(
+      Effect.provide(
+        layer(fake, { prefix: "competing-discovery-failures-", environment: discoveryProfile }),
+      ),
+    );
+  });
+
+  it.effect.each(["legacy", "unavailable", "wrong-folder"])(
+    "refuses unverifiable canonical registration %s without POST",
+    (failure) => {
+      const fake = discoveryEngine();
+      const registration = { id: "repo", path: REPO, kind: "own" };
+      fake.replies = {
+        ...fake.replies,
+        "/api/repositories": [
+          failure === "legacy"
+            ? registration
+            : {
+                ...registration,
+                canonicalPath: failure === "wrong-folder" ? "/another/repository" : null,
+                identityProblem: failure === "unavailable" ? "Unreadable" : null,
+              },
+        ],
+      };
+      return Effect.gen(function* () {
+        const service = yield* DeliveryService.DeliveryService;
+        expect(
+          (yield* service.discover(
+            { folder: REPO, board: "work", team: "development", preflight: true },
+            ordinaryCaller,
+          )).preflight,
+        ).toBe("blocked");
+        expect(
+          (yield* service
+            .act({
+              path: "/api/delivery/requests",
+              body: { route: "release", team: "development" },
+            })
+            .pipe(Effect.result))._tag,
+        ).toBe("Failure");
+        expect(fake.requests.every((r) => r.method === "GET")).toBe(true);
+      }).pipe(
+        Effect.provide(
+          layer(fake, { prefix: "canonical-witness-refusal-", environment: discoveryProfile }),
+        ),
+      );
+    },
+  );
+
+  it.effect("uses engine canonical folder evidence rather than raw caller spelling", () => {
+    const fake = aliasDiscoveryEngine();
+    const data = decodeDiscoveryDelivery(fake.replies?.["/api/delivery"]);
+    const canonical = "/users/tevin/repo";
+    fake.replies = {
+      ...fake.replies,
+      "/api/repository": {
+        readable: true,
+        root: "/Users/Tevin/Link",
+        canonicalPath: canonical,
+        identityProblem: null,
+      },
+      "/api/repositories": [
+        {
+          id: "repo",
+          path: "/Users/Tevin/Repo",
+          canonicalPath: canonical,
+          identityProblem: null,
+          kind: "own",
+        },
+        {
+          id: "alias",
+          path: "/Users/Tevin/Link",
+          canonicalPath: canonical,
+          identityProblem: null,
+          kind: "own",
+        },
+      ],
+      "/api/repositories/repo/discovery-check": {
+        id: "repo",
+        path: "/Users/Tevin/Repo",
+        kind: "own",
+        ok: true,
+      },
+      "/api/delivery": {
+        ...data,
+        projects: data.projects.map((project) => ({ ...project, path: canonical })),
+      },
+    };
+    return Effect.gen(function* () {
+      const service = yield* DeliveryService.DeliveryService;
+      expect(
+        (yield* service.discover(
+          { folder: "/Users/Tevin/Link", board: "work", team: "development", preflight: true },
+          ordinaryCaller,
+        )).preflight,
+      ).toBe("ready");
+      fake.replies = {
+        ...fake.replies,
+        "/api/repository": { readable: true, root: "/Users/Tevin/Link" },
+      };
+      expect(
+        (yield* service.discover(
+          { folder: "/Users/Tevin/Link", board: "work", team: "development", preflight: true },
+          ordinaryCaller,
+        )).preflight,
+      ).toBe("blocked");
+      expect(fake.requests.every((r) => r.method === "GET")).toBe(true);
+    }).pipe(
+      Effect.provide(
+        layer(fake, { prefix: "canonical-caller-witness-", environment: discoveryProfile }),
+      ),
+    );
+  });
+
+  it.effect.each([
+    "foreign-board",
+    "stale-repository",
+    "stale-base",
+    "missing-route",
+    "genuine-null",
+  ] as const)("retains round-one task request provenance: %s", (scenario) => {
+    const fake = discoveryEngine();
+    const data = decodeDiscoveryDelivery(fake.replies?.["/api/delivery"]);
+    const task = {
+      id: "existing",
+      state: "ready",
+      repository: scenario === "stale-repository" ? "old-repo" : "repo",
+      base: scenario === "stale-base" ? "old-branch" : "master",
+    };
+    const request =
+      scenario === "genuine-null"
+        ? null
+        : {
+            id: "durable-request",
+            task: "existing",
+            origin: "thread:local/ordinary",
+            ...(scenario === "missing-route"
+              ? {}
+              : { route: scenario === "foreign-board" ? "foreign-route" : "release" }),
+          };
+    fake.replies = {
+      ...fake.replies,
+      "/api/delivery?task=existing": {
+        ...data,
+        boards: [...data.boards, { id: "foreign", repository: "repo", base: "master" }],
+        routes: [...data.routes, { ...data.routes[0]!, id: "foreign-route", board: "foreign" }],
+        tracking: [{ task, request }],
+      },
+      "/api/delivery?board=work&task=existing": {
+        error: "Task request must not be scoped to this board",
+      },
+    };
+    fake.statuses = { "/api/delivery?board=work&task=existing": 409 };
+    return Effect.gen(function* () {
+      const service = yield* DeliveryService.DeliveryService;
+      const observed = yield* service.discover(
+        { folder: REPO, board: "work", team: "development", task: "existing", preflight: true },
+        ordinaryCaller,
+      );
+      expect(observed.task?.id).toBe("existing");
+      expect(observed.preflight).toBe(scenario === "genuine-null" ? "ready" : "blocked");
+      expect(observed.diagnostics).toEqual(
+        scenario === "genuine-null" ? [] : ["missing-deployment"],
+      );
+      expect(observed.linkedTasks).toEqual([]);
+      expect(fake.requests.some((r) => r.search === "?board=work")).toBe(true);
+      expect(fake.requests.some((r) => r.search === "?board=work&task=existing")).toBe(false);
+      expect(fake.requests.every((r) => r.method === "GET")).toBe(true);
+      expect(fake.sessions.size).toBe(0);
+    }).pipe(
+      Effect.provide(
+        layer(fake, { prefix: "round-one-request-provenance-", environment: discoveryProfile }),
+      ),
+    );
+  });
+
+  it.effect.each([false, true])(
+    "keeps ordinary task inventory without a durable request (preflight %s)",
+    (preflight) => {
+      const fake = discoveryEngine();
+      const data = decodeDiscoveryDelivery(fake.replies?.["/api/delivery"]);
+      fake.replies = {
+        ...fake.replies,
+        "/api/delivery?task=ordinary": {
+          ...data,
+          tracking: [
+            {
+              request: null,
+              task: { id: "ordinary", state: "ready", repository: "repo", base: "master" },
+            },
+          ],
+        },
+        "/api/delivery?board=work&task=ordinary": { error: "No request" },
+      };
+      fake.statuses = { "/api/delivery?board=work&task=ordinary": 409 };
+      return Effect.gen(function* () {
+        const service = yield* DeliveryService.DeliveryService;
+        const observed = yield* service.discover(
+          { folder: REPO, board: "work", team: "development", task: "ordinary", preflight },
+          ordinaryCaller,
+        );
+        expect(observed.diagnostics).toEqual([]);
+        expect(observed.preflight).toBe(preflight ? "ready" : "not-requested");
+        expect(observed.task?.id).toBe("ordinary");
+        expect(observed.linkedTasks).toEqual([]);
+        expect(fake.requests.some((r) => r.search === "?board=work")).toBe(true);
+        expect(fake.requests.some((r) => r.search === "?board=work&task=ordinary")).toBe(false);
+        expect(fake.requests.every((r) => r.method === "GET")).toBe(true);
+      }).pipe(
+        Effect.provide(
+          layer(fake, { prefix: "ordinary-no-request-", environment: discoveryProfile }),
+        ),
+      );
+    },
+  );
+
+  it.effect("recognizes task not found after board-first scoped selection", () => {
+    const fake = discoveryEngine();
+    const data = decodeDiscoveryDelivery(fake.replies?.["/api/delivery"]);
+    fake.replies = {
+      ...fake.replies,
+      "/api/delivery?task=gone": {
+        ...data,
+        tracking: [
+          {
+            request: {
+              id: "request",
+              task: "gone",
+              route: "release",
+              origin: "thread:local/ordinary",
+            },
+            task: { id: "gone", state: "ready", repository: "repo", base: "master" },
+          },
+        ],
+      },
+      "/api/delivery?board=work&task=gone": { error: "Gone" },
+    };
+    fake.statuses = { "/api/delivery?board=work&task=gone": 404 };
+    return Effect.gen(function* () {
+      const service = yield* DeliveryService.DeliveryService;
+      expect(
+        (yield* service.discover({ folder: REPO, board: "work", task: "gone" }, ordinaryCaller))
+          .diagnostics,
+      ).toEqual(["task-not-found"]);
+    }).pipe(
+      Effect.provide(layer(fake, { prefix: "scoped-task-gone-", environment: discoveryProfile })),
+    );
+  });
+
+  it.effect.each([false, true])(
+    "uses the saved board registration with same-folder aliases (reverse: %s)",
+    (reverse) => {
+      const fake = aliasDiscoveryEngine();
+      if (reverse)
+        fake.replies = {
+          ...fake.replies,
+          "/api/repositories": [
+            { id: "repo", path: REPO, canonicalPath: REPO, identityProblem: null, kind: "own" },
+            { id: "alias", path: REPO, canonicalPath: REPO, identityProblem: null, kind: "own" },
+          ],
+        };
+      return Effect.gen(function* () {
+        const service = yield* DeliveryService.DeliveryService;
+        const observed = yield* service.discover(
+          { folder: REPO, board: "work", team: "development", preflight: true },
+          ordinaryCaller,
+        );
+        expect(observed.preflight).toBe("ready");
+        expect(observed.repository?.id).toBe("repo");
+        expect(observed.boardDeployment.projectId).toBe("staging");
+        expect(observed.routes[0]?.autoMerge).toBe(false);
+        expect(observed.deployments[0]?.mode).toBe("manual");
+        expect(fake.requests).toHaveLength(7);
+        yield* service.act({
+          path: "/api/delivery/requests",
+          body: { id: "request", route: "release", team: "development" },
+        });
+        expect(fake.requests.filter((request) => request.method === "POST")).toHaveLength(1);
+        expect(
+          fake.requests
+            .filter((request) => request.path.endsWith("/discovery-check"))
+            .map((request) => request.path),
+        ).toEqual([
+          "/api/repositories/repo/discovery-check",
+          "/api/repositories/repo/discovery-check",
+        ]);
+        expect(fake.sessions.size).toBe(0);
+      }).pipe(
+        Effect.provide(layer(fake, { prefix: "canonical-alias-", environment: discoveryProfile })),
+      );
+    },
+  );
+  it.effect.each([
+    "conflicting-board-id",
+    "conflicting-project-id",
+    "wrong-folder",
+    "unknown-alias",
+    "empty-path",
+    "qualification",
+    "unverified-project",
+  ])("refuses invalid alias identity %s without dispatch", (failure) => {
+    const fake = aliasDiscoveryEngine();
+    const data = decodeDiscoveryDelivery(fake.replies?.["/api/delivery"]);
+    const registrations = [
+      { id: "repo", path: REPO, canonicalPath: REPO, identityProblem: null, kind: "own" },
+      ...(failure === "unknown-alias"
+        ? []
+        : [
+            {
+              id: "alias",
+              path:
+                failure === "wrong-folder" ? "C:/different" : failure === "empty-path" ? "" : REPO,
+              canonicalPath: failure === "wrong-folder" ? "C:/different" : REPO,
+              identityProblem: null,
+              kind: failure === "qualification" ? "qualification" : "own",
+            },
+          ]),
+      ...(failure.startsWith("conflicting")
+        ? [
+            {
+              id: failure === "conflicting-board-id" ? "repo" : "alias",
+              path: "C:/different",
+              canonicalPath: "C:/different",
+              identityProblem: null,
+              kind: "own",
+            },
+          ]
+        : []),
+    ];
+    fake.replies = {
+      ...fake.replies,
+      "/api/repositories": registrations,
+      "/api/delivery": {
+        ...data,
+        projects: data.projects.map((project) => ({
+          ...project,
+          identityProblem:
+            failure === "unverified-project" ? "Registration cannot be verified" : null,
+        })),
+      },
+    };
+    return Effect.gen(function* () {
+      const service = yield* DeliveryService.DeliveryService;
+      expect(
+        (yield* service.discover(
+          { folder: REPO, board: "work", team: "development", preflight: true },
+          ordinaryCaller,
+        )).preflight,
+      ).toBe("blocked");
+      const result = yield* service
+        .act({ path: "/api/delivery/requests", body: { route: "release", team: "development" } })
+        .pipe(Effect.result);
+      expect(result._tag).toBe("Failure");
+      expect(fake.requests.every((request) => request.method === "GET")).toBe(true);
+    }).pipe(
+      Effect.provide(layer(fake, { prefix: "invalid-alias-", environment: discoveryProfile })),
+    );
+  });
+  it.effect("keeps boards on canonical aliases ambiguous until a board is selected", () => {
+    const fake = aliasDiscoveryEngine();
+    const data = decodeDiscoveryDelivery(fake.replies?.["/api/delivery"]);
+    fake.replies = {
+      ...fake.replies,
+      "/api/delivery": {
+        ...data,
+        boards: [...data.boards, { id: "other-board", repository: "alias", base: "master" }],
+      },
+    };
+    return Effect.gen(function* () {
+      const service = yield* DeliveryService.DeliveryService;
+      const ambiguous = yield* service.discover(
+        { folder: REPO, team: "development", preflight: true },
+        ordinaryCaller,
+      );
+      expect(ambiguous.repository).toBeNull();
+      expect(ambiguous.boards).toHaveLength(2);
+      expect(ambiguous.diagnostics).toContain("ambiguous-board");
+      expect(ambiguous.preflight).toBe("blocked");
+      expect(fake.requests.some((request) => request.path.endsWith("/discovery-check"))).toBe(
+        false,
+      );
+      const selected = yield* service.discover(
+        { folder: REPO, board: "work", team: "development", preflight: true },
+        ordinaryCaller,
+      );
+      expect(selected.preflight).toBe("ready");
+      expect(selected.repository?.id).toBe("repo");
+      expect(fake.requests.every((request) => request.method === "GET")).toBe(true);
+    }).pipe(
+      Effect.provide(layer(fake, { prefix: "alias-board-choice-", environment: discoveryProfile })),
+    );
+  });
+
   it.effect(
     "keeps final launch identity inside the original three-second preparation deadline",
     () => {
@@ -365,8 +906,30 @@ describe("DeliveryService", () => {
     );
   });
   it.effect.each([
-    { name: "nonzero Git", body: { id: "repo", path: REPO, kind: "own", ok: false }, status: 200 },
-    { name: "another id", body: { id: "other", path: REPO, kind: "own", ok: true }, status: 200 },
+    {
+      name: "nonzero Git",
+      body: {
+        id: "repo",
+        path: REPO,
+        canonicalPath: REPO,
+        identityProblem: null,
+        kind: "own",
+        ok: false,
+      },
+      status: 200,
+    },
+    {
+      name: "another id",
+      body: {
+        id: "other",
+        path: REPO,
+        canonicalPath: REPO,
+        identityProblem: null,
+        kind: "own",
+        ok: true,
+      },
+      status: 200,
+    },
     {
       name: "changed path",
       body: { id: "repo", path: "C:/other", kind: "own", ok: true },
@@ -374,7 +937,14 @@ describe("DeliveryService", () => {
     },
     {
       name: "qualification",
-      body: { id: "repo", path: REPO, kind: "qualification", ok: true },
+      body: {
+        id: "repo",
+        path: REPO,
+        canonicalPath: REPO,
+        identityProblem: null,
+        kind: "qualification",
+        ok: true,
+      },
       status: 200,
     },
     { name: "missing registration", body: { code: "repository-not-found" }, status: 404 },
@@ -584,9 +1154,24 @@ describe("DeliveryService", () => {
     fake.replies = {
       ...fake.replies,
       "/api/repositories?discovery=1": [
-        { id: "repo", title: "Repository", path: REPO, defaultBase: "master", kind: "own" },
+        {
+          id: "repo",
+          title: "Repository",
+          path: REPO,
+          canonicalPath: REPO,
+          identityProblem: null,
+          defaultBase: "master",
+          kind: "own",
+        },
       ],
-      "/api/repositories/repo/discovery-check": { id: "repo", path: REPO, kind: "own", ok: false },
+      "/api/repositories/repo/discovery-check": {
+        id: "repo",
+        path: REPO,
+        canonicalPath: REPO,
+        identityProblem: null,
+        kind: "own",
+        ok: false,
+      },
     };
     return Effect.gen(function* () {
       const service = yield* DeliveryService.DeliveryService;
@@ -655,7 +1240,16 @@ describe("DeliveryService", () => {
       const fake = engine();
       fake.health = { profile: "fixture", home: "C:/fixture/engine" };
       fake.replies = {
-        "/api/repositories": [{ id: "repo", path: REPO, kind: "own", ok: true }],
+        "/api/repositories": [
+          {
+            id: "repo",
+            path: REPO,
+            canonicalPath: REPO,
+            identityProblem: null,
+            kind: "own",
+            ok: true,
+          },
+        ],
         "/api/teams": [
           {
             team: "development",
@@ -715,7 +1309,7 @@ describe("DeliveryService", () => {
         );
         expect(snapshot.repository).toEqual({ id: "repo", root: REPO });
         expect(snapshot.boards).toEqual([{ id: "work", branch: "master" }]);
-        expect(snapshot.routes[0]).toMatchObject({ id: "release", valid: true });
+        expect(snapshot.routes[0]).toMatchObject({ id: "release", valid: false });
         expect(snapshot.linkedTasks).toEqual([]);
         expect(snapshot.deployments[0]?.environment).toBe("[redacted]");
         expect(snapshot.deployments[0]?.liveHealthy).toBeNull();
@@ -745,10 +1339,6 @@ describe("DeliveryService", () => {
     "bounds all discovery phases with $delay responses (preflight: $preflight)",
     ({ delay, preflight, succeeds }) => {
       const fake = discoveryEngine();
-      fake.replies = {
-        ...fake.replies,
-        "/api/boards/work/deployment": { deploymentProjectId: "staging", state: "linked" },
-      };
       return Effect.gen(function* () {
         const started = yield* Deferred.make<void>();
         fake.beforeRequest = () =>
@@ -1118,9 +1708,147 @@ describe("DeliveryService", () => {
     );
   });
   it.effect(
-    "preflights explicit saved destinations freshly, without starting or repairing work",
+    "rejects a scoped response for another board and refuses task identity conflicts",
     () => {
       const fake = discoveryEngine();
+      const data = decodeDiscoveryDelivery(fake.replies?.["/api/delivery"]);
+      fake.replies = {
+        ...fake.replies,
+        "/api/delivery?board=work": {
+          ...data,
+          scope: { board: "other", route: null, project: null },
+          selection: { state: "selected", routeId: "release", projectId: "staging", problem: null },
+        },
+      };
+      return Effect.gen(function* () {
+        const service = yield* DeliveryService.DeliveryService;
+        const result = yield* service.discover(
+          { folder: REPO, board: "work", team: "development", preflight: true },
+          ordinaryCaller,
+        );
+        expect(result.preflight).toBe("blocked");
+        expect(result.boardDeployment.projectId).toBeNull();
+        fake.replies = { ...fake.replies, "/api/delivery?task=unknown": { error: "Not found" } };
+        fake.statuses = { "/api/delivery?task=unknown": 404 };
+        expect(
+          (yield* service.discover({ folder: REPO, task: "unknown", fresh: true }, ordinaryCaller))
+            .diagnostics,
+        ).toEqual(["task-not-found"]);
+        fake.statuses = { "/api/delivery?task=unknown": 409 };
+        expect(
+          (yield* service.discover({ folder: REPO, task: "unknown", fresh: true }, ordinaryCaller))
+            .diagnostics,
+        ).toEqual(["invalid-request"]);
+        expect(fake.requests.every((r) => r.method === "GET")).toBe(true);
+      }).pipe(
+        Effect.provide(layer(fake, { prefix: "snapshot-scope-", environment: discoveryProfile })),
+      );
+    },
+  );
+  it.effect(
+    "selects a task destination only from its durable request among explicit environments",
+    () => {
+      const fake = aliasDiscoveryEngine();
+      const data = decodeDiscoveryDelivery(fake.replies?.["/api/delivery"]);
+      const path = "/api/delivery?board=work&task=task-known";
+      const row = {
+        request: {
+          id: "request",
+          task: "task-known",
+          route: "production",
+          origin: "thread:local/ordinary",
+        },
+        task: { id: "task-known", state: "pr-open", repository: "repo", base: "master" },
+      };
+      const scoped = {
+        ...data,
+        scope: { board: "work", route: null, project: null },
+        selection: {
+          state: "selected",
+          routeId: "production",
+          projectId: "production",
+          problem: null,
+        },
+        routes: [...data.routes, { ...data.routes[0]!, id: "production", project: "production" }],
+        projects: [
+          ...data.projects,
+          { ...data.projects[0]!, id: "production", environment: "production" },
+        ],
+        tracking: [row],
+      };
+      fake.replies = { ...fake.replies, "/api/delivery?task=task-known": scoped, [path]: scoped };
+      return Effect.gen(function* () {
+        const service = yield* DeliveryService.DeliveryService;
+        const input = {
+          folder: REPO,
+          board: "work",
+          task: "task-known",
+          team: "development",
+          preflight: true,
+        };
+        const result = yield* service.discover(input, ordinaryCaller);
+        expect(result.preflight).toBe("ready");
+        expect(result.boardDeployment.projectId).toBe("production");
+        for (const tracking of [
+          [{ ...row, request: { ...row.request, task: "other" } }],
+          [{ ...row, task: { ...row.task, repository: "alias" } }],
+          [{ ...row, task: { ...row.task, base: "main" } }],
+          [],
+        ]) {
+          fake.replies = { ...fake.replies, [path]: { ...scoped, tracking } };
+          const refused = yield* service.discover(input, ordinaryCaller);
+          expect(refused.preflight).toBe("blocked");
+          expect(refused.linkedTasks).toEqual([]);
+        }
+        expect(fake.requests.every((r) => r.method === "GET")).toBe(true);
+      }).pipe(
+        Effect.provide(
+          layer(fake, { prefix: "snapshot-task-route-", environment: discoveryProfile }),
+        ),
+      );
+    },
+  );
+  it.effect.each([
+    { name: "old snapshot", mutation: "version" },
+    { name: "wrong canonical path", mutation: "path" },
+    { name: "invalid saved identity", mutation: "identity" },
+    { name: "wrong branch", mutation: "branch" },
+  ])("refuses $name without dispatch or an invented board endpoint", ({ mutation }) => {
+    const fake = discoveryEngine();
+    const original = decodeDiscoveryDelivery(fake.replies?.["/api/delivery"]);
+    const data = {
+      ...original,
+      version: mutation === "version" ? undefined : original.version,
+      projects: original.projects.map((p) => ({
+        ...p,
+        path: mutation === "path" ? "C:/other/repo" : p.path,
+        identityProblem: mutation === "identity" ? "Saved identity changed" : p.identityProblem,
+        branch: mutation === "branch" ? "main" : p.branch,
+      })),
+    };
+    fake.replies = { ...fake.replies, "/api/delivery": data };
+    return Effect.gen(function* () {
+      const service = yield* DeliveryService.DeliveryService;
+      const observed = yield* service.discover(
+        { folder: REPO, board: "work", team: "development", preflight: true },
+        ordinaryCaller,
+      );
+      expect(observed.preflight).toBe("blocked");
+      expect(observed.routes.every((r) => !r.valid)).toBe(true);
+      const result = yield* service
+        .act({ path: "/api/delivery/requests", body: { route: "release", team: "development" } })
+        .pipe(Effect.result);
+      expect(result._tag).toBe("Failure");
+      expect(fake.requests.every((r) => r.method === "GET")).toBe(true);
+      expect(fake.requests.some((r) => r.path.endsWith("/deployment"))).toBe(false);
+    }).pipe(
+      Effect.provide(layer(fake, { prefix: "snapshot-identity-", environment: discoveryProfile })),
+    );
+  });
+  it.effect(
+    "preflights explicit saved destinations freshly, without starting or repairing work",
+    () => {
+      const fake = aliasDiscoveryEngine();
       return Effect.gen(function* () {
         const service = yield* DeliveryService.DeliveryService;
         const input = { folder: REPO, board: "work", team: "development", preflight: true };
@@ -2013,6 +2741,60 @@ describe("tomlString", () => {
 });
 
 describe("sameFolder", () => {
+  it.each([
+    { raw: "/Users/Tevin/Repo", alias: "/Users/Tevin/Link", canonical: "/users/tevin/repo" },
+    { raw: "/home/tevin/link", alias: "/mnt/repo", canonical: "/mnt/repo" },
+    { raw: "C:/Work/Repo", alias: "c:\\WORK\\repo", canonical: "c:/work/repo" },
+  ])("compares verified engine witnesses exactly for $raw", ({ raw, alias, canonical }) => {
+    const original = decodeDiscoveryDelivery(aliasDiscoveryEngine().replies?.["/api/delivery"]);
+    const data = {
+      ...original,
+      projects: original.projects.map((project) => ({ ...project, path: canonical })),
+    };
+    const registrations = [
+      {
+        id: "alias",
+        path: alias,
+        canonicalPath: canonical,
+        identityProblem: null,
+        kind: "own" as const,
+      },
+      {
+        id: "repo",
+        path: raw,
+        canonicalPath: canonical,
+        identityProblem: null,
+        kind: "own" as const,
+      },
+    ];
+    expect(discoveryTarget(registrations, data, canonical, "work").repository?.id).toBe("repo");
+    expect(verifiedProjectRepository(registrations, data.projects[0]!, canonical)).toBe(true);
+    expect(
+      verifiedProjectRepository(registrations, data.projects[0]!, canonical.toUpperCase()),
+    ).toBe(false);
+    expect(
+      verifiedProjectRepository(
+        [...registrations, { ...registrations[0]!, canonicalPath: "/different" }],
+        data.projects[0]!,
+        canonical,
+      ),
+    ).toBe(false);
+    expect(
+      verifiedProjectRepository(
+        [{ ...registrations[0]!, canonicalPath: null, identityProblem: "Unavailable" }],
+        data.projects[0]!,
+        canonical,
+      ),
+    ).toBe(false);
+    expect(
+      verifiedProjectRepository(
+        [{ id: "alias", path: alias, kind: "own" }],
+        data.projects[0]!,
+        canonical,
+      ),
+    ).toBe(false);
+  });
+
   it("compares folders as the host does", () => {
     expect(DeliveryService.sameFolder("C:\\Work\\Repo\\", "c:/work/repo", "win32")).toBe(true);
     expect(DeliveryService.sameFolder("/work/Repo", "/work/repo", "linux")).toBe(false);
@@ -2020,3 +2802,53 @@ describe("sameFolder", () => {
     expect(DeliveryService.sameFolder("C:/work/repo", "C:/work/repo2", "win32")).toBe(false);
   });
 });
+
+const captureManifest = process.env.T3_DELIVERY_CAPTURE_MANIFEST;
+if (process.env.T3_DELIVERY_CAPTURE_REQUIRED === "1" && !captureManifest)
+  throw new Error("Independent pair QA requires its captured response manifest.");
+if (captureManifest) {
+  const suite = loadDeliveryCaptures(captureManifest);
+  it.effect.each(suite.cases)("frozen engine HTTP capture $id ($provenance)", (entry) => {
+    const fake = engine();
+    fake.captures = entry.responses.map((response) => ({ ...response, remaining: response.uses }));
+    fake.unexpectedCaptures = [];
+    return Effect.gen(function* () {
+      const service = yield* DeliveryService.DeliveryService;
+      const result =
+        entry.operation === "discover"
+          ? yield* service
+              .discover(
+                Schema.decodeUnknownSync(DeliveryDiscoveryInput)(entry.input),
+                ordinaryCaller,
+              )
+              .pipe(Effect.result)
+          : entry.operation === "read"
+            ? yield* service
+                .read(Schema.decodeUnknownSync(DeliveryReadInput)(entry.input))
+                .pipe(Effect.result)
+            : yield* service
+                .act(Schema.decodeUnknownSync(DeliveryActInput)(entry.input))
+                .pipe(Effect.result);
+      expect(result._tag).toBe(entry.expectedTag);
+      expect(result._tag === "Success" ? result.success : result.failure).toMatchObject(
+        entry.expected,
+      );
+      expect(fake.unexpectedCaptures).toEqual([]);
+      expect(fake.captures!.every((response) => response.remaining === 0)).toBe(true);
+      expect(fake.requests.every((request) => request.method === "GET")).toBe(true);
+      expect(fake.sessions.size).toBe(0);
+    }).pipe(
+      Effect.provide(
+        layer(fake, {
+          prefix: "dcap-",
+          environment: {
+            T3_WORKSPACE_PROFILE_ID: suite.profile ?? undefined,
+            T3_WORKSPACE_ENGINE_URL: "http://127.0.0.1:4320",
+            POLYMANIA_ACCOUNTS: suite.profile ?? undefined,
+            T3_WORKSPACE_ENGINE_HOME: suite.home,
+          },
+        }),
+      ),
+    );
+  });
+}

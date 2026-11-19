@@ -1,6 +1,10 @@
+import { loadDeliveryCaptures } from "../../../server/src/delivery/deliveryCapture.testkit.ts";
 import { describe, expect, it } from "vite-plus/test";
 import {
   boardDeliveryRequest,
+  parseBoardDeployment,
+  parseMergePermission,
+  validBoardDeliveryRoutes,
   parseTaskDeployment,
   taskDeploymentLabel,
   taskDeploymentStatus,
@@ -201,7 +205,41 @@ it("does not turn task or merge completion into a live deployment", () => {
   expect(deliveryProgress({ ...row, candidate: { state: "live", commit: "abc" } })).toBe(
     "Awaiting live verification: abc",
   );
-  expect(deliveryProgress({ ...row, complete: true, live: { commit: "abc" } })).toBe("Live: abc");
+  expect(deliveryProgress({ ...row, complete: true, live: { commit: "abc" } })).toBe(
+    "PR merged; awaiting release qualification",
+  );
+  const verified = {
+    ...row,
+    complete: true,
+    candidate: {
+      id: "candidate",
+      state: "live",
+      commit: "abc",
+      liveAt: "2026-11-17T09:00:00Z",
+      liveUntil: null,
+    },
+    live: {
+      candidateId: "candidate",
+      commit: "abc",
+      observedAt: "2026-11-17T09:01:00Z",
+      problem: null,
+    },
+  };
+  expect(deliveryProgress(verified)).toBe("Live: abc");
+  for (const uncertain of [
+    { ...verified, live: { ...verified.live, candidateId: "another" } },
+    { ...verified, candidate: { ...verified.candidate, liveUntil: "2026-11-17T09:02:00Z" } },
+    { ...verified, candidate: { ...verified.candidate, commit: "other" } },
+    { ...verified, live: { ...verified.live, commit: "other" } },
+    { ...verified, live: { ...verified.live, observedAt: undefined } },
+  ])
+    expect(deliveryProgress(uncertain)).not.toMatch(/^Live:/);
+  expect(
+    deliveryProgress({ ...verified, live: { ...verified.live, problem: "Verification failed" } }),
+  ).toBe("Verification failed");
+  expect(deliveryProgress({ ...verified, problem: "Saved destination changed" })).toBe(
+    "Saved destination changed",
+  );
   expect(
     deliveryProgress({
       ...row,
@@ -223,3 +261,85 @@ it("rejects an old engine response instead of inventing delivery routes", () => 
   expect(parseBoardDelivery({ error: "Not found" })).toBeNull();
   expect(parseBoardDelivery({ boards: [], routes: [], projects: [], tracking: [] })).not.toBeNull();
 });
+
+it("uses engine-validated saved route identity across aliases without branch-only matching", () => {
+  const snapshot = parseBoardDelivery({
+    version: 1,
+    boards: [{ id: "board", title: "App", repository: "app", base: "master" }],
+    routes: [
+      {
+        id: "release",
+        board: "board",
+        repository: "app",
+        base: "master",
+        project: "production",
+        auto_merge: 0,
+        identityProblem: null,
+      },
+    ],
+    projects: [
+      {
+        id: "production",
+        repository: "app-alias",
+        path: "/canonical/app",
+        branch: "master",
+        environment: "production",
+        mode: "manual",
+        identityProblem: null,
+      },
+    ],
+    tracking: [],
+  })!;
+  expect(validBoardDeliveryRoutes(snapshot).map((route) => route.id)).toEqual(["release"]);
+  for (const invalid of [
+    { ...snapshot, routes: [...snapshot.routes, ...snapshot.routes] },
+    { ...snapshot, routes: snapshot.routes.map((route) => ({ ...route, repository: "other" })) },
+    {
+      ...snapshot,
+      routes: snapshot.routes.map((route) => ({ ...route, identityProblem: "Wrong folder" })),
+    },
+    { ...snapshot, projects: [...snapshot.projects, ...snapshot.projects] },
+    {
+      ...snapshot,
+      projects: snapshot.projects.map((project) => ({
+        ...project,
+        identityProblem: "Unverified alias",
+      })),
+    },
+    { ...snapshot, projects: snapshot.projects.map((project) => ({ ...project, path: null })) },
+    {
+      ...snapshot,
+      projects: snapshot.projects.map((project) => ({ ...project, environment: "" })),
+    },
+    { ...snapshot, projects: snapshot.projects.map((project) => ({ ...project, branch: "main" })) },
+  ])
+    expect(validBoardDeliveryRoutes(invalid)).toEqual([]);
+});
+
+const captureManifest = process.env.T3_DELIVERY_CAPTURE_MANIFEST;
+if (process.env.T3_DELIVERY_CAPTURE_REQUIRED === "1" && !captureManifest)
+  throw new Error("Independent pair QA requires its captured response manifest.");
+if (captureManifest) {
+  const suite = loadDeliveryCaptures(captureManifest);
+  const cases = suite.cases.filter((entry) => entry.web !== undefined);
+  if (!cases.length) throw new Error("Capture suite requires web decoding/evidence cases.");
+  it.each(cases)("frozen engine web evidence $id ($provenance)", (entry) => {
+    const evidence = entry.web!;
+    const matches = entry.responses.filter((response) => response.path === evidence.path);
+    expect(matches).toHaveLength(1);
+    const response = matches[0]!;
+    const body: unknown = JSON.parse(new TextDecoder().decode(response.bytes));
+    const snapshot = evidence.decoder === "board-delivery" ? parseBoardDelivery(body) : null;
+    const decoded =
+      evidence.decoder === "board-link"
+        ? parseBoardDeployment(body)
+        : evidence.decoder === "merge-permission"
+          ? parseMergePermission(body)
+          : snapshot;
+    expect(decoded !== null).toBe(evidence.decodes);
+    expect(snapshot ? validBoardDeliveryRoutes(snapshot).map((route) => route.id) : []).toEqual(
+      evidence.validRouteIds,
+    );
+    expect(snapshot?.tracking.map(deliveryProgress) ?? []).toEqual(evidence.progress);
+  });
+}
