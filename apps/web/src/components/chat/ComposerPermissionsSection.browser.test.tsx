@@ -15,9 +15,9 @@ import {
 } from "./composerEventScope";
 import { ComposerFooterModeControls, ComposerPermissionsSection } from "./ComposerFooterControls";
 import { ComposerPickerFooter } from "./ComposerModelEffort";
-import { runtimeModeConfig, runtimeModeOptions } from "./runtimeModeConfig";
+import { resolveRuntimeModeOption, runtimeModeOptions } from "./runtimeModeConfig";
 
-const options = runtimeModeOptions.map((mode) => ({ mode, ...runtimeModeConfig[mode] }));
+const options = runtimeModeOptions.map((mode) => resolveRuntimeModeOption(mode));
 
 // Mirrors the overflow menu, which holds the Permissions section.
 function OverflowMenu() {
@@ -51,7 +51,7 @@ it("reaches Permissions with arrow keys, previews, and picks with Enter", async 
   await expect.element(supervised).toHaveFocus();
   await expect
     .element(supervised)
-    .toHaveAccessibleDescription(runtimeModeConfig["approval-required"].description);
+    .toHaveAccessibleDescription(resolveRuntimeModeOption("approval-required").description);
 
   await userEvent.keyboard("{ArrowRight}");
   await expect
