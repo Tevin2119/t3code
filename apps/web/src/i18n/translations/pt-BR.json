@@ -4964,6 +4964,7 @@
   "c752acb0b7088295": "Conectado",
   "a097631b7acab9d8": "Aguardando aprovação…",
   "aabd9632196ee7e5": "Reconectando…",
+  "36fff6eb0fde020c": "Cada assento salva seu modelo e seu nível de raciocínio. A janela de contexto é mostrada a partir do modelo e não é salva: as configurações de assento do motor ainda não têm um campo para a janela de contexto. Um nível de raciocínio que o harness ou o modelo recusa é rejeitado ao salvar, com o motivo do motor.",
   "a80895f122d7020f": "Não foi possível abrir o link",
   "2a1758375b2701f3": "Não foi possível adicionar o backend",
   "6730fa8ae68fad99": "Falha ao adicionar o backend.",

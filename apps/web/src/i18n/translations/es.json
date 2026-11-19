@@ -4964,6 +4964,7 @@
   "c752acb0b7088295": "Conectado",
   "a097631b7acab9d8": "Esperando aprobación…",
   "aabd9632196ee7e5": "Reconectando…",
+  "36fff6eb0fde020c": "Cada puesto guarda su modelo y su nivel de razonamiento. La ventana de contexto se muestra a partir del modelo y no se guarda: la configuración de puestos del motor aún no tiene un campo para la ventana de contexto. Un nivel de razonamiento que el harness o el modelo rechaza se rechaza al guardar, con el motivo del motor.",
   "a80895f122d7020f": "No se pudo abrir el enlace",
   "2a1758375b2701f3": "No se pudo añadir el backend",
   "6730fa8ae68fad99": "No se pudo añadir el backend.",

@@ -4966,6 +4966,7 @@
   "c752acb0b7088295": "Connected",
   "a097631b7acab9d8": "Waiting for approval…",
   "aabd9632196ee7e5": "Reconnecting…",
+  "36fff6eb0fde020c": "Each seat saves its model and reasoning level. The context window is shown from the model and is not saved: the engine's seat settings have no context-window field yet. A reasoning level the harness or model refuses is rejected when you save, with the engine's reason.",
   "a80895f122d7020f": "Could not open the link",
   "2a1758375b2701f3": "Could not add backend",
   "6730fa8ae68fad99": "Failed to add backend.",

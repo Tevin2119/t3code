@@ -237,7 +237,11 @@ export function BoardSeatsDialog(props: {
               <p className="text-xs text-muted-foreground">Reading the board.</p>
             )}
             {problems.length > 0 ? (
-              <ul className="list-disc pl-5 text-xs text-warning" data-delivery-problem>
+              <ul
+                role="alert"
+                className="list-disc pl-5 text-xs text-warning"
+                data-delivery-problem
+              >
                 {problems.map((problem) => (
                   <li key={problem}>{problem}</li>
                 ))}

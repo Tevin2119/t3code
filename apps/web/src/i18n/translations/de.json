@@ -4966,6 +4966,7 @@
   "c752acb0b7088295": "Verbunden",
   "a097631b7acab9d8": "Warte auf Genehmigung…",
   "aabd9632196ee7e5": "Verbinde neu…",
+  "36fff6eb0fde020c": "Jeder Sitz speichert sein Modell und seine Reasoning-Stufe. Das Kontextfenster wird vom Modell angezeigt und nicht gespeichert: Die Sitzeinstellungen der Engine haben noch kein Feld für das Kontextfenster. Eine Reasoning-Stufe, die der Harness oder das Modell ablehnt, wird beim Speichern mit der Begründung der Engine abgewiesen.",
   "a80895f122d7020f": "Der Link konnte nicht geöffnet werden",
   "2a1758375b2701f3": "Backend konnte nicht hinzugefügt werden",
   "6730fa8ae68fad99": "Backend konnte nicht hinzugefügt werden.",
