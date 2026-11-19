@@ -47,7 +47,6 @@ import {
 } from "../ui/dialog";
 import { Checkbox } from "../ui/checkbox";
 import { Textarea } from "../ui/textarea";
-import { Input } from "../ui/input";
 import { SidebarInset } from "../ui/sidebar";
 import { toastManager } from "../ui/toast";
 import { useProjects } from "../../state/entities";
@@ -55,6 +54,7 @@ import { addedRepository, repositoryChoices } from "./BoardPicker.repositories";
 import { RepositoryBrowse } from "./BoardPicker.browse";
 import { ADD_REPOSITORY, RepositoryPicker } from "./RepositoryPicker";
 import { useBoardDesktop } from "./BoardToolbar";
+import { DeliveryApprovalDialog } from "./DeliveryApprovalDialog";
 import { EnginePanel } from "./EnginePanel";
 import { EnvironmentPicker } from "./EnvironmentPicker";
 import { DeploymentRuntime } from "./DeploymentsPage.runtime";
@@ -413,104 +413,37 @@ function Approval({
   const allowed = useAtomValue(deliveryEnvironment.act.permissionAtom(environmentId));
   const person = usePersonName();
   const setPerson = useBoardStore((state) => state.setPerson);
-  const [by, setBy] = useState(person);
-  const [key, setKey] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [problem, setProblem] = useState<string | null>(null);
-  const [invalidated, setInvalidated] = useState(unavailable);
-  if (unavailable && !invalidated) setInvalidated(true);
-  const submit = async () => {
-    if (busy || !allowed || unavailable || invalidated) return;
-    setBusy(true);
-    setProblem(null);
-    await (async () => {
-      const body = deploymentRequestBody(request.path, {
-        ...request.body,
-        by: by.trim(),
-        key,
-      });
-      const result = await act(request.path, body);
-      if (!result.ok) {
-        setProblem(result.why);
-        return;
-      }
-      setPerson(by.trim());
-      toastManager.add({
-        title: request.title,
-        description: "The engine accepted the request.",
-        type: "success",
-      });
-      onDone();
-    })()
-      .catch(() => {
-        setProblem(
-          "The deployment request could not be submitted. Check its settings and try again.",
-        );
-      })
-      .finally(() => {
-        setKey("");
-        setBusy(false);
-      });
-  };
   return (
-    <Dialog open onOpenChange={(value) => !value && !busy && onClose()}>
-      <DialogPopup>
-        <DialogHeader>
-          <DialogTitle>{request.title}</DialogTitle>
-          <DialogDescription>
-            Deployment changes always need the engine's approval passphrase, even while an approval
-            window is open. T3 never saves it.
-          </DialogDescription>
-        </DialogHeader>
-        <DialogPanel>
-          <div className="flex flex-col gap-4">
-            <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-all text-xs">
-              {JSON.stringify(request.body, null, 2)}
-            </pre>
-            <Input
-              aria-label="Your name"
-              placeholder="Your name"
-              value={by}
-              disabled={busy}
-              onChange={(event) => setBy(event.target.value)}
-            />
-            <Input
-              type="password"
-              autoComplete="current-password"
-              aria-label="Approval passphrase"
-              placeholder="Approval passphrase"
-              value={key}
-              disabled={busy}
-              onChange={(event) => setKey(event.target.value)}
-            />
-            {!allowed ? (
-              <p role="status">This connection does not have permission to change deployments.</p>
-            ) : null}
-            {invalidated ? (
-              <p role="alert" className="text-sm text-warning-foreground">
-                The source snapshot became unavailable or stale. Cancel, refresh and review again.
-              </p>
-            ) : null}
-            {problem ? (
-              <p role="alert" className="text-sm text-warning-foreground">
-                {problem}
-              </p>
-            ) : null}
-          </div>
-        </DialogPanel>
-        <DialogFooter>
-          <Button variant="outline" disabled={busy} onClick={onClose}>
-            Cancel
-          </Button>
-          <Button
-            disabled={busy || !allowed || unavailable || invalidated || !by.trim() || !key}
-            onClick={() => void submit()}
-          >
-            {busy ? "Submitting" : "Confirm"}
-          </Button>
-        </DialogFooter>
-      </DialogPopup>
-    </Dialog>
+    <DeliveryApprovalDialog
+      title={request.title}
+      description="Deployment changes always need the engine's approval passphrase, even while an approval window is open. T3 never saves it."
+      person={person}
+      nameField
+      keyLabel="Approval passphrase"
+      allowed={allowed}
+      forbidden="This connection does not have permission to change deployments."
+      unavailable={unavailable}
+      submitLabel="Confirm"
+      busyLabel="Submitting"
+      failure="The deployment request could not be submitted. Check its settings and try again."
+      onSubmit={({ by, key }) =>
+        act(request.path, deploymentRequestBody(request.path, { ...request.body, by, key }))
+      }
+      onDone={(by) => {
+        setPerson(by);
+        toastManager.add({
+          title: request.title,
+          description: "The engine accepted the request.",
+          type: "success",
+        });
+        onDone();
+      }}
+      onClose={onClose}
+    >
+      <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-all text-xs">
+        {JSON.stringify(request.body, null, 2)}
+      </pre>
+    </DeliveryApprovalDialog>
   );
 }
 
