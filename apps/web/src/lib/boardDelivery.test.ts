@@ -201,7 +201,41 @@ it("does not turn task or merge completion into a live deployment", () => {
   expect(deliveryProgress({ ...row, candidate: { state: "live", commit: "abc" } })).toBe(
     "Awaiting live verification: abc",
   );
-  expect(deliveryProgress({ ...row, complete: true, live: { commit: "abc" } })).toBe("Live: abc");
+  expect(deliveryProgress({ ...row, complete: true, live: { commit: "abc" } })).toBe(
+    "PR merged; awaiting release qualification",
+  );
+  const verified = {
+    ...row,
+    complete: true,
+    candidate: {
+      id: "candidate",
+      state: "live",
+      commit: "abc",
+      liveAt: "2026-11-17T09:00:00Z",
+      liveUntil: null,
+    },
+    live: {
+      candidateId: "candidate",
+      commit: "abc",
+      observedAt: "2026-11-17T09:01:00Z",
+      problem: null,
+    },
+  };
+  expect(deliveryProgress(verified)).toBe("Live: abc");
+  for (const uncertain of [
+    { ...verified, live: { ...verified.live, candidateId: "another" } },
+    { ...verified, candidate: { ...verified.candidate, liveUntil: "2026-11-17T09:02:00Z" } },
+    { ...verified, candidate: { ...verified.candidate, commit: "other" } },
+    { ...verified, live: { ...verified.live, commit: "other" } },
+    { ...verified, live: { ...verified.live, observedAt: undefined } },
+  ])
+    expect(deliveryProgress(uncertain)).not.toMatch(/^Live:/);
+  expect(
+    deliveryProgress({ ...verified, live: { ...verified.live, problem: "Verification failed" } }),
+  ).toBe("Verification failed");
+  expect(deliveryProgress({ ...verified, problem: "Saved destination changed" })).toBe(
+    "Saved destination changed",
+  );
   expect(
     deliveryProgress({
       ...row,

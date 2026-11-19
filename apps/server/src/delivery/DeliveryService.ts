@@ -1050,14 +1050,22 @@ const make = Effect.fn("DeliveryService.make")(function* (
     if (!settings.enabled) return { ...snapshot, diagnostics: ["disabled"] };
     if (input.fresh || input.preflight) discoveryCache.clear();
     const readTimes: string[] = [];
+    let failedPath: string | undefined;
     let observedHealth: { engineUrl: string; response: DeliveryResponse } | undefined;
     const read = Effect.fn("DeliveryService.discoveryEndpoint")(function* <A>(
       enginePath: string,
       schema: Schema.Decoder<A>,
     ) {
-      const response = yield* input.preflight && enginePath === "/api/repositories?discovery=1"
-        ? request("GET", enginePath, undefined, true, observedHealth)
-        : discoveryRead(configuration, enginePath, observedHealth);
+      const operation =
+        input.preflight && enginePath === "/api/repositories?discovery=1"
+          ? request("GET", enginePath, undefined, true, observedHealth)
+          : discoveryRead(configuration, enginePath, observedHealth);
+      const response = yield* operation.pipe(
+        Effect.mapError((error) => {
+          failedPath = enginePath;
+          return error;
+        }),
+      );
       if (enginePath === "/api/health")
         observedHealth = { engineUrl: settings.engineUrl, response };
       readTimes.push(response.readAt);
@@ -1074,7 +1082,7 @@ const make = Effect.fn("DeliveryService.make")(function* (
     const result = yield* Effect.gen(function* () {
       const health = yield* read("/api/health", Discovery.DiscoveryHealth);
       if (!health.ok) return { ...snapshot, diagnostics: ["unreachable" as const] };
-      const [[repository, repositories, data, link], teams] = yield* Effect.all(
+      const [[repository, repositories, data], teams] = yield* Effect.all(
         [
           Effect.gen(function* () {
             const [repository, registrations, delivery] = yield* Effect.all(
@@ -1104,7 +1112,7 @@ const make = Effect.fn("DeliveryService.make")(function* (
               : registrations;
             const registered =
               input.preflight && candidates.length === 1 ? candidates[0]! : undefined;
-            // The targeted check runs beside the board link read so preflight keeps three rounds.
+            // Target validation and the scoped snapshot share the final observation round.
             const [checked, link] = yield* Effect.all(
               [
                 registered === undefined
@@ -1124,41 +1132,12 @@ const make = Effect.fn("DeliveryService.make")(function* (
                     : matching.length === 1
                       ? matching[0]
                       : undefined;
-                  let boardDeployment = snapshot.boardDeployment;
-                  const linkDiagnostics: DeliveryDiscoveryDiagnostic[] = [];
-                  if (selected && /^[A-Za-z0-9_-]{1,100}$/.test(selected.id)) {
-                    const deployment = yield* read(
-                      `/api/boards/${selected.id}/deployment`,
-                      Discovery.DiscoveryBoardDeployment,
-                    ).pipe(Effect.result);
-                    if (
-                      deployment._tag === "Failure" &&
-                      (deployment.failure.status === 401 || deployment.failure.status === 403)
-                    )
-                      linkDiagnostics.push("unauthorized");
-                    boardDeployment =
-                      deployment._tag === "Success"
-                        ? {
-                            capability: "available",
-                            board: Discovery.observationText(selected.id),
-                            projectId:
-                              deployment.success.deploymentProjectId === null
-                                ? null
-                                : Discovery.observationText(deployment.success.deploymentProjectId),
-                            state: deployment.success.state,
-                          }
-                        : {
-                            capability:
-                              deployment.failure.reason === "invalid" ||
-                              deployment.failure.status === 404
-                                ? "unsupported"
-                                : "unavailable",
-                            board: Discovery.observationText(selected.id),
-                            projectId: null,
-                            state: null,
-                          };
-                  }
-                  return { selected, boardDeployment, linkDiagnostics };
+                  if (!selected) return { selected, data: delivery };
+                  const query = new URLSearchParams({ board: selected.id });
+                  if (input.route) query.set("route", input.route);
+                  if (input.task) query.set("task", input.task);
+                  const data = yield* read(`/api/delivery?${query}`, Discovery.DiscoveryDelivery);
+                  return { selected, data };
                 }),
               ],
               { concurrency: 2 },
@@ -1170,15 +1149,14 @@ const make = Effect.fn("DeliveryService.make")(function* (
                   ? [registered]
                   : []
                 : registrations,
-              delivery,
-              link,
+              link.data,
             ] as const;
           }),
           read("/api/teams", Discovery.DiscoveryTeams),
         ],
         { concurrency: 2 },
       );
-      const selected = repositories.length > 0 ? link.selected : undefined;
+
       const current = yield* delivery;
       if (
         generation !== discoveryGeneration ||
@@ -1191,8 +1169,7 @@ const make = Effect.fn("DeliveryService.make")(function* (
         caller,
         {
           ...snapshot,
-          diagnostics: selected === undefined ? [] : link.linkDiagnostics,
-          boardDeployment: selected === undefined ? snapshot.boardDeployment : link.boardDeployment,
+          diagnostics: [],
           profile:
             snapshot.profile ??
             (health.profile === null ? null : Discovery.observationText(health.profile)),
@@ -1214,15 +1191,21 @@ const make = Effect.fn("DeliveryService.make")(function* (
       error._tag === "DeliveryError"
         ? error.status === 401 || error.status === 403
           ? "unauthorized"
-          : error.status === 413
-            ? "response-too-large"
-            : error.reason === "disabled"
-              ? "disabled"
-              : error.reason === "mismatch"
-                ? "profile-mismatch"
-                : error.reason === "unreachable"
-                  ? "unreachable"
-                  : "unsupported-server"
+          : error.status === 409
+            ? "invalid-request"
+            : error.status === 404 &&
+                input.task &&
+                failedPath === `/api/delivery?task=${encodeURIComponent(input.task)}`
+              ? "task-not-found"
+              : error.status === 413
+                ? "response-too-large"
+                : error.reason === "disabled"
+                  ? "disabled"
+                  : error.reason === "mismatch"
+                    ? "profile-mismatch"
+                    : error.reason === "unreachable"
+                      ? "unreachable"
+                      : "unsupported-server"
         : error._tag === "TimeoutError"
           ? "unreachable"
           : "unsupported-server";
@@ -1268,13 +1251,28 @@ const make = Effect.fn("DeliveryService.make")(function* (
           Effect.gen(function* () {
             const [data, registrations] = yield* Effect.all(
               [
-                read("/api/delivery", Discovery.DiscoveryDelivery),
+                read(
+                  `/api/delivery?route=${encodeURIComponent(input.route)}`,
+                  Discovery.DiscoveryDelivery,
+                ),
                 read("/api/repositories?discovery=1", Discovery.DiscoveryRegistrations),
               ],
               { concurrency: 2 },
             );
             const route = data.routes.find((item) => item.id === input.route);
             if (!route) return yield* refuse("missing-target");
+            if (data.version !== 1 || !data.scope || !data.selection)
+              return yield* refuse("unsupported-server");
+            if (
+              data.scope.route !== input.route ||
+              data.scope.board !== route.board ||
+              data.selection.state !== "selected" ||
+              data.selection.problem !== null ||
+              data.selection.routeId !== route.id ||
+              data.selection.projectId !== route.project ||
+              route.identityProblem !== null
+            )
+              return yield* refuse("missing-target");
             const board = data.boards.find((item) => item.id === route.board);
             if (!board?.base || board.repository !== route.repository || board.base !== route.base)
               return yield* refuse("missing-target");
@@ -1282,7 +1280,9 @@ const make = Effect.fn("DeliveryService.make")(function* (
             if (
               !project ||
               project.repository !== route.repository ||
-              project.branch !== route.base
+              project.branch !== route.base ||
+              project.identityProblem !== null ||
+              !project.path
             )
               return yield* refuse("missing-deployment");
             const matches = registrations.filter(
@@ -1290,6 +1290,7 @@ const make = Effect.fn("DeliveryService.make")(function* (
             );
             if (
               matches.length !== 1 ||
+              !sameFolder(matches[0]!.path, project.path!, hostPlatform) ||
               !(yield* checkRepository(matches[0]!, observedHealth, configuration))
             )
               return yield* refuse("unregistered-repository");

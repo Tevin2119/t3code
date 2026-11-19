@@ -80,11 +80,14 @@ export function BoardDelivery({
   const selectedBoard = snapshot?.boards.find((b) => b.id === board);
   const routes =
     snapshot?.routes.filter(
-      (r) => !task || (r.repository === task.repository && r.base === task.base),
+      (r) =>
+        r.identityProblem === null &&
+        (!task || (r.repository === task.repository && r.base === task.base)),
     ) ?? [];
   const linked = snapshot?.tracking.find((t) => t.request?.task === task?.id);
   const paused = task?.held || task?.state === "moving" || task?.state === "moved";
-  const disabled = !allowed || stale || busy || !snapshot || !!read.error || !!paused;
+  const disabled =
+    !allowed || stale || busy || !snapshot || snapshot.version !== 1 || !!read.error || !!paused;
   const submit = async (path: string, body: Record<string, unknown>) => {
     if (disabled || !key || !by.trim()) return;
     setBusy(true);
@@ -113,7 +116,7 @@ export function BoardDelivery({
         {task ? "Deliver this task" : "Board delivery routes"}
       </summary>
       <div className="mt-3 flex flex-col gap-3">
-        {read.error || (!snapshot && !read.isPending) ? (
+        {read.error || ((!snapshot || snapshot.version !== 1) && !read.isPending) ? (
           <p role="status">
             This engine does not provide board delivery routes. Update the engine before configuring
             delivery.
@@ -155,7 +158,10 @@ export function BoardDelivery({
               choices={snapshot.projects
                 .filter(
                   (p) =>
-                    p.repository === selectedBoard?.repository && p.branch === selectedBoard?.base,
+                    p.identityProblem === null &&
+                    !!p.path &&
+                    p.repository === selectedBoard?.repository &&
+                    p.branch === selectedBoard?.base,
                 )
                 .map((p) => ({ id: p.id, label: `${p.environment} / ${p.branch} / ${p.mode}` }))}
               onChange={setProject}

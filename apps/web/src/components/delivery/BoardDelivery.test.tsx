@@ -35,6 +35,7 @@ function setup() {
   mock.action.mockReset();
   mock.action.mockResolvedValue({ ok: false, why: "Host unavailable" });
   mock.snapshot = {
+    version: 1,
     boards: [{ id: "board", title: "Board", repository: "repo", base: "main" }],
     routes: [
       {
@@ -44,10 +45,19 @@ function setup() {
         base: "main",
         project: "prod",
         auto_merge: 0,
+        identityProblem: null,
       },
     ],
     projects: [
-      { id: "prod", repository: "repo", branch: "main", environment: "production", mode: "manual" },
+      {
+        id: "prod",
+        repository: "repo",
+        branch: "main",
+        environment: "production",
+        mode: "manual",
+        path: "/fixture/repo",
+        identityProblem: null,
+      },
     ],
     tracking: [],
   };
@@ -121,6 +131,23 @@ it("retries the same delivery request and clears the credential after refusal", 
 it("does not submit a delivery mutation through a read-only connection", async () => {
   setup();
   mock.allowed = false;
+  const screen = await act(() =>
+    create(<BoardDelivery environmentId={EnvironmentId.make("host")} />),
+  );
+  try {
+    expect(
+      screen.root.findAllByType("button").find((b) => b.children.includes("Save route"))?.props
+        .disabled,
+    ).toBe(true);
+    expect(mock.action).not.toHaveBeenCalled();
+  } finally {
+    await act(() => screen.unmount());
+  }
+});
+
+it("keeps an older engine inventory readable without enabling delivery writes", async () => {
+  setup();
+  mock.snapshot = { boards: [], routes: [], projects: [], tracking: [] };
   const screen = await act(() =>
     create(<BoardDelivery environmentId={EnvironmentId.make("host")} />),
   );

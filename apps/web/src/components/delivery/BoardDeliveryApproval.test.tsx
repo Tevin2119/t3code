@@ -70,7 +70,7 @@ it.each(["board", "catalog"] as const)(
       environmentId: "host" as never,
       board: "work",
       target: { repository: "app", base: "main", title: "App", ok: true } as never,
-      link: null,
+      link: { state: "unlinked", deploymentProjectId: null, project: null, problem: null } as never,
       stale: false,
       onDone: () => {},
     };

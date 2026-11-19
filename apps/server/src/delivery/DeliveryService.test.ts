@@ -142,8 +142,46 @@ const layer = (
                 fake.replies[url.pathname + url.search],
                 fake.statuses?.[url.pathname + url.search] ?? 200,
               );
-            if (fake.replies && Object.hasOwn(fake.replies, url.pathname))
-              return json(fake.replies[url.pathname], fake.statuses?.[url.pathname] ?? 200);
+            if (fake.replies && Object.hasOwn(fake.replies, url.pathname)) {
+              const value = fake.replies[url.pathname];
+              if (
+                url.pathname === "/api/delivery" &&
+                url.search &&
+                value &&
+                typeof value === "object" &&
+                "version" in value
+              ) {
+                const data = decodeDiscoveryDelivery(value);
+                const routeId = url.searchParams.get("route");
+                const board =
+                  url.searchParams.get("board") ??
+                  data.routes.find((r) => r.id === routeId)?.board ??
+                  null;
+                const routes = data.routes.filter(
+                  (r) => (!board || r.board === board) && (!routeId || r.id === routeId),
+                );
+                const selected = board && routes.length === 1 ? routes[0] : undefined;
+                return json(
+                  {
+                    ...data,
+                    scope: { board, route: routeId, project: null },
+                    selection: {
+                      state: selected
+                        ? "selected"
+                        : board && routes.length > 1
+                          ? "ambiguous"
+                          : "unconfigured",
+                      routeId: selected?.id ?? null,
+                      projectId: selected?.project ?? null,
+                      problem: null,
+                    },
+                    routes,
+                  },
+                  fake.statuses?.[url.pathname] ?? 200,
+                );
+              }
+              return json(value, fake.statuses?.[url.pathname] ?? 200);
+            }
             if (url.pathname === "/api/health" && fake.health)
               return json({ engine: "delivery", ok: true, ...fake.health });
             if (request.method === "POST" && url.pathname === "/api/sessions") {
@@ -244,6 +282,9 @@ const discoveryEngine = () => {
       },
     ],
     "/api/delivery": {
+      version: 1,
+      scope: { board: null, route: null, project: null },
+      selection: { state: "unconfigured", routeId: null, projectId: null, problem: null },
       boards: [{ id: "work", repository: "repo", base: "master" }],
       routes: [
         {
@@ -253,6 +294,7 @@ const discoveryEngine = () => {
           base: "master",
           project: "staging",
           auto_merge: 0,
+          identityProblem: null,
           updated: "2026-11-16T00:00:00Z",
         },
       ],
@@ -263,6 +305,8 @@ const discoveryEngine = () => {
           branch: "master",
           environment: "staging",
           mode: "manual",
+          path: REPO,
+          identityProblem: null,
           liveCommit: null,
           liveObservedAt: null,
           liveProblem: null,
@@ -701,7 +745,7 @@ describe("DeliveryService", () => {
         );
         expect(snapshot.repository).toEqual({ id: "repo", root: REPO });
         expect(snapshot.boards).toEqual([{ id: "work", branch: "master" }]);
-        expect(snapshot.routes[0]).toMatchObject({ id: "release", valid: true });
+        expect(snapshot.routes[0]).toMatchObject({ id: "release", valid: false });
         expect(snapshot.linkedTasks).toEqual([]);
         expect(snapshot.deployments[0]?.environment).toBe("[redacted]");
         expect(snapshot.deployments[0]?.liveHealthy).toBeNull();
@@ -731,10 +775,6 @@ describe("DeliveryService", () => {
     "bounds all discovery phases with $delay responses (preflight: $preflight)",
     ({ delay, preflight, succeeds }) => {
       const fake = discoveryEngine();
-      fake.replies = {
-        ...fake.replies,
-        "/api/boards/work/deployment": { deploymentProjectId: "staging", state: "linked" },
-      };
       return Effect.gen(function* () {
         const started = yield* Deferred.make<void>();
         fake.beforeRequest = () =>
@@ -1101,6 +1141,140 @@ describe("DeliveryService", () => {
             : {}),
         }),
       ),
+    );
+  });
+  it.effect(
+    "rejects a scoped response for another board and refuses task identity conflicts",
+    () => {
+      const fake = discoveryEngine();
+      const data = decodeDiscoveryDelivery(fake.replies?.["/api/delivery"]);
+      fake.replies = {
+        ...fake.replies,
+        "/api/delivery?board=work": {
+          ...data,
+          scope: { board: "other", route: null, project: null },
+          selection: { state: "selected", routeId: "release", projectId: "staging", problem: null },
+        },
+      };
+      return Effect.gen(function* () {
+        const service = yield* DeliveryService.DeliveryService;
+        const result = yield* service.discover(
+          { folder: REPO, board: "work", team: "development", preflight: true },
+          ordinaryCaller,
+        );
+        expect(result.preflight).toBe("blocked");
+        expect(result.boardDeployment.projectId).toBeNull();
+        fake.replies = { ...fake.replies, "/api/delivery?task=unknown": { error: "Not found" } };
+        fake.statuses = { "/api/delivery?task=unknown": 404 };
+        expect(
+          (yield* service.discover({ folder: REPO, task: "unknown", fresh: true }, ordinaryCaller))
+            .diagnostics,
+        ).toEqual(["task-not-found"]);
+        fake.statuses = { "/api/delivery?task=unknown": 409 };
+        expect(
+          (yield* service.discover({ folder: REPO, task: "unknown", fresh: true }, ordinaryCaller))
+            .diagnostics,
+        ).toEqual(["invalid-request"]);
+        expect(fake.requests.every((r) => r.method === "GET")).toBe(true);
+      }).pipe(
+        Effect.provide(layer(fake, { prefix: "snapshot-scope-", environment: discoveryProfile })),
+      );
+    },
+  );
+  it.effect(
+    "selects a task destination only from its durable request among explicit environments",
+    () => {
+      const fake = discoveryEngine();
+      const data = decodeDiscoveryDelivery(fake.replies?.["/api/delivery"]);
+      const path = "/api/delivery?board=work&task=task-known";
+      const row = {
+        request: {
+          id: "request",
+          task: "task-known",
+          route: "production",
+          origin: "thread:local/ordinary",
+        },
+        task: { id: "task-known", state: "pr-open", repository: "repo", base: "master" },
+      };
+      const scoped = {
+        ...data,
+        scope: { board: "work", route: null, project: null },
+        selection: {
+          state: "selected",
+          routeId: "production",
+          projectId: "production",
+          problem: null,
+        },
+        routes: [...data.routes, { ...data.routes[0]!, id: "production", project: "production" }],
+        projects: [
+          ...data.projects,
+          { ...data.projects[0]!, id: "production", environment: "production" },
+        ],
+        tracking: [row],
+      };
+      fake.replies = { ...fake.replies, [path]: scoped };
+      return Effect.gen(function* () {
+        const service = yield* DeliveryService.DeliveryService;
+        const input = {
+          folder: REPO,
+          board: "work",
+          task: "task-known",
+          team: "development",
+          preflight: true,
+        };
+        const result = yield* service.discover(input, ordinaryCaller);
+        expect(result.preflight).toBe("ready");
+        expect(result.boardDeployment.projectId).toBe("production");
+        fake.replies = {
+          ...fake.replies,
+          [path]: { ...scoped, tracking: [{ ...row, request: { ...row.request, task: "other" } }] },
+        };
+        const refused = yield* service.discover(input, ordinaryCaller);
+        expect(refused.preflight).toBe("blocked");
+        expect(refused.linkedTasks).toEqual([]);
+        expect(fake.requests.every((r) => r.method === "GET")).toBe(true);
+      }).pipe(
+        Effect.provide(
+          layer(fake, { prefix: "snapshot-task-route-", environment: discoveryProfile }),
+        ),
+      );
+    },
+  );
+  it.effect.each([
+    { name: "old snapshot", mutation: "version" },
+    { name: "wrong canonical path", mutation: "path" },
+    { name: "invalid saved identity", mutation: "identity" },
+    { name: "wrong branch", mutation: "branch" },
+  ])("refuses $name without dispatch or an invented board endpoint", ({ mutation }) => {
+    const fake = discoveryEngine();
+    const original = decodeDiscoveryDelivery(fake.replies?.["/api/delivery"]);
+    const data = {
+      ...original,
+      version: mutation === "version" ? undefined : original.version,
+      projects: original.projects.map((p) => ({
+        ...p,
+        path: mutation === "path" ? "C:/other/repo" : p.path,
+        identityProblem: mutation === "identity" ? "Saved identity changed" : p.identityProblem,
+        branch: mutation === "branch" ? "main" : p.branch,
+      })),
+    };
+    fake.replies = { ...fake.replies, "/api/delivery": data };
+    return Effect.gen(function* () {
+      const service = yield* DeliveryService.DeliveryService;
+      const observed = yield* service.discover(
+        { folder: REPO, board: "work", team: "development", preflight: true },
+        ordinaryCaller,
+      );
+      expect(observed.preflight).toBe("blocked");
+      expect(observed.routes.every((r) => !r.valid)).toBe(true);
+      const result = yield* service
+        .act({ path: "/api/delivery/requests", body: { route: "release", team: "development" } })
+        .pipe(Effect.result);
+      expect(result._tag).toBe("Failure");
+      expect(fake.requests.every((r) => r.method === "GET")).toBe(true);
+      expect(fake.requests.some((r) => r.path.endsWith("/deployment"))).toBe(false);
+    }).pipe(
+      Effect.provide(layer(fake, { prefix: "snapshot-identity-", environment: discoveryProfile })),
     );
   });
   it.effect(

@@ -1576,6 +1576,14 @@ it("attributes the engine actor string and prefers structured full auto data", (
 });
 
 describe("readsRefreshedBy", () => {
+  it("invalidates shared delivery evidence after deployment mode, discovery and retry writes", () => {
+    for (const path of [
+      "/api/deployments/projects",
+      "/api/deployments/projects/release/discover",
+      "/api/deployments/candidates/candidate/retry",
+    ])
+      expect(readsRefreshedBy(path)).toEqual(["/api/deployments", "/api/delivery"]);
+  });
   it("names the boards catalogue for a board made, edited or removed", () => {
     expect(readsRefreshedBy("/api/boards")).toEqual(["/api/boards"]);
     expect(readsRefreshedBy("/api/boards/dev-1/edit")).toEqual(["/api/boards"]);
