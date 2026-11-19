@@ -1,4 +1,5 @@
 import { ApprovalControls } from "./ApprovalControls";
+import { GlobalMergePermission } from "./MergePermissionControls";
 import { useAtomValue } from "@effect/atom-react";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
@@ -148,6 +149,7 @@ function EngineControl(props: {
   const [problem, setProblem] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [terminal, setTerminal] = useState(false);
+  const [mergePermissionOpen, setMergePermissionOpen] = useState(false);
   const reachable = !health.error && health.body !== null;
   const summary = parseDeliveryEngineHealth(health.body);
   const stopping = reachable && summary.stopping;
@@ -276,6 +278,16 @@ function EngineControl(props: {
             {reachable ? (
               <>
                 <ApprovalControls environmentId={environmentId} health={health} />
+                <details onToggle={(event) => setMergePermissionOpen(event.currentTarget.open)}>
+                  <summary className="cursor-pointer text-sm">
+                    Global automatic merge permission
+                  </summary>
+                  {mergePermissionOpen ? (
+                    <div className="mt-3">
+                      <GlobalMergePermission environmentId={environmentId} />
+                    </div>
+                  ) : null}
+                </details>
                 <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-xs">
                   <dt className="text-muted-foreground">Account profile</dt>
                   <dd>{summary.profile ?? "Not reported"}</dd>
