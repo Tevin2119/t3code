@@ -277,5 +277,9 @@ export function RightPanelSurfaceContent(props: {
         </Suspense>
       );
     }
+    // Board task surfaces belong to a task's own panel; a thread never hosts them.
+    case "task-evidence":
+    case "task-deployments":
+      return null;
   }
 }

@@ -10,17 +10,60 @@ const ThreadRelationshipsPanel = lazy(() =>
   })),
 );
 const optionalThreadSchema = Schema.NullOr(ScopedThreadRef);
-import { lazy, Suspense, useState } from "react";
+import { useAtomValue } from "@effect/atom-react";
+import { lazy, Suspense } from "react";
 import * as Schema from "effect/Schema";
+import { isElectron } from "../../env";
 import { useLocalStorage } from "../../hooks/useLocalStorage";
 import { useMediaQuery } from "../../hooks/useMediaQuery";
 import { RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY } from "../../rightPanelLayout";
+import {
+  selectThreadRightPanelState,
+  taskPanelRef,
+  useRightPanelStore,
+  type RightPanelSurface,
+} from "../../rightPanelStore";
+import { primaryServerKeybindingsAtom } from "../../state/server";
 import { PanelLayoutControls, RightPanelMaximizeControl } from "../chat/PanelLayoutControls";
-import { PreviewPanelShell } from "../preview/PreviewPanelShell";
 import { RightPanelSheet } from "../RightPanelSheet";
+import { RightPanelTabs } from "../RightPanelTabs";
 import { Button } from "../ui/button";
 
-/** Task-owned panels share native sizing and sheet behavior without inventing a thread owner. */
+const NO_SURFACES = new Set<string>();
+const NO_PREVIEW_SESSIONS = {};
+const NO_PREVIEW_DESKTOP_STATE = {};
+const NO_TERMINAL_LABELS = new Map<string, string>();
+const NOTHING = () => undefined;
+
+function getShortcutContext() {
+  return {
+    terminalFocus: false,
+    terminalOpen: false,
+    previewFocus: false,
+    previewOpen: false,
+    isWeb: !isElectron,
+    isDesktop: isElectron,
+  };
+}
+
+/** Opens a task's panel. A first open, or one after every tab was closed, brings both tabs back. */
+function openTaskPanel(owner: string, surface?: "task-evidence" | "task-deployments") {
+  const ref = taskPanelRef(owner);
+  const store = useRightPanelStore.getState();
+  if (selectThreadRightPanelState(store.byThreadKey, ref).surfaces.length === 0) {
+    store.open(ref, "task-evidence");
+    store.open(ref, "task-deployments");
+    store.activateSurface(ref, surface ?? "task-evidence");
+    return;
+  }
+  if (surface) store.open(ref, surface);
+  else store.show(ref);
+}
+
+/**
+ * Task-owned panels share native sizing and sheet behavior without inventing a thread owner. The
+ * right panel is T3's own tab panel, owned by `taskPanelRef`, so a thread view never shows it.
+ */
 export function TaskWorkspacePanels(props: {
   owner: string;
   source?: ScopedThreadRef | null;
@@ -29,16 +72,19 @@ export function TaskWorkspacePanels(props: {
   conversation?: ReactNode;
   renderConversation?: (showDetails: () => void) => ReactNode;
   evidence: ReactNode;
+  /** The deployments tab: the task's deployment status, one row per environment. */
+  deployments: ReactNode;
   detailsOpen: boolean;
   onDetailsOpenChange: (open: boolean) => void;
 }) {
   const sheet = useMediaQuery(RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY);
-  const [evidenceOpen, setEvidenceOpen] = useLocalStorage(
-    `t3code:task-evidence:${props.owner}`,
-    false,
-    Schema.Boolean,
+  const keybindings = useAtomValue(primaryServerKeybindingsAtom);
+  const panelRef = taskPanelRef(props.owner);
+  const panel = useRightPanelStore((state) =>
+    selectThreadRightPanelState(state.byThreadKey, panelRef),
   );
-  const [maximized, setMaximized] = useState(false);
+  const evidenceOpen = panel.isOpen;
+  const maximized = panel.isOpen && panel.maximized === true;
   const [selectedThread, setSelectedThread] = useLocalStorage(
     `t3code:task-inspected-thread:${props.owner}`,
     null as ScopedThreadRef | null,
@@ -47,9 +93,12 @@ export function TaskWorkspacePanels(props: {
   const inspectingSource = selectedThread !== null;
   const inspectThread = (thread: ScopedThreadRef) => setSelectedThread(thread);
   const closeEvidence = () => {
-    setEvidenceOpen(false);
-    setMaximized(false);
+    useRightPanelStore.getState().close(panelRef);
+    useRightPanelStore.getState().setMaximized(panelRef, false);
   };
+  const openEvidence = () => openTaskPanel(props.owner);
+  const setMaximized = (next: boolean) =>
+    useRightPanelStore.getState().setMaximized(panelRef, next);
   const controls = (
     <PanelLayoutControls
       detailsLabel="Toggle task details panel"
@@ -74,26 +123,27 @@ export function TaskWorkspacePanels(props: {
         if (evidenceOpen) closeEvidence();
         else {
           if (sheet) props.onDetailsOpenChange(false);
-          setEvidenceOpen(true);
+          openEvidence();
         }
       }}
     />
   );
+  const panelMode = sheet || inspectingSource ? "sheet" : "inline";
+  const activeSurface =
+    panel.surfaces.find((surface) => surface.id === panel.activeSurfaceId) ?? null;
+  const store = () => useRightPanelStore.getState();
   const evidence = (
-    <PreviewPanelShell
-      mode={sheet || inspectingSource ? "sheet" : "inline"}
+    <RightPanelTabs
+      mode={panelMode}
       open={evidenceOpen}
       maximized={maximized}
+      keybindings={keybindings}
+      getShortcutContext={getShortcutContext}
       widthStorageKey="t3code:task-evidence-width"
       defaultWidth={400}
-      workspaceArea
-      workspaceFocusKey={`task-evidence:${props.owner}`}
-      workspaceLabel="Task evidence"
-    >
-      <div className="flex h-full min-h-0 flex-col">
-        <header className="flex shrink-0 items-center gap-2 border-b px-3 py-2">
-          <span className="min-w-0 flex-1 text-sm font-medium">Task evidence and settings</span>
-          {!sheet && !inspectingSource ? (
+      layoutControls={
+        <span className="flex shrink-0 items-center gap-1">
+          {panelMode === "inline" ? (
             <RightPanelMaximizeControl
               maximized={maximized}
               onToggle={() => setMaximized(!maximized)}
@@ -102,10 +152,42 @@ export function TaskWorkspacePanels(props: {
           <Button size="xs" variant="ghost" onClick={closeEvidence}>
             Close evidence
           </Button>
-        </header>
-        <div className="flex min-h-0 flex-1">{props.evidence}</div>
+        </span>
+      }
+      surfaces={panel.surfaces}
+      environmentId={null}
+      activeSurfaceId={activeSurface?.id ?? null}
+      pendingSurfaceIds={NO_SURFACES}
+      previewSessions={NO_PREVIEW_SESSIONS}
+      desktopByTabId={NO_PREVIEW_DESKTOP_STATE}
+      terminalLabelsById={NO_TERMINAL_LABELS}
+      onActivate={(surface: RightPanelSurface) => store().activateSurface(panelRef, surface.id)}
+      onCloseSurface={(surface) => store().closeSurface(panelRef, surface.id)}
+      onCloseOtherSurfaces={(surface) => store().closeOtherSurfaces(panelRef, surface.id)}
+      onCloseSurfacesToRight={(surface) => store().closeSurfacesToRight(panelRef, surface.id)}
+      onCloseAllSurfaces={() => store().closeAllSurfaces(panelRef)}
+      onMoveSurface={(surfaceId, toIndex) => store().moveSurface(panelRef, surfaceId, toIndex)}
+      onCopyFilePath={NOTHING}
+      onAddBrowser={NOTHING}
+      onAddBrowserInProfile={NOTHING}
+      onAddTerminal={NOTHING}
+      onAddDiff={NOTHING}
+      onAddFiles={NOTHING}
+      onAddPullRequest={NOTHING}
+      onAddPullRequests={NOTHING}
+      onAddDevice={NOTHING}
+      browserAvailable={false}
+      terminalAvailable={false}
+      diffAvailable={false}
+      filesAvailable={false}
+      pullRequestAvailable={false}
+      pullRequestsAvailable={false}
+      deviceAvailable={false}
+    >
+      <div className="flex min-h-0 flex-1 overflow-y-auto">
+        {activeSurface?.kind === "task-deployments" ? props.deployments : props.evidence}
       </div>
-    </PreviewPanelShell>
+    </RightPanelTabs>
   );
   return (
     <div className="flex min-h-0 flex-1 flex-col" data-task-workspace-panels>
@@ -140,7 +222,11 @@ export function TaskWorkspacePanels(props: {
             </Button>
           ) : null}
           {inspectingSource ? (
-            <Button size="xs" variant="ghost" onClick={() => setEvidenceOpen(!evidenceOpen)}>
+            <Button
+              size="xs"
+              variant="ghost"
+              onClick={() => (evidenceOpen ? closeEvidence() : openEvidence())}
+            >
               Task evidence and actions
             </Button>
           ) : (
