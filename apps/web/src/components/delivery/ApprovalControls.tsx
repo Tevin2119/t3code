@@ -12,16 +12,9 @@ import {
 } from "../../state/delivery";
 import { useEnvironment } from "../../state/environments";
 import { Button } from "../ui/button";
-import {
-  Dialog,
-  DialogFooter,
-  DialogHeader,
-  DialogPanel,
-  DialogPopup,
-  DialogTitle,
-} from "../ui/dialog";
 import { Input } from "../ui/input";
 import { Switch } from "../ui/switch";
+import { type DeliveryApprovalSubmission, DeliveryApprovalDialog } from "./DeliveryApprovalDialog";
 
 /** Sidebar reads only the connected environment whose board is selected. */
 export function SidebarApprovalControls() {
@@ -67,36 +60,31 @@ function SupportedApprovalControls({
   const setPerson = useBoardStore((state) => state.setPerson);
   const now = useMinuteClock();
   const act = useDeliveryAct(environmentId, "approval controls");
-  const [step, setStep] = useState<"warning" | "key" | null>(null);
-  const [hasKey, setHasKey] = useState(false);
+  // Each turn-on attempt mounts a fresh dialog, so it starts again at the warning.
+  const [attempt, setAttempt] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
   const inFlight = useRef(false);
-  const keyInput = useRef<HTMLInputElement>(null);
   const summary = parseDeliveryEngineHealth(health.body, person);
-  const clear = () => {
-    if (keyInput.current) keyInput.current.value = "";
-    setHasKey(false);
-    setStep(null);
-  };
-  const send = async (path: string, key?: string) => {
+  // Ending the window and turning auto off send no key, so they stay outside the dialog.
+  const send = async (path: string) => {
     if (inFlight.current || !person.trim()) return;
     inFlight.current = true;
     setBusy(true);
     setProblem(null);
-    // The input is cleared before awaiting. No passphrase is kept in React state.
-    if (keyInput.current) keyInput.current.value = "";
-    setHasKey(false);
     // The engine request settles into a result, so cleanup can follow the await.
-    const result = await act(path, {
-      by: person,
-      ...(key === undefined ? {} : { key, confirmed: true }),
-    });
+    const result = await act(path, { by: person });
     if (!result.ok) setProblem(result.why);
-    clear();
     inFlight.current = false;
     setBusy(false);
     health.refresh();
+  };
+  const turnOn = async ({ by, key }: DeliveryApprovalSubmission) => {
+    setBusy(true);
+    const result = await act("/api/engine/auto", { by, key, confirmed: true });
+    setBusy(false);
+    health.refresh();
+    return result;
   };
   if (health.error || health.body === null) return null;
   const window = summary.approvalWindow;
@@ -143,7 +131,7 @@ function SupportedApprovalControls({
             onCheckedChange={(checked) => {
               if (checked) {
                 setProblem(null);
-                setStep("warning");
+                setAttempt((count) => (count ?? 0) + 1);
               } else void send("/api/engine/auto/off");
             }}
           />
@@ -169,67 +157,28 @@ function SupportedApprovalControls({
         </label>
       ) : null}
       {problem ? <p role="alert">{problem}</p> : null}
-      <Dialog
-        open={step !== null}
-        onOpenChange={(open) => {
-          if (!open) clear();
-        }}
-      >
-        {step !== null ? (
-          <DialogPopup data-full-auto-dialog>
-            <DialogHeader>
-              <DialogTitle>Turn on Full auto</DialogTitle>
-            </DialogHeader>
-            <DialogPanel>
-              {step === "warning" ? (
-                <p data-full-auto-warning>
-                  Danger: the engine signs off by itself, in effect bypassing approvals. Most tasks
-                  go straight to pull requests. Full auto stays on until you turn it off. It never
-                  merges, closes or moves work.
-                </p>
-              ) : (
-                <Input
-                  key="fresh-passphrase"
-                  ref={keyInput}
-                  type="password"
-                  autoComplete="off"
-                  aria-label="Full auto passphrase"
-                  placeholder="Approval passphrase"
-                  onChange={(event) => setHasKey(Boolean(event.target.value))}
-                  autoFocus
-                  disabled={busy || !person.trim()}
-                />
-              )}
-            </DialogPanel>
-            <DialogFooter>
-              <Button variant="outline" onClick={clear}>
-                Cancel
-              </Button>
-              {step === "warning" ? (
-                <Button
-                  variant="destructive"
-                  data-full-auto-continue
-                  onClick={() => setStep("key")}
-                >
-                  Continue
-                </Button>
-              ) : (
-                <Button
-                  variant="destructive"
-                  disabled={busy || !person.trim() || !hasKey}
-                  data-full-auto-on
-                  onClick={() => {
-                    const key = keyInput.current?.value;
-                    if (key) void send("/api/engine/auto", key);
-                  }}
-                >
-                  Turn on Full auto
-                </Button>
-              )}
-            </DialogFooter>
-          </DialogPopup>
-        ) : null}
-      </Dialog>
+      {attempt !== null ? (
+        <DeliveryApprovalDialog
+          key={attempt}
+          title="Turn on Full auto"
+          warning={
+            <p data-full-auto-warning>
+              Danger: the engine signs off by itself, in effect bypassing approvals. Most tasks go
+              straight to pull requests. Full auto stays on until you turn it off. It never merges,
+              closes or moves work.
+            </p>
+          }
+          person={person}
+          keyLabel="Full auto passphrase"
+          keyPlaceholder="Approval passphrase"
+          submitLabel="Turn on Full auto"
+          continueProps={{ "data-full-auto-continue": true }}
+          submitProps={{ "data-full-auto-on": true }}
+          onSubmit={turnOn}
+          onDone={() => setAttempt(null)}
+          onClose={() => setAttempt(null)}
+        />
+      ) : null}
     </div>
   );
 }
