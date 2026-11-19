@@ -324,11 +324,11 @@ export function getProviderOptionCurrentLabel(
   const currentValue = getProviderOptionCurrentValue(descriptor, selection, reportedSelection);
   return (
     descriptor.options.find((option) => option.id === currentValue)?.label ??
-    (getReportedOptionValue(descriptor.id, selection, reportedSelection) === "default"
+    // Fork: an OpenCode variant nobody picked runs on OpenCode's own default, so it says so.
+    (descriptor.id === "variant" ||
+    getReportedOptionValue(descriptor.id, selection, reportedSelection) === "default"
       ? "Default"
-      : descriptor.id === "variant"
-        ? "Unknown"
-        : undefined)
+      : undefined)
   );
 }
 
