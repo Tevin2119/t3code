@@ -139,6 +139,21 @@ describe("delivery environment routing", () => {
     }),
   );
 
+  it.effect("shares one board read across subscribers instead of querying each card", () =>
+    Effect.gen(function* () {
+      const { atoms, calls, registry } = yield* makeHarness();
+      const input = { path: "/api/lanes?view=development&set=work" };
+      const board = atoms.read({ environmentId: WINDOWS, input });
+      for (let index = 0; index < 50; index++) {
+        const subscriber = atoms.read({ environmentId: WINDOWS, input });
+        expect(subscriber).toBe(board);
+        yield* AtomRegistry.mount(registry, subscriber);
+      }
+      yield* AtomRegistry.getResult(registry, board);
+      expect(calls).toEqual([{ environmentId: WINDOWS, method: WS_METHODS.deliveryRead, input }]);
+    }),
+  );
+
   it.effect("sends task controls and one-off reads only to the selected environment", () =>
     Effect.gen(function* () {
       const { atoms, calls, registry } = yield* makeHarness();
@@ -155,6 +170,33 @@ describe("delivery environment routing", () => {
         { environmentId: WINDOWS, method: WS_METHODS.deliveryAct, input },
         { environmentId: MAC, method: WS_METHODS.deliveryRead, input: { path: TASK_PATH } },
       ]);
+      const requests = [
+        {
+          path: "/api/boards/work/deployment",
+          body: { deploymentProjectId: "deploy-staging", by: "Sam", key: "test-only-key" },
+        },
+        {
+          path: "/api/boards/work/deployment",
+          body: { deploymentProjectId: null, by: "Sam", key: "test-only-key" },
+        },
+        ...["engine", "boards/work", "tasks/task-1"].map((scope) => ({
+          path: `/api/${scope}/merge-permission`,
+          body: { mergePermission: "on", confirmed: true, by: "Sam", key: "test-only-key" },
+        })),
+      ];
+      for (const request of requests) {
+        const result = yield* Effect.promise(() =>
+          atoms.act.run(registry, { environmentId: WINDOWS, input: request }),
+        );
+        expect(result._tag).toBe("Success");
+      }
+      expect(calls.slice(2)).toEqual(
+        requests.map((input) => ({
+          environmentId: WINDOWS,
+          method: WS_METHODS.deliveryAct,
+          input,
+        })),
+      );
     }),
   );
 
