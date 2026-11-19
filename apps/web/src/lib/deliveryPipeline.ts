@@ -44,6 +44,17 @@ const BUILD_LANES = new Set([
   "approved",
   "pull-request",
 ]);
+// Lanes where a run is doing new work. The engine's task payload carries the task's last
+// publication across all its runs, with no run id, so a merge from an earlier run can sit beside
+// a rework run that has not merged anything yet. In these lanes the lane says where the task is.
+// Temporary cover: the durable fix is the publication's run id in the engine's task payload.
+const ACTIVE_WORK_LANES = new Set([
+  "planning",
+  "implementation",
+  "validation",
+  "rework",
+  "human-review",
+]);
 const DEPLOYING_STATES = new Set(["queued", "qualifying", "ready", "deploying", "verifying"]);
 
 const at = (
@@ -90,7 +101,11 @@ export function taskPipelineStage(task: TaskPipelineInput): TaskPipelineStage {
     return at(4, status.state, "warning");
   }
   const publication = task.publications.at(-1) ?? null;
-  if (publication?.state === "merged") return at(3, null, "success", true);
+  // A merge settles the task at Merged, unless a run has gone back to work since: that merge
+  // belongs to an earlier run, and the lane wins.
+  if (publication?.state === "merged" && !ACTIVE_WORK_LANES.has(lane)) {
+    return at(3, null, "success", true);
+  }
   if (lane === "completed") {
     return at(
       2,

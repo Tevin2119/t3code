@@ -4965,6 +4965,7 @@
   "c752acb0b7088295": "Ansluten",
   "a097631b7acab9d8": "Väntar på godkännande…",
   "aabd9632196ee7e5": "Återansluter…",
+  "36fff6eb0fde020c": "Varje plats sparar sin modell och sin resonemangsnivå. Kontextfönstret visas från modellen och sparas inte: motorns platsinställningar har ännu inget fält för kontextfönstret. En resonemangsnivå som harnessen eller modellen vägrar avvisas när du sparar, med motorns skäl.",
   "a80895f122d7020f": "Kunde inte öppna länken",
   "2a1758375b2701f3": "Kunde inte lägga till backend",
   "6730fa8ae68fad99": "Det gick inte att lägga till backend.",

@@ -70,7 +70,10 @@ const seat = (extra: Partial<CouncilSeat>): CouncilSeat => ({
   ...extra,
 });
 
-function taskWith(seats: ReadonlyArray<CouncilSeat> | null): TaskView {
+function taskWith(
+  seats: ReadonlyArray<CouncilSeat> | null,
+  extra: Partial<TaskView> = {},
+): TaskView {
   return {
     id: "task-1",
     team: "development",
@@ -79,9 +82,50 @@ function taskWith(seats: ReadonlyArray<CouncilSeat> | null): TaskView {
     publications: [],
     settings: [],
     card: parseCard({ lane: "implementation" })!,
+    ...extra,
     council: seats === null ? null : ({ seats } as unknown as TaskView["council"]),
   } as unknown as TaskView;
 }
+
+// A deployment that reached live with its candidate, as the engine reports one.
+const livePublication = {
+  publication: "p-1",
+  run: "run-1",
+  task: "task-1",
+  board: "original",
+  projectId: "app-production",
+  repositoryPath: "/real/app",
+  targetBranch: "main",
+  project: {
+    id: "app-production",
+    repository: "alias",
+    path: "/real/app",
+    environment: "production",
+    branch: "main",
+    mode: "manual",
+    title: "App",
+  },
+  headCommit: "a".repeat(40),
+  pullRequest: { number: 42, url: "https://github.com/owner/app/pull/42" },
+  publicationState: "merged",
+  mergeCommit: "c".repeat(40),
+  state: "live",
+  problem: null,
+  candidate: {
+    id: "cand-1",
+    commit: "c".repeat(40),
+    branch: "main",
+    state: "live",
+    inclusion: null,
+    evidence: null,
+    problem: null,
+    failedPhase: null,
+    liveAt: "2030-01-01T00:00:00.000Z",
+    liveUntil: null,
+  },
+  history: [],
+  updated: "2030-01-01T00:00:00.000Z",
+};
 
 let renderer: ReactTestRenderer;
 beforeEach(() => {
@@ -164,5 +208,38 @@ describe("TaskTeamActivity", () => {
     expect(strip.props["data-task-pipeline"]).toBe("Building");
     const current = strip.find((node) => node.props["aria-current"] === "step");
     expect(text(current)).toContain("Building, now");
+  });
+
+  it("puts aria-current on the tinted step once a step is settled, and on none once Live", async () => {
+    const stepsOf = (root: ReactTestInstance) =>
+      root.find((node) => typeof node.props["data-task-pipeline"] === "string").findAllByType("li");
+    const currentOf = (root: ReactTestInstance) =>
+      stepsOf(root)
+        .filter((node) => node.props["aria-current"] === "step")
+        .map(text);
+
+    // Merged is settled: its marker shows done and the tint sits on Deploying, so Deploying is
+    // the current step, not Merged.
+    const merged = await render(
+      taskWith(null, {
+        lane: "completed",
+        publications: [{ state: "merged" }] as unknown as TaskView["publications"],
+      }),
+    );
+    expect(currentOf(merged)).toHaveLength(1);
+    expect(currentOf(merged)[0]).toContain("Deploying, next");
+    expect(text(stepsOf(merged)[3]!)).toContain("Merged, done");
+
+    // Live is settled at the last step: every marker is done and nothing is current.
+    const live = await render(
+      taskWith(null, {
+        card: parseCard({
+          lane: "completed",
+          deployment: { current: livePublication, history: [] },
+        })!,
+      }),
+    );
+    expect(live.find((node) => node.props["data-task-pipeline"] === "Live")).toBeTruthy();
+    expect(currentOf(live)).toEqual([]);
   });
 });

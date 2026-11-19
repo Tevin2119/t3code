@@ -298,6 +298,21 @@ export const REASONING_OPTION_BY_DRIVER: Readonly<Record<string, string>> = {
   deepseek: "reasoning_effort",
 };
 
+/**
+ * The reasoning level a pick in a seat's traits menu sets, or null when the pick changed nothing
+ * the engine saves for a seat (its context window, fast mode). It compares the menu's options
+ * before and after, so a default the menu fills in is not taken for a pick.
+ */
+export function seatReasoningPicked(
+  option: string,
+  shown: ReadonlyArray<{ readonly id: string; readonly value: unknown }> | undefined,
+  next: ReadonlyArray<{ readonly id: string; readonly value: unknown }> | undefined,
+): string | null {
+  const before = shown?.find((item) => item.id === option)?.value;
+  const after = next?.find((item) => item.id === option)?.value;
+  return typeof after === "string" && after !== before ? after : null;
+}
+
 /** What a thread takes over from the seat it is bound to. */
 export interface SeatForThread {
   /** Null for a role taken by choice, which no seat on this harness holds. */

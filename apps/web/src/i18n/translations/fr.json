@@ -4965,6 +4965,7 @@
   "c752acb0b7088295": "Connecté",
   "a097631b7acab9d8": "En attente d’approbation…",
   "aabd9632196ee7e5": "Reconnexion…",
+  "36fff6eb0fde020c": "Chaque siège enregistre son modèle et son niveau de raisonnement. La fenêtre de contexte est affichée à partir du modèle et n'est pas enregistrée : les réglages de siège du moteur n'ont pas encore de champ pour la fenêtre de contexte. Un niveau de raisonnement que le harness ou le modèle refuse est rejeté à l'enregistrement, avec la raison donnée par le moteur.",
   "a80895f122d7020f": "Impossible d’ouvrir le lien",
   "2a1758375b2701f3": "Impossible d’ajouter le backend",
   "6730fa8ae68fad99": "Échec de l’ajout du backend.",

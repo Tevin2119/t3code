@@ -61,7 +61,9 @@ function SeatNow(props: { readonly live: SeatLive }) {
 /** Where the task is in the engine's flow. It shows the step; it asks nothing. */
 function TaskPipelineStrip(props: { readonly task: TaskView }) {
   const stage = taskPipelineStage(props.task);
-  // A settled step is done, so its marker shows the check the steps ahead of it show.
+  // A settled step is done, so its marker shows the check the steps ahead of it show, and the
+  // tinted marker moves to the step after it. The step a screen reader hears as current is the
+  // tinted one; once Live is settled nothing is tinted, so no step is current.
   const current = stage.settled ? stage.index + 1 : stage.index;
   return (
     <div className="flex flex-col gap-1.5 px-2.5" data-task-pipeline={stage.label}>
@@ -73,12 +75,18 @@ function TaskPipelineStrip(props: { readonly task: TaskView }) {
               "flex items-center gap-1",
               index < TASK_PIPELINE_STAGES.length - 1 && "flex-1",
             )}
-            aria-current={index === stage.index ? "step" : undefined}
+            aria-current={index === current ? "step" : undefined}
           >
             <WizardStepMarker index={index} currentStep={current} />
             <span className="sr-only">
               {label}
-              {index < current ? ", done" : index === stage.index ? ", now" : ""}
+              {index < current
+                ? ", done"
+                : index === current
+                  ? stage.settled
+                    ? ", next"
+                    : ", now"
+                  : ""}
             </span>
             {index < TASK_PIPELINE_STAGES.length - 1 ? (
               <span

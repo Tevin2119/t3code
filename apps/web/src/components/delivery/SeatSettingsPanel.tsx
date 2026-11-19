@@ -1,4 +1,6 @@
 import type { EnvironmentId, ProviderInstanceId } from "@t3tools/contracts";
+import { buildProviderOptionSelectionsFromDescriptors } from "@t3tools/shared/model";
+import { T } from "gt-react";
 import { RotateCcwIcon } from "lucide-react";
 import { useRef, useState, type ReactNode } from "react";
 
@@ -18,12 +20,15 @@ import {
   harnessOfDriver,
   seatValues,
   modelsForSeat,
+  seatReasoningPicked,
   HARNESS_DEFAULT_MODEL,
+  REASONING_OPTION_BY_DRIVER,
 } from "../../lib/deliverySeats";
 import { cn } from "../../lib/utils";
 import { getCustomModelOptionsByInstance } from "../../modelSelection";
 import {
   applyProviderInstanceSettings,
+  defaultModelOfProviderInstanceEntry,
   deriveProviderInstanceEntries,
   sortProviderInstanceEntries,
 } from "../../providerInstances";
@@ -32,6 +37,7 @@ import { EMPTY_SERVER_PROVIDERS, serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { HarnessTile } from "./OrchestratorSeatGlyphs";
 import { ProviderModelPicker } from "../chat/ProviderModelPicker";
+import { getTraitsSectionVisibility, TraitsPicker } from "../chat/TraitsPicker";
 import type { ModelEsque } from "../chat/providerIconUtils";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
@@ -192,8 +198,13 @@ export function SeatSettingsPanel(props: {
         </div>
       ) : null}
       {!props.switchesOnly && !locked ? (
-        <p className="text-2xs text-muted-foreground">
-          Model context-window overrides are not supported by engine seat settings.
+        <p className="text-2xs text-muted-foreground" data-seat-engine-limits>
+          <T>
+            Each seat saves its model and reasoning level. The context window is shown from the
+            model and is not saved: the engine's seat settings have no context-window field yet. A
+            reasoning level the harness or model refuses is rejected when you save, with the
+            engine's reason.
+          </T>
         </p>
       ) : null}
       <div className="flex flex-col divide-y divide-border">
@@ -229,6 +240,19 @@ export function SeatSettingsPanel(props: {
               (model) => model.slug === values.model,
             ) ?? (values.model ? { slug: values.model, name: values.model } : null);
           const set = (choice: SeatChoice) => props.onChange?.(item.seat, choice);
+          // Reasoning is picked from the model's own levels, as the team chat's participants do.
+          // The engine saves the reasoning level only, under the option the harness reads it as.
+          const reasoningOption = entry ? REASONING_OPTION_BY_DRIVER[entry.driverKind] : undefined;
+          const traitsModel =
+            values.model ?? (entry ? defaultModelOfProviderInstanceEntry(entry) : undefined);
+          const traitsOptions =
+            reasoningOption && values.reasoning
+              ? [{ id: reasoningOption, value: values.reasoning }]
+              : [];
+          const traits =
+            !locked && entry && reasoningOption && traitsModel && offer.reasoning.length > 0
+              ? { entry, option: reasoningOption, model: traitsModel }
+              : null;
 
           return (
             <div
@@ -371,21 +395,53 @@ export function SeatSettingsPanel(props: {
                     />
                   )}
 
-                  <Choice
-                    kind="Reasoning"
-                    label={`Reasoning for ${item.title}`}
-                    value={locked ? values.reasoning : (chosen.reasoning ?? null)}
-                    baseValue={locked ? values.reasoning : chosen.harness ? null : from.reasoning}
-                    baseLabel={locked ? "Reasoning" : baseLabel}
-                    options={locked ? [] : offer.reasoning}
-                    why={
-                      locked
-                        ? "Set when the workflow started."
-                        : (item.why.reasoning ??
-                          `${harnessLabel(values.harness)} takes no reasoning setting from outside.`)
-                    }
-                    onChange={(value) => set({ ...chosen, reasoning: value })}
-                  />
+                  {traits ? (
+                    <span className="flex" data-seat-traits={item.seat}>
+                      <TraitsPicker
+                        provider={traits.entry.driverKind}
+                        instanceId={traits.entry.instanceId}
+                        models={traits.entry.models}
+                        model={traits.model}
+                        modelOptions={traitsOptions}
+                        allowPromptInjectedEffort={false}
+                        disabled={!traits.entry.isAvailable}
+                        size="xs"
+                        onModelOptionsChange={(next) => {
+                          const shown = buildProviderOptionSelectionsFromDescriptors(
+                            getTraitsSectionVisibility({
+                              provider: traits.entry.driverKind,
+                              models: traits.entry.models,
+                              model: traits.model,
+                              modelOptions: traitsOptions,
+                              allowPromptInjectedEffort: false,
+                            }).descriptors,
+                          );
+                          const picked = seatReasoningPicked(traits.option, shown, next);
+                          // A context window or another option is not saved for a seat.
+                          if (picked === null) return;
+                          const inherited = chosen.harness ? null : from.reasoning;
+                          // Picking what the seat already runs on by default is no choice at all.
+                          set({ ...chosen, reasoning: picked === inherited ? "" : picked });
+                        }}
+                      />
+                    </span>
+                  ) : (
+                    <Choice
+                      kind="Reasoning"
+                      label={`Reasoning for ${item.title}`}
+                      value={locked ? values.reasoning : (chosen.reasoning ?? null)}
+                      baseValue={locked ? values.reasoning : chosen.harness ? null : from.reasoning}
+                      baseLabel={locked ? "Reasoning" : baseLabel}
+                      options={locked ? [] : offer.reasoning}
+                      why={
+                        locked
+                          ? "Set when the workflow started."
+                          : (item.why.reasoning ??
+                            `${harnessLabel(values.harness)} takes no reasoning setting from outside.`)
+                      }
+                      onChange={(value) => set({ ...chosen, reasoning: value })}
+                    />
+                  )}
                   <Choice
                     kind="Access"
                     label={`Access for ${item.title}`}
