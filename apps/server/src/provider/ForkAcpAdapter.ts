@@ -147,9 +147,10 @@ export function makeForkAcpAdapter(
       makeRuntime: Effect.fn("makeRuntime")(function* (input) {
         const problem = runtimeModeProblem(support, input.runtimePolicy.runtimeMode);
         if (problem)
-          return yield* new EffectAcpErrors.AcpTransportError({
-            detail: problem,
-            cause: undefined,
+          return yield* new ProviderAdapter.ProviderAdapterRuntimeModeUnsupportedError({
+            driver: ProviderDriverKind.make(kind),
+            runtimeMode: input.runtimePolicy.runtimeMode,
+            reason: problem,
           });
         const runtime = yield* options.makeRuntime(input);
         return withNativeTurnReceipt(runtime, options);

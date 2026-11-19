@@ -208,6 +208,24 @@ export class ProviderAdapterOpenSessionError extends Schema.TaggedError<Provider
   }
 }
 
+/**
+ * The harness refuses this access mode outright; its support table carries why.
+ * Deterministic: the same mode against the same provider fails again, so callers
+ * must not retry it as-is.
+ */
+export class ProviderAdapterRuntimeModeUnsupportedError extends Schema.TaggedError<ProviderAdapterRuntimeModeUnsupportedError>()(
+  "ProviderAdapterRuntimeModeUnsupportedError",
+  {
+    driver: ProviderDriverKind,
+    runtimeMode: RuntimeMode,
+    reason: Schema.String,
+  },
+) {
+  override get message(): string {
+    return `${this.driver} does not run in ${this.runtimeMode} mode: ${this.reason}`;
+  }
+}
+
 export class ProviderAdapterCloseSessionError extends Schema.TaggedError<ProviderAdapterCloseSessionError>()(
   "ProviderAdapterCloseSessionError",
   {

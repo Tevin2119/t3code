@@ -368,7 +368,7 @@ export interface AcpAdapterV2Flavor {
     input: AcpAdapterV2RuntimeInput,
   ) => Effect.Effect<
     AcpSessionRuntime.AcpSessionRuntime["Service"],
-    EffectAcpErrors.AcpError,
+    EffectAcpErrors.AcpError | ProviderAdapter.ProviderAdapterRuntimeModeUnsupportedError,
     ChildProcessSpawner.ChildProcessSpawner | SecureRandom.SecureRandom | Scope.Scope
   >;
   readonly customModels?: ReadonlyArray<string>;
