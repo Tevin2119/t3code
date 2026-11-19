@@ -25,6 +25,8 @@ const RIGHT_PANEL_KINDS = [
   "pull-requests",
   "issue",
   "side-chat",
+  "task-evidence",
+  "task-deployments",
 ] as const;
 export type RightPanelKind = (typeof RIGHT_PANEL_KINDS)[number];
 
@@ -96,7 +98,11 @@ export type RightPanelSurface =
       key: string;
       url?: string;
     }
-  | { id: `side-chat:${string}`; kind: "side-chat"; threadId: ThreadId };
+  | { id: `side-chat:${string}`; kind: "side-chat"; threadId: ThreadId }
+  /** A board task's evidence and settings. Only a task's own panel (`taskPanelRef`) opens it. */
+  | { id: "task-evidence"; kind: "task-evidence" }
+  /** A board task's deployment status, one row per environment. Task panels only, like evidence. */
+  | { id: "task-deployments"; kind: "task-deployments" };
 
 const RIGHT_PANEL_STORAGE_KEY = "t3code:right-panel-state:v2";
 const RIGHT_PANEL_STORAGE_VERSION = 15;
@@ -112,12 +118,26 @@ export const ISSUES_PANEL_REF = scopeThreadRef(
   ThreadId.make("issues-panel"),
 );
 
+const TASK_PANEL_ENVIRONMENT = "task-panel";
+
 /**
- * The pull-request and issues lists' shared panels are session
+ * A board task's panel. Like the lists' panels it is owned by a sentinel ref, not a thread, so its
+ * surfaces never reach a thread view. One per task, so each task keeps its own tabs.
+ */
+export const taskPanelRef = (owner: string) =>
+  scopeThreadRef(
+    EnvironmentId.make(TASK_PANEL_ENVIRONMENT),
+    ThreadId.make(`task:${encodeURIComponent(owner)}`),
+  );
+
+/**
+ * The pull-request and issues lists' shared panels, and task panels, are session
  * state: reopening the app should show the list, not last session's tabs and detail fetches.
  */
 const isPullRequestsPanelKey = (threadKey: string) =>
-  threadKey.endsWith(":pull-requests-panel") || threadKey.endsWith(":issues-panel");
+  threadKey.endsWith(":pull-requests-panel") ||
+  threadKey.endsWith(":issues-panel") ||
+  threadKey.startsWith(`${TASK_PANEL_ENVIRONMENT}:`);
 
 export interface ThreadRightPanelState {
   isOpen: boolean;
@@ -258,6 +278,10 @@ const singletonSurface = (
       return { id: "pull-requests", kind };
     case "device":
       return { id: "device", kind };
+    case "task-evidence":
+      return { id: "task-evidence", kind };
+    case "task-deployments":
+      return { id: "task-deployments", kind };
   }
 };
 
@@ -1335,8 +1359,11 @@ useRightPanelStore.subscribe((next, previous) => {
       ...removed.filter((surface) => surface.id === before.activeSurfaceId),
     ];
     for (const surface of closedInOrder.map(withoutReveal)) {
+      // A task's tabs reopen from the task itself, which a closed-view entry cannot route to.
       if (
         surface.kind === "terminal" ||
+        surface.kind === "task-evidence" ||
+        surface.kind === "task-deployments" ||
         (surface.kind === "preview" && surface.resourceId !== null)
       )
         continue;

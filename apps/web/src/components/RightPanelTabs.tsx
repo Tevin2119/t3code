@@ -40,6 +40,7 @@ import { horizontalListSortingStrategy, SortableContext, useSortable } from "@dn
 import { CSS } from "@dnd-kit/utilities";
 import {
   CircleDotIcon,
+  ClipboardListIcon,
   Smartphone,
   ChevronDown,
   ChevronLeft,
@@ -49,6 +50,7 @@ import {
   Globe2,
   MessagesSquare,
   Plus,
+  RocketIcon,
   TerminalSquare,
   Volume2Icon,
   VolumeOffIcon,
@@ -614,6 +616,10 @@ function surfaceTitle(
       return surface.title ?? surface.target?.name ?? resolve(msg("Device"));
     case "side-chat":
       return resolve(msg("Side chat"));
+    case "task-evidence":
+      return resolve(msg("Task evidence"));
+    case "task-deployments":
+      return resolve(msg("Deployments"));
     case "preview": {
       const snapshot = surface.resourceId ? sessions[surface.resourceId] : null;
       if (!snapshot || snapshot.navStatus._tag === "Idle") return resolve(msg("Browser"));
@@ -706,6 +712,10 @@ function SurfaceIcon({
       return <IssueSurfaceIcon surface={surface} environmentId={environmentId} />;
     case "side-chat":
       return <SideChatTabIcon environmentId={environmentId} threadId={surface.threadId} />;
+    case "task-evidence":
+      return <ClipboardListIcon className="size-3 shrink-0" />;
+    case "task-deployments":
+      return <RocketIcon className="size-3 shrink-0" />;
     case "device":
       return surface.target?.platform === "ios" ? (
         <AppleIcon className="size-3 shrink-0" />
