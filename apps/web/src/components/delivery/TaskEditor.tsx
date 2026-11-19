@@ -69,6 +69,7 @@ import { BoardDialog, BoardPicker, type PickerItem } from "./BoardPicker";
 import { PriorityPill } from "./taskParts";
 import { TeamDefaultsDialog } from "./TeamDefaultsDialog";
 import { MergePermissionControls } from "./MergePermissionControls";
+import { TaskDisclosure } from "./TaskDisclosure";
 
 interface Form {
   readonly title: string;
@@ -683,19 +684,20 @@ export function TaskEditor(props: {
 
             <aside className="flex min-w-0 flex-col gap-4">
               {saved?.card.mergePermission && props.environmentId ? (
-                <details>
-                  <summary className="cursor-pointer text-xs">Automatic merge permission</summary>
-                  <MergePermissionControls
-                    environmentId={props.environmentId}
-                    path={`/api/tasks/${saved.id}/merge-permission`}
-                    policy={saved.card.mergePermission}
-                    stale={policyStale || !!taskRead.error}
-                    onDone={taskRead.refresh}
-                  />
-                  <Button size="xs" variant="ghost" onClick={taskRead.refresh}>
-                    Refresh permission
-                  </Button>
-                </details>
+                <TaskDisclosure title="Automatic merge permission" defaultOpen={false}>
+                  <div>
+                    <MergePermissionControls
+                      environmentId={props.environmentId}
+                      path={`/api/tasks/${saved.id}/merge-permission`}
+                      policy={saved.card.mergePermission}
+                      stale={policyStale || !!taskRead.error}
+                      onDone={taskRead.refresh}
+                    />
+                    <Button size="xs" variant="ghost" onClick={taskRead.refresh}>
+                      Refresh permission
+                    </Button>
+                  </div>
+                </TaskDisclosure>
               ) : null}
               <Field
                 label="Your name"
