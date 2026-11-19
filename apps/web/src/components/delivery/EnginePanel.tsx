@@ -128,9 +128,11 @@ function EnvironmentEngineAttentionBar({
     <>
       {attention !== null ? (
         <div className="mx-4 mt-2">
-          <Alert variant="warning">
+          {/* ui/alert puts role="alert" on the whole bar, button included. Its props spread after that
+              role, so the bar drops it here and only the message is the live region. */}
+          <Alert variant="warning" role={undefined}>
             <PowerIcon aria-hidden="true" />
-            <AlertDescription>{attention}</AlertDescription>
+            <AlertDescription role="alert">{attention}</AlertDescription>
             <AlertAction>
               <Button size="xs" variant="outline" onClick={() => setOpen(true)}>
                 Open engine
