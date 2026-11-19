@@ -158,19 +158,23 @@ export function OrchestratorParticipants(props: {
                 model.isUnavailable ? " (Unavailable)" : ""
               }`
             : null;
+          // The orchestrator's own seat shows the orchestrator's model, so choosing here changes it.
+          const lead = row.orchestrator ? onLead : undefined;
           const setModel = (modelSelection: ModelSelection) =>
-            row.extra
-              ? setExtras(
-                  extras.map((extra) =>
-                    extra.id === row.seat ? { ...extra, modelSelection } : extra,
-                  ),
-                )
-              : props.onChange({
-                  participantChoices: {
-                    ...value.participantChoices,
-                    [row.seat]: { ...value.participantChoices?.[row.seat], modelSelection },
-                  },
-                });
+            lead
+              ? lead({ role: row.role, modelSelection })
+              : row.extra
+                ? setExtras(
+                    extras.map((extra) =>
+                      extra.id === row.seat ? { ...extra, modelSelection } : extra,
+                    ),
+                  )
+                : props.onChange({
+                    participantChoices: {
+                      ...value.participantChoices,
+                      [row.seat]: { ...value.participantChoices?.[row.seat], modelSelection },
+                    },
+                  });
           const setAccess = (access: OrchestratorParticipantAccess) =>
             row.extra
               ? setExtras(
@@ -235,7 +239,7 @@ export function OrchestratorParticipants(props: {
                       lockedProvider={null}
                       instanceEntries={entries}
                       modelOptionsByInstance={models}
-                      disabled={!row.included}
+                      disabled={!row.included && !lead}
                       size="xs"
                       triggerClassName="-ml-1.75 max-w-full sm:max-w-full"
                       triggerAriaLabel={`Choose provider and model for ${row.title}`}
@@ -260,7 +264,7 @@ export function OrchestratorParticipants(props: {
                         )
                       }
                     />
-                    {entry && row.modelSelection ? (
+                    {entry && row.modelSelection && !lead ? (
                       <TraitsPicker
                         provider={entry.driverKind}
                         instanceId={entry.instanceId}
