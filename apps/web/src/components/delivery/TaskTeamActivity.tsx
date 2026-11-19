@@ -154,7 +154,8 @@ function SeatRow(props: {
           <span className="sr-only">{seat.activity}</span>
           <span
             className={cn(
-              "shrink-0 truncate text-2xs font-normal",
+              // At most half the row, so a long detail ellipsizes and the seat name keeps the rest.
+              "min-w-0 max-w-1/2 truncate text-2xs font-normal",
               seat.activity === "unavailable" ? "text-destructive" : "text-muted-foreground",
             )}
             data-seat-detail
