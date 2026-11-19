@@ -48,7 +48,6 @@ import {
   type TaskFile,
   type TaskPriority,
   repeatKeys,
-  type SeatLive,
   type TaskBriefing,
   type TaskView,
   type TimelineEntry,
@@ -109,6 +108,7 @@ import { relatedTaskGroups } from "./relatedTaskGroups";
 import { TaskDeploymentsPanel } from "./TaskDeploymentStatus";
 import { MergePermissionControls } from "./MergePermissionControls";
 import { BoardDelivery } from "./BoardDelivery";
+import { TaskTeamActivity } from "./TaskTeamActivity";
 
 const EVENT_ICON: Record<string, typeof CircleDotIcon> = {
   pass: CircleCheckIcon,
@@ -369,27 +369,6 @@ function MobileHelp(props: {
         <div className="text-xs">{props.children}</div>
       </PopoverPopup>
     </Popover>
-  );
-}
-
-/** What a seat at work last did, newest last: the tools it called and what it said. */
-function SeatNow(props: { readonly live: SeatLive }) {
-  const items = props.live.items.slice(-4);
-  const keys = repeatKeys(items.map((item) => `${item.kind}:${item.text}`));
-  return (
-    <ul className="mt-0.5 flex flex-col gap-0.5 border-l border-border pl-2" data-seat-live>
-      {items.map((item, index) => (
-        <li
-          key={keys[index]}
-          className={cn(
-            "text-3xs break-words",
-            item.kind === "said" ? "text-foreground/80" : "font-mono text-muted-foreground",
-          )}
-        >
-          {item.text}
-        </li>
-      ))}
-    </ul>
   );
 }
 
@@ -1481,14 +1460,6 @@ function Row(props: { readonly label: string; readonly children: React.ReactNode
   );
 }
 
-const ACTIVITY_VARIANT: Record<string, "success" | "info" | "warning" | "secondary" | "error"> = {
-  active: "info",
-  queued: "warning",
-  completed: "success",
-  waiting: "secondary",
-  unavailable: "error",
-};
-
 function Info(props: {
   readonly environmentId: EnvironmentId | null;
   readonly from: "Board" | "Orchestrator";
@@ -2044,62 +2015,6 @@ function Info(props: {
         />
       </section>
     </aside>
-  );
-}
-
-function TaskTeamActivity(props: { environmentId: EnvironmentId | null; task: TaskView }) {
-  const { task } = props;
-  return (
-    <section className="flex flex-col gap-1.5" data-task-roster>
-      <TaskDisclosure
-        defaultOpen={true}
-        title={
-          <>
-            Team {task.team}
-            {task.defaults > 0 ? `, defaults r${task.defaults}` : ""}
-          </>
-        }
-      >
-        {task.council ? (
-          task.council.seats.map((seat) => (
-            <div key={seat.seat} className="flex items-start justify-between gap-2 text-xs">
-              <span className="min-w-0">
-                {seat.seat}
-                <span className="block text-3xs text-muted-foreground">
-                  {harnessLabel(seat.harness)}, {seat.requestedModel ?? "its own model"}
-                  {seat.reasoning ? `, ${seat.reasoning}` : ""}
-                  {seat.access && seat.access !== "full" ? `, ${seat.access}` : ""}
-                </span>
-                {seat.waitingWhy ? (
-                  <span className="block text-3xs text-muted-foreground" data-seat-waiting-why>
-                    {seat.waitingWhy}
-                  </span>
-                ) : null}
-                {seat.live && seat.live.items.length > 0 ? <SeatNow live={seat.live} /> : null}
-              </span>
-              <span className="shrink-0 text-right">
-                <Badge size="sm" variant={ACTIVITY_VARIANT[seat.activity] ?? "secondary"}>
-                  {seat.activity}
-                </Badge>
-                <span className="block text-3xs text-muted-foreground">
-                  {seat.blockedBy
-                    ? `waits for ${seat.blockedBy}`
-                    : seat.verdict
-                      ? `verdict ${seat.verdict}`
-                      : (seat.stage ?? "")}
-                </span>
-              </span>
-            </div>
-          ))
-        ) : (
-          <SeatSettingsPanel
-            environmentId={props.environmentId}
-            settings={task.settings}
-            chosen={{}}
-          />
-        )}
-      </TaskDisclosure>
-    </section>
   );
 }
 

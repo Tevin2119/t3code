@@ -119,7 +119,7 @@ export function useSeatCatalog(environmentId: EnvironmentId | null) {
   const entries = sortProviderInstanceEntries(
     applyProviderInstanceSettings(deriveProviderInstanceEntries(providers), settings, null),
   ).filter((entry) => harnessOfDriver(entry.driverKind) !== null);
-  return { entries, options: getCustomModelOptionsByInstance(settings, providers) };
+  return { entries, providers, options: getCustomModelOptionsByInstance(settings, providers) };
 }
 
 /**
