@@ -139,7 +139,8 @@ export function TaskWorkspacePanels(props: {
       maximized={maximized}
       keybindings={keybindings}
       getShortcutContext={getShortcutContext}
-      widthStorageKey="t3code:task-evidence-width"
+      // One key per task keeps each task's remembered panel width independent.
+      widthStorageKey={`t3code:task-evidence-width:${props.owner}`}
       defaultWidth={400}
       layoutControls={
         <span className="flex shrink-0 items-center gap-1">

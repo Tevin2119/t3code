@@ -74,6 +74,34 @@ it("keeps the reply while evidence is opened and closed, and isolates saved pane
   await expect.element(page.getByText("Candidate evidence for panel-test-a")).toBeVisible();
 });
 
+it("remembers the evidence panel width per task, not across tasks", async () => {
+  const keyA = "t3code:task-evidence-width:width-task-a";
+  const keyB = "t3code:task-evidence-width:width-task-b";
+  // The retired shared key is orphaned: a stale value must not reach any task.
+  localStorage.setItem("t3code:task-evidence-width", "600");
+  localStorage.setItem(keyA, "520");
+  localStorage.removeItem(keyB);
+  const panelWidth = () =>
+    document
+      .querySelector<HTMLElement>("[data-preview-panel-mode]")
+      ?.style.getPropertyValue("--resizable-width");
+  try {
+    await using screen = await render(<TaskExample key="a" owner="width-task-a" />);
+    await page.getByRole("button", { name: "Toggle right panel", exact: true }).click();
+    await expect.element(page.getByText("Candidate evidence for width-task-a")).toBeVisible();
+    await expect.poll(panelWidth).toBe("520px");
+    await screen.rerender(<TaskExample key="b" owner="width-task-b" />);
+    await page.getByRole("button", { name: "Toggle right panel", exact: true }).click();
+    await expect.element(page.getByText("Candidate evidence for width-task-b")).toBeVisible();
+    await expect.poll(panelWidth).toBe("400px");
+    expect(localStorage.getItem(keyB)).toBeNull();
+  } finally {
+    localStorage.removeItem("t3code:task-evidence-width");
+    localStorage.removeItem(keyA);
+    localStorage.removeItem(keyB);
+  }
+});
+
 it("keeps originless tasks usable and explains unavailable native tools", async () => {
   await using screen = await render(<TaskExample owner="originless" />);
   await expect
