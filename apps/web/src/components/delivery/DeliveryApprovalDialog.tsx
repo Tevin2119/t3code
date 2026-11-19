@@ -151,6 +151,7 @@ export function DeliveryApprovalDialog(props: {
                 autoFocus={!props.nameField}
                 disabled={busy || (!props.nameField && !by)}
                 onChange={(event) => {
+                  // The no-DOM test renderer never attaches the ref, so take the element from the event.
                   keyInput.current = event.target;
                   setHasKey(event.target.value.trim() !== "");
                 }}
