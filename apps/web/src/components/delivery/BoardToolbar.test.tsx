@@ -6,7 +6,7 @@ import { act, type ReactNode, useRef, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { Sheet, SheetPopup, SheetTitle } from "../ui/sheet";
-import { EnginePanel } from "./EnginePanel";
+import { EngineAttentionBar, EnginePanel } from "./EnginePanel";
 import { BoardToolbar, type BoardToolbarProps } from "./BoardToolbar";
 import { BoardEngineNotice, BoardNotice } from "./BoardEngineNotice";
 import { EnvironmentPicker } from "./EnvironmentPicker";
@@ -642,5 +642,33 @@ describe("responsive board control ownership", () => {
     await click("Clear chosen tags");
     expect(element("[data-board-tag-filter]").textContent).toBe("Tag");
     expect(button("Board filters")).toBeDefined();
+  });
+
+  it("keeps the attention bar's Open engine button outside its alert live region", async () => {
+    mock.read.body = {
+      approval: "passphrase",
+      versions: {
+        channel: "qa",
+        running: { commit: "a".repeat(40), changed: false },
+        installed: { commit: "a".repeat(40), changed: false },
+        available: { commit: "c".repeat(40), at: "2026-10-16T12:00:00Z" },
+        updateAvailable: true,
+        restartRequired: false,
+        deferred: false,
+        managed: true,
+        pinned: true,
+        problem: null,
+        update: null,
+      },
+    };
+    await act(async () =>
+      root.render(<EngineAttentionBar environmentId={EnvironmentId.make("local")} />),
+    );
+    const live = Array.from(document.querySelectorAll('[role="alert"]'));
+    expect(live).toHaveLength(1);
+    expect(live[0]?.textContent).toBe("Engine update ready: ccccccc.");
+    const open = button("Open engine");
+    expect(open.closest('[role="alert"]')).toBeNull();
+    expect(open.closest('[data-slot="alert"]')).not.toBeNull();
   });
 });

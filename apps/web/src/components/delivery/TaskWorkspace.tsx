@@ -106,7 +106,7 @@ import {
 import { Age, Avatar, laneTone, PriorityPill, QaVotes, TagList, WaitingOn } from "./taskParts";
 import { TaskDisclosure } from "./TaskDisclosure";
 import { relatedTaskGroups } from "./relatedTaskGroups";
-import { TaskDeploymentDetails } from "./TaskDeploymentStatus";
+import { TaskDeploymentsPanel } from "./TaskDeploymentStatus";
 import { MergePermissionControls } from "./MergePermissionControls";
 import { BoardDelivery } from "./BoardDelivery";
 
@@ -1922,7 +1922,6 @@ function Info(props: {
         </section>
       ) : null}
 
-      <TaskDeploymentDetails card={card} stale={props.stale} />
       {props.environmentId ? (
         <TaskDisclosure title="Automatic merge permission" defaultOpen={false}>
           <MergePermissionControls
@@ -2438,6 +2437,7 @@ export function TaskWorkspace(props: {
                   }}
                 />
               )}
+              deployments={<TaskDeploymentsPanel card={task.card} stale={stale || !!read.error} />}
               evidence={
                 <Info
                   key={task.id}

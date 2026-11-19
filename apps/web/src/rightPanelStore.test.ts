@@ -13,6 +13,7 @@ import {
   selectActiveRightPanelSurface,
   selectThreadPanelVisibility,
   selectThreadRightPanelState,
+  taskPanelRef,
   useRightPanelStore,
 } from "./rightPanelStore";
 
@@ -1276,5 +1277,53 @@ describe("rightPanelStore", () => {
     store.reconcileBrowserSurfaces(refA, ["tab-a", "tab-b"]);
     expect(surfaceIds()).toEqual(["browser:tab-a", "terminal:term-1", "diff", "browser:tab-b"]);
     expect(store.getUserActionRevision(refA)).toBe(revision);
+  });
+});
+
+describe("task panels", () => {
+  const owner = JSON.stringify(["board-env", "task-1"]);
+
+  it("owns a task's tabs under a ref no thread can have, one per task", () => {
+    const ref = taskPanelRef(owner);
+    expect(ref.environmentId).toBe("task-panel");
+    expect(taskPanelRef(JSON.stringify(["board-env", "task-2"]))).not.toEqual(ref);
+    const store = useRightPanelStore.getState();
+    store.open(ref, "task-evidence");
+    store.open(ref, "task-deployments");
+    expect(selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, ref)).toEqual({
+      isOpen: true,
+      activeSurfaceId: "task-deployments",
+      surfaces: [
+        { id: "task-evidence", kind: "task-evidence" },
+        { id: "task-deployments", kind: "task-deployments" },
+      ],
+    });
+    expect(selectActiveRightPanel(useRightPanelStore.getState().byThreadKey, refA)).toBeNull();
+  });
+
+  it("keeps task panels out of storage and out of closed-view history", async () => {
+    const ref = taskPanelRef(owner);
+    const store = useRightPanelStore.getState();
+    store.open(refA, "diff");
+    store.open(ref, "task-evidence");
+    store.open(ref, "task-deployments");
+    store.closeSurface(ref, "task-deployments");
+    expect(useClosedViewStore.getState().entries).toEqual([]);
+    const { storage, name } = useRightPanelStore.persist.getOptions();
+    const persisted = (await storage!.getItem(name!)) as {
+      state: { byThreadKey: Record<string, unknown> };
+    } | null;
+    expect(Object.keys(persisted!.state.byThreadKey)).toEqual(["env-1:thread-A"]);
+    expect(
+      migratePersistedRightPanelState({
+        byThreadKey: {
+          [`task-panel:${ref.threadId}`]: {
+            isOpen: true,
+            activeSurfaceId: "task-evidence",
+            surfaces: [{ id: "task-evidence", kind: "task-evidence" }],
+          },
+        },
+      }).byThreadKey,
+    ).toEqual({});
   });
 });

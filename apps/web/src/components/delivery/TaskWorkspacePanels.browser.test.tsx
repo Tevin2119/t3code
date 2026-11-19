@@ -48,6 +48,7 @@ function TaskExample({ owner }: { owner: string }) {
         details={<p>TaskExample configuration</p>}
         conversation={<textarea aria-label="TaskExample reply" />}
         evidence={<p>Candidate evidence for {owner}</p>}
+        deployments={<p>Deployment rows for {owner}</p>}
       />
     </div>
   );
@@ -73,6 +74,34 @@ it("keeps the reply while evidence is opened and closed, and isolates saved pane
   await expect.element(page.getByText("Candidate evidence for panel-test-a")).toBeVisible();
 });
 
+it("remembers the evidence panel width per task, not across tasks", async () => {
+  const keyA = "t3code:task-evidence-width:width-task-a";
+  const keyB = "t3code:task-evidence-width:width-task-b";
+  // The retired shared key is orphaned: a stale value must not reach any task.
+  localStorage.setItem("t3code:task-evidence-width", "600");
+  localStorage.setItem(keyA, "520");
+  localStorage.removeItem(keyB);
+  const panelWidth = () =>
+    document
+      .querySelector<HTMLElement>("[data-preview-panel-mode]")
+      ?.style.getPropertyValue("--resizable-width");
+  try {
+    await using screen = await render(<TaskExample key="a" owner="width-task-a" />);
+    await page.getByRole("button", { name: "Toggle right panel", exact: true }).click();
+    await expect.element(page.getByText("Candidate evidence for width-task-a")).toBeVisible();
+    await expect.poll(panelWidth).toBe("520px");
+    await screen.rerender(<TaskExample key="b" owner="width-task-b" />);
+    await page.getByRole("button", { name: "Toggle right panel", exact: true }).click();
+    await expect.element(page.getByText("Candidate evidence for width-task-b")).toBeVisible();
+    await expect.poll(panelWidth).toBe("400px");
+    expect(localStorage.getItem(keyB)).toBeNull();
+  } finally {
+    localStorage.removeItem("t3code:task-evidence-width");
+    localStorage.removeItem(keyA);
+    localStorage.removeItem(keyB);
+  }
+});
+
 it("keeps originless tasks usable and explains unavailable native tools", async () => {
   await using screen = await render(<TaskExample owner="originless" />);
   await expect
@@ -93,6 +122,7 @@ it("inspects the real source environment and preserves the task reply on return"
       onDetailsOpenChange={() => {}}
       details={<p>Configuration</p>}
       evidence={<p>Evidence</p>}
+      deployments={<p>Deployments</p>}
       conversation={<textarea aria-label="Bound task answer" />}
     />,
   );
@@ -131,4 +161,28 @@ it("opens narrow-screen evidence as a sheet and restores the reply after closing
   await expect
     .element(screen.getByRole("textbox", { name: "TaskExample reply" }))
     .toHaveValue("Keep narrow draft");
+});
+
+it("hosts evidence and deployments as native right-panel tabs with native maximize", async () => {
+  await using screen = await render(<TaskExample owner="native-tabs" />);
+  const reply = screen.getByRole("textbox", { name: "TaskExample reply" });
+  await reply.fill("Keep tab draft");
+  const replyElement = reply.element();
+  await screen.getByRole("button", { name: "Toggle right panel", exact: true }).click();
+  await expect
+    .element(page.getByRole("button", { name: "Task evidence", exact: true }))
+    .toBeVisible();
+  await expect.element(page.getByText("Candidate evidence for native-tabs")).toBeVisible();
+  await page.getByRole("button", { name: "Deployments", exact: true }).click();
+  await expect.element(page.getByText("Deployment rows for native-tabs")).toBeVisible();
+  // Native maximize: the panel takes the conversation's place, which stays mounted.
+  await page.getByRole("button", { name: "Maximize panel" }).click();
+  await expect.poll(() => replyElement.checkVisibility()).toBe(false);
+  await page.getByRole("button", { name: "Restore panel size" }).click();
+  await expect.poll(() => replyElement.checkVisibility()).toBe(true);
+  await page.getByRole("button", { name: "Close evidence", exact: true }).click();
+  await expect.element(reply).toHaveValue("Keep tab draft");
+  await screen.getByRole("button", { name: "Toggle right panel", exact: true }).click();
+  // Reopening keeps the tab the person left on.
+  await expect.element(page.getByText("Deployment rows for native-tabs")).toBeVisible();
 });

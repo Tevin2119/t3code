@@ -113,6 +113,10 @@ export const TaskDeploymentPublication = Schema.Struct({
   ...Outcome,
   history: Schema.Array(Schema.Struct({ ...Outcome, at: Schema.String })),
   updated: Schema.String,
+  // Reported by the deployment, which the engine does not send yet. Absent until it does.
+  previewUrl: Schema.optional(NullableText),
+  deploymentId: Schema.optional(NullableText),
+  logsUrl: Schema.optional(NullableText),
 });
 export type TaskDeploymentPublication = typeof TaskDeploymentPublication.Type;
 export const TaskDeployment = Schema.Struct({

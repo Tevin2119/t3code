@@ -1,8 +1,11 @@
 import type { TaskDeploymentPublication } from "@t3tools/contracts";
-import { RocketIcon } from "lucide-react";
-import { createContext, useContext } from "react";
+import { ArrowUpRightIcon, RocketIcon } from "lucide-react";
+import { createContext, useContext, type MouseEvent } from "react";
+import { useOpenLink } from "../../browser/useOpenLink";
 import { taskDeploymentLabel, taskDeploymentStatus } from "../../lib/boardDelivery";
 import type { DeliveryCard } from "../../lib/delivery";
+import { useOpenPrLink } from "../../lib/openPullRequestLink";
+import { RelativeTime } from "../RelativeTime";
 import { Badge } from "../ui/badge";
 import { TaskDisclosure } from "./TaskDisclosure";
 
@@ -29,7 +32,8 @@ export function TaskDeploymentBadge({ card }: { card: DeliveryCard }) {
   );
 }
 
-function Publication({
+/** Everything the engine recorded for one publication, flat: the row's one disclosure holds it. */
+function PublicationDetails({
   value,
   historical,
 }: {
@@ -38,19 +42,9 @@ function Publication({
 }) {
   const status = taskDeploymentStatus(value);
   return (
-    <div className="min-w-0 space-y-2 break-words text-xs">
-      <p>
-        <Badge
-          size="sm"
-          variant={historical ? "outline" : status.state === "blocked" ? "warning" : "secondary"}
-        >
-          {historical ? "Historical publication" : "Attributed publication"}: {status.state}
-        </Badge>
-      </p>
-      <p>
-        {value.project?.title ?? value.projectId} ·{" "}
-        {value.project?.environment ?? "unknown environment"} ·{" "}
-        {value.targetBranch ?? "unknown target"}
+    <div className="min-w-0 space-y-2 break-words text-xs" data-task-deployment-publication>
+      <p className="font-medium">
+        {historical ? "Historical publication" : "Attributed publication"}: {status.state}
       </p>
       <p className="break-all">
         Project: {value.projectId}
@@ -65,10 +59,7 @@ function Publication({
         Publication: {value.publicationState} · PR #{value.pullRequest.number}
       </p>
       <p className="break-all">Host-observed merge commit: {value.mergeCommit ?? "unknown"}</p>
-      {status.problem ? <p className="text-warning-foreground">{status.problem}</p> : null}
-      <p className="text-muted-foreground">
-        Projection updated: {value.updated}. Merge and qualification are not deployment.
-      </p>
+      <p className="text-muted-foreground">Projection updated: {value.updated}.</p>
       {value.candidate ? (
         <div className="space-y-1 break-all">
           <p>
@@ -84,21 +75,18 @@ function Publication({
               {value.candidate.liveUntil ? ` · until ${value.candidate.liveUntil}` : ""}
             </p>
           ) : null}
-          <TaskDisclosure title="Qualification evidence" defaultOpen={false}>
-            <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-all">
-              {JSON.stringify(value.candidate.evidence, null, 2) ?? "Not recorded"}
-            </pre>
-          </TaskDisclosure>
+          <p className="font-medium">Qualification evidence</p>
+          <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-all">
+            {JSON.stringify(value.candidate.evidence, null, 2) ?? "Not recorded"}
+          </pre>
         </div>
       ) : (
         <p className="text-muted-foreground">No current candidate evidence.</p>
       )}
       {value.history.length ? (
-        <TaskDisclosure
-          title={`Historical status transitions (${value.history.length})`}
-          defaultOpen={false}
-        >
-          <ol className="space-y-2 py-2">
+        <div className="space-y-1">
+          <p className="font-medium">Historical status transitions ({value.history.length})</p>
+          <ol className="space-y-2">
             {value.history.map((entry) => (
               <li key={JSON.stringify(entry)} className="break-all">
                 {entry.at} · {entry.state}
@@ -111,51 +99,158 @@ function Publication({
               </li>
             ))}
           </ol>
-        </TaskDisclosure>
+        </div>
       ) : null}
     </div>
   );
 }
 
-export function TaskDeploymentDetails({ card, stale }: { card: DeliveryCard; stale: boolean }) {
-  const deployment = card.deployment;
-  const earlier = deployment?.current.run !== card.run?.id;
+const LINK_CLASS =
+  "inline-flex shrink-0 items-center gap-0.5 text-primary underline-offset-2 hover:underline";
+
+/** One environment's newest publication, laid out like a linked pull request's row. */
+function EnvironmentRow({
+  environment,
+  latest,
+  older,
+  historical,
+}: {
+  environment: string;
+  latest: TaskDeploymentPublication;
+  older: readonly TaskDeploymentPublication[];
+  historical: boolean;
+}) {
+  const openPrLink = useOpenPrLink();
+  const openLink = useOpenLink(null);
+  const status = taskDeploymentStatus(latest);
+  const external = (url: string) => (event: MouseEvent<HTMLAnchorElement>) => {
+    if (event.button > 1) return;
+    event.preventDefault();
+    void openLink(url, { event }).catch((error: unknown) => console.error(error));
+  };
   return (
-    <section className="min-w-0" aria-label="Task deployment status">
-      <TaskDisclosure title="Deployment" defaultOpen={!!deployment}>
-        {stale ? (
-          <p className="text-xs text-warning-foreground">
-            Stale snapshot. This is not current deployment evidence.
-          </p>
+    <li
+      className="flex min-w-0 flex-col gap-1 rounded-md px-2 py-1.5 hover:bg-accent/60"
+      data-task-deployment-environment={environment}
+      data-task-deployment={status.state}
+    >
+      <div className="flex min-w-0 items-center gap-2">
+        <Badge
+          size="sm"
+          variant={historical ? "outline" : status.state === "blocked" ? "warning" : "secondary"}
+        >
+          {status.state}
+        </Badge>
+        <span className="min-w-0 flex-1 truncate text-sm font-medium">{environment}</span>
+        <span className="shrink-0 text-2xs text-muted-foreground">
+          <RelativeTime timestamp={latest.updated} />
+        </span>
+      </div>
+      <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-muted-foreground">
+        <span className="min-w-0 truncate">
+          {latest.project?.title ?? latest.projectId} · {latest.targetBranch ?? "unknown target"}
+        </span>
+        <a
+          href={latest.pullRequest.url}
+          onClick={(event) => openPrLink(event, latest.pullRequest.url)}
+          className={LINK_CLASS}
+        >
+          PR #{latest.pullRequest.number}
+          <ArrowUpRightIcon aria-hidden className="size-3" />
+        </a>
+        {latest.previewUrl ? (
+          <a href={latest.previewUrl} onClick={external(latest.previewUrl)} className={LINK_CLASS}>
+            Preview
+            <ArrowUpRightIcon aria-hidden className="size-3" />
+          </a>
         ) : null}
-        {!deployment ? (
-          <p className="text-xs text-muted-foreground">
-            No attributed deployment is available. A merge does not mean this task is live.
-          </p>
-        ) : (
-          <>
-            {earlier ? (
-              <p className="text-xs text-warning-foreground">
-                This publication belongs to an earlier run. The current run has no attributed
-                deployment here.
-              </p>
-            ) : null}
-            <Publication value={deployment.current} historical={earlier || stale} />
-            {deployment.history.length ? (
-              <TaskDisclosure
-                title={`Earlier attributed publications (${deployment.history.length})`}
-                defaultOpen={false}
-              >
-                <div className="space-y-4 py-2">
-                  {deployment.history.map((value) => (
-                    <Publication key={value.publication} value={value} historical />
-                  ))}
-                </div>
-              </TaskDisclosure>
-            ) : null}
-          </>
-        )}
+        {latest.logsUrl ? (
+          <a href={latest.logsUrl} onClick={external(latest.logsUrl)} className={LINK_CLASS}>
+            Logs
+            <ArrowUpRightIcon aria-hidden className="size-3" />
+          </a>
+        ) : null}
+        {latest.deploymentId ? (
+          <span className="font-mono text-3xs break-all">Deployment {latest.deploymentId}</span>
+        ) : null}
+      </div>
+      {status.problem ? <p className="text-xs text-warning-foreground">{status.problem}</p> : null}
+      <TaskDisclosure title="Details" defaultOpen={false}>
+        <PublicationDetails value={latest} historical={historical} />
+        {older.map((value) => (
+          <PublicationDetails key={value.publication} value={value} historical />
+        ))}
       </TaskDisclosure>
+    </li>
+  );
+}
+
+/**
+ * A board task's deployment status as a right-panel tab: one row per environment, newest
+ * publication first, with everything the engine recorded one disclosure down.
+ */
+export function TaskDeploymentsPanel({ card, stale }: { card: DeliveryCard; stale: boolean }) {
+  const deployment = card.deployment;
+  const staleNotice = stale ? (
+    <p className="text-xs text-warning-foreground">
+      Stale snapshot. This is not current deployment evidence.
+    </p>
+  ) : null;
+  if (!deployment) {
+    return (
+      <section
+        className="flex w-full flex-col items-center justify-center gap-2 p-6 text-center"
+        aria-label="Task deployment status"
+      >
+        <RocketIcon aria-hidden className="size-6 text-muted-foreground/60" />
+        <p className="text-sm font-medium">No deployment yet</p>
+        <p className="max-w-60 text-xs text-muted-foreground">
+          No attributed deployment is available. A merge does not mean this task is live.
+        </p>
+        {staleNotice}
+      </section>
+    );
+  }
+  const earlier = deployment.current.run !== card.run?.id;
+  const rows = new Map<
+    string,
+    { latest: TaskDeploymentPublication; older: TaskDeploymentPublication[] }
+  >();
+  // The current publication comes first, so it is its environment's row.
+  for (const value of [deployment.current, ...deployment.history]) {
+    const environment = value.project?.environment ?? "unknown environment";
+    const row = rows.get(environment);
+    if (row) row.older.push(value);
+    else rows.set(environment, { latest: value, older: [] });
+  }
+  return (
+    <section className="flex min-w-0 flex-1 flex-col" aria-label="Task deployment status">
+      {staleNotice || earlier ? (
+        <div className="space-y-1 border-b px-3 py-2">
+          {staleNotice}
+          {earlier ? (
+            <p className="text-xs text-warning-foreground">
+              This publication belongs to an earlier run. The current run has no attributed
+              deployment here.
+            </p>
+          ) : null}
+        </div>
+      ) : null}
+      <ul className="flex min-w-0 flex-col p-1.5">
+        {[...rows].map(([environment, row]) => (
+          <EnvironmentRow
+            key={environment}
+            environment={environment}
+            latest={row.latest}
+            older={row.older}
+            historical={stale || earlier || row.latest !== deployment.current}
+          />
+        ))}
+      </ul>
+      <footer className="mt-auto border-t border-border/60 px-2 py-1.5 text-2xs text-muted-foreground">
+        {rows.size === 1 ? "1 environment" : `${rows.size} environments`}. Merge and qualification
+        are not deployment.
+      </footer>
     </section>
   );
 }
