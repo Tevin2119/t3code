@@ -84,21 +84,20 @@ function Publication({
               {value.candidate.liveUntil ? ` · until ${value.candidate.liveUntil}` : ""}
             </p>
           ) : null}
-          <details>
-            <summary className="cursor-pointer">Qualification evidence</summary>
+          <TaskDisclosure title="Qualification evidence" defaultOpen={false}>
             <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-all">
               {JSON.stringify(value.candidate.evidence, null, 2) ?? "Not recorded"}
             </pre>
-          </details>
+          </TaskDisclosure>
         </div>
       ) : (
         <p className="text-muted-foreground">No current candidate evidence.</p>
       )}
       {value.history.length ? (
-        <details>
-          <summary className="cursor-pointer">
-            Historical status transitions ({value.history.length})
-          </summary>
+        <TaskDisclosure
+          title={`Historical status transitions (${value.history.length})`}
+          defaultOpen={false}
+        >
           <ol className="space-y-2 py-2">
             {value.history.map((entry) => (
               <li key={JSON.stringify(entry)} className="break-all">
@@ -112,7 +111,7 @@ function Publication({
               </li>
             ))}
           </ol>
-        </details>
+        </TaskDisclosure>
       ) : null}
     </div>
   );
@@ -143,16 +142,16 @@ export function TaskDeploymentDetails({ card, stale }: { card: DeliveryCard; sta
             ) : null}
             <Publication value={deployment.current} historical={earlier || stale} />
             {deployment.history.length ? (
-              <details>
-                <summary className="cursor-pointer text-xs">
-                  Earlier attributed publications ({deployment.history.length})
-                </summary>
+              <TaskDisclosure
+                title={`Earlier attributed publications (${deployment.history.length})`}
+                defaultOpen={false}
+              >
                 <div className="space-y-4 py-2">
                   {deployment.history.map((value) => (
                     <Publication key={value.publication} value={value} historical />
                   ))}
                 </div>
-              </details>
+              </TaskDisclosure>
             ) : null}
           </>
         )}

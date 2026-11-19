@@ -47,7 +47,6 @@ import {
 } from "../ui/dialog";
 import { Checkbox } from "../ui/checkbox";
 import { Textarea } from "../ui/textarea";
-import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { SidebarInset } from "../ui/sidebar";
 import { toastManager } from "../ui/toast";
 import { useProjects } from "../../state/entities";
@@ -60,6 +59,8 @@ import { EnginePanel } from "./EnginePanel";
 import { EnvironmentPicker } from "./EnvironmentPicker";
 import { DeploymentRuntime } from "./DeploymentsPage.runtime";
 import { BoardDelivery } from "./BoardDelivery";
+import { Choice } from "./Choice";
+import { TaskDisclosure } from "./TaskDisclosure";
 
 const MODE_LABELS = {
   manual: "Manual",
@@ -72,12 +73,7 @@ const when = (iso: string) =>
 type SnapshotRepository = DeploymentsSnapshot["repositories"][number];
 type Request = { title: string; path: string; body: Record<string, unknown> };
 
-function Choice({
-  label,
-  value,
-  items,
-  onChange,
-}: {
+function LabelledChoice(props: {
   label: string;
   value: string;
   items: readonly { value: string; label: string }[];
@@ -85,25 +81,8 @@ function Choice({
 }) {
   return (
     <label className="flex min-w-0 flex-col gap-1 text-sm">
-      <span>{label}</span>
-      <Select
-        value={value}
-        onValueChange={(next) => {
-          if (next !== null) onChange(next);
-        }}
-        items={items}
-      >
-        <SelectTrigger aria-label={label}>
-          <SelectValue placeholder={`Choose ${label.toLowerCase()}`} />
-        </SelectTrigger>
-        <SelectPopup>
-          {items.map((item) => (
-            <SelectItem key={item.value} value={item.value}>
-              {item.label}
-            </SelectItem>
-          ))}
-        </SelectPopup>
-      </Select>
+      <span>{props.label}</span>
+      <Choice {...props} placeholder={`Choose ${props.label.toLowerCase()}`} />
     </label>
   );
 }
@@ -280,13 +259,13 @@ function Configuration({
                 }
               />
             ) : null}
-            <Choice
+            <LabelledChoice
               label="Branch"
               value={branch}
               items={(selected?.branches ?? []).map((value) => ({ value, label: value }))}
               onChange={setBranch}
             />
-            <Choice
+            <LabelledChoice
               label="Release environment"
               value={releaseEnvironment}
               items={(adapter === "engine"
@@ -311,7 +290,7 @@ function Configuration({
               The release environment is independent of the watched branch. Changing a branch does
               not change where it deploys.
             </p>
-            <Choice
+            <LabelledChoice
               label="Mode"
               value={mode}
               items={Object.entries(MODE_LABELS).map(([value, label]) => ({ value, label }))}
@@ -333,7 +312,7 @@ function Configuration({
                 </span>
               </label>
             ) : null}
-            <Choice
+            <LabelledChoice
               label="Adapter"
               value={adapter}
               items={[
@@ -554,22 +533,21 @@ function Candidate({
       {candidate.problem ? (
         <p className="break-words text-sm text-warning-foreground">{candidate.problem}</p>
       ) : null}
-      <details className="min-w-0 text-xs">
-        <summary className="cursor-pointer rounded-sm py-1 focus-visible:outline-2 focus-visible:outline-ring">
-          Evidence, dependencies and history
-        </summary>
-        <pre className="mt-2 max-h-72 overflow-auto whitespace-pre-wrap break-all">
-          {JSON.stringify(
-            {
-              evidence: candidate.evidence,
-              dependencies: candidate.dependencies,
-              events: candidate.events,
-            },
-            null,
-            2,
-          )}
-        </pre>
-      </details>
+      <div className="min-w-0 text-xs">
+        <TaskDisclosure title="Evidence, dependencies and history" defaultOpen={false}>
+          <pre className="mt-2 max-h-72 overflow-auto whitespace-pre-wrap break-all">
+            {JSON.stringify(
+              {
+                evidence: candidate.evidence,
+                dependencies: candidate.dependencies,
+                events: candidate.events,
+              },
+              null,
+              2,
+            )}
+          </pre>
+        </TaskDisclosure>
+      </div>
       <div className="mt-auto flex flex-wrap gap-2">
         {deploymentActions(candidate, projectBusy).map((action) => (
           <Button
@@ -823,15 +801,21 @@ function DeploymentsContent({ environmentId }: { environmentId: EnvironmentId | 
                   )}
                 </div>
                 {history.length ? (
-                  <details className="min-w-0 border-t border-border pt-3">
-                    <summary className="cursor-pointer rounded-sm py-1 text-sm focus-visible:outline-2 focus-visible:outline-ring">
-                      <HistoryIcon aria-hidden="true" className="mx-1 inline size-4" />
-                      Superseded releases ({history.length})
-                    </summary>
-                    <div className="mt-3 grid min-w-0 grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
-                      {history.map(renderCandidate)}
-                    </div>
-                  </details>
+                  <div className="min-w-0 border-t border-border pt-3">
+                    <TaskDisclosure
+                      title={
+                        <>
+                          <HistoryIcon aria-hidden="true" className="mx-1 inline size-4" />
+                          Superseded releases ({history.length})
+                        </>
+                      }
+                      defaultOpen={false}
+                    >
+                      <div className="mt-3 grid min-w-0 grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
+                        {history.map(renderCandidate)}
+                      </div>
+                    </TaskDisclosure>
+                  </div>
                 ) : null}
               </section>
             );

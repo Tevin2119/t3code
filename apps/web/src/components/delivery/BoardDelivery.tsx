@@ -12,38 +12,8 @@ import {
 import { Button } from "../ui/button";
 import { Checkbox } from "../ui/checkbox";
 import { Input } from "../ui/input";
-import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
-
-function Choice({
-  label,
-  value,
-  choices,
-  onChange,
-}: {
-  label: string;
-  value: string;
-  choices: readonly { id: string; label: string }[];
-  onChange: (value: string) => void;
-}) {
-  return (
-    <Select
-      value={value}
-      onValueChange={(next) => next !== null && onChange(next)}
-      items={choices.map((c) => ({ value: c.id, label: c.label }))}
-    >
-      <SelectTrigger aria-label={label}>
-        <SelectValue placeholder={label} />
-      </SelectTrigger>
-      <SelectPopup>
-        {choices.map((c) => (
-          <SelectItem key={c.id} value={c.id}>
-            {c.label}
-          </SelectItem>
-        ))}
-      </SelectPopup>
-    </Select>
-  );
-}
+import { Choice } from "./Choice";
+import { TaskDisclosure } from "./TaskDisclosure";
 
 export function BoardDelivery({
   environmentId,
@@ -108,165 +78,171 @@ export function BoardDelivery({
     }
   };
   return (
-    <details className="rounded-lg border border-border p-3">
-      <summary className="cursor-pointer text-sm font-medium">
-        {task ? "Deliver this task" : "Board delivery routes"}
-      </summary>
-      <div className="mt-3 flex flex-col gap-3">
-        {read.error || (!snapshot && !read.isPending) ? (
-          <p role="status">
-            This engine does not provide board delivery routes. Update the engine before configuring
-            delivery.
-          </p>
-        ) : null}
-        {linked ? <p role="status">{deliveryProgress(linked)}</p> : null}
-        {snapshot?.problem ? <p role="status">{snapshot.problem}</p> : null}
-        {paused ? (
-          <p role="status">Resume this task on its board before requesting delivery.</p>
-        ) : null}
-        {snapshot && !task ? (
-          <>
-            <p className="text-sm">
-              Choose a board and its deployment destination. Automatic merging is off unless
-              explicitly enabled; deployment keeps its own saved mode.
+    <div className="rounded-lg border border-border p-3">
+      <TaskDisclosure
+        title={task ? "Deliver this task" : "Board delivery routes"}
+        defaultOpen={false}
+      >
+        <div className="mt-3 flex flex-col gap-3">
+          {read.error || (!snapshot && !read.isPending) ? (
+            <p role="status">
+              This engine does not provide board delivery routes. Update the engine before
+              configuring delivery.
             </p>
-            <Input
-              aria-label="Delivery route name"
-              placeholder="Delivery route name"
-              value={route}
-              onChange={(e) => setRoute(e.target.value)}
-              disabled={disabled}
-            />
-            <Choice
-              label="Board"
-              value={board}
-              choices={snapshot.boards.map((b) => ({
-                id: b.id,
-                label: `${b.title} / ${b.base ?? "no target branch"}`,
-              }))}
-              onChange={(value) => {
-                setBoard(value);
-                setProject("");
-              }}
-            />
-            <Choice
-              label="Deployment destination"
-              value={project}
-              choices={snapshot.projects
-                .filter(
-                  (p) =>
-                    p.repository === selectedBoard?.repository && p.branch === selectedBoard?.base,
-                )
-                .map((p) => ({ id: p.id, label: `${p.environment} / ${p.branch} / ${p.mode}` }))}
-              onChange={setProject}
-            />
-            <label className="flex items-center gap-2 text-sm">
-              <Checkbox
-                checked={autoMerge}
-                onCheckedChange={(value) => setAutoMerge(value === true)}
-              />
-              Allow this route to merge approved PRs after host checks
-            </label>
-            <p className="text-sm text-muted-foreground">
-              If no destination matches, configure a deployment above with the board's repository
-              and target branch.
-            </p>
-            {snapshot.routes.map((r) => (
-              <div key={r.id} className="flex items-center justify-between gap-2 text-sm">
-                <span>
-                  {r.board} / {r.base} / {r.project}:{" "}
-                  {r.auto_merge ? "automatic merge enabled" : "host merge required"}
-                </span>
-                {r.auto_merge ? (
-                  <Button
-                    size="xs"
-                    variant="outline"
-                    disabled={disabled || !key || !by.trim()}
-                    onClick={() =>
-                      void submit("/api/delivery/routes", { id: r.id, autoMerge: false })
-                    }
-                  >
-                    Disable automatic merge
-                  </Button>
-                ) : null}
-              </div>
-            ))}
-          </>
-        ) : null}
-        {snapshot && task && !linked ? (
-          <>
-            <Choice
-              label="Delivery route"
-              value={route}
-              choices={routes.map((r) => ({
-                id: r.id,
-                label: `${r.board} / ${r.base} / ${r.project}`,
-              }))}
-              onChange={setRoute}
-            />
-            {!routes.length ? (
-              <p>
-                No matching route is configured. Open Deployments and configure a board delivery
-                route for this task's repository and branch.
+          ) : null}
+          {linked ? <p role="status">{deliveryProgress(linked)}</p> : null}
+          {snapshot?.problem ? <p role="status">{snapshot.problem}</p> : null}
+          {paused ? (
+            <p role="status">Resume this task on its board before requesting delivery.</p>
+          ) : null}
+          {snapshot && !task ? (
+            <>
+              <p className="text-sm">
+                Choose a board and its deployment destination. Automatic merging is off unless
+                explicitly enabled; deployment keeps its own saved mode.
               </p>
-            ) : null}
-            <p className="text-sm">
-              This reuses the existing task and originating thread. A merged PR is not a verified
-              deployment.
-            </p>
-          </>
-        ) : null}
-        {snapshot && !linked ? (
-          <>
-            <Input
-              aria-label="Delivery requester"
-              placeholder="Your name"
-              value={by}
-              onChange={(e) => setBy(e.target.value)}
-              disabled={disabled}
-            />
-            <Input
-              aria-label="Delivery approval passphrase"
-              placeholder="Approval passphrase or terminal key"
-              type="password"
-              autoComplete="current-password"
-              value={key}
-              onChange={(e) => setKey(e.target.value)}
-              disabled={disabled}
-            />
-            <p className="text-xs text-muted-foreground">
-              T3 does not save this credential. Automatic merge requires passphrase approval.
-            </p>
-            <Button
-              disabled={
-                disabled ||
-                !key ||
-                !by.trim() ||
-                (task ? !route : !board || !project || !/^[\w-]{1,80}$/.test(route))
-              }
-              onClick={() =>
-                task
-                  ? requestTask()
-                  : void submit("/api/delivery/routes", {
-                      id: route,
-                      board,
-                      project,
-                      autoMerge,
-                      confirmed: autoMerge,
-                    })
-              }
-            >
-              {busy ? "Submitting" : task ? "Request delivery" : "Save route"}
-            </Button>
-          </>
-        ) : null}
-        {!allowed ? <p role="status">This connection has read-only delivery access.</p> : null}
-        {stale ? <p role="status">This reading is stale. Refresh before submitting.</p> : null}
-        {problem ? <p role="alert">{problem}</p> : null}
-        <Button size="xs" variant="ghost" onClick={read.refresh}>
-          Refresh delivery status
-        </Button>
-      </div>
-    </details>
+              <Input
+                aria-label="Delivery route name"
+                placeholder="Delivery route name"
+                value={route}
+                onChange={(e) => setRoute(e.target.value)}
+                disabled={disabled}
+              />
+              <Choice
+                label="Board"
+                value={board}
+                items={snapshot.boards.map((b) => ({
+                  value: b.id,
+                  label: `${b.title} / ${b.base ?? "no target branch"}`,
+                }))}
+                onChange={(value) => {
+                  setBoard(value);
+                  setProject("");
+                }}
+              />
+              <Choice
+                label="Deployment destination"
+                value={project}
+                items={snapshot.projects
+                  .filter(
+                    (p) =>
+                      p.repository === selectedBoard?.repository &&
+                      p.branch === selectedBoard?.base,
+                  )
+                  .map((p) => ({
+                    value: p.id,
+                    label: `${p.environment} / ${p.branch} / ${p.mode}`,
+                  }))}
+                onChange={setProject}
+              />
+              <label className="flex items-center gap-2 text-sm">
+                <Checkbox
+                  checked={autoMerge}
+                  onCheckedChange={(value) => setAutoMerge(value === true)}
+                />
+                Allow this route to merge approved PRs after host checks
+              </label>
+              <p className="text-sm text-muted-foreground">
+                If no destination matches, configure a deployment above with the board's repository
+                and target branch.
+              </p>
+              {snapshot.routes.map((r) => (
+                <div key={r.id} className="flex items-center justify-between gap-2 text-sm">
+                  <span>
+                    {r.board} / {r.base} / {r.project}:{" "}
+                    {r.auto_merge ? "automatic merge enabled" : "host merge required"}
+                  </span>
+                  {r.auto_merge ? (
+                    <Button
+                      size="xs"
+                      variant="outline"
+                      disabled={disabled || !key || !by.trim()}
+                      onClick={() =>
+                        void submit("/api/delivery/routes", { id: r.id, autoMerge: false })
+                      }
+                    >
+                      Disable automatic merge
+                    </Button>
+                  ) : null}
+                </div>
+              ))}
+            </>
+          ) : null}
+          {snapshot && task && !linked ? (
+            <>
+              <Choice
+                label="Delivery route"
+                value={route}
+                items={routes.map((r) => ({
+                  value: r.id,
+                  label: `${r.board} / ${r.base} / ${r.project}`,
+                }))}
+                onChange={setRoute}
+              />
+              {!routes.length ? (
+                <p>
+                  No matching route is configured. Open Deployments and configure a board delivery
+                  route for this task's repository and branch.
+                </p>
+              ) : null}
+              <p className="text-sm">
+                This reuses the existing task and originating thread. A merged PR is not a verified
+                deployment.
+              </p>
+            </>
+          ) : null}
+          {snapshot && !linked ? (
+            <>
+              <Input
+                aria-label="Delivery requester"
+                placeholder="Your name"
+                value={by}
+                onChange={(e) => setBy(e.target.value)}
+                disabled={disabled}
+              />
+              <Input
+                aria-label="Delivery approval passphrase"
+                placeholder="Approval passphrase or terminal key"
+                type="password"
+                autoComplete="current-password"
+                value={key}
+                onChange={(e) => setKey(e.target.value)}
+                disabled={disabled}
+              />
+              <p className="text-xs text-muted-foreground">
+                T3 does not save this credential. Automatic merge requires passphrase approval.
+              </p>
+              <Button
+                disabled={
+                  disabled ||
+                  !key ||
+                  !by.trim() ||
+                  (task ? !route : !board || !project || !/^[\w-]{1,80}$/.test(route))
+                }
+                onClick={() =>
+                  task
+                    ? requestTask()
+                    : void submit("/api/delivery/routes", {
+                        id: route,
+                        board,
+                        project,
+                        autoMerge,
+                        confirmed: autoMerge,
+                      })
+                }
+              >
+                {busy ? "Submitting" : task ? "Request delivery" : "Save route"}
+              </Button>
+            </>
+          ) : null}
+          {!allowed ? <p role="status">This connection has read-only delivery access.</p> : null}
+          {stale ? <p role="status">This reading is stale. Refresh before submitting.</p> : null}
+          {problem ? <p role="alert">{problem}</p> : null}
+          <Button size="xs" variant="ghost" onClick={read.refresh}>
+            Refresh delivery status
+          </Button>
+        </div>
+      </TaskDisclosure>
+    </div>
   );
 }
