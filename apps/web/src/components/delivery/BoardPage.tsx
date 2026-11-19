@@ -77,6 +77,7 @@ import { SharedBoard } from "./SharedBoard";
 import { BoardDeploymentControls } from "./BoardDeploymentControls";
 import { MergePermissionControls, MergePermissionSummary } from "./MergePermissionControls";
 import { DeploymentSnapshotStale, TaskDeploymentBadge } from "./TaskDeploymentStatus";
+import { TaskDisclosure } from "./TaskDisclosure";
 
 const CardFace = memo(function CardFace(props: {
   readonly card: DeliveryCard;
@@ -814,39 +815,47 @@ function EnvironmentBoardPage({ environmentId }: { readonly environmentId: Envir
               />
             ) : null}
             {chosenBoard?.kind === "own" ? (
-              <details
+              <div
                 key={chosenBoard.id}
                 className="mx-4 mt-2 shrink-0 rounded-lg border border-border p-3"
               >
-                <summary className="cursor-pointer text-xs">
-                  Board delivery settings · {chosenBoard.deployment?.state ?? "link unknown"}
-                  {chosenBoard.deployment?.problem ? `: ${chosenBoard.deployment.problem}` : ""}
-                </summary>
-                <div className="mt-3 grid max-h-80 min-w-0 gap-4 overflow-y-auto md:grid-cols-2">
-                  <BoardDeploymentControls
-                    environmentId={environmentId}
-                    board={chosenBoard.id}
-                    target={chosenBoard.target}
-                    link={chosenBoard.deployment}
-                    stale={stale}
-                    onDone={board.refresh}
-                  />
-                  <MergePermissionControls
-                    environmentId={environmentId}
-                    path={`/api/boards/${chosenBoard.id}/merge-permission`}
-                    policy={chosenBoard.mergePermission}
-                    stale={stale}
-                    onDone={board.refresh}
-                  />
-                </div>
-              </details>
+                <TaskDisclosure
+                  title={
+                    <>
+                      Board delivery settings · {chosenBoard.deployment?.state ?? "link unknown"}
+                      {chosenBoard.deployment?.problem ? `: ${chosenBoard.deployment.problem}` : ""}
+                    </>
+                  }
+                  defaultOpen={false}
+                >
+                  <div className="mt-3 grid max-h-80 min-w-0 gap-4 overflow-y-auto md:grid-cols-2">
+                    <BoardDeploymentControls
+                      environmentId={environmentId}
+                      board={chosenBoard.id}
+                      target={chosenBoard.target}
+                      link={chosenBoard.deployment}
+                      stale={stale}
+                      onDone={board.refresh}
+                    />
+                    <MergePermissionControls
+                      environmentId={environmentId}
+                      path={`/api/boards/${chosenBoard.id}/merge-permission`}
+                      policy={chosenBoard.mergePermission}
+                      stale={stale}
+                      onDone={board.refresh}
+                    />
+                  </div>
+                </TaskDisclosure>
+              </div>
             ) : chosenBoard?.mergePermission ? (
-              <details className="mx-4 mt-2 shrink-0 text-xs">
-                <summary className="cursor-pointer">
-                  Automatic merge permission (read-only board)
-                </summary>
-                <MergePermissionSummary policy={chosenBoard.mergePermission} />
-              </details>
+              <div className="mx-4 mt-2 shrink-0 text-xs">
+                <TaskDisclosure
+                  title="Automatic merge permission (read-only board)"
+                  defaultOpen={false}
+                >
+                  <MergePermissionSummary policy={chosenBoard.mergePermission} />
+                </TaskDisclosure>
+              </div>
             ) : null}
             <EngineAttentionBar environmentId={environmentId} />
             {parsed?.note ? (
