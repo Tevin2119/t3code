@@ -6,6 +6,7 @@ import type {
 import type { ThreadStructure } from "@t3tools/client-runtime/state/shell";
 import { backgroundWorkHoldsCompletion } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 import { T, useGT } from "gt-react";
+import { useState } from "react";
 
 import { InlineButton } from "../ui/button";
 import {
@@ -24,8 +25,10 @@ export function BackgroundWorkDetails(props: {
   readonly threadId: ThreadId;
   readonly tasks: ReadonlyArray<OrchestrationV2PendingBackgroundTask>;
   readonly turnItems: ThreadStructure["turnItems"];
+  readonly onOpenThread: (threadId: ThreadId) => void;
 }) {
   const gt = useGT();
+  const [open, setOpen] = useState(false);
   const kindLabel = (kind: string) => {
     switch (kind) {
       case "subagent":
@@ -42,7 +45,7 @@ export function BackgroundWorkDetails(props: {
   };
   const streamsOutput = useCommandOutputStreaming(props.environmentId);
   return (
-    <Dialog>
+    <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger render={<InlineButton />}>
         <T>Details</T>
       </DialogTrigger>
@@ -71,6 +74,7 @@ export function BackgroundWorkDetails(props: {
                     : kindLabel(task.kind);
               const itemId =
                 task.itemId ?? (item?.type === "command_execution" ? item.id : undefined);
+              const childThreadId = task.kind === "subagent" ? task.childThreadId : undefined;
               return (
                 <section key={task.taskId} className="space-y-2 text-sm">
                   <div className="flex items-baseline justify-between gap-3">
@@ -94,6 +98,16 @@ export function BackgroundWorkDetails(props: {
                         itemId={itemId}
                       />
                     </div>
+                  ) : null}
+                  {childThreadId ? (
+                    <InlineButton
+                      onClick={() => {
+                        setOpen(false);
+                        props.onOpenThread(childThreadId);
+                      }}
+                    >
+                      <T>Open subagent</T>
+                    </InlineButton>
                   ) : null}
                 </section>
               );
