@@ -106,12 +106,26 @@ export type ModelManifestData = typeof ModelManifestSchema.Type;
 
 const decodeManifest = Schema.decodeUnknownEffect(ModelManifestSchema);
 
-export const BUNDLED_MODEL_MANIFEST: ModelManifestData = Schema.decodeUnknownSync(
-  ModelManifestSchema,
-)({
-  ...bundledManifestJson,
-  compatibility: [...(bundledManifestJson.compatibility ?? []), ...forkCompatibilityJson],
+const FORK_COMPATIBILITY = Schema.decodeUnknownSync(Schema.Array(ProviderCompatibilityPolicy))(
+  forkCompatibilityJson,
+);
+
+/**
+ * The fork's own rules go first, so they win over upstream's for the same driver. Upstream writes
+ * its rules for upstream releases; this fork shares their version numbers but not always their
+ * provider integrations, and a fetched manifest must not withdraw a runtime the fork still runs.
+ */
+export const withForkCompatibility = (manifest: ModelManifestData): ModelManifestData => ({
+  ...manifest,
+  compatibility: [
+    ...FORK_COMPATIBILITY,
+    ...(manifest.compatibility ?? []).filter((policy) => !FORK_COMPATIBILITY.includes(policy)),
+  ],
 });
+
+export const BUNDLED_MODEL_MANIFEST: ModelManifestData = withForkCompatibility(
+  Schema.decodeUnknownSync(ModelManifestSchema)(bundledManifestJson),
+);
 
 function manifestUpdatedAtMs(manifest: ModelManifestData): number {
   if (manifest.updatedAt === undefined) return 0;
@@ -225,7 +239,7 @@ export const make = Effect.gen(function* () {
       if (manifestUpdatedAtMs(BUNDLED_MODEL_MANIFEST) > manifestUpdatedAtMs(fromDisk.manifest)) {
         return;
       }
-      manifest = fromDisk.manifest;
+      manifest = withForkCompatibility(fromDisk.manifest);
       fetchedAtMs = fromDisk.fetchedAtMs;
     }),
   );
@@ -260,7 +274,7 @@ export const make = Effect.gen(function* () {
       return manifest;
     }
 
-    manifest = fetched;
+    manifest = withForkCompatibility(fetched);
     fetchedAtMs = now;
     yield* encodeManifestCache({ fetchedAtMs: now, manifest: fetched }).pipe(
       Effect.flatMap((contents) => writeFileStringAtomically({ filePath: cachePath, contents })),

@@ -12,6 +12,7 @@ import { HttpClient, HttpClientResponse } from "effect/http";
 import * as ServerConfig from "../config.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as ModelManifest from "./ModelManifest.ts";
+import { resolveProviderCompatibility } from "./providerCompatibility.ts";
 
 describe("resolveProviderCatalog", () => {
   it.each([
@@ -265,15 +266,44 @@ const layerService = (input: {
     Layer.provideMerge(layerHttpClient(input.response)),
   );
 
+describe("withForkCompatibility", () => {
+  it("keeps a runtime the fork still runs when upstream withdraws it for the same version", () => {
+    const antigravity = ProviderDriverKind.make("antigravity");
+    const upstream = ModelManifest.withForkCompatibility({
+      version: 1,
+      currentModels: {},
+      compatibility: [
+        {
+          driver: antigravity,
+          t3CodeRange: ">=0.1.10",
+          recommendedRange: ">=1.5.12 <2",
+          ranges: [
+            { range: ">=1.5.0 <2", status: "supported" },
+            { range: "<1.5.0", status: "broken" },
+          ],
+        },
+      ],
+    });
+    assert.notStrictEqual(
+      resolveProviderCompatibility(upstream.compatibility, antigravity, "1.4.5", "0.1.10")?.status,
+      "broken",
+    );
+    assert.deepStrictEqual(ModelManifest.withForkCompatibility(upstream), upstream);
+  });
+});
+
 describe("ModelManifest service", () => {
   it.effect("prefers a fetched manifest over the bundle and caches it to disk", () =>
     Effect.gen(function* () {
       const service = yield* ModelManifest.make;
       const refreshed = yield* service.refresh;
-      assert.deepStrictEqual(refreshed, REMOTE_MANIFEST);
+      assert.deepStrictEqual(refreshed, ModelManifest.withForkCompatibility(REMOTE_MANIFEST));
 
       const rebooted = yield* ModelManifest.make;
-      assert.deepStrictEqual(yield* rebooted.current, REMOTE_MANIFEST);
+      assert.deepStrictEqual(
+        yield* rebooted.current,
+        ModelManifest.withForkCompatibility(REMOTE_MANIFEST),
+      );
     }).pipe(
       Effect.scoped,
       Effect.provide(
@@ -295,11 +325,20 @@ describe("ModelManifest service", () => {
         assert.deepStrictEqual(yield* service.current, ModelManifest.BUNDLED_MODEL_MANIFEST);
 
         remote = { ...REMOTE_MANIFEST, updatedAt: REMOTE_UPDATED_AT };
-        assert.deepStrictEqual(yield* service.forceRefresh, REMOTE_MANIFEST);
+        assert.deepStrictEqual(
+          yield* service.forceRefresh,
+          ModelManifest.withForkCompatibility(REMOTE_MANIFEST),
+        );
         remote = { ...REMOTE_MANIFEST, updatedAt: ModelManifest.BUNDLED_MODEL_MANIFEST.updatedAt! };
-        assert.deepStrictEqual(yield* service.forceRefresh, REMOTE_MANIFEST);
+        assert.deepStrictEqual(
+          yield* service.forceRefresh,
+          ModelManifest.withForkCompatibility(REMOTE_MANIFEST),
+        );
         const rebooted = yield* ModelManifest.make;
-        assert.deepStrictEqual(yield* rebooted.current, REMOTE_MANIFEST);
+        assert.deepStrictEqual(
+          yield* rebooted.current,
+          ModelManifest.withForkCompatibility(REMOTE_MANIFEST),
+        );
       }).pipe(
         Effect.scoped,
         Effect.provide(
@@ -318,16 +357,25 @@ describe("ModelManifest service", () => {
 
     return Effect.gen(function* () {
       const service = yield* ModelManifest.make;
-      assert.deepStrictEqual(yield* service.refresh, REMOTE_CLAUDE_MANIFEST);
+      assert.deepStrictEqual(
+        yield* service.refresh,
+        ModelManifest.withForkCompatibility(REMOTE_CLAUDE_MANIFEST),
+      );
 
       for (const _invalid of INVALID_REMOTE_MANIFESTS) {
         yield* TestClock.adjust("1 hour");
         responseIndex += 1;
-        assert.deepStrictEqual(yield* service.refresh, REMOTE_CLAUDE_MANIFEST);
+        assert.deepStrictEqual(
+          yield* service.refresh,
+          ModelManifest.withForkCompatibility(REMOTE_CLAUDE_MANIFEST),
+        );
       }
 
       const rebooted = yield* ModelManifest.make;
-      assert.deepStrictEqual(yield* rebooted.current, REMOTE_CLAUDE_MANIFEST);
+      assert.deepStrictEqual(
+        yield* rebooted.current,
+        ModelManifest.withForkCompatibility(REMOTE_CLAUDE_MANIFEST),
+      );
     }).pipe(
       Effect.scoped,
       Effect.provide(
@@ -391,7 +439,10 @@ describe("ModelManifest service", () => {
         yield* ModelManifest.encodeManifestCache({ fetchedAtMs: 0, manifest: REMOTE_MANIFEST }),
       );
       const later = yield* ModelManifest.make;
-      assert.deepStrictEqual(yield* later.current, REMOTE_MANIFEST);
+      assert.deepStrictEqual(
+        yield* later.current,
+        ModelManifest.withForkCompatibility(REMOTE_MANIFEST),
+      );
     }).pipe(
       Effect.scoped,
       Effect.provide(
