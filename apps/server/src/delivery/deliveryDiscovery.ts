@@ -293,9 +293,9 @@ export function projectDiscovery(
         (row) =>
           row.task?.id === input.task &&
           row.request?.task === input.task &&
-          row.request.route === data.delivery.selection?.routeId &&
-          row.task.repository === selected?.repository &&
-          row.task.base === selected?.base,
+          row.request?.route === data.delivery.selection?.routeId &&
+          row.task?.repository === selected?.repository &&
+          row.task?.base === selected?.base,
       )
     : [];
   const taskRoute = taskRequests.length === 1 ? taskRequests[0]?.request?.route : undefined;

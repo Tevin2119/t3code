@@ -34,6 +34,9 @@ import {
 } from "./deliveryDiscovery.ts";
 import { loadDeliveryCaptures } from "./deliveryCapture.testkit.ts";
 const decodeDiscoveryDelivery = Schema.decodeUnknownSync(DiscoveryDelivery);
+const decodeCaptureDiscoveryInput = Schema.decodeUnknownSync(DeliveryDiscoveryInput);
+const decodeCaptureReadInput = Schema.decodeUnknownSync(DeliveryReadInput);
+const decodeCaptureActInput = Schema.decodeUnknownSync(DeliveryActInput);
 
 const REPO = "C:/work/repo";
 const SCRATCH = "C:/home/scratch";
@@ -2817,18 +2820,11 @@ if (captureManifest) {
       const result =
         entry.operation === "discover"
           ? yield* service
-              .discover(
-                Schema.decodeUnknownSync(DeliveryDiscoveryInput)(entry.input),
-                ordinaryCaller,
-              )
+              .discover(decodeCaptureDiscoveryInput(entry.input), ordinaryCaller)
               .pipe(Effect.result)
           : entry.operation === "read"
-            ? yield* service
-                .read(Schema.decodeUnknownSync(DeliveryReadInput)(entry.input))
-                .pipe(Effect.result)
-            : yield* service
-                .act(Schema.decodeUnknownSync(DeliveryActInput)(entry.input))
-                .pipe(Effect.result);
+            ? yield* service.read(decodeCaptureReadInput(entry.input)).pipe(Effect.result)
+            : yield* service.act(decodeCaptureActInput(entry.input)).pipe(Effect.result);
       expect(result._tag).toBe(entry.expectedTag);
       expect(result._tag === "Success" ? result.success : result.failure).toMatchObject(
         entry.expected,

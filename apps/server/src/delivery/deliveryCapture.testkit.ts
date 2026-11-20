@@ -1,6 +1,7 @@
-import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
-import { dirname, isAbsolute, relative, resolve } from "node:path";
+// @effect-diagnostics nodeBuiltinImport:off - Captures load synchronously while the test file is collected.
+import * as NodeCrypto from "node:crypto";
+import * as NodeFS from "node:fs";
+import * as NodePath from "node:path";
 import * as Schema from "effect/Schema";
 
 const Hash = Schema.String.check(Schema.isPattern(/^[a-f0-9]{64}$/));
@@ -43,8 +44,10 @@ const CaptureSuite = Schema.Struct({
   cases: Schema.Array(CaptureCase).check(Schema.isMinLength(1)),
 });
 
+const decodeCaptureSuite = Schema.decodeUnknownSync(CaptureSuite);
+
 export function loadDeliveryCaptures(filename: string) {
-  const suite = Schema.decodeUnknownSync(CaptureSuite)(JSON.parse(readFileSync(filename, "utf8")));
+  const suite = decodeCaptureSuite(JSON.parse(NodeFS.readFileSync(filename, "utf8")));
   if (
     suite.enginePatchSha256 !== process.env.T3_DELIVERY_CAPTURE_ENGINE_PATCH_SHA256 ||
     suite.engineManifestSha256 !== process.env.T3_DELIVERY_CAPTURE_ENGINE_MANIFEST_SHA256
@@ -56,7 +59,7 @@ export function loadDeliveryCaptures(filename: string) {
     );
   if (new Set(suite.cases.map((entry) => entry.id)).size !== suite.cases.length)
     throw new Error("Duplicate capture case id.");
-  const folder = dirname(resolve(filename));
+  const folder = NodePath.dirname(NodePath.resolve(filename));
   return {
     ...suite,
     cases: suite.cases.map((entry) => {
@@ -67,12 +70,16 @@ export function loadDeliveryCaptures(filename: string) {
       const responses = entry.responses.map((response) => {
         if (!response.path.startsWith("/api/") || response.path.includes("#"))
           throw new Error("Capture must name an exact API path and query.");
-        const file = resolve(folder, response.bodyFile);
-        const child = relative(folder, file);
-        if (isAbsolute(response.bodyFile) || child.startsWith("..") || isAbsolute(child))
+        const file = NodePath.resolve(folder, response.bodyFile);
+        const child = NodePath.relative(folder, file);
+        if (
+          NodePath.isAbsolute(response.bodyFile) ||
+          child.startsWith("..") ||
+          NodePath.isAbsolute(child)
+        )
           throw new Error("Capture body must stay inside its evidence directory.");
-        const bytes = readFileSync(file);
-        if (createHash("sha256").update(bytes).digest("hex") !== response.sha256)
+        const bytes = NodeFS.readFileSync(file);
+        if (NodeCrypto.createHash("sha256").update(bytes).digest("hex") !== response.sha256)
           throw new Error(`Capture body hash mismatch: ${entry.id} ${response.path}`);
         return { ...response, bytes: new Uint8Array(bytes) };
       });

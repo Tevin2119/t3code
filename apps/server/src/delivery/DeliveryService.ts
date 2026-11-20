@@ -1211,6 +1211,13 @@ const make = Effect.fn("DeliveryService.make")(function* (
       );
     }).pipe(Effect.timeout("10 seconds"), Effect.result);
     if (result._tag === "Success") return result.success;
+    // A read that fails because the settings changed under it is a discarded observation.
+    const latest = yield* delivery;
+    if (
+      generation !== discoveryGeneration ||
+      key !== configurationKey(latest.enabled, latest.engineUrl, environment)
+    )
+      return { ...snapshot, diagnostics: ["configuration-changed" as const] };
     const failure = result.failure;
     const error = failure._tag === "DiscoveryEndpointError" ? failure.error : failure;
     const failedEndpoint =
