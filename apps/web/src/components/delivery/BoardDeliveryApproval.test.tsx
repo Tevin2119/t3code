@@ -42,6 +42,38 @@ vi.mock("../ui/dialog", () => ({
   DialogFooter: "footer",
 }));
 
+it("refuses linking when the board-link capability is absent", async () => {
+  state.action.mockReset();
+  state.stale = false;
+  state.snapshot = null;
+  let view!: ReturnType<typeof create>;
+  await act(() => {
+    view = create(
+      <BoardDeploymentControls
+        environmentId={"host" as never}
+        board="work"
+        target={{ repository: "app", base: "main", title: "App", ok: true } as never}
+        link={null}
+        stale={false}
+        onDone={() => {}}
+      />,
+    );
+  });
+  try {
+    const link = view.root
+      .findAllByType("button")
+      .find(
+        (node) =>
+          node.children.filter((child) => typeof child === "string").join("") ===
+          "Link deployment…",
+      );
+    expect(link?.props.disabled).toBe(true);
+    expect(state.action).not.toHaveBeenCalled();
+  } finally {
+    await act(() => view.unmount());
+  }
+});
+
 it.each(["board", "catalog"] as const)(
   "blocks open link review and approval when %s loses freshness",
   async (source) => {
@@ -70,7 +102,7 @@ it.each(["board", "catalog"] as const)(
       environmentId: "host" as never,
       board: "work",
       target: { repository: "app", base: "main", title: "App", ok: true } as never,
-      link: null,
+      link: { state: "unlinked", deploymentProjectId: null, project: null, problem: null } as never,
       stale: false,
       onDone: () => {},
     };

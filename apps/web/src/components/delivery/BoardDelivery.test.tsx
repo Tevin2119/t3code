@@ -3,6 +3,7 @@ import { expect, it, vi } from "vite-plus/test";
 import { act } from "../../../test/act";
 import { BoardDelivery } from "./BoardDelivery";
 import { EnvironmentId } from "@t3tools/contracts";
+import { parseBoardDelivery } from "../../lib/boardDelivery";
 
 const mock = vi.hoisted(() => ({ allowed: true, action: vi.fn(), snapshot: {} as unknown }));
 vi.mock("@effect/atom-react", () => ({ useAtomValue: () => mock.allowed }));
@@ -35,6 +36,7 @@ function setup() {
   mock.action.mockReset();
   mock.action.mockResolvedValue({ ok: false, why: "Host unavailable" });
   mock.snapshot = {
+    version: 1,
     boards: [{ id: "board", title: "Board", repository: "repo", base: "main" }],
     routes: [
       {
@@ -44,10 +46,19 @@ function setup() {
         base: "main",
         project: "prod",
         auto_merge: 0,
+        identityProblem: null,
       },
     ],
     projects: [
-      { id: "prod", repository: "repo", branch: "main", environment: "production", mode: "manual" },
+      {
+        id: "prod",
+        repository: "repo",
+        branch: "main",
+        environment: "production",
+        mode: "manual",
+        path: "/fixture/repo",
+        identityProblem: null,
+      },
     ],
     tracking: [],
   };
@@ -130,6 +141,79 @@ it("does not submit a delivery mutation through a read-only connection", async (
         .disabled,
     ).toBe(true);
     expect(mock.action).not.toHaveBeenCalled();
+  } finally {
+    await act(() => screen.unmount());
+  }
+});
+
+it("keeps an older engine inventory readable without enabling delivery writes", async () => {
+  setup();
+  mock.snapshot = { boards: [], routes: [], projects: [], tracking: [] };
+  const screen = await act(() =>
+    create(<BoardDelivery environmentId={EnvironmentId.make("host")} />),
+  );
+  try {
+    expect(
+      screen.root.findAllByType("button").find((b) => b.children.includes("Save route"))?.props
+        .disabled,
+    ).toBe(true);
+    expect(mock.action).not.toHaveBeenCalled();
+  } finally {
+    await act(() => screen.unmount());
+  }
+});
+
+it("lists explicit alias project identities without choosing a destination or broadening consent", async () => {
+  setup();
+  const snapshot = parseBoardDelivery(mock.snapshot)!;
+  mock.snapshot = {
+    ...snapshot,
+    projects: [
+      { ...snapshot.projects[0]!, repository: "registered-alias" },
+      {
+        ...snapshot.projects[0]!,
+        id: "staging",
+        repository: "registered-alias",
+        environment: "staging",
+      },
+    ],
+  };
+  const screen = await act(() =>
+    create(<BoardDelivery environmentId={EnvironmentId.make("host")} />),
+  );
+  try {
+    const choices = screen.root.findAllByType("select");
+    expect(choices[1]!.props.value).toBe("");
+    expect(choices[1]!.props.items.map((item: { label: string }) => item.label)).toEqual([
+      "registered-alias / production / main / manual",
+      "registered-alias / staging / main / manual",
+    ]);
+    await act(() => choices[0]!.props.onValueChange("board"));
+    expect(mock.action).not.toHaveBeenCalled();
+    await act(() => choices[1]!.props.onValueChange("prod"));
+    await act(() =>
+      screen.root
+        .findByProps({ "aria-label": "Delivery route name" })
+        .props.onChange({ target: { value: "new-route" } }),
+    );
+    await act(() =>
+      screen.root
+        .findByProps({ "aria-label": "Delivery approval passphrase" })
+        .props.onChange({ target: { value: "fixture-only" } }),
+    );
+    const save = screen.root
+      .findAllByType("button")
+      .find((button) => button.children.includes("Save route"))!;
+    expect(save.props.disabled).toBe(false);
+    await act(() => save.props.onClick());
+    expect(mock.action).toHaveBeenCalledTimes(1);
+    expect(mock.action.mock.calls[0]?.[1]).toMatchObject({
+      board: "board",
+      project: "prod",
+      autoMerge: false,
+      confirmed: false,
+    });
+    expect(mock.action.mock.calls[0]?.[1]).not.toHaveProperty("mode");
   } finally {
     await act(() => screen.unmount());
   }

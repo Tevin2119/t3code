@@ -21,10 +21,6 @@ const Text = Schema.String.check(Schema.isMaxLength(4096));
 const NullableText = Schema.NullOr(Text);
 const rows = <S extends Schema.Top>(schema: S) =>
   Schema.Array(schema).check(Schema.isMaxLength(2000));
-export const DiscoveryBoardDeployment = Schema.Struct({
-  deploymentProjectId: NullableText,
-  state: Schema.Literals(["unlinked", "linked", "invalid"]),
-});
 export const DiscoveryHealth = Schema.Struct({
   engine: Schema.Literal("delivery"),
   ok: Schema.Boolean,
@@ -34,6 +30,8 @@ export const DiscoveryHealth = Schema.Struct({
 export const DiscoveryRepository = Schema.Struct({
   readable: Schema.Boolean,
   root: Schema.optional(Text),
+  canonicalPath: Schema.optional(NullableText),
+  identityProblem: Schema.optional(NullableText),
 });
 export const DiscoveryRepositoryCheck = Schema.Struct({
   id: Text,
@@ -42,7 +40,13 @@ export const DiscoveryRepositoryCheck = Schema.Struct({
   ok: Schema.Boolean,
 });
 export const DiscoveryRegistrations = rows(
-  Schema.Struct({ id: Text, path: Text, kind: Schema.Literals(["own", "qualification"]) }),
+  Schema.Struct({
+    id: Text,
+    path: Text,
+    kind: Schema.Literals(["own", "qualification"]),
+    canonicalPath: Schema.optional(NullableText),
+    identityProblem: Schema.optional(NullableText),
+  }),
 );
 export const DiscoveryTeams = rows(
   Schema.Struct({
@@ -54,6 +58,18 @@ export const DiscoveryTeams = rows(
 );
 const Task = Schema.Struct({ id: Text, state: Text, repository: NullableText, base: NullableText });
 export const DiscoveryDelivery = Schema.Struct({
+  version: Schema.optional(Schema.Literal(1)),
+  scope: Schema.optional(
+    Schema.Struct({ board: NullableText, route: NullableText, project: NullableText }),
+  ),
+  selection: Schema.optional(
+    Schema.Struct({
+      state: Schema.Literals(["selected", "unconfigured", "ambiguous", "invalid"]),
+      routeId: NullableText,
+      projectId: NullableText,
+      problem: NullableText,
+    }),
+  ),
   boards: rows(Schema.Struct({ id: Text, repository: NullableText, base: NullableText })),
   routes: rows(
     Schema.Struct({
@@ -63,6 +79,7 @@ export const DiscoveryDelivery = Schema.Struct({
       base: Text,
       project: Text,
       auto_merge: Schema.Number,
+      identityProblem: Schema.optional(NullableText),
       updated: Schema.optional(Text),
     }),
   ),
@@ -73,6 +90,8 @@ export const DiscoveryDelivery = Schema.Struct({
       branch: Text,
       environment: Text,
       mode: Text,
+      path: Schema.optional(NullableText),
+      identityProblem: Schema.optional(NullableText),
       liveCommit: NullableText,
       liveObservedAt: NullableText,
       liveProblem: NullableText,
@@ -80,11 +99,77 @@ export const DiscoveryDelivery = Schema.Struct({
   ),
   tracking: rows(
     Schema.Struct({
-      request: Schema.NullOr(Schema.Struct({ id: Text, task: Text, origin: Text })),
+      request: Schema.NullOr(
+        Schema.Struct({ id: Text, task: Text, origin: Text, route: Schema.optional(Text) }),
+      ),
       task: Schema.NullOr(Task),
     }),
   ),
 });
+
+export function registeredRepository(
+  registrations: typeof DiscoveryRegistrations.Type,
+  id: string | null | undefined,
+) {
+  const rows = registrations.filter((row) => row.id === id);
+  const first = rows[0];
+  return first &&
+    first.kind === "own" &&
+    first.path.trim() &&
+    first.canonicalPath?.trim() &&
+    first.identityProblem === null &&
+    rows.every(
+      (row) =>
+        row.kind === "own" &&
+        row.path.trim() &&
+        row.identityProblem === null &&
+        row.canonicalPath === first.canonicalPath,
+    )
+    ? first
+    : undefined;
+}
+
+export function discoveryTarget(
+  registrations: typeof DiscoveryRegistrations.Type,
+  inventory: typeof DiscoveryDelivery.Type,
+  root: string | null,
+  boardId: string | undefined,
+) {
+  const matchesRoot = (id: string | null) => {
+    const registered = registeredRepository(registrations, id);
+    return !!registered && root !== null && registered.canonicalPath === root;
+  };
+  const boards = inventory.boards.filter((board) => matchesRoot(board.repository));
+  const candidates = boardId ? boards.filter((board) => board.id === boardId) : boards;
+  const selected =
+    candidates.length === 1 &&
+    inventory.boards.filter((board) => board.id === candidates[0]?.id).length === 1
+      ? candidates[0]
+      : undefined;
+  return {
+    boards,
+    selected,
+    repository: selected ? registeredRepository(registrations, selected.repository) : undefined,
+    registered: registrations.some((row) => matchesRoot(row.id)),
+  };
+}
+
+export function verifiedProjectRepository(
+  registrations: typeof DiscoveryRegistrations.Type,
+  project: (typeof DiscoveryDelivery.Type)["projects"][number],
+  targetPath: string,
+) {
+  const registered = registeredRepository(registrations, project.repository);
+  return (
+    !!registered &&
+    !!project.path &&
+    project.identityProblem === null &&
+    !!project.environment.trim() &&
+    !!project.branch.trim() &&
+    registered.canonicalPath === project.path &&
+    project.path === targetPath
+  );
+}
 
 // Only observations cross the model boundary; never error text, process settings, prompts or commands.
 export const observationText = (text: string, cap = 256): string =>
@@ -134,27 +219,17 @@ export function projectDiscovery(
     repositories: typeof DiscoveryRegistrations.Type;
     teams: typeof DiscoveryTeams.Type;
     delivery: typeof DiscoveryDelivery.Type;
-    sameFolder: (a: string, b: string) => boolean;
   },
 ): DeliveryDiscoverySnapshot {
   const diagnostics = [...snapshot.diagnostics];
   if (snapshot.boardDeployment.state === "invalid") diagnostics.push("missing-deployment");
   if (input.preflight && snapshot.boardDeployment.capability === "unavailable")
     diagnostics.push("unreachable");
-  const repository = data.repositories.find(
-    (repo) => repo.kind === "own" && data.root !== null && data.sameFolder(repo.path, data.root),
-  );
-  const boards = repository
-    ? data.delivery.boards.filter((board) => board.repository === repository.id)
-    : [];
-  const selected = input.board
-    ? boards.find((board) => board.id === input.board)
-    : boards.length === 1
-      ? boards[0]
-      : undefined;
-  if (!repository) diagnostics.push("unregistered-repository");
+  const target = discoveryTarget(data.repositories, data.delivery, data.root, input.board);
+  const { repository, boards, selected } = target;
+  if (!target.registered) diagnostics.push("unregistered-repository");
   else if (!input.board && boards.length > 1) diagnostics.push("ambiguous-board");
-  if (repository && (!selected || !selected.base || (input.preflight && !input.board)))
+  if (target.registered && (!selected || !selected.base || (input.preflight && !input.board)))
     diagnostics.push("missing-target");
   if (caller.toolsSupported === false) diagnostics.push("unsupported-provider-tools");
   const team = data.teams.find((team) => team.team === input.team);
@@ -174,35 +249,101 @@ export function projectDiscovery(
         )))
   )
     diagnostics.push("unsupported-provider-tools");
-  const projects = repository
-    ? data.delivery.projects.filter((project) => project.repository === repository.id)
-    : [];
-  const routes = repository
-    ? data.delivery.routes.filter((route) => route.repository === repository.id)
-    : [];
+  const scoped =
+    data.delivery.version === 1 &&
+    data.delivery.scope?.board === selected?.id &&
+    data.delivery.scope?.route === (input.route ?? null) &&
+    data.delivery.selection !== undefined;
+  if (selected && !scoped) diagnostics.push("unsupported-server");
+  if (scoped && data.delivery.selection?.state === "ambiguous")
+    diagnostics.push("ambiguous-deployment");
+  if (
+    scoped &&
+    (data.delivery.selection?.state === "invalid" ||
+      data.delivery.selection?.state === "unconfigured" ||
+      data.delivery.selection?.problem)
+  )
+    diagnostics.push("missing-deployment");
+  const projects = data.delivery.projects.filter((project) => {
+    const registered = registeredRepository(data.repositories, project.repository);
+    return registered && data.root !== null && registered.canonicalPath === data.root;
+  });
+  const routes = data.delivery.routes.filter((route) =>
+    boards.some((board) => board.id === route.board && board.repository === route.repository),
+  );
   const validRoute = (route: (typeof routes)[number]) => {
     const board = boards.find((board) => board.id === route.board);
-    const project = projects.find((project) => project.id === route.project);
-    return Boolean(board?.base && board.base === route.base && project?.branch === route.base);
+    const matches = data.delivery.projects.filter((project) => project.id === route.project);
+    const project = matches.length === 1 ? matches[0] : undefined;
+    return Boolean(
+      scoped &&
+      data.delivery.routes.filter((row) => row.id === route.id).length === 1 &&
+      route.board === selected?.id &&
+      board?.base &&
+      board.base === route.base &&
+      project?.branch === route.base &&
+      route.identityProblem === null &&
+      repository &&
+      project &&
+      verifiedProjectRepository(data.repositories, project, repository.canonicalPath!),
+    );
   };
+  const taskRequests = input.task
+    ? data.delivery.tracking.filter(
+        (row) =>
+          row.task?.id === input.task &&
+          row.request?.task === input.task &&
+          row.request?.route === data.delivery.selection?.routeId &&
+          row.task?.repository === selected?.repository &&
+          row.task?.base === selected?.base,
+      )
+    : [];
+  const taskRoute = taskRequests.length === 1 ? taskRequests[0]?.request?.route : undefined;
+  if (
+    input.task &&
+    scoped &&
+    data.delivery.tracking.some((row) => row.task?.id === input.task && row.request !== null) &&
+    !taskRoute
+  )
+    diagnostics.push("missing-deployment");
+  const selectedRoute = input.route ?? taskRoute;
   const destinations = routes.filter(
     (route) =>
       route.board === selected?.id &&
       validRoute(route) &&
-      (input.route === undefined || route.id === input.route),
+      (selectedRoute === undefined || route.id === selectedRoute),
   );
+  const destination =
+    scoped &&
+    data.delivery.selection?.state === "selected" &&
+    data.delivery.selection.problem === null &&
+    destinations.length === 1 &&
+    destinations[0]?.id === data.delivery.selection.routeId &&
+    destinations[0]?.project === data.delivery.selection.projectId
+      ? destinations[0]
+      : undefined;
+  if (scoped && data.delivery.selection?.state === "selected" && !destination)
+    diagnostics.push("missing-deployment");
   if (selected && destinations.length === 0) diagnostics.push("missing-deployment");
   if (input.preflight && destinations.length > 1) diagnostics.push("ambiguous-deployment");
   const origin =
     caller.threadId === undefined ? null : `thread:${caller.environmentId}/${caller.threadId}`;
-  const linked = data.delivery.tracking.filter(
-    (row) =>
+  const linked = data.delivery.tracking.filter((row) => {
+    const registered = registeredRepository(data.repositories, row.task?.repository);
+    return (
       origin !== null &&
       row.request?.origin === origin &&
       row.task !== null &&
       row.request.task === row.task.id &&
-      row.task.repository === repository?.id,
-  );
+      registered &&
+      data.root !== null &&
+      registered.canonicalPath === data.root &&
+      (!scoped ||
+        (row.task.repository === selected?.repository &&
+          row.task.base === selected?.base &&
+          routes.some((route) => route.id === row.request?.route && route.board === selected?.id)))
+    );
+  });
   const task = input.task
     ? (data.delivery.tracking.find((row) => row.task?.id === input.task)?.task ?? null)
     : null;
@@ -214,6 +355,20 @@ export function projectDiscovery(
   });
   return boundDiscovery({
     ...snapshot,
+    boardDeployment: selected
+      ? {
+          capability: scoped ? "available" : "unsupported",
+          board: observationText(selected.id),
+          projectId: destination ? observationText(destination.project) : null,
+          state: !scoped
+            ? null
+            : destination
+              ? "linked"
+              : data.delivery.selection?.state === "unconfigured"
+                ? "unlinked"
+                : "invalid",
+        }
+      : snapshot.boardDeployment,
     diagnostics: [...new Set(diagnostics)],
     preflight: input.preflight ? (diagnostics.length === 0 ? "ready" : "blocked") : "not-requested",
     repository:
