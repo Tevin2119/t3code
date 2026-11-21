@@ -1,10 +1,19 @@
 import { useAtomValue } from "@effect/atom-react";
 import type { BoardDeploymentLink, EnvironmentId } from "@t3tools/contracts";
 import { LinkIcon, RocketIcon, UnlinkIcon } from "lucide-react";
+import { useGT } from "gt-react";
 import { useState } from "react";
+import { boardDeploymentLinkView, boardTargetDiagnostic } from "../../lib/deliveryStates";
 import { parseDeployments, parseDeploymentCommands } from "../../lib/deployments";
 import type { DeliveryTarget } from "../../lib/delivery";
-import { deliveryEnvironment, useDeliveryRead, useStaleReading } from "../../state/delivery";
+import {
+  deliveryEnvironment,
+  useBoardStore,
+  useDeliveryRead,
+  usePersonName,
+  useStaleReading,
+} from "../../state/delivery";
+import { RelativeTime } from "../RelativeTime";
 import { Button } from "../ui/button";
 import {
   Dialog,
@@ -19,6 +28,24 @@ import { Input } from "../ui/input";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Textarea } from "../ui/textarea";
 import { BoardDeliveryApproval } from "./BoardDeliveryApproval";
+import { DeliveryDiagnosticNotice } from "./DeliveryDiagnosticNotice";
+
+/** The board link in a few words, for the settings header: the engine's problem as it is. */
+export function BoardDeploymentSummary({ link }: { link: BoardDeploymentLink | null | undefined }) {
+  const gt = useGT();
+  const view = boardDeploymentLinkView(link, { person: "", allowed: false });
+  return (
+    <span data-board-deployment-summary={view.kind}>
+      {view.kind === "unavailable"
+        ? gt("link unknown")
+        : view.kind === "unlinked"
+          ? gt("No deployment project linked")
+          : view.kind === "linked"
+            ? gt("Linked to {project}", { project: view.project })
+            : (view.problem ?? gt("Link has a problem"))}
+    </span>
+  );
+}
 
 export function BoardDeploymentControls(props: {
   environmentId: EnvironmentId;
@@ -28,59 +55,116 @@ export function BoardDeploymentControls(props: {
   stale: boolean;
   onDone: () => void;
 }) {
+  const gt = useGT();
   const allowed = useAtomValue(deliveryEnvironment.act.permissionAtom(props.environmentId));
+  const person = usePersonName();
+  const personRaw = useBoardStore((state) => state.person);
+  const setPerson = useBoardStore((state) => state.setPerson);
+  // Asked once: the field stays while the name is typed, rather than going at the first letter.
+  const [askName] = useState(() => person.length === 0);
   const [editing, setEditing] = useState(false);
   const [unlinking, setUnlinking] = useState(false);
   const path = `/api/boards/${props.board}/deployment`;
+  const view = boardDeploymentLinkView(props.link, { person, allowed });
+  const targetIssue = boardTargetDiagnostic(props.target);
   const linked = props.link?.deploymentProjectId;
+  // The engine refuses a link or unlink without a named person; no button that would just fail.
+  const named = person.length > 0;
   return (
-    <section className="min-w-0 space-y-2" aria-label="Board deployment link">
+    <section
+      className="min-w-0 space-y-2"
+      aria-label={gt("Board deployment link")}
+      data-board-deployment={view.kind}
+    >
       <h3 className="flex items-center gap-2 text-sm font-medium">
         <RocketIcon className="size-4" />
-        Deployment link
+        {gt("Deployment link")}
       </h3>
-      <p className="break-words text-xs text-muted-foreground">
-        {props.link
-          ? linked
-            ? `${props.link.state}: ${props.link.project?.title ?? linked} · ${props.link.project?.environment ?? "unknown environment"} · ${props.link.project?.branch ?? "unknown branch"} · ${props.link.project?.mode ?? "unknown mode"}`
-            : "Not linked. Existing publications keep their original attribution."
-          : "Deployment link status is unavailable from this engine."}
-      </p>
+      {view.kind === "unavailable" ? (
+        <p className="break-words text-xs text-muted-foreground">
+          {gt("Deployment link status is unavailable from this engine.")}
+        </p>
+      ) : view.kind === "unlinked" ? (
+        <div className="space-y-0.5 text-xs">
+          <p className="font-medium">{gt("No deployment project linked")}</p>
+          <p className="text-muted-foreground">
+            {gt("Existing publications keep their original attribution.")}
+          </p>
+        </div>
+      ) : view.kind === "linked" ? (
+        <div className="min-w-0 space-y-0.5 text-xs">
+          <p className="break-words font-medium">
+            {view.environment ? `${view.project} · ${view.environment}` : view.project}
+          </p>
+          <p className="break-words text-muted-foreground" data-board-deployment-by>
+            {view.by ? gt("Linked by {name}", { name: view.by }) : gt("Linked")}
+            {view.at ? (
+              <>
+                {" · "}
+                <RelativeTime timestamp={view.at} />
+              </>
+            ) : null}
+          </p>
+          {props.link?.project ? (
+            <p className="break-words text-muted-foreground">
+              {props.link.project.branch} · {props.link.project.mode}
+            </p>
+          ) : null}
+        </div>
+      ) : (
+        <DeliveryDiagnosticNotice code="missing-deployment" problem={view.problem} />
+      )}
       {linked ? (
         <p className="break-all font-mono text-2xs text-muted-foreground">{linked}</p>
       ) : null}
-      {props.link?.problem ? (
-        <p className="text-xs text-warning-foreground">{props.link.problem}</p>
+      {view.kind !== "unavailable" && targetIssue ? (
+        <DeliveryDiagnosticNotice code={targetIssue.code} problem={targetIssue.problem} />
       ) : null}
-      <div className="flex flex-wrap gap-2">
-        <Button
-          size="sm"
-          variant="outline"
-          disabled={
-            !allowed ||
-            !props.link ||
-            props.stale ||
-            !props.target?.repository ||
-            !props.target.base ||
-            !props.target.ok
-          }
-          onClick={() => setEditing(true)}
-        >
-          <LinkIcon />
-          {linked ? "Relink…" : "Link deployment…"}
-        </Button>
-        {linked ? (
+      {view.kind !== "unavailable" && allowed && (askName || !named) ? (
+        <label className="block space-y-1 text-xs" data-board-deployment-name>
+          <span className="text-muted-foreground">
+            {gt("The engine records who changes a deployment link. Enter your name to change one.")}
+          </span>
+          <Input
+            size="sm"
+            aria-label={gt("Your name")}
+            placeholder={gt("Your name")}
+            value={personRaw}
+            onChange={(event) => setPerson(event.target.value)}
+          />
+        </label>
+      ) : null}
+      {view.kind !== "unavailable" && !allowed ? (
+        <p className="text-xs text-muted-foreground">
+          {gt("This connection has read-only delivery access.")}
+        </p>
+      ) : null}
+      {view.kind !== "unavailable" && allowed && named ? (
+        <div className="flex flex-wrap gap-2">
           <Button
             size="sm"
             variant="outline"
-            disabled={!allowed || props.stale}
-            onClick={() => setUnlinking(true)}
+            disabled={
+              props.stale || !props.target?.repository || !props.target.base || !props.target.ok
+            }
+            onClick={() => setEditing(true)}
           >
-            <UnlinkIcon />
-            Unlink…
+            <LinkIcon />
+            {linked ? gt("Relink…") : gt("Link deployment…")}
           </Button>
-        ) : null}
-      </div>
+          {linked ? (
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={props.stale}
+              onClick={() => setUnlinking(true)}
+            >
+              <UnlinkIcon />
+              {gt("Unlink…")}
+            </Button>
+          ) : null}
+        </div>
+      ) : null}
       {editing && props.target ? (
         <LinkEditor
           environmentId={props.environmentId}

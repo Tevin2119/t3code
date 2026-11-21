@@ -79,9 +79,12 @@ import { unifiedBoardChoices } from "../../lib/deliveryBoardSelection";
 import { HowItFits } from "./HowItFits";
 import { SharedBoard } from "./SharedBoard";
 
-import { BoardDeploymentControls } from "./BoardDeploymentControls";
+import { BoardDeploymentControls, BoardDeploymentSummary } from "./BoardDeploymentControls";
 import { MergePermissionControls, MergePermissionSummary } from "./MergePermissionControls";
-import { DeploymentSnapshotStale, TaskDeploymentBadge } from "./TaskDeploymentStatus";
+import { DeploymentSnapshotStale } from "./TaskDeploymentStatus";
+import { CardDeliveryStatus } from "./CardDeliveryStatus";
+import { DeliveryDiagnosticNotice } from "./DeliveryDiagnosticNotice";
+import { deliveryReadDiagnostic } from "../../lib/deliveryStates";
 import { TaskDisclosure } from "./TaskDisclosure";
 
 const CardFace = memo(function CardFace(props: {
@@ -146,7 +149,7 @@ const CardFace = memo(function CardFace(props: {
         </span>
         <CardPeople card={card} />
       </div>
-      <TaskDeploymentBadge card={card} />
+      <CardDeliveryStatus card={card} variant="card" />
     </div>
   );
 });
@@ -789,11 +792,19 @@ function EnvironmentBoardPage({ environmentId }: { readonly environmentId: Envir
             onOpen={open}
           />
         ) : board.error ? (
-          <BoardEngineNotice
-            className="p-6 text-sm"
-            environmentId={environmentId}
-            message={`Delivery engine not reachable. ${board.error} Nothing shown here is current.`}
-          />
+          deliveryReadDiagnostic(board.failure) === "unreachable" ? (
+            <BoardEngineNotice
+              className="p-6 text-sm"
+              environmentId={environmentId}
+              message={`Delivery engine not reachable. ${board.error} Nothing shown here is current.`}
+            />
+          ) : (
+            <DeliveryDiagnosticNotice
+              className="min-w-0 space-y-1 p-6 text-sm"
+              code={deliveryReadDiagnostic(board.failure)}
+              problem={board.error}
+            />
+          )
         ) : (
           <>
             {actions.problem ? (
@@ -877,8 +888,8 @@ function EnvironmentBoardPage({ environmentId }: { readonly environmentId: Envir
                 <TaskDisclosure
                   title={
                     <>
-                      Board delivery settings · {chosenBoard.deployment?.state ?? "link unknown"}
-                      {chosenBoard.deployment?.problem ? `: ${chosenBoard.deployment.problem}` : ""}
+                      Board delivery settings ·{" "}
+                      <BoardDeploymentSummary link={chosenBoard.deployment} />
                     </>
                   }
                   defaultOpen={false}
