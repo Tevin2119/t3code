@@ -1040,11 +1040,28 @@ export interface DeliveryPublication {
   readonly pullRequest: { readonly number: number; readonly url: string } | null;
   readonly error: string | null;
   readonly attempts: number;
+  /** The merge commit the repository host reported, once it did. Older engines omit it. */
+  readonly mergeCommit: string | null;
+  /** The engine's guarded merge, when an executor is attached; null otherwise. */
+  readonly mergeExecution: DeliveryMergeExecution | null;
+}
+
+/**
+ * The durable state of the engine's own merge of a pull request (MERGE-EXECUTION.md): one of
+ * not-evaluated, blocked, queued, intent, uncertain, merged or observed, with its reason.
+ */
+export interface DeliveryMergeExecution {
+  readonly state: string;
+  readonly reason: string | null;
+  readonly mergeCommit: string | null;
+  readonly landedCommit: string | null;
+  readonly updated: string | null;
 }
 
 const parsePublication = (value: unknown): DeliveryPublication | null => {
   if (!isRecord(value)) return null;
   const pull = isRecord(value.pullRequest) ? value.pullRequest : null;
+  const execution = isRecord(value.mergeExecution) ? value.mergeExecution : null;
   return {
     run: textOrNull(value.run),
     state: text(value.state),
@@ -1053,6 +1070,17 @@ const parsePublication = (value: unknown): DeliveryPublication | null => {
     pullRequest: pull ? { number: count(pull.number), url: text(pull.url) } : null,
     error: textOrNull(value.error),
     attempts: count(value.attempts),
+    mergeCommit: textOrNull(value.mergeCommit),
+    mergeExecution:
+      execution && text(execution.state)
+        ? {
+            state: text(execution.state),
+            reason: textOrNull(execution.reason),
+            mergeCommit: textOrNull(execution.mergeCommit),
+            landedCommit: textOrNull(execution.landedCommit),
+            updated: textOrNull(execution.updated),
+          }
+        : null,
   };
 };
 

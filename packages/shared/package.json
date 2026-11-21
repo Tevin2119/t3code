@@ -11,6 +11,10 @@
       "types": "./src/pullRequestAnchor.ts",
       "import": "./src/pullRequestAnchor.ts"
     },
+    "./deliveryDiagnostics": {
+      "types": "./src/deliveryDiagnostics.ts",
+      "import": "./src/deliveryDiagnostics.ts"
+    },
     "./changedFileKind": {
       "types": "./src/changedFileKind.ts",
       "import": "./src/changedFileKind.ts"

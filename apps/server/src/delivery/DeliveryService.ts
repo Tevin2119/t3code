@@ -19,6 +19,7 @@ import {
   type ThreadId,
 } from "@t3tools/contracts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
+import { deliveryFailureDiagnostic } from "@t3tools/shared/deliveryDiagnostics";
 import { modelSelectionsEqual } from "@t3tools/shared/model";
 import * as ByteSize from "effect/ByteSize";
 import * as Clock from "effect/Clock";
@@ -1224,29 +1225,10 @@ const make = Effect.fn("DeliveryService.make")(function* (
       failure._tag === "DiscoveryEndpointError"
         ? new URL(failure.path, "http://discovery.invalid")
         : undefined;
-    const code: DeliveryDiscoveryDiagnostic =
-      error._tag === "DeliveryError"
-        ? error.status === 401 || error.status === 403
-          ? "unauthorized"
-          : error.status === 409 && failedEndpoint?.pathname === "/api/delivery"
-            ? "invalid-request"
-            : error.status === 404 &&
-                input.task &&
-                failedEndpoint?.pathname === "/api/delivery" &&
-                failedEndpoint.searchParams.get("task") === input.task
-              ? "task-not-found"
-              : error.status === 413
-                ? "response-too-large"
-                : error.reason === "disabled"
-                  ? "disabled"
-                  : error.reason === "mismatch"
-                    ? "profile-mismatch"
-                    : error.reason === "unreachable"
-                      ? "unreachable"
-                      : "unsupported-server"
-        : error._tag === "TimeoutError"
-          ? "unreachable"
-          : "unsupported-server";
+    const code = deliveryFailureDiagnostic(error, {
+      endpoint: failedEndpoint,
+      task: input.task,
+    });
     return { ...snapshot, diagnostics: [code] };
   });
 
