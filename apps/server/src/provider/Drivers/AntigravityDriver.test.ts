@@ -4,10 +4,12 @@ import { expect, it } from "@effect/vitest";
 import {
   ANTIGRAVITY_DEFAULT_MODEL,
   EnvironmentId,
+  ProviderDriverKind,
   ProviderInstanceId,
   ProviderSessionId,
   ThreadId,
   type AntigravitySettings,
+  type ProviderInstallState,
 } from "@t3tools/contracts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Effect from "effect/Effect";
@@ -31,6 +33,7 @@ import * as ProviderEventLoggers from "@t3tools/provider-core/server/ProviderEve
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 import * as ModelManifest from "../ModelManifest.ts";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
+import * as ProviderLatestVersions from "@t3tools/provider-core/server/ProviderLatestVersions";
 import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
 import { AntigravityDriver } from "./AntigravityDriver.ts";
 import * as ProviderHostLive from "../ProviderHostLive.ts";
@@ -38,6 +41,17 @@ import * as ServerSecretStore from "../../auth/ServerSecretStore.ts";
 
 const hostPlatform = HostProcess.Platform.defaultValue();
 const windowsHost = hostPlatform === "win32";
+const notInstalled: ProviderInstallState = {
+  driver: ProviderDriverKind.make("antigravity"),
+  operationId: null,
+  phase: "idle",
+  downloadedBytes: 0,
+  totalBytes: null,
+  version: null,
+  installedVersion: null,
+  canRemove: false,
+  message: null,
+};
 const decodeRequest = Schema.decodeEffect(
   Schema.fromJsonString(
     Schema.Struct({
@@ -154,6 +168,7 @@ const makeHarness = Effect.fn("makeAntigravityDriverHarness")(function* (
 
   const layerInstallation = Layer.mock(AntigravityInstallation.AntigravityInstallation)({
     managedDirectory: root,
+    state: Effect.succeed(notInstalled),
     resolve: () =>
       Effect.gen(function* () {
         if (controls.failResolution) {
@@ -298,6 +313,7 @@ const layerDeps = ServerConfig.layerTest(process.cwd(), {
   Layer.provideMerge(ModelManifest.layerTest),
   Layer.provideMerge(IdAllocator.layer),
   Layer.provideMerge(McpProviderSessions.layer),
+  Layer.provideMerge(ProviderLatestVersions.layer),
 );
 const layerTest = ProviderHostLive.layer.pipe(
   Layer.provideMerge(ServerSecretStore.layer),
@@ -652,6 +668,7 @@ it.layer(layerTest)("AntigravityDriver", (it) => {
           Effect.provide(
             Layer.mock(AntigravityInstallation.AntigravityInstallation)({
               managedDirectory: config.stateDir,
+              state: Effect.succeed(notInstalled),
               resolve: () => Effect.die("unused"),
               acquire: () => Effect.die("unused"),
             }),

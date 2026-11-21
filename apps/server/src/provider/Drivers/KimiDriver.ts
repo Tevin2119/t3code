@@ -40,7 +40,13 @@ import {
   type ProviderInstance,
 } from "@t3tools/provider-core/server/driver";
 import { mergeProviderInstanceEnvironment } from "@t3tools/provider-core/server/instanceEnvironment";
-import { makeManualOnlyProviderMaintenanceCapabilities } from "@t3tools/provider-core/server/maintenanceResolver";
+import {
+  enrichProviderSnapshotWithVersionAdvisory,
+  makeCachedProviderMaintenanceResolution,
+  makePackageManagedProviderMaintenanceResolver,
+  resolveProviderMaintenanceCapabilitiesEffect,
+} from "@t3tools/provider-core/server/maintenanceResolver";
+import * as ProviderLatestVersions from "@t3tools/provider-core/server/ProviderLatestVersions";
 import {
   haveProviderSnapshotSettingsChanged,
   makeProviderSnapshotSettingsSource,
@@ -52,9 +58,10 @@ const decodeKimiSettings = Schema.decodeSync(KimiSettings);
 const isSetupError = Schema.is(ProviderSetupError);
 
 const DRIVER_KIND = ProviderDriverKind.make("kimi");
-const MAINTENANCE_CAPABILITIES = makeManualOnlyProviderMaintenanceCapabilities({
+const UPDATE = makePackageManagedProviderMaintenanceResolver({
   provider: DRIVER_KIND,
-  packageName: "@moonshot-ai/kimi-code",
+  npmPackageName: "@moonshot-ai/kimi-code",
+  nativeUpdate: null,
 });
 
 export type KimiDriverEnv =
@@ -66,7 +73,8 @@ export type KimiDriverEnv =
   | FileSystem.FileSystem
   | HttpClient.HttpClient
   | Path.Path
-  | ProviderEventLoggers;
+  | ProviderEventLoggers
+  | ProviderLatestVersions.ProviderLatestVersions;
 
 export const KimiDriver: ProviderDriver<KimiSettings, KimiDriverEnv, KimiUsageReaderEnv> = {
   driverKind: DRIVER_KIND,
@@ -91,6 +99,7 @@ export const KimiDriver: ProviderDriver<KimiSettings, KimiDriverEnv, KimiUsageRe
     const fileSystem = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
     const eventLoggers = yield* ProviderEventLoggers;
+    const latestVersions = yield* ProviderLatestVersions.ProviderLatestVersions;
     const selfInvocation = yield* resolveSelfInvocation().pipe(
       Effect.mapError(
         (cause) =>
@@ -116,6 +125,16 @@ export const KimiDriver: ProviderDriver<KimiSettings, KimiDriverEnv, KimiUsageRe
       continuationGroupKey: continuationIdentity.continuationKey,
     });
     const effectiveConfig = { ...config, enabled } satisfies KimiSettings;
+    const resolveMaintenance = yield* makeCachedProviderMaintenanceResolution(
+      resolveProviderMaintenanceCapabilitiesEffect(UPDATE, {
+        binaryPath: effectiveConfig.binaryPath || "kimi",
+        env: processEnv,
+      }).pipe(
+        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+        Effect.provideService(FileSystem.FileSystem, fileSystem),
+        Effect.provideService(Path.Path, path),
+      ),
+    );
 
     const makeRuntime: KimiAdapterOptions["makeRuntime"] = (input) =>
       makeKimiAcpRuntime({
@@ -161,13 +180,24 @@ export const KimiDriver: ProviderDriver<KimiSettings, KimiDriverEnv, KimiUsageRe
 
     const snapshotSettings = yield* makeProviderSnapshotSettingsSource(effectiveConfig);
     const snapshot = yield* makeManagedServerProvider<ProviderSnapshotSettings<KimiSettings>>({
-      resolveMaintenance: () => Effect.succeed(MAINTENANCE_CAPABILITIES),
+      resolveMaintenance,
       getSettings: snapshotSettings.getSettings,
       streamSettings: snapshotSettings.streamSettings,
       haveSettingsChanged: haveProviderSnapshotSettingsChanged,
       initialSnapshot: (settings) =>
         buildInitialKimiProviderSnapshot(settings.provider).pipe(Effect.map(stampIdentity)),
       checkProvider,
+      enrichSnapshot: ({ settings, snapshot: currentSnapshot, publishSnapshot }) =>
+        resolveMaintenance().pipe(
+          Effect.flatMap((maintenanceCapabilities) =>
+            enrichProviderSnapshotWithVersionAdvisory(currentSnapshot, maintenanceCapabilities, {
+              enableProviderUpdateChecks: settings.enableProviderUpdateChecks,
+            }),
+          ),
+          Effect.provideService(HttpClient.HttpClient, httpClient),
+          Effect.provideService(ProviderLatestVersions.ProviderLatestVersions, latestVersions),
+          Effect.flatMap(publishSnapshot),
+        ),
     }).pipe(
       Effect.mapError(
         (cause) =>

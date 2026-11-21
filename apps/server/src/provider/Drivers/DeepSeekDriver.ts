@@ -36,7 +36,13 @@ import {
   type ProviderInstance,
 } from "@t3tools/provider-core/server/driver";
 import { mergeProviderInstanceEnvironment } from "@t3tools/provider-core/server/instanceEnvironment";
-import { makeManualOnlyProviderMaintenanceCapabilities } from "@t3tools/provider-core/server/maintenanceResolver";
+import {
+  enrichProviderSnapshotWithVersionAdvisory,
+  makeCachedProviderMaintenanceResolution,
+  makePackageManagedProviderMaintenanceResolver,
+  resolveProviderMaintenanceCapabilitiesEffect,
+} from "@t3tools/provider-core/server/maintenanceResolver";
+import * as ProviderLatestVersions from "@t3tools/provider-core/server/ProviderLatestVersions";
 import {
   haveProviderSnapshotSettingsChanged,
   makeProviderSnapshotSettingsSource,
@@ -47,9 +53,10 @@ import { withInstanceIdentity } from "@t3tools/provider-core/server/instanceIden
 const decodeDeepSeekSettings = Schema.decodeSync(DeepSeekSettings);
 
 const DRIVER_KIND = ProviderDriverKind.make("deepseek");
-const MAINTENANCE_CAPABILITIES = makeManualOnlyProviderMaintenanceCapabilities({
+const UPDATE = makePackageManagedProviderMaintenanceResolver({
   provider: DRIVER_KIND,
-  packageName: "@deepseek-ai/dsh",
+  npmPackageName: "@deepseek-ai/dsh",
+  nativeUpdate: null,
 });
 
 export type DeepSeekDriverEnv =
@@ -61,7 +68,8 @@ export type DeepSeekDriverEnv =
   | FileSystem.FileSystem
   | HttpClient.HttpClient
   | Path.Path
-  | ProviderEventLoggers;
+  | ProviderEventLoggers
+  | ProviderLatestVersions.ProviderLatestVersions;
 
 export const DeepSeekDriver: ProviderDriver<
   DeepSeekSettings,
@@ -90,6 +98,7 @@ export const DeepSeekDriver: ProviderDriver<
     const httpClient = yield* HttpClient.HttpClient;
     const path = yield* Path.Path;
     const eventLoggers = yield* ProviderEventLoggers;
+    const latestVersions = yield* ProviderLatestVersions.ProviderLatestVersions;
     const selfInvocation = yield* resolveSelfInvocation().pipe(
       Effect.mapError(
         (cause) =>
@@ -120,6 +129,16 @@ export const DeepSeekDriver: ProviderDriver<
       continuationGroupKey: continuationIdentity.continuationKey,
     });
     const effectiveConfig = { ...config, enabled } satisfies DeepSeekSettings;
+    const resolveMaintenance = yield* makeCachedProviderMaintenanceResolution(
+      resolveProviderMaintenanceCapabilitiesEffect(UPDATE, {
+        binaryPath: effectiveConfig.binaryPath || "dsh",
+        env: processEnv,
+      }).pipe(
+        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+        Effect.provideService(FileSystem.FileSystem, fileSystem),
+        Effect.provideService(Path.Path, path),
+      ),
+    );
 
     const makeRuntime: DeepSeekAdapterOptions["makeRuntime"] = (input) =>
       makeDeepSeekAcpRuntime({
@@ -161,13 +180,24 @@ export const DeepSeekDriver: ProviderDriver<
 
     const snapshotSettings = yield* makeProviderSnapshotSettingsSource(effectiveConfig);
     const snapshot = yield* makeManagedServerProvider<ProviderSnapshotSettings<DeepSeekSettings>>({
-      resolveMaintenance: () => Effect.succeed(MAINTENANCE_CAPABILITIES),
+      resolveMaintenance,
       getSettings: snapshotSettings.getSettings,
       streamSettings: snapshotSettings.streamSettings,
       haveSettingsChanged: haveProviderSnapshotSettingsChanged,
       initialSnapshot: (settings) =>
         buildInitialDeepSeekProviderSnapshot(settings.provider).pipe(Effect.map(stampIdentity)),
       checkProvider,
+      enrichSnapshot: ({ settings, snapshot: currentSnapshot, publishSnapshot }) =>
+        resolveMaintenance().pipe(
+          Effect.flatMap((maintenanceCapabilities) =>
+            enrichProviderSnapshotWithVersionAdvisory(currentSnapshot, maintenanceCapabilities, {
+              enableProviderUpdateChecks: settings.enableProviderUpdateChecks,
+            }),
+          ),
+          Effect.provideService(HttpClient.HttpClient, httpClient),
+          Effect.provideService(ProviderLatestVersions.ProviderLatestVersions, latestVersions),
+          Effect.flatMap(publishSnapshot),
+        ),
     }).pipe(
       Effect.mapError(
         (cause) =>

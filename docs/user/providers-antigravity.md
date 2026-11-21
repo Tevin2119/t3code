@@ -68,6 +68,8 @@ In web or desktop provider settings, choose **Update Antigravity** when an updat
 is available. T3 checks Google's CLI release channel while provider update checks
 are enabled. Installing or reinstalling also checks that channel. Updates keep
 your profile and existing runtime available if the new release fails validation.
+The same update is offered with other provider updates, in the sidebar and in
+**Update all**.
 
 Updating an older 1.4.5 installation migrates it to the native CLI. You may need to
 sign in again after migration. Threads already running finish with their original

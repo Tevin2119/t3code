@@ -29,6 +29,14 @@ project's shell hooks. Hermes normally asks about them on a terminal, which a T3
 Code session has no way to answer, so leave this off unless you want those hooks
 to run unattended.
 
+## Update Hermes
+
+When Hermes runs from the git checkout its installer creates, provider updates run
+`hermes update --yes`, which pulls the checkout and reinstalls its dependencies.
+Hermes can refuse while its other processes, such as gateways, are running; the
+update then fails with Hermes' own message. Any other install shows
+`hermes update` for you to run yourself.
+
 ## Models and threads
 
 The model list comes from Hermes' own configuration: T3 Code offers the provider
