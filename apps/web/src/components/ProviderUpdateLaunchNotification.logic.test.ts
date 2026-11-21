@@ -130,6 +130,19 @@ describe("provider update launch notification logic", () => {
     ).toBe(true);
   });
 
+  it("offers one-click updates for a runtime that updates without a terminal command", () => {
+    const candidate = updateCandidate({ driver: driver("antigravity"), updateCommand: null });
+
+    expect(isProviderSettingsUpdateCandidate(candidate)).toBe(true);
+    expect(canOneClickUpdateProviderCandidate(candidate, [candidate])).toBe(true);
+    expect(
+      canOneClickUpdateProviderCandidate(candidate, [
+        candidate,
+        provider({ driver: driver("antigravity"), instanceId: instanceId("agy_custom") }),
+      ]),
+    ).toBe(false);
+  });
+
   it("keeps the inline update action available while a provider update is already running", () => {
     const candidate = updateCandidate({
       driver: driver("codex"),

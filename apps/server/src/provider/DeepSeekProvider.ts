@@ -23,7 +23,6 @@ import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import {
   buildServerProvider,
   isCommandMissingCause,
-  parseGenericCliVersion,
   providerModelsFromSettings,
   spawnAndCollect,
   type ServerProviderDraft,
@@ -123,6 +122,11 @@ const runDeepSeekCliCommand = Effect.fn("runDeepSeekCliCommand")(function* (
 });
 
 /** Whether a credential file names a non-empty key under its `refs` section. */
+/** dsh publishes release candidates as `latest`, so the prerelease decides whether one is newer. */
+export function parseDeepSeekVersion(output: string): string | null {
+  return output.match(/\bv?(\d+\.\d+\.\d+(?:-[0-9A-Za-z]+(?:\.[0-9A-Za-z]+)*)?)\b/)?.[1] ?? null;
+}
+
 export function credentialFileHoldsApiKey(contents: string): boolean {
   const refs = /^refs:\s*$([\s\S]*?)(?=^\S|(?![\s\S]))/m.exec(contents)?.[1] ?? "";
   const value = new RegExp(`^\\s+${API_KEY_NAME}:\\s*(.*?)\\s*$`, "m").exec(refs)?.[1] ?? "";
@@ -238,7 +242,7 @@ export const checkDeepSeekProviderStatus = Effect.fn("checkDeepSeekProviderStatu
   }
 
   const versionOutput = versionResult.success.value;
-  const version = parseGenericCliVersion(`${versionOutput.stdout}\n${versionOutput.stderr}`);
+  const version = parseDeepSeekVersion(`${versionOutput.stdout}\n${versionOutput.stderr}`);
   if (versionOutput.code !== 0) {
     yield* Effect.logWarning("DeepSeek Harness version probe exited with a non-zero status.", {
       exitCode: versionOutput.code,
