@@ -1,3 +1,7 @@
+import {
+  subagentThreadTarget,
+  type SubagentThreadTarget,
+} from "@t3tools/client-runtime/linked-thread";
 import type { ScopedThreadRef } from "@t3tools/contracts";
 import { EnvironmentId, ThreadId } from "@t3tools/contracts";
 
@@ -63,36 +67,92 @@ export function conversationState(
 export const sameThread = (a: ScopedThreadRef | null, b: ScopedThreadRef | null): boolean =>
   a !== null && b !== null && a.environmentId === b.environmentId && a.threadId === b.threadId;
 
-/** The part of a delegated child the stand-in reads: its thread, and the seat it was given. */
+/** A seat's conversation, in the shape every agent row opens: see `subagentThreadTarget`. */
+export type SeatThread = SubagentThreadTarget;
+
+/** The part of a delegated child the stand-in reads: its thread, here or remote, and its seat. */
 interface SeatChild {
-  readonly childThreadId: string | null;
+  readonly childThreadId: ThreadId | null;
+  readonly remoteChild?:
+    | {
+        readonly environmentId: EnvironmentId;
+        readonly threadId: ThreadId;
+        readonly label: string;
+      }
+    | undefined;
   readonly teamChat?: { readonly seat: string } | undefined;
 }
+
+/** What places a seat that runs in a linked environment: see `subagentThreadTarget`. */
+export interface SeatReach {
+  readonly ownConnection: (
+    environmentId: EnvironmentId,
+  ) => { readonly connected: boolean } | undefined;
+  readonly isLinked: (environmentId: EnvironmentId) => boolean;
+}
+
+const LOCAL_ONLY: SeatReach = { ownConnection: () => undefined, isLinked: () => false };
 
 /**
  * The child conversation of a seat. In an orchestrator team chat the lead hands each seat a
  * delegated child thread named by the seat (`teamChat.seat`), the model this slice copies. A seat
- * the lead has not handed work to has none, and its row opens nothing.
+ * the lead has not handed work to has none, and its row opens nothing. A seat that runs in a
+ * linked environment opens there, or read-only through the task's environment (`linked`).
  */
 export function seatConversation(
   conversation: ScopedThreadRef | null,
   children: ReadonlyArray<SeatChild>,
   seat: string,
-): ScopedThreadRef | null {
+  reach: SeatReach = LOCAL_ONLY,
+): SeatThread | null {
   if (!conversation) return null;
-  const child = children.findLast((item) => item.teamChat?.seat === seat && item.childThreadId);
-  return child?.childThreadId
-    ? { environmentId: conversation.environmentId, threadId: ThreadId.make(child.childThreadId) }
-    : null;
+  const child = children.findLast(
+    (item) =>
+      item.teamChat?.seat === seat &&
+      (item.childThreadId !== null || item.remoteChild !== undefined),
+  );
+  return child === undefined
+    ? null
+    : subagentThreadTarget(child, conversation.environmentId, reach.ownConnection, reach.isLinked);
 }
+
+// A thread id alone names no thread: the same id can exist in two environments.
+const childOfThread = (
+  conversation: ScopedThreadRef,
+  children: ReadonlyArray<SeatChild>,
+  thread: ScopedThreadRef,
+) =>
+  children.find((item) =>
+    item.childThreadId !== null
+      ? item.childThreadId === thread.threadId &&
+        conversation.environmentId === thread.environmentId
+      : item.remoteChild?.threadId === thread.threadId &&
+        item.remoteChild.environmentId === thread.environmentId,
+  );
 
 /** The seat a child thread was given, for the line above a seat conversation. */
 export function seatOfThread(
+  conversation: ScopedThreadRef | null,
   children: ReadonlyArray<SeatChild>,
   thread: ScopedThreadRef | null,
 ): string | null {
-  if (!thread) return null;
-  return children.find((item) => item.childThreadId === thread.threadId)?.teamChat?.seat ?? null;
+  if (!conversation || !thread) return null;
+  return childOfThread(conversation, children, thread)?.teamChat?.seat ?? null;
+}
+
+/** How an open thread is reached now, so a connection made or lost while it is open shows. */
+export function openSeatThread(
+  conversation: ScopedThreadRef | null,
+  children: ReadonlyArray<SeatChild>,
+  thread: ScopedThreadRef | null,
+  reach: SeatReach,
+): SeatThread | null {
+  if (!conversation || !thread) return thread;
+  const child = childOfThread(conversation, children, thread);
+  const target =
+    child &&
+    subagentThreadTarget(child, conversation.environmentId, reach.ownConnection, reach.isLinked);
+  return target ?? thread;
 }
 
 /**

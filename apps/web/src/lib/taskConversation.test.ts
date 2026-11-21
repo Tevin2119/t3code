@@ -4,6 +4,7 @@ import { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import {
   conversationState,
   queueWait,
+  openSeatThread,
   seatConversation,
   seatOfThread,
   taskConversation,
@@ -61,13 +62,24 @@ describe("what the centre shows", () => {
 });
 
 describe("a seat's conversation", () => {
+  const id = ThreadId.make;
+  const remote = EnvironmentId.make("env-remote");
   const children = [
-    { childThreadId: "child-a", teamChat: { seat: "builder" } },
-    { childThreadId: "child-b", teamChat: { seat: "qa" } },
-    { childThreadId: "child-c", teamChat: { seat: "builder" } },
+    { childThreadId: id("child-a"), teamChat: { seat: "builder" } },
+    { childThreadId: id("child-b"), teamChat: { seat: "qa" } },
+    { childThreadId: id("child-c"), teamChat: { seat: "builder" } },
     { childThreadId: null, teamChat: { seat: "reviewer" } },
-    { childThreadId: "plain" },
+    { childThreadId: id("plain") },
+    {
+      childThreadId: null,
+      remoteChild: { environmentId: remote, threadId: id("child-b"), label: "Desktop" },
+      teamChat: { seat: "remote-qa" },
+    },
   ];
+  const reach = (own: { readonly connected: boolean } | undefined, linked: boolean) => ({
+    ownConnection: () => own,
+    isLinked: () => linked,
+  });
 
   it("is the seat's newest delegated child in the same environment", () => {
     expect(seatConversation(ref, children, "builder")?.threadId).toBe("child-c");
@@ -83,9 +95,49 @@ describe("a seat's conversation", () => {
     expect(seatConversation(null, children, "qa")).toBeNull();
   });
 
-  it("names the seat a child thread was given", () => {
-    expect(seatOfThread(children, { ...ref, threadId: ThreadId.make("child-b") })).toBe("qa");
-    expect(seatOfThread(children, { ...ref, threadId: ThreadId.make("plain") })).toBeNull();
+  it("opens a seat that runs in a linked environment there, or read-only through the link", () => {
+    const there = { environmentId: remote, threadId: "child-b" };
+    const throughLink = {
+      ...there,
+      linked: { viaEnvironmentId: ref.environmentId, label: "Desktop" },
+    };
+    expect(seatConversation(ref, children, "remote-qa", reach({ connected: true }, true))).toEqual(
+      there,
+    );
+    expect(seatConversation(ref, children, "remote-qa", reach(undefined, true))).toEqual(
+      throughLink,
+    );
+    // Saved but offline, with the link gone: it opens in place, where the client can reconnect.
+    expect(
+      seatConversation(ref, children, "remote-qa", reach({ connected: false }, false)),
+    ).toEqual(there);
+    // Neither connected nor linked: the read-only view says what to link again.
+    expect(seatConversation(ref, children, "remote-qa", reach(undefined, false))).toEqual(
+      throughLink,
+    );
+  });
+
+  it("names the seat a child thread was given, telling two environments' threads apart", () => {
+    expect(seatOfThread(ref, children, { ...ref, threadId: id("child-b") })).toBe("qa");
+    expect(seatOfThread(ref, children, { environmentId: remote, threadId: id("child-b") })).toBe(
+      "remote-qa",
+    );
+    expect(
+      seatOfThread(ref, children, { environmentId: remote, threadId: id("child-a") }),
+    ).toBeNull();
+    expect(seatOfThread(ref, children, { ...ref, threadId: id("plain") })).toBeNull();
+  });
+
+  it("follows the connection of a seat thread that is already open", () => {
+    const open = { environmentId: remote, threadId: id("child-b") };
+    expect(openSeatThread(ref, children, open, reach(undefined, true))?.linked).toEqual({
+      viaEnvironmentId: ref.environmentId,
+      label: "Desktop",
+    });
+    expect(openSeatThread(ref, children, open, reach({ connected: true }, true))).toEqual(open);
+    // A thread that is no seat's, opened from a lineage link, stays as it was asked for.
+    const other = { ...ref, threadId: id("elsewhere") };
+    expect(openSeatThread(ref, children, other, reach(undefined, false))).toBe(other);
   });
 });
 

@@ -29,7 +29,10 @@ import { useVisibleSecondClock } from "./use-visible-second-clock";
 import { SubagentStopButton } from "./SubagentStopButton";
 import { ThreadWorkflowGroup } from "./ThreadWorkflowGroup";
 import { ScreenContent } from "../../components/ui/ScreenContent";
-import { subagentThreadTarget, type SubagentThreadTarget } from "./threadAgentsPresentation";
+import {
+  subagentThreadTarget,
+  type SubagentThreadTarget,
+} from "@t3tools/client-runtime/linked-thread";
 import { useLinkedThreadReach } from "../../state/linkedThread";
 
 import { useOpenThreadInspector } from "./thread-inspector-navigation";

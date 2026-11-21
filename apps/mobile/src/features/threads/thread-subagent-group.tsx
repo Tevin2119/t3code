@@ -27,7 +27,7 @@ import { subagentCardElapsed } from "./subagent-card-presentation";
 import { useServerConfigs } from "../../state/entities";
 import { SubagentRow } from "./SubagentRow";
 import { useVisibleSecondClock } from "./use-visible-second-clock";
-import { subagentThreadTarget } from "./threadAgentsPresentation";
+import { subagentThreadTarget } from "@t3tools/client-runtime/linked-thread";
 import { useLinkedThreadReach } from "../../state/linkedThread";
 import { WorkLogBlock } from "./work-log-layout";
 
