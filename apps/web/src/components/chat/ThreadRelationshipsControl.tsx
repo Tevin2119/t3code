@@ -869,7 +869,14 @@ export function ThreadRelationshipsPanel(props: {
     const hint = relationshipHint(edge, props.threadId, isSideChat, m);
     const openProps =
       isSideChat || (isSubagent && !isParent)
-        ? trigger((intent) => openSideThreadRow(threadId, intent))
+        ? trigger((intent) => {
+            // A containing workspace (a board task panel) inspects its lineage itself.
+            if (inspectThread) {
+              inspectThread(scopeThreadRef(props.environmentId, threadId));
+              return;
+            }
+            openSideThreadRow(threadId, intent);
+          })
         : { onClick: () => openThread(threadId) };
     const RelationshipPopup = agent ? ThreadHoverCardPopup : TooltipPopup;
     const relationshipTooltip = agent ? (
