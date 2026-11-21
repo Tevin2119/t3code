@@ -9,7 +9,13 @@ import {
 } from "lucide-react";
 import type { ReactNode } from "react";
 
-import { nowLine, waitingWords, type DeliveryCard, type TaskPriority } from "../../lib/delivery";
+import {
+  nowLine,
+  waitingWords,
+  type DeliveryCard,
+  type TaskPriority,
+  type TaskView,
+} from "../../lib/delivery";
 import { ageLabel, initialsOf, PRIORITY_LABEL } from "../../lib/deliveryBoard";
 import { harnessLabel } from "../../lib/deliverySeats";
 import { cn } from "../../lib/utils";
@@ -338,5 +344,82 @@ export function Age(props: {
         {props.label} {props.at}
       </TooltipPopup>
     </Tooltip>
+  );
+}
+
+export function Row(props: { readonly label: string; readonly children: ReactNode }) {
+  return (
+    <div className="flex items-start justify-between gap-3 text-xs">
+      <span className="shrink-0 text-muted-foreground">{props.label}</span>
+      <span className="min-w-0 text-right break-words">{props.children}</span>
+    </div>
+  );
+}
+
+/**
+ * What became of the approved change, told apart: awaiting your decision, approved and not
+ * published, a pull request open, merged, or a failed attempt with its reason. Approval is never
+ * shown as publication, nor publication as a merge.
+ */
+export function PublicationRows(props: { readonly task: TaskView }) {
+  const { task } = props;
+  const publication = task.publications.at(-1) ?? null;
+  const url = publication?.pullRequest?.url ?? null;
+  const external = url !== null && /^https?:\/\//.test(url);
+  const said =
+    publication === null
+      ? task.state === "approved"
+        ? task.publishing.enabled
+          ? `Approved, not published yet${task.publishing.blockers.length ? `: ${task.publishing.blockers.join("; ")}` : "."}`
+          : `Approved, not published. ${task.publishing.why ?? ""}`
+        : task.lane === "human-review"
+          ? `None yet. Approving records acceptance${task.publishing.enabled ? "; then the approved commit is pushed and one pull request opened" : `. ${task.publishing.why ?? ""}`}. Nothing is merged.`
+          : task.publishing.enabled
+            ? "None yet. One is opened when a person approves the tested commit."
+            : `None. ${task.publishing.why ?? ""}`
+      : publication.state === "failed"
+        ? `Publishing failed (attempt ${publication.attempts}): ${publication.error ?? "no reason given"}. Nothing was merged.`
+        : publication.state === "merged"
+          ? "Merged on the repository host."
+          : publication.state === "closed"
+            ? "Closed on the repository host without a merge."
+            : publication.state === "pr-open"
+              ? "Open for review. Merging is done on the repository host, not by the team."
+              : `${publication.state}.`;
+  return (
+    <>
+      <Row label="Pull request">
+        <span
+          className="flex flex-col items-end gap-0.5 text-right"
+          data-task-related-pr={publication?.state ?? "none"}
+        >
+          {url ? (
+            external ? (
+              <a
+                href={url}
+                target="_blank"
+                rel="noreferrer"
+                className="text-primary underline-offset-2 hover:underline"
+                data-task-related-pr-link
+              >
+                #{publication?.pullRequest?.number} on the repository host
+              </a>
+            ) : (
+              <span className="font-mono text-3xs" data-task-related-pr-link>
+                {url} (stand-in host)
+              </span>
+            )
+          ) : null}
+          <span>{said}</span>
+        </span>
+      </Row>
+      {publication ? (
+        <Row label="Branch">
+          <span className="font-mono text-3xs break-all" data-task-related-branch>
+            {publication.branch} · {publication.commit.slice(0, 10)}
+          </span>
+        </Row>
+      ) : null}
+    </>
   );
 }

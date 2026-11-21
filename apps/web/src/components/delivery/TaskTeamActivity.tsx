@@ -4,12 +4,14 @@ import {
   type EnvironmentId,
   type OrchestrationV2TurnItemStatus,
   type ProviderInstanceId,
+  type ScopedThreadRef,
 } from "@t3tools/contracts";
 import { useMessages } from "gt-react";
 
 import { repeatKeys, type CouncilSeat, type SeatLive, type TaskView } from "../../lib/delivery";
 import { TASK_PIPELINE_STAGES, taskPipelineStage } from "../../lib/deliveryPipeline";
 import { driverOfHarness, entryForHarness, harnessLabel } from "../../lib/deliverySeats";
+import { sameThread } from "../../lib/taskConversation";
 import { cn } from "../../lib/utils";
 import { AgentElapsed } from "../chat/AgentElapsed";
 import { SubagentTooltipContent } from "../chat/SubagentTooltipContent";
@@ -109,12 +111,24 @@ function TaskPipelineStrip(props: { readonly task: TaskView }) {
   );
 }
 
-/** One seat as a native agent row: harness and status, what it waits on, and how long it ran. */
+/** The seats' own conversations, when the task has any: which a seat's row opens, and which is open. */
+export interface SeatConversations {
+  readonly thread: (seat: string) => ScopedThreadRef | null;
+  readonly current: ScopedThreadRef | null;
+  readonly open: (thread: ScopedThreadRef) => void;
+}
+
+/**
+ * One seat as a native agent row: harness and status, what it waits on, and how long it ran. A
+ * seat the lead has handed work to opens its own conversation, as a subagent row does.
+ */
 function SeatRow(props: {
   readonly seat: CouncilSeat;
   readonly catalog: ReturnType<typeof useSeatCatalog>;
+  readonly conversations?: SeatConversations | undefined;
 }) {
-  const { seat, catalog } = props;
+  const { seat, catalog, conversations } = props;
+  const thread = conversations?.thread(seat.seat) ?? null;
   const m = useMessages();
   const status = seatStatus(seat.activity);
   const entry = entryForHarness(catalog.entries, seat.harness);
@@ -136,7 +150,11 @@ function SeatRow(props: {
         : (seat.stage ?? threadRelationshipStatusLabel(status, m));
   const latest = seat.live?.items.at(-1)?.text ?? null;
   return (
-    <li data-task-seat={seat.seat} data-seat-activity={seat.activity}>
+    <li
+      data-task-seat={seat.seat}
+      data-seat-activity={seat.activity}
+      data-seat-conversation={thread ? "yes" : "no"}
+    >
       <Tooltip>
         <TooltipTrigger
           delay={200}
@@ -145,8 +163,9 @@ function SeatRow(props: {
               size="sm"
               variant="ghost"
               part="row"
-              className="cursor-default"
-              render={<div tabIndex={0} />}
+              render={thread ? undefined : <div tabIndex={0} />}
+              aria-current={sameThread(thread, conversations?.current ?? null) ? "true" : undefined}
+              onClick={thread ? () => conversations?.open(thread) : undefined}
             />
           }
         >
@@ -216,6 +235,7 @@ function SeatRow(props: {
 export function TaskTeamActivity(props: {
   readonly environmentId: EnvironmentId | null;
   readonly task: TaskView;
+  readonly conversations?: SeatConversations | undefined;
 }) {
   const { task } = props;
   const catalog = useSeatCatalog(props.environmentId);
@@ -240,7 +260,12 @@ export function TaskTeamActivity(props: {
         {task.council ? (
           <ul className="m-0 flex list-none flex-col p-0">
             {seats.map((seat) => (
-              <SeatRow key={seat.seat} seat={seat} catalog={catalog} />
+              <SeatRow
+                key={seat.seat}
+                seat={seat}
+                catalog={catalog}
+                conversations={props.conversations}
+              />
             ))}
           </ul>
         ) : (

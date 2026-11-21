@@ -186,3 +186,26 @@ it("hosts evidence and deployments as native right-panel tabs with native maximi
   // Reopening keeps the tab the person left on.
   await expect.element(page.getByText("Deployment rows for native-tabs")).toBeVisible();
 });
+
+it("opens the right panel on a task's first visit only when asked, and not again once closed", async () => {
+  const panel = (key: string) => (
+    <TaskWorkspacePanels
+      key={key}
+      owner="first-visit-task"
+      openFirst
+      detailsOpen={false}
+      onDetailsOpenChange={() => {}}
+      details={<p>Details</p>}
+      conversation={<p>Centre</p>}
+      evidence={<p>Engine facts</p>}
+      deployments={<p>Deployments</p>}
+    />
+  );
+  await using screen = await render(panel("a"));
+  await expect.element(page.getByText("Engine facts")).toBeVisible();
+  await page.getByRole("button", { name: "Close evidence", exact: true }).click();
+  await screen.rerender(panel("b"));
+  await expect
+    .element(page.getByRole("button", { name: "Toggle right panel", exact: true }))
+    .toHaveAttribute("aria-pressed", "false");
+});

@@ -1,7 +1,9 @@
 import "../../index.css";
 
 import type { ReactNode } from "react";
+import { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import { expect, it, vi } from "vite-plus/test";
+import { page } from "vite-plus/test/browser";
 
 import { render } from "../../../test/render";
 import { parseCard, type CouncilSeat, type TaskView } from "../../lib/delivery";
@@ -74,4 +76,33 @@ it("keeps a long seat detail inside a 220px pane, with both name and detail elli
   expect(detail.scrollWidth).toBeGreaterThan(detail.clientWidth);
   expect(getComputedStyle(detail).textOverflow).toBe("ellipsis");
   expect(name.scrollWidth).toBeGreaterThan(name.clientWidth);
+});
+
+it("opens a seat's own conversation from its row, and leaves a seat with none inert", async () => {
+  const open = vi.fn();
+  const child = { environmentId: EnvironmentId.make("env"), threadId: ThreadId.make("child") };
+  const both = {
+    ...task,
+    council: { seats: [seat({ seat: "builder" }), seat({ seat: "qa", blockedBy: null })] },
+  } as unknown as TaskView;
+  await using screen = await render(
+    <TaskTeamActivity
+      environmentId={null}
+      task={both}
+      conversations={{
+        thread: (name) => (name === "builder" ? child : null),
+        current: child,
+        open,
+      }}
+    />,
+  );
+  await page.getByRole("button", { name: /builder/ }).click();
+  expect(open).toHaveBeenCalledExactlyOnceWith(child);
+  await expect
+    .element(page.getByRole("button", { name: /builder/ }))
+    .toHaveAttribute("aria-current", "true");
+  await expect.element(page.getByRole("button", { name: /qa/ })).not.toBeInTheDocument();
+  expect(
+    screen.container.querySelector('[data-task-seat="qa"]')?.getAttribute("data-seat-conversation"),
+  ).toBe("no");
 });
