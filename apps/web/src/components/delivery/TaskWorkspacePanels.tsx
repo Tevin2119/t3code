@@ -11,7 +11,7 @@ const ThreadRelationshipsPanel = lazy(() =>
 );
 const optionalThreadSchema = Schema.NullOr(ScopedThreadRef);
 import { useAtomValue } from "@effect/atom-react";
-import { lazy, Suspense } from "react";
+import { lazy, Suspense, useEffect } from "react";
 import * as Schema from "effect/Schema";
 import { isElectron } from "../../env";
 import { useLocalStorage } from "../../hooks/useLocalStorage";
@@ -68,6 +68,10 @@ export function TaskWorkspacePanels(props: {
   owner: string;
   source?: ScopedThreadRef | null;
   navigation?: ReactNode;
+  /** Opens a related thread in the centre, where the task's own conversation is. Without it, a related thread opens in the full workspace view. */
+  onOpenThread?: (thread: ScopedThreadRef) => void;
+  /** Open the right panel the first time this task is shown. */
+  openFirst?: boolean;
   details: ReactNode;
   conversation?: ReactNode;
   renderConversation?: (showDetails: () => void) => ReactNode;
@@ -84,6 +88,15 @@ export function TaskWorkspacePanels(props: {
     selectThreadRightPanelState(state.byThreadKey, panelRef),
   );
   const evidenceOpen = panel.isOpen;
+  // A task never opened before shows its engine facts beside the conversation when the width holds
+  // task details, conversation and panel together. A panel the person closed keeps its tabs, so it
+  // stays closed.
+  const roomy = useMediaQuery("(min-width: 1360px)");
+  const firstVisit = panel.surfaces.length === 0;
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- opens the task's right panel in the external panel store on a first visit
+  useEffect(() => {
+    if (props.openFirst && firstVisit && roomy && !sheet) openTaskPanel(props.owner);
+  }, [props.openFirst, firstVisit, roomy, sheet, props.owner]);
   const maximized = panel.isOpen && panel.maximized === true;
   const [selectedThread, setSelectedThread] = useLocalStorage(
     `t3code:task-inspected-thread:${props.owner}`,
@@ -92,6 +105,7 @@ export function TaskWorkspacePanels(props: {
   );
   const inspectingSource = selectedThread !== null;
   const inspectThread = (thread: ScopedThreadRef) => setSelectedThread(thread);
+  const lineageThread = props.onOpenThread ?? inspectThread;
   const closeEvidence = () => {
     useRightPanelStore.getState().close(panelRef);
     useRightPanelStore.getState().setMaximized(panelRef, false);
@@ -278,7 +292,7 @@ export function TaskWorkspacePanels(props: {
                 <div className="shrink-0 border-b p-3">{props.navigation}</div>
               ) : null}
               {props.source ? (
-                <ThreadInspectionContext value={inspectThread}>
+                <ThreadInspectionContext value={lineageThread}>
                   <Suspense fallback={<p className="p-3 text-xs">Loading agent lineage...</p>}>
                     <div className="shrink-0 border-b p-3">
                       <ThreadRelationshipsPanel
@@ -333,7 +347,7 @@ export function TaskWorkspacePanels(props: {
                 <div className="shrink-0 border-b p-3">{props.navigation}</div>
               ) : null}
               {props.source ? (
-                <ThreadInspectionContext value={inspectThread}>
+                <ThreadInspectionContext value={lineageThread}>
                   <Suspense fallback={<p className="p-3 text-xs">Loading agent lineage...</p>}>
                     <div className="shrink-0 border-b p-3">
                       <ThreadRelationshipsPanel
