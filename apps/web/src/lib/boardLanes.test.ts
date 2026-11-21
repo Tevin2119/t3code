@@ -2,7 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import { BOARD_LANE, BOARD_LANES, boardLaneOf, engineLanesOf, regroupLanes } from "./boardLanes";
 import { parseCard, type DeliveryLane } from "./delivery";
-import { boardMoveIntent, filterLanes, NO_FILTERS } from "./deliveryBoard";
+import { boardMoveIntent, dropTargetLane, filterLanes, NO_FILTERS } from "./deliveryBoard";
 
 /** The engine's lane ids today, in its own order (LANES in the engine's views.mjs). */
 const ENGINE_LANES = [
@@ -122,5 +122,29 @@ describe("moving a card to a board lane", () => {
       "refused",
     );
     expect(engineLanesOf("queue")).toEqual(["ready", "intake"]);
+  });
+});
+
+describe("the engine lane a drop is asked of", () => {
+  it("a card dropped on a card of its own board lane reorders its own engine lane", () => {
+    // The queue holds both intake and ready: dropping on the other source is a reorder,
+    // not a move to it, so no "send to triage again" for a gesture inside one lane.
+    expect(dropTargetLane({ lane: "ready", actions: [] }, "intake", "intake-card")).toBe("ready");
+    // So does In work across its stages.
+    expect(dropTargetLane({ lane: "implementation", actions: [] }, "validation", "v-card")).toBe(
+      "implementation",
+    );
+  });
+
+  it("a card dropped on a card of another board lane asks that board lane's move", () => {
+    const card = { lane: "ready", actions: ["submit", "discard"] as ReadonlyArray<string> };
+    expect(dropTargetLane(card, "human-review", "review-card")).toBe(
+      boardMoveIntent(card, "needs-decision").lane,
+    );
+  });
+
+  it("a card dropped on a lane, not a card, is that lane's own move", () => {
+    const card = { lane: "draft", actions: ["submit"] as ReadonlyArray<string> };
+    expect(dropTargetLane(card, "queue", null)).toBe(boardMoveIntent(card, "queue").lane);
   });
 });

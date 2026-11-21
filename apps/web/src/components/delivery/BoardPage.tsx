@@ -28,6 +28,7 @@ import {
 import {
   boardMoveIntent,
   boardSetOf,
+  dropTargetLane,
   filterLanes,
   FLOW_LABEL,
   groupCards,
@@ -415,8 +416,9 @@ function BoardColumns(props: {
     if (target.before === card.id) return;
     // Dropped on its own lane and not on a card, it stays where it is.
     if (target.lane === boardLaneOf(card.lane) && !target.before) return;
-    // Dropped on a lane, the engine lane its move is asked of; on a card, that card's own lane.
-    const to = target.before ? target.lane : boardMoveIntent(card, target.lane).lane;
+    // The engine lane the drop is asked of: on a lane, its move; on a card, a reorder when the
+    // card stands in the same board lane, and the board lane's move otherwise.
+    const to = dropTargetLane(card, target.lane, target.before ?? null);
     props.onMove(card, to, target.before ?? null);
   };
 

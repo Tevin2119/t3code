@@ -827,6 +827,19 @@ export function moveIntent(card: MovableCard, lane: string): MoveIntent {
  * What moving a card to a board lane comes to. Each engine lane it holds is tried in turn with
  * `moveIntent`, from the card's own actions; the first not refused is the one a move is sent to.
  */
+/**
+ * The engine lane a drop comes to. Dropped on a lane, the engine lane its move is asked of.
+ * Dropped on a card of the same board lane, it reorders the dragged card's own engine lane: a
+ * queued card dropped on a card of the lane's other source is a reorder, not a move to it.
+ * Dropped on a card of another board lane, that board lane's own move is asked of.
+ */
+export function dropTargetLane(card: MovableCard, lane: string, before: string | null): string {
+  if (!before) return boardMoveIntent(card, lane).lane;
+  return boardLaneOf(lane) === boardLaneOf(card.lane)
+    ? card.lane
+    : boardMoveIntent(card, boardLaneOf(lane)).lane;
+}
+
 export function boardMoveIntent(
   card: MovableCard,
   lane: string,
