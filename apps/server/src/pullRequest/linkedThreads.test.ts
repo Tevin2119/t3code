@@ -79,6 +79,13 @@ it.effect(
           source: "manual",
         },
         {
+          id: "board-task",
+          host: "github.com",
+          repository: "acme/web",
+          number: 7,
+          source: "manual",
+        },
+        {
           id: "dismissed",
           host: "github.com",
           repository: "acme/web",
@@ -113,6 +120,9 @@ it.effect(
           settledOverride: ["settled", "archived"].includes(fixture.id) ? "settled" : null,
           settledAt: fixture.id === "auto-settled" ? archivedAt : null,
           ...(fixture.id === "side-chat" ? { lineage: { sideChat: true } } : {}),
+          ...(fixture.id === "board-task"
+            ? { lineage: { engineIntake: "board-task:board-1:task-7" } }
+            : {}),
           pullRequests: [{ ...fixture, linkedAt: createdAt, snapshot: null, stack: null }],
         });
         yield* sql`

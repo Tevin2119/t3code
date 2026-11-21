@@ -51,6 +51,7 @@ export const listLinkedPullRequestThreads = Effect.fn("listLinkedPullRequestThre
         AND json_extract(link.value, '$.source') != 'stack-dismissed'
         AND t.deleted_at IS NULL
         AND json_extract(t.payload_json, '$.lineage.sideChat') IS NOT 1
+        AND json_extract(t.payload_json, '$.lineage.engineIntake') IS NULL
       ORDER BY "updatedAt" DESC, id ASC
     `.pipe(NodeSqliteClient.readOnly);
     const threads = rows

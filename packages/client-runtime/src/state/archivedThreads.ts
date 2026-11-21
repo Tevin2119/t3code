@@ -1,5 +1,6 @@
 import {
   EnvironmentId,
+  isServerOwnedThreadLineage,
   type OrchestrationV2ArchivedShellSnapshot,
   type ScopedThreadRef,
 } from "@t3tools/contracts";
@@ -21,6 +22,9 @@ export interface ArchivedThreadSnapshotsState {
   readonly error: string | null;
   readonly isLoading: boolean;
 }
+
+const isServerOwned = (thread: OrchestrationV2ArchivedShellSnapshot["threads"][number]) =>
+  isServerOwnedThreadLineage(thread.lineage);
 
 const ARCHIVED_THREADS_ENVIRONMENT_KEY_SEPARATOR = "\u001f";
 const environmentIdOrder = Order.String as Order.Order<EnvironmentId>;
@@ -69,7 +73,11 @@ export function createArchivedThreadSnapshotsAtomFamily<E>(options: {
         const result = get(options.getSnapshotAtom(environmentId));
         isLoading ||= result.waiting;
 
-        const snapshot = AsyncResult.getOrElse(result, () => null);
+        const loaded = AsyncResult.getOrElse(result, () => null);
+        const snapshot =
+          loaded === null || !loaded.threads.some((thread) => isServerOwned(thread))
+            ? loaded
+            : { ...loaded, threads: loaded.threads.filter((thread) => !isServerOwned(thread)) };
         if (snapshot !== null) {
           snapshots.push({ environmentId, snapshot });
         }

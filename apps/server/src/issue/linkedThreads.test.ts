@@ -21,6 +21,12 @@ it.effect("finds every thread linked to exactly one issue, newest activity first
       { id: "archived", day: 4, issues: [issue], archived: true },
       { id: "deleted", day: 5, issues: [issue], deleted: true },
       { id: "side-chat", day: 5, issues: [issue], payload: { lineage: { sideChat: true } } },
+      {
+        id: "board-task",
+        day: 5,
+        issues: [issue],
+        payload: { lineage: { engineIntake: "board-task:board-1:task-7" } },
+      },
       { id: "other-key", day: 5, issues: [{ ...issue, key: "ENG-70" }] },
       { id: "other-scope", day: 5, issues: [{ ...issue, scope: "design" }] },
       { id: "other-tracker", day: 5, issues: [{ ...issue, tracker: "github" }] },

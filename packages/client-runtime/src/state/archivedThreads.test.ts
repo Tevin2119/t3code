@@ -40,6 +40,42 @@ it("does not expose an archived snapshot failure message", () => {
   registry.dispose();
 });
 
+it("leaves an archived board task's thread out of the archive", () => {
+  const environmentId = EnvironmentId.make("env-board");
+  const listedId = ThreadId.make("thread-listed");
+  const snapshotsAtom = createArchivedThreadSnapshotsAtomFamily<Error>({
+    getSnapshotAtom: () =>
+      Atom.make(
+        AsyncResult.success<OrchestrationV2ArchivedShellSnapshot, Error>({
+          schemaVersion: 1,
+          snapshotSequence: 1,
+          projects: [v2Project],
+          threads: [
+            { ...v2ThreadShell, id: listedId },
+            {
+              ...v2ThreadShell,
+              id: ThreadId.make("thread-board-task"),
+              lineage: { ...v2ThreadShell.lineage, engineIntake: "board-task:board-1:task-7" },
+            },
+          ],
+        }),
+      ),
+    hiddenThreadTagsAtom: () => Atom.make(null),
+    hiddenThreadKeysAtom: Atom.make((): ReadonlySet<string> => new Set()),
+    liveThreadRefsAtom: Atom.make((): ReadonlyArray<ScopedThreadRef> => []),
+    anyEnvironmentHidingAtom: Atom.make(false),
+    labelPrefix: "test:archived-thread-snapshots",
+  });
+  const registry = AtomRegistry.make();
+  const { snapshots } = registry.get(
+    snapshotsAtom(makeArchivedThreadsEnvironmentKey([environmentId])),
+  );
+  expect(snapshots.flatMap((entry) => entry.snapshot.threads.map((thread) => thread.id))).toEqual([
+    listedId,
+  ]);
+  registry.dispose();
+});
+
 describe("archived delegated tasks follow their parent on another machine", () => {
   const parentEnvironmentId = EnvironmentId.make("env-parent");
   const taskEnvironmentId = EnvironmentId.make("env-task");

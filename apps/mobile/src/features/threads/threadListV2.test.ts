@@ -1364,6 +1364,34 @@ it("excludes subagents from navigation, search and ordering while retaining user
   ).toEqual([fork.id, root.id]);
 });
 
+it("leaves a board task's thread out of the list, its search and its ordering", () => {
+  const listed = makeThread({ id: ThreadId.make("listed"), title: "Listed" });
+  const boardTask = makeThread({
+    id: ThreadId.make("board-task"),
+    title: "Board task",
+    lineage: {
+      parentThreadId: null,
+      rootThreadId: ThreadId.make("board-task"),
+      relationshipToParent: null,
+      engineIntake: "board-task:board-1:task-7",
+    },
+  });
+  const threads = [listed, boardTask];
+  expect(
+    buildThreadListV2Items({ threads, environmentId: null, searchQuery: "", now: NOW }).items.map(
+      (item) => item.thread.id,
+    ),
+  ).toEqual([listed.id]);
+  expect(
+    buildThreadListV2Items({ threads, environmentId: null, searchQuery: "Board", now: NOW }).items,
+  ).toEqual([]);
+  expect(
+    getThreadListV2OrderedSection({ threads, section: "active", now: NOW }).map(
+      (thread) => thread.id,
+    ),
+  ).toEqual([listed.id]);
+});
+
 const BASE_MS = Date.parse(NOW);
 const isoAt = (ms: number) => new Date(ms).toISOString();
 const MINUTE_MS = 60_000;

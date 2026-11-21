@@ -3277,7 +3277,7 @@ it.effect("SQL list older settled threads below a cursor", () =>
             parentThreadId: input.subagent === true ? id("b") : null,
             relationshipToParent: input.subagent === true ? "subagent" : null,
             rootThreadId: input.subagent === true ? id("b") : id(input.name),
-            ...(input.engineIntake ? { engineIntake: "intake-background-job" } : {}),
+            ...(input.engineIntake ? { engineIntake: "board-task:board-1:task-7" } : {}),
           },
           forkedFrom: null,
           createdAt: now,
@@ -3300,6 +3300,20 @@ it.effect("SQL list older settled threads below a cursor", () =>
     yield* createThread({ name: "child", settledDay: 1, subagent: true });
     yield* createThread({ name: "archived", settledDay: 1, archived: true });
     yield* createThread({ name: "engine-intake", settledDay: 1, engineIntake: true });
+    yield* createThread({ name: "engine-intake-open", settledDay: null, engineIntake: true });
+    // The awareness read lists in SQL; the active list hands its callers the marker to filter on.
+    assert.sameMembers(
+      (yield* store.getAgentAwarenessSnapshot()).threads
+        .map((thread) => thread.id)
+        .filter((threadId) => threadId.includes("engine-intake") || threadId === id("unsettled")),
+      [id("unsettled")],
+    );
+    assert.sameMembers(
+      (yield* store.listActiveThreads())
+        .filter((thread) => !isListedThreadLineage(thread.lineage))
+        .map((thread) => thread.id),
+      [id("child"), id("engine-intake"), id("engine-intake-open")],
+    );
 
     const list = (
       before: { readonly settledAt: string; readonly threadId?: ThreadId },

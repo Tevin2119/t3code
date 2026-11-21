@@ -176,11 +176,19 @@ export const OrchestrationV2AppThreadLineage = Schema.Struct({
 });
 export type OrchestrationV2AppThreadLineage = typeof OrchestrationV2AppThreadLineage.Type;
 
+/**
+ * Work the server started for itself: an engine intake, or a board task's conversation. It opens
+ * by id and is listed nowhere, so nothing may read the marker's value to find a thread.
+ */
+export const isServerOwnedThreadLineage = (
+  lineage: Pick<OrchestrationV2AppThreadLineage, "engineIntake">,
+): boolean => lineage.engineIntake !== undefined;
+
 /** Subagents and side chats live inside their parent's view, never in thread lists. */
 export const isListedThreadLineage = (lineage: OrchestrationV2AppThreadLineage): boolean =>
   lineage.relationshipToParent !== "subagent" &&
   lineage.sideChat !== true &&
-  lineage.engineIntake === undefined;
+  !isServerOwnedThreadLineage(lineage);
 
 export const OrchestrationV2ContextTransferType = Schema.Literals([
   "fork",
