@@ -106,6 +106,9 @@ import { Age, Avatar, laneTone, PriorityPill, QaVotes, TagList, WaitingOn } from
 import { TaskDisclosure } from "./TaskDisclosure";
 import { relatedTaskGroups } from "./relatedTaskGroups";
 import { TaskDeploymentsPanel } from "./TaskDeploymentStatus";
+import { CardDeliveryStatus } from "./CardDeliveryStatus";
+import { DeliveryDiagnosticNotice } from "./DeliveryDiagnosticNotice";
+import { deliveryReadDiagnostic } from "../../lib/deliveryStates";
 import { MergePermissionControls } from "./MergePermissionControls";
 import { BoardDelivery } from "./BoardDelivery";
 import { TaskTeamActivity } from "./TaskTeamActivity";
@@ -2284,10 +2287,18 @@ export function TaskWorkspace(props: {
         </WorkspacePageHeader>
 
         {read.error ? (
-          <p className="px-5 pt-3 text-sm text-warning">
-            Delivery engine not reachable. {read.error} This is not an ordinary chat and it will not
-            answer as one.
-          </p>
+          deliveryReadDiagnostic(read.failure, { task: true }) === "unreachable" ? (
+            <p className="px-5 pt-3 text-sm text-warning">
+              Delivery engine not reachable. {read.error} This is not an ordinary chat and it will
+              not answer as one.
+            </p>
+          ) : (
+            <DeliveryDiagnosticNotice
+              className="min-w-0 space-y-0.5 px-5 pt-3 text-sm"
+              code={deliveryReadDiagnostic(read.failure, { task: true })}
+              problem={read.error}
+            />
+          )
         ) : null}
         {actions.problem ? (
           <p className="px-5 pt-3 text-sm text-warning" data-delivery-problem>
@@ -2352,7 +2363,12 @@ export function TaskWorkspace(props: {
                   }}
                 />
               )}
-              deployments={<TaskDeploymentsPanel card={task.card} stale={stale || !!read.error} />}
+              deployments={
+                <div className="flex min-w-0 flex-1 flex-col">
+                  <CardDeliveryStatus card={task.card} variant="panel" />
+                  <TaskDeploymentsPanel card={task.card} stale={stale || !!read.error} />
+                </div>
+              }
               evidence={
                 <Info
                   key={task.id}

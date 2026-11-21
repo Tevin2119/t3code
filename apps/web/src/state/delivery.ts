@@ -73,6 +73,8 @@ export function useDeliveryRead(
     body: query.data?.body ?? null,
     readAt: query.data?.readAt ?? null,
     error: query.error,
+    /** The failure itself, so a screen can name which diagnostic it is. */
+    failure: query.failure,
     isPending: query.isPending,
     refresh,
   };
