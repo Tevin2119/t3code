@@ -2,6 +2,7 @@ import {
   DELIVERY_HARNESS_BY_DRIVER,
   type EnvironmentId,
   type ModelSelection,
+  type ProjectId,
   type ProviderInstanceId,
 } from "@t3tools/contracts";
 import { useNavigate } from "@tanstack/react-router";
@@ -29,6 +30,8 @@ export const NO_TEAM = "\u0000none";
 
 export function OrchestratorChatSetup(props: {
   readonly environmentId: EnvironmentId;
+  /** The project a thread that fixes a provider problem opens in. */
+  readonly projectId?: ProjectId | null | undefined;
   readonly threadId: string;
   readonly lead: ModelSelection;
   readonly entries: ReadonlyArray<ProviderInstanceEntry>;
@@ -219,6 +222,7 @@ export function OrchestratorChatSetup(props: {
       ) : null}
       <OrchestratorParticipants
         environmentId={props.environmentId}
+        projectId={props.projectId ?? null}
         team={team}
         value={draft}
         onChange={(patch) => update(props.threadId, patch)}

@@ -1,5 +1,6 @@
 import {
   type EnvironmentId,
+  type ProjectId,
   type ProviderInstanceId,
   type ServerProvider,
 } from "@t3tools/contracts";
@@ -15,6 +16,8 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { RefreshIcon } from "../ui/refresh-icon";
+import { providerProblemOfStatus } from "../../lib/providerProblem";
+import { ProviderProblemFixButton } from "./ProviderProblemFixButton";
 
 function getIncompatibleVersion(status: ServerProvider) {
   const compatibility = status.compatibilityAdvisory;
@@ -140,11 +143,14 @@ export const ProviderStatusBanner = memo(function ProviderStatusBanner({
   environmentId,
   onDismiss,
   onOpenProviderSetup,
+  projectId,
   status,
 }: {
   environmentId: EnvironmentId;
   onDismiss: () => void;
   onOpenProviderSetup?: (instanceId: ProviderInstanceId) => void;
+  /** The project a thread that fixes the problem opens in. */
+  projectId: ProjectId | null;
   status: ServerProvider | null;
 }) {
   const gt = useGT();
@@ -216,6 +222,11 @@ export const ProviderStatusBanner = memo(function ProviderStatusBanner({
                   <T>Open provider setup</T>
                 </InlineButton>
               ) : null}
+              <ProviderProblemFixButton
+                environmentId={environmentId}
+                projectId={projectId}
+                problem={providerProblemOfStatus(status, message)}
+              />
               <Button
                 aria-label={gt("Refresh {provider} provider status", { provider: providerName })}
                 disabled={!canRefresh || isRefreshing}

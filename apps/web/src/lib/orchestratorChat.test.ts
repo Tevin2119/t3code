@@ -130,6 +130,12 @@ it("does not substitute another provider when the explicitly selected instance b
   expect(result.configuration).toBeNull();
   expect(result.rows[0]?.modelSelection).toEqual(chosen);
   expect(result.rows[0]?.problem).toMatch(/unavailable/);
+  // The provider's own problem, so a Fix can ask an agent about it.
+  expect(result.rows[0]?.providerProblem).toMatchObject({
+    instanceId: "claude-work",
+    message: result.rows[0]?.problem,
+    blocks: "Scout",
+  });
 });
 
 it("holds a changed roster instead of sending stale seats or a single remaining participant", () => {

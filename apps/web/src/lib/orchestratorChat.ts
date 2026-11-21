@@ -10,6 +10,7 @@ import {
   type ProviderInstanceEntry,
 } from "../providerInstances";
 import type { DeliveryTeam } from "./delivery";
+import type { ProviderProblem } from "./providerProblem";
 import { REASONING_OPTION_BY_DRIVER } from "./deliverySeats";
 
 export type OrchestratorParticipantAccess = NonNullable<
@@ -76,7 +77,7 @@ export function resolveOrchestratorRoster(input: {
           (mode) => mode.mode === "approval-required" && !mode.available,
         )
       : undefined;
-    return !entry
+    const unavailable = !entry
       ? `${title}'s provider is unavailable. ${wayOut}`
       : !entry.enabled || !entry.installed || !entry.isAvailable || entry.status !== "ready"
         ? `${title}'s provider is unavailable. ${
@@ -84,13 +85,27 @@ export function resolveOrchestratorRoster(input: {
               ? describeUnavailableProviderInstance(entry)
               : `${entry.displayName} is not installed.`
           } ${wayOut}`
-        : !DELIVERY_HARNESS_BY_DRIVER[entry.driverKind]
-          ? `${entry.displayName} does not support team seats.`
-          : !modelSelection.model.trim()
-            ? `Choose a model for ${title}.`
-            : cannotAsk
-              ? `${entry.displayName} cannot be held to read-only${cannotAsk.reason ? `: ${cannotAsk.reason}` : "."} Leave ${title} out, or give ${title} full access.`
-              : null;
+        : null;
+    if (unavailable) {
+      const providerProblem: ProviderProblem = {
+        provider: entry?.displayName ?? modelSelection.instanceId,
+        instanceId: modelSelection.instanceId,
+        version: entry?.snapshot.version,
+        message: unavailable,
+        blocks: title,
+      };
+      return { problem: unavailable, providerProblem };
+    }
+    const problem = !entry
+      ? null
+      : !DELIVERY_HARNESS_BY_DRIVER[entry.driverKind]
+        ? `${entry.displayName} does not support team seats.`
+        : !modelSelection.model.trim()
+          ? `Choose a model for ${title}.`
+          : cannotAsk
+            ? `${entry.displayName} cannot be held to read-only${cannotAsk.reason ? `: ${cannotAsk.reason}` : "."} Leave ${title} out, or give ${title} full access.`
+            : null;
+    return { problem, providerProblem: null };
   };
   const teamRow = (seat: DeliveryTeam["seats"][number]) => {
     const settings = input.team?.settings.find((item) => item.seat === seat.seat);
@@ -121,13 +136,24 @@ export function resolveOrchestratorRoster(input: {
               : undefined,
           )
         : null);
-    const problem = !modelSelection
-      ? candidates.length === 0
+    const noProvider =
+      !modelSelection && candidates.length === 0
         ? `No enabled provider runs ${harness}, which ${seat.title} is set to. Choose another provider for ${seat.title}, or leave it out.`
-        : candidates.length > 1
-          ? `More than one provider runs ${harness}. Choose the one ${seat.title} uses.`
-          : `Choose a model for ${seat.title}.`
-      : selectionProblem(seat.title, modelSelection, access);
+        : null;
+    const { problem, providerProblem } = modelSelection
+      ? selectionProblem(seat.title, modelSelection, access)
+      : noProvider
+        ? {
+            problem: noProvider,
+            providerProblem: { provider: harness, message: noProvider, blocks: seat.title },
+          }
+        : {
+            problem:
+              candidates.length > 1
+                ? `More than one provider runs ${harness}. Choose the one ${seat.title} uses.`
+                : `Choose a model for ${seat.title}.`,
+            providerProblem: null,
+          };
     return {
       seat: seat.seat,
       title: seat.title,
@@ -141,6 +167,8 @@ export function resolveOrchestratorRoster(input: {
       orchestrator: seat.seat === ownSeat,
       extra: false,
       problem,
+      /** Set when the problem is the provider's own, so an agent can be asked to fix it. */
+      providerProblem,
     };
   };
   const teamRows = (input.team?.seats ?? []).map(teamRow);
@@ -148,6 +176,16 @@ export function resolveOrchestratorRoster(input: {
     ...teamRows,
     ...(input.extras ?? []).map((extra, index) => {
       const title = `Extra participant ${index + 1}`;
+      const { problem, providerProblem } =
+        input.team && !input.team.roles.some((role) => role.role === extra.role)
+          ? { problem: `Choose a role for ${title}.`, providerProblem: null }
+          : !extra.modelSelection
+            ? { problem: `Choose a provider and model for ${title}.`, providerProblem: null }
+            : selectionProblem(
+                title,
+                extra.modelSelection,
+                extra.access ?? input.access ?? "read-only",
+              );
       return {
         seat: extra.id,
         title,
@@ -158,16 +196,8 @@ export function resolveOrchestratorRoster(input: {
         ownAccess: extra.access,
         orchestrator: false,
         extra: true,
-        problem:
-          input.team && !input.team.roles.some((role) => role.role === extra.role)
-            ? `Choose a role for ${title}.`
-            : !extra.modelSelection
-              ? `Choose a provider and model for ${title}.`
-              : selectionProblem(
-                  title,
-                  extra.modelSelection,
-                  extra.access ?? input.access ?? "read-only",
-                ),
+        problem,
+        providerProblem,
       };
     }),
   ];

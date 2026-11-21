@@ -3824,6 +3824,7 @@ export default function ChatView(props: ChatViewProps) {
             {isWorkspaceFileDragActive ? <WorkspaceFileDropOverlay /> : null}
             <ChatBannerLane
               environmentId={activeThread.environmentId}
+              projectId={activeThread.projectId}
               providerStatus={visibleProviderStatus}
               providerStatusDismissalKey={providerStatusDismissalKey}
               onOpenProviderSetup={openProviderSetupStable}
