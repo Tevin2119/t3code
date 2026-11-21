@@ -3,6 +3,8 @@ import * as NodePath from "@effect/platform-node/NodePath";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Layer from "effect/Layer";
 import { expect, it } from "@effect/vitest";
+import { ProviderDriverKind } from "@t3tools/contracts";
+import { createProviderVersionAdvisory } from "@t3tools/provider-core/server/maintenanceResolver";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Digest from "effect/crypto/Digest";
 import * as Deferred from "effect/Deferred";
@@ -24,6 +26,7 @@ import * as ChildProcess from "effect/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
 import * as AntigravityInstallation from "./AntigravityInstallation.ts";
+import { resolveAntigravityMaintenance } from "./Drivers/AntigravityMaintenance.ts";
 import * as ModelManifest from "./ModelManifest.ts";
 import { type AntigravityReleaseAsset } from "./antigravityRelease.ts";
 
@@ -506,6 +509,79 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("Antigravity inst
         installedVersion: "1.5.8",
       });
       expect(offline.requests.filter((url) => url.includes("storage.googleapis.com"))).toEqual([]);
+    }),
+  );
+
+  it.effect("offers a newer managed runtime as a provider update that runs the install", () =>
+    Effect.gen(function* () {
+      const native = { native: true, platform: "win32" } as const;
+      const first = yield* makeHarness({ ...native, archive: Buffer.from(serverContents) });
+      const resolve = (
+        installation: AntigravityInstallation.AntigravityInstallation["Service"],
+        binaryPath = "",
+      ) => resolveAntigravityMaintenance({ installation, binaryPath });
+      expect((yield* resolve(first.installation)).update).toBeNull();
+      yield* first.installation.start;
+      expect((yield* terminalState(first.installation)).phase).toBe("succeeded");
+
+      const next = yield* makeHarness({
+        ...native,
+        baseDir: first.baseDir,
+        nativeVersion: "1.5.8",
+        archive: Buffer.from("next runtime"),
+      });
+      expect((yield* resolve(next.installation, "/opt/agy")).update).toBeNull();
+      const capabilities = yield* resolve(next.installation);
+      expect(yield* capabilities.lookupLatestVersion!).toBe("1.5.8");
+      expect(
+        createProviderVersionAdvisory({
+          driver: ProviderDriverKind.make("antigravity"),
+          currentVersion: "1.5.7",
+          latestVersion: "1.5.8",
+          maintenanceCapabilities: capabilities,
+        }),
+      ).toMatchObject({ status: "behind_latest", canUpdate: true, updateCommand: null });
+      const progress: string[] = [];
+      yield* capabilities.update!.run!((line) => Effect.sync(() => void progress.push(line)));
+      expect(progress[0]).toBe("Downloading Google's official Antigravity runtime.");
+      expect((yield* next.installation.resolve()).version).toBe("1.5.8");
+
+      const withdrawn = yield* makeHarness({
+        ...native,
+        baseDir: first.baseDir,
+        nativeVersion: "1.5.9",
+        archive: Buffer.from("withdrawn runtime"),
+        manifest: Effect.succeed({
+          ...ModelManifest.BUNDLED_MODEL_MANIFEST,
+          compatibility: [
+            {
+              driver: "antigravity",
+              t3CodeRange: ">=0.0.42",
+              ranges: [{ range: ">=1.5.9", status: "broken" }],
+            },
+          ],
+        }),
+      });
+      expect(yield* (yield* resolve(withdrawn.installation)).lookupLatestVersion!).toBeNull();
+
+      const failing = yield* makeHarness({
+        ...native,
+        baseDir: first.baseDir,
+        nativeVersion: "1.5.9",
+        archive: Buffer.from("failing runtime"),
+        validate: () =>
+          Effect.fail(
+            new AntigravityInstallation.AntigravityInstallationError({
+              operation: "verify",
+              detail: "Fixture validation failed.",
+            }),
+          ),
+      });
+      const failed = yield* (yield* resolve(failing.installation)).update!.run!(
+        () => Effect.void,
+      ).pipe(Effect.flip);
+      expect(failed.message).toBe("Fixture validation failed.");
+      expect((yield* failing.installation.resolve()).version).toBe("1.5.8");
     }),
   );
 

@@ -129,6 +129,8 @@ interface AntigravityInstallationService {
   readonly state: Effect.Effect<ProviderInstallState>;
   readonly changes: Stream.Stream<ProviderInstallState>;
   readonly checkForUpdate: Effect.Effect<void>;
+  /** The release `start` would install, after the hourly feed check; null when unknown or withdrawn. */
+  readonly latestVersion: Effect.Effect<string | null>;
   readonly remove: (
     protectedBinaryPaths?: ReadonlyArray<string>,
   ) => Effect.Effect<void, AntigravityInstallationError>;
@@ -1242,6 +1244,15 @@ export const makeAntigravityInstallation = Effect.fn("AntigravityInstallation.ma
     state: SubscriptionRef.get(state),
     changes: SubscriptionRef.changes(state),
     checkForUpdate: refreshRelease().pipe(Effect.ignore),
+    latestVersion: refreshRelease().pipe(
+      Effect.ignore,
+      Effect.andThen(
+        Effect.gen(function* () {
+          const version = releaseAsset?.version ?? null;
+          return version !== null && (yield* isWithdrawn(version)) ? null : version;
+        }),
+      ),
+    ),
     remove,
   });
 });

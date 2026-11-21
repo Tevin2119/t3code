@@ -1365,7 +1365,9 @@ export function createProviderVersionAdvisory(input: {
     currentVersion: input.currentVersion,
     latestVersion,
     updateCommand:
-      resolveLatestProviderUpdateAction(capabilities, latestVersion)?.command ??
+      (capabilities.update?.run
+        ? null
+        : resolveLatestProviderUpdateAction(capabilities, latestVersion)?.command) ??
       capabilities.manualCommand ??
       null,
     canUpdate: capabilities.update !== null,

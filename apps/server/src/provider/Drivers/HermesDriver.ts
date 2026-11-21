@@ -36,7 +36,9 @@ import {
   type ProviderInstance,
 } from "@t3tools/provider-core/server/driver";
 import { mergeProviderInstanceEnvironment } from "@t3tools/provider-core/server/instanceEnvironment";
-import { makeManualOnlyProviderMaintenanceCapabilities } from "@t3tools/provider-core/server/maintenanceResolver";
+import { enrichProviderSnapshotWithVersionAdvisory } from "@t3tools/provider-core/server/maintenanceResolver";
+import * as ProviderLatestVersions from "@t3tools/provider-core/server/ProviderLatestVersions";
+import { makeHermesMaintenanceResolution } from "./HermesMaintenance.ts";
 import {
   haveProviderSnapshotSettingsChanged,
   makeProviderSnapshotSettingsSource,
@@ -47,10 +49,6 @@ import { withInstanceIdentity } from "@t3tools/provider-core/server/instanceIden
 const decodeHermesSettings = Schema.decodeSync(HermesSettings);
 
 const DRIVER_KIND = ProviderDriverKind.make("hermes");
-const MAINTENANCE_CAPABILITIES = makeManualOnlyProviderMaintenanceCapabilities({
-  provider: DRIVER_KIND,
-  packageName: "hermes-agent",
-});
 
 export type HermesDriverEnv =
   | Effect.Services<ReturnType<typeof makeHermesAdapter>>
@@ -61,7 +59,8 @@ export type HermesDriverEnv =
   | FileSystem.FileSystem
   | HttpClient.HttpClient
   | Path.Path
-  | ProviderEventLoggers;
+  | ProviderEventLoggers
+  | ProviderLatestVersions.ProviderLatestVersions;
 
 export const HermesDriver: ProviderDriver<HermesSettings, HermesDriverEnv, HermesUsageReaderEnv> = {
   driverKind: DRIVER_KIND,
@@ -86,6 +85,7 @@ export const HermesDriver: ProviderDriver<HermesSettings, HermesDriverEnv, Herme
     const fileSystem = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
     const eventLoggers = yield* ProviderEventLoggers;
+    const latestVersions = yield* ProviderLatestVersions.ProviderLatestVersions;
     const selfInvocation = yield* resolveSelfInvocation().pipe(
       Effect.mapError(
         (cause) =>
@@ -117,6 +117,15 @@ export const HermesDriver: ProviderDriver<HermesSettings, HermesDriverEnv, Herme
       continuationGroupKey: continuationIdentity.continuationKey,
     });
     const effectiveConfig = { ...config, enabled } satisfies HermesSettings;
+    const resolveMaintenance = yield* makeHermesMaintenanceResolution({
+      binaryPath: effectiveConfig.binaryPath || "hermes",
+      env: processEnv,
+    }).pipe(
+      Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+      Effect.provideService(FileSystem.FileSystem, fileSystem),
+      Effect.provideService(HttpClient.HttpClient, httpClient),
+      Effect.provideService(Path.Path, path),
+    );
 
     const makeRuntime: HermesAdapterOptions["makeRuntime"] = (input) =>
       makeHermesAcpRuntime({
@@ -176,13 +185,24 @@ export const HermesDriver: ProviderDriver<HermesSettings, HermesDriverEnv, Herme
 
     const snapshotSettings = yield* makeProviderSnapshotSettingsSource(effectiveConfig);
     const snapshot = yield* makeManagedServerProvider<ProviderSnapshotSettings<HermesSettings>>({
-      resolveMaintenance: () => Effect.succeed(MAINTENANCE_CAPABILITIES),
+      resolveMaintenance,
       getSettings: snapshotSettings.getSettings,
       streamSettings: snapshotSettings.streamSettings,
       haveSettingsChanged: haveProviderSnapshotSettingsChanged,
       initialSnapshot: (settings) =>
         buildInitialHermesProviderSnapshot(settings.provider).pipe(Effect.map(stampIdentity)),
       checkProvider,
+      enrichSnapshot: ({ settings, snapshot: currentSnapshot, publishSnapshot }) =>
+        resolveMaintenance().pipe(
+          Effect.flatMap((maintenanceCapabilities) =>
+            enrichProviderSnapshotWithVersionAdvisory(currentSnapshot, maintenanceCapabilities, {
+              enableProviderUpdateChecks: settings.enableProviderUpdateChecks,
+            }),
+          ),
+          Effect.provideService(HttpClient.HttpClient, httpClient),
+          Effect.provideService(ProviderLatestVersions.ProviderLatestVersions, latestVersions),
+          Effect.flatMap(publishSnapshot),
+        ),
     }).pipe(
       Effect.mapError(
         (cause) =>

@@ -32,6 +32,7 @@ import * as TextGenerators from "../textGeneration/TextGenerators.ts";
 import * as ProviderInstallationGate from "./ProviderInstallationGate.ts";
 import * as ProviderInstanceRegistry from "./ProviderInstanceRegistry.ts";
 import * as ProviderRegistry from "./ProviderRegistry.ts";
+import { AntigravityInstallationError } from "./AntigravityInstallation.ts";
 import * as ModelManifest from "./ModelManifest.ts";
 import * as ProviderMaintenanceRunner from "./providerMaintenanceRunner.ts";
 import * as ProviderLatestVersions from "@t3tools/provider-core/server/ProviderLatestVersions";
@@ -762,6 +763,67 @@ describe("providerMaintenanceRunner", () => {
       ),
     ),
   );
+
+  it.effect.each([
+    {
+      name: "success",
+      outcome: Effect.void,
+      expected: ["succeeded", "Provider updated."],
+    },
+    {
+      name: "failure",
+      outcome: Effect.fail(
+        new AntigravityInstallationError({
+          operation: "download",
+          detail: "The download failed its checksum check.",
+        }),
+      ),
+      expected: ["failed", "The download failed its checksum check."],
+    },
+  ])("runs a self-managed installer in place of a command: $name", ({ outcome, expected }) => {
+    const spawned: string[] = [];
+    return Effect.gen(function* () {
+      const { registry, updateStatesRef } = yield* makeRegistry(baseNativeCliProvider, {
+        installedVersionAfterUpdate: "1.0.0",
+      });
+      const capabilities: ProviderMaintenanceCapabilities = {
+        ...lifecycleFor(NATIVE_CLI_DRIVER),
+        latestVersion: "1.0.0",
+        update: {
+          ...lifecycleFor(NATIVE_CLI_DRIVER).update!,
+          run: (onProgress) => onProgress("Downloading the runtime.").pipe(Effect.andThen(outcome)),
+        },
+      };
+      const updater = yield* makeTestRunner({
+        ...registry,
+        getProviderMaintenanceCapabilitiesForInstance: () => Effect.succeed(capabilities),
+      });
+
+      yield* updater.updateProvider(NATIVE_CLI_DRIVER);
+
+      assert.deepStrictEqual(spawned, []);
+      assert.deepStrictEqual(
+        (yield* Ref.get(updateStatesRef)).slice(3).map((state) => [state.status, state.message]),
+        [
+          ["running", "Installing the update"],
+          ["running", "Downloading the runtime."],
+          ...(expected[0] === "succeeded" ? [["running", "Verifying the installed version"]] : []),
+          expected,
+        ],
+      );
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          layerNonWindowsPlatform,
+          layerLatestVersionHttpClient("1.0.0"),
+          layerMockSpawner((command) => {
+            spawned.push(command);
+            return {};
+          }),
+        ),
+      ),
+    );
+  });
 
   it.effect("reports the updater's error rather than a trailing hint after it", () =>
     Effect.forEach(

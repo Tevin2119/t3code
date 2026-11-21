@@ -165,7 +165,13 @@ interface AntigravityProviderOptions {
   readonly supportsTextGeneration: Effect.Effect<boolean>;
   readonly probeUsage?: Effect.Effect<ServerProviderUsageLimits>;
   readonly clearUsage?: Effect.Effect<void>;
-  readonly maintenanceCapabilities?: ProviderMaintenanceCapabilities;
+  readonly maintenance?: {
+    readonly resolve: Effect.Effect<ProviderMaintenanceCapabilities>;
+    readonly withVersionAdvisory: (
+      snapshot: ServerProvider,
+      capabilities: ProviderMaintenanceCapabilities,
+    ) => Effect.Effect<ServerProvider>;
+  };
   readonly auth?: { readonly type: string; readonly label: string };
 }
 
@@ -341,14 +347,23 @@ export const makeAntigravityProvider = Effect.fn("makeAntigravityProvider")(func
     return yield* options.stampIdentity(next.draft);
   });
 
-  const maintenanceCapabilities =
-    options.maintenanceCapabilities ??
-    makeManualOnlyProviderMaintenanceCapabilities({
-      provider: ProviderDriverKind.make("antigravity"),
-      packageName: null,
-    });
+  const maintenance = options.maintenance;
+  const resolveMaintenance =
+    maintenance?.resolve ??
+    Effect.succeed(
+      makeManualOnlyProviderMaintenanceCapabilities({
+        provider: ProviderDriverKind.make("antigravity"),
+        packageName: null,
+      }),
+    );
+  const withVersionAdvisory = (snapshot: ServerProvider) =>
+    maintenance === undefined
+      ? Effect.succeed(snapshot)
+      : maintenance.resolve.pipe(
+          Effect.flatMap((capabilities) => maintenance.withVersionAdvisory(snapshot, capabilities)),
+        );
   const managed = yield* makeManagedServerProvider({
-    resolveMaintenance: () => Effect.succeed(maintenanceCapabilities),
+    resolveMaintenance: () => resolveMaintenance,
     getSettings: Effect.succeed(settings),
     streamSettings: Stream.empty,
     haveSettingsChanged: () => false,
@@ -357,7 +372,9 @@ export const makeAntigravityProvider = Effect.fn("makeAntigravityProvider")(func
     enrichSnapshot: ({ publishSnapshot }) =>
       SubscriptionRef.changes(metadata).pipe(
         Stream.runForEach((state) =>
-          options.stampIdentity(state.draft).pipe(Effect.flatMap(publishSnapshot)),
+          options
+            .stampIdentity(state.draft)
+            .pipe(Effect.flatMap(withVersionAdvisory), Effect.flatMap(publishSnapshot)),
         ),
       ),
   });

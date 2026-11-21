@@ -28,4 +28,9 @@ export interface ProviderMaintenanceCommandAction {
   readonly lockKey: string;
   /** The provider's environment, including its PATH and custom home. */
   readonly env?: NodeJS.ProcessEnv;
+  /**
+   * Runs instead of spawning `executable`, for a runtime T3 Code installs itself. There is
+   * no terminal equivalent, so `command` is not advertised.
+   */
+  readonly run?: (onProgress: (line: string) => Effect.Effect<void>) => Effect.Effect<void, Error>;
 }

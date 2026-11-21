@@ -65,8 +65,11 @@ import {
 import { makeAcpNativeLoggerFactory } from "@t3tools/provider-acp/server/nativeLogging";
 import { ProviderDriverError } from "../Errors.ts";
 import { makeAntigravityProvider } from "../AntigravityProvider.ts";
+import { resolveAntigravityMaintenance } from "./AntigravityMaintenance.ts";
 import { makeAntigravityUsageProbe } from "../antigravityUsageLimits.ts";
 import * as ProviderEventLoggers from "@t3tools/provider-core/server/ProviderEventLoggers";
+import * as ProviderLatestVersions from "@t3tools/provider-core/server/ProviderLatestVersions";
+import { enrichProviderSnapshotWithVersionAdvisory } from "@t3tools/provider-core/server/maintenanceResolver";
 import * as ModelCatalog from "@t3tools/provider-core/server/ModelCatalog";
 import {
   defaultProviderContinuationIdentity,
@@ -108,7 +111,8 @@ export type AntigravityDriverEnv =
   | McpProviderSessions.McpProviderSessions
   | ModelCatalog.ModelCatalog
   | Path.Path
-  | ProviderEventLoggers.ProviderEventLoggers;
+  | ProviderEventLoggers.ProviderEventLoggers
+  | ProviderLatestVersions.ProviderLatestVersions;
 
 export const AntigravityDriver: ProviderDriver<
   AntigravitySettings,
@@ -138,6 +142,7 @@ export const AntigravityDriver: ProviderDriver<
     const selfInvocation = yield* resolveSelfInvocation();
     const installation = yield* AntigravityInstallation.AntigravityInstallation;
     const loggers = yield* ProviderEventLoggers.ProviderEventLoggers;
+    const latestVersions = yield* ProviderLatestVersions.ProviderLatestVersions;
     const modelCatalog = yield* ModelCatalog.ModelCatalog;
     const currentCatalog = modelCatalog.current(DRIVER);
     const continuationRequests = yield* ProviderContinuationRequests.ProviderContinuationRequests;
@@ -450,6 +455,14 @@ export const AntigravityDriver: ProviderDriver<
       probe,
       probeUsage: usage.probe,
       clearUsage: usage.clear,
+      maintenance: {
+        resolve: resolveAntigravityMaintenance({ installation, binaryPath: settings.binaryPath }),
+        withVersionAdvisory: (snapshot, capabilities) =>
+          enrichProviderSnapshotWithVersionAdvisory(snapshot, capabilities).pipe(
+            Effect.provideService(HttpClient.HttpClient, httpClient),
+            Effect.provideService(ProviderLatestVersions.ProviderLatestVersions, latestVersions),
+          ),
+      },
       auth: { type: auth.authMethod, label: antigravityAuthLabel(auth.authMethod) },
       supportsTextGeneration: isAntigravityTextGenerationAvailable(profileDirectory).pipe(
         Effect.provideService(FileSystem.FileSystem, fileSystem),
@@ -584,6 +597,8 @@ export const AntigravityDriver: ProviderDriver<
       textGeneration,
       auth: authFlow.controller,
       refreshModels,
+      // Antigravity setup re-reads the model list after an install; an update does the same.
+      afterUpdate: refreshModels().pipe(Effect.ignore({ log: true })),
     } satisfies ProviderInstance;
   }),
 };
