@@ -23,6 +23,7 @@ import {
 } from "../orchestration-v2/Adapters/ClaudeAdapterV2.ts";
 import { codexThreadRuntimeParams } from "../orchestration-v2/Adapters/CodexAdapterV2.ts";
 import * as ProviderInstanceRegistry from "./ProviderInstanceRegistry.ts";
+import * as ModelManifest from "./ModelManifest.ts";
 import type { ProviderInstance } from "@t3tools/provider-core/server/driver";
 
 const driver = ProviderDriverKind.make("codex");
@@ -56,9 +57,19 @@ const testLayer = (
       openSession,
       getCapabilities: () => Effect.die("not used"),
       planSelectionTransition: () => Effect.succeed({ type: "apply_on_next_turn" }),
+      checksVersionAtHandshake: true,
     },
   };
   return ProviderAdapterRegistry.layerFromProviderInstanceRegistry.pipe(
+    Layer.provide(
+      Layer.succeed(ModelManifest.ModelManifest, {
+        current: Effect.succeed(ModelManifest.BUNDLED_MODEL_MANIFEST),
+        refresh: Effect.succeed(ModelManifest.BUNDLED_MODEL_MANIFEST),
+        forceRefresh: Effect.succeed(ModelManifest.BUNDLED_MODEL_MANIFEST),
+        refreshOnDemand: Effect.succeed(ModelManifest.BUNDLED_MODEL_MANIFEST),
+        refreshInBackground: Effect.void,
+      }),
+    ),
     Layer.provide(
       Layer.succeed(ProviderInstanceRegistry.ProviderInstanceRegistry, {
         getInstance: (id) => Effect.succeed(id === instanceId ? instance : undefined),

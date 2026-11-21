@@ -158,14 +158,11 @@ describe("delivery environment routing", () => {
     Effect.gen(function* () {
       const { atoms, calls, registry } = yield* makeHarness();
       const input = { path: `${TASK_PATH}/control`, body: { action: "pause", by: "operator" } };
-      const changed = yield* Effect.promise(() =>
-        atoms.act.run(registry, { environmentId: WINDOWS, input }),
-      );
-      expect(changed._tag).toBe("Success");
-      const reading = yield* Effect.promise(() =>
-        atoms.fetch.run(registry, { environmentId: MAC, input: { path: TASK_PATH } }),
-      );
-      expect(reading._tag).toBe("Success");
+      yield* atoms.act.run(registry, { environmentId: WINDOWS, input });
+      yield* atoms.fetch.run(registry, {
+        environmentId: MAC,
+        input: { path: TASK_PATH },
+      });
       expect(calls).toEqual([
         { environmentId: WINDOWS, method: WS_METHODS.deliveryAct, input },
         { environmentId: MAC, method: WS_METHODS.deliveryRead, input: { path: TASK_PATH } },
@@ -185,10 +182,7 @@ describe("delivery environment routing", () => {
         })),
       ];
       for (const request of requests) {
-        const result = yield* Effect.promise(() =>
-          atoms.act.run(registry, { environmentId: WINDOWS, input: request }),
-        );
-        expect(result._tag).toBe("Success");
+        yield* atoms.act.run(registry, { environmentId: WINDOWS, input: request });
       }
       expect(calls.slice(2)).toEqual(
         requests.map((input) => ({
@@ -207,22 +201,22 @@ describe("delivery environment routing", () => {
         const { atoms, calls, registry, supervisors } = yield* makeHarness();
         yield* SubscriptionRef.set(supervisors.get(WINDOWS)!.session, Option.none());
         const input = { path: `${TASK_PATH}/control`, body: { action: "pause" } };
-        const disconnected = yield* Effect.promise(() =>
+        const disconnected = yield* Effect.exit(
           atoms.act.run(registry, { environmentId: WINDOWS, input }),
         );
         expect(disconnected._tag).toBe("Failure");
-        if (AsyncResult.isFailure(disconnected)) {
+        if (disconnected._tag === "Failure") {
           expect(Cause.squash(disconnected.cause)).toMatchObject({
             _tag: "EnvironmentRpcUnavailableError",
             environmentId: WINDOWS,
           });
         }
         supervisors.delete(WINDOWS);
-        const removed = yield* Effect.promise(() =>
+        const removed = yield* Effect.exit(
           atoms.fetch.run(registry, { environmentId: WINDOWS, input: { path: TASK_PATH } }),
         );
         expect(removed._tag).toBe("Failure");
-        if (AsyncResult.isFailure(removed)) {
+        if (removed._tag === "Failure") {
           expect(Cause.squash(removed.cause)).toMatchObject({
             _tag: "EnvironmentNotRegisteredError",
             environmentId: WINDOWS,

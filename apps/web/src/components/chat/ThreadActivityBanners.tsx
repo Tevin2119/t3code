@@ -294,8 +294,6 @@ export function backgroundWorkNowItem(
     .toSorted((left, right) => right.updatedAtMs - left.updatedAtMs)[0];
   const isCommand = (row: (typeof rows)[number]) => row.task.kind !== "subagent";
   const startedAtMs = only?.startedAtMs ?? null;
-  // A subagent opens from its own icon; the dialog only earns its place for command output.
-  const commandTasks = input.tasks.filter((task) => task.kind !== "subagent");
   return {
     id: `background-work:${input.threadId}`,
     icon: rows.every(isCommand) ? <TerminalIcon /> : <CircleDashedIcon />,
@@ -353,14 +351,13 @@ export function backgroundWorkNowItem(
             />
           ),
         )}
-        {commandTasks.length === 0 ? null : (
-          <BackgroundWorkDetails
-            environmentId={input.environmentId}
-            threadId={input.threadId}
-            tasks={commandTasks}
-            turnItems={input.turnItems}
-          />
-        )}
+        <BackgroundWorkDetails
+          environmentId={input.environmentId}
+          threadId={input.threadId}
+          tasks={input.tasks}
+          turnItems={input.turnItems}
+          onOpenThread={onOpenThread}
+        />
         <InlineButton disabled={input.stopDisabled} onClick={() => void input.onStop()}>
           {input.stopping ? <T>Stopping...</T> : <T context="verb, stops background work">Stop</T>}
         </InlineButton>
