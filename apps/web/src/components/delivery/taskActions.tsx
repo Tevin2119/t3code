@@ -3,6 +3,7 @@ import { useRef, useState } from "react";
 
 import { minutesLeft, parseDeliveryEngineHealth } from "../../lib/deliveryEngineControl";
 import type { DeliveryCard } from "../../lib/delivery";
+import { boardLaneOf } from "../../lib/boardLanes";
 import { ACTION_LABEL, LANE_TITLE, moveIntent } from "../../lib/deliveryBoard";
 
 import {
@@ -208,8 +209,8 @@ export function useTaskActions(
           <DialogPanel>
             <div className="flex flex-col gap-6 text-sm">
               <p>
-                Moving it to {LANE_TITLE[confirming.lane] ?? confirming.lane} means this step.{" "}
-                {actionHelp(confirming.action, confirming.card)}
+                Moving it to {LANE_TITLE[boardLaneOf(confirming.lane)] ?? confirming.lane} means
+                this step. {actionHelp(confirming.action, confirming.card)}
               </p>
               {problem ? (
                 <p className="text-warning" data-delivery-problem>
