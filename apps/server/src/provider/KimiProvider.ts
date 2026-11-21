@@ -11,8 +11,10 @@ import { resolveSpawnCommand } from "@t3tools/shared/shell";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
+import * as Predicate from "effect/Predicate";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
 import { KIMI_DEFAULT_MODEL_SLUG } from "./acp/KimiAcpSupport.ts";
@@ -44,9 +46,9 @@ const KIMI_PRESENTATION = {
  * value is sent only when a person chose it and the session offers it.
  */
 const KIMI_THINKING_OPTION_ID = "thinking";
-const KIMI_THINKING_LEVELS = ["on", "low", "high", "max"] as const;
+const KIMI_THINKING_LEVELS = ["low", "high", "max"] as const;
 
-const LEVEL_LABELS: Record<string, string> = { on: "On", low: "Low", high: "High", max: "Max" };
+const LEVEL_LABELS: Record<string, string> = { low: "Low", high: "High", max: "Max" };
 
 // Named EMPTY while no option was offered. It now holds the level of reasoning.
 const EMPTY_CAPABILITIES: ModelCapabilities = createModelCapabilities({
@@ -68,6 +70,7 @@ const EMPTY_CAPABILITIES: ModelCapabilities = createModelCapabilities({
 });
 
 const VERSION_PROBE_TIMEOUT_MS = 10_000;
+const MAX_CATALOG_OUTPUT_CHARS = 8 * 1024 * 1024;
 
 /**
  * Fallback catalog used before the CLI answers, or when it cannot be reached.
@@ -191,6 +194,42 @@ const runKimiCliCommand = Effect.fn("runKimiCliCommand")(function* (
   );
 });
 
+/**
+ * Run `kimi provider list --json` and return the catalog as soon as the whole document has
+ * arrived. Kimi 2.7 prints it at once and then idles for seconds before it exits, often past
+ * the probe timeout; leaving the scope stops the process. Undefined when no catalog came, such
+ * as help or error text from a failed run.
+ */
+const readKimiProviderCatalog = Effect.fn("readKimiProviderCatalog")(function* (
+  kimiSettings: KimiSettings,
+  environment: NodeJS.ProcessEnv,
+) {
+  const command = kimiSettings.binaryPath || "kimi";
+  const spawnCommand = yield* resolveSpawnCommand(command, ["provider", "list", "--json"], {
+    env: environment,
+  });
+  const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+  const child = yield* spawner.spawn(
+    ChildProcess.make(spawnCommand.command, spawnCommand.args, {
+      env: environment,
+      shell: spawnCommand.shell,
+      forceKillAfter: "1 second",
+    }),
+  );
+  const catalog = yield* child.stdout.pipe(
+    Stream.decodeText(),
+    Stream.scan(
+      () => "",
+      (text, chunk) => text + chunk,
+    ),
+    Stream.takeWhile((text) => text.length <= MAX_CATALOG_OUTPUT_CHARS),
+    Stream.map(parseKimiProviderCatalog),
+    Stream.filter(Predicate.isNotUndefined),
+    Stream.runHead,
+  );
+  return Option.getOrUndefined(catalog);
+}, Effect.scoped);
+
 function kimiModelsFromSettings(
   customModels: ReadonlyArray<CustomModelSetting>,
   builtIn: ReadonlyArray<ServerProviderModel> = KIMI_BUILT_IN_MODELS,
@@ -207,14 +246,12 @@ export const probeKimiAuthenticated = Effect.fn("probeKimiAuthenticated")(functi
   kimiSettings: KimiSettings,
   environment: NodeJS.ProcessEnv = process.env,
 ): Effect.fn.Return<boolean, never, ChildProcessSpawner.ChildProcessSpawner> {
-  const result = yield* runKimiCliCommand(
-    kimiSettings,
-    ["provider", "list", "--json"],
-    environment,
-  ).pipe(Effect.timeoutOption(AUTH_PROBE_TIMEOUT_MS), Effect.result);
+  const result = yield* readKimiProviderCatalog(kimiSettings, environment).pipe(
+    Effect.timeoutOption(AUTH_PROBE_TIMEOUT_MS),
+    Effect.result,
+  );
   if (Result.isFailure(result) || Option.isNone(result.success)) return false;
-  if (result.success.value.code !== 0) return false;
-  return parseKimiProviderCatalog(result.success.value.stdout)?.auth.status === "authenticated";
+  return result.success.value?.auth.status === "authenticated";
 });
 
 export const buildInitialKimiProviderSnapshot = Effect.fn("buildInitialKimiProviderSnapshot")(
@@ -324,19 +361,13 @@ export const checkKimiProviderStatus = Effect.fn("checkKimiProviderStatus")(func
 
   // `kimi provider list --json` reports credentials and the model catalog
   // without starting the agent.
-  const catalogResult = yield* runKimiCliCommand(
-    kimiSettings,
-    ["provider", "list", "--json"],
-    environment,
-  ).pipe(Effect.timeoutOption(AUTH_PROBE_TIMEOUT_MS), Effect.result);
-
-  // Only a clean exit is parsed: a failed invocation prints help or error text
-  // that must not be read as a model catalog or a login verdict.
+  const catalogResult = yield* readKimiProviderCatalog(kimiSettings, environment).pipe(
+    Effect.timeoutOption(AUTH_PROBE_TIMEOUT_MS),
+    Effect.result,
+  );
   const catalog =
-    Result.isSuccess(catalogResult) &&
-    Option.isSome(catalogResult.success) &&
-    catalogResult.success.value.code === 0
-      ? parseKimiProviderCatalog(catalogResult.success.value.stdout)
+    Result.isSuccess(catalogResult) && Option.isSome(catalogResult.success)
+      ? catalogResult.success.value
       : undefined;
 
   if (catalog === undefined) {

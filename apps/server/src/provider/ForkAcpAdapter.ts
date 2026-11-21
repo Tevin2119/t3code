@@ -136,7 +136,10 @@ export function makeForkAcpAdapter(
           const option = kind === "kimi" ? "thinking" : "reasoning_effort";
           const chosen = getModelSelectionStringOptionValue(input.modelSelection, option);
           const result = yield* applyAcpSessionOption(input.runtime, option, chosen);
-          if (chosen && chosen !== "harness-default" && !result.applied)
+          // Kimi 2.7 replaced its On switch with levels and always thinks, so a saved On that
+          // the session no longer offers asks for the harness default.
+          const retiredOn = kind === "kimi" && chosen === "on" && !result.offered.includes("on");
+          if (chosen && chosen !== "harness-default" && !result.applied && !retiredOn)
             return yield* new EffectAcpErrors.AcpTransportError({
               detail: "The harness did not apply the requested reasoning option.",
               cause: result,

@@ -1,6 +1,17 @@
-import { expect, it } from "@effect/vitest";
+// @effect-diagnostics nodeBuiltinImport:off
+import * as NodeFS from "node:fs";
+import * as NodeOS from "node:os";
+import * as NodePath from "node:path";
 
-import { parseKimiProviderCatalog } from "./KimiProvider.ts";
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import { KimiSettings } from "@t3tools/contracts";
+import { expect, it } from "@effect/vitest";
+import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
+
+import { parseKimiProviderCatalog, probeKimiAuthenticated } from "./KimiProvider.ts";
+
+const decodeKimiSettings = Schema.decodeSync(KimiSettings);
 
 // Captured verbatim from `kimi provider list --json` on Kimi Code CLI 0.42.0.
 const SIGNED_IN_OUTPUT = JSON.stringify({
@@ -80,3 +91,20 @@ it("skips a banner line printed before the JSON document", () => {
 
   expect(catalog?.auth.status).toBe("authenticated");
 });
+
+it.effect("reads the catalog Kimi 2.7 prints without waiting for the process to exit", () =>
+  Effect.gen(function* () {
+    // Kimi 2.7 prints the catalog at once and then idles before it exits, past the probe timeout.
+    const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "kimi-linger-"));
+    const binaryPath = NodePath.join(dir, "kimi");
+    NodeFS.writeFileSync(
+      binaryPath,
+      `#!/usr/bin/env node\nprocess.stdout.write(${JSON.stringify(SIGNED_IN_OUTPUT)});\nsetTimeout(() => {}, 600_000);\n`,
+      { mode: 0o755 },
+    );
+    const settings = decodeKimiSettings({ binaryPath });
+
+    expect(yield* probeKimiAuthenticated(settings)).toBe(true);
+    NodeFS.rmSync(dir, { recursive: true, force: true });
+  }).pipe(Effect.provide(NodeServices.layer)),
+);
