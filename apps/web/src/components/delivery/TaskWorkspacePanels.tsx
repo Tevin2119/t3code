@@ -89,14 +89,21 @@ export function TaskWorkspacePanels(props: {
   );
   const evidenceOpen = panel.isOpen;
   // A task never opened before shows its engine facts beside the conversation when the width holds
-  // task details, conversation and panel together. A panel the person closed keeps its tabs, so it
-  // stays closed.
+  // task details, conversation and panel together. That it happened is kept apart from the tabs:
+  // closing every tab empties them, and the panel must stay closed all the same.
   const roomy = useMediaQuery("(min-width: 1360px)");
-  const firstVisit = panel.surfaces.length === 0;
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- opens the task's right panel in the external panel store on a first visit
+  const [firstOpenDone, setFirstOpenDone] = useLocalStorage(
+    `t3code:task-panel-first-open:${props.owner}`,
+    false,
+    Schema.Boolean,
+  );
+  const hasTabs = panel.surfaces.length > 0;
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- opens the task's right panel in the external panel store on a first visit, and records in local storage that the task has had its panel
   useEffect(() => {
-    if (props.openFirst && firstVisit && roomy && !sheet) openTaskPanel(props.owner);
-  }, [props.openFirst, firstVisit, roomy, sheet, props.owner]);
+    if (firstOpenDone) return;
+    if (hasTabs) setFirstOpenDone(true);
+    else if (props.openFirst && roomy && !sheet) openTaskPanel(props.owner);
+  }, [props.openFirst, firstOpenDone, hasTabs, roomy, sheet, props.owner, setFirstOpenDone]);
   const maximized = panel.isOpen && panel.maximized === true;
   const [selectedThread, setSelectedThread] = useLocalStorage(
     `t3code:task-inspected-thread:${props.owner}`,

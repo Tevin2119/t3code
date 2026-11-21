@@ -5,6 +5,7 @@ import { page, userEvent } from "vite-plus/test/browser";
 import { act, render } from "../../../test/render";
 import "~/index.css";
 import { useThreadInspection } from "../chat/ThreadInspectionContext";
+import { taskPanelRef, useRightPanelStore } from "../../rightPanelStore";
 import { TaskWorkspacePanels } from "./TaskWorkspacePanels";
 
 vi.mock("../ChatView", () => ({
@@ -205,7 +206,13 @@ it("opens the right panel on a task's first visit only when asked, and not again
   await expect.element(page.getByText("Engine facts")).toBeVisible();
   await page.getByRole("button", { name: "Close evidence", exact: true }).click();
   await screen.rerender(panel("b"));
-  await expect
-    .element(page.getByRole("button", { name: "Toggle right panel", exact: true }))
-    .toHaveAttribute("aria-pressed", "false");
+  const toggle = page.getByRole("button", { name: "Toggle right panel", exact: true });
+  await expect.element(toggle).toHaveAttribute("aria-pressed", "false");
+  // Closing every tab empties the panel, which is not a first visit either.
+  await toggle.click();
+  await expect.element(page.getByText("Engine facts")).toBeVisible();
+  await act(() => useRightPanelStore.getState().closeAllSurfaces(taskPanelRef("first-visit-task")));
+  await screen.rerender(panel("c"));
+  await expect.element(toggle).toHaveAttribute("aria-pressed", "false");
+  expect(page.getByText("Engine facts").query()).toBeNull();
 });
