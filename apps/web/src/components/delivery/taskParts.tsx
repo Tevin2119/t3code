@@ -54,6 +54,8 @@ export function PriorityPill(props: { readonly priority: TaskPriority; readonly 
 const LANE_TONE: Record<string, { readonly bar: string; readonly tint: string }> = {
   draft: { bar: "bg-zinc-400", tint: "bg-zinc-500/5" },
   chat: { bar: "bg-lime-500", tint: "bg-lime-500/5" },
+  queue: { bar: "bg-sky-500", tint: "bg-sky-500/5" },
+  "in-work": { bar: "bg-blue-500", tint: "bg-blue-500/5" },
   intake: { bar: "bg-sky-500", tint: "bg-sky-500/5" },
   triage: { bar: "bg-violet-500", tint: "bg-violet-500/5" },
   "needs-decision": { bar: "bg-amber-500", tint: "bg-amber-500/8" },

@@ -60,13 +60,14 @@ import {
   COMPOSER_KIND_LABEL,
   isSendKey,
   LANE_TITLE,
+  boardMoveIntent,
   messageStateLabel,
-  moveIntent,
   PRIORITY_LABEL,
   sectionOf,
   tagsFromText,
   type ComposerKind,
 } from "../../lib/deliveryBoard";
+import { BOARD_LANES, boardLaneOf } from "../../lib/boardLanes";
 import { boardChoiceKind, type MoveBoard } from "../../lib/deliveryMove";
 import { seatsChangedForTask, harnessLabel } from "../../lib/deliverySeats";
 import { cn } from "../../lib/utils";
@@ -1257,7 +1258,7 @@ function Briefs(props: {
                     ? "this waits for it"
                     : "it waits for this"
                   : ""}{" "}
-                {LANE_TITLE[item.lane ?? ""] ?? item.state}
+                {LANE_TITLE[boardLaneOf(item.lane ?? "")] ?? item.state}
               </span>
             </button>
           </li>
@@ -1571,13 +1572,15 @@ function Info(props: {
             {task.isDraft || !task.lane ? (
               <span className="inline-flex items-center gap-1.5" data-task-lane={task.lane ?? ""}>
                 <span className={cn("size-2 rounded-full", laneTone(task.lane).bar)} />
-                {LANE_TITLE[task.lane ?? ""] ?? task.state}
+                {LANE_TITLE[boardLaneOf(task.lane ?? "")] ?? task.state}
               </span>
             ) : (
               <Select
-                value={task.lane}
+                value={boardLaneOf(task.lane)}
                 onValueChange={(value) =>
-                  value && value !== task.lane && props.onMoveTo(String(value))
+                  value &&
+                  value !== boardLaneOf(task.lane) &&
+                  props.onMoveTo(boardMoveIntent(card, String(value)).lane)
                 }
               >
                 <SelectTrigger
@@ -1591,22 +1594,24 @@ function Info(props: {
                   <SelectValue>
                     <span className="inline-flex items-center gap-1.5">
                       <span className={cn("size-2 rounded-full", laneTone(task.lane).bar)} />
-                      {LANE_TITLE[task.lane] ?? task.state}
+                      {LANE_TITLE[boardLaneOf(task.lane)] ?? task.state}
                     </span>
                   </SelectValue>
                 </SelectTrigger>
                 <SelectPopup alignItemWithTrigger={false}>
-                  {Object.entries(LANE_TITLE)
-                    .filter(([lane]) => lane !== "draft")
+                  {BOARD_LANES.filter(
+                    (item) => item.id !== "draft" && item.id !== "closed-not-done",
+                  )
+                    .map((item) => [item.id, LANE_TITLE[item.id] ?? item.id] as const)
                     .map(([lane, title]) => {
-                      const intent = moveIntent(card, lane);
+                      const intent = boardMoveIntent(card, lane).intent;
                       // What choosing it does, or why it cannot be chosen, is said to every reader.
                       const said =
                         intent.kind === "refused"
                           ? intent.why
                           : intent.kind === "action"
                             ? actionLabel(intent.action, card)
-                            : lane === task.lane
+                            : lane === boardLaneOf(task.lane)
                               ? "Here now"
                               : intent.label;
                       return (
@@ -1624,7 +1629,7 @@ function Info(props: {
                           >
                             <span className={cn("size-2 rounded-full", laneTone(lane).bar)} />
                             {title}
-                            {lane !== task.lane ? (
+                            {lane !== boardLaneOf(task.lane) ? (
                               <span className="text-3xs text-muted-foreground">
                                 {intent.kind === "refused"
                                   ? "not from here, choose to see why"
@@ -2185,7 +2190,7 @@ export function TaskWorkspace(props: {
                   className="hidden [@media(min-width:640px)_and_(min-height:600px)]:inline-flex"
                   data-task-state={task.state}
                 >
-                  {LANE_TITLE[task.lane ?? ""] ?? task.state}
+                  {LANE_TITLE[boardLaneOf(task.lane ?? "")] ?? task.state}
                   {task.held ? ", paused" : ""}
                 </Badge>
                 <span

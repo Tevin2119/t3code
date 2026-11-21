@@ -1024,6 +1024,19 @@ export interface DeliveryCard {
   readonly actions: ReadonlyArray<string>;
   /** Put first by a person for the next free slots (Do next). */
   readonly first: boolean;
+  /** The engine's order among tasks, lowest first. The queue lane is ordered by it. */
+  readonly rank: number;
+  /** The engine's own answer to whether this task waits on a person (a question, a plan, a sign-off). */
+  readonly waitsOnPerson: boolean;
+  /** Whether an approval of this task still stands. */
+  readonly approveStands: boolean;
+  /**
+   * Where a queued task stands for a free slot and who holds the slots, as the engine reports it.
+   * Null until the engine sends it (proposed in BOARD-REVAMP-UI-SPEC section 9, build slice 1).
+   */
+  readonly queue: DeliveryQueueFact | null;
+  /** Rework rounds so far, when the engine counts them; null when it does not send a count. */
+  readonly reworkRounds: number | null;
   /** The board triage thinks it belongs on; it waits on a person to move it. Older engines omit it. */
   readonly suggestedBoard?: SuggestedBoard | null;
 }
@@ -1055,6 +1068,21 @@ const parsePublication = (value: unknown): DeliveryPublication | null => {
     attempts: count(value.attempts),
   };
 };
+
+/** A queued card's place in line and the tasks that hold the slots. Nothing here is estimated. */
+export interface DeliveryQueueFact {
+  /** 1 is next. */
+  readonly position: number;
+  /** How many tasks may run at once. */
+  readonly cap: number;
+  /** How many of those slots are in use. */
+  readonly busy: number;
+  readonly holders: ReadonlyArray<{
+    readonly id: string;
+    readonly number: number;
+    readonly title: string;
+  }>;
+}
 
 export interface DeliveryLane {
   readonly lane: string;
@@ -1098,6 +1126,24 @@ export interface DeliveryBoard {
   }>;
   readonly note: string | null;
 }
+
+const parseQueueFact = (value: unknown): DeliveryQueueFact | null => {
+  if (!isRecord(value)) return null;
+  const { position, cap, busy } = value;
+  if (typeof position !== "number" || typeof cap !== "number" || typeof busy !== "number") {
+    return null;
+  }
+  return {
+    position,
+    cap,
+    busy,
+    holders: records(value.holders).map((holder) => ({
+      id: text(holder.id),
+      number: count(holder.number),
+      title: text(holder.title),
+    })),
+  };
+};
 
 export const parseCard = (value: Json): DeliveryCard => {
   const run = isRecord(value.run) ? value.run : null;
@@ -1206,6 +1252,14 @@ export const parseCard = (value: Json): DeliveryCard => {
     mergePermission: parseMergePermission(value.mergePermission),
     actions: strings(value.actions),
     first: flag(value.first),
+    rank: typeof value.rank === "number" && Number.isFinite(value.rank) ? value.rank : 0,
+    waitsOnPerson: flag(value.waitsOnPerson),
+    approveStands: flag(value.approveStands),
+    queue: parseQueueFact(value.queue),
+    reworkRounds:
+      typeof value.reworkRounds === "number" && Number.isFinite(value.reworkRounds)
+        ? value.reworkRounds
+        : null,
     suggestedBoard: parseSuggestedBoard(value.suggestedBoard),
   };
 };
