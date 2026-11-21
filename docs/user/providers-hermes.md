@@ -34,8 +34,12 @@ to run unattended.
 When Hermes runs from the git checkout its installer creates, provider updates run
 `hermes update --yes`, which pulls the checkout and reinstalls its dependencies.
 Hermes can refuse while its other processes, such as gateways, are running; the
-update then fails with Hermes' own message. Any other install shows
-`hermes update` for you to run yourself.
+update then fails with Hermes' own message.
+
+The one-click update is offered only when the checkout has no commits its upstream
+lacks, because `hermes update` resets a diverged branch to its remote and would
+discard them. A checkout with local commits, one T3 Code cannot check with git,
+and any other install show `hermes update` for you to run yourself.
 
 ## Models and threads
 

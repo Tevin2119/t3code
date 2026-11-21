@@ -11,6 +11,9 @@ import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientResponse from "effect/http/HttpClientResponse";
+import * as Sink from "effect/Sink";
+import * as Stream from "effect/Stream";
+import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
 import { hermesMaintenance, makeHermesMaintenanceResolution } from "./HermesMaintenance.ts";
 
@@ -20,18 +23,50 @@ const layerRelease = (respond: () => Response) =>
     HttpClient.make((request) => Effect.succeed(HttpClientResponse.fromWeb(request, respond()))),
   );
 
+/** Answers `git rev-list --count @{upstream}..HEAD` and records what was asked. */
+const layerGit = (result: { readonly stdout: string; readonly code: number }, calls: string[][]) =>
+  Layer.succeed(
+    ChildProcessSpawner.ChildProcessSpawner,
+    ChildProcessSpawner.make((command) => {
+      const git = command as unknown as { command: string; args: ReadonlyArray<string> };
+      calls.push([git.command, ...git.args]);
+      return Effect.succeed(
+        ChildProcessSpawner.makeHandle({
+          pid: ChildProcessSpawner.ProcessId(1),
+          exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(result.code)),
+          isRunning: Effect.succeed(false),
+          kill: () => Effect.void,
+          unref: Effect.succeed(Effect.void),
+          stdin: Sink.drain,
+          stdout: Stream.make(new TextEncoder().encode(result.stdout)),
+          stderr: Stream.empty,
+          all: Stream.empty,
+          getInputFd: () => Sink.drain,
+          getOutputFd: () => Stream.empty,
+        }),
+      );
+    }),
+  );
+
+const makeCheckout = Effect.fn("HermesMaintenance.test.makeCheckout")(function* () {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const home = yield* fs.makeTempDirectoryScoped();
+  const checkout = path.join(home, "hermes-agent");
+  yield* fs.makeDirectory(path.join(checkout, ".git"), { recursive: true });
+  yield* fs.writeFileString(path.join(checkout, "pyproject.toml"), "");
+  return { home, checkout };
+});
+
 it.layer(NodeServices.layer)("HermesMaintenance", (it) => {
   it.effect.each([
     { name: "the checkout's own venv", launcher: ["hermes-agent", "venv", "bin", "hermes"] },
     { name: "a launcher beside the checkout", launcher: ["bin", "hermes"] },
-  ])("updates a git checkout launched from $name with hermes update", ({ launcher }) =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
+  ])("updates a git checkout launched from $name with hermes update", ({ launcher }) => {
+    const calls: string[][] = [];
+    return Effect.gen(function* () {
       const path = yield* Path.Path;
-      const home = yield* fs.makeTempDirectoryScoped();
-      const checkout = path.join(home, "hermes-agent");
-      yield* fs.makeDirectory(path.join(checkout, ".git"), { recursive: true });
-      yield* fs.writeFileString(path.join(checkout, "pyproject.toml"), "");
+      const { home, checkout } = yield* makeCheckout();
       const commandPath = path.join(home, ...launcher);
       const env = { HERMES_HOME: home };
 
@@ -50,7 +85,31 @@ it.layer(NodeServices.layer)("HermesMaintenance", (it) => {
         env,
       });
       expect(capabilities.packageName).toBeNull();
-    }),
+      expect(calls).toEqual([["git", "-C", checkout, "rev-list", "--count", "@{upstream}..HEAD"]]);
+    }).pipe(Effect.provide(layerGit({ stdout: "0\n", code: 0 }, calls)));
+  });
+
+  it.effect.each([
+    { name: "has commits its upstream lacks", git: { stdout: "2\n", code: 0 } },
+    { name: "has no upstream to compare", git: { stdout: "", code: 128 } },
+    { name: "gets an answer that is not a count", git: { stdout: "fatal\n", code: 0 } },
+  ])("keeps a checkout manual when it $name", ({ git }) =>
+    Effect.gen(function* () {
+      const path = yield* Path.Path;
+      const { home } = yield* makeCheckout();
+      const commandPath = path.join(home, "bin", "hermes");
+
+      const capabilities = yield* hermesMaintenance.resolve({
+        binaryPath: "hermes",
+        resolvedCommandPath: commandPath,
+        realCommandPath: commandPath,
+        env: {},
+        platform: "linux",
+      });
+
+      expect(capabilities.update).toBeNull();
+      expect(capabilities.manualCommand).toBe("hermes update");
+    }).pipe(Effect.provide(layerGit(git, []))),
   );
 
   it.effect("leaves an install without a checkout manual and names the command", () =>
