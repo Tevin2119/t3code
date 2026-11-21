@@ -1,6 +1,7 @@
 import type {
   EnvironmentId,
   OrchestrationV2ProviderFailureClass,
+  ProjectId,
   ProviderInstanceId,
   ServerProvider,
   ThreadId,
@@ -18,6 +19,7 @@ import { dismissThreadErrorBannerForSession, ThreadErrorBanner } from "./ThreadE
  */
 export function ChatBannerLane(props: {
   environmentId: EnvironmentId;
+  projectId: ProjectId | null;
   providerStatus: ServerProvider | null;
   providerStatusDismissalKey: string | null;
   onOpenProviderSetup: (instanceId: ProviderInstanceId) => void;
@@ -45,6 +47,7 @@ export function ChatBannerLane(props: {
     <div className="chat-banner-lane pointer-events-none absolute top-0 z-30 flex flex-col">
       <ProviderStatusBanner
         environmentId={props.environmentId}
+        projectId={props.projectId}
         status={providerStatus}
         onDismiss={() => dismissProviderStatusBannerForSession(providerStatusDismissalKey)}
         onOpenProviderSetup={onOpenProviderSetup}

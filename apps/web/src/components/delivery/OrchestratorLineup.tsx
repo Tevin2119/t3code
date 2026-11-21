@@ -4,6 +4,7 @@ import {
   type EnvironmentId,
   type ModelSelection,
   type ProviderDriverKind,
+  type ProjectId,
   type ProviderInstanceId,
   type ThreadId,
 } from "@t3tools/contracts";
@@ -69,6 +70,8 @@ function valueOfLineup(
  */
 export function OrchestratorLineup(props: {
   readonly environmentId: EnvironmentId;
+  /** The project a thread that fixes a provider problem opens in. */
+  readonly projectId?: ProjectId | null | undefined;
   readonly threadId: ThreadId;
   readonly driver: ProviderDriverKind | null;
   readonly entries: ReadonlyArray<ProviderInstanceEntry>;
@@ -217,6 +220,7 @@ export function OrchestratorLineup(props: {
       ) : null}
       <OrchestratorParticipants
         environmentId={props.environmentId}
+        projectId={props.projectId ?? null}
         team={team}
         value={value}
         onChange={(patch) => change(undefined, { ...value, ...patch })}

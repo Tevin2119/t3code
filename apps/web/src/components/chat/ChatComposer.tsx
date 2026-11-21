@@ -2712,6 +2712,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
               panel: (
                 <OrchestratorChatSetup
                   environmentId={environmentId}
+                  projectId={activeProjectId}
                   threadId={activeThreadId}
                   lead={selectedModelSelection}
                   entries={providerInstanceEntries}
@@ -2743,6 +2744,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                 panel: (
                   <OrchestratorLineup
                     environmentId={environmentId}
+                    projectId={activeProjectId}
                     threadId={activeThreadId}
                     driver={selectedProvider}
                     entries={providerInstanceEntries}

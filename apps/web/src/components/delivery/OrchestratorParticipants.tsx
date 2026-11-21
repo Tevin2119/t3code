@@ -1,4 +1,9 @@
-import type { EnvironmentId, ModelSelection, ProviderInstanceId } from "@t3tools/contracts";
+import type {
+  EnvironmentId,
+  ModelSelection,
+  ProjectId,
+  ProviderInstanceId,
+} from "@t3tools/contracts";
 import { DELIVERY_HARNESS_BY_DRIVER } from "@t3tools/contracts";
 import { createModelSelection } from "@t3tools/shared/model";
 import { CrownIcon, MessageCircleIcon, PlusIcon, RepeatIcon, Undo2Icon, XIcon } from "lucide-react";
@@ -15,6 +20,7 @@ import type {
 } from "../../lib/orchestratorChat";
 import { NO_PROVIDER_MODEL_SELECTION, type ProviderInstanceEntry } from "../../providerInstances";
 import { resolveModelPickerSelectedModel } from "../chat/ModelPickerContent";
+import { ProviderProblemFixButton } from "../chat/ProviderProblemFixButton";
 import { TraitsPicker } from "../chat/TraitsPicker";
 import { ProviderModelPicker } from "../chat/ProviderModelPicker";
 import { getTriggerDisplayModelName, type ModelEsque } from "../chat/providerIconUtils";
@@ -50,6 +56,8 @@ export interface OrchestratorLineupValue {
 /** The participants of a team conversation, with its critique round and access. */
 export function OrchestratorParticipants(props: {
   readonly environmentId: EnvironmentId;
+  /** The project a thread that fixes a provider problem opens in. */
+  readonly projectId: ProjectId | null;
   readonly team: DeliveryTeam | null;
   readonly value: OrchestratorLineupValue;
   readonly onChange: (patch: OrchestratorLineupValue) => void;
@@ -384,7 +392,16 @@ export function OrchestratorParticipants(props: {
                 ) : null}
               </div>
               {row.included && row.problem ? (
-                <p className="text-xs text-warning">{row.problem}</p>
+                <div className="flex items-start gap-2">
+                  <p className="min-w-0 flex-1 text-xs text-warning">{row.problem}</p>
+                  {row.providerProblem ? (
+                    <ProviderProblemFixButton
+                      environmentId={props.environmentId}
+                      projectId={props.projectId}
+                      problem={row.providerProblem}
+                    />
+                  ) : null}
+                </div>
               ) : null}
             </div>
           );
