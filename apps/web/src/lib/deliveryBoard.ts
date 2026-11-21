@@ -4,6 +4,7 @@
  * sent. Where a card may go is the engine's to decide; `moveIntent` says
  * what a move would come to, for the drag, the column choice and the step.
  */
+import { boardLaneOf, engineLanesOf } from "./boardLanes";
 import { parseBoard, type DeliveryCard, type DeliveryLane, type TaskPriority } from "./delivery";
 
 export interface DeliveryBoardSearch {
@@ -107,13 +108,17 @@ export const hasFilters = (filters: BoardFilters): boolean =>
  * the task of that number; words are looked for in the title, the tags, the
  * owner, the team and the id, and all of them have to be found.
  */
+/** The lanes a filter chose, as the board's: a choice kept from before the 11 lanes still counts. */
+const chosenLanes = (filters: BoardFilters): ReadonlySet<string> =>
+  new Set(filters.lanes.map(boardLaneOf));
+
 export function matchesCard(card: DeliveryCard, filters: BoardFilters): boolean {
   if (filters.priority && card.priority !== filters.priority) return false;
   if (filters.team && card.team !== filters.team) return false;
   if (filters.tags.length > 0 && !filters.tags.some((tag) => card.tags.includes(tag))) return false;
   if (filters.owner && card.owner.toLowerCase() !== filters.owner.toLowerCase()) return false;
   if (filters.waiting && card.waitingOn !== "person") return false;
-  if (filters.lanes.length > 0 && !filters.lanes.includes(card.lane)) return false;
+  if (filters.lanes.length > 0 && !chosenLanes(filters).has(boardLaneOf(card.lane))) return false;
   const q = filters.q.trim().toLowerCase();
   if (!q) return true;
   const number = /^#?(\d+)$/.exec(q)?.[1];
@@ -145,8 +150,9 @@ export function filterLanes(
 ): ReadonlyArray<DeliveryLane> {
   if (!hasFilters(filters)) return lanes;
   // Columns that were not chosen are not shown at all.
+  const chosen = chosenLanes(filters);
   const shown =
-    filters.lanes.length > 0 ? lanes.filter((lane) => filters.lanes.includes(lane.lane)) : lanes;
+    filters.lanes.length > 0 ? lanes.filter((lane) => chosen.has(boardLaneOf(lane.lane))) : lanes;
   return shown.map((lane) => ({
     ...lane,
     cards: lane.cards.filter((card) => matchesCard(card, filters)),
@@ -509,6 +515,9 @@ export const LANE_TITLE: Readonly<Record<string, string>> = {
   intake: "Intake",
   triage: "Triage",
   "needs-decision": "Waiting on you",
+  queue: "Queue",
+  "in-work": "In work",
+  "closed-not-done": "Closed, not done",
   ready: "Ready",
   planning: "Planning",
   implementation: "Building",
@@ -812,4 +821,35 @@ export function moveIntent(card: MovableCard, lane: string): MoveIntent {
     kind: "refused",
     why: `The engine puts a card in ${title(lane)} when its work reaches that stage. A card can be paused, resumed where it stood, sent to triage again, or decided.`,
   };
+}
+
+/**
+ * What moving a card to a board lane comes to. Each engine lane it holds is tried in turn with
+ * `moveIntent`, from the card's own actions; the first not refused is the one a move is sent to.
+ */
+/**
+ * The engine lane a drop comes to. Dropped on a lane, the engine lane its move is asked of.
+ * Dropped on a card of the same board lane, it reorders the dragged card's own engine lane: a
+ * queued card dropped on a card of the lane's other source is a reorder, not a move to it.
+ * Dropped on a card of another board lane, that board lane's own move is asked of.
+ */
+export function dropTargetLane(card: MovableCard, lane: string, before: string | null): string {
+  if (!before) return boardMoveIntent(card, lane).lane;
+  return boardLaneOf(lane) === boardLaneOf(card.lane)
+    ? card.lane
+    : boardMoveIntent(card, boardLaneOf(lane)).lane;
+}
+
+export function boardMoveIntent(
+  card: MovableCard,
+  lane: string,
+): { readonly lane: string; readonly intent: MoveIntent } {
+  if (boardLaneOf(card.lane) === lane) {
+    return { lane: card.lane, intent: moveIntent(card, card.lane) };
+  }
+  const tries = engineLanesOf(lane).map((engine) => ({
+    lane: engine,
+    intent: moveIntent(card, engine),
+  }));
+  return tries.find((attempt) => attempt.intent.kind !== "refused") ?? tries[0]!;
 }

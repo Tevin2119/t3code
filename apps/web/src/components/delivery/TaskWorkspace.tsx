@@ -7,8 +7,12 @@ import {
   useDeliveryReplyDrafts,
 } from "../../state/deliveryReplyDrafts";
 import { TaskWorkspacePanels } from "./TaskWorkspacePanels";
+import { TaskConversation } from "./TaskConversation";
+import { TaskFacts } from "./TaskFacts";
+import { useTaskConversation } from "./useTaskConversation";
 import { fullAutoAttribution } from "../../lib/delivery";
-import { EnvironmentId, ThreadId } from "@t3tools/contracts";
+import { EnvironmentId, ThreadId, type ScopedThreadRef } from "@t3tools/contracts";
+import { taskPanelRef, useRightPanelStore } from "../../rightPanelStore";
 import { SharedTaskAllocation } from "./SharedBoard";
 import {
   ArrowLeftIcon,
@@ -60,13 +64,14 @@ import {
   COMPOSER_KIND_LABEL,
   isSendKey,
   LANE_TITLE,
+  boardMoveIntent,
   messageStateLabel,
-  moveIntent,
   PRIORITY_LABEL,
   sectionOf,
   tagsFromText,
   type ComposerKind,
 } from "../../lib/deliveryBoard";
+import { BOARD_LANES, boardLaneOf } from "../../lib/boardLanes";
 import { boardChoiceKind, type MoveBoard } from "../../lib/deliveryMove";
 import { seatsChangedForTask, harnessLabel } from "../../lib/deliverySeats";
 import { cn } from "../../lib/utils";
@@ -102,13 +107,22 @@ import {
   useFileIntake,
   useTaskUploads,
 } from "./taskFiles";
-import { Age, Avatar, laneTone, PriorityPill, QaVotes, TagList, WaitingOn } from "./taskParts";
+import {
+  Age,
+  Avatar,
+  laneTone,
+  PriorityPill,
+  PublicationRows,
+  QaVotes,
+  Row,
+  TagList,
+  WaitingOn,
+} from "./taskParts";
 import { TaskDisclosure } from "./TaskDisclosure";
 import { relatedTaskGroups } from "./relatedTaskGroups";
 import { TaskDeploymentsPanel } from "./TaskDeploymentStatus";
 import { MergePermissionControls } from "./MergePermissionControls";
 import { BoardDelivery } from "./BoardDelivery";
-import { TaskTeamActivity } from "./TaskTeamActivity";
 
 const EVENT_ICON: Record<string, typeof CircleDotIcon> = {
   pass: CircleCheckIcon,
@@ -1257,7 +1271,7 @@ function Briefs(props: {
                     ? "this waits for it"
                     : "it waits for this"
                   : ""}{" "}
-                {LANE_TITLE[item.lane ?? ""] ?? item.state}
+                {LANE_TITLE[boardLaneOf(item.lane ?? "")] ?? item.state}
               </span>
             </button>
           </li>
@@ -1451,15 +1465,6 @@ function Details(props: {
   );
 }
 
-function Row(props: { readonly label: string; readonly children: React.ReactNode }) {
-  return (
-    <div className="flex items-start justify-between gap-3 text-xs">
-      <span className="shrink-0 text-muted-foreground">{props.label}</span>
-      <span className="min-w-0 text-right break-words">{props.children}</span>
-    </div>
-  );
-}
-
 function Info(props: {
   readonly environmentId: EnvironmentId | null;
   readonly from: "Board" | "Orchestrator";
@@ -1571,13 +1576,15 @@ function Info(props: {
             {task.isDraft || !task.lane ? (
               <span className="inline-flex items-center gap-1.5" data-task-lane={task.lane ?? ""}>
                 <span className={cn("size-2 rounded-full", laneTone(task.lane).bar)} />
-                {LANE_TITLE[task.lane ?? ""] ?? task.state}
+                {LANE_TITLE[boardLaneOf(task.lane ?? "")] ?? task.state}
               </span>
             ) : (
               <Select
-                value={task.lane}
+                value={boardLaneOf(task.lane)}
                 onValueChange={(value) =>
-                  value && value !== task.lane && props.onMoveTo(String(value))
+                  value &&
+                  value !== boardLaneOf(task.lane) &&
+                  props.onMoveTo(boardMoveIntent(card, String(value)).lane)
                 }
               >
                 <SelectTrigger
@@ -1591,22 +1598,24 @@ function Info(props: {
                   <SelectValue>
                     <span className="inline-flex items-center gap-1.5">
                       <span className={cn("size-2 rounded-full", laneTone(task.lane).bar)} />
-                      {LANE_TITLE[task.lane] ?? task.state}
+                      {LANE_TITLE[boardLaneOf(task.lane)] ?? task.state}
                     </span>
                   </SelectValue>
                 </SelectTrigger>
                 <SelectPopup alignItemWithTrigger={false}>
-                  {Object.entries(LANE_TITLE)
-                    .filter(([lane]) => lane !== "draft")
+                  {BOARD_LANES.filter(
+                    (item) => item.id !== "draft" && item.id !== "closed-not-done",
+                  )
+                    .map((item) => [item.id, LANE_TITLE[item.id] ?? item.id] as const)
                     .map(([lane, title]) => {
-                      const intent = moveIntent(card, lane);
+                      const intent = boardMoveIntent(card, lane).intent;
                       // What choosing it does, or why it cannot be chosen, is said to every reader.
                       const said =
                         intent.kind === "refused"
                           ? intent.why
                           : intent.kind === "action"
                             ? actionLabel(intent.action, card)
-                            : lane === task.lane
+                            : lane === boardLaneOf(task.lane)
                               ? "Here now"
                               : intent.label;
                       return (
@@ -1624,7 +1633,7 @@ function Info(props: {
                           >
                             <span className={cn("size-2 rounded-full", laneTone(lane).bar)} />
                             {title}
-                            {lane !== task.lane ? (
+                            {lane !== boardLaneOf(task.lane) ? (
                               <span className="text-3xs text-muted-foreground">
                                 {intent.kind === "refused"
                                   ? "not from here, choose to see why"
@@ -2018,74 +2027,6 @@ function Info(props: {
   );
 }
 
-/**
- * What became of the approved change, told apart: awaiting your decision, approved and not
- * published, a pull request open, merged, or a failed attempt with its reason. Approval is never
- * shown as publication, nor publication as a merge.
- */
-function PublicationRows(props: { readonly task: TaskView }) {
-  const { task } = props;
-  const publication = task.publications.at(-1) ?? null;
-  const url = publication?.pullRequest?.url ?? null;
-  const external = url !== null && /^https?:\/\//.test(url);
-  const said =
-    publication === null
-      ? task.state === "approved"
-        ? task.publishing.enabled
-          ? `Approved, not published yet${task.publishing.blockers.length ? `: ${task.publishing.blockers.join("; ")}` : "."}`
-          : `Approved, not published. ${task.publishing.why ?? ""}`
-        : task.lane === "human-review"
-          ? `None yet. Approving records acceptance${task.publishing.enabled ? "; then the approved commit is pushed and one pull request opened" : `. ${task.publishing.why ?? ""}`}. Nothing is merged.`
-          : task.publishing.enabled
-            ? "None yet. One is opened when a person approves the tested commit."
-            : `None. ${task.publishing.why ?? ""}`
-      : publication.state === "failed"
-        ? `Publishing failed (attempt ${publication.attempts}): ${publication.error ?? "no reason given"}. Nothing was merged.`
-        : publication.state === "merged"
-          ? "Merged on the repository host."
-          : publication.state === "closed"
-            ? "Closed on the repository host without a merge."
-            : publication.state === "pr-open"
-              ? "Open for review. Merging is done on the repository host, not by the team."
-              : `${publication.state}.`;
-  return (
-    <>
-      <Row label="Pull request">
-        <span
-          className="flex flex-col items-end gap-0.5 text-right"
-          data-task-related-pr={publication?.state ?? "none"}
-        >
-          {url ? (
-            external ? (
-              <a
-                href={url}
-                target="_blank"
-                rel="noreferrer"
-                className="text-primary underline-offset-2 hover:underline"
-                data-task-related-pr-link
-              >
-                #{publication?.pullRequest?.number} on the repository host
-              </a>
-            ) : (
-              <span className="font-mono text-3xs" data-task-related-pr-link>
-                {url} (stand-in host)
-              </span>
-            )
-          ) : null}
-          <span>{said}</span>
-        </span>
-      </Row>
-      {publication ? (
-        <Row label="Branch">
-          <span className="font-mono text-3xs break-all" data-task-related-branch>
-            {publication.branch} · {publication.commit.slice(0, 10)}
-          </span>
-        </Row>
-      ) : null}
-    </>
-  );
-}
-
 /** The value of the board choice for a task on no board. */
 const NO_BOARD = "__no_board__";
 
@@ -2124,6 +2065,18 @@ export function TaskWorkspace(props: {
   const [createProblem, setCreateProblem] = useState<string | null>(null);
   const [allocatingTask, setAllocatingTask] = useState<string | null>(null);
   const wide = useMediaQuery("(min-width: 640px) and (min-height: 600px)");
+  const conversation = useTaskConversation(task);
+  // A thread opened from a panel appears in the centre, so a panel that covers it, or fills the
+  // width, gives way. The right panel stays on the task otherwise.
+  const openInCentre = (thread: ScopedThreadRef) => {
+    conversation.open(thread);
+    const panel = taskPanelRef(JSON.stringify([props.environmentId, props.taskId]));
+    useRightPanelStore.getState().setMaximized(panel, false);
+    if (detailsSheet) {
+      useRightPanelStore.getState().close(panel);
+      setDetailsOpen(false);
+    }
+  };
 
   // Opened and looked at, what the team said is read.
   const unread = task?.card.unread ?? 0;
@@ -2158,7 +2111,14 @@ export function TaskWorkspace(props: {
     <SidebarInset className="isolate h-dvh min-h-0 overflow-hidden overscroll-y-none">
       <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-task-workspace={props.taskId}>
         <WorkspacePageHeader electron={isElectron} className="h-auto">
-          <div className="flex min-w-0 flex-1 items-center gap-1 py-1 [@media(min-width:640px)_and_(min-height:600px)]:flex-wrap [@media(min-width:640px)_and_(min-height:600px)]:gap-2 [@media(min-width:640px)_and_(min-height:600px)]:py-2">
+          <div
+            className={cn(
+              "flex min-w-0 flex-1 items-center gap-1 py-1 [@media(min-width:640px)_and_(min-height:600px)]:gap-2 [@media(min-width:640px)_and_(min-height:600px)]:py-2",
+              // With the thread view below, one row: the title gives way so the controls it draws stay clear.
+              conversation.state.kind !== "open" &&
+                "[@media(min-width:640px)_and_(min-height:600px)]:flex-wrap",
+            )}
+          >
             <Button
               size="xs"
               variant="ghost"
@@ -2175,7 +2135,13 @@ export function TaskWorkspace(props: {
                 <span className="shrink-0 font-mono text-xs text-muted-foreground" data-task-number>
                   #{task.number}
                 </span>
-                <h1 className="min-w-0 flex-1 truncate text-sm font-medium [@media(min-width:640px)_and_(min-height:600px)]:flex-none">
+                <h1
+                  className={cn(
+                    "min-w-0 flex-1 truncate text-sm font-medium",
+                    conversation.state.kind !== "open" &&
+                      "[@media(min-width:640px)_and_(min-height:600px)]:flex-none",
+                  )}
+                >
                   {task.title}
                 </h1>
                 <PriorityPill priority={task.priority} by={task.priorityBy} />
@@ -2185,7 +2151,7 @@ export function TaskWorkspace(props: {
                   className="hidden [@media(min-width:640px)_and_(min-height:600px)]:inline-flex"
                   data-task-state={task.state}
                 >
-                  {LANE_TITLE[task.lane ?? ""] ?? task.state}
+                  {LANE_TITLE[boardLaneOf(task.lane ?? "")] ?? task.state}
                   {task.held ? ", paused" : ""}
                 </Badge>
                 <span
@@ -2198,7 +2164,13 @@ export function TaskWorkspace(props: {
                 </span>
               </>
             ) : null}
-            <div className="ml-auto flex shrink-0 items-center gap-1">
+            <div
+              className={cn(
+                "ml-auto flex shrink-0 items-center gap-1",
+                // The thread view in the centre draws its own controls over the top right corner.
+                conversation.state.kind === "open" && "pe-32",
+              )}
+            >
               {task?.workflow === "chat" && task.state === "chat" ? (
                 <span className="hidden [@media(min-width:640px)_and_(min-height:600px)]:inline-flex">
                   <Button
@@ -2324,7 +2296,8 @@ export function TaskWorkspace(props: {
               }
               detailsOpen={detailsOpen}
               onDetailsOpenChange={setDetailsOpen}
-              navigation={<TaskTeamActivity environmentId={props.environmentId} task={task} />}
+              onOpenThread={openInCentre}
+              openFirst
               details={
                 <Details
                   key={task.id}
@@ -2336,34 +2309,53 @@ export function TaskWorkspace(props: {
                 />
               }
               renderConversation={(showDetails) => (
-                <Communications
+                <TaskConversation
                   key={task.id}
-                  environmentId={props.environmentId}
                   task={task}
-                  onChanged={read.refresh}
-                  onShow={(section) => {
-                    showDetails();
-                    setBriefOpen(true);
-                    requestAnimationFrame(() =>
-                      document
-                        .querySelector(`[data-task-section="${section}"]`)
-                        ?.scrollIntoView({ block: "start", behavior: "smooth" }),
-                    );
-                  }}
+                  state={conversation.state}
+                  seat={conversation.seat}
+                  seatName={conversation.seatName}
+                  onOpenThread={openInCentre}
+                  onBackToTask={conversation.backToTask}
+                  log={
+                    <Communications
+                      key={task.id}
+                      environmentId={props.environmentId}
+                      task={task}
+                      onChanged={read.refresh}
+                      onShow={(section) => {
+                        showDetails();
+                        setBriefOpen(true);
+                        requestAnimationFrame(() =>
+                          document
+                            .querySelector(`[data-task-section="${section}"]`)
+                            ?.scrollIntoView({ block: "start", behavior: "smooth" }),
+                        );
+                      }}
+                    />
+                  }
                 />
               )}
               deployments={<TaskDeploymentsPanel card={task.card} stale={stale || !!read.error} />}
               evidence={
-                <Info
-                  key={task.id}
-                  environmentId={props.environmentId}
-                  from={props.from}
-                  task={task}
-                  onChanged={read.refresh}
-                  stale={stale || !!read.error}
-                  onMoveTo={(lane) => actions.moveTo(task.card, lane, null)}
-                  busy={actions.busy}
-                />
+                <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+                  <TaskFacts
+                    environmentId={props.environmentId}
+                    task={task}
+                    stale={stale || !!read.error}
+                    conversations={{ ...conversation.seats, open: openInCentre }}
+                  />
+                  <Info
+                    key={task.id}
+                    environmentId={props.environmentId}
+                    from={props.from}
+                    task={task}
+                    onChanged={read.refresh}
+                    stale={stale || !!read.error}
+                    onMoveTo={(lane) => actions.moveTo(task.card, lane, null)}
+                    busy={actions.busy}
+                  />
+                </div>
               }
             />
             <DecisionBar
