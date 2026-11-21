@@ -169,14 +169,22 @@ const makeHarness = Effect.fn("makeAntigravityDriverHarness")(function* (
 
   const layerInstallation = Layer.mock(AntigravityInstallation.AntigravityInstallation)({
     managedDirectory: root,
-    state: Effect.succeed(notInstalled),
     compatibility: (version) =>
       Effect.succeed(
-        resolveProviderCompatibility(
-          ModelManifest.BUNDLED_MODEL_MANIFEST.compatibility,
-          ProviderDriverKind.make("antigravity"),
-          version,
-        ),
+        // The fork's manifest rates every listed Antigravity build supported, so the refusal
+        // test's fixture version carries an explicit broken rating here.
+        version === "1.2.0"
+          ? {
+              status: "broken" as const,
+              message: null,
+              recommendedVersion: null,
+              recommendedRange: ">=1.5.1 <2",
+            }
+          : resolveProviderCompatibility(
+              ModelManifest.BUNDLED_MODEL_MANIFEST.compatibility,
+              ProviderDriverKind.make("antigravity"),
+              version,
+            ),
       ),
     resolve: () =>
       Effect.gen(function* () {
@@ -555,7 +563,9 @@ it.layer(layerTest)("AntigravityDriver", (it) => {
     () =>
       Effect.gen(function* () {
         const h = yield* makeHarness();
-        const old = yield* h.makeExecutable("runtime old", { agentVersion: "1.4.5" });
+        // The fork's compatibility rules still support 1.4.x, so the refusal needs a version
+        // outside every range fork-compatibility.json allows.
+        const old = yield* h.makeExecutable("runtime old", { agentVersion: "1.2.0" });
         h.controls.selected = { ...old, source: "path", version: null };
         const threadId = ThreadId.make("thread-antigravity-old-runtime");
         const modelSelection = { instanceId: h.instance.instanceId, model: "gemini-test-low" };
@@ -576,7 +586,7 @@ it.layer(layerTest)("AntigravityDriver", (it) => {
             yield* session.ensureThread({ threadId, modelSelection, runtimePolicy });
           }),
         ).pipe(Effect.flip);
-        const message = `Antigravity 1.4.5 does not work with this T3 Code release. Update the Antigravity executable at ${old.executablePath} to >=1.5.12 <2, then retry.`;
+        const message = `Antigravity 1.2.0 does not work with this T3 Code release. Update the Antigravity executable at ${old.executablePath} to >=1.5.1 <2, then retry.`;
         expect(knownProviderFailureMessage(error)).toBe(message);
         expect((yield* h.refresh().pipe(Effect.flip)).detail).toBe(message);
         const methods = (yield* h.readRequests).map((request) => request.method);
