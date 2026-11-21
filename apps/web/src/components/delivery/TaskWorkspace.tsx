@@ -2111,7 +2111,14 @@ export function TaskWorkspace(props: {
     <SidebarInset className="isolate h-dvh min-h-0 overflow-hidden overscroll-y-none">
       <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-task-workspace={props.taskId}>
         <WorkspacePageHeader electron={isElectron} className="h-auto">
-          <div className="flex min-w-0 flex-1 items-center gap-1 py-1 [@media(min-width:640px)_and_(min-height:600px)]:flex-wrap [@media(min-width:640px)_and_(min-height:600px)]:gap-2 [@media(min-width:640px)_and_(min-height:600px)]:py-2">
+          <div
+            className={cn(
+              "flex min-w-0 flex-1 items-center gap-1 py-1 [@media(min-width:640px)_and_(min-height:600px)]:gap-2 [@media(min-width:640px)_and_(min-height:600px)]:py-2",
+              // With the thread view below, one row: the title gives way so the controls it draws stay clear.
+              conversation.state.kind !== "open" &&
+                "[@media(min-width:640px)_and_(min-height:600px)]:flex-wrap",
+            )}
+          >
             <Button
               size="xs"
               variant="ghost"
@@ -2128,7 +2135,13 @@ export function TaskWorkspace(props: {
                 <span className="shrink-0 font-mono text-xs text-muted-foreground" data-task-number>
                   #{task.number}
                 </span>
-                <h1 className="min-w-0 flex-1 truncate text-sm font-medium [@media(min-width:640px)_and_(min-height:600px)]:flex-none">
+                <h1
+                  className={cn(
+                    "min-w-0 flex-1 truncate text-sm font-medium",
+                    conversation.state.kind !== "open" &&
+                      "[@media(min-width:640px)_and_(min-height:600px)]:flex-none",
+                  )}
+                >
                   {task.title}
                 </h1>
                 <PriorityPill priority={task.priority} by={task.priorityBy} />

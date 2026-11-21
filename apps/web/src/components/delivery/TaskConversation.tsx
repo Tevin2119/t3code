@@ -1,11 +1,12 @@
 import type { ScopedThreadRef } from "@t3tools/contracts";
 import { useGT } from "gt-react";
 import { ArrowLeftIcon, CornerDownRightIcon } from "lucide-react";
-import { lazy, Suspense, useState, type ReactNode } from "react";
+import { lazy, Suspense, useEffect, useState, type ReactNode } from "react";
 
 import type { TaskView } from "../../lib/delivery";
 import { queueWait, type ConversationState } from "../../lib/taskConversation";
 import { ThreadInspectionContext } from "../chat/ThreadInspectionContext";
+import { RenderErrorBoundary } from "../RenderErrorBoundary";
 import { Button } from "../ui/button";
 import { Toggle } from "../ui/toggle";
 import { ToggleGroup } from "../ui/toggle-group";
@@ -66,6 +67,27 @@ function ConversationWaiting(props: { readonly task: TaskView; readonly why: "dr
   );
 }
 
+/**
+ * The thread view threw while mounting (its composer can fail to start the first time the page
+ * loads). The first failure mounts it again once; a second one asks the person to.
+ */
+function ConversationFailed(props: { readonly attempt: number; readonly onRetry: () => void }) {
+  const gt = useGT();
+  const retried = props.attempt > 0;
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- one automatic remount of the thread view after it failed to mount
+  useEffect(() => {
+    if (!retried) props.onRetry();
+  }, [retried, props]);
+  return retried ? (
+    <div className="flex flex-col items-start gap-2 p-4" role="alert">
+      <p className="text-sm">{gt("The conversation could not be shown.")}</p>
+      <Button size="xs" variant="outline" onClick={props.onRetry}>
+        {gt("Try again")}
+      </Button>
+    </div>
+  ) : null;
+}
+
 /** The line above a seat's conversation: whose it is, and the way back to the task. */
 function SeatBar(props: {
   readonly task: TaskView;
@@ -108,6 +130,7 @@ function OpenConversation(props: {
 }) {
   const gt = useGT();
   const [view, setView] = useState<"conversation" | "log">("conversation");
+  const [attempt, setAttempt] = useState(0);
   const shown = props.seat ?? props.thread;
   return (
     <div
@@ -146,33 +169,40 @@ function OpenConversation(props: {
         props.log
       ) : (
         <ThreadInspectionContext value={props.onOpenThread}>
-          <Suspense
+          <RenderErrorBoundary
+            resetKeys={[attempt, shown.threadId]}
             fallback={
-              <p role="status" className="p-4 text-sm text-muted-foreground">
-                {gt("Loading the conversation...")}
-              </p>
+              <ConversationFailed attempt={attempt} onRetry={() => setAttempt((n) => n + 1)} />
             }
           >
-            <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-              <ChatView
-                key={`${shown.environmentId}:${shown.threadId}`}
-                environmentId={shown.environmentId}
-                threadId={shown.threadId}
-                routeKind="server"
-                reserveTitleBarControlInset={false}
-                unavailableContent={
-                  <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-4">
-                    <TaskText task={props.task} />
-                    <p role="status" className="text-xs text-muted-foreground">
-                      {gt(
-                        "This conversation is loading or is not available here. The task's facts beside it stand.",
-                      )}
-                    </p>
-                  </div>
-                }
-              />
-            </div>
-          </Suspense>
+            <Suspense
+              fallback={
+                <p role="status" className="p-4 text-sm text-muted-foreground">
+                  {gt("Loading the conversation...")}
+                </p>
+              }
+            >
+              <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+                <ChatView
+                  key={`${shown.environmentId}:${shown.threadId}`}
+                  environmentId={shown.environmentId}
+                  threadId={shown.threadId}
+                  routeKind="server"
+                  reserveTitleBarControlInset={false}
+                  unavailableContent={
+                    <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-4">
+                      <TaskText task={props.task} />
+                      <p role="status" className="text-xs text-muted-foreground">
+                        {gt(
+                          "This conversation is loading or is not available here. The task's facts beside it stand.",
+                        )}
+                      </p>
+                    </div>
+                  }
+                />
+              </div>
+            </Suspense>
+          </RenderErrorBoundary>
         </ThreadInspectionContext>
       )}
     </div>
