@@ -2,6 +2,7 @@ import {
   ProviderInstanceId,
   ProviderSetupError,
   type OrchestrationV2ProviderCapabilities,
+  type ServerProvider,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -9,6 +10,8 @@ import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 
+import * as ModelManifest from "../provider/ModelManifest.ts";
+import { brokenRuntimeError } from "../provider/providerCompatibility.ts";
 import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
 import * as DeliveryThreadSession from "../delivery/DeliveryThreadSession.ts";
 import * as DeliveryEffective from "../delivery/DeliveryEffective.ts";
@@ -64,11 +67,12 @@ export class ProviderAdapterRegistryV2 extends Context.Service<
 export const layerFromProviderInstanceRegistry: Layer.Layer<
   ProviderAdapterRegistryV2,
   never,
-  ProviderInstanceRegistry.ProviderInstanceRegistry
+  ProviderInstanceRegistry.ProviderInstanceRegistry | ModelManifest.ModelManifest
 > = Layer.effect(
   ProviderAdapterRegistryV2,
   Effect.gen(function* () {
     const instances = yield* ProviderInstanceRegistry.ProviderInstanceRegistry;
+    const manifest = yield* ModelManifest.ModelManifest;
     return ProviderAdapterRegistryV2.of({
       get: Effect.fn("ProviderAdapterRegistryV2.get")(function (instanceId) {
         return instances.getInstance(instanceId).pipe(
@@ -77,10 +81,30 @@ export const layerFromProviderInstanceRegistry: Layer.Layer<
               return new ProviderAdapterRegistryLookupError({ instanceId });
             const adapter = instance.orchestrationAdapter;
             const auth = instance.auth;
+            const refuseBroken = Effect.fnUntraced(function* (snapshot: ServerProvider) {
+              return snapshot.version
+                ? brokenRuntimeError({
+                    instanceId,
+                    name: snapshot.displayName ?? instance.displayName ?? adapter.driver,
+                    version: snapshot.version,
+                    advisory: ModelManifest.providerCompatibility(
+                      yield* manifest.current,
+                      adapter.driver,
+                      snapshot.version,
+                    ),
+                  })
+                : undefined;
+            });
             return Effect.succeed({
               ...adapter,
               openSession: (input) => {
                 const open = Effect.gen(function* () {
+                  if (!adapter.checksVersionAtHandshake) {
+                    let refused = yield* refuseBroken(yield* instance.snapshot.getSnapshot);
+                    // The last probe may predate an update, so look again before refusing.
+                    if (refused) refused = yield* refuseBroken(yield* instance.snapshot.refresh);
+                    if (refused) return yield* refused;
+                  }
                   yield* DeliveryThreadSession.prepareDeliveryThread(input.threadId, {
                     driver: adapter.driver,
                     cwd: input.runtimePolicy.cwd ?? undefined,
@@ -97,6 +121,7 @@ export const layerFromProviderInstanceRegistry: Layer.Layer<
                   yield* Effect.sync(() =>
                     DeliveryThreadSession.beginDeliveryEffective(input.threadId),
                   );
+                  // Delivery reports every start, so sessions without auth take the same path.
                   const binding = auth?.credentialBinding;
                   const related = binding
                     ? (yield* instances.listInstances).filter(

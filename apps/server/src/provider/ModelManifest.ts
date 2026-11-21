@@ -21,7 +21,10 @@ import { hasValidClaudeManifestAdapters } from "./ClaudeModelManifest.ts";
 import bundledManifestJson from "./model-manifest.json" with { type: "json" };
 // The fork's own harnesses, kept apart from upstream's manifest so a sync never conflicts on it.
 import forkCompatibilityJson from "./fork-compatibility.json" with { type: "json" };
-import { ProviderCompatibilityPolicy } from "./providerCompatibility.ts";
+import {
+  ProviderCompatibilityPolicy,
+  resolveProviderCompatibility,
+} from "./providerCompatibility.ts";
 import * as ModelCatalog from "@t3tools/provider-core/server/ModelCatalog";
 
 const MODEL_MANIFEST_URL =
@@ -126,6 +129,15 @@ export const withForkCompatibility = (manifest: ModelManifestData): ModelManifes
 export const BUNDLED_MODEL_MANIFEST: ModelManifestData = withForkCompatibility(
   Schema.decodeUnknownSync(ModelManifestSchema)(bundledManifestJson),
 );
+
+/** A manifest with no policy for this driver and release falls back to the bundled one. */
+export const providerCompatibility = (
+  manifest: ModelManifestData,
+  driver: ProviderDriverKind,
+  version: string | null,
+) =>
+  resolveProviderCompatibility(manifest.compatibility, driver, version) ??
+  resolveProviderCompatibility(BUNDLED_MODEL_MANIFEST.compatibility, driver, version);
 
 function manifestUpdatedAtMs(manifest: ModelManifestData): number {
   if (manifest.updatedAt === undefined) return 0;

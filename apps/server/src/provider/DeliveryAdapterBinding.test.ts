@@ -22,6 +22,7 @@ import {
   claudeMcpQueryOverrides,
 } from "../orchestration-v2/Adapters/ClaudeAdapterV2.ts";
 import { codexThreadRuntimeParams } from "../orchestration-v2/Adapters/CodexAdapterV2.ts";
+import * as ModelManifest from "./ModelManifest.ts";
 import * as ProviderInstanceRegistry from "./ProviderInstanceRegistry.ts";
 import type { ProviderInstance } from "@t3tools/provider-core/server/driver";
 
@@ -48,7 +49,11 @@ const testLayer = (
     continuationIdentity: { driverKind: testDriver, continuationKey: "team-provider" },
     displayName: "Team provider",
     enabled: true,
-    snapshot: {} as ProviderInstance["snapshot"],
+    // No version, so the registry's broken-runtime check admits it.
+    snapshot: {
+      getSnapshot: Effect.succeed({}),
+      refresh: Effect.succeed({}),
+    } as unknown as ProviderInstance["snapshot"],
     textGeneration: {} as ProviderInstance["textGeneration"],
     orchestrationAdapter: {
       instanceId,
@@ -68,6 +73,7 @@ const testLayer = (
         subscribeChanges: Effect.never,
       }),
     ),
+    Layer.provide(ModelManifest.layerTest),
   );
 };
 

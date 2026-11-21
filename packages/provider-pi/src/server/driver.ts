@@ -141,11 +141,17 @@ export const PiDriver: ProviderDriver<PiSettings, PiDriverEnv, Path.Path> = {
           }),
       ),
     );
-    const textGeneration = yield* makePiTextGeneration(effectiveConfig, processEnv);
+    const textGeneration = yield* makePiTextGeneration(
+      effectiveConfig,
+      processEnv,
+      host.compatibility,
+    );
 
     const checkProvider = fileSystem.makeDirectory(probeCwd, { recursive: true }).pipe(
       Effect.ignore,
-      Effect.andThen(checkPiProviderStatus(effectiveConfig, processEnv, probeCwd)),
+      Effect.andThen(
+        checkPiProviderStatus(effectiveConfig, processEnv, probeCwd, host.compatibility),
+      ),
       Effect.filterOrElse(
         (draft) =>
           !(effectiveConfig.enabled && draft.installed && draft.auth.status === "authenticated"),
