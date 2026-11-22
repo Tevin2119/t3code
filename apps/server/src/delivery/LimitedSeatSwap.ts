@@ -390,7 +390,9 @@ export const layerWorker = Layer.effectDiscard(
     const orchestrator = yield* Orchestrator.OrchestratorV2;
     yield* forkParked(
       Stream.runForEach(orchestrator.streamDomainEvents, (event) =>
-        event.type === "run.updated" && event.payload.status === "failed"
+        // The failure and its usage-limit error are separate events, in either order.
+        (event.type === "run.updated" && event.payload.status === "failed") ||
+        (event.type === "turn-item.updated" && event.payload.type === "error")
           ? swaps.handOffLimitedLead(event.threadId)
           : Effect.void,
       ),
