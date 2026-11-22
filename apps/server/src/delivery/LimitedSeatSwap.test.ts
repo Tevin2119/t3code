@@ -56,6 +56,8 @@ function setup({
   lineage = {} as Record<string, unknown>,
   ordinary = false,
   limitedSeat = false,
+  /** The hand-off's fork lands but its first turn has not: the window a status read can fall in. */
+  startsNoTurn = false,
 } = {}) {
   const providers = [
     provider("claude", "claudeAgent"),
@@ -97,7 +99,11 @@ function setup({
       snooze?: boolean;
     },
   };
-  const created = new Map<string, { id: ThreadId; modelSelection: unknown }>();
+  // A fork keeps its source's model until its first turn lands, so the fake never updates it.
+  const created = new Map<
+    string,
+    { id: ThreadId; modelSelection: unknown; deletedAt: null; runs: Array<unknown> }
+  >();
   const commands: Array<OrchestrationV2ServerCommand> = [];
   const calls: Array<string> = [];
   const facts = (): LimitedSeatFacts => ({
@@ -140,6 +146,8 @@ function setup({
   const projections = {
     getThreadShell: (thread: ThreadId) => Effect.succeed(thread === threadId ? shell : null),
     findThread: (thread: ThreadId) => Effect.sync(() => created.get(thread) ?? null),
+    getThreadRecords: (thread: ThreadId) =>
+      Effect.sync(() => ({ runs: created.get(thread)?.runs ?? [] })),
   } as unknown as ProjectionStore.ProjectionStoreV2["Service"];
   const threads = {
     dispatch: (command: OrchestrationV2ServerCommand) =>
@@ -150,9 +158,13 @@ function setup({
           created.set(command.targetThreadId, {
             id: command.targetThreadId,
             modelSelection: shell.modelSelection,
+            deletedAt: null,
+            runs: [],
           });
-        if (command.type === "message.dispatch" && command.modelSelection)
-          created.get(command.threadId)!.modelSelection = command.modelSelection;
+        if (command.type === "message.dispatch" && command.modelSelection && !startsNoTurn) {
+          const runs = created.get(command.threadId)!.runs;
+          if (runs.length === 0) runs.push({ modelSelection: command.modelSelection });
+        }
         if (command.type === "thread.metadata.update" && command.limitRecovery)
           shell.limitRecovery = {
             runId: command.limitRecovery.runId,
@@ -205,6 +217,44 @@ it.effect("hands a limited lead on to a linked thread on the first free favorite
     expect((yield* swaps.status(threadId)).notices).toEqual([
       expect.objectContaining({ seat: null, state: "swapped", continuedIn: target }),
     ]);
+  }).pipe(Effect.provide(fixture.layer));
+});
+
+it.effect("names the model the hand-off started, not the one the fork inherited", () => {
+  const fixture = setup({ limitedSeat: true });
+  return Effect.gen(function* () {
+    const swaps = yield* LimitedSeatSwap.LimitedSeatSwap;
+    yield* swaps.handOffLimitedLead(threadId);
+    // The old thread runs no more turns: its limited seat is offered no swap there.
+    expect((yield* swaps.status(threadId)).notices).toEqual([
+      {
+        seat: null,
+        state: "swapped",
+        continuedIn: target,
+        limited: expect.objectContaining({ model: "claude-fable" }),
+        substitute: { instanceId: "kimi", model: "kimi-k3" },
+      },
+    ]);
+  }).pipe(Effect.provide(fixture.layer));
+});
+
+it.effect("names the substitute about to start while the fork has no turn yet", () => {
+  const fixture = setup({ startsNoTurn: true });
+  return Effect.gen(function* () {
+    const swaps = yield* LimitedSeatSwap.LimitedSeatSwap;
+    yield* swaps.handOffLimitedLead(threadId);
+    expect((yield* swaps.status(threadId)).notices).toEqual([
+      expect.objectContaining({
+        state: "swapped",
+        substitute: { instanceId: "kimi", model: "kimi-k3" },
+      }),
+    ]);
+    // Asked again, the turn that never landed is sent on the substitute, not the limited model.
+    yield* swaps.handOffLimitedLead(threadId);
+    expect(fixture.commands.at(-1)).toMatchObject({
+      type: "message.dispatch",
+      modelSelection: { instanceId: "kimi", model: "kimi-k3" },
+    });
   }).pipe(Effect.provide(fixture.layer));
 });
 

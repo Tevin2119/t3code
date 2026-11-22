@@ -18,6 +18,7 @@ import {
 import {
   firstFreeFavorite,
   isFreeCandidate,
+  limitedLeadHandoffThreadId,
   limitedLeadPool,
   limitedSeatPool,
   seatLimit,
@@ -42,8 +43,7 @@ import * as LimitedSeats from "./LimitedSeats.ts";
 /** What a lead handed on to a new thread is told, as limit recovery tells a thread it resumes. */
 export const LEAD_HANDOFF_MESSAGE = "Continue where you left off.";
 
-/** The thread a limited lead's run is handed on to. One per run, however often it is asked for. */
-export const leadHandoffThreadId = (runId: RunId) => ThreadId.make(`limited-lead:${runId}`);
+export const leadHandoffThreadId = limitedLeadHandoffThreadId;
 
 /**
  * What hands a limited lead on, in order. The old thread's resume is disarmed first, so the same
@@ -177,6 +177,23 @@ const make = Effect.gen(function* () {
     };
   });
 
+  /**
+   * The thread a limited run was handed on to, with the model the hand-off started it on. The
+   * fork carries its source's model until that first turn lands, so the thread's own model is
+   * not the substitute. Null where the run was not handed on, or the thread was deleted since.
+   */
+  const handedOn = Effect.fn("LimitedSeatSwap.handedOn")(function* (runId: RunId) {
+    const target = leadHandoffThreadId(runId);
+    const continued = yield* projections.findThread(target);
+    if (continued === null) return null;
+    const { runs } = yield* projections.getThreadRecords(target, ["runs"]);
+    return {
+      id: continued.id,
+      deleted: continued.deletedAt !== null,
+      dispatched: runs[0]?.modelSelection ?? null,
+    };
+  }, Effect.mapError(storage));
+
   const status: LimitedSeatSwap["Service"]["status"] = Effect.fn("LimitedSeatSwap.status")(
     function* (threadId) {
       const conversation = yield* governed(threadId);
@@ -186,21 +203,26 @@ const make = Effect.gen(function* () {
       const notices: Array<DeliveryLimitedSeatNotice> = [];
       const lead = leadLimit(shell, facts.now);
       if (lead !== null) {
-        const continued = yield* projections
-          .findThread(leadHandoffThreadId(lead.runId))
-          .pipe(Effect.mapError(storage));
-        if (continued !== null) {
-          notices.push({
-            seat: null,
-            limited: lead.limited,
-            state: "swapped",
-            substitute: continued.modelSelection,
-            continuedIn: continued.id,
-          });
-        } else if (policy !== "skip") {
-          const free = firstFreeFavorite(
-            limitedLeadPool({ facts, roster: lineup.participants, lead: shell.modelSelection }),
-          );
+        const continued = yield* handedOn(lead.runId);
+        const free = firstFreeFavorite(
+          limitedLeadPool({ facts, roster: lineup.participants, lead: shell.modelSelection }),
+        );
+        if (continued !== null && !continued.deleted) {
+          // Between the fork and its first turn, the substitute is the one about to be started.
+          const substitute = continued.dispatched ?? (free === null ? null : selectionOf(free));
+          if (substitute !== null)
+            notices.push({
+              seat: null,
+              limited: lead.limited,
+              state: "swapped",
+              substitute,
+              continuedIn: continued.id,
+            });
+          // This thread runs no more turns, so its seats have nothing left to swap for.
+          return { policy, notices };
+        }
+        // A deleted continuation cannot be made again; the recovery banner's resume is the way on.
+        if (continued === null && policy !== "skip") {
           notices.push({
             seat: null,
             limited: lead.limited,
@@ -258,17 +280,21 @@ const make = Effect.gen(function* () {
     const lead = leadLimit(shell, facts.now);
     if (lead === null) return yield* refused("This conversation's lead is not limited now.");
     const target = leadHandoffThreadId(lead.runId);
-    const existing = yield* projections.findThread(target).pipe(Effect.mapError(storage));
+    const existing = yield* handedOn(lead.runId);
+    if (existing?.deleted === true)
+      return yield* refused(
+        "The thread this conversation continued in was deleted. Resume this one at its reset.",
+      );
     const pool = limitedLeadPool({
       facts,
       roster: lineup.participants,
       lead: shell.modelSelection,
     });
     const free = firstFreeFavorite(pool);
-    // A hand-off already made keeps its model: a second click or sweep only finishes it.
+    // A hand-off already started keeps its model: a second click or sweep only finishes it.
     const substitute =
-      existing !== null
-        ? existing.modelSelection
+      existing !== null && existing.dispatched !== null
+        ? existing.dispatched
         : chosen !== undefined
           ? isFreeCandidate(pool, seatModelOf(chosen))
             ? chosen

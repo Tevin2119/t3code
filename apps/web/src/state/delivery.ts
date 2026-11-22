@@ -29,6 +29,7 @@ import type {
 import { boardPreferencesOf, useBoardStore } from "./deliveryBoard";
 import { useEnvironments, usePrimaryEnvironmentId } from "./environments";
 import { useEnvironmentQuery } from "./query";
+import { serverEnvironment } from "./server";
 import { environmentThreadShells } from "./threads";
 import { useAtomCommand } from "./use-atom-command";
 
@@ -37,6 +38,8 @@ export { useBoardStore } from "./deliveryBoard";
 
 export const deliveryEnvironment = createDeliveryEnvironmentAtoms(connectionAtomRuntime, {
   threadShellAtom: environmentThreadShells.threadShellAtom,
+  settingsAtom: serverEnvironment.settingsValueAtom,
+  providersAtom: serverEnvironment.providersValueAtom,
 });
 
 /** Whether this environment has a delivery engine turned on. */

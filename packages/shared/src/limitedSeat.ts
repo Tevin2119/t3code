@@ -3,12 +3,20 @@ import {
   type ModelSelection,
   type ProjectId,
   type ProviderInstanceId,
+  type RunId,
   resolveProjectProviderInstanceEnabled,
   type ServerProvider,
   type ServerSettings,
+  ThreadId,
 } from "@t3tools/contracts";
 
 import { exhaustedUsageWindow } from "./usageLimits.ts";
+
+/**
+ * The thread a limited lead's run is handed on to. One per run, however often it is asked for,
+ * so its existence is how the server and the clients know a run was handed on.
+ */
+export const limitedLeadHandoffThreadId = (runId: RunId) => ThreadId.make(`limited-lead:${runId}`);
 
 /** A model as a seat runs it: on one provider instance. */
 export interface SeatModel {

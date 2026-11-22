@@ -84,6 +84,7 @@ import {
   managedRuntimeModeCeilingMessage,
 } from "@t3tools/contracts";
 import * as KeyedLock from "@t3tools/shared/KeyedLock";
+import { limitedLeadHandoffThreadId } from "@t3tools/shared/limitedSeat";
 import { modelSelectionsEqual } from "@t3tools/shared/model";
 import { expandAssistantCitationsForProvider } from "@t3tools/shared/assistantCitations";
 import { modelSwitchSince } from "./modelSwitch.ts";
@@ -1907,6 +1908,15 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     projectionStore
       .findThread(threadId)
       .pipe(Effect.mapError((cause) => new OrchestratorProjectionError({ threadId, cause })));
+
+  /**
+   * Whether a limited lead's run was handed on to a linked thread. Resuming it here as well would
+   * run the same work twice, so nothing arms or resumes it while that thread exists.
+   */
+  const runHandedOn = (runId: RunId) =>
+    findThread(limitedLeadHandoffThreadId(runId)).pipe(
+      Effect.map((continued) => continued !== null && continued.deletedAt === null),
+    );
 
   /** Side chats live inside their parent, so deleting or archiving the parent takes them too. */
   const liveSideChatIds = Effect.fn("Orchestrator.liveSideChatIds")(
@@ -4842,6 +4852,20 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           cause: "The provider limit changed before recovery could be configured.",
         });
       }
+      const previous = thread.limitRecovery;
+      const resumes =
+        command.limitRecovery.autoResume ??
+        (previous?.runId === command.limitRecovery.runId &&
+          previous.resetAt === command.limitRecovery.resetAt &&
+          previous.autoResume);
+      if (resumes && (yield* runHandedOn(command.limitRecovery.runId))) {
+        return yield* new OrchestratorDispatchError({
+          commandId: command.commandId,
+          commandType: command.type,
+          cause:
+            "This conversation continues in a linked thread. Open that thread instead of resuming this one.",
+        });
+      }
     }
     let restoredUnsettledAt: DateTime.Utc | null | undefined;
     if (command.type === "thread.unsettle" && command.restoreUnsettledAt !== undefined) {
@@ -7255,6 +7279,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       const now = yield* DateTime.now;
       if (
         run?.id !== command.usageLimitContinuationOfRunId ||
+        (yield* runHandedOn(command.usageLimitContinuationOfRunId)) ||
         failure?.class !== "usage_limit" ||
         threadShellFromProjection(projection).lastErrorClass !== "usage_limit" ||
         !recovery?.autoResume ||
@@ -17059,7 +17084,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           // A Stop that reached the run before its limit failure landed had nothing to disarm.
           const stopped = yield* stopReachedRun(command, input.threadId, input.limitRecovery.runId);
           yield* dispatchWithReceiptEffect(
-            stopped
+            stopped || (yield* runHandedOn(input.limitRecovery.runId))
               ? {
                   ...command,
                   limitRecovery: { ...input.limitRecovery, autoResume: false, snooze: false },

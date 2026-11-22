@@ -192,7 +192,7 @@ import {
   squashAtomCommandFailure,
   type AtomCommandResult,
 } from "@t3tools/client-runtime/state/runtime";
-import { AsyncResult } from "effect/reactivity";
+import { AsyncResult, Atom } from "effect/reactivity";
 import { isElectron } from "../env";
 import { useActiveThreadRef } from "../hooks/useActiveThreadRef";
 import { composerRequiresModifier } from "../composer-logic";
@@ -450,6 +450,7 @@ import {
 } from "./ChatView.logic";
 
 const EMPTY_PROVIDERS: ServerProvider[] = [];
+const NOT_HANDED_ON_ATOM = Atom.make(false);
 const EMPTY_PROVIDER_MODELS: ServerProvider["models"] = [];
 const EMPTY_USAGE_LIMIT_SOURCES: UsageLimitSourceSnapshots = [];
 import type { CodexArtifactTemplate } from "@t3tools/shared/codexArtifactTemplates";
@@ -2873,6 +2874,13 @@ export default function ChatView(props: ChatViewProps) {
     );
     return item ? [item] : [];
   });
+  const limitedLeadHandedOn = useAtomValue(
+    activeThreadShell === null
+      ? NOT_HANDED_ON_ATOM
+      : deliveryEnvironment.limitedLeadHandedOn(
+          scopeThreadRef(environmentId, activeThreadShell.id),
+        ),
+  );
   const limitRecoveryBanner = useUsageLimitRecoveryBannerItem(
     limitRecoveryRun !== null && activeThreadShell !== null
       ? {
@@ -2882,6 +2890,7 @@ export default function ChatView(props: ChatViewProps) {
           stoppedAt: limitRecoveryRun.completedAt ?? activeThreadShell.updatedAt,
           settled: activeThreadShell.settledOverride === "settled",
           requestPending: pendingApprovals.length > 0 || pendingUserInputs.length > 0,
+          handedOn: limitedLeadHandedOn,
           recovery: activeThreadShell.limitRecovery ?? null,
           snoozedUntil: activeThreadShell.snoozedUntil,
           timestampFormat,
