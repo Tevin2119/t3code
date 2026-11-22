@@ -14,6 +14,11 @@ export interface BoardThreadRow {
   readonly projectId: ProjectId;
   readonly title: string;
   readonly archivedAt: string | null;
+  /**
+   * The version of the thread's event stream. It grows with every event and never repeats, so it
+   * tells a thread that was archived and restored from the one first archived.
+   */
+  readonly revision: number;
   readonly task: BoardTask;
   /** The thread's pull request and issue links, as stored: JSON arrays, or null for none. */
   readonly pullRequests: string | null;
@@ -44,6 +49,7 @@ export const listBoardThreadRows = Effect.fn("listBoardThreadRows")(function* (o
     title: string;
     archivedAt: string | null;
     marker: string | null;
+    revision: number;
     pullRequests: string | null;
     issues: string | null;
   }>`
@@ -51,6 +57,10 @@ export const listBoardThreadRows = Effect.fn("listBoardThreadRows")(function* (o
       t.archived_at AS "archivedAt",
       json_extract(t.payload_json, '$.pullRequests') AS "pullRequests",
       json_extract(t.payload_json, '$.issues') AS issues,
+      (
+        SELECT COALESCE(MAX(e.stream_version), 0) FROM orchestration_events AS e
+        WHERE e.aggregate_kind = 'thread' AND e.stream_id = t.thread_id
+      ) AS revision,
       json_extract(t.payload_json, '$.lineage.engineIntake') AS marker
     FROM orchestration_v2_projection_threads AS t
     WHERE t.deleted_at IS NULL
@@ -67,6 +77,7 @@ export const listBoardThreadRows = Effect.fn("listBoardThreadRows")(function* (o
             projectId: ProjectId.make(row.projectId),
             title: row.title,
             archivedAt: row.archivedAt,
+            revision: row.revision,
             task,
             pullRequests: row.pullRequests,
             issues: row.issues,

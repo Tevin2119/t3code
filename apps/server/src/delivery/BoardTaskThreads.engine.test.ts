@@ -20,6 +20,7 @@ import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
+  CommandId,
   EnvironmentId,
   ProviderInstanceId,
   ProjectId,
@@ -150,6 +151,7 @@ function threadStore() {
       title: string;
       modelSelection: unknown;
       archivedAt: string | null;
+      revision: number;
     }
   >();
   const receipts = new Set<string>();
@@ -168,21 +170,35 @@ function threadStore() {
           title: command.title,
           modelSelection: command.modelSelection,
           archivedAt: null,
+          revision: 0,
         });
         const after = hooks.afterCreate;
         if (after) yield* after(command.threadId);
       }
-      if (command.type === "thread.archive") threads.get(command.threadId)!.archivedAt = "archived";
+      // Every event of a thread raises its revision, as the event stream's version does.
+      if (command.type === "thread.archive" || command.type === "thread.unarchive") {
+        const thread = threads.get(command.threadId)!;
+        thread.archivedAt = command.type === "thread.archive" ? "archived" : null;
+        thread.revision += 1;
+      }
       return { storedEvents: [] };
     });
-  return { threads, commands, hooks, dispatch };
+  /** A person restores an archived thread from the board's archive. */
+  const restore = (threadId: ThreadId) =>
+    dispatch({
+      type: "thread.unarchive",
+      commandId: CommandId.make(`person:restore:${threadId}:${threads.get(threadId)!.revision}`),
+      threadId,
+    });
+  return { threads, commands, hooks, dispatch, restore };
 }
 
-function service(store: ReturnType<typeof threadStore>, key: string = PHRASE) {
+function service(store: ReturnType<typeof threadStore>, key: string | null = PHRASE) {
   return BoardTaskThreads.make.pipe(
-    Effect.provideService(HostProcess.Environment, {
-      [BoardTaskThreads.BOARD_THREAD_KEY_VARIABLE]: key,
-    }),
+    Effect.provideService(
+      HostProcess.Environment,
+      key === null ? {} : { [BoardTaskThreads.BOARD_THREAD_KEY_VARIABLE]: key },
+    ),
     Effect.provideService(ServerEnvironment.ServerEnvironmentIdentity, {
       getEnvironmentId: Effect.succeed(ENVIRONMENT),
     }),
@@ -221,6 +237,7 @@ function service(store: ReturnType<typeof threadStore>, key: string = PHRASE) {
                     projectId: PROJECT,
                     title: thread.title,
                     archivedAt: thread.archivedAt,
+                    revision: thread.revision,
                     task,
                     pullRequests: null,
                     issues: null,
@@ -337,8 +354,21 @@ const linkLife = Effect.gen(function* () {
   store.hooks.afterCreate = null;
   assert.isNotNull(store.threads.get(threadOf(vanishing))!.archivedAt);
 
-  // A wrong key is refused by code, and nothing is written or archived.
+  // Without the approval key nothing is sent to the link route, and the thread waits open.
   const locked = yield* add();
+  const keyless = yield* service(store, null);
+  assert.deepEqual(
+    [...(yield* keyless.reconcile())].toSorted(),
+    [
+      [locked, "no-key"],
+      [moving, "archived-thread"],
+    ].toSorted(),
+  );
+  assert.isNull(yield* linkOf(locked));
+  assert.isNull(store.threads.get(threadOf(locked))!.archivedAt);
+  assert.equal((yield* setEvents(locked)).length, 0);
+
+  // A wrong key is refused by code, and nothing is written or archived.
   const wrong = yield* service(store, "not the passphrase at all");
   assert.deepEqual(
     [...(yield* wrong.reconcile())].toSorted(),
@@ -357,6 +387,24 @@ const linkLife = Effect.gen(function* () {
   yield* threads.reconcile();
   assert.isNotNull(store.threads.get(threadOf(started))!.archivedAt);
   assert.isNull(store.threads.get(threadOf(twice))!.archivedAt);
+
+  // Restored from the archive with its task still deleted, or still another conversation's: the
+  // next pass archives it again, so it never sits open where no list shows it.
+  for (const id of [started, contested]) {
+    yield* store.restore(threadOf(id));
+    assert.isNull(store.threads.get(threadOf(id))!.archivedAt);
+    yield* threads.reconcile();
+    assert.isNotNull(store.threads.get(threadOf(id))!.archivedAt);
+  }
+  assert.equal((yield* linkOf(contested)).threadId, theirs);
+
+  // Restored with its task back in work and the link free: the next pass links it.
+  yield* store.restore(threadOf(moving));
+  assert.deepEqual([...(yield* threads.reconcile())], []);
+  const relinked = yield* linkOf(moving);
+  assert.deepEqual([relinked.environmentId, relinked.threadId], [ENVIRONMENT, threadOf(moving)]);
+  assert.equal((yield* setEvents(moving)).length, 1);
+  assert.isNull(store.threads.get(threadOf(moving))!.archivedAt);
 });
 
 it.live.skipIf(ENGINE_ROOT === "")("runs the whole link life against the real engine", () =>

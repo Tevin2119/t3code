@@ -100,7 +100,7 @@ const decodeClaimed = Schema.decodeUnknownOption(Claimed);
 const decodeSelection = Schema.decodeUnknownEffect(ModelSelection);
 
 /** Every task of every board, with each card's link joined once by the engine. */
-const LANES_PATH = "/api/lanes?view=development&set=all";
+export const LANES_PATH = "/api/lanes?view=development&set=all";
 
 // A task in one of these lanes has not started or is not a task run: it has no conversation yet.
 // `intake` and `ready` are what an engine before the queue lane calls the same wait.
@@ -109,6 +109,39 @@ const NOT_STARTED = new Set(["draft", "chat", "queue", "intake", "ready"]);
 const FINISHED = new Set(["completed", "closed-not-done"]);
 // A task that moved is worked on another machine; the engine refuses its link here (`moved`).
 const MOVED = new Set(["moved", "moving"]);
+
+/** A task in work with no conversation: this pass links it to its thread. */
+const awaitsThread = (card: Card) =>
+  card.boardThread === null &&
+  !NOT_STARTED.has(card.lane) &&
+  !FINISHED.has(card.lane) &&
+  !MOVED.has(card.state);
+
+/**
+ * How a thread this server made stands with its task, as the engine's lanes show it: `linked` is
+ * the task's conversation, `free` may still become it, and a `displaced` or `moved` one never
+ * will here (another conversation holds the task, or it is worked on another machine). The pass
+ * archives the last two, and the board's archive offers no restore for them.
+ */
+export const boardThreadStanding = (
+  card: {
+    readonly state: string;
+    readonly boardThread?:
+      | { readonly environmentId: string; readonly threadId: string }
+      | null
+      | undefined;
+  },
+  environmentId: string,
+  threadId: string,
+) => {
+  const link = card.boardThread;
+  if (link) {
+    return link.environmentId === environmentId && link.threadId === threadId
+      ? ("linked" as const)
+      : ("displaced" as const);
+  }
+  return MOVED.has(card.state) ? ("moved" as const) : ("free" as const);
+};
 
 /**
  * The engine's approval key, when the host gives this server one. The link routes are keyed
@@ -209,11 +242,17 @@ export const make = Effect.gen(function* () {
     return yield* local(decodeSelection({ instanceId: instance.instanceId, model: lead.model }));
   });
 
-  const archive = (task: BoardTask, threadId: ThreadId, why: string) =>
+  /**
+   * Archives a thread that holds no task. The command id carries the thread's revision, so a pass
+   * repeated over the same state is answered by the first archive, and a thread a person restored
+   * since is archived anew: without it the first archive's receipt would answer every later one,
+   * and the restored thread would stay open, in no list and not in the board's archive.
+   */
+  const archive = (task: BoardTask, threadId: ThreadId, why: string, revision: number) =>
     local(
       threads.dispatch({
         type: "thread.archive",
-        commandId: CommandId.make(`${boardTaskThreadMarker(task)}:archive:${why}`),
+        commandId: CommandId.make(`${boardTaskThreadMarker(task)}:archive:${why}:${revision}`),
         threadId,
       }),
     ).pipe(Effect.asVoid);
@@ -277,12 +316,14 @@ export const make = Effect.gen(function* () {
       readonly teams: typeof Teams.Type;
       readonly folders: ReadonlyMap<string, string>;
       readonly key: string | undefined;
+      readonly revisions: ReadonlyMap<string, number>;
     },
   ) {
     if (!card.set) return "no-board" as const;
     const task = boardTaskOf(card.set, card.id);
     if (task === null) return "unmarkable-id" as const;
     const threadId = boardTaskThreadId(task);
+    const revision = context.revisions.get(threadId) ?? 0;
     const folder = context.folders.get(card.set);
     const project =
       folder === undefined
@@ -346,13 +387,13 @@ export const make = Effect.gen(function* () {
         yield* holdClaim(card, context.environmentId, threadId);
         return null;
       }
-      yield* archive(task, threadId, "displaced");
+      yield* archive(task, threadId, "displaced", revision);
       return null;
     }
     if (refusal.code === "moved" || refusal.code === "not-found") {
       // The task is worked on another machine, or is gone: it is finished for this server. The
       // archive is what keeps it so, on every later pass and after a restart.
-      yield* archive(task, threadId, refusal.code === "moved" ? "moved" : "deleted");
+      yield* archive(task, threadId, refusal.code === "moved" ? "moved" : "deleted", revision);
       return refusal.code === "moved" ? ("moved" as const) : null;
     }
     if (refusal.code === "refused") return "refused" as const;
@@ -360,8 +401,10 @@ export const make = Effect.gen(function* () {
   });
 
   /**
-   * The threads this server made whose task ended: deleted in the engine, or held by another
-   * conversation now. They are archived, never deleted, and the board lists them.
+   * The open threads this server made whose task ended here: deleted in the engine, held by
+   * another conversation, or moved to another machine. They are archived, never deleted, and the
+   * board lists them. A thread a person restored is judged like any other, so one whose task is
+   * still gone goes back to the archive on the next pass.
    */
   const settleEnded = Effect.fn("BoardTaskThreads.settleEnded")(function* (
     cards: ReadonlyMap<string, Card>,
@@ -375,18 +418,13 @@ export const make = Effect.gen(function* () {
           .pipe(Effect.result);
         if (read._tag === "Success" || read.failure.status !== 404) continue;
         yield* releaseClaim(row.task.id);
-        yield* archive(row.task, row.threadId, "deleted");
+        yield* archive(row.task, row.threadId, "deleted", row.revision);
         continue;
       }
-      const link = card.boardThread;
-      if (
-        link !== null &&
-        link !== undefined &&
-        (link.environmentId !== environmentId || link.threadId !== row.threadId)
-      ) {
-        yield* releaseClaim(row.task.id);
-        yield* archive(row.task, row.threadId, "displaced");
-      }
+      const standing = boardThreadStanding(card, environmentId, row.threadId);
+      if (standing === "linked" || standing === "free") continue;
+      yield* releaseClaim(row.task.id);
+      yield* archive(row.task, row.threadId, standing, row.revision);
     }
   });
 
@@ -404,14 +442,11 @@ export const make = Effect.gen(function* () {
       );
       // An engine that serves no `boardThread` has no link to write to. Nothing is made for it.
       if ([...cards.values()].some((card) => card.boardThread === undefined)) return holds;
-      const starting = [...cards.values()].filter(
-        (card) =>
-          card.boardThread === null &&
-          !NOT_STARTED.has(card.lane) &&
-          !FINISHED.has(card.lane) &&
-          !MOVED.has(card.state),
-      );
+      const starting = [...cards.values()].filter(awaitsThread);
       if (starting.length > 0) {
+        const revisions = new Map(
+          (yield* local(rows.list({ archived: false }))).map((row) => [row.threadId, row.revision]),
+        );
         const teams = yield* engine(delivery.read({ path: "/api/teams" })).pipe(
           Effect.flatMap((response) => engine(decodeTeams(response.body))),
         );
@@ -422,7 +457,7 @@ export const make = Effect.gen(function* () {
         );
         const key = hostEnvironment[BOARD_THREAD_KEY_VARIABLE] || undefined;
         for (const card of starting) {
-          const hold = yield* bind(card, { environmentId, teams, folders, key });
+          const hold = yield* bind(card, { environmentId, teams, folders, key, revisions });
           if (hold !== null) holds.set(card.id, hold);
         }
       }

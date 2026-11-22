@@ -1,5 +1,6 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
+  CommandId,
   EnvironmentId,
   ProjectId,
   ThreadId,
@@ -58,6 +59,7 @@ interface StoredThread {
   readonly modelSelection: unknown;
   readonly marker: string | undefined;
   archivedAt: string | null;
+  revision: number;
 }
 
 /** What the thread store keeps across a server restart: threads and command receipts. */
@@ -81,6 +83,7 @@ function threadStore() {
           modelSelection: command.modelSelection,
           marker: command.engineIntake,
           archivedAt: null,
+          revision: 0,
         });
         receipts.add(command.commandId);
         const after = hooks.afterCreate;
@@ -88,16 +91,27 @@ function threadStore() {
         after?.();
       }
       if (command.type === "thread.archive") {
-        threads.get(command.threadId)!.archivedAt = "2026-11-22T11:00:00.000Z";
+        const thread = threads.get(command.threadId)!;
+        thread.archivedAt = "2026-11-22T11:00:00.000Z";
+        thread.revision += 1;
         receipts.add(command.commandId);
       }
       if (command.type === "thread.unarchive") {
-        threads.get(command.threadId)!.archivedAt = null;
+        const thread = threads.get(command.threadId)!;
+        thread.archivedAt = null;
+        thread.revision += 1;
         receipts.add(command.commandId);
       }
       return Effect.succeed({ storedEvents: [] });
     });
-  return { threads, commands, hooks, dispatch };
+  /** A person restores an archived thread from the board's archive. */
+  const restore = (threadId: ThreadId) =>
+    dispatch({
+      type: "thread.unarchive",
+      commandId: CommandId.make(`person:restore:${threads.get(threadId)!.revision}`),
+      threadId,
+    });
+  return { threads, commands, hooks, dispatch, restore };
 }
 type ThreadStore = ReturnType<typeof threadStore>;
 
@@ -163,6 +177,7 @@ function service(
                     projectId: PROJECT,
                     title: thread.title,
                     archivedAt: thread.archivedAt,
+                    revision: thread.revision,
                     task,
                     pullRequests: null,
                     issues: null,
@@ -315,6 +330,16 @@ it.effect("adopts the link another writer set first and never overwrites it", ()
     assert.equal(engine.linkOf("task-7")?.threadId, THEIRS);
     assert.equal(linkWrites(engine).length, 1);
     assert.equal(engine.requests.filter((request) => request.method === "PUT").length, 1);
+    // A person restores the displaced thread. The task is still another conversation's, so the
+    // next pass archives it again, each time it is restored: it never sits open in no list.
+    for (const restored of [1, 2]) {
+      yield* store.restore(THREAD);
+      assert.isNull(store.threads.get(THREAD)!.archivedAt);
+      yield* threads.reconcile();
+      assert.isNotNull(store.threads.get(THREAD)!.archivedAt, `restore ${restored}`);
+    }
+    assert.equal(engine.linkOf("task-7")?.threadId, THEIRS);
+    assert.equal(puts(engine).length, 1);
   }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-conflict-")));
 });
 
@@ -347,6 +372,25 @@ it.effect("makes no thread for a moved task, and archives one the engine refuses
     );
     assert.equal(puts(engine).length, 1);
     assert.isNull(engine.linkOf("task-7"));
+    // Restored while the task is still on the other machine: it holds nothing and is archived
+    // again.
+    engine.task("task-7").state = "moved";
+    yield* store.restore(THREAD);
+    assert.deepEqual([...(yield* threads.reconcile())], []);
+    assert.isNotNull(store.threads.get(THREAD)!.archivedAt);
+    assert.equal(puts(engine).length, 1);
+    // The task came back and its link is free: restoring the thread is what links it, on the
+    // next pass, and it is the task's conversation from then on.
+    engine.task("task-7").state = "running";
+    assert.deepEqual([...(yield* threads.reconcile())], [["task-7", "archived-thread"]]);
+    yield* store.restore(THREAD);
+    assert.deepEqual([...(yield* threads.reconcile())], []);
+    assert.equal(engine.linkOf("task-7")?.threadId, THREAD);
+    assert.equal(engine.linkOf("task-7")?.environmentId, ENVIRONMENT);
+    assert.isNotNull(engine.leaseOf("task-7"));
+    yield* threads.reconcile();
+    assert.isNull(store.threads.get(THREAD)!.archivedAt);
+    assert.equal(store.threads.size, 1);
   }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-moved-")));
 });
 
@@ -496,10 +540,23 @@ it.effect(
       assert.isNull(store.threads.get(finished)!.archivedAt);
       assert.equal(engine.linkOf("task-8")?.threadId, finished);
       assert.isNull(engine.leaseOf("task-8"));
-      // A person restored the archived thread from the board: it is not archived a second time.
-      store.threads.get(THREAD)!.archivedAt = null;
-      yield* threads.reconcile();
+      // A person restores the deleted task's thread. Its task is gone, so no list would show it
+      // and the board's archive no longer would either: the next pass archives it again, on this
+      // server and on a new one after a restart, however often it is restored.
+      yield* store.restore(THREAD);
       assert.isNull(store.threads.get(THREAD)!.archivedAt);
+      yield* threads.reconcile();
+      assert.isNotNull(store.threads.get(THREAD)!.archivedAt);
+      yield* store.restore(THREAD);
+      yield* (yield* service(store)).reconcile();
+      assert.isNotNull(store.threads.get(THREAD)!.archivedAt);
+      // A pass repeated over an archived thread sends no further archive.
+      const archives = () =>
+        store.commands.filter((command) => command.type === "thread.archive").length;
+      const sent = archives();
+      yield* threads.reconcile();
+      assert.equal(archives(), sent);
+      assert.isNull(store.threads.get(finished)!.archivedAt);
     }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-ended-")));
   },
 );
