@@ -11,6 +11,7 @@ import * as ServerConfig from "../config.ts";
 import { createPendingAttachmentId, resolveAttachmentPath } from "../attachmentStore.ts";
 import * as ThreadMessageIntake from "./ThreadMessageIntake.ts";
 import { boardTaskThreadCommandId, boardTaskThreadMarker } from "../delivery/boardThreadMarker.ts";
+import { listBoardThreadRows } from "../delivery/boardThreadRows.ts";
 import { assert, it, vi } from "@effect/vitest";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import {
@@ -577,6 +578,20 @@ it.effect("keeps a board task's thread out of both lists, however often it is cr
         [ThreadId.make("thread:top-level")],
       );
     }
+    // The board reaches it by its marker: among the live ones, and once archived among those.
+    const rows = (archived: boolean) =>
+      listBoardThreadRows({ archived }).pipe(
+        Effect.map((found) => found.map((row) => ({ threadId: row.threadId, task: row.task }))),
+      );
+    assert.deepEqual(yield* rows(false), [{ threadId, task }]);
+    assert.deepEqual(yield* rows(true), []);
+    yield* threads.dispatch({
+      type: "thread.archive",
+      commandId: CommandId.make("command:archive-board-task"),
+      threadId,
+    });
+    assert.deepEqual(yield* rows(false), []);
+    assert.deepEqual(yield* rows(true), [{ threadId, task }]);
   }).pipe(Effect.provide(harness.layer));
 });
 

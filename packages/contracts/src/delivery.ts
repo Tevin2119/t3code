@@ -1,7 +1,7 @@
 // Relay engine-owned payloads as JSON; type only the state T3 stores or acts on.
 import * as Schema from "effect/Schema";
 
-import { ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import { ProjectId, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import { ModelSelection } from "./modelSelection.ts";
 
 export const DeliveryOrchestrationConfig = Schema.Struct({
@@ -219,6 +219,26 @@ export const DeliveryThreadState = Schema.Struct({
   rememberedLineup: Schema.optional(DeliveryRememberedLineup),
 });
 export type DeliveryThreadState = typeof DeliveryThreadState.Type;
+
+/**
+ * The archived conversations of board tasks. A task that ended (deleted, its project removed, or
+ * held by another conversation) leaves its thread archived, and no thread list shows it: this is
+ * how the board reaches them.
+ */
+export const DeliveryArchivedBoardThreads = Schema.Struct({
+  threads: Schema.Array(
+    Schema.Struct({
+      threadId: ThreadId,
+      projectId: ProjectId,
+      title: Schema.String,
+      archivedAt: Schema.String,
+      /** The board and the task the thread was made for. */
+      board: Schema.String,
+      taskId: Schema.String,
+    }),
+  ),
+});
+export type DeliveryArchivedBoardThreads = typeof DeliveryArchivedBoardThreads.Type;
 
 /** Replaces who joins a conversation from its next message on; null makes it an ordinary one. */
 export const DeliverySetThreadLineupInput = Schema.Struct({

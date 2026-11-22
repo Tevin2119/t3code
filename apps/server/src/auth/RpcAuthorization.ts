@@ -134,6 +134,7 @@ export const RPC_REQUIRED_SCOPES = {
   [WS_METHODS.deliveryAct]: AuthOrchestrationOperateScope,
   [WS_METHODS.deliveryBindThread]: AuthOrchestrationOperateScope,
   [WS_METHODS.deliveryThreadBinding]: AuthOrchestrationReadScope,
+  [WS_METHODS.deliveryArchivedBoardThreads]: AuthOrchestrationReadScope,
   [WS_METHODS.deliveryReleaseThread]: AuthOrchestrationOperateScope,
   [WS_METHODS.deliverySetThreadLineup]: AuthOrchestrationOperateScope,
   [WS_METHODS.serverReportClientActivity]: AuthOrchestrationReadScope,

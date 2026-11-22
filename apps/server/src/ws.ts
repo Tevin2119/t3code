@@ -27,6 +27,7 @@ import * as Stream from "effect/Stream";
 import { rpcInitialItems } from "./rpcInitialItems.ts";
 import { subscribeChatGptHandoff } from "./provider/CodexChatGptHandoff.ts";
 import {
+  DeliveryError,
   AcpRegistryOperationError,
   CommandId,
   authScopeResponse,
@@ -266,6 +267,7 @@ import * as ThreadIssueService from "./orchestration-v2/ThreadIssueService.ts";
 import * as IssueTrackerConnections from "./issue/IssueTrackerConnections.ts";
 import * as PullRequestReviewGuideService from "./pullRequest/PullRequestReviewGuideService.ts";
 import { listLinkedPullRequestThreads } from "./pullRequest/linkedThreads.ts";
+import { listBoardThreadRows } from "./delivery/boardThreadRows.ts";
 import { pullRequestSyncKey } from "./pullRequest/pullRequestSyncKey.ts";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as PullRequestSyncReactor from "./orchestration-v2/PullRequestSyncReactor.ts";
@@ -3692,6 +3694,7 @@ const layerForkWsRpc = (currentSession: EnvironmentAuth.AuthenticatedSession) =>
     Effect.gen(function* () {
       const checkoutUpdate = yield* CheckoutUpdate.CheckoutUpdate;
       const delivery = yield* DeliveryService.DeliveryService;
+      const sql = yield* SqlClient.SqlClient;
       return ForkServerWsRpcGroup.of({
         [WS_METHODS.serverSubscribeCheckoutUpdate]: (_input) => checkoutUpdate.states,
         [WS_METHODS.serverCheckCheckoutUpdate]: (_input) =>
@@ -3708,6 +3711,27 @@ const layerForkWsRpc = (currentSession: EnvironmentAuth.AuthenticatedSession) =>
             : delivery.act(input),
         [WS_METHODS.deliveryBindThread]: (input) => delivery.bindThread(input),
         [WS_METHODS.deliveryThreadBinding]: (input) => delivery.threadState(input.threadId),
+        [WS_METHODS.deliveryArchivedBoardThreads]: () =>
+          listBoardThreadRows({ archived: true }).pipe(
+            Effect.provideService(SqlClient.SqlClient, sql),
+            Effect.map((rows) => ({
+              threads: rows.map((row) => ({
+                threadId: row.threadId,
+                projectId: row.projectId,
+                title: row.title,
+                archivedAt: row.archivedAt ?? "",
+                board: row.task.board,
+                taskId: row.task.id,
+              })),
+            })),
+            Effect.mapError(
+              () =>
+                new DeliveryError({
+                  reason: "storage",
+                  detail: "The archived board conversations could not be read.",
+                }),
+            ),
+          ),
         [WS_METHODS.deliveryReleaseThread]: (input) => delivery.releaseThread(input.threadId),
         [WS_METHODS.deliverySetThreadLineup]: (input) => delivery.setThreadLineup(input),
       });

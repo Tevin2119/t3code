@@ -30,42 +30,50 @@ export class BoardThreadRows extends Context.Service<
   }
 >()("t3/delivery/boardThreadRows") {}
 
+/** The rows, read with whatever database connection the caller holds. */
+export const listBoardThreadRows = Effect.fn("listBoardThreadRows")(function* (options: {
+  readonly archived: boolean;
+}) {
+  const sql = yield* SqlClient.SqlClient;
+  const rows = yield* sql<{
+    id: string;
+    projectId: string;
+    title: string;
+    archivedAt: string | null;
+    marker: string | null;
+  }>`
+    SELECT t.thread_id AS id, t.project_id AS "projectId", t.title,
+      t.archived_at AS "archivedAt",
+      json_extract(t.payload_json, '$.lineage.engineIntake') AS marker
+    FROM orchestration_v2_projection_threads AS t
+    WHERE t.deleted_at IS NULL
+      AND json_extract(t.payload_json, '$.lineage.engineIntake') LIKE ${BOARD_TASK_MARKER_LIKE}
+    ORDER BY t.updated_at DESC, id ASC
+  `.pipe(NodeSqliteClient.readOnly);
+  return rows.flatMap((row): ReadonlyArray<BoardThreadRow> => {
+    const task = boardTaskOfMarker(row.marker);
+    return task === null || (row.archivedAt !== null) !== options.archived
+      ? []
+      : [
+          {
+            threadId: ThreadId.make(row.id),
+            projectId: ProjectId.make(row.projectId),
+            title: row.title,
+            archivedAt: row.archivedAt,
+            task,
+          },
+        ];
+  });
+});
+
 export const layer = Layer.effect(
   BoardThreadRows,
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     return BoardThreadRows.of({
-      list: Effect.fn("BoardThreadRows.list")(function* ({ archived }) {
-        const rows = yield* sql<{
-          id: string;
-          projectId: string;
-          title: string;
-          archivedAt: string | null;
-          marker: string | null;
-        }>`
-          SELECT t.thread_id AS id, t.project_id AS "projectId", t.title,
-            t.archived_at AS "archivedAt",
-            json_extract(t.payload_json, '$.lineage.engineIntake') AS marker
-          FROM orchestration_v2_projection_threads AS t
-          WHERE t.deleted_at IS NULL
-            AND json_extract(t.payload_json, '$.lineage.engineIntake') LIKE ${BOARD_TASK_MARKER_LIKE}
-          ORDER BY t.updated_at DESC, id ASC
-        `.pipe(NodeSqliteClient.readOnly);
-        return rows.flatMap((row) => {
-          const task = boardTaskOfMarker(row.marker);
-          return task === null || (row.archivedAt !== null) !== archived
-            ? []
-            : [
-                {
-                  threadId: ThreadId.make(row.id),
-                  projectId: ProjectId.make(row.projectId),
-                  title: row.title,
-                  archivedAt: row.archivedAt,
-                  task,
-                },
-              ];
-        });
-      }),
+      list: Effect.fn("BoardThreadRows.list")((options) =>
+        listBoardThreadRows(options).pipe(Effect.provideService(SqlClient.SqlClient, sql)),
+      ),
     });
   }),
 );

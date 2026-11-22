@@ -52,6 +52,7 @@ import {
 } from "../../state/delivery";
 import { BoardEngineNotice, BoardNotice, CloseNoticeButton } from "./BoardEngineNotice";
 import { EngineAttentionBar } from "./EnginePanel";
+import { ArchivedBoardThreads } from "./ArchivedBoardThreads";
 import { BoardToolbar } from "./BoardToolbar";
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
 import { SidebarInset } from "../ui/sidebar";
@@ -732,7 +733,14 @@ function EnvironmentBoardPage({ environmentId }: { readonly environmentId: Envir
                 onEdit={(item) => setDialog({ kind: "view", editing: item })}
               />
             }
-            help={<HowItFits />}
+            help={
+              <>
+                {active && !shared ? (
+                  <ArchivedBoardThreads environmentId={active} board={boardSet} />
+                ) : null}
+                <HowItFits />
+              </>
+            }
             filters={filters}
             grouping={grouping}
             view={view}
