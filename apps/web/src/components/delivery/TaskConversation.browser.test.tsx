@@ -196,6 +196,25 @@ describe("a seat in a linked environment", () => {
     expect(mountedThreads).toEqual([]);
   });
 
+  it("stays in the direct view, composer and all, while a saved environment that nothing links to is offline", async () => {
+    using _timers = fakeTimers();
+    await using screen = await render(<Seat resolved={direct} reach={online} />);
+    const composer = screen.getByRole("textbox", { name: "Composer" });
+    await composer.fill("half a sentence");
+    const element = composer.element();
+    // Offline with no link: the links answer, and there is still nothing to read it through.
+    for (const reach of [loading, loaded]) {
+      await screen.rerender(<Seat resolved={direct} reach={reach} />);
+      await act(() => vi.advanceTimersByTime(SEAT_LINKED_VIEW_DELAY_MS * 3));
+      expect(element.isConnected).toBe(true);
+      expect(document.activeElement).toBe(element);
+    }
+    // Back online: the same view, with what was typed.
+    await screen.rerender(<Seat resolved={direct} reach={online} />);
+    expect((element as HTMLTextAreaElement).value).toBe("half a sentence");
+    expect(document.body.textContent).not.toContain("Linked view");
+  });
+
   it("keeps the composer, its text and its focus through a reconnect, and moves to the linked view only when the connection stays down", async () => {
     // The hook's wait is a timer, held here until the test moves it.
     using _timers = fakeTimers();

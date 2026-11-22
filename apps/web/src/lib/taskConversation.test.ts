@@ -189,6 +189,30 @@ describe("an open seat's view, held steady", () => {
   it("shows nothing once the seat is closed", () => {
     expect(steadySeatThread(direct, null, online)).toEqual({ kind: "none" });
   });
+
+  it("keeps a seat open in place when its saved environment goes offline and nothing links to it", () => {
+    const children = [
+      {
+        childThreadId: null,
+        remoteChild: { environmentId: remote, threadId: direct.threadId, label: "Desktop" },
+        teamChat: { seat: "remote-qa" },
+      },
+    ];
+    // What the connections say at each step, for a saved environment no link reaches.
+    const resolved = (connected: boolean) =>
+      openSeatThread(ref, children, direct, {
+        ownConnection: () => ({ connected }),
+        isLinked: () => false,
+      });
+    const open = steadySeatThread(null, resolved(true), online);
+    expect(open).toEqual({ kind: "shown", seat: direct });
+    // Offline: the same view stays, where the app says it is offline and can reconnect. There
+    // is no linked view to move to, however long it lasts, and coming back changes nothing.
+    for (const reach of [loading, loaded]) {
+      expect(steadySeatThread(direct, resolved(false), reach)).toEqual(open);
+    }
+    expect(steadySeatThread(direct, resolved(true), online)).toEqual(open);
+  });
 });
 
 describe("why a task waits", () => {
