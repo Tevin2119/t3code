@@ -3331,17 +3331,19 @@ it.effect("SQL list older settled threads below a cursor", () =>
         latestSequence: Effect.succeed(0),
         options: { omitIdleSubagents, omitOlderSettled: false },
       }).pipe(
-        Effect.map(({ snapshot }) =>
-          snapshot.threads
+        Effect.map(({ snapshot }) => ({
+          sent: snapshot.threads
             .map((thread) => thread.id)
             .filter((threadId) => threadId.includes("engine-intake")),
-        ),
+          counted: snapshot.serverOwnedThreads,
+        })),
       );
-    assert.deepEqual(yield* serverOwnedSentTo(true), []);
-    assert.sameMembers(yield* serverOwnedSentTo(false), [
-      id("engine-intake"),
-      id("engine-intake-open"),
-    ]);
+    // Either way the snapshot counts them per project, so a client can say the project has them.
+    const counted = [{ projectId: ProjectId.make("project:a"), count: 2 }];
+    assert.deepEqual(yield* serverOwnedSentTo(true), { sent: [], counted });
+    const everyRow = yield* serverOwnedSentTo(false);
+    assert.sameMembers(everyRow.sent, [id("engine-intake"), id("engine-intake-open")]);
+    assert.deepEqual(everyRow.counted, counted);
 
     const list = (
       before: { readonly settledAt: string; readonly threadId?: ThreadId },

@@ -723,6 +723,7 @@
   "bac5ef48aafb20b1": "Isto remove {count} entradas de projeto agrupadas.",
   "3e46fbf3eadf0745": "Essas threads e as threads arquivadas são excluídas do T3 Code. As sessões do provedor são mantidas.",
   "1a50cbc984f8fe1c": "As threads arquivadas são excluídas do T3 Code. As sessões do provedor são mantidas.",
+  "cc23bb20eefeac3b": "{count, plural, one {{count} conversa iniciada por um quadro ou pelo motor é arquivada, não excluída.} other {{count} conversas iniciadas por um quadro ou pelo motor são arquivadas, não excluídas.}}",
   "4f076ebbf1c8846e": "Isto remove apenas as entradas do projeto, não os arquivos no disco.",
   "19b8f3ad79efb9e1": "As outras entradas deste projeto agrupado não são afetadas.",
   "2207c69b042b2e37": "Esta ação não pode ser desfeita.",

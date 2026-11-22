@@ -46,7 +46,7 @@ import { useSettingsEnvironmentFilter, type SettingsTarget } from "./settings-en
 import { leaveSettingsPage } from "./settings-navigation";
 import { workspaceHasColumns } from "../layout/workspace/workspace-selection-store";
 import { DEFAULT_SETTINGS_PAGE } from "../layout/workspace/workspace-tab-navigation";
-import { readUnloadedThreadCount } from "../../state/olderSettledShelf";
+import { readServerOwnedThreadCount, readUnloadedThreadCount } from "../../state/olderSettledShelf";
 import { m } from "../../i18n/messages";
 
 export function SettingsProjectOverviewRouteScreen() {
@@ -253,6 +253,7 @@ function ProjectOverviewContent(props: {
         displayName,
         threads,
         unloadedThreadCount: readUnloadedThreadCount(members, threads),
+        serverOwnedThreadCount: readServerOwnedThreadCount(members, threads),
       },
       m,
     );

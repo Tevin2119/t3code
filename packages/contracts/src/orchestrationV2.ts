@@ -2513,6 +2513,12 @@ export const OrchestrationV2ShellSnapshot = Schema.Struct({
   ...OrchestrationV2ThreadShellSnapshot.fields,
   projects: Schema.Array(OrchestrationProjectShell),
   olderSettled: Schema.optionalKey(OrchestrationV2OlderSettledThreads),
+  /**
+   * Per project, the active threads carrying the server-owned marker, sent or not (their seats
+   * and side chats are not counted). No list shows them, so this is how a client can say a
+   * project has them. Exact at `snapshotSequence`; absent when there are none.
+   */
+  serverOwnedThreads: Schema.optionalKey(Schema.Array(OrchestrationV2OlderSettledCount)),
 });
 export type OrchestrationV2ShellSnapshot = typeof OrchestrationV2ShellSnapshot.Type;
 

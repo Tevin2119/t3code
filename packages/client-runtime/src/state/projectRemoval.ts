@@ -1,8 +1,48 @@
-import { isListedThreadLineage } from "@t3tools/contracts";
+import {
+  isListedThreadLineage,
+  isServerOwnedThreadLineage,
+  type EnvironmentId,
+  type OrchestrationV2ShellSnapshot,
+  type ProjectId,
+} from "@t3tools/contracts";
 
 import type { EnvironmentProject, EnvironmentThreadShell } from "./models.ts";
 import { mFallback, msg } from "gt-i18n";
 import type { MFunctionType } from "gt-i18n/types";
+
+/**
+ * The threads of these projects that the server started for itself, such as a board task's
+ * conversation. The shell leaves their rows out and counts them instead, as of its last snapshot;
+ * a server that does not count sends every row, so the larger of the two is used.
+ */
+export function serverOwnedThreadCount(input: {
+  readonly members: ReadonlyArray<{
+    readonly environmentId: EnvironmentId;
+    readonly id: ProjectId;
+  }>;
+  readonly counted: (
+    environmentId: EnvironmentId,
+  ) => OrchestrationV2ShellSnapshot["serverOwnedThreads"];
+  /** The rows this client holds. */
+  readonly threads: ReadonlyArray<
+    Pick<EnvironmentThreadShell, "environmentId" | "projectId" | "lineage">
+  >;
+}): number {
+  let total = 0;
+  for (const member of input.members) {
+    const counted =
+      input.counted(member.environmentId)?.find((entry) => entry.projectId === member.id)?.count ??
+      0;
+    const held = input.threads.filter(
+      (thread) =>
+        thread.environmentId === member.environmentId &&
+        thread.projectId === member.id &&
+        isServerOwnedThreadLineage(thread.lineage),
+    ).length;
+    total += Math.max(counted, held);
+  }
+  return total;
+}
 
 export function planProjectRemoval<
   Thread extends Pick<EnvironmentThreadShell, "environmentId" | "projectId" | "lineage">,
@@ -19,6 +59,8 @@ export function planProjectRemoval<
     readonly threads: ReadonlyArray<Thread>;
     /** The members' threads this client does not hold: older settled threads its shell left out. */
     readonly unloadedThreadCount?: number;
+    /** The members' server-owned threads, which are archived, not deleted: `serverOwnedThreadCount`. */
+    readonly serverOwnedThreadCount?: number;
   },
   resolve: MFunctionType = mFallback,
 ) {
@@ -31,6 +73,7 @@ export function planProjectRemoval<
   const threadCount =
     projectThreads.filter((thread) => isListedThreadLineage(thread.lineage)).length +
     (options.unloadedThreadCount ?? 0);
+  const keptCount = options.serverOwnedThreadCount ?? 0;
   const isWholeGroup = members.length === groupMemberCount;
   const targetKind = hasOtherMembers || !isWholeGroup ? "checkout" : "project";
   const singleMember = members.length === 1 ? members[0]! : null;
@@ -80,6 +123,17 @@ export function planProjectRemoval<
             msg("Any archived threads are deleted from T3 Code. Provider sessions are kept."),
           ),
         ]),
+    // No list shows these, so this line is the only place a person learns they exist.
+    ...(keptCount > 0
+      ? [
+          resolve(
+            msg(
+              "{count, plural, one {{count} conversation started by a board or the engine is archived, not deleted.} other {{count} conversations started by a board or the engine are archived, not deleted.}}",
+              { count: keptCount },
+            ),
+          ),
+        ]
+      : []),
     isWholeGroup && !hasOtherMembers
       ? resolve(msg("This removes only the project entries, not the files on disk."))
       : resolve(msg("Other entries in this grouped project are unaffected.")),

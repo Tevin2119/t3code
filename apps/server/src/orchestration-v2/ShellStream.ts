@@ -194,6 +194,7 @@ interface ShellTrimFacts {
   readonly remoteTaskParentIds: ReadonlySet<string>;
   /** Threads carrying the server-owned marker: an engine intake or a board task's conversation. */
   readonly serverOwnedThreadIds: ReadonlySet<string>;
+  readonly serverOwnedCounts: ReadonlyArray<OrchestrationV2OlderSettledCount>;
   /** Undefined when no thread is settled, so none is older. */
   readonly olderSettledBeforeMs: number | undefined;
   readonly olderSettledCounts: ReadonlyArray<OrchestrationV2OlderSettledCount>;
@@ -206,10 +207,14 @@ function shellTrimFacts(rows: ReadonlyArray<ShellTrimRow>): ShellTrimFacts {
   const subagentThreadIds = new Set<string>();
   const remoteTaskParentIds = new Set<string>();
   const serverOwnedThreadIds = new Set<string>();
+  const serverOwned = new Map<ProjectId, number>();
   const settledTimes: Array<number> = [];
   for (const row of rows) {
     if (row.hasRemoteTasks === true) remoteTaskParentIds.add(row.id);
-    if (isServerOwnedThreadLineage(row.lineage)) serverOwnedThreadIds.add(row.id);
+    if (isServerOwnedThreadLineage(row.lineage)) {
+      serverOwnedThreadIds.add(row.id);
+      serverOwned.set(row.projectId, (serverOwned.get(row.projectId) ?? 0) + 1);
+    }
     if (row.lineage.relationshipToParent === "subagent") {
       subagentThreadIds.add(row.id);
       if (row.lineage.parentThreadId) subagentParentIds.add(row.lineage.parentThreadId);
@@ -237,6 +242,7 @@ function shellTrimFacts(rows: ReadonlyArray<ShellTrimRow>): ShellTrimFacts {
     subagentThreadIds,
     remoteTaskParentIds,
     serverOwnedThreadIds,
+    serverOwnedCounts: Array.from(serverOwned, ([projectId, count]) => ({ projectId, count })),
     olderSettledBeforeMs,
     olderSettledCounts: Array.from(counts, ([projectId, count]) => ({ projectId, count })),
   };
@@ -412,12 +418,17 @@ function trimShellSnapshot(
   const threads = options.omitIdleSubagents
     ? omitIdleSubagentShellsWith(omitServerOwnedShellsWith(base.threads, facts), facts)
     : base.threads;
-  if (!options.omitOlderSettled) return { ...base, threads };
+  // Counted for every subscriber: an older client drops the key, a newer one need not hold rows.
+  const counted =
+    facts.serverOwnedCounts.length === 0
+      ? { ...base, threads }
+      : { ...base, threads, serverOwnedThreads: facts.serverOwnedCounts };
+  if (!options.omitOlderSettled) return counted;
   const older = omitOlderSettledShellsWith(
     { threads, snapshotSequence: base.snapshotSequence, now: options.now },
     facts,
   );
-  return { ...base, threads: older.threads, olderSettled: older.olderSettled };
+  return { ...counted, threads: older.threads, olderSettled: older.olderSettled };
 }
 
 /**

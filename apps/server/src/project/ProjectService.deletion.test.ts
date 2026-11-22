@@ -89,7 +89,11 @@ const seedProject = Effect.fn("ProjectDeletionTest.seedProject")(function* (proj
   `;
 });
 
-function nativeThreadCreated(projectId: ProjectId, threadId: ThreadId) {
+function nativeThreadCreated(
+  projectId: ProjectId,
+  threadId: ThreadId,
+  overrides: Partial<Pick<OrchestrationV2AppThread, "lineage" | "archivedAt">> = {},
+) {
   const createdAt = DateTime.makeUnsafe("2026-01-01T00:00:00.000Z");
   const providerInstanceId = ProviderInstanceId.make("codex");
   const payload: OrchestrationV2AppThread = {
@@ -114,6 +118,7 @@ function nativeThreadCreated(projectId: ProjectId, threadId: ThreadId) {
     settledAt: null,
     lastVisitedAt: null,
     deletedAt: null,
+    ...overrides,
   };
   return {
     id: EventId.make(`created:${threadId}`),
@@ -425,6 +430,97 @@ it.effect("rejects a child deletion command ID already accepted for an unrelated
       assert.deepEqual(cleanup, []);
     }).pipe(Effect.provide(layerServices));
   }).pipe(Effect.provide(layerDatabase)),
+);
+
+it.effect(
+  "archives a removed project's board task threads and their seats, and deletes the rest",
+  () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const projectId = ProjectId.make("project:board-threads");
+      const id = (name: string) => ThreadId.make(`thread:board:${name}`);
+      const boardTask = (name: string) => ({
+        parentThreadId: null,
+        relationshipToParent: null,
+        rootThreadId: id(name),
+        engineIntake: `board-task:board-1:${name}`,
+      });
+      yield* seedProject(projectId);
+      yield* TestClock.setTime(Date.parse("2026-09-04T12:00:00.000Z"));
+      const archivedBefore = DateTime.makeUnsafe("2026-02-01T00:00:00.000Z");
+
+      yield* Effect.gen(function* () {
+        const eventSink = yield* EventSink.EventSinkV2;
+        const projections = yield* ProjectionStore.ProjectionStoreV2;
+        yield* eventSink.write({
+          events: [
+            nativeThreadCreated(projectId, id("listed")),
+            nativeThreadCreated(projectId, id("task"), { lineage: boardTask("task") }),
+            nativeThreadCreated(projectId, id("seat"), {
+              lineage: {
+                parentThreadId: id("task"),
+                relationshipToParent: "subagent",
+                rootThreadId: id("task"),
+              },
+            }),
+            nativeThreadCreated(projectId, id("done"), {
+              lineage: boardTask("done"),
+              archivedAt: archivedBefore,
+            }),
+          ],
+        });
+        const service = yield* ProjectService.make;
+        // Board threads are affected too, so a removal that was not confirmed is still refused.
+        const unconfirmed = yield* service
+          .delete({ commandId: CommandId.make("command:board:unconfirmed"), projectId })
+          .pipe(Effect.flip);
+        assert.equal(unconfirmed._tag, "ProjectNotEmptyError");
+
+        const input = { commandId: CommandId.make("command:board:delete"), projectId, force: true };
+        const removed = yield* service.delete(input);
+        assert.isNotNull(removed.deletedAt);
+        const threadOf = (name: string) =>
+          projections.getThreadProjection(id(name)).pipe(Effect.map(({ thread }) => thread));
+        assert.isNotNull((yield* threadOf("listed")).deletedAt);
+        const removedAt = yield* DateTime.now;
+        for (const name of ["task", "seat"]) {
+          const kept = yield* threadOf(name);
+          assert.isNull(kept.deletedAt, name);
+          assert.deepEqual(kept.archivedAt, removedAt, name);
+        }
+        // Already archived: left exactly as it was.
+        const done = yield* threadOf("done");
+        assert.isNull(done.deletedAt);
+        assert.deepEqual(done.archivedAt, archivedBefore);
+
+        const threadEvents = sql<{ readonly stream_id: string; readonly event_type: string }>`
+        SELECT stream_id, event_type FROM orchestration_events
+        WHERE event_type IN ('thread.deleted', 'thread.archived')
+        ORDER BY stream_id ASC
+      `;
+        const events = yield* threadEvents;
+        assert.deepEqual(
+          events.map((event) => [event.stream_id, event.event_type]),
+          [
+            [id("listed"), "thread.deleted"],
+            [id("seat"), "thread.archived"],
+            [id("task"), "thread.archived"],
+          ],
+        );
+        // An archived thread keeps its files; only the deleted one has them cleaned up.
+        const cleanups = yield* sql<{ readonly thread_id: string; readonly effect_type: string }>`
+        SELECT thread_id, effect_type FROM orchestration_v2_effect_outbox
+        WHERE effect_type = 'terminal.cleanup' ORDER BY thread_id ASC
+      `;
+        assert.deepEqual(
+          cleanups.map((cleanup) => cleanup.thread_id),
+          [id("listed"), id("seat"), id("task")],
+        );
+        // A retried removal repeats nothing.
+        assert.deepEqual(yield* service.delete(input), removed);
+        assert.deepEqual(yield* threadEvents, events);
+      }).pipe(Effect.provide(layerServices));
+    }).pipe(Effect.provide(layerDatabase)),
 );
 
 it.effect("deletes a project without force once its imported threads were deleted in V2", () =>
