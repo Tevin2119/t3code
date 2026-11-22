@@ -123,12 +123,13 @@ export function planProjectRemoval<
             msg("Any archived threads are deleted from T3 Code. Provider sessions are kept."),
           ),
         ]),
-    // No list shows these, so this line is the only place a person learns they exist.
+    // No list shows these, so this line is the only place a person learns they exist. Its last
+    // sentence is the exception to "any archived threads are deleted" above.
     ...(keptCount > 0
       ? [
           resolve(
             msg(
-              "{count, plural, one {{count} conversation started by a board or the engine is archived, not deleted.} other {{count} conversations started by a board or the engine are archived, not deleted.}}",
+              "{count, plural, one {{count} conversation started by a board or the engine is archived, not deleted.} other {{count} conversations started by a board or the engine are archived, not deleted.}} Board and engine conversations already archived are kept.",
               { count: keptCount },
             ),
           ),
