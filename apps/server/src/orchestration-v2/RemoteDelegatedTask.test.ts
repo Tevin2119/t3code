@@ -12,6 +12,7 @@ import {
   RunId,
   ThreadId,
 } from "@t3tools/contracts";
+import { limitedLeadHandoffThreadId } from "@t3tools/shared/limitedSeat";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -418,6 +419,79 @@ it.layer(layerTest)("a delegated task in a linked environment", (it) => {
       const offered = yield* Ref.get(offers);
       assert.equal(offered.length, 1);
       assert.equal(offered[0]?.threadId, parent.threadId);
+    }),
+  );
+
+  it.effect("settles its result quietly on a parent whose work continues in a linked thread", () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const sink = yield* EventSink.EventSinkV2;
+      const parent = yield* seedLiveParent("handed-on");
+      yield* orchestrator.dispatch({
+        type: "delegated_task.remote.request",
+        commandId: CommandId.make("command:remote-delegate:handed-on"),
+        parentThreadId: parent.threadId,
+        parentRunId: parent.runId,
+        parentNodeId: parent.rootNodeId,
+        task: "Run the suite there.",
+        driver: ProviderDriverKind.make("remote"),
+        modelSelection,
+        remoteChild,
+        completionWake: "always",
+      });
+      // The parent's run fails on its limit and the work is handed on to a linked thread.
+      const now = yield* DateTime.now;
+      const before = yield* orchestrator.getThreadProjection(parent.threadId);
+      yield* sink.write({
+        events: [
+          {
+            id: EventId.make("event:handed-on:failed"),
+            type: "run.updated",
+            threadId: parent.threadId,
+            runId: parent.runId,
+            occurredAt: now,
+            payload: { ...before.runs[0]!, status: "failed", completedAt: now },
+          },
+        ],
+      });
+      const continuedIn = limitedLeadHandoffThreadId(parent.runId);
+      yield* orchestrator.dispatch({
+        type: "thread.create",
+        createdBy: "agent",
+        creationSource: "server",
+        commandId: CommandId.make("command:create:handed-on-continued"),
+        threadId: continuedIn,
+        projectId: ProjectId.make("project:remote-delegated-task"),
+        title: "Parent, continued",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+      });
+      const offers = yield* Offers;
+      yield* Ref.set(offers, []);
+      const taskId = before.subagents[0]!.id;
+      // The result is recorded and disposed, as on an archived parent: no error, no wake, no run.
+      yield* orchestrator.dispatch({
+        type: "delegated_task.remote.complete",
+        commandId: CommandId.make("command:remote-complete:handed-on"),
+        parentThreadId: parent.threadId,
+        taskId,
+        status: "completed",
+        result: "All 412 tests pass on the box.",
+        stoppedThere: "ran-out",
+      });
+      const after = yield* orchestrator.getThreadProjection(parent.threadId);
+      const task = after.subagents.find((candidate) => candidate.id === taskId);
+      assert.equal(task?.result, "All 412 tests pass on the box.");
+      assert.equal(task?.completionDelivery?.state, "disposed");
+      assert.deepEqual(
+        after.runs.map((run) => [run.id, run.status]),
+        [[parent.runId, "failed"]],
+      );
+      assert.lengthOf(after.messages, before.messages.length);
+      assert.deepEqual(yield* Ref.get(offers), []);
     }),
   );
 });

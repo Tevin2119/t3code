@@ -1,13 +1,27 @@
 import {
   CommandId,
+  deliveryLimitedSeatPolicy,
   deliveryParticipantAccess,
   isCompactionCommandMessage,
+  isServerOwnedThreadLineage,
+  type ModelSelection,
   parseGoalCommand,
   type OrchestrationV2Subagent,
   RunId,
   ThreadId,
 } from "@t3tools/contracts";
 import { projectComposerContextForProvider } from "@t3tools/shared/composerContextReferences";
+import {
+  agreedStandIn,
+  firstFreeFavorite,
+  isFreeCandidate,
+  type LimitedSeatFacts,
+  limitedSeatPool,
+  seatLimit,
+  type SeatModel,
+  seatModelOf,
+} from "@t3tools/shared/limitedSeat";
+import { createModelSelection } from "@t3tools/shared/model";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as EventSink from "../orchestration-v2/EventSink.ts";
@@ -21,6 +35,7 @@ import { resolveAttachmentPath } from "../attachmentStore.ts";
 import { ServerConfig } from "../config.ts";
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import * as DeliveryService from "./DeliveryService.ts";
+import * as LimitedSeats from "./LimitedSeats.ts";
 import { teamDiscussionContext } from "./teamDiscussionContext.ts";
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
@@ -59,11 +74,39 @@ export const isNativeTeamChatError = Schema.is(NativeTeamChatError);
 const terminal = (task: OrchestrationV2Subagent) =>
   ["completed", "failed", "cancelled", "interrupted"].includes(task.status);
 
+/**
+ * A usage limit's reset as a turn note writes it. The server cannot know each reader's clock, so
+ * the time is the server's own and names its zone.
+ */
+export const formatLimitReset = (resetAt: string) =>
+  Option.match(DateTime.make(resetAt), {
+    onNone: () => resetAt,
+    onSome: (time) =>
+      DateTime.toDate(time).toLocaleString(undefined, {
+        month: "short",
+        day: "numeric",
+        hour: "numeric",
+        minute: "2-digit",
+        timeZoneName: "short",
+      }),
+  });
+
+/** The name the model picker shows for a model; its id where the provider lists no name. */
+const modelName = (facts: LimitedSeatFacts, model: SeatModel) =>
+  facts.providers
+    .find((provider) => provider.instanceId === model.instanceId)
+    ?.models.find((candidate) => candidate.slug === model.model)?.name ?? model.model;
+
 const contributions = (tasks: ReadonlyArray<OrchestrationV2Subagent>) =>
   tasks
     .map(
       (task) =>
-        `${task.teamChat?.seat ?? task.title} (${task.providerInstanceId}/${task.model}, ${task.status}; native child ${task.childThreadId}):\n${
+        `${task.teamChat?.seat ?? task.title} (${task.providerInstanceId}/${task.model}${
+          // The lead attributes insights to a seat's model, so it is told when another stood in.
+          task.teamChat?.substituteFor === undefined
+            ? ""
+            : `, standing in for ${task.teamChat.substituteFor.model}, which reached its usage limit`
+        }, ${task.status}; native child ${task.childThreadId}):\n${
           task.result === null
             ? "No contribution was returned."
             : task.result.length > 6000
@@ -75,6 +118,7 @@ const contributions = (tasks: ReadonlyArray<OrchestrationV2Subagent>) =>
 
 export const make = Effect.gen(function* () {
   const deliveryOption = yield* Effect.serviceOption(DeliveryService.DeliveryService);
+  const limitedSeatsOption = yield* Effect.serviceOption(LimitedSeats.LimitedSeats);
   const projections = yield* ProjectionStore.ProjectionStoreV2;
   const eventSink = yield* EventSink.EventSinkV2;
   const threads = yield* ThreadManagementService.ThreadManagementService;
@@ -159,10 +203,13 @@ export const make = Effect.gen(function* () {
         if (notice?.type === "system_notice") skipped.set(seat.seat, notice.message);
       }
       // Notices preserve admission failures even when a provider or team changes on a later wake.
+      let noticesWritten = 0;
       const recordSkip = Effect.fn("NativeTeamChat.recordSkip")(function* (
         seat: string,
         reason: string,
         noticeId = skipId(seat),
+        // A substitute is a note on a seat that joins, not a seat that is left out.
+        substitute = false,
       ) {
         const now = yield* DateTime.now;
         const written = yield* eventSink.writeIfRunCurrent({
@@ -189,9 +236,11 @@ export const make = Effect.gen(function* () {
                 nativeItemRef: null,
                 parentItemId: null,
                 ordinal:
-                  Math.max(0, ...parent.turnItems.map((item) => item.ordinal)) + skipped.size + 1,
-                status: "failed",
-                title: `${seat} · skipped`,
+                  Math.max(0, ...parent.turnItems.map((item) => item.ordinal)) +
+                  skipped.size +
+                  (noticesWritten += 1),
+                status: substitute ? "completed" : "failed",
+                title: substitute ? `${seat} · substitute` : `${seat} · skipped`,
                 message: reason,
                 startedAt: now,
                 completedAt: now,
@@ -202,7 +251,7 @@ export const make = Effect.gen(function* () {
         });
         if (!written.committed)
           return yield* new NativeTeamChatError({ runId: input.runId, reason: "state" });
-        skipped.set(seat, reason);
+        if (!substitute) skipped.set(seat, reason);
       });
       const fallback = Effect.fn("NativeTeamChat.fallback")(function* (reason: string) {
         if (!tasks.every(terminal)) return { ready: false, context: "" };
@@ -247,6 +296,97 @@ export const make = Effect.gen(function* () {
           ? { readOnly: true, access: "approval-required" as const }
           : { readOnly: false, access };
       };
+      const policy = deliveryLimitedSeatPolicy(lineup);
+      type StandIn = {
+        readonly selection: ModelSelection;
+        readonly substituteFor?: NonNullable<
+          NonNullable<OrchestrationV2Subagent["teamChat"]>["substituteFor"]
+        >;
+      };
+      /** Seats this call starts on a substitute, by seat. */
+      const standIns = new Map<string, StandIn>();
+      const turnStandIn = (seat: string): ModelSelection | undefined => {
+        const task = tasks.find(
+          (candidate) =>
+            candidate.teamChat?.seat === seat && candidate.teamChat.substituteFor !== undefined,
+        );
+        if (task === undefined) return undefined;
+        return (
+          task.modelSelection ??
+          (task.model === null
+            ? undefined
+            : createModelSelection(task.providerInstanceId, task.model))
+        );
+      };
+      const runsOn = (seat: (typeof roster)[number]) =>
+        standIns.get(seat.seat)?.selection ?? turnStandIn(seat.seat) ?? seat.modelSelection;
+      /**
+       * What a seat starts on: its own model, or a substitute when that one is limited. Undefined
+       * once the seat has been left out, with its notice written.
+       */
+      const standIn = Effect.fn("NativeTeamChat.standIn")(function* (
+        seat: (typeof roster)[number],
+        facts: LimitedSeatFacts,
+      ) {
+        const own = seatModelOf(seat.modelSelection);
+        const limit = seatLimit(facts, own);
+        if (limit === null) return { selection: seat.modelSelection } satisfies StandIn;
+        const limited = `${seat.seat}: ${modelName(facts, own)} has reached its usage limit${limit.resetAt ? ` until ${formatLimitReset(limit.resetAt)}` : ""}.`;
+        const substituteFor = { ...own, resetAt: limit.resetAt };
+        const earlier = turnStandIn(seat.seat);
+        if (earlier !== undefined) {
+          // One swap a turn: the stand-in chosen for this turn is kept, or the seat sits out.
+          if (seatLimit(facts, seatModelOf(earlier)) === null)
+            return { selection: earlier, substituteFor } satisfies StandIn;
+          yield* recordSkip(
+            seat.seat,
+            `${limited} Its substitute ${modelName(facts, seatModelOf(earlier))} is limited too, and a seat is swapped once a turn.`,
+          );
+          return undefined;
+        }
+        if (policy === "skip") {
+          yield* recordSkip(seat.seat, `${limited} Left out of this message.`);
+          return undefined;
+        }
+        const pool = limitedSeatPool({
+          facts,
+          roster,
+          lead: parent.thread.modelSelection,
+          seat,
+          // A seat not started yet still holds the substitute a person agreed to for it.
+          runsOn: (other) =>
+            standIns.get(other.seat)?.selection ??
+            turnStandIn(other.seat) ??
+            agreedStandIn({ facts, policy, seat: other }) ??
+            other.modelSelection,
+        });
+        const free = firstFreeFavorite(pool);
+        const none = `${limited} No favorite model is free, so ${seat.seat} waits.`;
+        if (policy === "ask" || seat.picked === true) {
+          const agreed = seat.substitute;
+          if (agreed !== undefined && isFreeCandidate(pool, seatModelOf(agreed)))
+            return { selection: agreed, substituteFor } satisfies StandIn;
+          yield* recordSkip(
+            seat.seat,
+            free === null
+              ? none
+              : `${limited} ${
+                  policy === "ask"
+                    ? ""
+                    : "Its model was chosen by hand, so it is not swapped without asking. "
+                }${modelName(facts, free)} is free: swap to it from the notice to use it from the next message.`,
+          );
+          return undefined;
+        }
+        if (free === null) {
+          yield* recordSkip(seat.seat, none);
+          return undefined;
+        }
+        return {
+          selection: createModelSelection(free.instanceId, free.model),
+          substituteFor,
+        } satisfies StandIn;
+      });
       const mode = lineup.critique ?? "first";
       const critiqueWanted = mode === "always" || (mode === "first" && !followUp);
       const stage = done(initial) ? "critique" : "contribution";
@@ -261,13 +401,20 @@ export const make = Effect.gen(function* () {
         roster.length - skipped.size >= 2 &&
         !(done(initial) && (done(critiques) || !critiqueWanted))
       ) {
+        const facts =
+          Option.isSome(limitedSeatsOption) && !isServerOwnedThreadLineage(parent.thread.lineage)
+            ? yield* limitedSeatsOption.value.facts(input.threadId)
+            : undefined;
         const available = yield* Effect.forEach(
           candidates,
           Effect.fn("NativeTeamChat.preflight")(function* (seat) {
-            const instance = yield* instances.getInstance(seat.modelSelection.instanceId);
+            const runsOn = facts === undefined ? undefined : yield* standIn(seat, facts);
+            if (facts !== undefined && runsOn === undefined) return undefined;
+            const selection = runsOn?.selection ?? seat.modelSelection;
+            const instance = yield* instances.getInstance(selection.instanceId);
             const enabled = yield* threads.isProviderInstanceEnabledForProject({
               projectId: parent.thread.projectId,
-              instanceId: seat.modelSelection.instanceId,
+              instanceId: selection.instanceId,
             });
             let reason: string | undefined;
             if (instance === undefined) reason = "provider is unavailable";
@@ -297,13 +444,28 @@ export const make = Effect.gen(function* () {
               );
               return undefined;
             }
-            const adapter = yield* adapters.get(seat.modelSelection.instanceId).pipe(
+            const adapter = yield* adapters.get(selection.instanceId).pipe(
               Effect.catchTags({
                 ProviderAdapterRegistryLookupError: () => Effect.undefined,
               }),
             );
-            if (adapter === undefined)
+            if (adapter === undefined) {
               yield* recordSkip(seat.seat, `${seat.seat}: provider is unavailable.`);
+              return undefined;
+            }
+            if (facts !== undefined && runsOn?.substituteFor !== undefined) {
+              const { resetAt } = runsOn.substituteFor;
+              yield* recordSkip(
+                seat.seat,
+                `${seat.seat} runs on ${modelName(facts, seatModelOf(selection))} this turn: ${modelName(facts, runsOn.substituteFor)} has reached its usage limit${resetAt ? ` until ${formatLimitReset(resetAt)}` : ""}.`,
+                ids.derive.runSignalTurnItem({
+                  runId: input.runId,
+                  signal: `team-seat-substitute:${stage}:${seat.seat}`,
+                }),
+                true,
+              );
+              standIns.set(seat.seat, runsOn);
+            }
             return adapter;
           }),
         );
@@ -378,8 +540,8 @@ export const make = Effect.gen(function* () {
             members: eligible.map((seat) => ({
               seat: seat.seat,
               role: seat.role,
-              providerInstanceId: seat.modelSelection.instanceId,
-              model: seat.modelSelection.model,
+              providerInstanceId: runsOn(seat).instanceId,
+              model: runsOn(seat).model,
               access: deliveryParticipantAccess(lineup, seat.seat),
             })),
             skipped: roster.flatMap((seat) => {
@@ -416,7 +578,14 @@ export const make = Effect.gen(function* () {
           parentThreadId: input.threadId,
           parentRunId: input.runId,
           parentNodeId: run.rootNodeId,
-          teamChat: { sourceRunId: input.runId, stage, seat: seat.seat },
+          teamChat: {
+            sourceRunId: input.runId,
+            stage,
+            seat: seat.seat,
+            ...(standIns.get(seat.seat)?.substituteFor === undefined
+              ? {}
+              : { substituteFor: standIns.get(seat.seat)!.substituteFor! }),
+          },
           title: `${seat.seat} · ${stage}`,
           task: `Participate as ${seat.role}, seat ${seat.seat}, in ${group}. ${
             readOnly
@@ -427,7 +596,7 @@ export const make = Effect.gen(function* () {
               ? "Give your independent assessment of the latest user message, with evidence, assumptions, and objections."
               : "Critique the independent contributions below. Identify errors, disagreements, overlooked alternatives, and evidence that changes your conclusion. Do not merely repeat the other participants."
           }\n\nConversation:\n${conversation}${attached}${stage === "critique" ? `\n\nIndependent contributions:\n${contributions(initial)}` : ""}`,
-          modelSelection: seat.modelSelection,
+          modelSelection: standIns.get(seat.seat)?.selection ?? seat.modelSelection,
           runtimeMode: access,
           // No seat gets plan mode: a harness in it writes a plan and asks for its approval,
           // which a read-only seat is refused, and then asks the person what to revise. A

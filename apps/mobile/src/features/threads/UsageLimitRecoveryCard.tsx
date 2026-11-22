@@ -1,3 +1,5 @@
+import { useAtomValue } from "@effect/atom-react";
+import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import { errorDisplayMessage } from "@t3tools/client-runtime/errors";
 import { AsyncResult } from "effect/reactivity";
@@ -19,6 +21,7 @@ import { tryOpenExternalUrl } from "../../lib/openExternalUrl";
 import { ProviderIcon } from "../../components/ProviderIcon";
 import { AppText as Text } from "../../components/ui/AppText";
 import { useDeadlinePassed } from "../../lib/clock";
+import { deliveryEnvironment } from "../../state/delivery";
 import { threadEnvironment } from "../../state/threads";
 import { useAtomCommand } from "../../state/use-atom-command";
 
@@ -34,7 +37,12 @@ export function UsageLimitRecoveryCard({
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const resetAt = thread.runtime?.usageLimitResetAt ?? null;
+  // A run handed on to a linked thread must not resume here as well.
+  const handedOn = useAtomValue(
+    deliveryEnvironment.limitedLeadHandedOn(scopeThreadRef(environmentId, thread.id)),
+  );
   const canSchedule =
+    !handedOn &&
     thread.settledOverride !== "settled" &&
     resetAt !== null &&
     Date.parse(resetAt) > Date.parse(thread.latestRun?.completedAt ?? thread.updatedAt);

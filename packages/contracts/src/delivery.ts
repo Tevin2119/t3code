@@ -1,8 +1,13 @@
 // Relay engine-owned payloads as JSON; type only the state T3 stores or acts on.
 import * as Schema from "effect/Schema";
 
-import { ProjectId, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import { IsoDateTime, ProjectId, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import { ProviderInstanceId } from "./providerInstance.ts";
 import { ModelSelection } from "./modelSelection.ts";
+
+/** What a conversation does when a seat's model has reached its usage limit. */
+export const DeliveryLimitedSeatPolicy = Schema.Literals(["swap", "ask", "skip"]);
+export type DeliveryLimitedSeatPolicy = typeof DeliveryLimitedSeatPolicy.Type;
 
 export const DeliveryOrchestrationConfig = Schema.Struct({
   participants: Schema.Array(
@@ -12,10 +17,18 @@ export const DeliveryOrchestrationConfig = Schema.Struct({
       modelSelection: ModelSelection,
       /** This participant's own access. Absent means the conversation's. */
       access: Schema.optional(Schema.Literals(["read-only", "approval-required", "full-access"])),
+      /** A person chose this seat's model by hand, so it is never swapped without asking. */
+      picked: Schema.optional(Schema.Boolean),
+      /** What the seat does in its team. A QA seat never stands in on a builder seat's model. */
+      duty: Schema.optional(Schema.Literals(["build", "qa"])),
+      /** What a person agreed the seat runs on while its own model is limited. */
+      substitute: Schema.optional(ModelSelection),
     }),
   ).check(Schema.isMinLength(2), Schema.isMaxLength(12)),
   /** When participants critique each other. Absent means the conversation's first message only. */
   critique: Schema.optional(Schema.Literals(["first", "always", "never"])),
+  /** When a seat is limited. Absent means swap automatically. Read at the start of each turn. */
+  limitedSeat: Schema.optional(DeliveryLimitedSeatPolicy),
   /** The access participants run with. Absent means read-only: what would change something is declined. */
   access: Schema.optional(Schema.Literals(["approval-required", "full-access"])),
   /** The team participants take their roles from, when the conversation itself is bound to none. */
@@ -28,6 +41,10 @@ export const deliveryParticipantAccess = (
   lineup: Pick<DeliveryOrchestrationConfig, "access" | "participants">,
   seat: string,
 ) => lineup.participants.find((item) => item.seat === seat)?.access ?? lineup.access ?? "read-only";
+
+export const deliveryLimitedSeatPolicy = (
+  lineup: Pick<DeliveryOrchestrationConfig, "limitedSeat">,
+): DeliveryLimitedSeatPolicy => lineup.limitedSeat ?? "swap";
 
 /**
  * The team a conversation was switched away from, so one click brings it back.
@@ -274,6 +291,48 @@ export const DeliverySetThreadLineupInput = Schema.Struct({
 export type DeliverySetThreadLineupInput = typeof DeliverySetThreadLineupInput.Type;
 
 export const DeliveryThreadBindingInput = Schema.Struct({ threadId: ThreadId });
+
+/** A seat, or the lead, whose model has reached its usage limit, and what could stand in. */
+export const DeliveryLimitedSeatNotice = Schema.Struct({
+  /** The seat's name; null for the conversation's lead. */
+  seat: Schema.NullOr(TrimmedNonEmptyString),
+  limited: Schema.Struct({
+    instanceId: ProviderInstanceId,
+    model: TrimmedNonEmptyString,
+    resetAt: Schema.NullOr(IsoDateTime),
+  }),
+  /**
+   * `offered`: one click swaps to `substitute`. `none-free`: no favorite is free, so the seat
+   * waits. `swapped`: `substitute` stands in, for a lead in the thread `continuedIn`.
+   */
+  state: Schema.Literals(["offered", "none-free", "swapped"]),
+  /** The first free favorite, or the model that stands in. Null when none is free. */
+  substitute: Schema.NullOr(ModelSelection),
+  /** The thread a limited lead was handed on to. */
+  continuedIn: Schema.optional(ThreadId),
+});
+export type DeliveryLimitedSeatNotice = typeof DeliveryLimitedSeatNotice.Type;
+
+export const DeliveryLimitedSeatStatus = Schema.Struct({
+  /** Null where this setting does not govern: an ordinary chat, or a board task's conversation. */
+  policy: Schema.NullOr(DeliveryLimitedSeatPolicy),
+  notices: Schema.Array(DeliveryLimitedSeatNotice),
+});
+export type DeliveryLimitedSeatStatus = typeof DeliveryLimitedSeatStatus.Type;
+
+/** Swaps a limited seat, or the lead when `seat` is null, to a favorite the status offered. */
+export const DeliveryLimitedSeatSwapInput = Schema.Struct({
+  threadId: ThreadId,
+  seat: Schema.NullOr(TrimmedNonEmptyString),
+  modelSelection: ModelSelection,
+});
+export type DeliveryLimitedSeatSwapInput = typeof DeliveryLimitedSeatSwapInput.Type;
+
+export const DeliveryLimitedSeatSwapResult = Schema.Struct({
+  /** The thread the conversation continues in, when its lead was handed on. */
+  continuedIn: Schema.NullOr(ThreadId),
+});
+export type DeliveryLimitedSeatSwapResult = typeof DeliveryLimitedSeatSwapResult.Type;
 export type DeliveryThreadBindingInput = typeof DeliveryThreadBindingInput.Type;
 
 export class DeliveryError extends Schema.TaggedError<DeliveryError>()("DeliveryError", {

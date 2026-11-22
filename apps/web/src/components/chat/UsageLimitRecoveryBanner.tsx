@@ -31,6 +31,8 @@ type RecoveryProps = {
   stoppedAt: string;
   settled: boolean;
   requestPending: boolean;
+  /** The run continues in a linked thread, so resuming it here would run the same work twice. */
+  handedOn?: boolean;
   snoozedUntil: string | null;
   recovery: OrchestrationV2LimitRecovery | null;
   timestampFormat: TimestampFormat;
@@ -48,13 +50,21 @@ function parseEpochMs(isoDate: string | null): number | null {
 function limitRecoveryScheduleState(
   props: Pick<
     RecoveryProps,
-    "runId" | "resetAt" | "stoppedAt" | "settled" | "requestPending" | "recovery" | "snoozedUntil"
+    | "runId"
+    | "resetAt"
+    | "stoppedAt"
+    | "settled"
+    | "requestPending"
+    | "handedOn"
+    | "recovery"
+    | "snoozedUntil"
   >,
 ) {
   // The server refuses recovery changes while a request is pending.
   const canSchedule =
     !props.settled &&
     !props.requestPending &&
+    props.handedOn !== true &&
     props.resetAt !== null &&
     Date.parse(props.resetAt) > Date.parse(props.stoppedAt);
   const resumes =

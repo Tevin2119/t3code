@@ -67,6 +67,7 @@ import { ThreadFind, ThreadFindCanvas } from "./chat/ThreadFindProvider";
 import { closeThreadFind, openThreadFind, useThreadFindOpen } from "./chat/threadFindStore";
 import { THREAD_FIND_BAR_RESERVED_HEIGHT } from "./chat/ThreadFindBar";
 import { useUsageLimitRecoveryBannerItem } from "./chat/UsageLimitRecoveryBanner";
+import { useLimitedSeatBannerItems } from "./chat/LimitedSeatNotices";
 import {
   isThreadEnvironmentLocked,
   resolveDraftHeroState,
@@ -81,6 +82,7 @@ import { RightPanelSurfaceContent } from "./chat/RightPanelSurfaceContent";
 import { usePendingThreadRequests } from "./chat/usePendingThreadRequests";
 import { isScratchProject } from "@t3tools/client-runtime/state/projects";
 import { resolveWorktreeRepositorySelection } from "@t3tools/client-runtime/state/thread-repositories";
+import { limitedLeadHandoffThreadId } from "@t3tools/shared/limitedSeat";
 import { visibleThreadPullRequests } from "@t3tools/shared/threadPullRequests";
 import type { UsageLimitSourceSnapshots } from "@t3tools/contracts";
 import { feedbackBannerItem } from "./chat/ComposerFeedback";
@@ -88,6 +90,10 @@ import {
   archivedThreadBannerItem,
   archivedThreadSendBlockReason,
 } from "./chat/ComposerArchivedThread";
+import {
+  handedOnThreadBannerItem,
+  handedOnThreadSendBlockReason,
+} from "./chat/ComposerHandedOnThread";
 import { freshSessionBannerItem } from "./chat/ComposerFreshSession";
 import { armFreshSession, disarmFreshSession, useFreshSessionArmed } from "./chat/freshSessionArms";
 import { useUsageLimitsPanel } from "./chat/useUsageLimitsPanel";
@@ -191,7 +197,7 @@ import {
   squashAtomCommandFailure,
   type AtomCommandResult,
 } from "@t3tools/client-runtime/state/runtime";
-import { AsyncResult } from "effect/reactivity";
+import { AsyncResult, Atom } from "effect/reactivity";
 import { isElectron } from "../env";
 import { useActiveThreadRef } from "../hooks/useActiveThreadRef";
 import { composerRequiresModifier } from "../composer-logic";
@@ -449,6 +455,7 @@ import {
 } from "./ChatView.logic";
 
 const EMPTY_PROVIDERS: ServerProvider[] = [];
+const NOT_HANDED_ON_ATOM = Atom.make(false);
 const EMPTY_PROVIDER_MODELS: ServerProvider["models"] = [];
 const EMPTY_USAGE_LIMIT_SOURCES: UsageLimitSourceSnapshots = [];
 import type { CodexArtifactTemplate } from "@t3tools/shared/codexArtifactTemplates";
@@ -920,7 +927,16 @@ export default function ChatView(props: ChatViewProps) {
     !isServerThread || serverProjection === null
       ? null
       : deriveResumableRunId(serverProjection, serverRuntime);
+  // A thread whose limited run continues in a linked thread opens to read. The server refuses
+  // every message to it, so the composer offers no resume and no send.
+  const threadHandedOn = useAtomValue(
+    serverThread === null
+      ? NOT_HANDED_ON_ATOM
+      : deliveryEnvironment.limitedLeadHandedOn(scopeThreadRef(environmentId, serverThread.id)),
+  );
+  const handedOnRunId = threadHandedOn ? (serverThread?.latestRun?.runId ?? null) : null;
   const canResume =
+    !threadHandedOn &&
     serverProjection !== null &&
     canResumeThread(serverProjection, resumableRunId, hasHeldQueuedRuns);
   const parentSubagentThreadId =
@@ -2881,6 +2897,7 @@ export default function ChatView(props: ChatViewProps) {
           stoppedAt: limitRecoveryRun.completedAt ?? activeThreadShell.updatedAt,
           settled: activeThreadShell.settledOverride === "settled",
           requestPending: pendingApprovals.length > 0 || pendingUserInputs.length > 0,
+          handedOn: threadHandedOn,
           recovery: activeThreadShell.limitRecovery ?? null,
           snoozedUntil: activeThreadShell.snoozedUntil,
           timestampFormat,
@@ -2895,11 +2912,40 @@ export default function ChatView(props: ChatViewProps) {
       : null,
     messages,
   );
+  const limitedSeatBannerItems = useLimitedSeatBannerItems(
+    {
+      environmentId,
+      threadId: deliveryEnabled && activeThreadShell !== null ? activeThreadShell.id : null,
+      providers: providerStatuses,
+      timestampFormat,
+      onOpenThread: (next) =>
+        void navigate({
+          to: "/$environmentId/$threadId",
+          params: buildThreadRouteParams(scopeThreadRef(environmentId, next)),
+        }),
+    },
+    messages,
+  );
   // An archived thread opens to read. The server refuses every message to it, so the composer says
   // so before one is written, not after a send that goes nowhere.
   const threadArchived = serverThread !== null && serverThread.archivedAt !== null;
   const composerBannerItems = (() => {
-    const archivedItems = threadArchived ? [archivedThreadBannerItem(messages)] : [];
+    const archivedItems = threadArchived
+      ? [archivedThreadBannerItem(messages)]
+      : handedOnRunId !== null
+        ? [
+            handedOnThreadBannerItem(
+              () =>
+                void navigate({
+                  to: "/$environmentId/$threadId",
+                  params: buildThreadRouteParams(
+                    scopeThreadRef(environmentId, limitedLeadHandoffThreadId(handedOnRunId)),
+                  ),
+                }),
+              messages,
+            ),
+          ]
+        : [];
     const fallbackSelection = draftFallback?.selection;
     const defaultSelection =
       draftDefaultModelSelection ??
@@ -2948,7 +2994,10 @@ export default function ChatView(props: ChatViewProps) {
             ),
           ]
         : [];
-    const limitRecoveryItems = limitRecoveryBanner === null ? [] : [limitRecoveryBanner];
+    const limitRecoveryItems =
+      limitRecoveryBanner === null
+        ? limitedSeatBannerItems
+        : [limitRecoveryBanner, ...limitedSeatBannerItems];
     const extensionStatusBanner = extensionStatusBannerItem(
       deriveProviderExtensionStatuses(serverProjection),
     );
@@ -4099,17 +4148,19 @@ export default function ChatView(props: ChatViewProps) {
                                     ? gt("This connection cannot change threads.")
                                     : threadArchived
                                       ? archivedThreadSendBlockReason(messages)
-                                      : isEnvironmentChanging
-                                        ? gt("Preparing machine")
-                                        : isRevertingCheckpoint
-                                          ? gt("Rewinding conversation")
-                                          : feedbackUploading
-                                            ? gt("Sending feedback")
-                                            : threadDetailLoading
-                                              ? gt("Messages loading")
-                                              : worktreeSetupBlocksSend
-                                                ? gt("Preparing worktree")
-                                                : projectCloneSendBlockReason
+                                      : threadHandedOn
+                                        ? handedOnThreadSendBlockReason(messages)
+                                        : isEnvironmentChanging
+                                          ? gt("Preparing machine")
+                                          : isRevertingCheckpoint
+                                            ? gt("Rewinding conversation")
+                                            : feedbackUploading
+                                              ? gt("Sending feedback")
+                                              : threadDetailLoading
+                                                ? gt("Messages loading")
+                                                : worktreeSetupBlocksSend
+                                                  ? gt("Preparing worktree")
+                                                  : projectCloneSendBlockReason
                                 }
                                 isPreparingWorktree={isPreparingWorktree && !sendQueuesBehindSetup}
                                 bannerItems={

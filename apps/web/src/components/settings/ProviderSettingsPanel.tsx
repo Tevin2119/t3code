@@ -1,3 +1,4 @@
+import { FavoriteModelsOrderList } from "./FavoriteModelsOrderList";
 import { SettingsGroup } from "./SettingsGroup";
 import { RefreshIcon } from "~/components/ui/refresh-icon";
 import {
@@ -1163,6 +1164,31 @@ export function EnvironmentProviderSettings({
           readOnly={readOnly}
         />
       ) : null}
+
+      <SettingsSection title={gt("Favorite models")}>
+        <SettingsRow
+          id={searchableSetting("favorite-models-order").id}
+          title={searchableSetting("favorite-models-order").title}
+          description={gt(
+            "Your starred models, first choice first. In a team conversation, a seat whose model has reached its usage limit moves to the first free one.",
+          )}
+        >
+          <div className="mt-3 pb-2">
+            {favorites.length === 0 ? (
+              <p className="text-xs text-muted-foreground">
+                <T>Star a model in a provider's model list to add it here.</T>
+              </p>
+            ) : (
+              <FavoriteModelsOrderList
+                favorites={favorites}
+                providers={serverProviders}
+                disabled={readOnly || !canWriteSettings}
+                onReorder={(next) => updateModelPreferences({ setModelFavoriteOrder: next })}
+              />
+            )}
+          </div>
+        </SettingsRow>
+      </SettingsSection>
 
       <SettingsSection title={gt("Advanced")}>
         <SettingsRow

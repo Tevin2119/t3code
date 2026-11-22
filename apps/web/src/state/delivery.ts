@@ -23,17 +23,24 @@ import type {
   OrchestratorAccess,
   OrchestratorCritique,
   OrchestratorExtraParticipant,
+  OrchestratorLimitedSeat,
   OrchestratorParticipantChoice,
 } from "../lib/orchestratorChat";
 import { boardPreferencesOf, useBoardStore } from "./deliveryBoard";
 import { useEnvironments, usePrimaryEnvironmentId } from "./environments";
 import { useEnvironmentQuery } from "./query";
+import { serverEnvironment } from "./server";
+import { environmentThreadShells } from "./threads";
 import { useAtomCommand } from "./use-atom-command";
 
 export type { SeatChoice };
 export { useBoardStore } from "./deliveryBoard";
 
-export const deliveryEnvironment = createDeliveryEnvironmentAtoms(connectionAtomRuntime);
+export const deliveryEnvironment = createDeliveryEnvironmentAtoms(connectionAtomRuntime, {
+  threadShellAtom: environmentThreadShells.threadShellAtom,
+  settingsAtom: serverEnvironment.settingsValueAtom,
+  providersAtom: serverEnvironment.providersValueAtom,
+});
 
 /** Whether this environment has a delivery engine turned on. */
 export function useDeliveryEnabled(environmentId: EnvironmentId | null): boolean {
@@ -347,6 +354,8 @@ export interface OrchestratorDraft {
   readonly critique?: OrchestratorCritique;
   /** The access participants run with; absent is the conversation's own. */
   readonly access?: OrchestratorAccess | undefined;
+  /** When a seat is limited; absent is the team profile's default, else swap automatically. */
+  readonly limitedSeat?: OrchestratorLimitedSeat | undefined;
   /** No team behind the conversation: every participant is added by hand. */
   readonly teamless?: boolean;
   readonly started?: boolean;

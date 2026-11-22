@@ -65,6 +65,9 @@ import {
   DeliveryActInput,
   DeliveryBindThreadInput,
   DeliverySetThreadLineupInput,
+  DeliveryLimitedSeatStatus,
+  DeliveryLimitedSeatSwapInput,
+  DeliveryLimitedSeatSwapResult,
   DeliveryError,
   DeliveryReadInput,
   DeliveryResponse,
@@ -640,6 +643,8 @@ export const WS_METHODS = {
   deliveryArchivedBoardThreads: "delivery.archivedBoardThreads",
   deliveryReleaseThread: "delivery.releaseThread",
   deliverySetThreadLineup: "delivery.setThreadLineup",
+  deliveryLimitedSeats: "delivery.limitedSeats",
+  deliverySwapLimitedSeat: "delivery.swapLimitedSeat",
   scheduledTasksList: "scheduledTasks.list",
   scheduledTasksSubscribe: "scheduledTasks.subscribe",
   scheduledTasksUpsert: "scheduledTasks.upsert",
@@ -1206,6 +1211,20 @@ const WsDeliveryThreadBindingRpc = Rpc.make(WS_METHODS.deliveryThreadBinding, {
 const WsDeliverySetThreadLineupRpc = Rpc.make(WS_METHODS.deliverySetThreadLineup, {
   payload: DeliverySetThreadLineupInput,
   success: DeliveryThreadState,
+  error: Schema.Union([EnvironmentAuthorizationError, DeliveryError]),
+});
+
+/** Which seats of a conversation are limited now, and what could stand in for each. */
+const WsDeliveryLimitedSeatsRpc = Rpc.make(WS_METHODS.deliveryLimitedSeats, {
+  payload: DeliveryThreadBindingInput,
+  success: DeliveryLimitedSeatStatus,
+  error: Schema.Union([EnvironmentAuthorizationError, DeliveryError]),
+});
+
+/** Swaps one limited seat, or hands a limited lead on to a linked thread. Safe to repeat. */
+const WsDeliverySwapLimitedSeatRpc = Rpc.make(WS_METHODS.deliverySwapLimitedSeat, {
+  payload: DeliveryLimitedSeatSwapInput,
+  success: DeliveryLimitedSeatSwapResult,
   error: Schema.Union([EnvironmentAuthorizationError, DeliveryError]),
 });
 
@@ -2727,6 +2746,8 @@ export const ForkWsRpcGroup = RpcGroup.make(
   WsDeliveryArchivedBoardThreadsRpc,
   WsDeliveryReleaseThreadRpc,
   WsDeliverySetThreadLineupRpc,
+  WsDeliveryLimitedSeatsRpc,
+  WsDeliverySwapLimitedSeatRpc,
   WsServerSubscribeCheckoutUpdateRpc,
   WsServerCheckCheckoutUpdateRpc,
   WsServerStartCheckoutUpdateRpc,

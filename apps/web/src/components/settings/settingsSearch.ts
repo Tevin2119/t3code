@@ -1071,6 +1071,13 @@ export const SETTINGS_SEARCH_ITEMS = [
     textGeneratorsOnly: true,
   },
   {
+    id: "favorite-models-order",
+    title: msg("Favorites order"),
+    to: "/settings/providers",
+    searchTerms: [msg("starred models reorder swap limited seat substitute usage limit")],
+    providerSettingsOnly: true,
+  },
+  {
     id: "provider-health-check-interval",
     title: msg("Health check interval"),
     to: "/settings/providers",

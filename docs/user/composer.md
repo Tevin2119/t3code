@@ -47,6 +47,18 @@ that cannot be held to read-only says so in the setup: leave it out or use full 
 The lead uses the project's folder and your selected access
 settings. Use **Use ordinary chat** to leave Orchestrator before starting.
 
+**When a seat is limited** decides what happens when a participant's model, or the
+orchestrator's, has reached its usage limit. **Swap automatically**, the default, starts
+that seat's next turn on the first free model in your Favorites: one that is available,
+not limited itself, not on the limited model's account or provider, and not already used
+in the conversation. A limited orchestrator continues in a new linked thread with a
+summary, and the old thread stays readable and no longer resumes by itself. **Ask me**
+shows a notice naming that model with one button to swap. **Leave it out** has the seat
+sit the message out. A model you chose for a seat by hand is never swapped without
+asking. With no favorite free, the seat waits and a notice says so. Put your Favorites
+in order under Settings, Providers, **Favorites order**. The setting applies from your
+next message; a board task's conversation follows its team's own setting instead.
+
 Choose **No team** in the setup to run a conversation with participants of your own
 only: add two or more, each with any provider and model. They join as themselves,
 with no team instructions, and nothing is saved.

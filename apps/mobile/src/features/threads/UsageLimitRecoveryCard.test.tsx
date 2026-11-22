@@ -34,6 +34,11 @@ vi.mock("../../components/ui/Button", () => ({
   ),
 }));
 vi.mock("../../state/threads", () => ({ threadEnvironment: { updateMetadata: {} } }));
+const testState = vi.hoisted(() => ({ handedOn: false }));
+vi.mock("../../state/delivery", () => ({
+  deliveryEnvironment: { limitedLeadHandedOn: () => ({}) },
+}));
+vi.mock("@effect/atom-react", () => ({ useAtomValue: () => testState.handedOn }));
 vi.mock("../../state/use-atom-command", () => ({ useAtomCommand: () => vi.fn() }));
 
 import { UsageLimitRecoveryCard } from "./UsageLimitRecoveryCard";
@@ -86,6 +91,26 @@ describe("UsageLimitRecoveryCard", () => {
     expect([...container.querySelectorAll("button")].map((button) => button.textContent)).toEqual(
       actions,
     );
+  });
+
+  it("offers no resume or snooze once the run continues in a linked thread", () => {
+    using _timers = { [Symbol.dispose]: () => vi.useRealTimers() };
+    vi.useFakeTimers({ now: 0 });
+    testState.handedOn = true;
+    using _handedOn = { [Symbol.dispose]: () => void (testState.handedOn = false) };
+    const container = document.createElement("div");
+    const root = createRoot(container);
+    using _root = { [Symbol.dispose]: () => act(() => root.unmount()) };
+    act(() =>
+      root.render(
+        <UsageLimitRecoveryCard
+          thread={failedThread(new Date(DAY_MS).toISOString())}
+          environmentId={"env-1" as EnvironmentId}
+        />,
+      ),
+    );
+    expect(container.textContent).toContain("Usage limit reached");
+    expect(container.querySelectorAll("button")).toHaveLength(0);
   });
 
   it("drops a failed copy's error once a retry copies the request", async () => {

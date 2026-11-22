@@ -392,6 +392,7 @@ export function applyServerSettingsPatch(
   const {
     migrateModelPreferences,
     setModelFavorites,
+    setModelFavoriteOrder,
     setModelsHidden,
     setProviderModelOrder,
     providerModelPreferences,
@@ -452,7 +453,7 @@ export function applyServerSettingsPatch(
         : undefined;
   const initialFavorites =
     patch.favorites ?? current.favorites ?? migrateModelPreferences?.favorites ?? null;
-  const favorites =
+  const toggledFavorites =
     setModelFavorites?.reduce(
       (current, change) => {
         const exists = current.some(
@@ -468,6 +469,23 @@ export function applyServerSettingsPatch(
       },
       [...(initialFavorites ?? [])],
     ) ?? initialFavorites;
+  // Only an order is sent, so a favorite another client added meanwhile is kept, not dropped.
+  const favorites =
+    setModelFavoriteOrder && toggledFavorites
+      ? [
+          ...setModelFavoriteOrder.flatMap((entry) =>
+            toggledFavorites.filter(
+              (favorite) => favorite.provider === entry.provider && favorite.model === entry.model,
+            ),
+          ),
+          ...toggledFavorites.filter(
+            (favorite) =>
+              !setModelFavoriteOrder.some(
+                (entry) => entry.provider === favorite.provider && entry.model === favorite.model,
+              ),
+          ),
+        ]
+      : toggledFavorites;
   const initialModelPreferences =
     providerModelPreferences ??
     current.providerModelPreferences ??

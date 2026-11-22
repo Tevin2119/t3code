@@ -7,15 +7,18 @@
 import {
   DELIVERY_DEFAULT_TEAM,
   DELIVERY_HARNESS_BY_DRIVER,
+  DeliveryLimitedSeatPolicy,
   type DeliveryThreadBinding,
   type BoardDeploymentLink,
   type MergePermissionView,
   type TaskDeployment,
 } from "@t3tools/contracts";
+import * as Schema from "effect/Schema";
 import { parseSuggestedBoard, type SuggestedBoard } from "./deliveryMove";
 import { parseBoardDeployment, parseMergePermission, parseTaskDeployment } from "./boardDelivery";
 
 type Json = Record<string, unknown>;
+const isLimitedSeatPolicy = Schema.is(DeliveryLimitedSeatPolicy);
 const isRecord = (value: unknown): value is Json =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 const text = (value: unknown, fallback = ""): string =>
@@ -81,6 +84,8 @@ export interface DeliveryTeam {
     readonly defined: Readonly<Record<string, number>>;
   };
   readonly qaGate: { readonly seats: ReadonlyArray<string>; readonly minimum: number } | null;
+  /** What the team's profile says a new conversation does when a seat is limited, if it says. */
+  readonly whenSeatLimited: DeliveryLimitedSeatPolicy | null;
 }
 
 export interface DeliveryRole {
@@ -495,6 +500,7 @@ const parseTeam = (team: Json): DeliveryTeam => {
     },
     workload: { build: shares(workload.build), defined: shares(workload.defined) },
     qaGate: qa ? { seats: strings(qa.seats), minimum: count(qa.minimumPassingProviders) } : null,
+    whenSeatLimited: isLimitedSeatPolicy(team.whenSeatLimited) ? team.whenSeatLimited : null,
   };
 };
 

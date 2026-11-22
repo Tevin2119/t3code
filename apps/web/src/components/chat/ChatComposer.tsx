@@ -63,6 +63,7 @@ import {
   EnvironmentRequestInvalidError,
   AuthOrchestrationOperateScope,
   clampManagedRuntimeMode,
+  isServerOwnedThreadLineage,
   ProviderDriverKind,
   ProviderInstanceId,
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
@@ -2750,6 +2751,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     entries={providerInstanceEntries}
                     models={modelOptionsByInstance}
                     onFocusChat={startSingleChatForSeat}
+                    boardOwned={
+                      activeThread !== undefined && isServerOwnedThreadLineage(activeThread.lineage)
+                    }
                     onLeaveToSingle={() => void switchStartedThreadToSingle()}
                   />
                 ),

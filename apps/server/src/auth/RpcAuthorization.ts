@@ -137,6 +137,8 @@ export const RPC_REQUIRED_SCOPES = {
   [WS_METHODS.deliveryArchivedBoardThreads]: AuthOrchestrationReadScope,
   [WS_METHODS.deliveryReleaseThread]: AuthOrchestrationOperateScope,
   [WS_METHODS.deliverySetThreadLineup]: AuthOrchestrationOperateScope,
+  [WS_METHODS.deliveryLimitedSeats]: AuthOrchestrationReadScope,
+  [WS_METHODS.deliverySwapLimitedSeat]: AuthOrchestrationOperateScope,
   [WS_METHODS.serverReportClientActivity]: AuthOrchestrationReadScope,
   [WS_METHODS.scheduledTasksSubscribe]: AuthOrchestrationReadScope,
   [WS_METHODS.secretsAnswerRequest]: AuthOrchestrationOperateScope,
