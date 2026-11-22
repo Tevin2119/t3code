@@ -9,6 +9,8 @@ import {
 import type { EnvironmentProject, EnvironmentThreadShell } from "./models.ts";
 import { mFallback, msg } from "gt-i18n";
 import type { MFunctionType } from "gt-i18n/types";
+import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 
 /**
  * The threads of these projects that the server started for itself, such as a board task's
@@ -44,6 +46,46 @@ export function serverOwnedThreadCount(input: {
   return total;
 }
 
+/** An archived board task conversation, as `delivery.archivedBoardThreads` lists it. */
+type ArchivedServerOwnedThread = { readonly projectId: ProjectId };
+
+/**
+ * The archived board task conversations of these projects. The shell's count covers only the
+ * active ones, and a removal keeps the archived ones, so each environment is asked for its list.
+ * An environment that does not answer in time, or has no such list, counts as none: the
+ * confirmation must not wait on it.
+ */
+export async function archivedServerOwnedThreadCount(input: {
+  readonly members: ReadonlyArray<{
+    readonly environmentId: EnvironmentId;
+    readonly id: ProjectId;
+  }>;
+  readonly read: (
+    environmentId: EnvironmentId,
+  ) => Promise<ReadonlyArray<ArchivedServerOwnedThread> | null>;
+  readonly timeoutMs?: number;
+}): Promise<number> {
+  const environmentIds = [...new Set(input.members.map((member) => member.environmentId))];
+  const counts = await Promise.all(
+    environmentIds.map(async (environmentId) => {
+      const rows = await Effect.runPromise(
+        Effect.tryPromise({ try: () => input.read(environmentId), catch: () => null }).pipe(
+          Effect.timeoutOption(input.timeoutMs ?? 2_000),
+          Effect.map(Option.getOrNull),
+          Effect.orElseSucceed(() => null),
+        ),
+      );
+      const projectIds = new Set(
+        input.members
+          .filter((member) => member.environmentId === environmentId)
+          .map((member) => member.id),
+      );
+      return (rows ?? []).filter((row) => projectIds.has(row.projectId)).length;
+    }),
+  );
+  return counts.reduce((total, count) => total + count, 0);
+}
+
 export function planProjectRemoval<
   Thread extends Pick<EnvironmentThreadShell, "environmentId" | "projectId" | "lineage">,
 >(
@@ -61,6 +103,8 @@ export function planProjectRemoval<
     readonly unloadedThreadCount?: number;
     /** The members' server-owned threads, which are archived, not deleted: `serverOwnedThreadCount`. */
     readonly serverOwnedThreadCount?: number;
+    /** The members' board task conversations already archived, which are kept: `archivedServerOwnedThreadCount`. */
+    readonly archivedServerOwnedThreadCount?: number;
   },
   resolve: MFunctionType = mFallback,
 ) {
@@ -74,6 +118,7 @@ export function planProjectRemoval<
     projectThreads.filter((thread) => isListedThreadLineage(thread.lineage)).length +
     (options.unloadedThreadCount ?? 0);
   const keptCount = options.serverOwnedThreadCount ?? 0;
+  const archivedKeptCount = options.archivedServerOwnedThreadCount ?? 0;
   const isWholeGroup = members.length === groupMemberCount;
   const targetKind = hasOtherMembers || !isWholeGroup ? "checkout" : "project";
   const singleMember = members.length === 1 ? members[0]! : null;
@@ -134,7 +179,18 @@ export function planProjectRemoval<
             ),
           ),
         ]
-      : []),
+      : // With none active that sentence is absent, and "any archived threads are deleted" would
+        // be false for these.
+        archivedKeptCount > 0
+        ? [
+            resolve(
+              msg(
+                "{count, plural, one {{count} archived conversation started by a board is kept, not deleted.} other {{count} archived conversations started by a board are kept, not deleted.}}",
+                { count: archivedKeptCount },
+              ),
+            ),
+          ]
+        : []),
     isWholeGroup && !hasOtherMembers
       ? resolve(msg("This removes only the project entries, not the files on disk."))
       : resolve(msg("Other entries in this grouped project are unaffected.")),

@@ -5468,5 +5468,6 @@
   "8d545d54c0a9e950": "Hide the commands, edits, and searches agents run. Hide successful keeps failures. Zen shows only final answers. Approvals, questions, and errors always show.",
   "cdf5dd7d370e594c": "Board task: {title}",
   "dae94973cc4ff259": "Task ended. Its conversation is in the board's archive",
-  "afeb354df4c94446": "Open it on the board in the web or desktop app"
+  "afeb354df4c94446": "Open it on the board in the web or desktop app",
+  "a65acdb87eac322b": "{count, plural, one {{count} archived conversation started by a board is kept, not deleted.} other {{count} archived conversations started by a board are kept, not deleted.}}"
 }

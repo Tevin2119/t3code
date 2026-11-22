@@ -29,6 +29,11 @@ export function createDeliveryEnvironmentAtoms<R, E>(
       tag: WS_METHODS.deliveryArchivedBoardThreads,
       staleTimeMs: 2_000,
     }),
+    /** The same list read once by hand, for a project removal to count what it keeps. */
+    fetchArchivedBoardThreads: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:delivery:fetch-archived-board-threads",
+      tag: WS_METHODS.deliveryArchivedBoardThreads,
+    }),
     /** A thread's team, or the team choice that is still held. Cheap, and read often. */
     threadBinding,
     /** Query families include the environment and thread; previous query values never carry over. */

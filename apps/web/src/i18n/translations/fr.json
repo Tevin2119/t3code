@@ -12572,5 +12572,6 @@
   "9e91e9a77b664e4e": "Impossible de démarrer un guide de revue",
   "cdf5dd7d370e594c": "Tâche du tableau : {title}",
   "dae94973cc4ff259": "Tâche terminée. Sa conversation se trouve dans les archives du tableau",
-  "1f8f11ca7798711e": "Ouvre la tâche dans le tableau"
+  "1f8f11ca7798711e": "Ouvre la tâche dans le tableau",
+  "a65acdb87eac322b": "{count, plural, one {{count} conversation archivée lancée par un tableau est conservée, pas supprimée.} other {{count} conversations archivées lancées par un tableau sont conservées, pas supprimées.}}"
 }

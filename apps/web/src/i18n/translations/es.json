@@ -12567,5 +12567,6 @@
   "9e91e9a77b664e4e": "No se pudo iniciar una guía de revisión",
   "cdf5dd7d370e594c": "Tarea del tablero: {title}",
   "dae94973cc4ff259": "Tarea finalizada. Su conversación está en el archivo del tablero",
-  "1f8f11ca7798711e": "Abre la tarea en el tablero"
+  "1f8f11ca7798711e": "Abre la tarea en el tablero",
+  "a65acdb87eac322b": "{count, plural, one {{count} conversación archivada iniciada por un tablero se conserva, no se elimina.} other {{count} conversaciones archivadas iniciadas por un tablero se conservan, no se eliminan.}}"
 }
