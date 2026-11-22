@@ -65,18 +65,45 @@ const NOT_A_VALUE_READ: ReadonlyArray<RegExp> = [
   /^engineIntake: _engineIntake,$/,
   // The engine intake stamping its own admission.
   /^engineIntake: admissionId,$/,
+  // A board task's thread stamped at its creation, by the marker module's own spelling.
+  /^engineIntake: boardTaskThreadMarker\(task\),$/,
 ];
 
-it("only the engine intake reads the marker's value; every other reader asks whether it is set", () => {
+// The board task readers. Each hands the value to the marker module, thread to task only, and
+// none builds a marker to find a thread: a task's thread is the engine's `boardThread`.
+const BOARD_TASK_READS = [
+  // The threads this server made for board tasks, selected on the marker's own prefix.
+  {
+    file: "apps/server/src/delivery/boardThreadRows.ts",
+    line: "json_extract(t.payload_json, '$.lineage.engineIntake') AS marker",
+  },
+  {
+    file: "apps/server/src/delivery/boardThreadRows.ts",
+    line: "AND json_extract(t.payload_json, '$.lineage.engineIntake') LIKE ${BOARD_TASK_MARKER_LIKE}",
+  },
+  // The thread just created is the task's own, before the engine is told of it.
+  {
+    file: "apps/server/src/delivery/BoardTaskThreads.ts",
+    line: "const stamped = boardTaskOfMarker(created.thread.lineage.engineIntake);",
+  },
+];
+
+it("only the engine intake and the named board task readers read the marker's value", () => {
   const valueReads = linesNaming(/engineIntake|engine_intake/).filter(
     ({ line }) => !NOT_A_VALUE_READ.some((allowed) => allowed.test(line)),
   );
-  assert.deepEqual(valueReads, [
-    {
-      file: "apps/server/src/delivery/NativeIntake.ts",
-      line: "if (projection.thread.lineage.engineIntake !== admissionId)",
-    },
-  ]);
+  const byPlace = (a: { file: string; line: string }, b: { file: string; line: string }) =>
+    `${a.file}\n${a.line}`.localeCompare(`${b.file}\n${b.line}`);
+  assert.deepEqual(
+    valueReads.toSorted(byPlace),
+    [
+      {
+        file: "apps/server/src/delivery/NativeIntake.ts",
+        line: "if (projection.thread.lineage.engineIntake !== admissionId)",
+      },
+      ...BOARD_TASK_READS,
+    ].toSorted(byPlace),
+  );
 });
 
 it("nothing but the marker module knows what a board task's marker looks like", () => {
