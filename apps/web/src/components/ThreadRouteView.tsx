@@ -2,7 +2,7 @@ import { useAtomValue } from "@effect/atom-react";
 import { parseScopedThreadKey, scopedThreadKey } from "@t3tools/client-runtime/environment";
 import { parseThreadKey, threadKey } from "@t3tools/client-runtime/state/entities";
 import { visibilityParentKey } from "@t3tools/client-runtime/state/threads";
-import type { ScopedThreadRef } from "@t3tools/contracts";
+import { isServerOwnedThreadLineage, type ScopedThreadRef } from "@t3tools/contracts";
 import * as Option from "effect/Option";
 import { Navigate, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
@@ -123,9 +123,12 @@ export function ThreadRouteView({
   const hiddenByTagFilter = serverThreadRef !== null && hiddenKeys.has(threadKey(serverThreadRef));
   // Cached detail can predate a tag or an archive, so while hiding an off-shell thread opens only
   // as the child of a loaded, visible parent (lineage never changes); anything else stays closed.
+  // Server-owned work, such as a board task's conversation, has no parent and no row in any list,
+  // so its lineage alone opens it: the shell never sends it and its id is the only way in.
   const offShellBlocked =
     hidingAnywhere &&
     unlistedThreadRef !== null &&
+    !(unlistedThread !== null && isServerOwnedThreadLineage(unlistedThread.lineage)) &&
     !(
       unlistedParentKey !== null &&
       unlistedParentShell !== null &&

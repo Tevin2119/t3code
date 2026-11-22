@@ -4152,8 +4152,9 @@ export const OrchestrationV2SubscribeShellInput = Schema.Struct({
   knownProjectIdentities: Schema.optionalKey(Schema.String),
   requestCompletionMarker: Schema.optionalKey(Schema.Boolean),
   /**
-   * Snapshots leave out idle subagent children; read them with `getThreadFamily`. Send only to
-   * servers that advertise `shellThreadFamilies`.
+   * Snapshots leave out idle subagent children and server-owned threads with their families (see
+   * `isServerOwnedThreadLineage`); read them with `getThreadFamily`. Send only to servers that
+   * advertise `shellThreadFamilies`.
    */
   omitIdleSubagents: Schema.optionalKey(Schema.Boolean),
   /**

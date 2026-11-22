@@ -15,6 +15,7 @@ import {
   isListedThreadLineage,
   isLiveSubagentShell,
   isOlderSettledThreadShell,
+  isServerOwnedThreadLineage,
   OrchestrationProjectShell as ProjectShellSchema,
   OrchestrationV2ThreadShell as ThreadShellSchema,
 } from "@t3tools/contracts";
@@ -191,6 +192,8 @@ interface ShellTrimFacts {
   readonly subagentThreadIds: Set<string>;
   /** Only the store's index knows these; shells alone leave it empty. */
   readonly remoteTaskParentIds: ReadonlySet<string>;
+  /** Threads carrying the server-owned marker: an engine intake or a board task's conversation. */
+  readonly serverOwnedThreadIds: ReadonlySet<string>;
   /** Undefined when no thread is settled, so none is older. */
   readonly olderSettledBeforeMs: number | undefined;
   readonly olderSettledCounts: ReadonlyArray<OrchestrationV2OlderSettledCount>;
@@ -202,9 +205,11 @@ function shellTrimFacts(rows: ReadonlyArray<ShellTrimRow>): ShellTrimFacts {
   const subagentParentIds = new Set<string>();
   const subagentThreadIds = new Set<string>();
   const remoteTaskParentIds = new Set<string>();
+  const serverOwnedThreadIds = new Set<string>();
   const settledTimes: Array<number> = [];
   for (const row of rows) {
     if (row.hasRemoteTasks === true) remoteTaskParentIds.add(row.id);
+    if (isServerOwnedThreadLineage(row.lineage)) serverOwnedThreadIds.add(row.id);
     if (row.lineage.relationshipToParent === "subagent") {
       subagentThreadIds.add(row.id);
       if (row.lineage.parentThreadId) subagentParentIds.add(row.lineage.parentThreadId);
@@ -231,6 +236,7 @@ function shellTrimFacts(rows: ReadonlyArray<ShellTrimRow>): ShellTrimFacts {
     subagentParentIds,
     subagentThreadIds,
     remoteTaskParentIds,
+    serverOwnedThreadIds,
     olderSettledBeforeMs,
     olderSettledCounts: Array.from(counts, ([projectId, count]) => ({ projectId, count })),
   };
@@ -246,6 +252,52 @@ function hiddenChildAncestorIds(
     ancestorIds.add(thread.lineage.rootThreadId);
   }
   return ancestorIds;
+}
+
+/**
+ * Whether a row belongs to work the server started for itself: a thread carrying the marker, or a
+ * subagent or side chat rooted at one. No list shows any of them, so a subscriber that reads
+ * families gets the whole family on demand when its thread is opened by id. The parent of a task
+ * in a linked environment stays, like in the other trims, so that task still nests under it.
+ */
+function isOmittedServerOwnedRow(
+  row: Pick<ShellTrimRow, "id" | "lineage">,
+  facts: Pick<ShellTrimFacts, "serverOwnedThreadIds" | "remoteTaskParentIds">,
+): boolean {
+  return (
+    (facts.serverOwnedThreadIds.has(row.id) ||
+      facts.serverOwnedThreadIds.has(row.lineage.rootThreadId)) &&
+    !facts.remoteTaskParentIds.has(row.id)
+  );
+}
+
+function omitServerOwnedShellsWith<Row extends Pick<ShellTrimRow, "id" | "lineage">>(
+  rows: ReadonlyArray<Row>,
+  facts: Pick<ShellTrimFacts, "serverOwnedThreadIds" | "remoteTaskParentIds">,
+): ReadonlyArray<Row> {
+  return facts.serverOwnedThreadIds.size === 0
+    ? rows
+    : rows.filter((row) => !isOmittedServerOwnedRow(row, facts));
+}
+
+/**
+ * Server-owned work has no row in any list, so a subscriber that reads thread families does not
+ * get it in the shell: a board with twenty tasks would otherwise add twenty rows every client only
+ * hides. Changes to such a thread still arrive as deltas, which keep an open one current.
+ */
+export function omitServerOwnedShells(
+  threads: ReadonlyArray<OrchestrationV2ThreadShell>,
+): ReadonlyArray<OrchestrationV2ThreadShell> {
+  return omitServerOwnedShellsWith(threads, shellTrimFacts(threads));
+}
+
+/** The archive lists no server-owned thread, so its snapshot does not carry one. */
+export function omitServerOwnedArchivedShells<
+  Row extends Pick<OrchestrationV2ThreadShell, "lineage">,
+>(threads: ReadonlyArray<Row>): ReadonlyArray<Row> {
+  return threads.some((thread) => isServerOwnedThreadLineage(thread.lineage))
+    ? threads.filter((thread) => !isServerOwnedThreadLineage(thread.lineage))
+    : threads;
 }
 
 function omitIdleSubagentShellsWith(
@@ -322,7 +374,9 @@ export function activeShellRowsForSubscriber(
 } {
   const facts = shellTrimFacts(threads);
   return {
-    threads: omitIdleSubagents ? omitIdleSubagentShellsWith(threads, facts) : threads,
+    threads: omitIdleSubagents
+      ? omitIdleSubagentShellsWith(omitServerOwnedShellsWith(threads, facts), facts)
+      : threads,
     subagentThreadIds: facts.subagentThreadIds,
   };
 }
@@ -354,8 +408,9 @@ function trimShellSnapshot(
   facts: ShellTrimFacts,
   options: ShellSubscriberOptions & { readonly now: DateTime.Utc },
 ): OrchestrationV2ShellSnapshot {
+  // Both trims rest on the same opt-in: the subscriber reads what the shell leaves out by family.
   const threads = options.omitIdleSubagents
-    ? omitIdleSubagentShellsWith(base.threads, facts)
+    ? omitIdleSubagentShellsWith(omitServerOwnedShellsWith(base.threads, facts), facts)
     : base.threads;
   if (!options.omitOlderSettled) return { ...base, threads };
   const older = omitOlderSettledShellsWith(
@@ -370,10 +425,13 @@ function trimShellSnapshot(
  * trimming the shells read for these ids gives the snapshot trimming every shell would.
  */
 function shellSubscriberThreadIds(
-  index: ReadonlyArray<ActiveShellIndexEntry>,
+  everyEntry: ReadonlyArray<ActiveShellIndexEntry>,
   options: ShellSubscriberOptions,
 ): ReadonlyArray<ThreadId> {
-  const facts = shellTrimFacts(index);
+  const facts = shellTrimFacts(everyEntry);
+  const index = options.omitIdleSubagents
+    ? omitServerOwnedShellsWith(everyEntry, facts)
+    : everyEntry;
   const subagents = index.filter(
     (entry) =>
       entry.lineage.relationshipToParent === "subagent" &&

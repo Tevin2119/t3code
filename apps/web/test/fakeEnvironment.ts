@@ -106,6 +106,7 @@ const decodeServerConfig = Schema.decodeUnknownSync(ServerConfig);
 const makeServerConfig = (
   providers: ReadonlyArray<unknown>,
   supportsIssues = false,
+  hiddenThreadTags: ReadonlyArray<string> = [],
 ): ServerConfig => ({
   ...decodeServerConfig({
     environment: {
@@ -125,7 +126,7 @@ const makeServerConfig = (
       otlpTracesEnabled: false,
       otlpMetricsEnabled: false,
     },
-    settings: {},
+    settings: hiddenThreadTags.length === 0 ? {} : { hideTaggedThreads: true, hiddenThreadTags },
     threadSnapshotPagination: true,
     threadResumeCompletionMarker: true,
     shellResumeCompletionMarker: true,
@@ -231,10 +232,13 @@ export interface FakeThread {
   readonly providerSubagentOf?: ThreadId;
   /** Makes this an older settled thread the shell leaves out; only its family read returns it. */
   readonly olderSettled?: true;
-  /** Marks this as server-owned work no thread list shows; the shell still carries it. */
+  /** Marks this as server-owned work no thread list shows. Add `offShell` for what a server sends. */
   readonly engineIntake?: string;
-  /** Leaves this out of the shell without settling it, so only a read by id finds it. */
+  /** Leaves this out of the shell without settling it, so its family read or a read by id finds it. */
   readonly offShell?: true;
+  /** Archives it: out of the shell and of every family, so only a read by id finds it. */
+  readonly archived?: true;
+  readonly tags?: ReadonlyArray<string>;
   readonly id: ThreadId;
   readonly title: string;
   /** Defaults to GPT-5.4 on Codex. */
@@ -332,6 +336,7 @@ function shellOf(thread: FakeThread): OrchestrationV2ThreadShell {
     worktreePath: null,
     activeProviderThreadId: thread.providerThreads?.[0]?.id ?? null,
     ...(thread.issues === undefined ? {} : { issues: thread.issues }),
+    ...(thread.tags === undefined ? {} : { tags: thread.tags }),
     lineage: {
       rootThreadId: parentOf(thread) ?? thread.id,
       parentThreadId: parentOf(thread) ?? null,
@@ -354,7 +359,7 @@ function shellOf(thread: FakeThread): OrchestrationV2ThreadShell {
     visibleItemCount: thread.items.length,
     createdAt: AT,
     updatedAt: AT,
-    archivedAt: null,
+    archivedAt: thread.archived ? AT : null,
     settledOverride: thread.olderSettled ? "settled" : null,
     settledAt: thread.olderSettled ? AT : null,
     lastVisitedAt: AT,
@@ -391,7 +396,8 @@ function projectionOf(thread: FakeThread): OrchestrationV2ThreadProjection {
       creationSource: shell.creationSource,
       createdAt: AT,
       updatedAt: AT,
-      archivedAt: null,
+      archivedAt: shell.archivedAt,
+      ...(shell.tags === undefined ? {} : { tags: shell.tags }),
       settledOverride: shell.settledOverride,
       settledAt: shell.settledAt,
       lastVisitedAt: AT,
@@ -450,6 +456,27 @@ const subscribe = <A>(first: ReadonlyArray<A>, register?: (queue: Queue.Queue<A>
     }),
   );
 
+type ConfigSnapshot = {
+  readonly version: 1;
+  readonly type: "snapshot";
+  readonly config: ServerConfig;
+};
+const configSnapshot = (): ConfigSnapshot => ({
+  version: 1,
+  type: "snapshot",
+  config: serverConfig(),
+});
+const configSubscribers = new Set<Queue.Queue<ConfigSnapshot>>();
+const subscribeConfig = () =>
+  subscribe<ConfigSnapshot>([configSnapshot()], (queue) => {
+    configSubscribers.add(queue);
+    return () => configSubscribers.delete(queue);
+  });
+/** The connection outlives a test, so a scenario with its own settings sends them to it. */
+const pushConfig = () => {
+  for (const queue of configSubscribers) Effect.runSync(Queue.offer(queue, configSnapshot()));
+};
+
 const handlers: Record<string, (input: never) => unknown> = {
   // Recorded, and accepted only when the scenario asks, since a pending command holds every
   // later command on its thread. Accepted commands' events never arrive.
@@ -503,7 +530,7 @@ const handlers: Record<string, (input: never) => unknown> = {
             snapshotSequence: sequence,
             projects,
             threads: threads
-              .filter((thread) => !thread.olderSettled && !thread.offShell)
+              .filter((thread) => !thread.olderSettled && !thread.offShell && !thread.archived)
               .map(shellOf),
             archivedThreads: [],
           },
@@ -541,7 +568,9 @@ const handlers: Record<string, (input: never) => unknown> = {
     return Effect.succeed({
       snapshotSequence: sequence,
       threads: requested
-        ? threads.filter((thread) => rootOf(thread) === rootOf(requested)).map(shellOf)
+        ? threads
+            .filter((thread) => !thread.archived && rootOf(thread) === rootOf(requested))
+            .map(shellOf)
         : [],
     });
   },
@@ -552,8 +581,7 @@ const handlers: Record<string, (input: never) => unknown> = {
         if (vcsStatusSubscriber === queue) vcsStatusSubscriber = null;
       };
     }),
-  [WS_METHODS.subscribeServerConfig]: () =>
-    subscribe([{ version: 1 as const, type: "snapshot" as const, config: serverConfig() }]),
+  [WS_METHODS.subscribeServerConfig]: () => subscribeConfig(),
 };
 
 // Unanswered calls stay pending, like a server that has not replied yet.
@@ -569,8 +597,7 @@ const client = new Proxy(handlers, {
 const session: EnvironmentConnectionLease["session"] = {
   client: client as unknown as WsRpcProtocolClient,
   initialConfig: Effect.sync(serverConfig),
-  subscribeServerConfig: () =>
-    subscribe([{ version: 1 as const, type: "snapshot" as const, config: serverConfig() }]),
+  subscribeServerConfig: () => subscribeConfig(),
   ready: Effect.void,
   probe: Effect.void,
   inboundFrames: Effect.succeed(0),
@@ -614,6 +641,8 @@ export function installFakeEnvironment(
     /** Commands left unanswered even when accepting, until `rejectPendingCommand`. */
     readonly holdCommand?: (command: OrchestrationV2Command) => boolean;
     readonly providers?: ReadonlyArray<unknown>;
+    /** Turns the tag filter on, hiding threads that carry one of these tags. */
+    readonly hiddenThreadTags?: ReadonlyArray<string>;
   },
 ): Disposable {
   threads = fixtures;
@@ -621,6 +650,7 @@ export function installFakeEnvironment(
     ...makeServerConfig(
       options?.providers ?? [CODEX_PROVIDER],
       fixtures.some((thread) => (thread.issues?.length ?? 0) > 0),
+      options?.hiddenThreadTags,
     ),
     keybindings: options?.keybindings ?? DEFAULT_RESOLVED_KEYBINDINGS,
   };
@@ -635,6 +665,8 @@ export function installFakeEnvironment(
     })),
   ];
   holdCommand = options?.holdCommand ?? (() => false);
+  const ownSettings = (options?.hiddenThreadTags?.length ?? 0) > 0;
+  if (ownSettings) pushConfig();
   globalThis.fetch = async (input, init) => {
     const url = new URL(input instanceof Request ? input.url : String(input), window.location.href);
     if (url.origin !== window.location.origin) return realFetch(input, init);
@@ -663,6 +695,7 @@ export function installFakeEnvironment(
       holdCommand = () => false;
       pendingDispatches = [];
       pendingAssetUrls = [];
+      if (ownSettings) pushConfig();
     },
   };
 }
@@ -715,6 +748,21 @@ export function answerRpc(method: string, handler: (input: never) => unknown): D
       else delete handlers[method];
     },
   };
+}
+
+/** Sends a thread's row as a shell delta: how a change reaches a client whose shell left it out. */
+export async function emitShellThread(threadId: ThreadId): Promise<void> {
+  const thread = threads.find((candidate) => candidate.id === threadId);
+  if (shellSubscriber === null || thread === undefined) throw new Error("No shell row to send");
+  sequence += 1;
+  await Effect.runPromise(
+    Queue.offer(shellSubscriber, {
+      kind: "thread.updated",
+      sequence,
+      location: "active",
+      thread: shellOf(thread),
+    }),
+  );
 }
 
 export async function emitTerminalMetadata(event: TerminalMetadataStreamEvent): Promise<void> {
