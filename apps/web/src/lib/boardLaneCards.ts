@@ -157,6 +157,45 @@ export function waitKindsOf(card: Waiting): ReadonlyArray<WaitKind> {
   return kinds.length > 0 ? kinds : ["other"];
 }
 
+/**
+ * What was said on a card, as the engine counts it: how many messages, how many of them new to
+ * the person, and the last one's line. Null when nothing was said. The engine keeps these today
+ * from its own log; the conversation's activity is mirrored onto them by a later engine slice.
+ */
+export function cardActivityOf(card: Pick<DeliveryCard, "messages" | "unread" | "last">): {
+  readonly messages: number;
+  readonly unread: number;
+  readonly by: string | null;
+  readonly text: string | null;
+} | null {
+  if (card.messages <= 0 && card.unread <= 0 && !card.last?.text) return null;
+  return {
+    // The engine counts both; a count it sent smaller than the other is still not made up here.
+    messages: card.messages,
+    unread: card.unread,
+    by: card.last?.text ? card.last.by || null : null,
+    text: card.last?.text ? card.last.text : null,
+  };
+}
+
+/**
+ * What a lane of waiting cards owes in all: the open questions and the sign-offs, added up from
+ * the same card fields `waitKindsOf` reads. A card that does not wait on a person adds nothing.
+ */
+export function laneWaitCounts(cards: ReadonlyArray<Waiting>): {
+  readonly questions: number;
+  readonly signOffs: number;
+} {
+  let questions = 0;
+  let signOffs = 0;
+  for (const card of cards) {
+    const kinds = waitKindsOf(card);
+    if (kinds.includes("question")) questions += card.questions;
+    if (kinds.includes("sign-off")) signOffs += 1;
+  }
+  return { questions, signOffs };
+}
+
 /** Who has approved the task and still stands, for the sign-off line. */
 export const standingApprovers = (card: Pick<DeliveryCard, "approvals">): ReadonlyArray<string> =>
   card.approvals

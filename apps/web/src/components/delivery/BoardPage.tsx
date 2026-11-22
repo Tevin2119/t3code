@@ -17,7 +17,7 @@ import { useGT, useMessages } from "gt-react";
 import { memo, useEffect, useMemo, useState } from "react";
 
 import { isElectron } from "../../env";
-import { queuePlaces, reworkOf, waitKindsOf } from "../../lib/boardLaneCards";
+import { laneWaitCounts, queuePlaces, reworkOf, waitKindsOf } from "../../lib/boardLaneCards";
 import { BOARD_LANE, boardLaneOf, boardLaneTitle, regroupLanes } from "../../lib/boardLanes";
 import {
   deliveryEnvironmentChoice,
@@ -62,6 +62,7 @@ import { InWorkSections, QueueLine, ReworkCount, WaitKinds } from "./BoardLaneCa
 import { TaskEditor } from "./TaskEditor";
 import {
   Age,
+  CardActivity,
   CardPeople,
   CardSigns,
   laneTone,
@@ -87,6 +88,30 @@ import { CardDeliveryStatus } from "./CardDeliveryStatus";
 import { DeliveryDiagnosticNotice } from "./DeliveryDiagnosticNotice";
 import { deliveryReadDiagnostic } from "../../lib/deliveryStates";
 import { TaskDisclosure } from "./TaskDisclosure";
+
+/**
+ * What the Waiting on you lane owes in all: its open questions and its sign-offs. A board task's
+ * conversation raises nothing in the sidebar or as a notification, so this lane is where a
+ * person sees that they are asked.
+ */
+function LaneWaitCounts(props: { readonly cards: ReadonlyArray<DeliveryCard> }) {
+  const { questions, signOffs } = laneWaitCounts(props.cards);
+  if (questions === 0 && signOffs === 0) return null;
+  return (
+    <span className="flex shrink-0 items-center gap-1.5 text-3xs font-normal text-warning-foreground">
+      {questions > 0 ? (
+        <span data-lane-questions={questions}>
+          {questions} {questions === 1 ? "question" : "questions"}
+        </span>
+      ) : null}
+      {signOffs > 0 ? (
+        <span data-lane-sign-offs={signOffs}>
+          {signOffs} {signOffs === 1 ? "sign-off" : "sign-offs"}
+        </span>
+      ) : null}
+    </span>
+  );
+}
 
 const CardFace = memo(function CardFace(props: {
   readonly card: DeliveryCard;
@@ -142,6 +167,7 @@ const CardFace = memo(function CardFace(props: {
           {card.blocker}
         </p>
       ) : null}
+      <CardActivity card={card} />
       <div className="flex items-center justify-between gap-2">
         <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5">
           {showsKinds ? null : <WaitingOn card={card} />}
@@ -349,6 +375,7 @@ export function Lane(props: {
           {lane.cards.length}
           {lane.cards.length !== props.total ? ` of ${props.total}` : ""}
         </span>
+        {lane.lane === BOARD_LANE.needsDecision ? <LaneWaitCounts cards={lane.cards} /> : null}
         {props.dragged && offer ? (
           <span className="text-3xs font-normal text-muted-foreground">{offer}</span>
         ) : null}
