@@ -15,6 +15,9 @@ export interface BoardThreadRow {
   readonly title: string;
   readonly archivedAt: string | null;
   readonly task: BoardTask;
+  /** The thread's pull request and issue links, as stored: JSON arrays, or null for none. */
+  readonly pullRequests: string | null;
+  readonly issues: string | null;
 }
 
 /**
@@ -41,9 +44,13 @@ export const listBoardThreadRows = Effect.fn("listBoardThreadRows")(function* (o
     title: string;
     archivedAt: string | null;
     marker: string | null;
+    pullRequests: string | null;
+    issues: string | null;
   }>`
     SELECT t.thread_id AS id, t.project_id AS "projectId", t.title,
       t.archived_at AS "archivedAt",
+      json_extract(t.payload_json, '$.pullRequests') AS "pullRequests",
+      json_extract(t.payload_json, '$.issues') AS issues,
       json_extract(t.payload_json, '$.lineage.engineIntake') AS marker
     FROM orchestration_v2_projection_threads AS t
     WHERE t.deleted_at IS NULL
@@ -61,6 +68,8 @@ export const listBoardThreadRows = Effect.fn("listBoardThreadRows")(function* (o
             title: row.title,
             archivedAt: row.archivedAt,
             task,
+            pullRequests: row.pullRequests,
+            issues: row.issues,
           },
         ];
   });

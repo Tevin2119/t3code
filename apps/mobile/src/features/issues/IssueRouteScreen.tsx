@@ -330,12 +330,33 @@ function LinkedThreads(props: { readonly params: IssueParams; readonly host: str
     hiddenKeys,
     hidingAnywhere,
   );
-  if (threads.length === 0) return null;
+  // A board task's conversation is in no list. This app has no board, so its row opens nothing:
+  // the task view, with the conversation in it, is on the board in the web and desktop apps.
+  const boardTasks = relations.data?.boardTasks ?? [];
+  if (threads.length === 0 && boardTasks.length === 0) return null;
   return (
     <View className="gap-2">
       <PullRequestSectionHeading>
         <T>Linked threads</T>
       </PullRequestSectionHeading>
+      {boardTasks.map((task) => (
+        <View
+          key={`${task.board}:${task.taskId}`}
+          className="flex-row items-center gap-2 rounded-2xl bg-grouped-card p-3"
+        >
+          <SymbolView name="square.grid.2x2" size={15} tintColorClassName="accent-icon-muted" />
+          <View className="min-w-0 flex-1">
+            <Text className="text-sm" numberOfLines={2}>
+              {gt("Board task: {title}", { title: task.title })}
+            </Text>
+            <Text className="text-2xs text-foreground-muted" numberOfLines={2}>
+              {task.ended
+                ? gt("Task ended. Its conversation is in the board's archive")
+                : gt("Open it on the board in the web or desktop app")}
+            </Text>
+          </View>
+        </View>
+      ))}
       {threads.map((thread) => {
         const title = thread.title || gt("Untitled thread");
         return (

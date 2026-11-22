@@ -12568,5 +12568,8 @@
   "27d76249d09eb69f": "Guide de revue prêt",
   "faa3bb26abb39c93": "Échec du guide de revue",
   "b7df38b7d8792d78": "Ouvrir le guide",
-  "9e91e9a77b664e4e": "Impossible de démarrer un guide de revue"
+  "9e91e9a77b664e4e": "Impossible de démarrer un guide de revue",
+  "cdf5dd7d370e594c": "Tâche du tableau : {title}",
+  "dae94973cc4ff259": "Tâche terminée. Sa conversation se trouve dans les archives du tableau",
+  "1f8f11ca7798711e": "Ouvre la tâche dans le tableau"
 }

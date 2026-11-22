@@ -16,6 +16,8 @@ import {
   boardTaskThreadMarker,
 } from "../delivery/boardThreadMarker.ts";
 import { listBoardThreadRows } from "../delivery/boardThreadRows.ts";
+import { linkedBoardTasks } from "../delivery/linkedBoardTasks.ts";
+import { listLinkedPullRequestThreads } from "../pullRequest/linkedThreads.ts";
 import { assert, it, vi } from "@effect/vitest";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import {
@@ -26,6 +28,7 @@ import {
   DEFAULT_SERVER_SETTINGS,
   EnvironmentId,
   GitCommandError,
+  IssueTrackerKind,
   MessageId,
   RunId,
   ProjectId,
@@ -589,6 +592,48 @@ it.effect("keeps a board task's thread out of both lists, however often it is cr
       );
     assert.deepEqual(yield* rows(false), [{ threadId, task }]);
     assert.deepEqual(yield* rows(true), []);
+    // Linked to a pull request and an issue, it shows as its task: by the engine's title when the
+    // engine answers, by the thread's own when it does not. The list of linked threads leaves it out.
+    const pullRequest = { host: "github.com", repository: "acme/api", number: 7 };
+    const issue = {
+      tracker: IssueTrackerKind.make("github"),
+      host: "github.com",
+      scope: "acme/api",
+      key: "42",
+    };
+    yield* threads.dispatch({
+      type: "thread.pull-request.link",
+      commandId: CommandId.make("command:board-task-pr"),
+      threadId,
+      ...pullRequest,
+      url: "https://github.com/acme/api/pull/7",
+      source: "created",
+    });
+    yield* threads.dispatch({
+      type: "thread.issue.link",
+      commandId: CommandId.make("command:board-task-issue"),
+      threadId,
+      ...issue,
+      projectId,
+      url: "https://github.com/acme/api/issues/42",
+      displayKey: "#42",
+      title: "Issue",
+      source: "manual",
+    });
+    const lanes = Effect.succeed({
+      readAt: "2026-11-22T10:00:00.000Z",
+      body: { lanes: [{ cards: [{ id: "task-7", title: "The engine's title" }] }] },
+    });
+    const asTask = (title: string, ended = false) => [
+      { board: "board-1", taskId: "task-7", title, ended },
+    ];
+    assert.deepEqual(yield* linkedBoardTasks({ pullRequest }, lanes), asTask("The engine's title"));
+    assert.deepEqual(yield* linkedBoardTasks({ issue }, null), asTask("Task 7"));
+    assert.deepEqual(
+      yield* linkedBoardTasks({ pullRequest: { ...pullRequest, number: 8 } }, lanes),
+      [],
+    );
+    assert.deepEqual((yield* listLinkedPullRequestThreads(pullRequest)).threads, []);
     yield* threads.dispatch({
       type: "thread.archive",
       commandId: CommandId.make("command:archive-board-task"),
@@ -596,6 +641,8 @@ it.effect("keeps a board task's thread out of both lists, however often it is cr
     });
     assert.deepEqual(yield* rows(false), []);
     assert.deepEqual(yield* rows(true), [{ threadId, task }]);
+    // The task ended and its conversation is archived: the row stays, told as ended.
+    assert.deepEqual(yield* linkedBoardTasks({ pullRequest }, null), asTask("Task 7", true));
   }).pipe(Effect.provide(harness.layer));
 });
 

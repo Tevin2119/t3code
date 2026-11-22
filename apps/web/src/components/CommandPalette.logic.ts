@@ -48,20 +48,49 @@ export function buildLinkedThreadActionItems(
     query: string;
     icon: ReactNode;
     runThread: (thread: Pick<SidebarThreadSummary, "environmentId" | "id">) => Promise<void>;
+    /**
+     * Opens a board task's view, or the board for a task that ended (`taskId` null), where its
+     * archived conversation is listed. Without it, linked board tasks are not listed.
+     */
+    runBoardTask?: (task: { environmentId: EnvironmentId; taskId: string | null }) => Promise<void>;
+    boardTaskIcon?: ReactNode;
   },
   resolve: MessageResolver = m,
 ): CommandPaletteActionItem[] {
-  return input.threads.map((thread) => ({
-    kind: "action",
-    value: `thread:${input.environmentId}:${thread.id}`,
-    threadRef: { environmentId: input.environmentId, threadId: thread.id },
-    title: thread.title || resolve(msg("Untitled thread")),
-    description:
-      thread.archivedAt === null ? resolve(msg("Linked thread")) : resolve(msg("Archived thread")),
-    searchTerms: [input.query, thread.title],
-    icon: input.icon,
-    run: () => input.runThread({ environmentId: input.environmentId, id: thread.id }),
-  }));
+  const { runBoardTask } = input;
+  return [
+    ...input.threads.map((thread): CommandPaletteActionItem => ({
+      kind: "action",
+      value: `thread:${input.environmentId}:${thread.id}`,
+      threadRef: { environmentId: input.environmentId, threadId: thread.id },
+      title: thread.title || resolve(msg("Untitled thread")),
+      description:
+        thread.archivedAt === null
+          ? resolve(msg("Linked thread"))
+          : resolve(msg("Archived thread")),
+      searchTerms: [input.query, thread.title],
+      icon: input.icon,
+      run: () => input.runThread({ environmentId: input.environmentId, id: thread.id }),
+    })),
+    // A board task's row carries no thread: it opens the task, with its conversation in it.
+    ...(runBoardTask === undefined
+      ? []
+      : (input.boardTasks ?? []).map((task): CommandPaletteActionItem => ({
+          kind: "action",
+          value: `linked-task:${input.environmentId}:${task.taskId}`,
+          title: resolve(msg("Board task: {title}", { title: task.title })),
+          description: task.ended
+            ? resolve(msg("Task ended. Its conversation is in the board's archive"))
+            : resolve(msg("Opens the task on the board")),
+          searchTerms: [input.query, task.title],
+          icon: input.boardTaskIcon ?? input.icon,
+          run: () =>
+            runBoardTask({
+              environmentId: input.environmentId,
+              taskId: task.ended ? null : task.taskId,
+            }),
+        }))),
+  ];
 }
 
 export function browseInputEndPaddingClass(input: {

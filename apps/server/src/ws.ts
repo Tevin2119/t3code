@@ -268,6 +268,7 @@ import * as IssueTrackerConnections from "./issue/IssueTrackerConnections.ts";
 import * as PullRequestReviewGuideService from "./pullRequest/PullRequestReviewGuideService.ts";
 import { listLinkedPullRequestThreads } from "./pullRequest/linkedThreads.ts";
 import { listBoardThreadRows } from "./delivery/boardThreadRows.ts";
+import { linkedBoardTasks } from "./delivery/linkedBoardTasks.ts";
 import { pullRequestSyncKey } from "./pullRequest/pullRequestSyncKey.ts";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as PullRequestSyncReactor from "./orchestration-v2/PullRequestSyncReactor.ts";
@@ -1996,13 +1997,34 @@ export const layerWsRpc = (
         return yield* mutateProjectWithClone(projectService, projectCloneTracker, mutation);
       });
 
+      // A board task's conversation is in no thread list: where it is linked, it shows as its task.
+      const boardDelivery = yield* Effect.serviceOption(DeliveryService.DeliveryService);
+      const withBoardTasks = <A extends object>(
+        result: A,
+        link: Parameters<typeof linkedBoardTasks>[0],
+      ) =>
+        linkedBoardTasks(
+          link,
+          Option.isSome(boardDelivery)
+            ? boardDelivery.value.read({ path: "/api/lanes?view=development&set=all" })
+            : null,
+        ).pipe(
+          Effect.provideService(SqlClient.SqlClient, sql),
+          Effect.map((boardTasks) =>
+            boardTasks.length === 0 ? result : { ...result, boardTasks },
+          ),
+        );
+
       const handlers = CoreServerWsRpcGroup.of({
         [WS_METHODS.issuesList]: (input) => issues.list(input),
         [WS_METHODS.issuesDetail]: (input) => issues.detail(input),
         [WS_METHODS.issuesComments]: (input) => issues.comments(input),
         [WS_METHODS.issuesTemplates]: (input) => issues.templates(input),
         [WS_METHODS.issuesCandidates]: (input) => issues.candidates(input),
-        [WS_METHODS.issuesLinkedThreads]: (input) => threadIssues.linkedThreads(input),
+        [WS_METHODS.issuesLinkedThreads]: (input) =>
+          threadIssues
+            .linkedThreads(input)
+            .pipe(Effect.flatMap((result) => withBoardTasks(result, { issue: input }))),
         [WS_METHODS.issuesCreate]: (input) => issues.create(input),
         [WS_METHODS.issuesComment]: (input) => issues.comment(input),
         [WS_METHODS.issuesUpdate]: (input) => issues.update(input),
@@ -2848,6 +2870,7 @@ export const layerWsRpc = (
                 ? Effect.succeed({ threads: [] })
                 : listLinkedPullRequestThreads(key).pipe(
                     Effect.provideService(SqlClient.SqlClient, sql),
+                    Effect.flatMap((result) => withBoardTasks(result, { pullRequest: key })),
                   ),
             ),
           ),

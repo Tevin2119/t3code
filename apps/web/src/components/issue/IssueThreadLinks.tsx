@@ -117,18 +117,21 @@ export function IssueThreadLinks({
     hiddenKeys,
     hidingAnywhere,
   );
+  // A board task's conversation is in no list: it counts, and opens, as the task.
+  const boardTasks = (relations.data ?? lastRelations)?.boardTasks ?? [];
+  const linkedCount = linkedThreads.length + boardTasks.length;
   const linkedThreadsLabel =
-    linkedThreads.length > 0
+    linkedCount > 0
       ? gt(
           "{count, plural, one {Linked from {count} thread} other {Linked from {count} threads}}",
-          { count: linkedThreads.length },
+          { count: linkedCount },
         )
       : gt("Linked threads");
   // A failed read shows "?" and falls back to searching threads for the issue's link.
   const relationsKnown = (relations.data ?? lastRelations) !== null;
   return (
     <>
-      {linkedThreads.length > 0 || (!relationsKnown && relations.error !== null) ? (
+      {linkedCount > 0 || (!relationsKnown && relations.error !== null) ? (
         <Tooltip>
           <TooltipTrigger
             render={
@@ -140,13 +143,13 @@ export function IssueThreadLinks({
                   openCommandPalette({
                     query: issue.url,
                     ...(relationsKnown
-                      ? { linkedThreads: { environmentId, threads: linkedThreads } }
+                      ? { linkedThreads: { environmentId, threads: linkedThreads, boardTasks } }
                       : {}),
                   })
                 }
               >
                 <MessageSquareIcon aria-hidden className="size-3.5" />
-                <span aria-hidden>{linkedThreads.length || "?"}</span>
+                <span aria-hidden>{linkedCount || "?"}</span>
               </Button>
             }
           />

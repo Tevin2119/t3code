@@ -58,6 +58,43 @@ describe("linked pull request thread navigation", () => {
     await items[0]?.run();
     expect(runThread).toHaveBeenCalledWith({ environmentId, id });
   });
+
+  it("lists a linked board task by its task, and opens the task and never its thread", async () => {
+    const environmentId = EnvironmentId.make("remote");
+    const runThread = vi.fn(async () => {});
+    const runBoardTask = vi.fn(async () => {});
+    const linkedThreads = {
+      environmentId,
+      threads: [],
+      boardTasks: [
+        { board: "work", taskId: "task-7", title: "Ship the thing", ended: false },
+        // Deleted or moved for good: still a row, by the title its thread kept.
+        { board: "work", taskId: "task-8", title: "Gone", ended: true },
+      ],
+    };
+    const query = "https://github.com/acme/web/pull/42";
+    const [item, ended, ...rest] = buildLinkedThreadActionItems({
+      ...linkedThreads,
+      query,
+      icon: null,
+      runThread,
+      runBoardTask,
+    });
+    expect(rest).toEqual([]);
+    expect(item?.title).toBe("Board task: Ship the thing");
+    expect(item?.threadRef).toBeUndefined();
+    await item?.run();
+    expect(runBoardTask).toHaveBeenCalledWith({ environmentId, taskId: "task-7" });
+    // An ended task opens the board, where its archived conversation is listed.
+    expect(ended?.title).toBe("Board task: Gone");
+    await ended?.run();
+    expect(runBoardTask).toHaveBeenLastCalledWith({ environmentId, taskId: null });
+    expect(runThread).not.toHaveBeenCalled();
+    // A surface that cannot open a task view lists no row that would open the thread instead.
+    expect(
+      buildLinkedThreadActionItems({ ...linkedThreads, query, icon: null, runThread }),
+    ).toEqual([]);
+  });
 });
 
 describe("reduceCommandPaletteUiState", () => {

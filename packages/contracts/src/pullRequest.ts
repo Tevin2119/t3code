@@ -12,6 +12,7 @@ import {
   ThreadId,
   TrimmedNonEmptyString,
 } from "./baseSchemas.ts";
+import { LinkedBoardTask } from "./delivery.ts";
 import { SourceControlProviderKind } from "./sourceControl.ts";
 
 export const PullRequestInvolvement = Schema.Literals(["all", "reviewing", "authored"]);
@@ -491,6 +492,7 @@ export const PullRequestLinkedThreadsResult = Schema.Struct({
       settled: Schema.optionalKey(Schema.Boolean),
     }),
   ),
+  boardTasks: Schema.optionalKey(Schema.Array(LinkedBoardTask)),
 });
 export type PullRequestLinkedThreadsResult = typeof PullRequestLinkedThreadsResult.Type;
 

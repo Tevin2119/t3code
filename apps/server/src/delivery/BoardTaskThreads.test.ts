@@ -164,6 +164,8 @@ function service(
                     title: thread.title,
                     archivedAt: thread.archivedAt,
                     task,
+                    pullRequests: null,
+                    issues: null,
                   },
                 ];
           }),

@@ -240,6 +240,20 @@ export const DeliveryArchivedBoardThreads = Schema.Struct({
 });
 export type DeliveryArchivedBoardThreads = typeof DeliveryArchivedBoardThreads.Type;
 
+/**
+ * A board task whose conversation is linked to a pull request or an issue. Its thread is in no
+ * list, so it is shown as the task and opens the task view: the row carries no thread id.
+ */
+export const LinkedBoardTask = Schema.Struct({
+  board: Schema.String,
+  taskId: Schema.String,
+  /** The engine's title, or the one the thread was made with when the engine has no such task. */
+  title: Schema.String,
+  /** The task ended (deleted, moved for good, its project removed): its conversation is archived. */
+  ended: Schema.Boolean,
+});
+export type LinkedBoardTask = typeof LinkedBoardTask.Type;
+
 /** Replaces who joins a conversation from its next message on; null makes it an ordinary one. */
 export const DeliverySetThreadLineupInput = Schema.Struct({
   threadId: ThreadId,

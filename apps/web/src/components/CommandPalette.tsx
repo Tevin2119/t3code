@@ -73,6 +73,7 @@ import {
   MessageSquareDashedIcon,
   LinkIcon,
   MessageSquareIcon,
+  SquareKanbanIcon,
   PaletteIcon,
   RotateCcwIcon,
   SettingsIcon,
@@ -1964,6 +1965,16 @@ function OpenCommandPaletteDialog(props: {
                   await navigate({
                     to: "/$environmentId/$threadId",
                     params: buildThreadRouteParams(scopeThreadRef(thread.environmentId, thread.id)),
+                  });
+                },
+                boardTaskIcon: <SquareKanbanIcon className={ITEM_ICON_CLASS} />,
+                runBoardTask: async (task) => {
+                  await navigate({
+                    to: "/board",
+                    search: {
+                      environment: task.environmentId,
+                      ...(task.taskId === null ? {} : { task: task.taskId }),
+                    },
                   });
                 },
               },
