@@ -4,7 +4,13 @@ import * as NodePath from "node:path";
 
 import { assert, it } from "@effect/vitest";
 
-import { boardTaskThreadMarker } from "./boardThreadMarker.ts";
+import {
+  BOARD_TASK_MARKER_LIKE,
+  boardTaskOfMarker,
+  boardTaskThreadCommandId,
+  boardTaskThreadId,
+  boardTaskThreadMarker,
+} from "./boardThreadMarker.ts";
 
 // A board task's thread reuses `lineage.engineIntake` as its marker, with a value of its own. That
 // is safe only while every reader but the engine intake asks whether the field is set, never what
@@ -82,4 +88,53 @@ it("nothing but the marker module knows what a board task's marker looks like", 
     [...new Set(linesNaming(/board-task:/).map(({ file }) => file))],
     ["apps/server/src/delivery/boardThreadMarker.ts"],
   );
+});
+
+it("keeps a colon in a board or task id from making two tasks one marker", () => {
+  const pairs = [
+    [
+      { board: "a:b", id: "c" },
+      { board: "a", id: "b:c" },
+    ],
+    [
+      { board: "a%3Ab", id: "c" },
+      { board: "a:b", id: "c" },
+    ],
+    [
+      { board: "a", id: "b" },
+      { board: "a:", id: "b" },
+    ],
+  ] as const;
+  for (const [left, right] of pairs) {
+    assert.notEqual(boardTaskThreadMarker(left), boardTaskThreadMarker(right));
+    assert.notEqual(boardTaskThreadCommandId(left), boardTaskThreadCommandId(right));
+    assert.notEqual(boardTaskThreadId(left), boardTaskThreadId(right));
+  }
+});
+
+it("reads the task back out of a marker, and nothing out of any other value", () => {
+  for (const task of [
+    { board: "board-1", id: "task-7" },
+    { board: "a:b", id: "c" },
+    { board: "a", id: "b:c" },
+    { board: "with/slash and space", id: "100%" },
+  ]) {
+    assert.deepEqual(boardTaskOfMarker(boardTaskThreadMarker(task)), task);
+  }
+  for (const value of [
+    null,
+    undefined,
+    "",
+    // An engine intake's admission.
+    `intake-${"a".repeat(64)}:0`,
+    BOARD_TASK_MARKER_LIKE,
+    `${BOARD_TASK_MARKER_LIKE.slice(0, -1)}only-a-board`,
+    `${BOARD_TASK_MARKER_LIKE.slice(0, -1)}a:b:c`,
+    `${BOARD_TASK_MARKER_LIKE.slice(0, -1)}:task`,
+    // Not the spelling the grammar writes, and a broken escape.
+    `${BOARD_TASK_MARKER_LIKE.slice(0, -1)}%61:b`,
+    `${BOARD_TASK_MARKER_LIKE.slice(0, -1)}%zz:b`,
+  ]) {
+    assert.equal(boardTaskOfMarker(value), null, String(value));
+  }
 });
