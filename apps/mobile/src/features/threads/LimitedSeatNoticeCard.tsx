@@ -5,7 +5,10 @@ import {
 } from "@t3tools/client-runtime/limited-seat-notices";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
+import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
+import { limitedLeadHandoffThreadId } from "@t3tools/shared/limitedSeat";
+import { useAtomValue } from "@effect/atom-react";
 import { StackActions, useNavigation } from "@react-navigation/native";
 import { AsyncResult } from "effect/reactivity";
 import { useGT, useMessages } from "gt-react-native";
@@ -135,6 +138,43 @@ function LimitedSeatNotice(props: {
           {error}
         </Text>
       ) : null}
+    </View>
+  );
+}
+
+/**
+ * Above the composer of a thread whose limited run continues in a linked thread. The server
+ * refuses every message to it, so the composer sends nothing and this card leads to the thread
+ * that carries the work on.
+ */
+export function HandedOnThreadCard(props: {
+  readonly thread: EnvironmentThreadShell;
+  readonly environmentId: EnvironmentId;
+}) {
+  const gt = useGT();
+  const navigation = useNavigation();
+  const runId = props.thread.latestRun?.runId;
+  const handedOn = useAtomValue(
+    deliveryEnvironment.limitedLeadHandedOn(scopeThreadRef(props.environmentId, props.thread.id)),
+  );
+  if (!handedOn || runId === undefined) return null;
+  return (
+    <View className="mx-3 mb-2 gap-1 rounded-xl border border-border bg-screen p-3">
+      <Text className="text-sm font-t3-medium text-foreground">
+        {gt("This conversation continues in a linked thread")}
+      </Text>
+      <NoticeAction
+        label={gt("Open thread")}
+        disabled={false}
+        onPress={() =>
+          navigation.dispatch(
+            StackActions.push("Thread", {
+              environmentId: String(props.environmentId),
+              threadId: String(limitedLeadHandoffThreadId(runId)),
+            }),
+          )
+        }
+      />
     </View>
   );
 }

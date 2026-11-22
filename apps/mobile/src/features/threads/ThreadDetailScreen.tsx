@@ -16,7 +16,9 @@ import { parseThreadKey, threadKey } from "@t3tools/client-runtime/state/entitie
 import { createThreadVisitTracker } from "@t3tools/client-runtime/state/thread-visits";
 import { useChildThreadInputs, useThreadReportedModelSelection } from "../../state/entities";
 import { UsageLimitRecoveryCard } from "./UsageLimitRecoveryCard";
-import { LimitedSeatNoticeCard } from "./LimitedSeatNoticeCard";
+import { HandedOnThreadCard, LimitedSeatNoticeCard } from "./LimitedSeatNoticeCard";
+import { scopeThreadRef } from "@t3tools/client-runtime/environment";
+import { deliveryEnvironment } from "../../state/delivery";
 import { useFocusEffect, useNavigation } from "@react-navigation/native";
 import {
   effectiveSnoozed,
@@ -512,6 +514,12 @@ function ThreadDetailBody(
     threadId: props.selectedThread.id,
   });
   const composerError = useAtomValue(threadComposerErrorsAtom)[selectedThreadKey]?.message ?? null;
+  // The server refuses every message to a thread whose limited run continues in a linked thread.
+  const threadHandedOn = useAtomValue(
+    deliveryEnvironment.limitedLeadHandedOn(
+      scopeThreadRef(props.environmentId, props.selectedThread.id),
+    ),
+  );
   const preferences = useAtomValue(mobilePreferencesAtom);
   const toolCallVisibility = AsyncResult.isSuccess(preferences)
     ? (preferences.value.toolCallVisibility ?? "showAll")
@@ -1730,11 +1738,17 @@ function ThreadDetailBody(
                       environmentId={props.environmentId}
                     />
                     {props.draftMode ? null : (
-                      <LimitedSeatNoticeCard
-                        thread={props.selectedThread}
-                        environmentId={props.environmentId}
-                        canOperateThread={props.canOperateThread}
-                      />
+                      <>
+                        <HandedOnThreadCard
+                          thread={props.selectedThread}
+                          environmentId={props.environmentId}
+                        />
+                        <LimitedSeatNoticeCard
+                          thread={props.selectedThread}
+                          environmentId={props.environmentId}
+                          canOperateThread={props.canOperateThread}
+                        />
+                      </>
                     )}
                     <ChildThreadApprovals
                       threadRef={props.selectedThreadDetailRef}
@@ -1970,10 +1984,12 @@ function ThreadDetailBody(
                         sendBlockedReason={
                           props.draftMode
                             ? props.draftMode.sendBlockedReason
-                            : props.creationState?.kind === "preparing" &&
-                                !props.creationState.serverOwned
-                              ? gt("Starting the task…")
-                              : null
+                            : threadHandedOn
+                              ? gt("This conversation continues in a linked thread")
+                              : props.creationState?.kind === "preparing" &&
+                                  !props.creationState.serverOwned
+                                ? gt("Starting the task…")
+                                : null
                         }
                         interactionLocked={props.draftMode?.interactionLocked}
                         draftKey={props.composerDraftKey ?? undefined}
@@ -2002,7 +2018,7 @@ function ThreadDetailBody(
                         onNativePasteText={props.onNativePasteText}
                         onRemoveDraftImage={props.onRemoveDraftImage}
                         onStopThread={props.onStopThread}
-                        onResumeQueue={props.onResumeQueue}
+                        onResumeQueue={threadHandedOn ? null : props.onResumeQueue}
                         onSendMessage={handleSendMessage}
                         onShowUsageLimits={showUsageLimits}
                         canSwitchProvider={props.canSwitchThreadProvider}

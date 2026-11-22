@@ -13510,6 +13510,49 @@ it.layer(layerTest)("usage-limit recovery", (it) => {
         creationSource: "server",
       });
       assert.lengthOf((yield* orchestrator.getThreadProjection(threadId)).runs, 1);
+
+      // The composer's "Resume thread", a typed message, and the send the CLI and tools make.
+      const send = (name: string, extra: { readonly manualContinuationOfRunId?: RunId } = {}) =>
+        orchestrator.dispatch({
+          type: "message.dispatch",
+          commandId: CommandId.make(`limited-lead:${name}`),
+          messageId: MessageId.make(`limited-lead:${name}`),
+          threadId,
+          ...extra,
+          text: "Continue where you left off.",
+          attachments: [],
+          dispatchMode: { type: "start_immediately" },
+          ...(name === "cli"
+            ? { deliveryIntent: "auto" as const, createdBy: "agent", creationSource: "mcp" }
+            : { createdBy: "user", creationSource: "web" }),
+        });
+      for (const refusedSend of [
+        send("manual-resume", { manualContinuationOfRunId: source.id }),
+        send("typed"),
+        send("cli"),
+      ]) {
+        const refused = yield* Effect.flip(refusedSend);
+        assert.equal(refused._tag, "OrchestratorThreadHandedOnError");
+        assert.equal(
+          refused.message,
+          "This conversation continues in a linked thread. Open that thread instead of resuming this one.",
+        );
+      }
+      const kept = yield* orchestrator.getThreadProjection(threadId);
+      assert.deepEqual(
+        kept.runs.map((run) => run.id),
+        [source.id],
+      );
+      assert.lengthOf(kept.messages, 1);
+
+      // Deleting the linked thread reopens this one.
+      yield* orchestrator.dispatch({
+        type: "thread.delete",
+        commandId: CommandId.make("limited-lead:delete-continued"),
+        threadId: target,
+      });
+      yield* send("reopened");
+      assert.lengthOf((yield* orchestrator.getThreadProjection(threadId)).runs, 2);
     }),
   );
 
