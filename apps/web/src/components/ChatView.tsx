@@ -67,6 +67,7 @@ import { ThreadFind, ThreadFindCanvas } from "./chat/ThreadFindProvider";
 import { closeThreadFind, openThreadFind, useThreadFindOpen } from "./chat/threadFindStore";
 import { THREAD_FIND_BAR_RESERVED_HEIGHT } from "./chat/ThreadFindBar";
 import { useUsageLimitRecoveryBannerItem } from "./chat/UsageLimitRecoveryBanner";
+import { useLimitedSeatBannerItems } from "./chat/LimitedSeatNotices";
 import {
   isThreadEnvironmentLocked,
   resolveDraftHeroState,
@@ -2895,6 +2896,20 @@ export default function ChatView(props: ChatViewProps) {
       : null,
     messages,
   );
+  const limitedSeatBannerItems = useLimitedSeatBannerItems(
+    {
+      environmentId,
+      threadId: deliveryEnabled && activeThreadShell !== null ? activeThreadShell.id : null,
+      providers: providerStatuses,
+      timestampFormat,
+      onOpenThread: (next) =>
+        void navigate({
+          to: "/$environmentId/$threadId",
+          params: buildThreadRouteParams(scopeThreadRef(environmentId, next)),
+        }),
+    },
+    messages,
+  );
   // An archived thread opens to read. The server refuses every message to it, so the composer says
   // so before one is written, not after a send that goes nowhere.
   const threadArchived = serverThread !== null && serverThread.archivedAt !== null;
@@ -2948,7 +2963,10 @@ export default function ChatView(props: ChatViewProps) {
             ),
           ]
         : [];
-    const limitRecoveryItems = limitRecoveryBanner === null ? [] : [limitRecoveryBanner];
+    const limitRecoveryItems =
+      limitRecoveryBanner === null
+        ? limitedSeatBannerItems
+        : [limitRecoveryBanner, ...limitedSeatBannerItems];
     const extensionStatusBanner = extensionStatusBannerItem(
       deriveProviderExtensionStatuses(serverProjection),
     );

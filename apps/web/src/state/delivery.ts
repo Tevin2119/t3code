@@ -29,12 +29,15 @@ import type {
 import { boardPreferencesOf, useBoardStore } from "./deliveryBoard";
 import { useEnvironments, usePrimaryEnvironmentId } from "./environments";
 import { useEnvironmentQuery } from "./query";
+import { environmentThreadShells } from "./threads";
 import { useAtomCommand } from "./use-atom-command";
 
 export type { SeatChoice };
 export { useBoardStore } from "./deliveryBoard";
 
-export const deliveryEnvironment = createDeliveryEnvironmentAtoms(connectionAtomRuntime);
+export const deliveryEnvironment = createDeliveryEnvironmentAtoms(connectionAtomRuntime, {
+  threadShellAtom: environmentThreadShells.threadShellAtom,
+});
 
 /** Whether this environment has a delivery engine turned on. */
 export function useDeliveryEnabled(environmentId: EnvironmentId | null): boolean {

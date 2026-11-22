@@ -619,6 +619,10 @@
       "types": "./src/pullRequestReply.ts",
       "default": "./src/pullRequestReply.ts"
     },
+    "./limited-seat-notices": {
+      "types": "./src/limitedSeatNotices.ts",
+      "default": "./src/limitedSeatNotices.ts"
+    },
     "./issue-presentation": {
       "types": "./src/issuePresentation.ts",
       "default": "./src/issuePresentation.ts"
