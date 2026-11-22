@@ -469,6 +469,21 @@ const EMPTY_COMPOSER_BANNER_ITEMS: ReadonlyArray<ComposerBannerStackItem> = [];
 
 const EMPTY_PENDING_FILE_SURFACE_IDS: ReadonlySet<string> = new Set();
 
+/** What a view hosting this thread adds to it. An ordinary thread has none of these. */
+export interface ChatViewSlots {
+  /** The header's title in place of the thread's own. */
+  readonly title?: string;
+  /** The header's parent breadcrumb in place of the thread's own: the way back to the host. */
+  readonly parent?: { readonly title: string; readonly open: () => void };
+  readonly headerActions?: ReactNode;
+  /** Under the header, above the timeline. */
+  readonly banner?: ReactNode;
+  /** Above the composer, and shown with no composer too. */
+  readonly composerLane?: ReactNode;
+  /** False when the thread takes no messages here: there is no composer. */
+  readonly composer?: boolean;
+}
+
 type ChatViewProps =
   | {
       environmentId: EnvironmentId;
@@ -479,6 +494,7 @@ type ChatViewProps =
       /** A side chat in its parent's right panel; the parent keeps the keyboard and workspace UI. */
       embedded?: SideChatParentPanel;
       unavailableContent?: ReactNode;
+      slots?: ChatViewSlots;
       routeKind: "server";
       draftId?: never;
     }
@@ -510,6 +526,7 @@ export default function ChatView(props: ChatViewProps) {
     embedded: parentPanel,
   } = props;
   const embedded = parentPanel !== undefined;
+  const slots = routeKind === "server" ? props.slots : undefined;
   const inspectThread = useThreadInspection();
   const panelHostShell = useQuietThreadShell(parentPanel?.hostRef ?? null);
   const canOperateThread = useEnvironmentScope(environmentId, AuthOrchestrationOperateScope);
@@ -1950,7 +1967,7 @@ export default function ChatView(props: ChatViewProps) {
     turnDiffSummaries.some((summary) => summary.repositories !== undefined);
   // Provider-native subagents cannot take messages; approvals and questions go to the top-level parent.
   const showProviderSubagentBar = isProviderSubagent;
-  const composerMounted = !showProviderSubagentBar;
+  const composerMounted = !showProviderSubagentBar && slots?.composer !== false;
   const providerSubagentModels = selectedProviderEntry?.models ?? EMPTY_PROVIDER_MODELS;
   // Providers can report dated model ids or aliases.
   const providerSubagentModelSlug = selectedProviderEntry
@@ -1979,7 +1996,7 @@ export default function ChatView(props: ChatViewProps) {
     shouldShowComposerContextStrip({
       isDraftHeroState,
       persistInActiveThreads: settings.persistComposerContextStrip,
-      hasActiveProject: activeProject !== null && !showProviderSubagentBar,
+      hasActiveProject: activeProject !== null && composerMounted,
       isGitRepo,
       showEnvironmentIndicator: showComposerEnvironmentIndicator,
     });
@@ -3845,11 +3862,16 @@ export default function ChatView(props: ChatViewProps) {
               activeThreadEnvironmentId={activeThread.environmentId}
               activeThreadId={activeThread.id}
               isServerThread={isServerThread}
-              activeThreadTitle={activeThread.title}
+              activeThreadTitle={slots?.title ?? activeThread.title}
               activeThreadLinkOrigin={activeThreadShell?.linkOrigin?.label ?? null}
               activeProject={activeProject ?? null}
-              parentThreadLink={headerParentThreadLink}
-              onOpenThread={onOpenRelatedThreadStable}
+              parentThreadLink={
+                slots?.parent
+                  ? { threadId: activeThread.id, title: slots.parent.title }
+                  : headerParentThreadLink
+              }
+              onOpenThread={slots?.parent ? slots.parent.open : onOpenRelatedThreadStable}
+              actions={slots?.headerActions}
               rightPanelOpen={inlineRightPanelOwnsTitleBar}
               onNewThreadInProject={handleNewThreadInActiveProjectStable}
               {...(activeDraftLogicalProjectKey
@@ -3859,6 +3881,7 @@ export default function ChatView(props: ChatViewProps) {
             />
           </header>
         )}
+        {slots?.banner}
 
         <div className="relative flex min-h-0 min-w-0 flex-1">
           <ThreadFindCanvas
@@ -4069,8 +4092,9 @@ export default function ChatView(props: ChatViewProps) {
                         : undefined
                     }
                   >
+                    {slots?.composerLane}
                     <ChildThreadApprovals threadRef={activeThreadRef} />
-                    <div className="relative">
+                    <div className={slots?.composer === false ? "hidden" : "relative"}>
                       <ComposerSurface.Shell contextRow={showComposerContextStrip}>
                         <ComposerSurface.Host
                           inert={queuedRunEdit.isSaving}

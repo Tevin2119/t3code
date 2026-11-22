@@ -5293,6 +5293,8 @@
   "a1238a3f72d5dee8": "A conversa da equipe começa quando esta tarefa é iniciada. Ainda não há nada a responder.",
   "5316704c1283635d": "Não foi possível mostrar a conversa.",
   "8c8efe9c6cffdf66": "Voltar para a tarefa #{number}",
+  "e150c65e5bcc64ce": "Esta tarefa é trabalhada em outra máquina ou está a caminho dela.",
+  "9d30b2961ec2769e": "Isto está encerrado. O que foi dito é mantido.",
   "036a05240c1069e2": "Assento {seat}",
   "15dd178ef4fc2eb4": "Conversa do assento",
   "ba2f576086976840": "Carregando a conversa...",

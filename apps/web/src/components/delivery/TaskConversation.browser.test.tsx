@@ -8,6 +8,7 @@ import "~/index.css";
 import { act, fakeTimers, render } from "../../../test/render";
 import { parseTask } from "../../lib/delivery";
 import type { SeatThread } from "../../lib/taskConversation";
+import type { ChatViewSlots } from "../ChatView";
 import { useThreadInspection } from "../chat/ThreadInspectionContext";
 import { TaskConversation } from "./TaskConversation";
 import { SEAT_LINKED_VIEW_DELAY_MS, useSteadySeat } from "./useTaskConversation";
@@ -15,16 +16,24 @@ import { SEAT_LINKED_VIEW_DELAY_MS, useSteadySeat } from "./useTaskConversation"
 /** Every thread the direct view was mounted for, in order. */
 const mountedThreads: string[] = [];
 
+// The native thread view, drawing what the task view hands its header, banner and lanes.
 vi.mock("../ChatView", () => ({
-  default: ({ threadId }: { threadId: string }) => {
+  default: ({ threadId, slots }: { threadId: string; slots?: ChatViewSlots }) => {
     const inspect = useThreadInspection();
     useEffect(() => {
       mountedThreads.push(threadId);
     }, [threadId]);
     return (
       <div>
+        <header>
+          {slots?.parent ? <button onClick={slots.parent.open}>{slots.parent.title}</button> : null}
+          <h2>{slots?.title ?? `Thread title ${threadId}`}</h2>
+          {slots?.headerActions}
+        </header>
+        {slots?.banner}
         <p>Thread view {threadId}</p>
-        <textarea aria-label="Composer" />
+        {slots?.composerLane}
+        {slots?.composer === false ? null : <textarea aria-label="Composer" />}
         <button
           onClick={() =>
             inspect?.({
@@ -68,12 +77,20 @@ const idle = {
   seat: null,
   seatResolving: false,
   seatName: null,
+  source: null,
   onOpenThread: () => {},
   onBackToTask: () => {},
   log: <p>The engine log</p>,
+  chrome: {
+    title: "#12 Fix the sync",
+    actions: <button>Task menu</button>,
+    notices: <p>Engine notice</p>,
+    panelControls: <button>Task panels</button>,
+    decisions: <p>Your decision</p>,
+  },
 };
 
-it("shows a queued task's text and the engine's place, with nothing to type into", async () => {
+it("shows a queued task's text and the engine's place in the native page, with nothing to type into", async () => {
   await using screen = await render(
     <TaskConversation
       {...idle}
@@ -95,9 +112,14 @@ it("shows a queued task's text and the engine's place, with nothing to type into
       state={{ kind: "waiting", why: "queued" }}
     />,
   );
+  await expect.element(screen.getByRole("heading", { name: "#12 Fix the sync" })).toBeVisible();
+  await expect.element(screen.getByRole("button", { name: "Task menu" })).toBeVisible();
+  await expect.element(screen.getByRole("button", { name: "Task panels" })).toBeVisible();
+  await expect.element(screen.getByText("Engine notice")).toBeVisible();
   await expect.element(screen.getByText("Make the sync stop dropping rows.")).toBeVisible();
   await expect.element(screen.getByText(/4 of 4 slots busy/)).toBeVisible();
   await expect.element(screen.getByText("#9 Holds one")).toBeVisible();
+  await expect.element(screen.getByText("Your decision")).toBeVisible();
   await expect.element(screen.getByRole("textbox")).not.toBeInTheDocument();
 });
 
@@ -115,20 +137,55 @@ it("keeps the engine's log, with its composer, for a task in work with no conver
   );
   await expect.element(screen.getByText("The engine log")).toBeVisible();
   await expect.element(screen.getByText(/No conversation is linked/)).toBeVisible();
+  await expect.element(screen.getByText("Make the sync stop dropping rows.")).toBeVisible();
+  await expect.element(screen.getByRole("heading", { name: "#12 Fix the sync" })).toBeVisible();
 });
 
-it("opens the thread in the centre, with the engine log one toggle away", async () => {
+it("says a task worked on another machine is there, and mounts no thread for it", async () => {
+  mountedThreads.length = 0;
+  await using screen = await render(
+    <TaskConversation {...idle} task={task({ state: "moved" })} state={{ kind: "moved" }} />,
+  );
+  await expect.element(screen.getByText(/worked on another machine/)).toBeVisible();
+  await expect.element(screen.getByText("Make the sync stop dropping rows.")).toBeVisible();
+  await expect.element(screen.getByRole("button", { name: "Task menu" })).toBeVisible();
+  await expect.element(screen.getByRole("textbox")).not.toBeInTheDocument();
+  expect(mountedThreads).toEqual([]);
+});
+
+it("opens the thread as the native view, titled by the task, with the engine log one toggle away", async () => {
   await using screen = await render(
     <TaskConversation {...idle} task={task()} state={{ kind: "open", ref, offline: false }} />,
   );
   await expect.element(screen.getByText("Thread view lead-thread")).toBeVisible();
+  await expect.element(screen.getByRole("heading", { name: "#12 Fix the sync" })).toBeVisible();
+  await expect.element(screen.getByRole("button", { name: "Task menu" })).toBeVisible();
+  await expect.element(screen.getByText("Your decision")).toBeVisible();
   await expect.element(screen.getByRole("textbox", { name: "Composer" })).toBeVisible();
   await page.getByRole("button", { name: "Engine log" }).click();
   await expect.element(screen.getByText("The engine log")).toBeVisible();
   await expect.element(screen.getByText("Thread view lead-thread")).not.toBeInTheDocument();
+  // The page that stands in keeps the task's header, actions and toggles.
+  await expect.element(screen.getByRole("heading", { name: "#12 Fix the sync" })).toBeVisible();
+  await expect.element(screen.getByRole("button", { name: "Task menu" })).toBeVisible();
+  await page.getByRole("button", { name: "Conversation" }).click();
+  await expect.element(screen.getByText("Thread view lead-thread")).toBeVisible();
 });
 
-it("hands a thread the conversation opens to the view, and offers the way back from a seat", async () => {
+it("keeps a closed task's thread to read, with no composer", async () => {
+  await using screen = await render(
+    <TaskConversation
+      {...idle}
+      task={task({ state: "closed" })}
+      state={{ kind: "open", ref, offline: false }}
+    />,
+  );
+  await expect.element(screen.getByText("Thread view lead-thread")).toBeVisible();
+  await expect.element(screen.getByText("This is closed. What was said is kept.")).toBeVisible();
+  await expect.element(screen.getByRole("textbox", { name: "Composer" })).not.toBeInTheDocument();
+});
+
+it("hands a thread the conversation opens to the view, and leads back from a seat by the breadcrumb", async () => {
   const onOpenThread = vi.fn();
   const onBackToTask = vi.fn();
   await using screen = await render(
@@ -156,6 +213,33 @@ it("hands a thread the conversation opens to the view, and offers the way back f
   );
   await expect.element(screen.getByText("Thread view child-thread")).toBeVisible();
   await expect.element(screen.getByText("Seat qa")).toBeVisible();
+  // The seat's own thread keeps its title; the task's actions stay in reach.
+  await expect
+    .element(screen.getByRole("heading", { name: "Thread title child-thread" }))
+    .toBeVisible();
+  await expect.element(screen.getByRole("button", { name: "Task menu" })).toBeVisible();
+  await page.getByRole("button", { name: "Back to task #12" }).click();
+  expect(onBackToTask).toHaveBeenCalledOnce();
+});
+
+it("opens the conversation the task was filed from in the centre, with the way back and no seat label", async () => {
+  const source = {
+    environmentId: EnvironmentId.make("env-9"),
+    threadId: ThreadId.make("filed-from"),
+  };
+  const onBackToTask = vi.fn();
+  await using screen = await render(
+    <TaskConversation
+      {...idle}
+      task={task()}
+      state={{ kind: "open", ref, offline: false }}
+      seat={source}
+      source={source}
+      onBackToTask={onBackToTask}
+    />,
+  );
+  await expect.element(screen.getByText("Thread view filed-from")).toBeVisible();
+  await expect.element(screen.getByText("Seat conversation")).not.toBeInTheDocument();
   await page.getByRole("button", { name: "Back to task #12" }).click();
   expect(onBackToTask).toHaveBeenCalledOnce();
 });
@@ -191,6 +275,7 @@ describe("a seat in a linked environment", () => {
     await using screen = await render(<Seat resolved={direct} reach={loading} />);
     await expect.element(screen.getByText("Seat qa")).toBeVisible();
     await expect.element(screen.getByText("Loading the conversation...")).toBeVisible();
+    await expect.element(screen.getByRole("button", { name: "Back to task #12" })).toBeVisible();
     await screen.rerender(<Seat resolved={linked} reach={loaded} />);
     await expect.element(screen.getByText("Linked view of seat-thread")).toBeVisible();
     expect(mountedThreads).toEqual([]);

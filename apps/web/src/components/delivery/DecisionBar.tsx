@@ -5,8 +5,8 @@ import { MobileHelp } from "./taskParts";
 
 /**
  * The decisions a person makes on the task: approve what was tested, send it back with a
- * reason, start or submit it. Kept apart from the composer, and below every tab, so that
- * what is written is never taken for a decision and the buttons are in reach on a phone.
+ * reason, start or submit it. A lane of its own above the composer, so that what is written
+ * is never taken for a decision and the buttons are in reach on a phone.
  */
 export function DecisionBar(props: {
   readonly task: TaskView;
@@ -18,7 +18,7 @@ export function DecisionBar(props: {
   const deciding = props.actions.some((action) => action === "approve" || action === "reject");
   return (
     <section
-      className="flex shrink-0 flex-col border-t border-border bg-muted/30 pb-safe"
+      className="flex shrink-0 flex-col rounded-lg border border-border bg-muted/30"
       aria-label="Your decision"
       data-task-decisions
     >

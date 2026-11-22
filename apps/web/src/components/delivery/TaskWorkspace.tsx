@@ -10,7 +10,6 @@ import { EnvironmentId, ThreadId, type ScopedThreadRef } from "@t3tools/contract
 import { taskPanelRef, useRightPanelStore } from "../../rightPanelStore";
 import { SharedTaskAllocation } from "./SharedBoard";
 import {
-  ArrowLeftIcon,
   CheckIcon,
   CircleAlertIcon,
   CircleCheckIcon,
@@ -20,13 +19,12 @@ import {
   CirclePlayIcon,
   CircleXIcon,
   CornerDownRightIcon,
-  EllipsisIcon,
   FileIcon,
   GitCommitHorizontalIcon,
   ListChecksIcon,
   PencilIcon,
 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import { isElectron } from "../../env";
 import { useMediaQuery } from "../../hooks/useMediaQuery";
@@ -37,8 +35,7 @@ import {
   type TaskView,
   type TimelineEntry,
 } from "../../lib/delivery";
-import { LANE_TITLE, messageStateLabel, sectionOf } from "../../lib/deliveryBoard";
-import { boardLaneOf } from "../../lib/boardLanes";
+import { messageStateLabel, sectionOf } from "../../lib/deliveryBoard";
 import { cn } from "../../lib/utils";
 import {
   useBoardStore,
@@ -51,14 +48,16 @@ import {
 import { Dialog, DialogHeader, DialogPanel, DialogPopup, DialogTitle } from "../ui/dialog";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
-import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
+import { Empty, EmptyHeader, EmptyTitle } from "../ui/empty";
 import { SidebarInset } from "../ui/sidebar";
 import { Textarea } from "../ui/textarea";
 import { WorkspacePageHeader } from "../WorkspacePageHeader";
-import { actionHelp, actionLabel, useTaskActions } from "./taskActions";
+import { BoardTaskContext } from "./BoardTaskContext";
+import { useTaskActions } from "./taskActions";
 import { TaskEditor } from "./TaskEditor";
 import { TaskFileList } from "./taskFiles";
-import { Age, Avatar, PriorityPill, time } from "./taskParts";
+import { TaskMenu } from "./TaskMenu";
+import { Age, Avatar, time } from "./taskParts";
 import { TaskComposer } from "./TaskComposer";
 import { DecisionBar } from "./DecisionBar";
 import { Details } from "./TaskDetails";
@@ -527,9 +526,9 @@ function Communications(props: {
 }
 
 /**
- * A task with everything about it in one place: what is asked, what was said
- * and what happened, and where it stands. The Board and the Orchestrator
- * both open this, on the same record.
+ * A board task opened as its native thread: the thread view T3 shows any thread in, with the
+ * task's number, title and actions in its header, or the native page with the task's words while
+ * it has no thread. A draft opens the task editor. The board's own read is the only source.
  */
 export function TaskWorkspace(props: {
   readonly environmentId: EnvironmentId | null;
@@ -549,10 +548,11 @@ export function TaskWorkspace(props: {
     onDone: read.refresh,
     onDiscarded: () => props.onClose(),
   });
-  const detailsSheet = useMediaQuery(RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY);
+  const narrow = useMediaQuery(RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY);
+  // The details are a sheet at every width, closed until asked for.
   const [detailsOpen, setDetailsOpen] = useLocalStorage(
-    `t3code:task-details:${JSON.stringify([props.environmentId, props.taskId, detailsSheet ? "sheet" : "inline"])}`,
-    !detailsSheet,
+    `t3code:task-details:${JSON.stringify([props.environmentId, props.taskId, "sheet"])}`,
+    false,
     Schema.Boolean,
   );
   const [briefOpen, setBriefOpen] = useState(true);
@@ -560,18 +560,16 @@ export function TaskWorkspace(props: {
   const [creatingTask, setCreatingTask] = useState(false);
   const [createProblem, setCreateProblem] = useState<string | null>(null);
   const [allocatingTask, setAllocatingTask] = useState<string | null>(null);
-  const wide = useMediaQuery("(min-width: 640px) and (min-height: 600px)");
+  const [menuProblem, setMenuProblem] = useState<string | null>(null);
   const conversation = useTaskConversation(task);
-  // A thread opened from a panel appears in the centre, so a panel that covers it, or fills the
-  // width, gives way. The right panel stays on the task otherwise.
+  // A thread opened from a panel appears in the centre, so the details sheet over it closes, and a
+  // panel that fills the width gives way. The right panel stays on the task otherwise.
   const openInCentre = (thread: ScopedThreadRef) => {
     conversation.open(thread);
     const panel = taskPanelRef(JSON.stringify([props.environmentId, props.taskId]));
     useRightPanelStore.getState().setMaximized(panel, false);
-    if (detailsSheet) {
-      useRightPanelStore.getState().close(panel);
-      setDetailsOpen(false);
-    }
+    setDetailsOpen(false);
+    if (narrow) useRightPanelStore.getState().close(panel);
   };
 
   // Opened and looked at, what the team said is read.
@@ -586,15 +584,20 @@ export function TaskWorkspace(props: {
     void act(`/api/tasks/${task.id}/seen`, { by: person });
   }, [act, person, task, unread]);
 
+  // Provided where the task view mounts: what it hosts reads the board's task from here.
+  const board = { environmentId: props.environmentId, taskId: props.taskId, task };
+
   if (task?.isDraft) {
     return (
-      <TaskEditor
-        environmentId={props.environmentId}
-        taskId={task.id}
-        from={props.from}
-        onClose={props.onClose}
-        onSaved={(id) => props.onOpenTask(id)}
-      />
+      <BoardTaskContext value={board}>
+        <TaskEditor
+          environmentId={props.environmentId}
+          taskId={task.id}
+          from={props.from}
+          onClose={props.onClose}
+          onSaved={(id) => props.onOpenTask(id)}
+        />
+      </BoardTaskContext>
     );
   }
 
@@ -602,202 +605,66 @@ export function TaskWorkspace(props: {
     ["approve", "reject", "publish", "submit", "deliver", "accept-artifacts"].includes(action),
   );
   const others = task?.actions.filter((action) => !primary?.includes(action)) ?? [];
+  const source = task?.source
+    ? {
+        environmentId: EnvironmentId.make(task.source.environmentId),
+        threadId: ThreadId.make(task.source.threadId),
+      }
+    : null;
+  const problem = actions.problem ?? menuProblem;
+  // Under the native header: the engine's notices, the last refusal and the delivery disclosure.
+  const notices = (
+    <>
+      {read.error ? (
+        deliveryReadDiagnostic(read.failure, { task: true }) === "unreachable" ? (
+          <p className="shrink-0 border-b border-border px-3 py-1.5 text-xs text-warning">
+            Delivery engine not reachable. {read.error} This is not an ordinary chat and it will not
+            answer as one.
+          </p>
+        ) : (
+          <DeliveryDiagnosticNotice
+            className="min-w-0 shrink-0 space-y-0.5 border-b border-border px-3 py-1.5 text-xs"
+            code={deliveryReadDiagnostic(read.failure, { task: true })}
+            problem={read.error}
+          />
+        )
+      ) : null}
+      {problem ? (
+        <p
+          className="shrink-0 border-b border-border px-3 py-1.5 text-xs text-warning"
+          data-delivery-problem
+        >
+          {problem}
+        </p>
+      ) : null}
+      {task && props.environmentId && task.origin.startsWith(`thread:${props.environmentId}/`) ? (
+        <div className="shrink-0 border-b border-border px-3 py-2">
+          <BoardDelivery
+            key={`${props.environmentId}:${task.id}`}
+            environmentId={props.environmentId}
+            task={{
+              id: task.id,
+              origin: task.origin,
+              held: task.held,
+              state: task.state,
+              repository: task.target?.repository ?? null,
+              base: task.target?.base ?? null,
+            }}
+          />
+        </div>
+      ) : null}
+    </>
+  );
 
   return (
-    <SidebarInset className="isolate h-dvh min-h-0 overflow-hidden overscroll-y-none">
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-task-workspace={props.taskId}>
-        <WorkspacePageHeader electron={isElectron} className="h-auto">
-          <div
-            className={cn(
-              "flex min-w-0 flex-1 items-center gap-1 py-1 [@media(min-width:640px)_and_(min-height:600px)]:gap-2 [@media(min-width:640px)_and_(min-height:600px)]:py-2",
-              // With the thread view below, one row: the title gives way so the controls it draws stay clear.
-              conversation.state.kind !== "open" &&
-                "[@media(min-width:640px)_and_(min-height:600px)]:flex-wrap",
-            )}
-          >
-            <Button
-              size="xs"
-              variant="ghost"
-              onClick={props.onClose}
-              aria-label={`Back to ${props.from}`}
-            >
-              <ArrowLeftIcon />
-              <span className="hidden [@media(min-width:640px)_and_(min-height:600px)]:inline">
-                {props.from}
-              </span>
-            </Button>
-            {task ? (
-              <>
-                <span className="shrink-0 font-mono text-xs text-muted-foreground" data-task-number>
-                  #{task.number}
-                </span>
-                <h1
-                  className={cn(
-                    "min-w-0 flex-1 truncate text-sm font-medium",
-                    conversation.state.kind !== "open" &&
-                      "[@media(min-width:640px)_and_(min-height:600px)]:flex-none",
-                  )}
-                >
-                  {task.title}
-                </h1>
-                <PriorityPill priority={task.priority} by={task.priorityBy} />
-                <Badge
-                  size="sm"
-                  variant="outline"
-                  className="hidden [@media(min-width:640px)_and_(min-height:600px)]:inline-flex"
-                  data-task-state={task.state}
-                >
-                  {LANE_TITLE[boardLaneOf(task.lane ?? "")] ?? task.state}
-                  {task.held ? ", paused" : ""}
-                </Badge>
-                <span
-                  className={cn(
-                    "font-mono text-3xs text-muted-foreground",
-                    !stale && "hidden [@media(min-width:640px)_and_(min-height:600px)]:inline-flex",
-                  )}
-                >
-                  {stale ? "stale" : "live"}
-                </span>
-              </>
-            ) : null}
-            <div
-              className={cn(
-                "ml-auto flex shrink-0 items-center gap-1",
-                // The thread view in the centre draws its own controls over the top right corner.
-                conversation.state.kind === "open" && "pe-32",
-              )}
-            >
-              {task?.workflow === "chat" && task.state === "chat" ? (
-                <span className="hidden [@media(min-width:640px)_and_(min-height:600px)]:inline-flex">
-                  <Button
-                    size="xs"
-                    variant="outline"
-                    onClick={() => {
-                      setCreateProblem(null);
-                      setTaskBrief("");
-                    }}
-                  >
-                    Create task from chat
-                  </Button>
-                </span>
-              ) : null}
-              {task ? (
-                <SharedTaskAllocation
-                  environmentId={props.environmentId}
-                  taskId={task.id}
-                  open={allocatingTask === task.id}
-                  onOpenChange={(open) => setAllocatingTask(open ? task.id : null)}
-                />
-              ) : null}
-              {task && (!wide || others.length > 0) ? (
-                <Menu>
-                  <MenuTrigger
-                    render={
-                      <Button
-                        size="icon-sm"
-                        variant="ghost"
-                        aria-label="What can be done with this task"
-                        data-task-actions
-                      />
-                    }
-                  >
-                    <EllipsisIcon />
-                  </MenuTrigger>
-                  <MenuPopup align="end">
-                    {!wide && task.workflow === "chat" && task.state === "chat" ? (
-                      <MenuItem
-                        disabled={actions.busy}
-                        onClick={() => {
-                          setCreateProblem(null);
-                          setTaskBrief("");
-                        }}
-                      >
-                        <span className="flex max-w-80 flex-col">
-                          <span>Create task from chat</span>
-                          <span className="text-xs text-muted-foreground">
-                            Make this chat a task; nothing starts yet.
-                          </span>
-                        </span>
-                      </MenuItem>
-                    ) : null}
-                    {!wide ? (
-                      <MenuItem disabled={actions.busy} onClick={() => setAllocatingTask(task.id)}>
-                        <span className="flex max-w-80 flex-col">
-                          <span>Allocate</span>
-                          <span className="text-xs text-muted-foreground">
-                            Choose the machine for it, or follow its move.
-                          </span>
-                        </span>
-                      </MenuItem>
-                    ) : null}
-                    {others.map((action) => (
-                      <MenuItem
-                        key={action}
-                        disabled={actions.busy}
-                        onClick={() => actions.run(task.card, action)}
-                      >
-                        <span className="flex max-w-80 flex-col">
-                          <span>{actionLabel(action, task.card)}</span>
-                          <span className="text-xs text-muted-foreground">
-                            {actionHelp(action, task.card)}
-                          </span>
-                        </span>
-                      </MenuItem>
-                    ))}
-                  </MenuPopup>
-                </Menu>
-              ) : null}
-            </div>
-          </div>
-        </WorkspacePageHeader>
-
-        {read.error ? (
-          deliveryReadDiagnostic(read.failure, { task: true }) === "unreachable" ? (
-            <p className="px-5 pt-3 text-sm text-warning">
-              Delivery engine not reachable. {read.error} This is not an ordinary chat and it will
-              not answer as one.
-            </p>
-          ) : (
-            <DeliveryDiagnosticNotice
-              className="min-w-0 space-y-0.5 px-5 pt-3 text-sm"
-              code={deliveryReadDiagnostic(read.failure, { task: true })}
-              problem={read.error}
-            />
-          )
-        ) : null}
-        {actions.problem ? (
-          <p className="px-5 pt-3 text-sm text-warning" data-delivery-problem>
-            {actions.problem}
-          </p>
-        ) : null}
-
-        {task ? (
-          <>
-            {props.environmentId && task.origin.startsWith(`thread:${props.environmentId}/`) ? (
-              <BoardDelivery
-                key={`${props.environmentId}:${task.id}`}
-                environmentId={props.environmentId}
-                task={{
-                  id: task.id,
-                  origin: task.origin,
-                  held: task.held,
-                  state: task.state,
-                  repository: task.target?.repository ?? null,
-                  base: task.target?.base ?? null,
-                }}
-              />
-            ) : null}
+    <BoardTaskContext value={board}>
+      <SidebarInset className="isolate h-dvh min-h-0 overflow-hidden overscroll-y-none">
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-task-workspace={props.taskId}>
+          {task ? (
             <TaskWorkspacePanels
               key={`${props.environmentId}:${task.id}`}
               owner={JSON.stringify([props.environmentId, task.id])}
-              source={
-                task.source
-                  ? {
-                      environmentId: EnvironmentId.make(task.source.environmentId),
-                      threadId: ThreadId.make(task.source.threadId),
-                    }
-                  : null
-              }
+              source={source}
               detailsOpen={detailsOpen}
               onDetailsOpenChange={setDetailsOpen}
               onOpenThread={openInCentre}
@@ -812,7 +679,7 @@ export function TaskWorkspace(props: {
                   onOpenChange={setBriefOpen}
                 />
               }
-              renderConversation={(showDetails) => (
+              renderConversation={(panel) => (
                 <TaskConversation
                   key={task.id}
                   task={task}
@@ -820,8 +687,38 @@ export function TaskWorkspace(props: {
                   seat={conversation.seat}
                   seatResolving={conversation.seatResolving}
                   seatName={conversation.seatName}
+                  source={source}
                   onOpenThread={openInCentre}
                   onBackToTask={conversation.backToTask}
+                  chrome={{
+                    title: `#${task.number} ${task.title}`,
+                    actions: (
+                      <TaskMenu
+                        environmentId={props.environmentId}
+                        task={task}
+                        actions={others}
+                        taskActions={actions}
+                        onCreateTask={() => {
+                          setCreateProblem(null);
+                          setTaskBrief("");
+                        }}
+                        onAllocate={() => setAllocatingTask(task.id)}
+                        onInspectSource={source ? () => openInCentre(source) : undefined}
+                        onChanged={read.refresh}
+                        onProblem={setMenuProblem}
+                      />
+                    ),
+                    notices,
+                    panelControls: panel.controls,
+                    decisions: (
+                      <DecisionBar
+                        task={task}
+                        actions={primary ?? []}
+                        busy={actions.busy}
+                        onAction={(action) => actions.run(task.card, action)}
+                      />
+                    ),
+                  }}
                   log={
                     <Communications
                       key={task.id}
@@ -829,7 +726,7 @@ export function TaskWorkspace(props: {
                       task={task}
                       onChanged={read.refresh}
                       onShow={(section) => {
-                        showDetails();
+                        panel.showDetails();
                         setBriefOpen(true);
                         requestAnimationFrame(() =>
                           document
@@ -862,56 +759,55 @@ export function TaskWorkspace(props: {
                     task={task}
                     onChanged={read.refresh}
                     stale={stale || !!read.error}
-                    onMoveTo={(lane) => actions.moveTo(task.card, lane, null)}
-                    busy={actions.busy}
                   />
                 </div>
               }
             />
-            <DecisionBar
-              task={task}
-              actions={primary ?? []}
-              busy={actions.busy}
-              onAction={(action) => actions.run(task.card, action)}
-            />
-          </>
-        ) : read.error ? null : (
-          <p className="p-6 text-sm text-muted-foreground">
-            {read.isPending ? "Reading the task." : "There is no such task."}
-          </p>
-        )}
-      </div>
-      {actions.dialog}
-      <Dialog
-        open={taskBrief !== null}
-        onOpenChange={(open) => {
-          if (!open && !creatingTask) setTaskBrief(null);
-        }}
-      >
-        <DialogPopup>
-          <DialogHeader>
-            <DialogTitle>Create a non-code task</DialogTitle>
-          </DialogHeader>
-          <DialogPanel>
-            <div className="flex flex-col gap-3">
-              <p className="text-sm text-muted-foreground">
-                Write the agreed brief. The draft keeps this conversation, project folder and
-                attachments. Creating it does not start work.
-              </p>
-              <Textarea
-                aria-label="Agreed task brief"
-                value={taskBrief ?? ""}
-                disabled={creatingTask}
-                onChange={(event) => setTaskBrief(event.target.value)}
-              />
-              {createProblem ? <p role="alert">{createProblem}</p> : null}
-              <Button
-                disabled={creatingTask || !taskBrief?.trim() || !task}
-                onClick={() => {
-                  if (!task || !taskBrief?.trim() || creatingTask) return;
-                  setCreatingTask(true);
-                  void act(`/api/tasks/${task.id}/from-chat`, { text: taskBrief, by: person }).then(
-                    (result) => {
+          ) : (
+            <TaskEmpty notices={notices} reading={read.isPending} failed={!!read.error} />
+          )}
+        </div>
+        {actions.dialog}
+        {task ? (
+          <SharedTaskAllocation
+            environmentId={props.environmentId}
+            taskId={task.id}
+            open={allocatingTask === task.id}
+            onOpenChange={(open) => setAllocatingTask(open ? task.id : null)}
+          />
+        ) : null}
+        <Dialog
+          open={taskBrief !== null}
+          onOpenChange={(open) => {
+            if (!open && !creatingTask) setTaskBrief(null);
+          }}
+        >
+          <DialogPopup>
+            <DialogHeader>
+              <DialogTitle>Create a non-code task</DialogTitle>
+            </DialogHeader>
+            <DialogPanel>
+              <div className="flex flex-col gap-3">
+                <p className="text-sm text-muted-foreground">
+                  Write the agreed brief. The draft keeps this conversation, project folder and
+                  attachments. Creating it does not start work.
+                </p>
+                <Textarea
+                  aria-label="Agreed task brief"
+                  value={taskBrief ?? ""}
+                  disabled={creatingTask}
+                  onChange={(event) => setTaskBrief(event.target.value)}
+                />
+                {createProblem ? <p role="alert">{createProblem}</p> : null}
+                <Button
+                  disabled={creatingTask || !taskBrief?.trim() || !task}
+                  onClick={() => {
+                    if (!task || !taskBrief?.trim() || creatingTask) return;
+                    setCreatingTask(true);
+                    void act(`/api/tasks/${task.id}/from-chat`, {
+                      text: taskBrief,
+                      by: person,
+                    }).then((result) => {
                       setCreatingTask(false);
                       if (!result.ok) {
                         setCreateProblem(result.why);
@@ -925,16 +821,39 @@ export function TaskWorkspace(props: {
                       setTaskBrief(null);
                       read.refresh();
                       props.onOpenTask(created.id);
-                    },
-                  );
-                }}
-              >
-                {creatingTask ? "Creating draft..." : "Create draft"}
-              </Button>
-            </div>
-          </DialogPanel>
-        </DialogPopup>
-      </Dialog>
-    </SidebarInset>
+                    });
+                  }}
+                >
+                  {creatingTask ? "Creating draft..." : "Create draft"}
+                </Button>
+              </div>
+            </DialogPanel>
+          </DialogPopup>
+        </Dialog>
+      </SidebarInset>
+    </BoardTaskContext>
+  );
+}
+
+/** No task to show yet, or none by that id: the native empty state under the native header. */
+function TaskEmpty(props: {
+  readonly notices: ReactNode;
+  readonly reading: boolean;
+  readonly failed: boolean;
+}) {
+  return (
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-background">
+      <WorkspacePageHeader electron={isElectron} />
+      {props.notices}
+      {props.failed ? null : (
+        <Empty>
+          <EmptyHeader>
+            <EmptyTitle>
+              {props.reading ? "Reading the task." : "There is no such task."}
+            </EmptyTitle>
+          </EmptyHeader>
+        </Empty>
+      )}
+    </div>
   );
 }

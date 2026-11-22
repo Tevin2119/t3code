@@ -13,15 +13,9 @@ import {
   type TaskView,
   waitingWords,
 } from "../../lib/delivery";
-import {
-  ageLabel,
-  LANE_TITLE,
-  boardMoveIntent,
-  PRIORITY_LABEL,
-  tagsFromText,
-} from "../../lib/deliveryBoard";
-import { BOARD_LANES, boardLaneOf } from "../../lib/boardLanes";
-import { boardChoiceKind, type MoveBoard } from "../../lib/deliveryMove";
+import { ageLabel, LANE_TITLE, PRIORITY_LABEL, tagsFromText } from "../../lib/deliveryBoard";
+import { boardLaneOf } from "../../lib/boardLanes";
+import type { MoveBoard } from "../../lib/deliveryMove";
 import { seatsChangedForTask, harnessLabel } from "../../lib/deliverySeats";
 import { cn } from "../../lib/utils";
 import {
@@ -32,12 +26,9 @@ import {
   usePersonName,
   withSeatChoice,
 } from "../../state/delivery";
-import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
-import { MoveTaskDialog } from "./MoveTaskDialog";
 import { SeatSettingsPanel } from "./SeatSettingsPanel";
-import { actionLabel } from "./taskActions";
 import {
   Age,
   laneTone,
@@ -59,10 +50,6 @@ export function Info(props: {
   readonly task: TaskView;
   readonly onChanged: () => void;
   readonly stale: boolean;
-  /** Takes the task to a column, by the step that leads there; see moveIntent. */
-  readonly onMoveTo: (lane: string) => void;
-  /** A request is out: nothing more is sent until it returns. */
-  readonly busy: boolean;
 }) {
   const { task } = props;
   const { card } = task;
@@ -77,7 +64,7 @@ export function Info(props: {
   const closed = ["approved", "rejected", "closed"].includes(task.state);
   const flow = task.flows.find((item) => item.id === task.workflow) ?? null;
   const navigate = useNavigate();
-  // The boards of the person's own, to move the task between, with where each one's work is done.
+  // The boards of the person's own, to name the one the task is on.
   const boardsRead = useDeliveryRead(props.environmentId, "/api/boards");
   const boards: ReadonlyArray<MoveBoard> = (
     Array.isArray(boardsRead.body) ? boardsRead.body : []
@@ -92,12 +79,8 @@ export function Info(props: {
         ]
       : [],
   );
-  // The board triage thinks the task belongs on, and the move a person is about to confirm.
+  // The board triage thinks the task belongs on. Moving it there is in the header's menu.
   const suggested = task.suggestedBoard ?? card.suggestedBoard ?? null;
-  const [moving, setMoving] = useState<{
-    readonly board: string;
-  } | null>(null);
-  const startMove = (board: string) => setMoving({ board });
   // What is set for the task, which the switches change.
   const set = Object.fromEntries(task.settings.map((item) => [item.seat, item.set]));
   // The seat choices last sent. Until a read of the task shows it changed since (its last
@@ -134,107 +117,13 @@ export function Info(props: {
       data-task-info
       aria-label="About this task"
     >
-      {suggested && suggested.id !== card.set ? (
-        <div
-          className="flex items-start justify-between gap-2 rounded border border-warning/60 bg-warning/5 px-2 py-1.5 text-xs"
-          data-task-suggested-board={suggested.id}
-        >
-          <span>
-            Triage suggests board <span className="font-medium">{suggested.title}</span>
-            {suggested.repositoryTitle ? ` (${suggested.repositoryTitle})` : ""}
-          </span>
-          <Button size="xs" variant="outline" onClick={() => startMove(suggested.id)}>
-            Move...
-          </Button>
-        </div>
-      ) : null}
-      {moving ? (
-        <MoveTaskDialog
-          environmentId={props.environmentId}
-          task={task}
-          boards={boards}
-          board={moving.board}
-          onClose={() => setMoving(null)}
-          onMoved={props.onChanged}
-        />
-      ) : null}
       <section className="flex flex-col gap-1.5">
         <TaskDisclosure title="Status and decisions">
           <Row label="Stands in">
-            {task.isDraft || !task.lane ? (
-              <span className="inline-flex items-center gap-1.5" data-task-lane={task.lane ?? ""}>
-                <span className={cn("size-2 rounded-full", laneTone(task.lane).bar)} />
-                {LANE_TITLE[boardLaneOf(task.lane ?? "")] ?? task.state}
-              </span>
-            ) : (
-              <Select
-                value={boardLaneOf(task.lane)}
-                onValueChange={(value) =>
-                  value &&
-                  value !== boardLaneOf(task.lane) &&
-                  props.onMoveTo(boardMoveIntent(card, String(value)).lane)
-                }
-              >
-                <SelectTrigger
-                  aria-label="Column"
-                  size="compact"
-                  variant="ghost"
-                  className="w-auto min-w-0"
-                  disabled={props.busy}
-                  data-task-lane={task.lane}
-                >
-                  <SelectValue>
-                    <span className="inline-flex items-center gap-1.5">
-                      <span className={cn("size-2 rounded-full", laneTone(task.lane).bar)} />
-                      {LANE_TITLE[boardLaneOf(task.lane)] ?? task.state}
-                    </span>
-                  </SelectValue>
-                </SelectTrigger>
-                <SelectPopup alignItemWithTrigger={false}>
-                  {BOARD_LANES.filter(
-                    (item) => item.id !== "draft" && item.id !== "closed-not-done",
-                  )
-                    .map((item) => [item.id, LANE_TITLE[item.id] ?? item.id] as const)
-                    .map(([lane, title]) => {
-                      const intent = boardMoveIntent(card, lane).intent;
-                      // What choosing it does, or why it cannot be chosen, is said to every reader.
-                      const said =
-                        intent.kind === "refused"
-                          ? intent.why
-                          : intent.kind === "action"
-                            ? actionLabel(intent.action, card)
-                            : lane === boardLaneOf(task.lane)
-                              ? "Here now"
-                              : intent.label;
-                      return (
-                        <SelectItem
-                          key={lane}
-                          value={lane}
-                          aria-label={`${title}: ${said}`}
-                          data-move={intent.kind}
-                        >
-                          <span
-                            className={cn(
-                              "inline-flex items-center gap-1.5",
-                              intent.kind === "refused" && "text-muted-foreground",
-                            )}
-                          >
-                            <span className={cn("size-2 rounded-full", laneTone(lane).bar)} />
-                            {title}
-                            {lane !== boardLaneOf(task.lane) ? (
-                              <span className="text-3xs text-muted-foreground">
-                                {intent.kind === "refused"
-                                  ? "not from here, choose to see why"
-                                  : said}
-                              </span>
-                            ) : null}
-                          </span>
-                        </SelectItem>
-                      );
-                    })}
-                </SelectPopup>
-              </Select>
-            )}
+            <span className="inline-flex items-center gap-1.5" data-task-lane={task.lane ?? ""}>
+              <span className={cn("size-2 rounded-full", laneTone(task.lane).bar)} />
+              {LANE_TITLE[boardLaneOf(task.lane ?? "")] ?? task.state}
+            </span>
           </Row>
           {card.set === "qualification" ? (
             <Row label="Kept as">
@@ -244,59 +133,17 @@ export function Info(props: {
             </Row>
           ) : (
             <Row label="Board">
-              <Select
-                value={card.set ?? NO_BOARD}
-                onValueChange={(value) => {
-                  const chosen =
-                    value === NO_BOARD ? null : (boards.find((item) => item.id === value) ?? null);
-                  if (value === (card.set ?? NO_BOARD)) return;
-                  // A board done in another repository moves the task's work there, which is confirmed first.
-                  if (
-                    value !== NO_BOARD &&
-                    !["chat", "non-code"].includes(task.workflow) &&
-                    boardChoiceKind(task.target?.repository ?? null, chosen) === "move"
-                  ) {
-                    startMove(String(value));
-                    return;
-                  }
-                  void act(`/api/tasks/${task.id}/board`, {
-                    board: value === NO_BOARD ? null : String(value),
-                    by: person,
-                  }).then((result) => {
-                    if (!result.ok) setProblem(result.why);
-                    props.onChanged();
-                  });
-                }}
+              {/* A board other than the suggested one is outlined in the warning tone. */}
+              <span
+                className={cn(
+                  "inline-flex min-w-0 rounded-md",
+                  suggested && suggested.id !== card.set && "px-1 ring-1 ring-warning/60",
+                )}
+                data-task-board={card.set ?? ""}
               >
-                {/* A board other than the suggested one is outlined in the warning tone. */}
-                <span
-                  className={cn(
-                    "inline-flex min-w-0 rounded-md",
-                    suggested && suggested.id !== card.set && "ring-1 ring-warning/60",
-                  )}
-                >
-                  <SelectTrigger
-                    aria-label="Board"
-                    size="compact"
-                    variant="ghost"
-                    className="w-auto min-w-0"
-                    data-task-board={card.set ?? ""}
-                  >
-                    <SelectValue>
-                      {boards.find((item) => item.id === card.set)?.title ??
-                        (card.set ? card.set : "Not on a board")}
-                    </SelectValue>
-                  </SelectTrigger>
-                </span>
-                <SelectPopup alignItemWithTrigger={false}>
-                  <SelectItem value={NO_BOARD}>Not on a board</SelectItem>
-                  {boards.map((item) => (
-                    <SelectItem key={item.id} value={item.id}>
-                      {item.title}
-                    </SelectItem>
-                  ))}
-                </SelectPopup>
-              </Select>
+                {boards.find((item) => item.id === card.set)?.title ??
+                  (card.set ? card.set : "Not on a board")}
+              </span>
             </Row>
           )}
           <Row label="Now">
@@ -614,6 +461,3 @@ export function Info(props: {
     </aside>
   );
 }
-
-/** The value of the board choice for a task on no board. */
-const NO_BOARD = "__no_board__";

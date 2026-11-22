@@ -5294,6 +5294,8 @@
   "a1238a3f72d5dee8": "La conversation de l'équipe commence quand cette tâche est démarrée. Il n'y a encore rien à répondre.",
   "5316704c1283635d": "La conversation n'a pas pu être affichée.",
   "8c8efe9c6cffdf66": "Retour à la tâche n° {number}",
+  "e150c65e5bcc64ce": "Cette tâche est traitée sur une autre machine, ou elle est en route vers celle-ci.",
+  "9d30b2961ec2769e": "Ceci est clos. Ce qui a été dit est conservé.",
   "036a05240c1069e2": "Siège {seat}",
   "15dd178ef4fc2eb4": "Conversation du siège",
   "ba2f576086976840": "Chargement de la conversation...",

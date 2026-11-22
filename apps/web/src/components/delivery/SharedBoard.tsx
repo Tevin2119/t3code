@@ -363,39 +363,30 @@ function SharedBoardContent(props: SharedBoardProps) {
     </section>
   );
 }
+/** The task allocation dialog. The task view's header menu opens it. */
 function SharedTaskAllocationContent(props: {
   environmentId: EnvironmentId | null;
   taskId: string;
-  readonly open?: boolean;
-  readonly onOpenChange?: (open: boolean) => void;
+  readonly open: boolean;
+  readonly onOpenChange: (open: boolean) => void;
 }) {
-  const [localOpen, setLocalOpen] = useState(false);
-  const open = props.open ?? localOpen;
-  const setOpen = props.onOpenChange ?? setLocalOpen;
   return (
-    <>
-      <span className="hidden [@media(min-width:640px)_and_(min-height:600px)]:inline-flex">
-        <Button size="sm" variant="ghost" onClick={() => setOpen(true)}>
-          Allocate
-        </Button>
-      </span>
-      <Dialog open={open} onOpenChange={setOpen}>
-        <DialogPopup>
-          <DialogHeader>
-            <DialogTitle>Task allocation</DialogTitle>
-          </DialogHeader>
-          <DialogPanel>{open ? <SharedBoard {...props} /> : null}</DialogPanel>
-        </DialogPopup>
-      </Dialog>
-    </>
+    <Dialog open={props.open} onOpenChange={props.onOpenChange}>
+      <DialogPopup>
+        <DialogHeader>
+          <DialogTitle>Task allocation</DialogTitle>
+        </DialogHeader>
+        <DialogPanel>{props.open ? <SharedBoard {...props} /> : null}</DialogPanel>
+      </DialogPopup>
+    </Dialog>
   );
 }
 
 export function SharedTaskAllocation(props: {
   environmentId: EnvironmentId | null;
   taskId: string;
-  readonly open?: boolean;
-  readonly onOpenChange?: (open: boolean) => void;
+  readonly open: boolean;
+  readonly onOpenChange: (open: boolean) => void;
 }) {
   return <SharedTaskAllocationContent key={`${props.environmentId}:${props.taskId}`} {...props} />;
 }

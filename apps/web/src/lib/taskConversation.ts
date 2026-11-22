@@ -17,17 +17,21 @@ import type { DeliveryCard, TaskView } from "./delivery";
 /** What a task's conversation is, before anyone asks whether it can be reached. */
 export type TaskConversation =
   | { readonly kind: "thread"; readonly ref: ScopedThreadRef }
-  /** `draft` and `queued` have no conversation yet; `unlinked` is a task in work with none known. */
-  | { readonly kind: "none"; readonly why: "draft" | "queued" | "unlinked" };
+  /**
+   * `draft` and `queued` have no conversation yet; `unlinked` is a task in work with none known;
+   * `moved` is worked on another machine, or on its way there, so none is opened here.
+   */
+  | { readonly kind: "none"; readonly why: "draft" | "queued" | "unlinked" | "moved" };
 
-type ConversationInput = Pick<TaskView, "boardThread" | "isDraft" | "lane">;
+type ConversationInput = Pick<TaskView, "boardThread" | "isDraft" | "lane" | "state">;
 
 /**
  * The engine's link is the conversation, wherever the task stands: a task sent back to the queue
- * keeps what was said in it. With no link a draft or a queued task has none yet, and a task in
- * work is `unlinked`. There is no other source to fall back to.
+ * keeps what was said in it. A task the engine reports moved or moving opens none here, link or
+ * not. With no link a draft or a queued task has none yet, and a task in work is `unlinked`.
  */
 export function taskConversation(task: ConversationInput): TaskConversation {
+  if (task.state === "moved" || task.state === "moving") return { kind: "none", why: "moved" };
   const link = task.boardThread;
   if (link) {
     return {
@@ -50,7 +54,9 @@ export type ConversationState =
   /** No conversation yet, and none expected until the task starts. No composer. */
   | { readonly kind: "waiting"; readonly why: "draft" | "queued" }
   /** In work with no linked conversation: the engine's own log stands in, as it did before. */
-  | { readonly kind: "unlinked" };
+  | { readonly kind: "unlinked" }
+  /** Worked on another machine: no thread is mounted and nothing is sent from here. */
+  | { readonly kind: "moved" };
 
 export function conversationState(
   conversation: TaskConversation,
@@ -59,6 +65,7 @@ export function conversationState(
   if (conversation.kind === "thread") {
     return { kind: "open", ref: conversation.ref, offline: !reachable };
   }
+  if (conversation.why === "moved") return { kind: "moved" };
   return conversation.why === "unlinked"
     ? { kind: "unlinked" }
     : { kind: "waiting", why: conversation.why };
