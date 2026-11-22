@@ -49,13 +49,15 @@ const SETTLED = { timeout: 10_000 };
 
 it.each(
   SHELL_ROWS.flatMap((row) => [
-    { ...row, filter: "off", tagFilter: false },
-    { ...row, filter: "on", tagFilter: true },
+    { ...row, filter: "off", tagFilter: false, tag: "no tag", tags: [] },
+    { ...row, filter: "on", tagFilter: true, tag: "no tag", tags: [] },
+    // The filter hides rows of lists. A board task's thread is in none, so its tag closes nothing.
+    { ...row, filter: "on", tagFilter: true, tag: "a hidden tag", tags: HIDDEN_TAGS },
     // Each case has its own thread: a detail cached by an earlier case would open a thread the
     // route is about to close.
   ]).map((row, index) => ({ ...row, name: `probe-unlisted-${index}` })),
 )(
-  "opens a board task's thread by id, from a link and after a reload, when the shell $shell and the tag filter is $filter",
+  "opens a board task's thread by id, from a link and after a reload, when the shell $shell, the tag filter is $filter and it carries $tag",
   async (c) => {
     const listed = threadWithHistory("probe-listed", 1);
     // A listed thread the filter hides: its row leaving the sidebar says the filter is in force.
@@ -63,6 +65,7 @@ it.each(
     const unlisted: FakeThread = {
       ...threadWithHistory(c.name, 1),
       engineIntake: "board-task:probe",
+      tags: c.tags,
       ...c.fixture,
     };
     using _environment = installFakeEnvironment(

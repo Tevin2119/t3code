@@ -120,15 +120,20 @@ export function ThreadRouteView({
   );
   const hidingAnywhere = useAnyEnvironmentHiding();
   const draftRedirectShell = useQuietThreadShell(draftRedirect ?? null);
-  const hiddenByTagFilter = serverThreadRef !== null && hiddenKeys.has(threadKey(serverThreadRef));
+  // Server-owned work, such as a board task's conversation, has no parent and no row in any list,
+  // so its lineage alone opens it, whatever its tags: the shell never sends it, its id is the only
+  // way in, and the tag filter hides rows of lists it is not in. Opening one brings its row in.
+  const serverOwned =
+    (serverThreadShell !== null && isServerOwnedThreadLineage(serverThreadShell.lineage)) ||
+    (unlistedThread !== null && isServerOwnedThreadLineage(unlistedThread.lineage));
+  const hiddenByTagFilter =
+    serverThreadRef !== null && !serverOwned && hiddenKeys.has(threadKey(serverThreadRef));
   // Cached detail can predate a tag or an archive, so while hiding an off-shell thread opens only
   // as the child of a loaded, visible parent (lineage never changes); anything else stays closed.
-  // Server-owned work, such as a board task's conversation, has no parent and no row in any list,
-  // so its lineage alone opens it: the shell never sends it and its id is the only way in.
   const offShellBlocked =
     hidingAnywhere &&
     unlistedThreadRef !== null &&
-    !(unlistedThread !== null && isServerOwnedThreadLineage(unlistedThread.lineage)) &&
+    !serverOwned &&
     !(
       unlistedParentKey !== null &&
       unlistedParentShell !== null &&
