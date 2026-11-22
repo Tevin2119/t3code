@@ -9,9 +9,9 @@ import { BOARD_LANE, boardLaneOf } from "./boardLanes";
 import type { DeliveryCard, TaskView } from "./delivery";
 
 /**
- * THROWAWAY, like boardLanes.ts. The one place that says which conversation is a task's, until
- * the engine links tasks to threads (its build slices 1 and 2): an ordinary thread, the one the
- * task was made from, stands in. Callers never read `task.source` themselves.
+ * The one place that says which conversation is a task's: the thread the engine links it to
+ * (`boardThread`). Nothing else reads that field, and the thread a task was filed from
+ * (`task.source`) is never a task's conversation.
  */
 
 /** What a task's conversation is, before anyone asks whether it can be reached. */
@@ -20,27 +20,27 @@ export type TaskConversation =
   /** `draft` and `queued` have no conversation yet; `unlinked` is a task in work with none known. */
   | { readonly kind: "none"; readonly why: "draft" | "queued" | "unlinked" };
 
-type ConversationInput = Pick<TaskView, "source" | "isDraft" | "lane">;
+type ConversationInput = Pick<TaskView, "boardThread" | "isDraft" | "lane">;
 
 /**
- * A draft or a queued task has no conversation, whatever thread it was made from: the thread it
- * came from is a conversation of its own and is not the team's. Once the task is in work the
- * stand-in is that origin thread, if there is one.
+ * The engine's link is the conversation, wherever the task stands: a task sent back to the queue
+ * keeps what was said in it. With no link a draft or a queued task has none yet, and a task in
+ * work is `unlinked`. There is no other source to fall back to.
  */
 export function taskConversation(task: ConversationInput): TaskConversation {
+  const link = task.boardThread;
+  if (link) {
+    return {
+      kind: "thread",
+      ref: {
+        environmentId: EnvironmentId.make(link.environmentId),
+        threadId: ThreadId.make(link.threadId),
+      },
+    };
+  }
   if (task.isDraft || task.lane === "draft") return { kind: "none", why: "draft" };
   if (boardLaneOf(task.lane) === BOARD_LANE.queue) return { kind: "none", why: "queued" };
-  const source = task.source;
-  if (!source || !source.environmentId || !source.threadId) {
-    return { kind: "none", why: "unlinked" };
-  }
-  return {
-    kind: "thread",
-    ref: {
-      environmentId: EnvironmentId.make(source.environmentId),
-      threadId: ThreadId.make(source.threadId),
-    },
-  };
+  return { kind: "none", why: "unlinked" };
 }
 
 /** What the centre of the task view shows. */
@@ -49,7 +49,7 @@ export type ConversationState =
   | { readonly kind: "open"; readonly ref: ScopedThreadRef; readonly offline: boolean }
   /** No conversation yet, and none expected until the task starts. No composer. */
   | { readonly kind: "waiting"; readonly why: "draft" | "queued" }
-  /** In work with no known conversation: the engine's own log stands in, as it did before. */
+  /** In work with no linked conversation: the engine's own log stands in, as it did before. */
   | { readonly kind: "unlinked" };
 
 export function conversationState(
@@ -70,7 +70,7 @@ export const sameThread = (a: ScopedThreadRef | null, b: ScopedThreadRef | null)
 /** A seat's conversation, in the shape every agent row opens: see `subagentThreadTarget`. */
 export type SeatThread = SubagentThreadTarget;
 
-/** The part of a delegated child the stand-in reads: its thread, here or remote, and its seat. */
+/** The part of a delegated child this module reads: its thread, here or remote, and its seat. */
 interface SeatChild {
   readonly childThreadId: ThreadId | null;
   readonly remoteChild?:
