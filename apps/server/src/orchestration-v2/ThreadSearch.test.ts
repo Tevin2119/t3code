@@ -73,6 +73,7 @@ const thread = (
     readonly deletedAt?: DateTime.Utc;
     readonly subagentOf?: ThreadId;
     readonly sideChatOf?: ThreadId;
+    readonly boardTask?: string;
     readonly title?: string;
     readonly settledAt?: DateTime.Utc;
     readonly linkedPullRequest?: ThreadLinkedPullRequest;
@@ -112,7 +113,12 @@ const thread = (
             rootThreadId: overrides.sideChatOf,
             sideChat: true,
           }
-        : { parentThreadId: null, relationshipToParent: null, rootThreadId: threadId },
+        : {
+            parentThreadId: null,
+            relationshipToParent: null,
+            rootThreadId: threadId,
+            ...(overrides.boardTask === undefined ? {} : { engineIntake: overrides.boardTask }),
+          },
     forkedFrom: null,
     createdAt: at(0),
     updatedAt: at(0),
@@ -493,6 +499,7 @@ it.layer(layerTest)("ThreadSearch", (it) => {
       const parent = ThreadId.make("thread:tokens-parent");
       const subagent = ThreadId.make("thread:tokens-subagent");
       const sideChat = ThreadId.make("thread:tokens-side-chat");
+      const boardTask = ThreadId.make("thread:tokens-board-task");
       yield* createProject(project);
       yield* Effect.forEach(
         [
@@ -502,6 +509,11 @@ it.layer(layerTest)("ThreadSearch", (it) => {
           message(subagent, "subagent", "assistant", "ThreadSearchService renamed"),
           thread(sideChat, project, { sideChatOf: parent, title: "ThreadSearchService question" }),
           message(sideChat, "side-chat", "user", "Why rename ThreadSearchService?"),
+          thread(boardTask, project, {
+            boardTask: "board-task:board-1:task-7",
+            title: "ThreadSearchService task",
+          }),
+          message(boardTask, "board-task", "user", "Rename ThreadSearchService on the board"),
         ],
         projections.apply,
         { discard: true },
@@ -1146,6 +1158,11 @@ it.layer(layerTest)("ThreadSearch.searchOlderSettled", (it) => {
           thread(id("recent"), project, { title: "Kestrel nest", settledAt: at(50) }),
           thread(id("open"), project, { title: "Kestrel nest" }),
           thread(id("child"), project, { title: "Kestrel nest", subagentOf: id("old") }),
+          thread(id("board-task"), project, {
+            title: "Kestrel nest",
+            settledAt: old,
+            boardTask: "board-task:board-1:task-7",
+          }),
           thread(id("elsewhere"), other, { title: "Kestrel nest", settledAt: old }),
           thread(id("note"), project, { title: "Unrelated", settledAt: old }),
           thread(id("new-note"), project, { title: "Unrelated", settledAt: at(50) }),
@@ -1164,7 +1181,13 @@ it.layer(layerTest)("ThreadSearch.searchOlderSettled", (it) => {
         { discard: true },
       );
       const before = DateTime.formatIso(at(30));
-      const messageThreadIds = [id("new-note"), id("note"), id("archived-note"), id("old")];
+      const messageThreadIds = [
+        id("new-note"),
+        id("note"),
+        id("archived-note"),
+        id("old"),
+        id("board-task"),
+      ];
       assert.sameMembers(
         [...(yield* search.searchOlderSettled({ query: "kestrel", before, messageThreadIds }))],
         [id("old"), id("elsewhere"), id("note")],

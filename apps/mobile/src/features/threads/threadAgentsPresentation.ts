@@ -1,4 +1,3 @@
-import { resolveLinkedThreadOpen } from "@t3tools/client-runtime/linked-thread";
 import {
   formatSubagentDisplayTitle,
   resolveSubagentMetadata,
@@ -11,12 +10,7 @@ import {
   type SubagentWorkflowGroup,
 } from "@t3tools/client-runtime/state/subagentRuntime";
 import { REASONING_EFFORT_OPTION_IDS } from "@t3tools/client-runtime/state/thread-execution";
-import type {
-  EnvironmentId,
-  OrchestrationV2Subagent,
-  ServerProvider,
-  ThreadId,
-} from "@t3tools/contracts";
+import type { OrchestrationV2Subagent, ServerProvider } from "@t3tools/contracts";
 import { resolveSelectableModel } from "@t3tools/shared/model";
 import { msg } from "gt-react-native";
 
@@ -35,43 +29,6 @@ export interface SubagentRowPresentation {
   readonly canOpenThread: boolean;
   /** The linked environment the task runs in, when it runs in one. */
   readonly runsOn: string | null;
-}
-
-export interface SubagentThreadTarget {
-  readonly environmentId: EnvironmentId;
-  readonly threadId: ThreadId;
-  /** Set when the thread is read through the environment that links to it, not opened there. */
-  readonly linked?: { readonly viaEnvironmentId: EnvironmentId; readonly label: string };
-}
-
-/**
- * Where an agent's thread opens: here, in the linked environment that runs it when this app is
- * connected there, or read-only through this environment's link. Once the link is gone a saved
- * environment opens in place, where the app can reconnect to it; with neither, the read-only view
- * says what to link again. Null when there is no thread.
- */
-export function subagentThreadTarget(
-  subagent: Pick<OrchestrationV2Subagent, "childThreadId" | "remoteChild">,
-  environmentId: EnvironmentId,
-  ownConnection: (environmentId: EnvironmentId) => { readonly connected: boolean } | undefined,
-  /** Whether `environmentId` still holds a link to the given environment. */
-  isLinked: (environmentId: EnvironmentId) => boolean,
-): SubagentThreadTarget | null {
-  if (subagent.childThreadId !== null) {
-    return { environmentId, threadId: subagent.childThreadId };
-  }
-  const remote = subagent.remoteChild;
-  if (remote === undefined) return null;
-  const target = { environmentId: remote.environmentId, threadId: remote.threadId };
-  const open = resolveLinkedThreadOpen({
-    environmentId: remote.environmentId,
-    viaEnvironmentId: environmentId,
-    own: ownConnection(remote.environmentId),
-    linked: isLinked(remote.environmentId),
-  });
-  return open === "direct"
-    ? target
-    : { ...target, linked: { viaEnvironmentId: environmentId, label: remote.label } };
 }
 
 function rowTitle(

@@ -13,13 +13,20 @@ import type { DeliveryCard } from "./delivery";
 const WORK_STAGES = ["triage", "plan", "build", "checks", "review", "qa"] as const;
 export type WorkStage = (typeof WORK_STAGES)[number];
 
-export const WORK_STAGE_TITLE: Readonly<Record<WorkStage, string>> = {
+/** A card in work whose stage the engine named in no way this client knows. */
+const UNKNOWN_STAGE = "unknown" as const;
+export type CardStage = WorkStage | typeof UNKNOWN_STAGE;
+
+export const WORK_STAGE_TITLE: Readonly<Record<CardStage, string>> = {
   triage: msg("Triage", { $context: "a stage of a board task, where it is sorted and prepared" }),
   plan: msg("Plan", { $context: "noun, a stage of a board task where the plan is made" }),
   build: msg("Build", { $context: "noun, a stage of a board task where the work is built" }),
   checks: msg("Checks", { $context: "noun, a stage of a board task where tests and checks run" }),
   review: msg("Review", { $context: "noun, a stage of a board task where the work is reviewed" }),
   qa: msg("QA", { $context: "a stage of a board task: independent quality assurance" }),
+  [UNKNOWN_STAGE]: msg("Stage not known", {
+    $context: "heading for board tasks in work whose stage the engine did not report",
+  }),
 };
 
 /**
@@ -53,20 +60,26 @@ const STAGE_OF_LANE: Readonly<Record<string, WorkStage>> = {
  * whatever stage its last run ended at, so those two are told by the lane the engine put them
  * in. A rework round is a count on the card (see `reworkOf`), never a section.
  */
-export function workStageOf(card: Pick<DeliveryCard, "lane" | "run">): WorkStage {
+export function workStageOf(card: Pick<DeliveryCard, "lane" | "run">): CardStage {
   if (card.lane === "triage") return "triage";
   if (card.lane === "rework") return "build";
-  return STAGE_OF_RUN[card.run?.stage ?? ""] ?? STAGE_OF_LANE[card.lane] ?? "build";
+  // Neither the run nor the lane places it: no stage is made up for it.
+  return STAGE_OF_RUN[card.run?.stage ?? ""] ?? STAGE_OF_LANE[card.lane] ?? UNKNOWN_STAGE;
 }
 
-/** The cards of the In work lane in sections, in stage order; a stage with no card has no section. */
+/**
+ * The cards of the In work lane in sections, in stage order; a stage with no card has no section.
+ * Cards of no known stage come last in a section of their own, so none drops off the board.
+ */
 export function workSections<T extends Pick<DeliveryCard, "lane" | "run">>(
   cards: ReadonlyArray<T>,
-): ReadonlyArray<{ readonly stage: WorkStage; readonly cards: ReadonlyArray<T> }> {
-  return WORK_STAGES.map((stage) => ({
-    stage,
-    cards: cards.filter((card) => workStageOf(card) === stage),
-  })).filter((section) => section.cards.length > 0);
+): ReadonlyArray<{ readonly stage: CardStage; readonly cards: ReadonlyArray<T> }> {
+  return ([...WORK_STAGES, UNKNOWN_STAGE] satisfies ReadonlyArray<CardStage>)
+    .map((stage) => ({
+      stage,
+      cards: cards.filter((card) => workStageOf(card) === stage),
+    }))
+    .filter((section) => section.cards.length > 0);
 }
 
 /**

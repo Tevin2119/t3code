@@ -135,7 +135,7 @@ const makeServerConfig = (
 let baseServerConfig = makeServerConfig([CODEX_PROVIDER]);
 // A server only leaves threads out of the shell when it serves their families.
 const serverConfig = (): ServerConfig =>
-  threads.some((thread) => thread.olderSettled)
+  threads.some((thread) => thread.olderSettled || thread.offShell)
     ? { ...baseServerConfig, shellThreadFamilies: true }
     : baseServerConfig;
 
@@ -231,6 +231,10 @@ export interface FakeThread {
   readonly providerSubagentOf?: ThreadId;
   /** Makes this an older settled thread the shell leaves out; only its family read returns it. */
   readonly olderSettled?: true;
+  /** Marks this as server-owned work no thread list shows; the shell still carries it. */
+  readonly engineIntake?: string;
+  /** Leaves this out of the shell without settling it, so only a read by id finds it. */
+  readonly offShell?: true;
   readonly id: ThreadId;
   readonly title: string;
   /** Defaults to GPT-5.4 on Codex. */
@@ -333,6 +337,7 @@ function shellOf(thread: FakeThread): OrchestrationV2ThreadShell {
       parentThreadId: parentOf(thread) ?? null,
       relationshipToParent: thread.providerSubagentOf ? "subagent" : null,
       ...(thread.sideChatOf ? { sideChat: true } : {}),
+      ...(thread.engineIntake === undefined ? {} : { engineIntake: thread.engineIntake }),
     },
     forkedFrom: null,
     createdBy: thread.providerSubagentOf ? "agent" : "user",
@@ -497,7 +502,9 @@ const handlers: Record<string, (input: never) => unknown> = {
             schemaVersion: 1,
             snapshotSequence: sequence,
             projects,
-            threads: threads.filter((thread) => !thread.olderSettled).map(shellOf),
+            threads: threads
+              .filter((thread) => !thread.olderSettled && !thread.offShell)
+              .map(shellOf),
             archivedThreads: [],
           },
         },

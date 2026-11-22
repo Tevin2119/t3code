@@ -4,7 +4,8 @@ import { ArrowLeftIcon, CornerDownRightIcon } from "lucide-react";
 import { lazy, Suspense, useEffect, useState, type ReactNode } from "react";
 
 import type { TaskView } from "../../lib/delivery";
-import { queueWait, type ConversationState } from "../../lib/taskConversation";
+import { queueWait, type ConversationState, type SeatThread } from "../../lib/taskConversation";
+import { linkedThreadSurface } from "../../linkedThreadSurface";
 import { ThreadInspectionContext } from "../chat/ThreadInspectionContext";
 import { RenderErrorBoundary } from "../RenderErrorBoundary";
 import { Button } from "../ui/button";
@@ -13,6 +14,9 @@ import { ToggleGroup } from "../ui/toggle-group";
 import { QueueLine } from "./BoardLaneCards";
 
 const ChatView = lazy(() => import("../ChatView"));
+const LinkedThread = lazy(() =>
+  import("../chat/LinkedThreadPane").then((module) => ({ default: module.LinkedThread })),
+);
 
 /** The task's own words, kept on the screen whenever the conversation cannot be. */
 function TaskText(props: { readonly task: TaskView }) {
@@ -113,6 +117,24 @@ function SeatBar(props: {
 }
 
 /**
+ * A seat that runs in a linked environment this client is not connected to: its conversation read
+ * through the task's environment, in the view a remote agent's thread already opens in.
+ */
+function LinkedSeat(props: {
+  readonly seat: SeatThread;
+  readonly linked: NonNullable<SeatThread["linked"]>;
+}) {
+  const surface = linkedThreadSurface({
+    viaEnvironmentId: props.linked.viaEnvironmentId,
+    environmentId: props.seat.environmentId,
+    threadId: props.seat.threadId,
+    label: props.linked.label,
+    title: null,
+  });
+  return <LinkedThread key={surface.id} panelRef={null} surface={surface} visible />;
+}
+
+/**
  * The task's conversation in the centre, in the thread view T3 already has, its composer
  * included. A seat's conversation replaces it here with a way back, and the right panel does
  * not move. Until the lead's conversation carries what the engine still says in its log, the log
@@ -122,7 +144,7 @@ function OpenConversation(props: {
   readonly task: TaskView;
   readonly thread: ScopedThreadRef;
   readonly offline: boolean;
-  readonly seat: ScopedThreadRef | null;
+  readonly seat: SeatThread | null;
   readonly seatName: string | null;
   readonly onOpenThread: (thread: ScopedThreadRef) => void;
   readonly onBackToTask: () => void;
@@ -183,23 +205,27 @@ function OpenConversation(props: {
               }
             >
               <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-                <ChatView
-                  key={`${shown.environmentId}:${shown.threadId}`}
-                  environmentId={shown.environmentId}
-                  threadId={shown.threadId}
-                  routeKind="server"
-                  reserveTitleBarControlInset={false}
-                  unavailableContent={
-                    <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-4">
-                      <TaskText task={props.task} />
-                      <p role="status" className="text-xs text-muted-foreground">
-                        {gt(
-                          "This conversation is loading or is not available here. The task's facts beside it stand.",
-                        )}
-                      </p>
-                    </div>
-                  }
-                />
+                {props.seat?.linked ? (
+                  <LinkedSeat seat={props.seat} linked={props.seat.linked} />
+                ) : (
+                  <ChatView
+                    key={`${shown.environmentId}:${shown.threadId}`}
+                    environmentId={shown.environmentId}
+                    threadId={shown.threadId}
+                    routeKind="server"
+                    reserveTitleBarControlInset={false}
+                    unavailableContent={
+                      <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-4">
+                        <TaskText task={props.task} />
+                        <p role="status" className="text-xs text-muted-foreground">
+                          {gt(
+                            "This conversation is loading or is not available here. The task's facts beside it stand.",
+                          )}
+                        </p>
+                      </div>
+                    }
+                  />
+                )}
               </div>
             </Suspense>
           </RenderErrorBoundary>
@@ -216,7 +242,7 @@ function OpenConversation(props: {
 export function TaskConversation(props: {
   readonly task: TaskView;
   readonly state: ConversationState;
-  readonly seat: ScopedThreadRef | null;
+  readonly seat: SeatThread | null;
   readonly seatName: string | null;
   readonly onOpenThread: (thread: ScopedThreadRef) => void;
   readonly onBackToTask: () => void;

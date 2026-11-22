@@ -10,6 +10,7 @@ import * as Path from "effect/Path";
 import * as ServerConfig from "../config.ts";
 import { createPendingAttachmentId, resolveAttachmentPath } from "../attachmentStore.ts";
 import * as ThreadMessageIntake from "./ThreadMessageIntake.ts";
+import { boardTaskThreadCommandId, boardTaskThreadMarker } from "../delivery/boardThreadMarker.ts";
 import { assert, it, vi } from "@effect/vitest";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import {
@@ -532,6 +533,50 @@ it.effect("leaves a task delegated from a linked environment out of the top-leve
       all.map((thread) => thread.id),
       delegated.threadId,
     );
+  }).pipe(Effect.provide(harness.layer));
+});
+
+it.effect("keeps a board task's thread out of both lists, however often it is created", () => {
+  const harness = makeHarness();
+  return Effect.gen(function* () {
+    const launches = yield* ThreadLaunch.ThreadLaunchService;
+    const threads = yield* ThreadManagement.ThreadManagementService;
+    yield* launches.launch(
+      launchInput({ command: "command:top-level", thread: "thread:top-level" }),
+    );
+    const task = { board: "board-1", id: "task-7" };
+    const threadId = ThreadId.make("thread:board-task");
+    const create = threads.dispatch({
+      type: "thread.create",
+      commandId: boardTaskThreadCommandId(task),
+      threadId,
+      projectId,
+      title: "Task 7",
+      modelSelection,
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      branch: null,
+      worktreePath: null,
+      createdBy: "system",
+      creationSource: "server",
+      engineIntake: boardTaskThreadMarker(task),
+    });
+    const first = yield* create;
+    const repeated = yield* create;
+    // The receipt answers the second create with the first one's events.
+    assert.deepEqual(
+      repeated.storedEvents.map((stored) => stored.sequence),
+      first.storedEvents.map((stored) => stored.sequence),
+    );
+    const { thread } = yield* threads.getProjectThreadRecords({ projectId, threadId }, []);
+    assert.equal(thread.lineage.engineIntake, "board-task:board-1:task-7");
+    for (const includeSubagents of [false, true]) {
+      const listed = yield* threads.listProjectThreads({ projectId, includeSubagents });
+      assert.deepEqual(
+        listed.map((entry) => entry.id),
+        [ThreadId.make("thread:top-level")],
+      );
+    }
   }).pipe(Effect.provide(harness.layer));
 });
 

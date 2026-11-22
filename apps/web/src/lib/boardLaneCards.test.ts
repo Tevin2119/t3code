@@ -21,6 +21,21 @@ describe("the stage of a card in work", () => {
     expect(workStageOf(card({ lane: "planning", run: null }))).toBe("plan");
   });
 
+  it("makes up no stage for a card neither its run nor its lane places", () => {
+    expect(workStageOf(card({ lane: "new-lane", run: null }))).toBe("unknown");
+    expect(workStageOf(card({ lane: "new-lane", run: { stage: "new-stage" } }))).toBe("unknown");
+    // A lane that names the stage still does, whatever the run calls it.
+    expect(workStageOf(card({ lane: "planning", run: { stage: "new-stage" } }))).toBe("plan");
+    const sections = workSections([
+      card({ id: "u", lane: "new-lane", run: null }),
+      card({ id: "q", run: { stage: "qa" } }),
+    ]);
+    expect(sections.map((s) => [s.stage, s.cards.map((c) => c.id)])).toEqual([
+      ["qa", ["q"]],
+      ["unknown", ["u"]],
+    ]);
+  });
+
   it("makes a section only for a stage that holds a card, in stage order", () => {
     const sections = workSections([
       card({ id: "q", run: { stage: "qa" } }),

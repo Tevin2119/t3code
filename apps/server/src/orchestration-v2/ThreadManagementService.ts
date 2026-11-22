@@ -14,6 +14,7 @@ import {
   CommandId,
   isDelegatedAppThread,
   isListedThreadLineage,
+  isServerOwnedThreadLineage,
   MessageId,
   OrchestrationV2StopWorkflowError,
   type OrchestrationV2StopWorkflowInput,
@@ -886,7 +887,7 @@ const make = Effect.gen(function* () {
         threads
           .filter((thread) =>
             input.includeSubagents
-              ? thread.lineage.sideChat !== true
+              ? thread.lineage.sideChat !== true && !isServerOwnedThreadLineage(thread.lineage)
               : isListedThreadLineage(thread.lineage) && !isDelegatedAppThread(thread),
           )
           .toSorted(

@@ -57,6 +57,53 @@ export function resolveLinkedThreadOpen(input: {
   return input.own === undefined ? "unavailable" : "direct";
 }
 
+/** Where a delegated task's thread opens. */
+export interface SubagentThreadTarget {
+  readonly environmentId: EnvironmentId;
+  readonly threadId: ThreadId;
+  /** Set when the thread is read through the environment that links to it, not opened there. */
+  readonly linked?: { readonly viaEnvironmentId: EnvironmentId; readonly label: string };
+}
+
+/**
+ * Where an agent's thread opens: here, in the linked environment that runs it when this app is
+ * connected there, or read-only through this environment's link. Once the link is gone a saved
+ * environment opens in place, where the app can reconnect to it; with neither, the read-only view
+ * says what to link again. Null when there is no thread.
+ */
+export function subagentThreadTarget(
+  subagent: {
+    readonly childThreadId: ThreadId | null;
+    readonly remoteChild?:
+      | {
+          readonly environmentId: EnvironmentId;
+          readonly threadId: ThreadId;
+          readonly label: string;
+        }
+      | undefined;
+  },
+  environmentId: EnvironmentId,
+  ownConnection: (environmentId: EnvironmentId) => { readonly connected: boolean } | undefined,
+  /** Whether `environmentId` still holds a link to the given environment. */
+  isLinked: (environmentId: EnvironmentId) => boolean,
+): SubagentThreadTarget | null {
+  if (subagent.childThreadId !== null) {
+    return { environmentId, threadId: subagent.childThreadId };
+  }
+  const remote = subagent.remoteChild;
+  if (remote === undefined) return null;
+  const target = { environmentId: remote.environmentId, threadId: remote.threadId };
+  const open = resolveLinkedThreadOpen({
+    environmentId: remote.environmentId,
+    viaEnvironmentId: environmentId,
+    own: ownConnection(remote.environmentId),
+    linked: isLinked(remote.environmentId),
+  });
+  return open === "direct"
+    ? target
+    : { ...target, linked: { viaEnvironmentId: environmentId, label: remote.label } };
+}
+
 export type LinkedEnvironmentConnection =
   /** This client paired with the linked environment and saved it. */
   | { readonly type: "connected" }
