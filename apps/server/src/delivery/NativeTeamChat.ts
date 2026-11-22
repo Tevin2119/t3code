@@ -17,6 +17,7 @@ import {
   type LimitedSeatFacts,
   limitedSeatPool,
   seatLimit,
+  type SeatModel,
   seatModelOf,
 } from "@t3tools/shared/limitedSeat";
 import { createModelSelection } from "@t3tools/shared/model";
@@ -72,11 +73,39 @@ export const isNativeTeamChatError = Schema.is(NativeTeamChatError);
 const terminal = (task: OrchestrationV2Subagent) =>
   ["completed", "failed", "cancelled", "interrupted"].includes(task.status);
 
+/**
+ * A usage limit's reset as a turn note writes it. The server cannot know each reader's clock, so
+ * the time is the server's own and names its zone.
+ */
+export const formatLimitReset = (resetAt: string) =>
+  Option.match(DateTime.make(resetAt), {
+    onNone: () => resetAt,
+    onSome: (time) =>
+      DateTime.toDate(time).toLocaleString(undefined, {
+        month: "short",
+        day: "numeric",
+        hour: "numeric",
+        minute: "2-digit",
+        timeZoneName: "short",
+      }),
+  });
+
+/** The name the model picker shows for a model; its id where the provider lists no name. */
+const modelName = (facts: LimitedSeatFacts, model: SeatModel) =>
+  facts.providers
+    .find((provider) => provider.instanceId === model.instanceId)
+    ?.models.find((candidate) => candidate.slug === model.model)?.name ?? model.model;
+
 const contributions = (tasks: ReadonlyArray<OrchestrationV2Subagent>) =>
   tasks
     .map(
       (task) =>
-        `${task.teamChat?.seat ?? task.title} (${task.providerInstanceId}/${task.model}, ${task.status}; native child ${task.childThreadId}):\n${
+        `${task.teamChat?.seat ?? task.title} (${task.providerInstanceId}/${task.model}${
+          // The lead attributes insights to a seat's model, so it is told when another stood in.
+          task.teamChat?.substituteFor === undefined
+            ? ""
+            : `, standing in for ${task.teamChat.substituteFor.model}, which reached its usage limit`
+        }, ${task.status}; native child ${task.childThreadId}):\n${
           task.result === null
             ? "No contribution was returned."
             : task.result.length > 6000
@@ -301,7 +330,7 @@ export const make = Effect.gen(function* () {
         const own = seatModelOf(seat.modelSelection);
         const limit = seatLimit(facts, own);
         if (limit === null) return { selection: seat.modelSelection } satisfies StandIn;
-        const limited = `${seat.seat}: ${own.model} has reached its usage limit${limit.resetAt ? ` until ${limit.resetAt}` : ""}.`;
+        const limited = `${seat.seat}: ${modelName(facts, own)} has reached its usage limit${limit.resetAt ? ` until ${formatLimitReset(limit.resetAt)}` : ""}.`;
         const substituteFor = { ...own, resetAt: limit.resetAt };
         const earlier = turnStandIn(seat.seat);
         if (earlier !== undefined) {
@@ -310,7 +339,7 @@ export const make = Effect.gen(function* () {
             return { selection: earlier, substituteFor } satisfies StandIn;
           yield* recordSkip(
             seat.seat,
-            `${limited} Its substitute ${earlier.model} is limited too, and a seat is swapped once a turn.`,
+            `${limited} Its substitute ${modelName(facts, seatModelOf(earlier))} is limited too, and a seat is swapped once a turn.`,
           );
           return undefined;
         }
@@ -339,7 +368,7 @@ export const make = Effect.gen(function* () {
                   policy === "ask"
                     ? ""
                     : "Its model was chosen by hand, so it is not swapped without asking. "
-                }${free.model} is free: swap to it from the notice to use it from the next message.`,
+                }${modelName(facts, free)} is free: swap to it from the notice to use it from the next message.`,
           );
           return undefined;
         }
@@ -418,11 +447,11 @@ export const make = Effect.gen(function* () {
               yield* recordSkip(seat.seat, `${seat.seat}: provider is unavailable.`);
               return undefined;
             }
-            if (runsOn?.substituteFor !== undefined) {
-              const { model, resetAt } = runsOn.substituteFor;
+            if (facts !== undefined && runsOn?.substituteFor !== undefined) {
+              const { resetAt } = runsOn.substituteFor;
               yield* recordSkip(
                 seat.seat,
-                `${seat.seat} runs on ${selection.model} this turn: ${model} has reached its usage limit${resetAt ? ` until ${resetAt}` : ""}.`,
+                `${seat.seat} runs on ${modelName(facts, seatModelOf(selection))} this turn: ${modelName(facts, runsOn.substituteFor)} has reached its usage limit${resetAt ? ` until ${formatLimitReset(resetAt)}` : ""}.`,
                 ids.derive.runSignalTurnItem({
                   runId: input.runId,
                   signal: `team-seat-substitute:${stage}:${seat.seat}`,

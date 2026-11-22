@@ -866,6 +866,8 @@ it.effect(
 );
 
 const LIMIT_RESET = "2026-11-22T17:00:00.000Z";
+const RESET_SHOWN = NativeTeamChat.formatLimitReset(LIMIT_RESET);
+const MODEL_NAMES = { "claude-model": "Claude Model", "kimi-k3": "Kimi K3" };
 const limitedProvider = (instanceId: string, driver: string, limited = false): ServerProvider => ({
   instanceId: ProviderInstanceId.make(instanceId),
   driver: ProviderDriverKind.make(driver),
@@ -875,7 +877,13 @@ const limitedProvider = (instanceId: string, driver: string, limited = false): S
   status: "ready",
   auth: { status: "authenticated" },
   checkedAt: "2026-11-22T11:00:00.000Z",
-  models: [],
+  // Named as the model picker names them; the notes use these names, not the ids.
+  models: Object.entries(MODEL_NAMES).map(([slug, name]) => ({
+    slug,
+    name,
+    isCustom: false,
+    capabilities: null,
+  })),
   slashCommands: [],
   skills: [],
   ...(limited
@@ -973,8 +981,18 @@ it.effect("starts a limited seat on the first free favorite and notes why", () =
     expect(fixture.notices[0]).toMatchObject({
       status: "completed",
       title: "researcher · substitute",
-      message: `researcher runs on kimi-k3 this turn: claude-model has reached its usage limit until ${LIMIT_RESET}.`,
+      message: `researcher runs on Kimi K3 this turn: Claude Model has reached its usage limit until ${RESET_SHOWN}.`,
     });
+    // Whoever reads the researcher's contribution is told which model stood in for it.
+    for (const task of fixture.tasks)
+      Object.assign(task, { status: "completed", result: "Noted." });
+    yield* service.prepareTurn({ threadId, runId });
+    const critique = [...fixture.admissions.values()].find(
+      (command) => command.teamChat.stage === "critique",
+    )!;
+    expect(critique.task).toContain(
+      "kimi-work/kimi-k3, standing in for claude-model, which reached its usage limit, completed",
+    );
   }),
 );
 
@@ -1043,7 +1061,7 @@ it.effect("does not swap a model a person chose by hand; the notice still names 
     yield* service.prepareTurn({ threadId, runId });
     expect(fixture.seatsOn()).not.toHaveProperty("contribution:researcher");
     expect(fixture.notices[0]?.type === "system_notice" && fixture.notices[0].message).toBe(
-      `researcher: claude-model has reached its usage limit until ${LIMIT_RESET}. Its model was chosen by hand, so it is not swapped without asking. kimi-k3 is free: swap to it from the notice to use it from the next message.`,
+      `researcher: Claude Model has reached its usage limit until ${RESET_SHOWN}. Its model was chosen by hand, so it is not swapped without asking. Kimi K3 is free: swap to it from the notice to use it from the next message.`,
     );
   }),
 );
@@ -1056,7 +1074,7 @@ it.effect("asks before a swap, and uses the model the person agreed to", () =>
     yield* service.prepareTurn({ threadId, runId });
     expect(fixture.seatsOn()).not.toHaveProperty("contribution:researcher");
     expect(fixture.notices[0]).toMatchObject({
-      message: expect.stringContaining("kimi-k3 is free: swap to it from the notice"),
+      message: expect.stringContaining("Kimi K3 is free: swap to it from the notice"),
     });
 
     const agreed = limitedResearcher();
@@ -1085,7 +1103,7 @@ it.effect(
       yield* service.prepareTurn({ threadId, runId });
       expect(fixture.seatsOn()).not.toHaveProperty("contribution:researcher");
       expect(fixture.notices[0]).toMatchObject({
-        message: `researcher: claude-model has reached its usage limit until ${LIMIT_RESET}. Left out of this message.`,
+        message: `researcher: Claude Model has reached its usage limit until ${RESET_SHOWN}. Left out of this message.`,
       });
     }),
 );
