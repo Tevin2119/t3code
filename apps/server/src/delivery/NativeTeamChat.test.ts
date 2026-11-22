@@ -1087,6 +1087,24 @@ it.effect("asks before a swap, and uses the model the person agreed to", () =>
   }),
 );
 
+it.effect("leaves another seat's agreed substitute to that seat", () =>
+  Effect.gen(function* () {
+    const fixture = limitedResearcher();
+    fixture.limitedInstances.add("codex-work");
+    // The critic comes after the researcher in the roster, and already agreed to Kimi.
+    Object.assign(fixture.participants[1]!, {
+      substitute: createModelSelection(ProviderInstanceId.make("kimi-work"), "kimi-k3"),
+    });
+    fixture.lineup.current = { ...fixture.lineup.current!, limitedSeat: "ask" } as never;
+    yield* (yield* fixture.service).prepareTurn({ threadId, runId });
+    expect(fixture.seatsOn()["contribution:critic"]).toBe("kimi-k3");
+    expect(fixture.seatsOn()).not.toHaveProperty("contribution:researcher");
+    expect(fixture.notices[0]).toMatchObject({
+      message: expect.stringContaining("deepseek-v4 is free: swap to it from the notice"),
+    });
+  }),
+);
+
 it.effect(
   "reads the setting at the start of each turn, so a change applies from the next message",
   () =>

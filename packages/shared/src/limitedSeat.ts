@@ -169,6 +169,26 @@ export interface LimitedSeatRosterSeat {
   readonly duty?: "build" | "qa" | undefined;
 }
 
+/**
+ * What a limited seat stands in on by agreement: the substitute a person agreed to for it, where
+ * the seat asks before it swaps. Undefined while its own model is free, or where it swaps unasked.
+ * The notice, the swap and the turn all read another seat through this, so they agree on what is
+ * in use.
+ */
+export function agreedStandIn(input: {
+  readonly facts: LimitedSeatFacts;
+  readonly policy: "swap" | "ask" | "skip";
+  readonly seat: LimitedSeatRosterSeat & {
+    readonly picked?: boolean | undefined;
+    readonly substitute?: ModelSelection | undefined;
+  };
+}): ModelSelection | undefined {
+  const { facts, policy, seat } = input;
+  if (seat.substitute === undefined || policy === "skip") return undefined;
+  if (policy !== "ask" && seat.picked !== true) return undefined;
+  return seatLimit(facts, seatModelOf(seat.modelSelection)) === null ? undefined : seat.substitute;
+}
+
 /** The pool for one seat of a conversation: every other seat's model and the lead's are in use. */
 export function limitedSeatPool<Seat extends LimitedSeatRosterSeat>(input: {
   readonly facts: LimitedSeatFacts;

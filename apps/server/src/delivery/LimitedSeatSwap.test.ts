@@ -56,6 +56,7 @@ function setup({
   lineage = {} as Record<string, unknown>,
   ordinary = false,
   limitedSeat = false,
+  limitedScout = false,
   /** The hand-off's fork lands but its first turn has not: the window a status read can fall in. */
   startsNoTurn = false,
 } = {}) {
@@ -113,6 +114,9 @@ function setup({
     threadLimits: [
       { instanceId: id("claude"), model: "claude-fable", resetAt: RESET },
       ...(limitedSeat ? [{ instanceId: id("codex"), model: "gpt-astra", resetAt: RESET }] : []),
+      ...(limitedScout
+        ? [{ instanceId: id("deepseek"), model: "deepseek-v4", resetAt: RESET }]
+        : []),
     ],
     settings: {
       ...DEFAULT_SERVER_SETTINGS,
@@ -346,6 +350,27 @@ it.effect("records the substitute a person agreed to for a seat, once", () => {
     expect(
       (yield* swaps.status(threadId)).notices.find((notice) => notice.seat === "critic"),
     ).toMatchObject({ state: "swapped", substitute: { model: "kimi-k3" } });
+  }).pipe(Effect.provide(fixture.layer));
+});
+
+it.effect("never offers a seat the model another seat stands in on", () => {
+  const fixture = setup({ policy: "ask", limitedSeat: true, limitedScout: true });
+  return Effect.gen(function* () {
+    const swaps = yield* LimitedSeatSwap.LimitedSeatSwap;
+    const kimi = model("kimi", "kimi-k3");
+    const noticeFor = (seat: string) =>
+      Effect.map(swaps.status(threadId), (status) =>
+        status.notices.find((notice) => notice.seat === seat),
+      );
+    expect(yield* noticeFor("scout")).toMatchObject({ state: "offered", substitute: kimi });
+    yield* swaps.swap({ threadId, seat: "critic", modelSelection: kimi });
+    expect(yield* noticeFor("critic")).toMatchObject({ state: "swapped", substitute: kimi });
+    expect(yield* noticeFor("scout")).toMatchObject({ state: "none-free", substitute: null });
+    const refused = yield* Effect.flip(
+      swaps.swap({ threadId, seat: "scout", modelSelection: kimi }),
+    );
+    expect(refused.detail).toBe("kimi-k3 is no longer free. Choose again from the notice.");
+    expect(fixture.lineups.get(threadId)?.participants[1]?.substitute).toBeUndefined();
   }).pipe(Effect.provide(fixture.layer));
 });
 

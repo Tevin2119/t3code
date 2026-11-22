@@ -12,6 +12,7 @@ import {
 } from "@t3tools/contracts";
 import { projectComposerContextForProvider } from "@t3tools/shared/composerContextReferences";
 import {
+  agreedStandIn,
   firstFreeFavorite,
   isFreeCandidate,
   type LimitedSeatFacts,
@@ -352,7 +353,12 @@ export const make = Effect.gen(function* () {
           roster,
           lead: parent.thread.modelSelection,
           seat,
-          runsOn,
+          // A seat not started yet still holds the substitute a person agreed to for it.
+          runsOn: (other) =>
+            standIns.get(other.seat)?.selection ??
+            turnStandIn(other.seat) ??
+            agreedStandIn({ facts, policy, seat: other }) ??
+            other.modelSelection,
         });
         const free = firstFreeFavorite(pool);
         const none = `${limited} No favorite model is free, so ${seat.seat} waits.`;

@@ -16,6 +16,7 @@ import {
   ThreadId,
 } from "@t3tools/contracts";
 import {
+  agreedStandIn,
   firstFreeFavorite,
   isFreeCandidate,
   limitedLeadHandoffThreadId,
@@ -240,6 +241,8 @@ const make = Effect.gen(function* () {
             roster: lineup.participants,
             lead: shell.modelSelection,
             seat,
+            runsOn: (other) =>
+              agreedStandIn({ facts, policy, seat: other }) ?? other.modelSelection,
           });
           const limited = {
             instanceId: limit.instanceId,
@@ -359,11 +362,13 @@ const make = Effect.gen(function* () {
         return { continuedIn: null };
       if (seatLimit(facts, seatModelOf(seat.modelSelection)) === null)
         return yield* refused(`${input.seat} is not limited now.`);
+      const policy = deliveryLimitedSeatPolicy(lineup);
       const pool = limitedSeatPool({
         facts,
         roster: lineup.participants,
         lead: shell.modelSelection,
         seat,
+        runsOn: (other) => agreedStandIn({ facts, policy, seat: other }) ?? other.modelSelection,
       });
       if (!isFreeCandidate(pool, chosen))
         return yield* refused(`${chosen.model} is no longer free. Choose again from the notice.`);
