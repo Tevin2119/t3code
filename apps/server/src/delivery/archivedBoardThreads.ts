@@ -30,8 +30,9 @@ const decodeCards = Schema.decodeUnknownOption(
   }),
 );
 
-// The archive list is also read when a project is removed: the engine is never waited on for long.
-const ENGINE_WAIT = "3 seconds";
+// One wait for the whole engine check. Removing a project reads this list too, with a two second
+// deadline of its own: past this wait every task is unknown and the rows are still answered.
+const ENGINE_WAIT = "1500 millis";
 
 type ArchivedThread = DeliveryArchivedBoardThreads["threads"][number];
 
@@ -46,51 +47,55 @@ export const archivedBoardThreads = Effect.fn("archivedBoardThreads")(function* 
   read: ((path: string) => Effect.Effect<DeliveryResponse, DeliveryError>) | null,
 ) {
   const rows = yield* listBoardThreadRows({ archived: true });
-  const lanes =
+  type Row = (typeof rows)[number];
+  const check = Effect.fn("archivedBoardThreads.check")(function* (
+    ask: (path: string) => Effect.Effect<DeliveryResponse, DeliveryError>,
+  ) {
+    const lanes = yield* ask(LANES_PATH).pipe(
+      Effect.map((response) => decodeCards(response.body)),
+      Effect.orElseSucceed(() => Option.none()),
+    );
+    if (Option.isNone(lanes)) return new Map<Row, ArchivedThread["task"]>();
+    const cards = new Map(
+      lanes.value.lanes.flatMap((lane) => lane.cards.map((card) => [card.id, card] as const)),
+    );
+    const taskOf = (row: Row): Effect.Effect<ArchivedThread["task"]> => {
+      const card = cards.get(row.task.id);
+      if (card === undefined) {
+        return ask(`/api/tasks/${row.task.id}`).pipe(
+          Effect.as("unknown" as const),
+          Effect.catch((error) =>
+            Effect.succeed(error.status === 404 ? ("deleted" as const) : ("unknown" as const)),
+          ),
+        );
+      }
+      const standing = boardThreadStanding(card, environmentId, row.threadId);
+      return Effect.succeed(standing === "linked" || standing === "free" ? "open" : "held");
+    };
+    return new Map(
+      yield* Effect.forEach(
+        rows,
+        (row) => taskOf(row).pipe(Effect.map((task) => [row, task] as const)),
+        { concurrency: 4 },
+      ),
+    );
+  });
+  const tasks =
     read === null || rows.length === 0
       ? Option.none()
-      : yield* read(LANES_PATH).pipe(
-          Effect.map((response) => decodeCards(response.body)),
-          Effect.orElseSucceed(() => Option.none()),
-          Effect.timeoutOption(ENGINE_WAIT),
-          Effect.map(Option.flatten),
-        );
-  const cards = new Map(
-    Option.isSome(lanes)
-      ? lanes.value.lanes.flatMap((lane) => lane.cards.map((card) => [card.id, card] as const))
-      : [],
-  );
-  const taskOf = Effect.fn("archivedBoardThreads.taskOf")(function* (
-    row: (typeof rows)[number],
-  ): Effect.fn.Return<ArchivedThread["task"]> {
-    if (read === null || Option.isNone(lanes)) return "unknown";
-    const card = cards.get(row.task.id);
-    if (card === undefined) {
-      const gone = yield* read(`/api/tasks/${row.task.id}`).pipe(
-        Effect.as(false),
-        Effect.catch((error) => Effect.succeed(error.status === 404)),
-        Effect.timeoutOption(ENGINE_WAIT),
-      );
-      return Option.getOrElse(gone, () => false) ? "deleted" : "unknown";
-    }
-    const standing = boardThreadStanding(card, environmentId, row.threadId);
-    return standing === "linked" || standing === "free" ? "open" : "held";
-  });
-  const threads = yield* Effect.forEach(
-    rows,
-    (row) =>
-      taskOf(row).pipe(
-        Effect.map((task): ArchivedThread => ({
-          threadId: row.threadId,
-          projectId: row.projectId,
-          title: row.title,
-          archivedAt: row.archivedAt ?? "",
-          board: row.task.board,
-          taskId: row.task.id,
-          task,
-        })),
-      ),
-    { concurrency: 4 },
-  );
-  return { threads };
+      : yield* check(read).pipe(Effect.timeoutOption(ENGINE_WAIT));
+  return {
+    threads: rows.map((row): ArchivedThread => ({
+      threadId: row.threadId,
+      projectId: row.projectId,
+      title: row.title,
+      archivedAt: row.archivedAt ?? "",
+      board: row.task.board,
+      taskId: row.task.id,
+      task: Option.match(tasks, {
+        onNone: () => "unknown" as const,
+        onSome: (found) => found.get(row) ?? "unknown",
+      }),
+    })),
+  };
 });
