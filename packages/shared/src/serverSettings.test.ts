@@ -1037,6 +1037,22 @@ describe("synchronized model preferences", () => {
     ).toEqual([]);
   });
 
+  it("reorders favorites without dropping one another client added or reviving a removed one", () => {
+    const favorite = (model: string) => ({ provider, model });
+    const three = applyServerSettingsPatch(DEFAULT_SERVER_SETTINGS, {
+      setModelFavorites: ["sol", "astra", "luna"].map((model) => ({
+        provider,
+        model,
+        favorite: true,
+      })),
+    });
+    // This client last saw sol and astra, plus terra, which was unstarred since.
+    const reordered = applyServerSettingsPatch(three, {
+      setModelFavoriteOrder: [favorite("astra"), favorite("terra"), favorite("sol")],
+    });
+    expect(reordered.favorites).toEqual([favorite("astra"), favorite("sol"), favorite("luna")]);
+  });
+
   it("keeps the same model on different provider instances as separate favorites", () => {
     const otherProvider = ProviderInstanceId.make("codex_personal");
     const first = applyServerSettingsPatch(DEFAULT_SERVER_SETTINGS, {
