@@ -372,12 +372,21 @@ it.effect("makes no thread for a moved task, and archives one the engine refuses
     );
     assert.equal(puts(engine).length, 1);
     assert.isNull(engine.linkOf("task-7"));
-    // Restored while the task is still on the other machine: it holds nothing and is archived
-    // again.
+    // Restored while the task is still on the other machine. The lanes no longer list it, so
+    // the task's own detail is what says it moved: the thread holds nothing and is archived
+    // again, each time it is restored, on this server and on a new one after a restart.
     engine.task("task-7").state = "moved";
-    yield* store.restore(THREAD);
-    assert.deepEqual([...(yield* threads.reconcile())], []);
-    assert.isNotNull(store.threads.get(THREAD)!.archivedAt);
+    for (const pass of [threads, yield* service(store)]) {
+      yield* store.restore(THREAD);
+      assert.isNull(store.threads.get(THREAD)!.archivedAt);
+      assert.deepEqual([...(yield* pass.reconcile())], []);
+      assert.isNotNull(store.threads.get(THREAD)!.archivedAt);
+      assert.deepEqual(engine.requests.at(-1), {
+        method: "GET",
+        path: "/api/tasks/task-7",
+        body: undefined,
+      });
+    }
     assert.equal(puts(engine).length, 1);
     // The task came back and its link is free: restoring the thread is what links it, on the
     // next pass, and it is the task's conversation from then on.
@@ -393,6 +402,41 @@ it.effect("makes no thread for a moved task, and archives one the engine refuses
     assert.equal(store.threads.size, 1);
   }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-moved-")));
 });
+
+it.effect(
+  "archives a moved task's thread once its link is gone, and keeps one it still holds",
+  () => {
+    const engine = board();
+    engine.addTask({ id: "task-7" });
+    engine.addTask({ id: "task-8" });
+    engine.addTask({ id: "task-9" });
+    const store = threadStore();
+    const threadOf = (id: string) => boardTaskThreadId(boardTaskOf("work", id)!);
+    return Effect.gen(function* () {
+      const threads = yield* service(store);
+      yield* threads.reconcile();
+      // Three linked tasks leave this machine. One lost its link first, one keeps it, and one is
+      // still on its way, which the lanes go on listing.
+      engine.handle("DELETE", "/api/tasks/task-7/board-thread", { key: engine.key });
+      engine.task("task-7").state = "moved";
+      engine.task("task-8").state = "moved";
+      engine.task("task-9").state = "moving";
+      yield* threads.reconcile();
+      assert.isNotNull(store.threads.get(THREAD)!.archivedAt);
+      // A thread its moved task still names stays the task's conversation, and claims nothing.
+      for (const id of ["task-8", "task-9"]) {
+        assert.isNull(store.threads.get(threadOf(id))!.archivedAt, id);
+        assert.equal(engine.linkOf(id)?.threadId, threadOf(id));
+        assert.isNull(engine.leaseOf(id), id);
+      }
+      assert.isNull(engine.leaseOf("task-7"));
+      // A forced restore of the moved task's thread cannot leave it open in no list.
+      yield* store.restore(THREAD);
+      yield* threads.reconcile();
+      assert.isNotNull(store.threads.get(THREAD)!.archivedAt);
+    }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-moved-away-")));
+  },
+);
 
 it.effect("archives the thread of a task the engine no longer has, and never asks again", () => {
   const engine = board();

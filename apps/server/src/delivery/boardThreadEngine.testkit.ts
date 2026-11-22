@@ -212,7 +212,8 @@ export function scratchEngine(
     const body = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
     requests.push({ method, path: pathname, body: raw });
     if (method === "GET" && pathname === "/api/lanes") {
-      const cards = [...tasks.values()].map(cardOf);
+      // A task that moved away has no lane and is on no board; one on its way keeps its lane.
+      const cards = [...tasks.values()].filter((task) => task.state !== "moved").map(cardOf);
       return {
         status: 200,
         body: {
@@ -229,9 +230,18 @@ export function scratchEngine(
     const detail = /^\/api\/tasks\/([\w-]+)$/.exec(pathname);
     if (method === "GET" && detail) {
       const task = tasks.get(detail[1]!);
-      // `thread` keeps meaning the task id; the conversation is only ever `boardThread`.
+      // `thread` keeps meaning the task id; the conversation is only ever `boardThread`. A moved
+      // task is still answered for, with its state and no lane.
       return task
-        ? { status: 200, body: { ...cardOf(task), thread: task.id, source: null } }
+        ? {
+            status: 200,
+            body: {
+              ...cardOf(task),
+              ...(task.state === "moved" ? { lane: null } : {}),
+              thread: task.id,
+              source: null,
+            },
+          }
         : refused(404, `no task ${detail[1]}`);
     }
     // The moved guard of every task write, which runs before the key is looked at.

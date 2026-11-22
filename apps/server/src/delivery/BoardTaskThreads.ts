@@ -97,6 +97,14 @@ const decodeRefusal = Schema.decodeUnknownOption(Refusal);
 const decodeLinked = Schema.decodeUnknownEffect(Linked);
 const decodeDetail = Schema.decodeUnknownOption(Detail);
 const decodeClaimed = Schema.decodeUnknownOption(Claimed);
+const decodeStanding = Schema.decodeUnknownOption(
+  Schema.Struct({
+    state: Schema.String,
+    boardThread: Schema.optional(
+      Schema.NullOr(Schema.Struct({ environmentId: Schema.String, threadId: Schema.String })),
+    ),
+  }),
+);
 const decodeSelection = Schema.decodeUnknownEffect(ModelSelection);
 
 /** Every task of every board, with each card's link joined once by the engine. */
@@ -141,6 +149,19 @@ export const boardThreadStanding = (
       : ("displaced" as const);
   }
   return MOVED.has(card.state) ? ("moved" as const) : ("free" as const);
+};
+
+/**
+ * The standing of a thread whose task the lanes do not list, from the task's own detail. The
+ * engine gives a task that moved to another machine no lane, and still answers for it with its
+ * state: that answer is the only place that says so. Any other task the lanes leave out is not
+ * judged here (`null`).
+ */
+export const movedTaskStanding = (detail: unknown, environmentId: string, threadId: string) => {
+  const task = decodeStanding(detail);
+  return Option.isSome(task) && MOVED.has(task.value.state)
+    ? boardThreadStanding(task.value, environmentId, threadId)
+    : null;
 };
 
 /**
@@ -402,8 +423,8 @@ export const make = Effect.gen(function* () {
 
   /**
    * The open threads this server made whose task ended here: deleted in the engine, held by
-   * another conversation, or moved to another machine. They are archived, never deleted, and the
-   * board lists them. A thread a person restored is judged like any other, so one whose task is
+   * another conversation, or moved to another machine without keeping this one. They are
+   * archived, never deleted, and the board lists them. A thread a person restored is judged like any other, so one whose task is
    * still gone goes back to the archive on the next pass.
    */
   const settleEnded = Effect.fn("BoardTaskThreads.settleEnded")(function* (
@@ -416,9 +437,18 @@ export const make = Effect.gen(function* () {
         const read = yield* delivery
           .read({ path: `/api/tasks/${row.task.id}` })
           .pipe(Effect.result);
-        if (read._tag === "Success" || read.failure.status !== 404) continue;
+        // Only the engine's own answer ends a thread: 404 is a deleted task, and a task it still
+        // answers for as moved is on another machine. Anything else is left for the next pass.
+        const ended =
+          read._tag === "Success"
+            ? movedTaskStanding(read.success.body, environmentId, row.threadId)
+            : read.failure.status === 404
+              ? ("deleted" as const)
+              : null;
+        if (ended === null || ended === "free") continue;
+        // A moved task takes no work here, whether or not it kept this thread as its conversation.
         yield* releaseClaim(row.task.id);
-        yield* archive(row.task, row.threadId, "deleted", row.revision);
+        if (ended !== "linked") yield* archive(row.task, row.threadId, ended, row.revision);
         continue;
       }
       const standing = boardThreadStanding(card, environmentId, row.threadId);

@@ -342,6 +342,17 @@ const linkLife = Effect.gen(function* () {
   store.hooks.afterCreate = null;
   assert.isNotNull(store.threads.get(threadOf(moving))!.archivedAt);
   assert.isNull(yield* linkOf(moving));
+  // The engine lists a moved task in no lane and still answers for it. A forced restore of its
+  // thread is archived again on the next pass, from the state its detail gives.
+  const lanes = yield* engineGet(BoardTaskThreads.LANES_PATH);
+  assert.isFalse(
+    lanes.lanes.some((lane: any) => lane.cards.some((card: any) => card.id === moving)),
+  );
+  assert.equal((yield* engineGet(`/api/tasks/${moving}`)).state, "moved");
+  yield* store.restore(threadOf(moving));
+  assert.isNull(store.threads.get(threadOf(moving))!.archivedAt);
+  assert.deepEqual([...(yield* threads.reconcile())], []);
+  assert.isNotNull(store.threads.get(threadOf(moving))!.archivedAt);
   yield* control("/move", { id: moving, state: "triage" });
   assert.deepEqual([...(yield* threads.reconcile())], [[moving, "archived-thread"]]);
   assert.isNull(yield* linkOf(moving));

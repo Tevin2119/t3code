@@ -649,7 +649,7 @@ it.effect("keeps a board task's thread out of both lists, however often it is cr
     const here = "environment-here";
     const standing = (
       card: Record<string, unknown> | null,
-      detail: "found" | "gone" | "down" = "gone",
+      detail: "gone" | "down" | Record<string, unknown> = "gone",
     ) =>
       archivedBoardThreads(here, (path) =>
         path.startsWith("/api/lanes")
@@ -659,8 +659,8 @@ it.effect("keeps a board task's thread out of both lists, however often it is cr
                 readAt: "2026-11-22T10:00:00.000Z",
                 body: { lanes: [{ cards: "id" in card ? [card] : [] }] },
               })
-          : detail === "found"
-            ? Effect.succeed({ readAt: "2026-11-22T10:00:00.000Z", body: {} })
+          : typeof detail === "object"
+            ? Effect.succeed({ readAt: "2026-11-22T10:00:00.000Z", body: detail })
             : Effect.fail(
                 new DeliveryError({
                   reason: detail === "gone" ? "refused" : "unreachable",
@@ -675,16 +675,28 @@ it.effect("keeps a board task's thread out of both lists, however often it is cr
     assert.deepEqual(yield* standing({ ...card, boardThread: { environmentId: here, threadId } }), [
       "open",
     ]);
-    // Another conversation holds the task, or it moved to another machine: no restore.
+    // Another conversation holds the task, or it is on its way to another machine: no restore.
     assert.deepEqual(
       yield* standing({ ...card, boardThread: { environmentId: "other", threadId } }),
       ["held"],
     );
-    assert.deepEqual(yield* standing({ ...card, state: "moved", boardThread: null }), ["held"]);
+    assert.deepEqual(yield* standing({ ...card, state: "moving", boardThread: null }), ["held"]);
     // Not in the lanes and the engine answers 404 for it: deleted. Any other answer, or an
     // engine that is away or not asked, is unknown, never deleted and never restorable.
     assert.deepEqual(yield* standing({}), ["deleted"]);
-    assert.deepEqual(yield* standing({}, "found"), ["unknown"]);
+    assert.deepEqual(yield* standing({}, { state: "closed" }), ["unknown"]);
+    assert.deepEqual(yield* standing({}, {}), ["unknown"]);
+    // A task that moved away is in no lane, and the engine still answers for it: held, unless
+    // it kept this thread as its conversation.
+    assert.deepEqual(yield* standing({}, { state: "moved", boardThread: null }), ["held"]);
+    assert.deepEqual(
+      yield* standing({}, { state: "moved", boardThread: { environmentId: "other", threadId } }),
+      ["held"],
+    );
+    assert.deepEqual(
+      yield* standing({}, { state: "moved", boardThread: { environmentId: here, threadId } }),
+      ["open"],
+    );
     assert.deepEqual(yield* standing({}, "down"), ["unknown"]);
     assert.deepEqual(yield* standing(null), ["unknown"]);
     assert.deepEqual(

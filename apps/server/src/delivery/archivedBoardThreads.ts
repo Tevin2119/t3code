@@ -7,7 +7,7 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
-import { boardThreadStanding, LANES_PATH } from "./BoardTaskThreads.ts";
+import { boardThreadStanding, LANES_PATH, movedTaskStanding } from "./BoardTaskThreads.ts";
 import { listBoardThreadRows } from "./boardThreadRows.ts";
 
 const decodeCards = Schema.decodeUnknownOption(
@@ -38,9 +38,9 @@ type ArchivedThread = DeliveryArchivedBoardThreads["threads"][number];
 
 /**
  * The archived conversations of board tasks, each with how its task stands in the engine. A
- * restore only helps a thread whose task can still take it: `open`. A task the engine does not
- * list is `deleted` once the engine says so itself (404), and `unknown` while it does not answer,
- * so a slow or absent engine never offers a restore and never calls a task deleted.
+ * restore only helps a thread whose task can still take it: `open`. A task the lanes do not list
+ * is `deleted` on the engine's 404, judged by its own detail when that says it moved away, and
+ * `unknown` otherwise: a slow or absent engine never offers a restore or calls a task deleted.
  */
 export const archivedBoardThreads = Effect.fn("archivedBoardThreads")(function* (
   environmentId: string,
@@ -60,17 +60,21 @@ export const archivedBoardThreads = Effect.fn("archivedBoardThreads")(function* 
       lanes.value.lanes.flatMap((lane) => lane.cards.map((card) => [card.id, card] as const)),
     );
     const taskOf = (row: Row): Effect.Effect<ArchivedThread["task"]> => {
+      const told = (standing: ReturnType<typeof boardThreadStanding>) =>
+        standing === "linked" || standing === "free" ? ("open" as const) : ("held" as const);
       const card = cards.get(row.task.id);
-      if (card === undefined) {
-        return ask(`/api/tasks/${row.task.id}`).pipe(
-          Effect.as("unknown" as const),
-          Effect.catch((error) =>
-            Effect.succeed(error.status === 404 ? ("deleted" as const) : ("unknown" as const)),
-          ),
-        );
+      if (card !== undefined) {
+        return Effect.succeed(told(boardThreadStanding(card, environmentId, row.threadId)));
       }
-      const standing = boardThreadStanding(card, environmentId, row.threadId);
-      return Effect.succeed(standing === "linked" || standing === "free" ? "open" : "held");
+      return ask(`/api/tasks/${row.task.id}`).pipe(
+        Effect.map((response) => {
+          const standing = movedTaskStanding(response.body, environmentId, row.threadId);
+          return standing === null ? ("unknown" as const) : told(standing);
+        }),
+        Effect.catch((error) =>
+          Effect.succeed(error.status === 404 ? ("deleted" as const) : ("unknown" as const)),
+        ),
+      );
     };
     return new Map(
       yield* Effect.forEach(
