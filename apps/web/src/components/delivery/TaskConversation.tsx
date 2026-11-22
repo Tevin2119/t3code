@@ -145,6 +145,7 @@ function OpenConversation(props: {
   readonly thread: ScopedThreadRef;
   readonly offline: boolean;
   readonly seat: SeatThread | null;
+  readonly seatResolving: boolean;
   readonly seatName: string | null;
   readonly onOpenThread: (thread: ScopedThreadRef) => void;
   readonly onBackToTask: () => void;
@@ -154,10 +155,16 @@ function OpenConversation(props: {
   const [view, setView] = useState<"conversation" | "log">("conversation");
   const [attempt, setAttempt] = useState(0);
   const shown = props.seat ?? props.thread;
+  const inSeat = props.seat !== null || props.seatResolving;
+  const loading = (
+    <p role="status" className="p-4 text-sm text-muted-foreground">
+      {gt("Loading the conversation...")}
+    </p>
+  );
   return (
     <div
       className="flex min-h-0 min-w-0 flex-1 flex-col"
-      data-task-conversation={props.seat ? "seat" : "open"}
+      data-task-conversation={inSeat ? "seat" : "open"}
     >
       {props.offline ? (
         <p
@@ -170,7 +177,7 @@ function OpenConversation(props: {
           )}
         </p>
       ) : null}
-      {props.seat ? (
+      {inSeat ? (
         <SeatBar task={props.task} seatName={props.seatName} onBack={props.onBackToTask} />
       ) : (
         <div className="flex shrink-0 items-center border-b border-border px-3 py-1">
@@ -187,7 +194,11 @@ function OpenConversation(props: {
           </ToggleGroup>
         </div>
       )}
-      {view === "log" && !props.seat ? (
+      {props.seat === null && props.seatResolving ? (
+        // The seat is open but its links are not known yet. The task's own conversation is not
+        // shown in its place, and neither view is mounted only to be swapped for the other.
+        loading
+      ) : view === "log" && !inSeat ? (
         props.log
       ) : (
         <ThreadInspectionContext value={props.onOpenThread}>
@@ -197,13 +208,7 @@ function OpenConversation(props: {
               <ConversationFailed attempt={attempt} onRetry={() => setAttempt((n) => n + 1)} />
             }
           >
-            <Suspense
-              fallback={
-                <p role="status" className="p-4 text-sm text-muted-foreground">
-                  {gt("Loading the conversation...")}
-                </p>
-              }
-            >
+            <Suspense fallback={loading}>
               <div className="flex min-h-0 min-w-0 flex-1 flex-col">
                 {props.seat?.linked ? (
                   <LinkedSeat seat={props.seat} linked={props.seat.linked} />
@@ -243,6 +248,8 @@ export function TaskConversation(props: {
   readonly task: TaskView;
   readonly state: ConversationState;
   readonly seat: SeatThread | null;
+  /** A seat is open but cannot be placed yet. */
+  readonly seatResolving: boolean;
   readonly seatName: string | null;
   readonly onOpenThread: (thread: ScopedThreadRef) => void;
   readonly onBackToTask: () => void;
@@ -272,6 +279,7 @@ export function TaskConversation(props: {
           thread={state.ref}
           offline={state.offline}
           seat={props.seat}
+          seatResolving={props.seatResolving}
           seatName={props.seatName}
           onOpenThread={props.onOpenThread}
           onBackToTask={props.onBackToTask}

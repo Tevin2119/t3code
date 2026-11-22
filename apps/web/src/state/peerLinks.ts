@@ -47,6 +47,18 @@ const offersNoLinksAtom = Atom.make(false).pipe(Atom.withLabel("peer-links:offer
 export function useLinkedEnvironments(
   environmentId: EnvironmentId | null,
 ): ReadonlyMap<EnvironmentId, string> {
+  return useLinkedEnvironmentsRead(environmentId).names;
+}
+
+/**
+ * `useLinkedEnvironments`, with whether the list has its answer. While it loads the names are
+ * empty, which is not the same as no links: a caller that picks a view from them waits for
+ * `settled`.
+ */
+export function useLinkedEnvironmentsRead(environmentId: EnvironmentId | null): {
+  readonly names: ReadonlyMap<EnvironmentId, string>;
+  readonly settled: boolean;
+} {
   const offered = useAtomValue(
     environmentId === null ? offersNoLinksAtom : offersLinkedEnvironmentsAtom(environmentId),
   );
@@ -56,10 +68,14 @@ export function useLinkedEnvironments(
       ? peerLinkEnvironment.names({ environmentId, input: {} })
       : null,
   );
-  return linkedEnvironmentNames({
-    links: offered ? (links.data?.links ?? []) : [],
-    environments: identities,
-  });
+  return {
+    names: linkedEnvironmentNames({
+      links: offered ? (links.data?.links ?? []) : [],
+      environments: identities,
+    }),
+    // Nothing to ask counts as answered, and so does a failed read: it will not say more.
+    settled: environmentId === null || !offered || links.isSuccess || links.error !== null,
+  };
 }
 
 export function usePeerLinkHosts() {

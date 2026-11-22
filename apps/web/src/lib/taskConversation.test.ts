@@ -7,6 +7,7 @@ import {
   openSeatThread,
   seatConversation,
   seatOfThread,
+  steadySeatThread,
   taskConversation,
 } from "./taskConversation";
 
@@ -138,6 +139,55 @@ describe("a seat's conversation", () => {
     // A thread that is no seat's, opened from a lineage link, stays as it was asked for.
     const other = { ...ref, threadId: id("elsewhere") };
     expect(openSeatThread(ref, children, other, reach(undefined, false))).toBe(other);
+  });
+});
+
+describe("an open seat's view, held steady", () => {
+  const remote = EnvironmentId.make("env-remote");
+  const direct = { environmentId: remote, threadId: ThreadId.make("child-b") };
+  const linked = { ...direct, linked: { viaEnvironmentId: ref.environmentId, label: "Desktop" } };
+  const loading = { certain: false, connected: false };
+  const loaded = { certain: true, connected: false };
+  const online = { certain: true, connected: true };
+
+  it("waits to place a newly opened seat until the links have loaded", () => {
+    // Saved but offline reads as direct, and unsaved as linked, before the links say which.
+    expect(steadySeatThread(null, direct, loading)).toEqual({ kind: "resolving" });
+    expect(steadySeatThread(null, linked, loading)).toEqual({ kind: "resolving" });
+    expect(steadySeatThread(null, linked, loaded)).toEqual({ kind: "shown", seat: linked });
+    expect(steadySeatThread(null, direct, loaded)).toEqual({ kind: "shown", seat: direct });
+    // This client's own connection needs no link, so it never waits.
+    expect(steadySeatThread(null, direct, online)).toEqual({ kind: "shown", seat: direct });
+    // Another seat opened over this one is placed afresh, not swapped in under the old view.
+    const other = { ...direct, threadId: ThreadId.make("child-z") };
+    expect(steadySeatThread(other, direct, loading)).toEqual({ kind: "resolving" });
+  });
+
+  it("keeps the direct view through a reconnect, and offers the linked view for later", () => {
+    // The connection drops: the links are asked for, and until they answer nothing changes.
+    expect(steadySeatThread(direct, direct, loading)).toEqual({ kind: "shown", seat: direct });
+    // They answer that a link exists. The direct view stays; the linked view waits its turn.
+    expect(steadySeatThread(direct, linked, loaded)).toEqual({
+      kind: "shown",
+      seat: direct,
+      later: linked,
+    });
+    // The connection is back before that turn comes: nothing was remounted.
+    expect(steadySeatThread(direct, direct, online)).toEqual({ kind: "shown", seat: direct });
+  });
+
+  it("leaves the linked view at once for a connection of its own, not for links that reload", () => {
+    expect(steadySeatThread(linked, direct, online)).toEqual({ kind: "shown", seat: direct });
+    expect(steadySeatThread(linked, direct, loading)).toEqual({ kind: "shown", seat: linked });
+    // The link is really gone and the environment is saved: it opens in place, offline.
+    expect(steadySeatThread(linked, direct, loaded)).toEqual({ kind: "shown", seat: direct });
+    // A new name for the linked environment redraws the same view.
+    const renamed = { ...linked, linked: { ...linked.linked, label: "Workstation" } };
+    expect(steadySeatThread(linked, renamed, loaded)).toEqual({ kind: "shown", seat: renamed });
+  });
+
+  it("shows nothing once the seat is closed", () => {
+    expect(steadySeatThread(direct, null, online)).toEqual({ kind: "none" });
   });
 });
 
