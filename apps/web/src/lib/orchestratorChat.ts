@@ -1,5 +1,6 @@
 import {
   DELIVERY_HARNESS_BY_DRIVER,
+  type DeliveryLimitedSeatPolicy,
   type DeliveryOrchestrationConfig,
   type ModelSelection,
 } from "@t3tools/contracts";
@@ -34,6 +35,7 @@ export interface OrchestratorExtraParticipant {
 
 export type OrchestratorCritique = NonNullable<DeliveryOrchestrationConfig["critique"]>;
 export type OrchestratorAccess = NonNullable<DeliveryOrchestrationConfig["access"]>;
+export type OrchestratorLimitedSeat = DeliveryLimitedSeatPolicy;
 
 export function resolveOrchestratorRoster(input: {
   readonly team: DeliveryTeam | null;
@@ -45,6 +47,8 @@ export function resolveOrchestratorRoster(input: {
   readonly entries: ReadonlyArray<ProviderInstanceEntry>;
   readonly critique?: OrchestratorCritique | undefined;
   readonly access?: OrchestratorAccess | undefined;
+  /** What a person chose for a limited seat; absent, the team's profile decides, else swap. */
+  readonly limitedSeat?: OrchestratorLimitedSeat | undefined;
   readonly extras?: ReadonlyArray<OrchestratorExtraParticipant> | undefined;
   /** The harness and role the orchestrator itself runs as, when known. */
   readonly orchestrator?: {
@@ -213,10 +217,12 @@ export function resolveOrchestratorRoster(input: {
         : selected.length < 2 || selected.length > 12
           ? "Choose between 2 and 12 participants."
           : (selected.find((row) => row.problem)?.problem ?? null);
+  const limitedSeat = input.limitedSeat ?? input.team?.whenSeatLimited ?? "swap";
   const configuration: DeliveryOrchestrationConfig | null = problem
     ? null
     : {
         ...(input.critique && input.critique !== "first" ? { critique: input.critique } : {}),
+        ...(limitedSeat !== "swap" ? { limitedSeat } : {}),
         ...(input.access ? { access: input.access } : {}),
         ...(input.callsTeam ? { team: input.callsTeam } : {}),
         participants: selected.flatMap((row) =>
@@ -232,7 +238,7 @@ export function resolveOrchestratorRoster(input: {
             : [],
         ),
       };
-  return { rows, configuration, problem };
+  return { rows, configuration, problem, limitedSeat };
 }
 
 /**

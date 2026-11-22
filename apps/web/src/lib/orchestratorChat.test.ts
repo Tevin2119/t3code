@@ -506,3 +506,29 @@ it("does not put a held retry back on the roster it failed with once a newer lin
     }),
   ).toEqual({ source: "held", orchestration: heldOrchestration });
 });
+
+it("takes what a limited seat does from the person, then the team's profile, then swaps", () => {
+  const { team, entries } = setup();
+  const resolve = (
+    forTeam: typeof team,
+    limitedSeat?: "swap" | "ask" | "skip",
+  ): DeliveryOrchestrationConfig | null =>
+    resolveOrchestratorRoster({ team: forTeam, choices: undefined, entries, limitedSeat })
+      .configuration;
+
+  // Swap automatically is the default, and the default is not written down.
+  expect(resolve(team)).not.toHaveProperty("limitedSeat");
+  const asks = { ...team, whenSeatLimited: "ask" as const };
+  expect(resolve(asks)?.limitedSeat).toBe("ask");
+  expect(resolve(asks, "skip")?.limitedSeat).toBe("skip");
+  // A person's own "swap" stands against a team that asks.
+  expect(resolve(asks, "swap")).not.toHaveProperty("limitedSeat");
+});
+
+it("reads the team profile's default for a limited seat, and ignores a value it does not know", () => {
+  const teamOf = (whenSeatLimited: unknown) =>
+    parseTeams([{ team: "research", available: true, seats: [], whenSeatLimited }])[0]!;
+  expect(teamOf("skip").whenSeatLimited).toBe("skip");
+  expect(teamOf("later").whenSeatLimited).toBeNull();
+  expect(teamOf(undefined).whenSeatLimited).toBeNull();
+});

@@ -4,6 +4,10 @@ import * as Schema from "effect/Schema";
 import { ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import { ModelSelection } from "./modelSelection.ts";
 
+/** What a conversation does when a seat's model has reached its usage limit. */
+export const DeliveryLimitedSeatPolicy = Schema.Literals(["swap", "ask", "skip"]);
+export type DeliveryLimitedSeatPolicy = typeof DeliveryLimitedSeatPolicy.Type;
+
 export const DeliveryOrchestrationConfig = Schema.Struct({
   participants: Schema.Array(
     Schema.Struct({
@@ -16,6 +20,8 @@ export const DeliveryOrchestrationConfig = Schema.Struct({
   ).check(Schema.isMinLength(2), Schema.isMaxLength(12)),
   /** When participants critique each other. Absent means the conversation's first message only. */
   critique: Schema.optional(Schema.Literals(["first", "always", "never"])),
+  /** When a seat is limited. Absent means swap automatically. Read at the start of each turn. */
+  limitedSeat: Schema.optional(DeliveryLimitedSeatPolicy),
   /** The access participants run with. Absent means read-only: what would change something is declined. */
   access: Schema.optional(Schema.Literals(["approval-required", "full-access"])),
   /** The team participants take their roles from, when the conversation itself is bound to none. */
@@ -28,6 +34,10 @@ export const deliveryParticipantAccess = (
   lineup: Pick<DeliveryOrchestrationConfig, "access" | "participants">,
   seat: string,
 ) => lineup.participants.find((item) => item.seat === seat)?.access ?? lineup.access ?? "read-only";
+
+export const deliveryLimitedSeatPolicy = (
+  lineup: Pick<DeliveryOrchestrationConfig, "limitedSeat">,
+): DeliveryLimitedSeatPolicy => lineup.limitedSeat ?? "swap";
 
 /**
  * The team a conversation was switched away from, so one click brings it back.

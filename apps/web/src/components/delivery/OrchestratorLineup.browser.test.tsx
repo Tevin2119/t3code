@@ -443,3 +443,44 @@ it("saves reasoning and context window together in the participant model selecti
   );
   await expect.element(scout.getByRole("button", { name: /Maximum/ })).toBeVisible();
 });
+
+it("saves what a limited seat does from the footer, and leaves the control off a board task", async () => {
+  testState.threadState = {
+    data: { binding: RESEARCH_BINDING, lineup: LINEUP_OF_THREE, pending: null },
+  };
+  testState.setLineup.mockClear();
+  await using screen = await render(
+    <OrchestratorLineup
+      environmentId={"env-a" as never}
+      threadId={"t1" as never}
+      driver={ProviderDriverKind.make("codex")}
+      entries={ENTRIES}
+      models={MODELS}
+    />,
+  );
+
+  const control = page.getByRole("combobox", { name: "When a seat is limited" });
+  await expect.element(control).toHaveTextContent("Swap automatically");
+  await control.click();
+  await page.getByRole("option", { name: "Ask me" }).click();
+  await vi.waitFor(() => {
+    expect(testState.setLineup).toHaveBeenCalledWith({
+      environmentId: "env-a",
+      input: { threadId: "t1", orchestration: { ...LINEUP_OF_THREE, limitedSeat: "ask" } },
+    });
+  });
+  await expect.element(control).toHaveTextContent("Ask me");
+
+  await screen.rerender(
+    <OrchestratorLineup
+      environmentId={"env-a" as never}
+      threadId={"t1" as never}
+      driver={ProviderDriverKind.make("codex")}
+      entries={ENTRIES}
+      models={MODELS}
+      boardOwned
+    />,
+  );
+  await expect.element(control).not.toBeInTheDocument();
+  await expect.element(page.getByRole("combobox", { name: "Critique round" })).toBeInTheDocument();
+});

@@ -6,7 +6,16 @@ import type {
 } from "@t3tools/contracts";
 import { DELIVERY_HARNESS_BY_DRIVER } from "@t3tools/contracts";
 import { createModelSelection } from "@t3tools/shared/model";
-import { CrownIcon, MessageCircleIcon, PlusIcon, RepeatIcon, Undo2Icon, XIcon } from "lucide-react";
+import { useGT } from "gt-react";
+import {
+  CrownIcon,
+  GaugeIcon,
+  MessageCircleIcon,
+  PlusIcon,
+  RepeatIcon,
+  Undo2Icon,
+  XIcon,
+} from "lucide-react";
 import type { ReactNode } from "react";
 import { cn } from "~/lib/utils";
 import type { DeliveryTeam } from "../../lib/delivery";
@@ -14,6 +23,7 @@ import type {
   OrchestratorAccess,
   OrchestratorCritique,
   OrchestratorExtraParticipant,
+  OrchestratorLimitedSeat,
   OrchestratorParticipantAccess,
   OrchestratorParticipantChoice,
   resolveOrchestratorRoster,
@@ -51,6 +61,7 @@ export interface OrchestratorLineupValue {
   readonly extraParticipants?: ReadonlyArray<OrchestratorExtraParticipant>;
   readonly critique?: OrchestratorCritique;
   readonly access?: OrchestratorAccess | undefined;
+  readonly limitedSeat?: OrchestratorLimitedSeat | undefined;
 }
 
 /** The participants of a team conversation, with its critique round and access. */
@@ -73,12 +84,24 @@ export function OrchestratorParticipants(props: {
   readonly onFocus?:
     | ((row: { readonly role: string; readonly modelSelection: ModelSelection }) => void)
     | undefined;
+  /** A board task's conversation: its team's own setting decides what a limited seat does. */
+  readonly boardOwned?: boolean | undefined;
   /** What the owning panel adds to the explanation behind the info button. */
   readonly about?: ReactNode;
   /** The owning panel's own action, at the end of the footer row. */
   readonly footer?: ReactNode;
 }) {
+  const gt = useGT();
   const { team, value, roster } = props;
+  const limitedSeatOptions: ReadonlyArray<{
+    readonly value: OrchestratorLimitedSeat;
+    readonly label: string;
+  }> = [
+    { value: "swap", label: gt("Swap automatically") },
+    { value: "ask", label: gt("Ask me") },
+    { value: "skip", label: gt("Leave it out") },
+  ];
+  const limitedSeatLabel = gt("When a seat is limited");
   const entries = props.entries.filter((entry) => DELIVERY_HARNESS_BY_DRIVER[entry.driverKind]);
   const models = new Map(props.models);
   for (const row of roster.rows) {
@@ -145,6 +168,14 @@ export function OrchestratorParticipants(props: {
             edit, commit, push and post. A participant's own access, set beside it, comes first, and
             a seat the team keeps read-only stays read-only unless you change it here.
           </span>
+          {props.boardOwned ? null : (
+            <span className="mt-1.5 block">
+              <span className="font-medium text-foreground">{limitedSeatLabel}: </span>
+              {gt(
+                "a seat whose model has reached its usage limit moves to the first free model in your Favorites, waits for you to choose, or sits the message out. It applies from your next message. A model you chose for a seat by hand is never swapped without asking.",
+              )}
+            </span>
+          )}
         </InfoPopover>
       </div>
       <div className="flex flex-col divide-y divide-border/60">
@@ -474,6 +505,33 @@ export function OrchestratorParticipants(props: {
             ))}
           </SelectPopup>
         </Select>
+        {props.boardOwned ? null : (
+          <Select
+            items={limitedSeatOptions}
+            value={roster.limitedSeat}
+            onValueChange={(next) => {
+              if (next === "swap" || next === "ask" || next === "skip")
+                props.onChange({ limitedSeat: next });
+            }}
+          >
+            <GlyphButton
+              label={limitedSeatLabel}
+              render={<SelectTrigger variant="ghost" size="xs" aria-label={limitedSeatLabel} />}
+            >
+              <span className="flex min-w-0 items-center gap-1">
+                <GaugeIcon aria-hidden />
+                <SelectValue />
+              </span>
+            </GlyphButton>
+            <SelectPopup matchTriggerWidth={false}>
+              {limitedSeatOptions.map((item) => (
+                <SelectItem key={item.value} value={item.value}>
+                  {item.label}
+                </SelectItem>
+              ))}
+            </SelectPopup>
+          </Select>
+        )}
         {props.footer ? <span className="ml-auto flex shrink-0">{props.footer}</span> : null}
       </div>
       {roster.problem ? (

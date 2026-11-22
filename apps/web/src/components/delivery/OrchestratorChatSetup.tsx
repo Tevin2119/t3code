@@ -71,6 +71,7 @@ export function OrchestratorChatSetup(props: {
     entries: props.entries,
     critique: draft?.critique,
     access: draft?.access,
+    limitedSeat: draft?.limitedSeat,
     extras: draft?.extraParticipants,
     orchestrator: {
       harness: leadEntry ? (DELIVERY_HARNESS_BY_DRIVER[leadEntry.driverKind] ?? null) : null,
