@@ -16,6 +16,7 @@ import {
   type TaskPriority,
   type TaskView,
 } from "../../lib/delivery";
+import { cardActivityOf } from "../../lib/boardLaneCards";
 import { ageLabel, initialsOf, PRIORITY_LABEL } from "../../lib/deliveryBoard";
 import { harnessLabel } from "../../lib/deliverySeats";
 import { cn } from "../../lib/utils";
@@ -301,6 +302,36 @@ export function CardPeople(props: { readonly card: DeliveryCard }) {
       ))}
       {card.owner ? <Avatar name={card.owner} detail={`Owner: ${card.owner}`} /> : null}
     </span>
+  );
+}
+
+/**
+ * What was said on a task, for its card: how much, how much of it is new, and the last line. The
+ * full text stays in the conversation. Every part is the engine's own count.
+ */
+export function CardActivity(props: { readonly card: DeliveryCard }) {
+  const activity = cardActivityOf(props.card);
+  if (activity === null) return null;
+  return (
+    <p
+      className="flex min-w-0 items-baseline gap-1.5 text-2xs text-muted-foreground"
+      data-card-activity
+    >
+      <span className="shrink-0 font-mono text-3xs" data-card-messages={activity.messages}>
+        {plural(activity.messages, "message", "messages")}
+      </span>
+      {activity.unread > 0 ? (
+        <span className="shrink-0 font-medium text-foreground" data-card-unread={activity.unread}>
+          {activity.unread} new
+        </span>
+      ) : null}
+      {activity.text ? (
+        <span className="min-w-0 truncate" data-card-last>
+          {activity.by ? `${activity.by}: ` : ""}
+          {activity.text}
+        </span>
+      ) : null}
+    </p>
   );
 }
 

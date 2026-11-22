@@ -77,6 +77,15 @@ const LANES: ReadonlyArray<DeliveryLane> = [
             { actor: "Sam", decision: "approve", stands: true },
           ],
           paused: { needsPerson: true },
+          messages: 128,
+          unread: 12,
+          last: {
+            at: "2026-11-22T10:00:00Z",
+            by: "lead-developer-with-a-long-seat-name",
+            from: "team",
+            kind: "reply",
+            text: "A long last line that has to be cut short on the card instead of widening it.",
+          },
         }),
       ),
     ],
@@ -158,5 +167,11 @@ it.each(CASES)(
     expect(
       screen.container.querySelector('[data-lane="an-engine-lane-this-build-has-not-heard-of"]'),
     ).not.toBeNull();
+    // The waiting lane says what it owes in all, and the card what was said, inside their widths.
+    const waiting = screen.container.querySelector('[data-lane="needs-decision"]');
+    expect(waiting?.querySelector('[data-lane-questions="3"]')).not.toBeNull();
+    expect(waiting?.querySelector('[data-lane-sign-offs="1"]')).not.toBeNull();
+    expect(waiting?.querySelector('[data-card-unread="12"]')).not.toBeNull();
+    expect(waiting?.querySelector("[data-card-last]")).not.toBeNull();
   },
 );

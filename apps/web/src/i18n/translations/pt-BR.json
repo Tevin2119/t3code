@@ -12597,5 +12597,9 @@
   "27d76249d09eb69f": "Guia de revisão pronto",
   "faa3bb26abb39c93": "O guia de revisão falhou",
   "b7df38b7d8792d78": "Abrir guia",
-  "9e91e9a77b664e4e": "Não foi possível iniciar um guia de revisão"
+  "9e91e9a77b664e4e": "Não foi possível iniciar um guia de revisão",
+  "cdf5dd7d370e594c": "Tarefa do quadro: {title}",
+  "dae94973cc4ff259": "Tarefa encerrada. A conversa está no arquivo do quadro",
+  "1f8f11ca7798711e": "Abre a tarefa no quadro",
+  "a65acdb87eac322b": "{count, plural, one {{count} conversa arquivada iniciada por um quadro é mantida, não excluída.} other {{count} conversas arquivadas iniciadas por um quadro são mantidas, não excluídas.}}"
 }

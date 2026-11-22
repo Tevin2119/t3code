@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { queuePlaces, reworkOf, waitKindsOf, workSections, workStageOf } from "./boardLaneCards";
+import {
+  cardActivityOf,
+  laneWaitCounts,
+  queuePlaces,
+  reworkOf,
+  waitKindsOf,
+  workSections,
+  workStageOf,
+} from "./boardLaneCards";
 import { parseCard } from "./delivery";
 
 const card = (extra: Record<string, unknown> = {}) =>
@@ -101,5 +109,46 @@ describe("what a person owes a card", () => {
     expect(waitKindsOf(card({ questions: 3, actions: ["approve"] }))).toEqual([]);
     expect(owed({ lane: "draft", actions: ["submit"] })).toEqual([]);
     expect(owed({ lane: "paused", actions: ["resume"] })).toEqual(["resume"]);
+  });
+
+  it("adds up a lane's questions and sign-offs from the cards that wait on a person", () => {
+    const waiting = (extra: Record<string, unknown>) =>
+      card({ waitsOnPerson: true, waitingOn: "person", ...extra });
+    expect(
+      laneWaitCounts([
+        waiting({ questions: 2 }),
+        waiting({ questions: 1, actions: ["approve", "reject"] }),
+        waiting({ actions: ["approve"], approveStands: true }),
+        // Not waiting on a person: its questions and its approve action are not owed by one.
+        card({ questions: 5, actions: ["approve"] }),
+      ]),
+    ).toEqual({ questions: 3, signOffs: 1 });
+    expect(laneWaitCounts([])).toEqual({ questions: 0, signOffs: 0 });
+  });
+});
+
+describe("what was said on a card", () => {
+  const last = {
+    at: "2026-11-22T10:00:00Z",
+    by: "lead",
+    from: "team",
+    kind: "reply",
+    text: "Done.",
+  };
+
+  it("gives the engine's counts and its last line, and nothing when nothing was said", () => {
+    expect(cardActivityOf(card({ messages: 4, unread: 2, last }))).toEqual({
+      messages: 4,
+      unread: 2,
+      by: "lead",
+      text: "Done.",
+    });
+    expect(cardActivityOf(card())).toBeNull();
+    expect(cardActivityOf(card({ messages: 1 }))).toEqual({
+      messages: 1,
+      unread: 0,
+      by: null,
+      text: null,
+    });
   });
 });

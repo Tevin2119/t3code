@@ -935,6 +935,27 @@ export const waitingWords = (reason: string | null): string =>
         ? `waits for ${reason}`
         : "is working";
 
+/**
+ * The engine's link from a task to the conversation its lead runs it in (`boardThread`, engine
+ * spec 6a). The names are the engine's. Only `lib/taskConversation` reads it.
+ */
+export interface BoardThreadLink {
+  readonly environmentId: string;
+  readonly threadId: string;
+  /** The T3 environment that wrote the link, never a person. */
+  readonly setBy: string;
+  readonly setAt: string;
+}
+
+export function parseBoardThread(value: unknown): BoardThreadLink | null {
+  if (!isRecord(value)) return null;
+  const environmentId = text(value.environmentId);
+  const threadId = text(value.threadId);
+  return environmentId && threadId
+    ? { environmentId, threadId, setBy: text(value.setBy), setAt: text(value.setAt) }
+    : null;
+}
+
 export interface DeliveryCard {
   readonly id: string;
   /** The number a person says and searches by, e.g. 1001. */
@@ -1034,6 +1055,8 @@ export interface DeliveryCard {
   readonly rank: number;
   /** The engine's own answer to whether this task waits on a person (a question, a plan, a sign-off). */
   readonly waitsOnPerson: boolean;
+  /** The conversation the board's lead runs this task in, or null when the engine links none. */
+  readonly boardThread: BoardThreadLink | null;
   /** Whether an approval of this task still stands. */
   readonly approveStands: boolean;
   /**
@@ -1288,6 +1311,7 @@ export const parseCard = (value: Json): DeliveryCard => {
     first: flag(value.first),
     rank: typeof value.rank === "number" && Number.isFinite(value.rank) ? value.rank : 0,
     waitsOnPerson: flag(value.waitsOnPerson),
+    boardThread: parseBoardThread(value.boardThread),
     approveStands: flag(value.approveStands),
     queue: parseQueueFact(value.queue),
     reworkRounds:
@@ -1700,7 +1724,12 @@ export interface TaskView {
   readonly target: DeliveryTarget | null;
   /** The board triage thinks it belongs on, as on its card. Older engines omit it. */
   readonly suggestedBoard?: SuggestedBoard | null;
-  /** The conversation this task was made from: `<environment>/<thread>`. */
+  /** The conversation the board's lead runs this task in. Read through `lib/taskConversation`. */
+  readonly boardThread: BoardThreadLink | null;
+  /**
+   * The conversation this task was filed from: `<environment>/<thread>`. A thread of its own, and
+   * never the task's conversation.
+   */
   readonly source: {
     readonly kind: "thread";
     readonly environmentId: string;
@@ -1922,6 +1951,7 @@ export function parseTask(body: unknown): TaskView | null {
     })(),
     target: parseTarget(body.target),
     suggestedBoard: parseSuggestedBoard(body.suggestedBoard),
+    boardThread: parseBoardThread(body.boardThread),
     source: (() => {
       const source = isRecord(body.source) ? body.source : null;
       const ref = source ? text(source.ref) : "";

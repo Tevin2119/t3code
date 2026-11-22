@@ -10,6 +10,7 @@ import {
   ThreadId,
   TrimmedNonEmptyString,
 } from "./baseSchemas.ts";
+import { LinkedBoardTask } from "./delivery.ts";
 import {
   PullRequestActor,
   PullRequestLabel,
@@ -548,6 +549,7 @@ export const IssueLinkedThreadsResult = Schema.Struct({
       settled: Schema.Boolean,
     }),
   ),
+  boardTasks: Schema.optionalKey(Schema.Array(LinkedBoardTask)),
 });
 export type IssueLinkedThreadsResult = typeof IssueLinkedThreadsResult.Type;
 

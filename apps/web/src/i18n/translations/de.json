@@ -12597,5 +12597,9 @@
   "27d76249d09eb69f": "Review-Leitfaden bereit",
   "faa3bb26abb39c93": "Review-Leitfaden fehlgeschlagen",
   "b7df38b7d8792d78": "Leitfaden öffnen",
-  "9e91e9a77b664e4e": "Review-Leitfaden konnte nicht gestartet werden"
+  "9e91e9a77b664e4e": "Review-Leitfaden konnte nicht gestartet werden",
+  "cdf5dd7d370e594c": "Board-Aufgabe: {title}",
+  "dae94973cc4ff259": "Aufgabe beendet. Die Unterhaltung liegt im Archiv des Boards",
+  "1f8f11ca7798711e": "Öffnet die Aufgabe auf dem Board",
+  "a65acdb87eac322b": "{count, plural, one {{count} archiviertes, von einem Board gestartetes Gespräch bleibt erhalten und wird nicht gelöscht.} other {{count} archivierte, von einem Board gestartete Gespräche bleiben erhalten und werden nicht gelöscht.}}"
 }

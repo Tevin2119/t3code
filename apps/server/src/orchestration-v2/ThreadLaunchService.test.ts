@@ -10,10 +10,19 @@ import * as Path from "effect/Path";
 import * as ServerConfig from "../config.ts";
 import { createPendingAttachmentId, resolveAttachmentPath } from "../attachmentStore.ts";
 import * as ThreadMessageIntake from "./ThreadMessageIntake.ts";
-import { boardTaskThreadCommandId, boardTaskThreadMarker } from "../delivery/boardThreadMarker.ts";
+import {
+  boardTaskOf,
+  boardTaskThreadCommandId,
+  boardTaskThreadMarker,
+} from "../delivery/boardThreadMarker.ts";
+import { listBoardThreadRows } from "../delivery/boardThreadRows.ts";
+import { archivedBoardThreads } from "../delivery/archivedBoardThreads.ts";
+import { linkedBoardTasks } from "../delivery/linkedBoardTasks.ts";
+import { listLinkedPullRequestThreads } from "../pullRequest/linkedThreads.ts";
 import { assert, it, vi } from "@effect/vitest";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import {
+  DeliveryError,
   ChatAttachmentId,
   ComposerContextId,
   type ChatAttachment,
@@ -21,6 +30,7 @@ import {
   DEFAULT_SERVER_SETTINGS,
   EnvironmentId,
   GitCommandError,
+  IssueTrackerKind,
   MessageId,
   RunId,
   ProjectId,
@@ -544,7 +554,7 @@ it.effect("keeps a board task's thread out of both lists, however often it is cr
     yield* launches.launch(
       launchInput({ command: "command:top-level", thread: "thread:top-level" }),
     );
-    const task = { board: "board-1", id: "task-7" };
+    const task = boardTaskOf("board-1", "task-7")!;
     const threadId = ThreadId.make("thread:board-task");
     const create = threads.dispatch({
       type: "thread.create",
@@ -577,6 +587,147 @@ it.effect("keeps a board task's thread out of both lists, however often it is cr
         [ThreadId.make("thread:top-level")],
       );
     }
+    // The board reaches it by its marker: among the live ones, and once archived among those.
+    const rows = (archived: boolean) =>
+      listBoardThreadRows({ archived }).pipe(
+        Effect.map((found) => found.map((row) => ({ threadId: row.threadId, task: row.task }))),
+      );
+    assert.deepEqual(yield* rows(false), [{ threadId, task }]);
+    assert.deepEqual(yield* rows(true), []);
+    // Linked to a pull request and an issue, it shows as its task: by the engine's title when the
+    // engine answers, by the thread's own when it does not. The list of linked threads leaves it out.
+    const pullRequest = { host: "github.com", repository: "acme/api", number: 7 };
+    const issue = {
+      tracker: IssueTrackerKind.make("github"),
+      host: "github.com",
+      scope: "acme/api",
+      key: "42",
+    };
+    yield* threads.dispatch({
+      type: "thread.pull-request.link",
+      commandId: CommandId.make("command:board-task-pr"),
+      threadId,
+      ...pullRequest,
+      url: "https://github.com/acme/api/pull/7",
+      source: "created",
+    });
+    yield* threads.dispatch({
+      type: "thread.issue.link",
+      commandId: CommandId.make("command:board-task-issue"),
+      threadId,
+      ...issue,
+      projectId,
+      url: "https://github.com/acme/api/issues/42",
+      displayKey: "#42",
+      title: "Issue",
+      source: "manual",
+    });
+    const lanes = Effect.succeed({
+      readAt: "2026-11-22T10:00:00.000Z",
+      body: { lanes: [{ cards: [{ id: "task-7", title: "The engine's title" }] }] },
+    });
+    const asTask = (title: string, ended = false) => [
+      { board: "board-1", taskId: "task-7", title, ended },
+    ];
+    assert.deepEqual(yield* linkedBoardTasks({ pullRequest }, lanes), asTask("The engine's title"));
+    assert.deepEqual(yield* linkedBoardTasks({ issue }, null), asTask("Task 7"));
+    assert.deepEqual(
+      yield* linkedBoardTasks({ pullRequest: { ...pullRequest, number: 8 } }, lanes),
+      [],
+    );
+    assert.deepEqual((yield* listLinkedPullRequestThreads(pullRequest)).threads, []);
+    yield* threads.dispatch({
+      type: "thread.archive",
+      commandId: CommandId.make("command:archive-board-task"),
+      threadId,
+    });
+    assert.deepEqual(yield* rows(false), []);
+    assert.deepEqual(yield* rows(true), [{ threadId, task }]);
+    // The task ended and its conversation is archived: the row stays, told as ended.
+    assert.deepEqual(yield* linkedBoardTasks({ pullRequest }, null), asTask("Task 7", true));
+    // The board's archive says how the task stands, which decides whether a restore is offered.
+    const here = "environment-here";
+    const standing = (
+      card: Record<string, unknown> | null,
+      detail: "gone" | "down" | Record<string, unknown> = "gone",
+    ) =>
+      archivedBoardThreads(here, (path) =>
+        path.startsWith("/api/lanes")
+          ? card === null
+            ? Effect.fail(new DeliveryError({ reason: "unreachable", detail: "down" }))
+            : Effect.succeed({
+                readAt: "2026-11-22T10:00:00.000Z",
+                body: { lanes: [{ cards: "id" in card ? [card] : [] }] },
+              })
+          : typeof detail === "object"
+            ? Effect.succeed({ readAt: "2026-11-22T10:00:00.000Z", body: detail })
+            : Effect.fail(
+                new DeliveryError({
+                  reason: detail === "gone" ? "refused" : "unreachable",
+                  detail,
+                  ...(detail === "gone" ? { status: 404 } : {}),
+                }),
+              ),
+      ).pipe(Effect.map((result) => result.threads.map((entry) => entry.task)));
+    const card = { id: "task-7", state: "running" };
+    // Its link is free, or names this thread: restoring it makes it the task's conversation.
+    assert.deepEqual(yield* standing({ ...card, boardThread: null }), ["open"]);
+    assert.deepEqual(yield* standing({ ...card, boardThread: { environmentId: here, threadId } }), [
+      "open",
+    ]);
+    // Another conversation holds the task, or it is on its way to another machine: no restore.
+    assert.deepEqual(
+      yield* standing({ ...card, boardThread: { environmentId: "other", threadId } }),
+      ["held"],
+    );
+    assert.deepEqual(yield* standing({ ...card, state: "moving", boardThread: null }), ["held"]);
+    // Not in the lanes and the engine answers 404 for it: deleted. Any other answer, or an
+    // engine that is away or not asked, is unknown, never deleted and never restorable.
+    assert.deepEqual(yield* standing({}), ["deleted"]);
+    assert.deepEqual(yield* standing({}, { state: "closed" }), ["unknown"]);
+    assert.deepEqual(yield* standing({}, {}), ["unknown"]);
+    // A task that moved away is in no lane, and the engine still answers for it: held, unless
+    // it kept this thread as its conversation.
+    assert.deepEqual(yield* standing({}, { state: "moved", boardThread: null }), ["held"]);
+    assert.deepEqual(
+      yield* standing({}, { state: "moved", boardThread: { environmentId: "other", threadId } }),
+      ["held"],
+    );
+    assert.deepEqual(
+      yield* standing({}, { state: "moved", boardThread: { environmentId: here, threadId } }),
+      ["open"],
+    );
+    assert.deepEqual(yield* standing({}, "down"), ["unknown"]);
+    assert.deepEqual(yield* standing(null), ["unknown"]);
+    assert.deepEqual(
+      (yield* archivedBoardThreads(here, null)).threads.map((entry) => entry.task),
+      ["unknown"],
+    );
+    // The row carries the thread's revision, which every archive and restore raises: it is what
+    // lets a restored thread be archived anew instead of being answered by the first archive.
+    const revision = (archived: boolean) =>
+      listBoardThreadRows({ archived }).pipe(Effect.map((found) => found[0]!.revision));
+    const seen = [yield* revision(true)];
+    for (const round of [1, 2]) {
+      yield* threads.dispatch({
+        type: "thread.unarchive",
+        commandId: CommandId.make(`command:restore-board-task-${round}`),
+        threadId,
+      });
+      seen.push(yield* revision(false));
+      yield* threads.dispatch({
+        type: "thread.archive",
+        commandId: CommandId.make(`command:archive-board-task-${round}`),
+        threadId,
+      });
+      seen.push(yield* revision(true));
+    }
+    assert.isTrue(seen[0]! > 0);
+    assert.deepEqual(
+      seen,
+      seen.toSorted((a, b) => a - b),
+    );
+    assert.equal(new Set(seen).size, seen.length);
   }).pipe(Effect.provide(harness.layer));
 });
 
@@ -620,10 +771,10 @@ it.effect("an archived thread receives no message, a board task's or any other",
           "messages",
         ])
         .pipe(Effect.map((records) => [records.runs.length, records.messages.length]));
-    const marker = boardTaskThreadMarker({ board: "board-1", id: "task-9" });
+    const marker = boardTaskThreadMarker(boardTaskOf("board-1", "task-9")!);
     yield* create("archived-board", marker);
     yield* create("archived-ordinary");
-    yield* create("live-board", boardTaskThreadMarker({ board: "board-1", id: "task-10" }));
+    yield* create("live-board", boardTaskThreadMarker(boardTaskOf("board-1", "task-10")!));
     for (const name of ["archived-board", "archived-ordinary"]) {
       yield* threads.dispatch({
         type: "thread.archive",

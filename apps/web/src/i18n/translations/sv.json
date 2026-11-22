@@ -12604,5 +12604,9 @@
   "27d76249d09eb69f": "Granskningsguiden är klar",
   "faa3bb26abb39c93": "Granskningsguiden misslyckades",
   "b7df38b7d8792d78": "Öppna guiden",
-  "9e91e9a77b664e4e": "Kunde inte starta en granskningsguide"
+  "9e91e9a77b664e4e": "Kunde inte starta en granskningsguide",
+  "cdf5dd7d370e594c": "Tavluppgift: {title}",
+  "dae94973cc4ff259": "Uppgiften är avslutad. Konversationen finns i tavlans arkiv",
+  "1f8f11ca7798711e": "Öppnar uppgiften på tavlan",
+  "a65acdb87eac322b": "{count, plural, one {{count} arkiverad konversation som startats av en tavla behålls, den tas inte bort.} other {{count} arkiverade konversationer som startats av en tavla behålls, de tas inte bort.}}"
 }

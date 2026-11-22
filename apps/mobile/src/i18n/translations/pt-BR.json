@@ -5470,5 +5470,9 @@
   "ad208e3e32c85029": "Ocultar todas",
   "3328503592789bed": "Zen",
   "856812e7e1fc445e": "Chamadas de ferramentas no chat",
-  "8d545d54c0a9e950": "Oculta os comandos, edições e pesquisas que os agentes executam. \"Ocultar bem-sucedidas\" mantém as falhas. Zen mostra só as respostas finais. Aprovações, perguntas e erros sempre aparecem."
+  "8d545d54c0a9e950": "Oculta os comandos, edições e pesquisas que os agentes executam. \"Ocultar bem-sucedidas\" mantém as falhas. Zen mostra só as respostas finais. Aprovações, perguntas e erros sempre aparecem.",
+  "cdf5dd7d370e594c": "Tarefa do quadro: {title}",
+  "dae94973cc4ff259": "Tarefa encerrada. A conversa está no arquivo do quadro",
+  "afeb354df4c94446": "Abra-a no quadro pelo app web ou desktop",
+  "a65acdb87eac322b": "{count, plural, one {{count} conversa arquivada iniciada por um quadro é mantida, não excluída.} other {{count} conversas arquivadas iniciadas por um quadro são mantidas, não excluídas.}}"
 }

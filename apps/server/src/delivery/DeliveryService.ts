@@ -127,6 +127,11 @@ const decodeDeliveryRequest = Schema.decodeUnknownEffect(
   }),
 );
 
+/** The engine writes for a board task's conversation; only the server makes them. */
+const BOARD_THREAD_LINK = /^\/api\/tasks\/[\w-]+\/board-thread$/;
+const BOARD_THREAD_CLAIM = /^\/api\/orchestration\/tasks\/[\w-]+\/(claim|ack|release)$/;
+const BOARD_THREAD_WRITE = new RegExp(`${BOARD_THREAD_LINK.source}|${BOARD_THREAD_CLAIM.source}`);
+
 /** Two spellings of one folder compare equal: slashes, case on Windows, a trailing slash. */
 const normalFolder = (value: string, platform: NodeJS.Platform) => {
   const slashed = value.replaceAll("\\", "/").replace(/\/+$/, "");
@@ -162,6 +167,15 @@ export class DeliveryService extends Context.Service<
     readonly nativeBuildAct: (
       input: DeliveryActInput,
     ) => Effect.Effect<DeliveryResponse, DeliveryError>;
+    /**
+     * The server's own writes for a board task's conversation: the `boardThread` link (PUT and
+     * DELETE) and the task claim with its heartbeat. No client reaches these: `act` refuses them.
+     */
+    readonly boardThreadAct: (input: {
+      readonly method: "PUT" | "DELETE" | "POST";
+      readonly path: string;
+      readonly body: unknown;
+    }) => Effect.Effect<DeliveryResponse, DeliveryError>;
     readonly nativeIntakeAct: (
       input: DeliveryActInput,
     ) => Effect.Effect<DeliveryResponse, DeliveryError>;
@@ -218,6 +232,7 @@ export const layerTest = Layer.succeed(
     act: disabled,
     nativeBuildAct: disabled,
     nativeIntakeAct: disabled,
+    boardThreadAct: disabled,
     bindThread: disabled,
     refreshThread: disabled,
     threadState: Effect.fn("DeliveryService.threadState")(() =>
@@ -437,7 +452,7 @@ const make = Effect.fn("DeliveryService.make")(function* (
   });
   const request = Effect.fn("DeliveryService.request")(
     function* (
-      method: "GET" | "POST",
+      method: "GET" | "POST" | "PUT" | "DELETE",
       enginePath: string,
       body?: unknown,
       bounded = false,
@@ -447,7 +462,7 @@ const make = Effect.fn("DeliveryService.make")(function* (
     ) {
       if (expectedConfiguration !== undefined) yield* assertConfiguration(expectedConfiguration);
       const settings = yield* delivery;
-      if (method === "POST") invalidateDiscovery();
+      if (method !== "GET") invalidateDiscovery();
       const hostEnvironment = yield* HostProcess.Environment;
       if (!settings.enabled) {
         return yield* new DeliveryError({
@@ -555,7 +570,14 @@ const make = Effect.fn("DeliveryService.make")(function* (
       if (bounded && method === "GET" && enginePath === "/api/health") {
         return yield* readHealth(settings.engineUrl, true);
       }
-      const base = method === "GET" ? HttpClientRequest.get(url) : HttpClientRequest.post(url);
+      const base =
+        method === "GET"
+          ? HttpClientRequest.get(url)
+          : method === "PUT"
+            ? HttpClientRequest.put(url)
+            : method === "DELETE"
+              ? HttpClientRequest.delete(url)
+              : HttpClientRequest.post(url);
       const prepared =
         method === "GET" ? base : base.pipe(HttpClientRequest.bodyJsonUnsafe(body ?? {}));
       if (expectedConfiguration !== undefined) yield* assertConfiguration(expectedConfiguration);
@@ -583,6 +605,13 @@ const make = Effect.fn("DeliveryService.make")(function* (
           status: 413,
           detail: "Discovery response exceeds its size limit.",
         });
+      }
+      // The engine answers a clear with 204 and no body.
+      if (response.status === 204) {
+        return {
+          readAt: DateTime.formatIso(yield* DateTime.now),
+          body: null,
+        } satisfies DeliveryResponse;
       }
       const parsed = yield* (
         bounded
@@ -618,7 +647,7 @@ const make = Effect.fn("DeliveryService.make")(function* (
       return { readAt, body: parsed } satisfies DeliveryResponse;
     },
     (effect, method) =>
-      method === "POST" ? effect.pipe(Effect.ensuring(Effect.sync(invalidateDiscovery))) : effect,
+      method === "GET" ? effect : effect.pipe(Effect.ensuring(Effect.sync(invalidateDiscovery))),
   );
 
   /** The root of the repository a folder is in, or the folder itself when it is in none. */
@@ -1535,21 +1564,29 @@ const make = Effect.fn("DeliveryService.make")(function* (
                 "Native build receipts can only be written by the server's native coordinator.",
             }),
           )
-        : new URL(input.path, "http://delivery.invalid").pathname === "/api/delivery/requests"
-          ? preflightDeliveryRequest(input.body).pipe(
-              Effect.flatMap(({ configuration, observedHealth, dispatchDeadline }) =>
-                request(
-                  "POST",
-                  input.path,
-                  input.body,
-                  false,
-                  observedHealth,
-                  configuration,
-                  dispatchDeadline,
-                ),
-              ),
+        : BOARD_THREAD_WRITE.test(new URL(input.path, "http://delivery.invalid").pathname)
+          ? Effect.fail(
+              new DeliveryError({
+                reason: "refused",
+                detail:
+                  "A board task's conversation is claimed and linked by the server, when the engine says the task started.",
+              }),
             )
-          : request("POST", input.path, input.body),
+          : new URL(input.path, "http://delivery.invalid").pathname === "/api/delivery/requests"
+            ? preflightDeliveryRequest(input.body).pipe(
+                Effect.flatMap(({ configuration, observedHealth, dispatchDeadline }) =>
+                  request(
+                    "POST",
+                    input.path,
+                    input.body,
+                    false,
+                    observedHealth,
+                    configuration,
+                    dispatchDeadline,
+                  ),
+                ),
+              )
+            : request("POST", input.path, input.body),
     ),
     nativeBuildAct: Effect.fn("DeliveryService.nativeBuildAct")((input) =>
       /^\/api\/native-builds\/att-[A-Za-z0-9-]+\/(claim|attach|complete)$/.test(input.path)
@@ -1558,6 +1595,16 @@ const make = Effect.fn("DeliveryService.make")(function* (
             new DeliveryError({
               reason: "invalid",
               detail: "Invalid native coordinator mutation path.",
+            }),
+          ),
+    ),
+    boardThreadAct: Effect.fn("DeliveryService.boardThreadAct")((input) =>
+      (input.method === "POST" ? BOARD_THREAD_CLAIM : BOARD_THREAD_LINK).test(input.path)
+        ? request(input.method, input.path, input.body)
+        : Effect.fail(
+            new DeliveryError({
+              reason: "invalid",
+              detail: "Invalid board thread mutation path.",
             }),
           ),
     ),
