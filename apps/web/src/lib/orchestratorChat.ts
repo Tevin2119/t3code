@@ -23,6 +23,10 @@ export interface OrchestratorParticipantChoice {
   readonly modelSelection?: ModelSelection;
   /** This seat's access for the conversation, over the team's and the conversation's. */
   readonly access?: OrchestratorParticipantAccess;
+  /** The model was chosen by hand here, so a limit never swaps it without asking. */
+  readonly picked?: boolean;
+  /** What the person agreed the seat runs on while its own model is limited. */
+  readonly substitute?: ModelSelection;
 }
 
 /** A participant added for one conversation: any provider and model, in one of the team's roles. */
@@ -31,6 +35,7 @@ export interface OrchestratorExtraParticipant {
   readonly role: string;
   readonly modelSelection?: ModelSelection;
   readonly access?: OrchestratorParticipantAccess;
+  readonly substitute?: ModelSelection;
 }
 
 export type OrchestratorCritique = NonNullable<DeliveryOrchestrationConfig["critique"]>;
@@ -111,6 +116,12 @@ export function resolveOrchestratorRoster(input: {
             : null;
     return { problem, providerProblem: null };
   };
+  const dutyOf = (stages: ReadonlyArray<string>) =>
+    stages.includes("qa")
+      ? ("qa" as const)
+      : stages.includes("build")
+        ? ("build" as const)
+        : undefined;
   const teamRow = (seat: DeliveryTeam["seats"][number]) => {
     const settings = input.team?.settings.find((item) => item.seat === seat.seat);
     const choice = input.choices?.[seat.seat];
@@ -167,6 +178,9 @@ export function resolveOrchestratorRoster(input: {
       access,
       /** Set when the seat's access is its own and not the conversation's. */
       ownAccess: own,
+      picked: choice?.picked === true && choice.modelSelection !== undefined,
+      substitute: choice?.substitute,
+      duty: dutyOf(seat.stages),
       /** The seat the orchestrator itself holds. */
       orchestrator: seat.seat === ownSeat,
       extra: false,
@@ -198,6 +212,14 @@ export function resolveOrchestratorRoster(input: {
         modelSelection: extra.modelSelection ?? null,
         access: extra.access ?? input.access ?? ("read-only" as const),
         ownAccess: extra.access,
+        // An added participant's model is always a person's own choice.
+        picked: extra.modelSelection !== undefined,
+        substitute: extra.substitute,
+        duty: dutyOf(
+          (input.team?.seats ?? [])
+            .filter((seat) => seat.role === extra.role)
+            .flatMap((seat) => seat.stages),
+        ),
         orchestrator: false,
         extra: true,
         problem,
@@ -233,6 +255,9 @@ export function resolveOrchestratorRoster(input: {
                   role: row.role,
                   modelSelection: row.modelSelection,
                   ...(row.ownAccess ? { access: row.ownAccess } : {}),
+                  ...(row.picked ? { picked: true } : {}),
+                  ...(row.duty ? { duty: row.duty } : {}),
+                  ...(row.substitute ? { substitute: row.substitute } : {}),
                 },
               ]
             : [],

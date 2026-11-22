@@ -1015,6 +1015,14 @@ const TeamChatParticipation = Schema.Struct({
   sourceRunId: RunId,
   stage: Schema.Literals(["contribution", "critique"]),
   seat: TrimmedNonEmptyString,
+  /** The seat's own model, when this turn runs on a substitute because that one was limited. */
+  substituteFor: Schema.optional(
+    Schema.Struct({
+      instanceId: ProviderInstanceId,
+      model: TrimmedNonEmptyString,
+      resetAt: Schema.NullOr(IsoDateTime),
+    }),
+  ),
 });
 
 export const OrchestrationV2Subagent = Schema.Struct({

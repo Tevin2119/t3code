@@ -46,6 +46,8 @@ function valueOfLineup(
                 included: true,
                 modelSelection: joined.modelSelection,
                 ...(joined.access ? { access: joined.access } : {}),
+                ...(joined.picked ? { picked: true } : {}),
+                ...(joined.substitute ? { substitute: joined.substitute } : {}),
               }
             : { included: false },
         ];
@@ -58,6 +60,7 @@ function valueOfLineup(
         role: item.role,
         modelSelection: item.modelSelection,
         ...(item.access ? { access: item.access } : {}),
+        ...(item.substitute ? { substitute: item.substitute } : {}),
       })),
     ...(lineup.critique ? { critique: lineup.critique } : {}),
     ...(lineup.access ? { access: lineup.access } : {}),

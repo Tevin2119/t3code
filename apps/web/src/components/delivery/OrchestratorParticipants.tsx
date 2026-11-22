@@ -204,14 +204,21 @@ export function OrchestratorParticipants(props: {
               ? lead({ role: row.role, modelSelection })
               : row.extra
                 ? setExtras(
-                    extras.map((extra) =>
-                      extra.id === row.seat ? { ...extra, modelSelection } : extra,
-                    ),
+                    extras.map((extra) => {
+                      if (extra.id !== row.seat) return extra;
+                      // A new choice by hand ends whatever stood in for the old one.
+                      const { substitute: _substitute, ...kept } = extra;
+                      return { ...kept, modelSelection };
+                    }),
                   )
                 : props.onChange({
                     participantChoices: {
                       ...value.participantChoices,
-                      [row.seat]: { ...value.participantChoices?.[row.seat], modelSelection },
+                      [row.seat]: (() => {
+                        const { substitute: _substitute, ...kept } =
+                          value.participantChoices?.[row.seat] ?? {};
+                        return { ...kept, modelSelection, picked: true };
+                      })(),
                     },
                   });
           const setAccess = (access: OrchestratorParticipantAccess) =>

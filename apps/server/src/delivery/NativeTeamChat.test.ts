@@ -11,6 +11,9 @@ import {
   type OrchestrationV2TurnItem,
   type ChatAttachment,
   type OrchestrationV2ServerCommand,
+  DEFAULT_SERVER_SETTINGS,
+  ProviderDriverKind,
+  type ServerProvider,
 } from "@t3tools/contracts";
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -19,10 +22,12 @@ import {
   threadContextRecord,
   formatComposerContextReference,
 } from "@t3tools/shared/composerContextReferences";
+import type { LimitedSeatFacts } from "@t3tools/shared/limitedSeat";
 import { createModelSelection } from "@t3tools/shared/model";
 import { ServerConfig } from "../config.ts";
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import * as DeliveryService from "./DeliveryService.ts";
+import * as LimitedSeats from "./LimitedSeats.ts";
 import * as EventSink from "../orchestration-v2/EventSink.ts";
 import * as NativeTeamChat from "./NativeTeamChat.ts";
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
@@ -60,6 +65,9 @@ function setup({
   unbound = false,
   callsTeam = undefined as string | undefined,
   participantConfiguration = "research@3#abc",
+  /** What T3 knows about limits and Favorites; absent, no seat is ever treated as limited. */
+  limitFacts = undefined as (() => LimitedSeatFacts) | undefined,
+  boardOwned = false,
 } = {}) {
   const participants = [
     {
@@ -183,6 +191,8 @@ function setup({
           worktreePath: null,
           projectId: ProjectId.make("project"),
           runtimeMode: threadAccess,
+          modelSelection: createModelSelection(ProviderInstanceId.make("lead-work"), "lead-model"),
+          lineage: boardOwned ? { engineIntake: "task-1" } : {},
         },
         runs: missingRun ? [] : [run],
         messages: [message],
@@ -272,6 +282,11 @@ function setup({
       Effect.provideService(ThreadManagementService.ThreadManagementService, threads),
       Effect.provideService(ProviderAdapterRegistry.ProviderAdapterRegistryV2, adapters),
       Effect.provideService(ProviderInstanceRegistry.ProviderInstanceRegistry, instances),
+      limitFacts === undefined
+        ? (effect) => effect
+        : Effect.provideService(LimitedSeats.LimitedSeats, {
+            facts: () => Effect.sync(limitFacts),
+          }),
       Effect.provide(IdAllocator.layer),
     ),
   };
@@ -848,4 +863,230 @@ it.effect(
         expect(command.task.replaceAll("\\", "/")).toContain("C:/state/attachments/image.png");
       }
     }),
+);
+
+const LIMIT_RESET = "2026-11-22T17:00:00.000Z";
+const limitedProvider = (instanceId: string, driver: string, limited = false): ServerProvider => ({
+  instanceId: ProviderInstanceId.make(instanceId),
+  driver: ProviderDriverKind.make(driver),
+  enabled: true,
+  installed: true,
+  version: null,
+  status: "ready",
+  auth: { status: "authenticated" },
+  checkedAt: "2026-11-22T11:00:00.000Z",
+  models: [],
+  slashCommands: [],
+  skills: [],
+  ...(limited
+    ? {
+        usageLimits: {
+          checkedAt: "2026-11-22T11:00:00.000Z",
+          windows: [{ id: "primary", label: "5 hours", usedPercent: 100, resetsAt: LIMIT_RESET }],
+        } as NonNullable<ServerProvider["usageLimits"]>,
+      }
+    : {}),
+});
+
+/** The researcher's Claude is limited; Favorites are Kimi, then DeepSeek. */
+function limitedResearcher(
+  options: Omit<NonNullable<Parameters<typeof setup>[0]>, "limitFacts"> & {
+    readonly favorites?: ReadonlyArray<readonly [string, string]>;
+  } = {},
+) {
+  const limitedInstances = new Set(["claude-work"]);
+  const providers = [
+    ["claude-work", "claudeAgent"],
+    ["codex-work", "codex"],
+    ["builder-work", "codex"],
+    ["kimi-work", "kimi"],
+    ["deepseek-work", "deepseek"],
+  ] as const;
+  const { favorites, ...rest } = options;
+  const fixture = setup({
+    third: true,
+    ...rest,
+    limitFacts: () => ({
+      now: Date.parse("2026-11-22T12:00:00.000Z"),
+      projectId: ProjectId.make("project"),
+      threadLimits: [],
+      providers: providers.map(([instanceId, driver]) =>
+        limitedProvider(instanceId, driver, limitedInstances.has(instanceId)),
+      ),
+      settings: {
+        ...DEFAULT_SERVER_SETTINGS,
+        providerInstances: Object.fromEntries(
+          providers.map(([instanceId, driver]) => [
+            ProviderInstanceId.make(instanceId),
+            { driver: ProviderDriverKind.make(driver), enabled: true },
+          ]),
+        ),
+        favorites: (
+          favorites ?? [
+            ["kimi-work", "kimi-k3"],
+            ["deepseek-work", "deepseek-v4"],
+          ]
+        ).map(([provider, model]) => ({ provider: ProviderInstanceId.make(provider), model })),
+      },
+    }),
+  });
+  const seatsOn = () =>
+    Object.fromEntries(
+      [...fixture.admissions.values()].map((command) => [
+        `${command.teamChat.stage}:${command.teamChat.seat}`,
+        command.modelSelection.model,
+      ]),
+    );
+  return { ...fixture, limitedInstances, seatsOn };
+}
+
+it.effect("starts a limited seat on the first free favorite and notes why", () =>
+  Effect.gen(function* () {
+    const fixture = limitedResearcher();
+    const service = yield* fixture.service;
+    yield* service.prepareTurn({ threadId, runId });
+    // Swap automatically is the default: the lineup states no setting.
+    expect(fixture.lineup.current).not.toHaveProperty("limitedSeat");
+    expect(fixture.seatsOn()).toEqual({
+      "contribution:researcher": "kimi-k3",
+      "contribution:critic": "codex-model",
+      "contribution:builder": "builder-model",
+    });
+    const researcher = [...fixture.admissions.values()].find(
+      (command) => command.teamChat.seat === "researcher",
+    )!;
+    expect(researcher.modelSelection.instanceId).toBe("kimi-work");
+    expect(researcher.teamChat.substituteFor).toEqual({
+      instanceId: "claude-work",
+      model: "claude-model",
+      resetAt: LIMIT_RESET,
+    });
+    expect(fixture.notices).toHaveLength(1);
+    expect(fixture.notices[0]).toMatchObject({
+      status: "completed",
+      title: "researcher · substitute",
+      message: `researcher runs on kimi-k3 this turn: claude-model has reached its usage limit until ${LIMIT_RESET}.`,
+    });
+  }),
+);
+
+it.effect(
+  "swaps a seat once a turn: the critique keeps the stand-in or sits out, never a third model",
+  () =>
+    Effect.gen(function* () {
+      const fixture = limitedResearcher({ critique: "always" });
+      const service = yield* fixture.service;
+      yield* service.prepareTurn({ threadId, runId });
+      for (const task of fixture.tasks) task.status = "completed";
+      // The stand-in reaches its own limit before the critique round.
+      fixture.limitedInstances.add("kimi-work");
+      yield* service.prepareTurn({ threadId, runId });
+      expect(fixture.seatsOn()).toEqual({
+        "contribution:researcher": "kimi-k3",
+        "contribution:critic": "codex-model",
+        "contribution:builder": "builder-model",
+        "critique:critic": "codex-model",
+        "critique:builder": "builder-model",
+      });
+      expect(fixture.notices.at(-1)).toMatchObject({
+        status: "failed",
+        message: expect.stringContaining("a seat is swapped once a turn"),
+      });
+    }),
+);
+
+it.effect("keeps the same stand-in for the critique round while it stays free", () =>
+  Effect.gen(function* () {
+    const fixture = limitedResearcher({ critique: "always" });
+    const service = yield* fixture.service;
+    yield* service.prepareTurn({ threadId, runId });
+    for (const task of fixture.tasks) task.status = "completed";
+    yield* service.prepareTurn({ threadId, runId });
+    expect(fixture.seatsOn()["critique:researcher"]).toBe("kimi-k3");
+  }),
+);
+
+it.effect("leaves a limited seat waiting with a notice when no favorite is free", () =>
+  Effect.gen(function* () {
+    // The only favorites are the limited account's own model and a provider that is not there.
+    const fixture = limitedResearcher({
+      favorites: [
+        ["claude-work", "claude-other"],
+        ["lead-work", "lead-model"],
+      ],
+    });
+    const service = yield* fixture.service;
+    yield* service.prepareTurn({ threadId, runId });
+    expect(Object.keys(fixture.seatsOn())).toEqual(["contribution:critic", "contribution:builder"]);
+    expect(fixture.notices).toHaveLength(1);
+    expect(fixture.notices[0]).toMatchObject({
+      status: "failed",
+      title: "researcher · skipped",
+      message: expect.stringContaining("No favorite model is free, so researcher waits."),
+    });
+  }),
+);
+
+it.effect("does not swap a model a person chose by hand; the notice still names the free one", () =>
+  Effect.gen(function* () {
+    const fixture = limitedResearcher();
+    Object.assign(fixture.participants[0]!, { picked: true });
+    const service = yield* fixture.service;
+    yield* service.prepareTurn({ threadId, runId });
+    expect(fixture.seatsOn()).not.toHaveProperty("contribution:researcher");
+    expect(fixture.notices[0]?.type === "system_notice" && fixture.notices[0].message).toBe(
+      `researcher: claude-model has reached its usage limit until ${LIMIT_RESET}. Its model was chosen by hand, so it is not swapped without asking. kimi-k3 is free: swap to it from the notice to use it from the next message.`,
+    );
+  }),
+);
+
+it.effect("asks before a swap, and uses the model the person agreed to", () =>
+  Effect.gen(function* () {
+    const fixture = limitedResearcher();
+    fixture.lineup.current = { ...fixture.lineup.current!, limitedSeat: "ask" } as never;
+    const service = yield* fixture.service;
+    yield* service.prepareTurn({ threadId, runId });
+    expect(fixture.seatsOn()).not.toHaveProperty("contribution:researcher");
+    expect(fixture.notices[0]).toMatchObject({
+      message: expect.stringContaining("kimi-k3 is free: swap to it from the notice"),
+    });
+
+    const agreed = limitedResearcher();
+    Object.assign(agreed.participants[0]!, {
+      substitute: createModelSelection(ProviderInstanceId.make("deepseek-work"), "deepseek-v4"),
+    });
+    agreed.lineup.current = { ...agreed.lineup.current!, limitedSeat: "ask" } as never;
+    yield* (yield* agreed.service).prepareTurn({ threadId, runId });
+    expect(agreed.seatsOn()["contribution:researcher"]).toBe("deepseek-v4");
+  }),
+);
+
+it.effect(
+  "reads the setting at the start of each turn, so a change applies from the next message",
+  () =>
+    Effect.gen(function* () {
+      const fixture = limitedResearcher();
+      const service = yield* fixture.service;
+      yield* service.prepareTurn({ threadId, runId });
+      expect(fixture.seatsOn()["contribution:researcher"]).toBe("kimi-k3");
+      // The person chooses Leave it out; the next message is a new turn with nothing recorded.
+      fixture.lineup.current = { ...fixture.lineup.current!, limitedSeat: "skip" } as never;
+      fixture.tasks.length = 0;
+      fixture.notices.length = 0;
+      fixture.admissions.clear();
+      yield* service.prepareTurn({ threadId, runId });
+      expect(fixture.seatsOn()).not.toHaveProperty("contribution:researcher");
+      expect(fixture.notices[0]).toMatchObject({
+        message: `researcher: claude-model has reached its usage limit until ${LIMIT_RESET}. Left out of this message.`,
+      });
+    }),
+);
+
+it.effect("leaves a board task's conversation to its team's own setting", () =>
+  Effect.gen(function* () {
+    const fixture = limitedResearcher({ boardOwned: true });
+    yield* (yield* fixture.service).prepareTurn({ threadId, runId });
+    expect(fixture.seatsOn()["contribution:researcher"]).toBe("claude-model");
+    expect(fixture.notices).toHaveLength(0);
+  }),
 );

@@ -532,3 +532,58 @@ it("reads the team profile's default for a limited seat, and ignores a value it 
   expect(teamOf("later").whenSeatLimited).toBeNull();
   expect(teamOf(undefined).whenSeatLimited).toBeNull();
 });
+
+it("marks a model chosen by hand, a seat's duty and an agreed substitute for the limited-seat rule", () => {
+  const { entries } = setup();
+  const team = parseTeams([
+    {
+      team: "development",
+      available: true,
+      roles: [{ role: "developer" }, { role: "qa" }],
+      seats: [
+        {
+          seat: "developer",
+          title: "Developer",
+          role: "developer",
+          harness: "claude",
+          model: "a",
+          stages: ["plan", "build"],
+          available: true,
+        },
+        {
+          seat: "qa",
+          title: "QA",
+          role: "qa",
+          harness: "codex",
+          model: "b",
+          stages: ["qa"],
+          available: true,
+        },
+      ],
+    },
+  ])[0]!;
+  const chosen = createModelSelection(ProviderInstanceId.make("codex"), "c");
+  const first = resolveOrchestratorRoster({ team, choices: undefined, entries });
+  expect(first.problem).toBeNull();
+  const untouched = first.configuration;
+  expect(untouched?.participants).toEqual([
+    expect.objectContaining({ seat: "developer", duty: "build" }),
+    expect.objectContaining({ seat: "qa", duty: "qa" }),
+  ]);
+  expect(untouched?.participants[1]).not.toHaveProperty("picked");
+
+  const picked = resolveOrchestratorRoster({
+    team,
+    entries,
+    // A saved lineup round-trips every seat's model; only a hand pick carries the mark.
+    choices: {
+      developer: { included: true, modelSelection: chosen },
+      qa: { included: true, modelSelection: chosen, picked: true, substitute: chosen },
+    },
+    extras: [{ id: "custom-1", role: "qa", modelSelection: chosen }],
+  }).configuration;
+  expect(picked?.participants[0]).not.toHaveProperty("picked");
+  expect(picked?.participants[1]).toMatchObject({ picked: true, substitute: chosen });
+  // An added participant is a person's own choice, and takes the duty of its role.
+  expect(picked?.participants[2]).toMatchObject({ seat: "custom-1", picked: true, duty: "qa" });
+});

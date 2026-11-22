@@ -16,6 +16,12 @@ export const DeliveryOrchestrationConfig = Schema.Struct({
       modelSelection: ModelSelection,
       /** This participant's own access. Absent means the conversation's. */
       access: Schema.optional(Schema.Literals(["read-only", "approval-required", "full-access"])),
+      /** A person chose this seat's model by hand, so it is never swapped without asking. */
+      picked: Schema.optional(Schema.Boolean),
+      /** What the seat does in its team. A QA seat never stands in on a builder seat's model. */
+      duty: Schema.optional(Schema.Literals(["build", "qa"])),
+      /** What a person agreed the seat runs on while its own model is limited. */
+      substitute: Schema.optional(ModelSelection),
     }),
   ).check(Schema.isMinLength(2), Schema.isMaxLength(12)),
   /** When participants critique each other. Absent means the conversation's first message only. */
