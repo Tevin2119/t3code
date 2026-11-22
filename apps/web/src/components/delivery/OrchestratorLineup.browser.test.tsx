@@ -484,3 +484,43 @@ it("saves what a limited seat does from the footer, and leaves the control off a
   await expect.element(control).not.toBeInTheDocument();
   await expect.element(page.getByRole("combobox", { name: "Critique round" })).toBeInTheDocument();
 });
+
+// The model picker is 360px wide; its provider rail and border leave the team panel 315px, and a
+// classic scrollbar takes 15px more.
+it.each([315, 300])(
+  "fits the footer's three selects in a %ipx panel, with nothing cut off",
+  async (width) => {
+    testState.threadState = {
+      data: {
+        binding: RESEARCH_BINDING,
+        lineup: { ...LINEUP_OF_THREE, access: "approval-required", critique: "first" },
+        pending: null,
+      },
+    };
+    await page.viewport(1024, 768);
+    await using _screen = await render(
+      <div data-popover-panel style={{ width, overflow: "hidden" }}>
+        <OrchestratorLineup
+          environmentId={"env-a" as never}
+          threadId={"t1" as never}
+          driver={ProviderDriverKind.make("codex")}
+          entries={ENTRIES}
+          models={MODELS}
+          onLeaveToSingle={() => {}}
+        />
+      </div>,
+    );
+    const panel = document.querySelector("[data-popover-panel]")!.getBoundingClientRect();
+    for (const name of ["Critique round", "Participants' access", "When a seat is limited"]) {
+      const trigger = page.getByRole("combobox", { name });
+      await expect.element(trigger).toBeVisible();
+      const element = trigger.element();
+      const box = element.getBoundingClientRect();
+      expect(box.left, name).toBeGreaterThanOrEqual(panel.left);
+      expect(box.right, name).toBeLessThanOrEqual(panel.right);
+      // Neither the trigger nor the value inside it is cut short.
+      for (const part of [element, element.firstElementChild!])
+        expect(part.scrollWidth, name).toBeLessThanOrEqual(part.clientWidth + 1);
+    }
+  },
+);
