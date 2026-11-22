@@ -646,6 +646,69 @@ it.effect("keeps a board task's thread out of both lists, however often it is cr
   }).pipe(Effect.provide(harness.layer));
 });
 
+it.effect("an archived thread receives no message, a board task's or any other", () => {
+  const harness = makeHarness();
+  return Effect.gen(function* () {
+    const threads = yield* ThreadManagement.ThreadManagementService;
+    const create = (name: string, engineIntake?: string) =>
+      threads.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make(`command:create:${name}`),
+        threadId: ThreadId.make(`thread:${name}`),
+        projectId,
+        title: name,
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+        createdBy: "system",
+        creationSource: "server",
+        ...(engineIntake === undefined ? {} : { engineIntake }),
+      });
+    // The command the web composer sends.
+    const send = (name: string) =>
+      threads.dispatch({
+        type: "message.dispatch",
+        commandId: CommandId.make(`command:send:${name}`),
+        threadId: ThreadId.make(`thread:${name}`),
+        messageId: MessageId.make(`message:${name}`),
+        createdBy: "user",
+        creationSource: "web",
+        text: "Still there?",
+        attachments: [],
+        dispatchMode: { type: "start_immediately" },
+      });
+    const received = (name: string) =>
+      threads
+        .getProjectThreadRecords({ projectId, threadId: ThreadId.make(`thread:${name}`) }, [
+          "runs",
+          "messages",
+        ])
+        .pipe(Effect.map((records) => [records.runs.length, records.messages.length]));
+    const marker = boardTaskThreadMarker({ board: "board-1", id: "task-9" });
+    yield* create("archived-board", marker);
+    yield* create("archived-ordinary");
+    yield* create("live-board", boardTaskThreadMarker({ board: "board-1", id: "task-10" }));
+    for (const name of ["archived-board", "archived-ordinary"]) {
+      yield* threads.dispatch({
+        type: "thread.archive",
+        commandId: CommandId.make(`command:archive:${name}`),
+        threadId: ThreadId.make(`thread:${name}`),
+      });
+      const refused = yield* Effect.flip(send(name));
+      assert.equal(refused._tag, "OrchestratorThreadArchivedError");
+      assert.equal(
+        refused.message,
+        `Thread thread:${name} is archived and cannot receive messages.`,
+      );
+      assert.deepEqual(yield* received(name), [0, 0]);
+    }
+    yield* send("live-board");
+    assert.deepEqual(yield* received("live-board"), [1, 1]);
+  }).pipe(Effect.provide(harness.layer));
+});
+
 it.effect("runs a thread-bound automation on the provider the thread uses now", () => {
   const harness = makeHarness({ adapters: [adapter, claudeAdapter] });
   const layerScheduledTasks = ScheduledTasks.layer.pipe(

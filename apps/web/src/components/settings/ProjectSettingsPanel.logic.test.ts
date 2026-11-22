@@ -170,7 +170,7 @@ describe("project removal confirmation", () => {
       serverOwnedThreadCount: 3,
     });
     expect(plan.confirmationMessage).toBe(
-      'Remove project "Repo" and delete its 1 thread?\nPath: /work/repo\nEnvironment: Local\nThose threads and any archived threads are deleted from T3 Code. Provider sessions are kept.\n3 conversations started by a board or the engine are archived, not deleted.\nThis removes only the project entries, not the files on disk.\nThis action cannot be undone.',
+      'Remove project "Repo" and delete its 1 thread?\nPath: /work/repo\nEnvironment: Local\nThose threads and any archived threads are deleted from T3 Code. Provider sessions are kept.\n3 conversations started by a board or the engine are archived, not deleted. Board and engine conversations already archived are kept.\nThis removes only the project entries, not the files on disk.\nThis action cannot be undone.',
     );
     // With no listed thread the line still shows: it is the only sign these exist.
     expect(

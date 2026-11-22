@@ -723,7 +723,7 @@
   "bac5ef48aafb20b1": "Det här tar bort {count} grupperade projektposter.",
   "3e46fbf3eadf0745": "De trådarna och eventuella arkiverade trådar tas bort från T3 Code. Leverantörssessioner behålls.",
   "1a50cbc984f8fe1c": "Eventuella arkiverade trådar tas bort från T3 Code. Leverantörssessioner behålls.",
-  "cc23bb20eefeac3b": "{count, plural, one {{count} konversation som startats av en tavla eller motorn arkiveras, den tas inte bort.} other {{count} konversationer som startats av en tavla eller motorn arkiveras, de tas inte bort.}}",
+  "361080ce34c8e8ed": "{count, plural, one {{count} konversation som startats av en tavla eller motorn arkiveras, den tas inte bort.} other {{count} konversationer som startats av en tavla eller motorn arkiveras, de tas inte bort.}} Redan arkiverade konversationer från tavlor och motorn behålls.",
   "4f076ebbf1c8846e": "Det här tar bara bort projektposterna, inte filerna på disken.",
   "19b8f3ad79efb9e1": "Andra poster i det här grupperade projektet påverkas inte.",
   "2207c69b042b2e37": "Den här åtgärden kan inte ångras.",

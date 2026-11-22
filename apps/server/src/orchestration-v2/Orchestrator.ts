@@ -300,6 +300,20 @@ export class OrchestratorSubagentThreadReadOnlyError extends Schema.TaggedError<
   }
 }
 
+/** The one sentence every entry point gives for a send into an archived thread. */
+export const archivedThreadRefusal = (threadId: ThreadId) =>
+  `Thread ${threadId} is archived and cannot receive messages.`;
+
+/** An archived thread receives nothing: no client, CLI or tool send starts or steers a turn in it. */
+export class OrchestratorThreadArchivedError extends Schema.TaggedError<OrchestratorThreadArchivedError>()(
+  "OrchestratorThreadArchivedError",
+  { commandId: CommandId, threadId: ThreadId },
+) {
+  override get message(): string {
+    return archivedThreadRefusal(this.threadId);
+  }
+}
+
 export class OrchestratorThreadAboveModeLimitError extends Schema.TaggedError<OrchestratorThreadAboveModeLimitError>()(
   "OrchestratorThreadAboveModeLimitError",
   {
@@ -387,6 +401,7 @@ export const OrchestratorV2Error = Schema.Union([
   OrchestratorCommandPreviouslyRejectedError,
   OrchestratorCommandIdConflictError,
   OrchestratorSubagentThreadReadOnlyError,
+  OrchestratorThreadArchivedError,
   OrchestratorThreadAboveModeLimitError,
   OrchestratorProviderSelectionBusyError,
   OrchestratorRuntimeModeAboveCeilingError,
@@ -7112,6 +7127,30 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       });
     }
     return thread;
+  });
+
+  /**
+   * An archived thread receives nothing a person, the CLI or a tool sends. The server's own
+   * follow-ups to a run (a steer follow-up, a usage-limit or restart continuation, a notification,
+   * an idle compaction) are not refused here: each settles quietly on an archived thread below.
+   */
+  const refuseArchivedThreadMessage = Effect.fnUntraced(function* (
+    command: Extract<OrchestrationV2Command, { readonly type: "message.dispatch" }>,
+    thread: Pick<OrchestrationV2AppThread, "archivedAt">,
+  ) {
+    if (
+      thread.archivedAt !== null &&
+      command.steerFollowUpOfRunId === undefined &&
+      command.usageLimitContinuationOfRunId === undefined &&
+      command.restartContinuationOfRunId === undefined &&
+      command.notification === undefined &&
+      command.idleCompaction === undefined
+    ) {
+      return yield* new OrchestratorThreadArchivedError({
+        commandId: command.commandId,
+        threadId: command.threadId,
+      });
+    }
   });
 
   const dispatchMessage = Effect.fn("Orchestrator.dispatchMessage")(function* (
@@ -15842,6 +15881,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         break;
       case "message.dispatch": {
         const thread = yield* refuseNativeSubagentMessage(command);
+        yield* refuseArchivedThreadMessage(command, thread);
         const guestSend =
           command.guestMessageId === undefined
             ? undefined
