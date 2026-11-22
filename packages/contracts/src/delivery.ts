@@ -235,6 +235,13 @@ export const DeliveryArchivedBoardThreads = Schema.Struct({
       /** The board and the task the thread was made for. */
       board: Schema.String,
       taskId: Schema.String,
+      /**
+       * How the task stands in the engine. Only an `open` task can take the thread back, so only
+       * its thread is offered a restore: a restored thread of any other is archived again.
+       * `held` is a task another conversation holds or that moved to another machine; `unknown`
+       * is an engine that did not answer.
+       */
+      task: Schema.Literals(["open", "held", "deleted", "unknown"]),
     }),
   ),
 });

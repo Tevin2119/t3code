@@ -1,7 +1,7 @@
 import { ProjectId, ThreadId } from "@t3tools/contracts";
 import { expect, it } from "vite-plus/test";
 
-import { archivedThreadsOfBoard } from "./ArchivedBoardThreads.logic";
+import { archivedThreadsOfBoard, archivedThreadTaskNote } from "./ArchivedBoardThreads.logic";
 
 const thread = (board: string, taskId: string, archivedAt: string) => ({
   threadId: ThreadId.make(`thread-${taskId}`),
@@ -10,6 +10,7 @@ const thread = (board: string, taskId: string, archivedAt: string) => ({
   archivedAt,
   board,
   taskId,
+  task: "open" as const,
 });
 
 it("lists the open board's archived conversations, newest first, and every board's on all", () => {
@@ -25,4 +26,16 @@ it("lists the open board's archived conversations, newest first, and every board
     "a",
   ]);
   expect(archivedThreadsOfBoard(threads, "none")).toEqual([]);
+});
+
+it("offers a restore only for a task that can take the thread back, and says why not", () => {
+  const row = thread("work", "a", "2026-11-20T10:00:00.000Z");
+  // No note is the restore: the row of an open task shows Open, Restore and Delete.
+  expect(archivedThreadTaskNote(row)).toBeNull();
+  expect(archivedThreadTaskNote({ ...row, task: "deleted" })).toBe("The task was deleted.");
+  // An engine that did not answer never offers a restore and never calls the task deleted.
+  expect(archivedThreadTaskNote({ ...row, task: "unknown" })).toBe(
+    "The task could not be checked.",
+  );
+  expect(archivedThreadTaskNote({ ...row, task: "held" })).toBe("The task is held elsewhere.");
 });

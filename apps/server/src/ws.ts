@@ -267,7 +267,7 @@ import * as ThreadIssueService from "./orchestration-v2/ThreadIssueService.ts";
 import * as IssueTrackerConnections from "./issue/IssueTrackerConnections.ts";
 import * as PullRequestReviewGuideService from "./pullRequest/PullRequestReviewGuideService.ts";
 import { listLinkedPullRequestThreads } from "./pullRequest/linkedThreads.ts";
-import { listBoardThreadRows } from "./delivery/boardThreadRows.ts";
+import { archivedBoardThreads } from "./delivery/archivedBoardThreads.ts";
 import { linkedBoardTasks } from "./delivery/linkedBoardTasks.ts";
 import { pullRequestSyncKey } from "./pullRequest/pullRequestSyncKey.ts";
 import * as SqlClient from "effect/sql/SqlClient";
@@ -3718,6 +3718,7 @@ const layerForkWsRpc = (currentSession: EnvironmentAuth.AuthenticatedSession) =>
       const checkoutUpdate = yield* CheckoutUpdate.CheckoutUpdate;
       const delivery = yield* DeliveryService.DeliveryService;
       const sql = yield* SqlClient.SqlClient;
+      const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
       return ForkServerWsRpcGroup.of({
         [WS_METHODS.serverSubscribeCheckoutUpdate]: (_input) => checkoutUpdate.states,
         [WS_METHODS.serverCheckCheckoutUpdate]: (_input) =>
@@ -3735,18 +3736,11 @@ const layerForkWsRpc = (currentSession: EnvironmentAuth.AuthenticatedSession) =>
         [WS_METHODS.deliveryBindThread]: (input) => delivery.bindThread(input),
         [WS_METHODS.deliveryThreadBinding]: (input) => delivery.threadState(input.threadId),
         [WS_METHODS.deliveryArchivedBoardThreads]: () =>
-          listBoardThreadRows({ archived: true }).pipe(
+          serverEnvironment.getEnvironmentId.pipe(
+            Effect.flatMap((environmentId) =>
+              archivedBoardThreads(environmentId, (path) => delivery.read({ path })),
+            ),
             Effect.provideService(SqlClient.SqlClient, sql),
-            Effect.map((rows) => ({
-              threads: rows.map((row) => ({
-                threadId: row.threadId,
-                projectId: row.projectId,
-                title: row.title,
-                archivedAt: row.archivedAt ?? "",
-                board: row.task.board,
-                taskId: row.task.id,
-              })),
-            })),
             Effect.mapError(
               () =>
                 new DeliveryError({

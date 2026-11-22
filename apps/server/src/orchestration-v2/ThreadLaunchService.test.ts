@@ -16,11 +16,13 @@ import {
   boardTaskThreadMarker,
 } from "../delivery/boardThreadMarker.ts";
 import { listBoardThreadRows } from "../delivery/boardThreadRows.ts";
+import { archivedBoardThreads } from "../delivery/archivedBoardThreads.ts";
 import { linkedBoardTasks } from "../delivery/linkedBoardTasks.ts";
 import { listLinkedPullRequestThreads } from "../pullRequest/linkedThreads.ts";
 import { assert, it, vi } from "@effect/vitest";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import {
+  DeliveryError,
   ChatAttachmentId,
   ComposerContextId,
   type ChatAttachment,
@@ -643,6 +645,77 @@ it.effect("keeps a board task's thread out of both lists, however often it is cr
     assert.deepEqual(yield* rows(true), [{ threadId, task }]);
     // The task ended and its conversation is archived: the row stays, told as ended.
     assert.deepEqual(yield* linkedBoardTasks({ pullRequest }, null), asTask("Task 7", true));
+    // The board's archive says how the task stands, which decides whether a restore is offered.
+    const here = "environment-here";
+    const standing = (
+      card: Record<string, unknown> | null,
+      detail: "found" | "gone" | "down" = "gone",
+    ) =>
+      archivedBoardThreads(here, (path) =>
+        path.startsWith("/api/lanes")
+          ? card === null
+            ? Effect.fail(new DeliveryError({ reason: "unreachable", detail: "down" }))
+            : Effect.succeed({
+                readAt: "2026-11-22T10:00:00.000Z",
+                body: { lanes: [{ cards: "id" in card ? [card] : [] }] },
+              })
+          : detail === "found"
+            ? Effect.succeed({ readAt: "2026-11-22T10:00:00.000Z", body: {} })
+            : Effect.fail(
+                new DeliveryError({
+                  reason: detail === "gone" ? "refused" : "unreachable",
+                  detail,
+                  ...(detail === "gone" ? { status: 404 } : {}),
+                }),
+              ),
+      ).pipe(Effect.map((result) => result.threads.map((entry) => entry.task)));
+    const card = { id: "task-7", state: "running" };
+    // Its link is free, or names this thread: restoring it makes it the task's conversation.
+    assert.deepEqual(yield* standing({ ...card, boardThread: null }), ["open"]);
+    assert.deepEqual(yield* standing({ ...card, boardThread: { environmentId: here, threadId } }), [
+      "open",
+    ]);
+    // Another conversation holds the task, or it moved to another machine: no restore.
+    assert.deepEqual(
+      yield* standing({ ...card, boardThread: { environmentId: "other", threadId } }),
+      ["held"],
+    );
+    assert.deepEqual(yield* standing({ ...card, state: "moved", boardThread: null }), ["held"]);
+    // Not in the lanes and the engine answers 404 for it: deleted. Any other answer, or an
+    // engine that is away or not asked, is unknown, never deleted and never restorable.
+    assert.deepEqual(yield* standing({}), ["deleted"]);
+    assert.deepEqual(yield* standing({}, "found"), ["unknown"]);
+    assert.deepEqual(yield* standing({}, "down"), ["unknown"]);
+    assert.deepEqual(yield* standing(null), ["unknown"]);
+    assert.deepEqual(
+      (yield* archivedBoardThreads(here, null)).threads.map((entry) => entry.task),
+      ["unknown"],
+    );
+    // The row carries the thread's revision, which every archive and restore raises: it is what
+    // lets a restored thread be archived anew instead of being answered by the first archive.
+    const revision = (archived: boolean) =>
+      listBoardThreadRows({ archived }).pipe(Effect.map((found) => found[0]!.revision));
+    const seen = [yield* revision(true)];
+    for (const round of [1, 2]) {
+      yield* threads.dispatch({
+        type: "thread.unarchive",
+        commandId: CommandId.make(`command:restore-board-task-${round}`),
+        threadId,
+      });
+      seen.push(yield* revision(false));
+      yield* threads.dispatch({
+        type: "thread.archive",
+        commandId: CommandId.make(`command:archive-board-task-${round}`),
+        threadId,
+      });
+      seen.push(yield* revision(true));
+    }
+    assert.isTrue(seen[0]! > 0);
+    assert.deepEqual(
+      seen,
+      seen.toSorted((a, b) => a - b),
+    );
+    assert.equal(new Set(seen).size, seen.length);
   }).pipe(Effect.provide(harness.layer));
 });
 
