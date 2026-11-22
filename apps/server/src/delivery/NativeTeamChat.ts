@@ -13,8 +13,9 @@ import {
 import { projectComposerContextForProvider } from "@t3tools/shared/composerContextReferences";
 import {
   firstFreeFavorite,
+  isFreeCandidate,
   type LimitedSeatFacts,
-  limitedSeatCandidates,
+  limitedSeatPool,
   seatLimit,
   seatModelOf,
 } from "@t3tools/shared/limitedSeat";
@@ -317,38 +318,18 @@ export const make = Effect.gen(function* () {
           yield* recordSkip(seat.seat, `${limited} Left out of this message.`);
           return undefined;
         }
-        const pool = limitedSeatCandidates({
+        const pool = limitedSeatPool({
           facts,
-          limited: own,
-          inUse: [
-            seatModelOf(parent.thread.modelSelection),
-            ...roster
-              .filter((other) => other.seat !== seat.seat)
-              .map(runsOn)
-              .map(seatModelOf),
-          ],
-          builderModels:
-            seat.duty === "qa"
-              ? roster
-                  .flatMap((other) =>
-                    other.duty === "build" ? [other.modelSelection, runsOn(other)] : [],
-                  )
-                  .map(seatModelOf)
-              : undefined,
+          roster,
+          lead: parent.thread.modelSelection,
+          seat,
+          runsOn,
         });
         const free = firstFreeFavorite(pool);
         const none = `${limited} No favorite model is free, so ${seat.seat} waits.`;
         if (policy === "ask" || seat.picked === true) {
           const agreed = seat.substitute;
-          if (
-            agreed !== undefined &&
-            pool.some(
-              (candidate) =>
-                candidate.skip === null &&
-                candidate.instanceId === agreed.instanceId &&
-                candidate.model === agreed.model,
-            )
-          )
+          if (agreed !== undefined && isFreeCandidate(pool, seatModelOf(agreed)))
             return { selection: agreed, substituteFor } satisfies StandIn;
           yield* recordSkip(
             seat.seat,

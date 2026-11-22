@@ -882,8 +882,16 @@ const limitedProvider = (instanceId: string, driver: string, limited = false): S
     ? {
         usageLimits: {
           checkedAt: "2026-11-22T11:00:00.000Z",
-          windows: [{ id: "primary", label: "5 hours", usedPercent: 100, resetsAt: LIMIT_RESET }],
-        } as NonNullable<ServerProvider["usageLimits"]>,
+          windows: [
+            {
+              id: "primary",
+              kind: "session",
+              label: "5 hours",
+              usedPercent: 100,
+              resetsAt: LIMIT_RESET,
+            },
+          ],
+        },
       }
     : {}),
 });

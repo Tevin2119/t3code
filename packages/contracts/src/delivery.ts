@@ -1,7 +1,8 @@
 // Relay engine-owned payloads as JSON; type only the state T3 stores or acts on.
 import * as Schema from "effect/Schema";
 
-import { ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import { IsoDateTime, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import { ProviderInstanceId } from "./providerInstance.ts";
 import { ModelSelection } from "./modelSelection.ts";
 
 /** What a conversation does when a seat's model has reached its usage limit. */
@@ -249,6 +250,48 @@ export const DeliverySetThreadLineupInput = Schema.Struct({
 export type DeliverySetThreadLineupInput = typeof DeliverySetThreadLineupInput.Type;
 
 export const DeliveryThreadBindingInput = Schema.Struct({ threadId: ThreadId });
+
+/** A seat, or the lead, whose model has reached its usage limit, and what could stand in. */
+export const DeliveryLimitedSeatNotice = Schema.Struct({
+  /** The seat's name; null for the conversation's lead. */
+  seat: Schema.NullOr(TrimmedNonEmptyString),
+  limited: Schema.Struct({
+    instanceId: ProviderInstanceId,
+    model: TrimmedNonEmptyString,
+    resetAt: Schema.NullOr(IsoDateTime),
+  }),
+  /**
+   * `offered`: one click swaps to `substitute`. `none-free`: no favorite is free, so the seat
+   * waits. `swapped`: `substitute` stands in, for a lead in the thread `continuedIn`.
+   */
+  state: Schema.Literals(["offered", "none-free", "swapped"]),
+  /** The first free favorite, or the model that stands in. Null when none is free. */
+  substitute: Schema.NullOr(ModelSelection),
+  /** The thread a limited lead was handed on to. */
+  continuedIn: Schema.optional(ThreadId),
+});
+export type DeliveryLimitedSeatNotice = typeof DeliveryLimitedSeatNotice.Type;
+
+export const DeliveryLimitedSeatStatus = Schema.Struct({
+  /** Null where this setting does not govern: an ordinary chat, or a board task's conversation. */
+  policy: Schema.NullOr(DeliveryLimitedSeatPolicy),
+  notices: Schema.Array(DeliveryLimitedSeatNotice),
+});
+export type DeliveryLimitedSeatStatus = typeof DeliveryLimitedSeatStatus.Type;
+
+/** Swaps a limited seat, or the lead when `seat` is null, to a favorite the status offered. */
+export const DeliveryLimitedSeatSwapInput = Schema.Struct({
+  threadId: ThreadId,
+  seat: Schema.NullOr(TrimmedNonEmptyString),
+  modelSelection: ModelSelection,
+});
+export type DeliveryLimitedSeatSwapInput = typeof DeliveryLimitedSeatSwapInput.Type;
+
+export const DeliveryLimitedSeatSwapResult = Schema.Struct({
+  /** The thread the conversation continues in, when its lead was handed on. */
+  continuedIn: Schema.NullOr(ThreadId),
+});
+export type DeliveryLimitedSeatSwapResult = typeof DeliveryLimitedSeatSwapResult.Type;
 export type DeliveryThreadBindingInput = typeof DeliveryThreadBindingInput.Type;
 
 export class DeliveryError extends Schema.TaggedError<DeliveryError>()("DeliveryError", {

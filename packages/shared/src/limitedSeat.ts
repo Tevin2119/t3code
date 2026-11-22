@@ -153,3 +153,64 @@ export const seatModelOf = (selection: ModelSelection): SeatModel => ({
   instanceId: selection.instanceId,
   model: selection.model,
 });
+
+/** A seat of a conversation, as the limited-seat rule reads it. */
+export interface LimitedSeatRosterSeat {
+  readonly seat: string;
+  readonly modelSelection: ModelSelection;
+  readonly duty?: "build" | "qa" | undefined;
+}
+
+/** The pool for one seat of a conversation: every other seat's model and the lead's are in use. */
+export function limitedSeatPool<Seat extends LimitedSeatRosterSeat>(input: {
+  readonly facts: LimitedSeatFacts;
+  readonly roster: ReadonlyArray<Seat>;
+  readonly lead: ModelSelection;
+  readonly seat: Seat;
+  /** What a seat runs on this turn, when a substitute already stands in for it. */
+  readonly runsOn?: (seat: Seat) => ModelSelection;
+}): ReadonlyArray<LimitedSeatCandidate> {
+  const runsOn = input.runsOn ?? ((seat: Seat) => seat.modelSelection);
+  return limitedSeatCandidates({
+    facts: input.facts,
+    limited: seatModelOf(input.seat.modelSelection),
+    inUse: [
+      seatModelOf(input.lead),
+      ...input.roster
+        .filter((other) => other.seat !== input.seat.seat)
+        .map((other) => seatModelOf(runsOn(other))),
+    ],
+    builderModels:
+      input.seat.duty === "qa"
+        ? input.roster
+            .flatMap((other) =>
+              other.duty === "build" ? [other.modelSelection, runsOn(other)] : [],
+            )
+            .map(seatModelOf)
+        : undefined,
+  });
+}
+
+/** The pool for the lead of a conversation: every seat's model is in use. */
+export const limitedLeadPool = (input: {
+  readonly facts: LimitedSeatFacts;
+  readonly roster: ReadonlyArray<LimitedSeatRosterSeat>;
+  readonly lead: ModelSelection;
+}): ReadonlyArray<LimitedSeatCandidate> =>
+  limitedSeatCandidates({
+    facts: input.facts,
+    limited: seatModelOf(input.lead),
+    inUse: input.roster.map((seat) => seatModelOf(seat.modelSelection)),
+  });
+
+/** Whether a model is among the free candidates of a pool. */
+export const isFreeCandidate = (
+  pool: ReadonlyArray<LimitedSeatCandidate>,
+  model: SeatModel,
+): boolean =>
+  pool.some(
+    (candidate) =>
+      candidate.skip === null &&
+      candidate.instanceId === model.instanceId &&
+      candidate.model === model.model,
+  );

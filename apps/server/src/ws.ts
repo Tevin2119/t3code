@@ -27,6 +27,7 @@ import * as Stream from "effect/Stream";
 import { rpcInitialItems } from "./rpcInitialItems.ts";
 import { subscribeChatGptHandoff } from "./provider/CodexChatGptHandoff.ts";
 import {
+  DeliveryError,
   AcpRegistryOperationError,
   CommandId,
   authScopeResponse,
@@ -258,6 +259,7 @@ import { commandFeatureUsage, featureUsage } from "./telemetry/FeatureUsage.ts";
 import type { TelemetryOwner } from "./telemetry/Identify.ts";
 import * as UsageService from "./usage/UsageService.ts";
 import * as DeliveryService from "./delivery/DeliveryService.ts";
+import * as LimitedSeatSwap from "./delivery/LimitedSeatSwap.ts";
 import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
 import * as TriageService from "./triage/TriageService.ts";
 import * as PullRequestService from "./pullRequest/PullRequestService.ts";
@@ -3692,6 +3694,7 @@ const layerForkWsRpc = (currentSession: EnvironmentAuth.AuthenticatedSession) =>
     Effect.gen(function* () {
       const checkoutUpdate = yield* CheckoutUpdate.CheckoutUpdate;
       const delivery = yield* DeliveryService.DeliveryService;
+      const limitedSeatSwap = yield* Effect.serviceOption(LimitedSeatSwap.LimitedSeatSwap);
       return ForkServerWsRpcGroup.of({
         [WS_METHODS.serverSubscribeCheckoutUpdate]: (_input) => checkoutUpdate.states,
         [WS_METHODS.serverCheckCheckoutUpdate]: (_input) =>
@@ -3710,6 +3713,19 @@ const layerForkWsRpc = (currentSession: EnvironmentAuth.AuthenticatedSession) =>
         [WS_METHODS.deliveryThreadBinding]: (input) => delivery.threadState(input.threadId),
         [WS_METHODS.deliveryReleaseThread]: (input) => delivery.releaseThread(input.threadId),
         [WS_METHODS.deliverySetThreadLineup]: (input) => delivery.setThreadLineup(input),
+        [WS_METHODS.deliveryLimitedSeats]: (input) =>
+          Option.match(limitedSeatSwap, {
+            onNone: () => Effect.succeed({ policy: null, notices: [] }),
+            onSome: (swaps) => swaps.status(input.threadId),
+          }),
+        [WS_METHODS.deliverySwapLimitedSeat]: (input) =>
+          Option.match(limitedSeatSwap, {
+            onNone: () =>
+              Effect.fail(
+                new DeliveryError({ reason: "disabled", detail: "Delivery is turned off." }),
+              ),
+            onSome: (swaps) => swaps.swap(input),
+          }),
       });
     }),
   );

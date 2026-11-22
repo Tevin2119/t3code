@@ -2,6 +2,7 @@ import * as SendFailureNotice from "./SendFailureNotice.ts";
 import * as WorktreeBranchSync from "./WorktreeBranchSync.ts";
 import * as GuestShareService from "../guest/GuestShareService.ts";
 import * as LimitedSeats from "../delivery/LimitedSeats.ts";
+import * as LimitedSeatSwap from "../delivery/LimitedSeatSwap.ts";
 import * as NativeTeamChat from "../delivery/NativeTeamChat.ts";
 import * as UsageLimitRecoveryWorker from "./UsageLimitRecoveryWorker.ts";
 import * as Scheduler from "../scheduling/Scheduler.ts";
@@ -278,6 +279,16 @@ const layerThreadManagementProvided = ThreadManagementService.layerWithLegacyImp
   ),
 );
 const layerLimitedSeatsProvided = LimitedSeats.layer.pipe(Layer.provide(ProjectionStore.layer));
+const layerLimitedSeatSwapProvided = LimitedSeatSwap.layer.pipe(
+  Layer.provide(
+    Layer.mergeAll(
+      layerLimitedSeatsProvided,
+      layerThreadManagementProvided,
+      ProjectionStore.layer,
+      ProviderAdapterRegistry.layerFromProviderInstanceRegistry,
+    ),
+  ),
+);
 const layerNativeTeamChatProvided = NativeTeamChat.layer.pipe(
   Layer.provide(
     Layer.mergeAll(
@@ -450,6 +461,10 @@ export const layerProduction = Layer.mergeAll(
         layerOrchestratorProvided,
       ),
     ),
+  ),
+  layerLimitedSeatSwapProvided,
+  LimitedSeatSwap.layerWorker.pipe(
+    Layer.provide(Layer.merge(layerLimitedSeatSwapProvided, layerOrchestratorProvided)),
   ),
   layerProviderContinuationWorkerProvided,
   layerAgentSessionScannerProvided,

@@ -41,10 +41,12 @@ function provider(
   };
 }
 
-const exhausted = {
+const exhausted: NonNullable<ServerProvider["usageLimits"]> = {
   checkedAt: "2026-11-22T11:00:00.000Z",
-  windows: [{ id: "primary", label: "5 hours", usedPercent: 100, resetsAt: later }],
-} as NonNullable<ServerProvider["usageLimits"]>;
+  windows: [
+    { id: "primary", kind: "session", label: "5 hours", usedPercent: 100, resetsAt: later },
+  ],
+};
 
 const favorite = (instanceId: string, model: string) => ({ provider: id(instanceId), model });
 const seat = (instanceId: string, model: string) => ({ instanceId: id(instanceId), model });
