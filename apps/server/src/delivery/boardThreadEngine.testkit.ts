@@ -1,6 +1,6 @@
 // A scratch engine serving the frozen task-to-thread contract (BOARD-REVAMP-UI-SPEC.md 6a), with
-// the shapes of the unmerged engine half (Operation-PaperClip pull request 167, at 1d8fc1db) and
-// the task claim of slice 1. A model, not the engine: what passes here must still pass there.
+// the shapes of the merged engine half (Operation-PaperClip main at a658892b) and the task claim
+// of slice 1. A model, not the engine: BoardTaskThreads.engine.test.ts runs against the real one.
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -72,6 +72,8 @@ export function scratchEngine(
   let clock = Date.parse("2026-11-22T10:00:00.000Z");
   let holderSeq = 0;
   let down = false;
+  /** Link writes the engine is answering now, and the most it ever answered at once. */
+  const linkWrites = { inFlight: 0, most: 0 };
   /** Runs once, just before the next link write is admitted: another writer getting in first. */
   let beforeNextPut: (() => void) | null = null;
 
@@ -318,6 +320,7 @@ export function scratchEngine(
       down = value;
     },
     isDown: () => down,
+    linkWrites,
   };
 }
 
@@ -335,13 +338,25 @@ export const scratchEngineHttp = (engine: ScratchEngine) =>
           request.body._tag === "Uint8Array"
             ? decodeJson(new TextDecoder().decode(request.body.body))
             : undefined;
-        const answer = engine.handle(request.method, url.pathname, body);
-        return Effect.succeed(
-          HttpClientResponse.fromWeb(
+        const answer = () => {
+          const { status, body: answered } = engine.handle(request.method, url.pathname, body);
+          return HttpClientResponse.fromWeb(
             request,
-            answer.status === 204
+            status === 204
               ? new Response(null, { status: 204 })
-              : Response.json(answer.body, { status: answer.status }),
+              : Response.json(answered, { status }),
+          );
+        };
+        if (request.method !== "PUT") return Effect.sync(answer);
+        // A link write takes a turn of the scheduler, so two sent at once would be seen together.
+        engine.linkWrites.inFlight += 1;
+        engine.linkWrites.most = Math.max(engine.linkWrites.most, engine.linkWrites.inFlight);
+        return Effect.yieldNow.pipe(
+          Effect.map(answer),
+          Effect.ensuring(
+            Effect.sync(() => {
+              engine.linkWrites.inFlight -= 1;
+            }),
           ),
         );
       }),

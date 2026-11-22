@@ -10,7 +10,11 @@ import * as Path from "effect/Path";
 import * as ServerConfig from "../config.ts";
 import { createPendingAttachmentId, resolveAttachmentPath } from "../attachmentStore.ts";
 import * as ThreadMessageIntake from "./ThreadMessageIntake.ts";
-import { boardTaskThreadCommandId, boardTaskThreadMarker } from "../delivery/boardThreadMarker.ts";
+import {
+  boardTaskOf,
+  boardTaskThreadCommandId,
+  boardTaskThreadMarker,
+} from "../delivery/boardThreadMarker.ts";
 import { listBoardThreadRows } from "../delivery/boardThreadRows.ts";
 import { assert, it, vi } from "@effect/vitest";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
@@ -545,7 +549,7 @@ it.effect("keeps a board task's thread out of both lists, however often it is cr
     yield* launches.launch(
       launchInput({ command: "command:top-level", thread: "thread:top-level" }),
     );
-    const task = { board: "board-1", id: "task-7" };
+    const task = boardTaskOf("board-1", "task-7")!;
     const threadId = ThreadId.make("thread:board-task");
     const create = threads.dispatch({
       type: "thread.create",

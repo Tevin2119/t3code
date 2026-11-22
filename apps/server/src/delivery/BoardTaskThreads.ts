@@ -28,6 +28,7 @@ import * as ServerSettings from "../serverSettings.ts";
 import { forkParked } from "../serverActivation.ts";
 import * as BoardThreadRows from "./boardThreadRows.ts";
 import {
+  boardTaskOf,
   boardTaskOfMarker,
   boardTaskThreadCommandId,
   boardTaskThreadId,
@@ -87,12 +88,14 @@ const Refusal = Schema.Struct({
   current: Schema.optional(Schema.NullOr(BoardThread)),
 });
 const Linked = Schema.Struct({ boardThread: BoardThread });
+const Detail = Schema.Struct({ boardThread: Schema.NullOr(BoardThread) });
 const Claimed = Schema.Struct({ holder: Schema.String });
 
 const decodeLanes = Schema.decodeUnknownEffect(Lanes);
 const decodeTeams = Schema.decodeUnknownEffect(Teams);
 const decodeRefusal = Schema.decodeUnknownOption(Refusal);
 const decodeLinked = Schema.decodeUnknownEffect(Linked);
+const decodeDetail = Schema.decodeUnknownOption(Detail);
 const decodeClaimed = Schema.decodeUnknownOption(Claimed);
 const decodeSelection = Schema.decodeUnknownEffect(ModelSelection);
 
@@ -116,12 +119,14 @@ export const BOARD_THREAD_KEY_VARIABLE = "T3_DELIVERY_BOARD_THREAD_KEY";
 /** Why a started task has no conversation of its own yet. Told in the log, never guessed around. */
 export type BoardThreadHold =
   | "no-board"
+  | "unmarkable-id"
   | "no-project"
   | "no-lead"
   | "no-lead-model"
   | "no-provider"
   | "ambiguous-provider"
   | "foreign-thread"
+  | "archived-thread"
   | "no-key"
   | "refused"
   | "moved";
@@ -166,6 +171,9 @@ export const make = Effect.gen(function* () {
   const rows = yield* BoardThreadRows.BoardThreadRows;
   const hostEnvironment = yield* HostProcess.Environment;
   const lock = yield* Semaphore.make(1);
+  // The one queue every `boardThread` write of this server waits in: the engine is sent one link
+  // write at a time, which also bounds the first run, when every open task shows no link.
+  const linkWrites = yield* Semaphore.make(1);
   // The token of each claim this server holds. It is kept in memory only: after a restart the
   // old lease lapses within its window and the task is claimed again, still by the same thread.
   const holders = new Map<string, string>();
@@ -254,6 +262,13 @@ export const make = Effect.gen(function* () {
       .pipe(Effect.ignore);
   });
 
+  const writeLink = (taskId: string, body: unknown) =>
+    linkWrites.withPermits(1)(
+      delivery
+        .boardThreadAct({ method: "PUT", path: `/api/tasks/${taskId}/board-thread`, body })
+        .pipe(Effect.result),
+    );
+
   /** A started task with no conversation: make its thread once, and tell the engine. */
   const bind = Effect.fn("BoardTaskThreads.bind")(function* (
     card: Card,
@@ -265,7 +280,8 @@ export const make = Effect.gen(function* () {
     },
   ) {
     if (!card.set) return "no-board" as const;
-    const task = { board: card.set, id: card.id };
+    const task = boardTaskOf(card.set, card.id);
+    if (task === null) return "unmarkable-id" as const;
     const threadId = boardTaskThreadId(task);
     const folder = context.folders.get(card.set);
     const project =
@@ -300,31 +316,32 @@ export const make = Effect.gen(function* () {
     const created = yield* local(projections.getThreadRecords(threadId, []));
     const stamped = boardTaskOfMarker(created.thread.lineage.engineIntake);
     if (stamped?.board !== task.board || stamped.id !== task.id) return "foreign-thread" as const;
+    // An archived thread is never linked: it was displaced, its task was refused for good, or a
+    // person archived it. Restoring it from the board's archive is what lets it be linked.
+    if (created.thread.archivedAt !== null) return "archived-thread" as const;
     if (context.key === undefined) return "no-key" as const;
-    const put = yield* delivery
-      .boardThreadAct({
-        method: "PUT",
-        path: `/api/tasks/${card.id}/board-thread`,
-        body: {
-          environmentId: context.environmentId,
-          threadId,
-          setBy: context.environmentId,
-          // No link was set when the lanes were read. A writer in between is answered 409.
-          expect: null,
-          key: context.key,
-        },
-      })
-      .pipe(Effect.result);
+    const put = yield* writeLink(card.id, {
+      environmentId: context.environmentId,
+      threadId,
+      setBy: context.environmentId,
+      // No link was set when the lanes were read. A writer in between is answered 409.
+      expect: null,
+      key: context.key,
+    });
     if (put._tag === "Success") {
       yield* engine(decodeLinked(put.success.body));
       yield* holdClaim(card, context.environmentId, threadId);
       return null;
     }
+    // The refusal's `code` decides, never its words.
     const refusal = refusalOf(put.failure);
     if (refusal.code === "conflict") {
-      // Another writer set the link first. Its value stands and is never overwritten; the thread
-      // made here holds no task, so it is archived, where the board still reaches it.
-      const held = refusal.current;
+      // Another writer set the link first. The engine's value is read and stands, never
+      // overwritten; a thread made here that it does not name holds no task and is archived,
+      // where the board still reaches it.
+      const read = yield* delivery.read({ path: `/api/tasks/${card.id}` }).pipe(Effect.result);
+      const detail = read._tag === "Success" ? decodeDetail(read.success.body) : Option.none();
+      const held = Option.isSome(detail) ? detail.value.boardThread : refusal.current;
       if (held?.environmentId === context.environmentId && held.threadId === threadId) {
         yield* holdClaim(card, context.environmentId, threadId);
         return null;
@@ -332,13 +349,11 @@ export const make = Effect.gen(function* () {
       yield* archive(task, threadId, "displaced");
       return null;
     }
-    if (refusal.code === "moved") {
-      yield* archive(task, threadId, "moved");
-      return "moved" as const;
-    }
-    if (refusal.code === "not-found") {
-      yield* archive(task, threadId, "deleted");
-      return null;
+    if (refusal.code === "moved" || refusal.code === "not-found") {
+      // The task is worked on another machine, or is gone: it is finished for this server. The
+      // archive is what keeps it so, on every later pass and after a restart.
+      yield* archive(task, threadId, refusal.code === "moved" ? "moved" : "deleted");
+      return refusal.code === "moved" ? ("moved" as const) : null;
     }
     if (refusal.code === "refused") return "refused" as const;
     return yield* new BoardTaskThreadsError({ reason: "engine", cause: put.failure });

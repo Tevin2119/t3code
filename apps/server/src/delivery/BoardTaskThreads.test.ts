@@ -27,6 +27,7 @@ import {
 } from "./boardThreadEngine.testkit.ts";
 import * as BoardThreadRows from "./boardThreadRows.ts";
 import {
+  boardTaskOf,
   boardTaskOfMarker,
   boardTaskThreadCommandId,
   boardTaskThreadId,
@@ -34,7 +35,7 @@ import {
 import * as DeliveryService from "./DeliveryService.ts";
 
 // Every case here runs against the scratch engine of boardThreadEngine.testkit.ts, through the
-// delivery service's real request path. None of it has run against the merged engine half.
+// delivery service's real request path. BoardTaskThreads.engine.test.ts runs the real engine.
 
 const ENVIRONMENT = EnvironmentId.make("471fea73-5365-4bbb-96eb-8e35be50eaec");
 const OTHER = "0d9b2f0e-other-environment";
@@ -132,7 +133,10 @@ function service(
     Effect.provideService(ProjectionStore.ProjectionStoreV2, {
       getThreadRecords: (threadId: string) =>
         Effect.succeed({
-          thread: { lineage: { engineIntake: store.threads.get(threadId)?.marker } },
+          thread: {
+            lineage: { engineIntake: store.threads.get(threadId)?.marker },
+            archivedAt: store.threads.get(threadId)?.archivedAt ?? null,
+          },
         }),
     } as unknown as ProjectionStore.ProjectionStoreV2["Service"]),
     Effect.provideService(ProjectStore.ProjectStoreV2, {
@@ -189,10 +193,13 @@ function board(options: Parameters<typeof scratchEngine>[0] = {}) {
   return engine;
 }
 
-const TASK = { board: "work", id: "task-7" };
+const TASK = boardTaskOf("work", "task-7")!;
 const THREAD = boardTaskThreadId(TASK);
+const THEIRS = "thread:their/board-task:a:b%3Ac";
 const creates = (store: ThreadStore) =>
   store.commands.filter((command) => command.type === "thread.create");
+const puts = (engine: ScratchEngine) =>
+  engine.requests.filter((request) => request.method === "PUT");
 const linkWrites = (engine: ScratchEngine) =>
   engine.events.filter((event) => event.kind === "task.board-thread-set");
 
@@ -287,17 +294,23 @@ it.effect("adopts the link another writer set first and never overwrites it", ()
   const store = threadStore();
   return Effect.gen(function* () {
     engine.beforeNextPut(() => {
-      engine.writeLink("task-7", { environmentId: OTHER, threadId: "their-thread", setBy: OTHER });
+      engine.writeLink("task-7", { environmentId: OTHER, threadId: THEIRS, setBy: OTHER });
     });
     const threads = yield* service(store);
     yield* threads.reconcile();
-    assert.equal(engine.linkOf("task-7")?.threadId, "their-thread");
+    // The engine's value is read back after the refusal and stands as it was written: a thread id
+    // of another environment keeps its colons, slash and percent sign.
+    assert.deepEqual(
+      engine.requests.slice(-2).map((request) => `${request.method} ${request.path}`),
+      ["PUT /api/tasks/task-7/board-thread", "GET /api/tasks/task-7"],
+    );
+    assert.equal(engine.linkOf("task-7")?.threadId, THEIRS);
     assert.equal(engine.linkOf("task-7")?.setBy, OTHER);
     // The thread made here holds no task: it is archived, not deleted, and claims nothing.
     assert.isNotNull(store.threads.get(THREAD)!.archivedAt);
     assert.isNull(engine.leaseOf("task-7"));
     yield* threads.reconcile();
-    assert.equal(engine.linkOf("task-7")?.threadId, "their-thread");
+    assert.equal(engine.linkOf("task-7")?.threadId, THEIRS);
     assert.equal(linkWrites(engine).length, 1);
     assert.equal(engine.requests.filter((request) => request.method === "PUT").length, 1);
   }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-conflict-")));
@@ -322,30 +335,75 @@ it.effect("makes no thread for a moved task, and archives one the engine refuses
     assert.isNull(engine.leaseOf("task-7"));
     // The task that had already moved was never given a thread or a write.
     assert.isFalse(engine.requests.some((request) => request.path.includes("moved-1")));
+    // The refusal is final: a later pass that sees the task in work, on this server or on a new
+    // one after a restart, writes nothing while the thread stays archived.
+    engine.task("task-7").state = "running";
+    assert.deepEqual([...(yield* threads.reconcile())], [["task-7", "archived-thread"]]);
+    assert.deepEqual(
+      [...(yield* (yield* service(store)).reconcile())],
+      [["task-7", "archived-thread"]],
+    );
+    assert.equal(puts(engine).length, 1);
+    assert.isNull(engine.linkOf("task-7"));
   }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-moved-")));
 });
 
-it.effect("keeps two tasks apart when a board id carries the separator", () => {
+it.effect("archives the thread of a task the engine no longer has, and never asks again", () => {
   const engine = board();
-  engine.setBoard("team:alpha", REPO);
-  engine.setBoard("team", REPO);
-  engine.addTask({ id: "t1", set: "team:alpha" });
-  engine.addTask({ id: "alpha-t1", set: "team" });
+  engine.addTask({ id: "task-7" });
+  const store = threadStore();
+  return Effect.gen(function* () {
+    // The task is deleted after the lanes were read and before the link is written.
+    store.hooks.afterCreate = () => engine.removeTask("task-7");
+    const threads = yield* service(store);
+    assert.deepEqual([...(yield* threads.reconcile())], []);
+    assert.isNotNull(store.threads.get(THREAD)!.archivedAt);
+    assert.equal(puts(engine).length, 1);
+    engine.addTask({ id: "task-7" });
+    assert.deepEqual(
+      [...(yield* (yield* service(store)).reconcile())],
+      [["task-7", "archived-thread"]],
+    );
+    assert.equal(puts(engine).length, 1);
+    assert.isNull(engine.linkOf("task-7"));
+    assert.equal(store.threads.size, 1);
+  }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-not-found-")));
+});
+
+it.effect("sends the engine one link write at a time, however many tasks have no link", () => {
+  const engine = board();
+  const ids = Array.from({ length: 12 }, (_, index) => `task-${index}`);
+  for (const id of ids) engine.addTask({ id });
   const store = threadStore();
   return Effect.gen(function* () {
     const threads = yield* service(store);
-    assert.deepEqual([...(yield* threads.reconcile())], []);
-    const first = boardTaskThreadId({ board: "team:alpha", id: "t1" });
-    const second = boardTaskThreadId({ board: "team", id: "alpha-t1" });
-    assert.notEqual(first, second);
-    assert.deepEqual([...store.threads.keys()].toSorted(), [first, second].toSorted());
-    // The engine takes a thread id with a colon and a percent sign as it is.
-    assert.equal(engine.linkOf("t1")?.threadId, first);
-    assert.equal(engine.linkOf("alpha-t1")?.threadId, second);
-    assert.deepEqual(boardTaskOfMarker(store.threads.get(first)!.marker), {
-      board: "team:alpha",
-      id: "t1",
+    yield* Effect.all([threads.reconcile(), threads.reconcile(), threads.reconcile()], {
+      concurrency: "unbounded",
     });
+    assert.equal(engine.linkWrites.most, 1);
+    assert.equal(puts(engine).length, ids.length);
+    assert.deepEqual(
+      ids.map((id) => engine.linkOf(id)?.threadId),
+      ids.map((id) => boardTaskThreadId(boardTaskOf("work", id)!)),
+    );
+  }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-queue-")));
+});
+
+it.effect("refuses a board id with a colon at write, and links a thread id that has them", () => {
+  const engine = board();
+  engine.setBoard("team:alpha", REPO);
+  engine.addTask({ id: "t1", set: "team:alpha" });
+  engine.addTask({ id: "task-7" });
+  const store = threadStore();
+  return Effect.gen(function* () {
+    const threads = yield* service(store);
+    // No thread, no command and no write for the id the marker cannot carry.
+    assert.deepEqual([...(yield* threads.reconcile())], [["t1", "unmarkable-id"]]);
+    assert.deepEqual([...store.threads.keys()], [THREAD]);
+    assert.isFalse(engine.requests.some((request) => request.path.includes("/t1/")));
+    // The thread id T3 writes carries two colons, and the engine takes it as it is.
+    assert.equal(THREAD.split(":").length, 3);
+    assert.equal(engine.linkOf("task-7")?.threadId, THREAD);
   }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-colon-")));
 });
 
@@ -426,7 +484,7 @@ it.effect(
     return Effect.gen(function* () {
       const threads = yield* service(store);
       yield* threads.reconcile();
-      const finished = boardTaskThreadId({ board: "work", id: "task-8" });
+      const finished = boardTaskThreadId(boardTaskOf("work", "task-8")!);
       engine.task("task-8").lane = "completed";
       engine.task("task-8").state = "completed";
       engine.removeTask("task-7");

@@ -6,11 +6,14 @@ import { assert, it } from "@effect/vitest";
 
 import {
   BOARD_TASK_MARKER_LIKE,
+  boardTaskOf,
   boardTaskOfMarker,
   boardTaskThreadCommandId,
   boardTaskThreadId,
   boardTaskThreadMarker,
 } from "./boardThreadMarker.ts";
+
+const TASK = boardTaskOf("board-1", "task-7")!;
 
 // A board task's thread reuses `lineage.engineIntake` as its marker, with a value of its own. That
 // is safe only while every reader but the engine intake asks whether the field is set, never what
@@ -107,60 +110,54 @@ it("only the engine intake and the named board task readers read the marker's va
 });
 
 it("nothing but the marker module knows what a board task's marker looks like", () => {
-  assert.equal(
-    boardTaskThreadMarker({ board: "board-1", id: "task-7" }),
-    "board-task:board-1:task-7",
-  );
+  assert.equal(boardTaskThreadMarker(TASK), "board-task:board-1:task-7");
   assert.deepEqual(
     [...new Set(linesNaming(/board-task:/).map(({ file }) => file))],
     ["apps/server/src/delivery/boardThreadMarker.ts"],
   );
 });
 
-it("keeps a colon in a board or task id from making two tasks one marker", () => {
-  const pairs = [
-    [
-      { board: "a:b", id: "c" },
-      { board: "a", id: "b:c" },
-    ],
-    [
-      { board: "a%3Ab", id: "c" },
-      { board: "a:b", id: "c" },
-    ],
-    [
-      { board: "a", id: "b" },
-      { board: "a:", id: "b" },
-    ],
-  ] as const;
-  for (const [left, right] of pairs) {
-    assert.notEqual(boardTaskThreadMarker(left), boardTaskThreadMarker(right));
-    assert.notEqual(boardTaskThreadCommandId(left), boardTaskThreadCommandId(right));
-    assert.notEqual(boardTaskThreadId(left), boardTaskThreadId(right));
+it("refuses an id the marker cannot carry at write, so no two tasks share a marker", () => {
+  for (const [board, id] of [
+    // A colon in a task id, the engine's own separator in neither id.
+    ["a", "b:c"],
+    ["a:b", "c"],
+    ["a", ""],
+    ["", "b"],
+    ["a", "b c"],
+    ["a b", "c"],
+    ["a", "b/c"],
+    ["a", "b%3Ac"],
+  ] as const) {
+    assert.isNull(boardTaskOf(board, id), `${board} / ${id}`);
   }
+  // What the engine writes today passes, and the marker keeps the spelling already stamped.
+  const task = boardTaskOf("delivery-engine_tasks.and/board", "t_7-a");
+  assert.isNotNull(task);
+  assert.equal(boardTaskThreadMarker(task!), "board-task:delivery-engine_tasks.and/board:t_7-a");
+  assert.equal(boardTaskThreadId(task!), boardTaskThreadMarker(task!));
+  assert.equal(boardTaskThreadCommandId(task!), `${boardTaskThreadMarker(task!)}:thread`);
 });
 
-it("reads the task back out of a marker, and nothing out of any other value", () => {
-  for (const task of [
-    { board: "board-1", id: "task-7" },
-    { board: "a:b", id: "c" },
-    { board: "a", id: "b:c" },
-    { board: "with/slash and space", id: "100%" },
-  ]) {
-    assert.deepEqual(boardTaskOfMarker(boardTaskThreadMarker(task)), task);
-  }
+it("reads the task back out of a marker, and ignores every malformed one", () => {
+  assert.deepEqual(boardTaskOfMarker(boardTaskThreadMarker(TASK)), TASK);
+  const prefix = BOARD_TASK_MARKER_LIKE.slice(0, -1);
   for (const value of [
     null,
     undefined,
     "",
-    // An engine intake's admission.
+    // An engine intake's admission, and another prefix.
     `intake-${"a".repeat(64)}:0`,
-    BOARD_TASK_MARKER_LIKE,
-    `${BOARD_TASK_MARKER_LIKE.slice(0, -1)}only-a-board`,
-    `${BOARD_TASK_MARKER_LIKE.slice(0, -1)}a:b:c`,
-    `${BOARD_TASK_MARKER_LIKE.slice(0, -1)}:task`,
-    // Not the spelling the grammar writes, and a broken escape.
-    `${BOARD_TASK_MARKER_LIKE.slice(0, -1)}%61:b`,
-    `${BOARD_TASK_MARKER_LIKE.slice(0, -1)}%zz:b`,
+    "board-tasks:a:b",
+    "task:a:b",
+    // An empty id, and no task id at all.
+    prefix,
+    `${prefix}only-a-board`,
+    `${prefix}:task`,
+    `${prefix}board:`,
+    // A colon in the task id reads as a third part, never as board `a` with task `b:c`.
+    `${prefix}a:b:c`,
+    `${prefix}a:b c`,
   ]) {
     assert.equal(boardTaskOfMarker(value), null, String(value));
   }
