@@ -141,18 +141,22 @@ function EnabledPullRequestThreadLinks({
     hiddenKeys,
     hidingAnywhere,
   );
+  // A board task's conversation is in no list: it counts, and opens, as the task.
+  const boardTasks =
+    linking.mode === "multiple" ? ((relations.data ?? lastRelations)?.boardTasks ?? []) : [];
+  const linkedCount = linkedThreads.length + boardTasks.length;
   const linkedThreadsLabel =
-    linkedThreads.length > 0
+    linkedCount > 0
       ? gt(
           "{count, plural, one {Linked from {count} thread} other {Linked from {count} threads}}",
           {
-            count: linkedThreads.length,
+            count: linkedCount,
           },
         )
       : gt("Linked threads");
   return (
     <>
-      {display === "count" && (linkedThreads.length > 0 || relations.error !== null) ? (
+      {display === "count" && (linkedCount > 0 || relations.error !== null) ? (
         <Tooltip>
           <TooltipTrigger
             render={
@@ -165,12 +169,12 @@ function EnabledPullRequestThreadLinks({
                     query: url,
                     ...((relations.data ?? lastRelations) === null
                       ? {}
-                      : { linkedThreads: { environmentId, threads: linkedThreads } }),
+                      : { linkedThreads: { environmentId, threads: linkedThreads, boardTasks } }),
                   })
                 }
               >
                 <MessageSquareIcon aria-hidden className="size-3.5" />
-                <span aria-hidden>{linkedThreads.length || "?"}</span>
+                <span aria-hidden>{linkedCount || "?"}</span>
               </Button>
             }
           />

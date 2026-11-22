@@ -1,7 +1,7 @@
 // Relay engine-owned payloads as JSON; type only the state T3 stores or acts on.
 import * as Schema from "effect/Schema";
 
-import { ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import { ProjectId, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import { ModelSelection } from "./modelSelection.ts";
 
 export const DeliveryOrchestrationConfig = Schema.Struct({
@@ -219,6 +219,47 @@ export const DeliveryThreadState = Schema.Struct({
   rememberedLineup: Schema.optional(DeliveryRememberedLineup),
 });
 export type DeliveryThreadState = typeof DeliveryThreadState.Type;
+
+/**
+ * The archived conversations of board tasks. A task that ended (deleted, its project removed, or
+ * held by another conversation) leaves its thread archived, and no thread list shows it: this is
+ * how the board reaches them.
+ */
+export const DeliveryArchivedBoardThreads = Schema.Struct({
+  threads: Schema.Array(
+    Schema.Struct({
+      threadId: ThreadId,
+      projectId: ProjectId,
+      title: Schema.String,
+      archivedAt: Schema.String,
+      /** The board and the task the thread was made for. */
+      board: Schema.String,
+      taskId: Schema.String,
+      /**
+       * How the task stands in the engine. Only an `open` task can take the thread back, so only
+       * its thread is offered a restore: a restored thread of any other is archived again.
+       * `held` is a task another conversation holds or that moved to another machine; `unknown`
+       * is an engine that did not answer.
+       */
+      task: Schema.Literals(["open", "held", "deleted", "unknown"]),
+    }),
+  ),
+});
+export type DeliveryArchivedBoardThreads = typeof DeliveryArchivedBoardThreads.Type;
+
+/**
+ * A board task whose conversation is linked to a pull request or an issue. Its thread is in no
+ * list, so it is shown as the task and opens the task view: the row carries no thread id.
+ */
+export const LinkedBoardTask = Schema.Struct({
+  board: Schema.String,
+  taskId: Schema.String,
+  /** The engine's title, or the one the thread was made with when the engine has no such task. */
+  title: Schema.String,
+  /** The task ended (deleted, moved for good, its project removed): its conversation is archived. */
+  ended: Schema.Boolean,
+});
+export type LinkedBoardTask = typeof LinkedBoardTask.Type;
 
 /** Replaces who joins a conversation from its next message on; null makes it an ordinary one. */
 export const DeliverySetThreadLineupInput = Schema.Struct({

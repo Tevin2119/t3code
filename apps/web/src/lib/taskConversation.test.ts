@@ -1,3 +1,7 @@
+// @effect-diagnostics nodeBuiltinImport:off - reads the source tree synchronously, once.
+import * as NodeFS from "node:fs";
+import * as NodePath from "node:path";
+
 import { describe, expect, it } from "vite-plus/test";
 import { EnvironmentId, ThreadId } from "@t3tools/contracts";
 
@@ -10,36 +14,83 @@ import {
   steadySeatThread,
   taskConversation,
 } from "./taskConversation";
+import { parseBoardThread, parseCard, parseTask } from "./delivery";
 
-const source = { kind: "thread" as const, environmentId: "env-1", threadId: "thread-1" };
+const SRC = NodePath.resolve(import.meta.dirname, "..");
+const sourceFiles = (directory: string): ReadonlyArray<string> =>
+  NodeFS.readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
+    const path = NodePath.join(directory, entry.name);
+    if (entry.isDirectory()) return sourceFiles(path);
+    return /\.tsx?$/.test(entry.name) && !/\.test\.tsx?$/.test(entry.name) ? [path] : [];
+  });
+
+const boardThread = {
+  environmentId: "env-1",
+  threadId: "thread-1",
+  setBy: "env-1",
+  setAt: "2026-11-22T10:00:00.000Z",
+};
+// The thread the task was filed from: another conversation, which must never stand in.
+const source = { kind: "thread" as const, environmentId: "env-9", threadId: "filed-from" };
 const ref = { environmentId: EnvironmentId.make("env-1"), threadId: ThreadId.make("thread-1") };
 
 describe("which conversation a task has", () => {
-  it("is the thread the task was made from, once the task is in work", () => {
-    expect(taskConversation({ source, isDraft: false, lane: "implementation" })).toEqual({
-      kind: "thread",
-      ref,
-    });
+  it("is the thread the engine links the task to, in work or sent back to the queue", () => {
+    for (const lane of ["implementation", "queue", "completed"]) {
+      expect(taskConversation({ boardThread, isDraft: false, lane })).toEqual({
+        kind: "thread",
+        ref,
+      });
+    }
   });
 
-  it("has none for a draft or a queued task, even when it was made from a thread", () => {
-    expect(taskConversation({ source, isDraft: true, lane: "draft" })).toEqual({
+  it("has none for a draft or a queued task with no link", () => {
+    expect(taskConversation({ boardThread: null, isDraft: true, lane: "draft" })).toEqual({
       kind: "none",
       why: "draft",
     });
     for (const lane of ["intake", "ready", "queue"]) {
-      expect(taskConversation({ source, isDraft: false, lane })).toEqual({
+      expect(taskConversation({ boardThread: null, isDraft: false, lane })).toEqual({
         kind: "none",
         why: "queued",
       });
     }
   });
 
-  it("is unlinked for a task in work that was not made from a thread", () => {
-    expect(taskConversation({ source: null, isDraft: false, lane: "planning" })).toEqual({
-      kind: "none",
-      why: "unlinked",
+  it("is unlinked for a task in work with no link, and never the thread it was filed from", () => {
+    const task = { boardThread: null, source, isDraft: false, lane: "planning" };
+    expect(taskConversation(task)).toEqual({ kind: "none", why: "unlinked" });
+  });
+
+  it("reads the link as the engine serves it, on the task and on its card", () => {
+    const wire = { ...boardThread, threadId: "board-task:a%3Ab:c/with:colon" };
+    expect(parseBoardThread(wire)).toEqual(wire);
+    expect(parseTask({ id: "t", card: {}, boardThread: wire })?.boardThread).toEqual(wire);
+    expect(parseCard({ id: "t", boardThread: wire }).boardThread).toEqual(wire);
+    for (const none of [null, undefined, {}, { environmentId: "env-1" }, "thread-1"]) {
+      expect(parseBoardThread(none)).toBeNull();
+    }
+    // `thread` is the task id and `source` the filing thread: neither is read as the link.
+    const named = parseTask({
+      id: "t",
+      card: {},
+      thread: "t",
+      source: { kind: "thread", ref: "env-9/x" },
     });
+    expect(named?.source?.threadId).toBe("x");
+    expect(named?.boardThread).toBeNull();
+  });
+
+  it("is the only reader of the link", () => {
+    // Taking the field off the wire is the parser's; a read is anything else that names it.
+    const readers = sourceFiles(SRC).filter((file) =>
+      NodeFS.readFileSync(file, "utf8")
+        .split("\n")
+        .some((line) => /\.boardThread\b/.test(line) && !line.includes("parseBoardThread(")),
+    );
+    expect(readers.map((file) => NodePath.relative(SRC, file))).toEqual([
+      NodePath.join("lib", "taskConversation.ts"),
+    ]);
   });
 });
 

@@ -6,7 +6,10 @@ import { AuthOrchestrationOperateScope } from "@t3tools/contracts";
 import { useEnvironmentsWithScope } from "../../state/session";
 import { mapAtomCommandResult, settlePromise } from "@t3tools/client-runtime/state/runtime";
 import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environment";
-import { planProjectRemoval } from "@t3tools/client-runtime/state/projects";
+import {
+  archivedServerOwnedThreadCount,
+  planProjectRemoval,
+} from "@t3tools/client-runtime/state/projects";
 import { type EnvironmentId, type SidebarProjectGroupingMode } from "@t3tools/contracts";
 import {
   checkProjectAccess,
@@ -34,6 +37,8 @@ import { useEnvironments, usePrimaryEnvironmentId } from "../../state/environmen
 import { useThreadShells, waitForProjectRemoval } from "../../state/entities";
 import { refreshProjectFaviconUrl } from "../../state/assets";
 import { projectEnvironment } from "../../state/projects";
+import { deliveryEnvironment } from "../../state/delivery";
+import { useAtomCommand } from "../../state/use-atom-command";
 import { ProjectFavicon } from "../ProjectFavicon";
 import { Alert, AlertDescription } from "../ui/alert";
 import { Button } from "../ui/button";
@@ -288,6 +293,9 @@ function ProjectDetail({
   const deleteProject = useOrchestrationCommand(projectEnvironment.delete, {
     reportFailure: false,
   });
+  const fetchArchivedBoardThreads = useAtomCommand(deliveryEnvironment.fetchArchivedBoardThreads, {
+    reportFailure: false,
+  });
   const projectNameEditedRef = useRef(false);
 
   const faviconPath = group.faviconPath ?? null;
@@ -359,6 +367,14 @@ function ProjectDetail({
     const api = readLocalApi();
     if (!api) return;
 
+    // The shell counts only the active board conversations; the archived ones are kept.
+    const archivedKept = await archivedServerOwnedThreadCount({
+      members,
+      read: async (environmentId) => {
+        const result = await fetchArchivedBoardThreads({ environmentId, input: {} });
+        return result._tag === "Success" ? result.value.threads : null;
+      },
+    });
     const { projectThreads, isWholeGroup, confirmationMessage } = planProjectRemoval(
       {
         members,
@@ -368,6 +384,7 @@ function ProjectDetail({
         threads,
         unloadedThreadCount: readUnloadedThreadCount(members, threads),
         serverOwnedThreadCount: readServerOwnedThreadCount(members, threads),
+        archivedServerOwnedThreadCount: archivedKept,
       },
       resolveMessage,
     );

@@ -5457,5 +5457,9 @@
   "ad208e3e32c85029": "Tout masquer",
   "3328503592789bed": "Zen",
   "856812e7e1fc445e": "Appels d’outils dans la discussion",
-  "8d545d54c0a9e950": "Masque les commandes, modifications et recherches lancées par les agents. Masquer les réussis garde les échecs. Zen n’affiche que les réponses finales. Les approbations, questions et erreurs s’affichent toujours."
+  "8d545d54c0a9e950": "Masque les commandes, modifications et recherches lancées par les agents. Masquer les réussis garde les échecs. Zen n’affiche que les réponses finales. Les approbations, questions et erreurs s’affichent toujours.",
+  "cdf5dd7d370e594c": "Tâche du tableau : {title}",
+  "dae94973cc4ff259": "Tâche terminée. Sa conversation se trouve dans les archives du tableau",
+  "afeb354df4c94446": "Ouvrez-la dans le tableau depuis l'application web ou de bureau",
+  "a65acdb87eac322b": "{count, plural, one {{count} conversation archivée lancée par un tableau est conservée, pas supprimée.} other {{count} conversations archivées lancées par un tableau sont conservées, pas supprimées.}}"
 }

@@ -71,6 +71,7 @@ import {
   DeliveryThreadBinding,
   DeliveryThreadBindingInput,
   DeliveryThreadState,
+  DeliveryArchivedBoardThreads,
 } from "./delivery.ts";
 import {
   AcpRegistryAcceptUrlAuthInput,
@@ -636,6 +637,7 @@ export const WS_METHODS = {
   deliveryAct: "delivery.act",
   deliveryBindThread: "delivery.bindThread",
   deliveryThreadBinding: "delivery.threadBinding",
+  deliveryArchivedBoardThreads: "delivery.archivedBoardThreads",
   deliveryReleaseThread: "delivery.releaseThread",
   deliverySetThreadLineup: "delivery.setThreadLineup",
   scheduledTasksList: "scheduledTasks.list",
@@ -1183,6 +1185,13 @@ const WsDeliveryActRpc = Rpc.make(WS_METHODS.deliveryAct, {
 const WsDeliveryBindThreadRpc = Rpc.make(WS_METHODS.deliveryBindThread, {
   payload: DeliveryBindThreadInput,
   success: DeliveryThreadBinding,
+  error: Schema.Union([EnvironmentAuthorizationError, DeliveryError]),
+});
+
+/** The archived conversations of board tasks, which no thread list shows. */
+const WsDeliveryArchivedBoardThreadsRpc = Rpc.make(WS_METHODS.deliveryArchivedBoardThreads, {
+  payload: Schema.Struct({}),
+  success: DeliveryArchivedBoardThreads,
   error: Schema.Union([EnvironmentAuthorizationError, DeliveryError]),
 });
 
@@ -2715,6 +2724,7 @@ export const ForkWsRpcGroup = RpcGroup.make(
   WsDeliveryActRpc,
   WsDeliveryBindThreadRpc,
   WsDeliveryThreadBindingRpc,
+  WsDeliveryArchivedBoardThreadsRpc,
   WsDeliveryReleaseThreadRpc,
   WsDeliverySetThreadLineupRpc,
   WsServerSubscribeCheckoutUpdateRpc,

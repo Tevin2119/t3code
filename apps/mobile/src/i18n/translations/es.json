@@ -5457,5 +5457,9 @@
   "ad208e3e32c85029": "Ocultar todo",
   "3328503592789bed": "Zen",
   "856812e7e1fc445e": "Llamadas a herramientas en el chat",
-  "8d545d54c0a9e950": "Oculta los comandos, ediciones y búsquedas que ejecutan los agentes. Ocultar las correctas mantiene los fallos. Zen solo muestra las respuestas finales. Las aprobaciones, preguntas y errores siempre se muestran."
+  "8d545d54c0a9e950": "Oculta los comandos, ediciones y búsquedas que ejecutan los agentes. Ocultar las correctas mantiene los fallos. Zen solo muestra las respuestas finales. Las aprobaciones, preguntas y errores siempre se muestran.",
+  "cdf5dd7d370e594c": "Tarea del tablero: {title}",
+  "dae94973cc4ff259": "Tarea finalizada. Su conversación está en el archivo del tablero",
+  "afeb354df4c94446": "Ábrela en el tablero desde la app web o de escritorio",
+  "a65acdb87eac322b": "{count, plural, one {{count} conversación archivada iniciada por un tablero se conserva, no se elimina.} other {{count} conversaciones archivadas iniciadas por un tablero se conservan, no se eliminan.}}"
 }
