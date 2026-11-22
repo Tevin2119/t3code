@@ -1946,6 +1946,24 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       Effect.map((continued) => continued !== null && continued.deletedAt === null),
     );
 
+  /**
+   * The linked thread these runs' work continues in, when the latest executed one is a limited run
+   * that was handed on. Such a thread is read-only while that thread exists: a second run here
+   * would redo the work, so it takes no message and starts nothing from its queue.
+   */
+  const handedOnTo = Effect.fnUntraced(function* (runs: ReadonlyArray<OrchestrationV2Run>) {
+    const latest = latestExecutedRun(runs);
+    if (latest?.status !== "failed" || !(yield* runHandedOn(latest.id))) return null;
+    return limitedLeadHandoffThreadId(latest.id);
+  });
+
+  /**
+   * `handedOnTo` for a delegated task's result, read from the run that spawned the task alone so a
+   * long parent costs nothing more. A task of an earlier run is caught where its wake would start.
+   */
+  const spawningRunHandedOn = (run: OrchestrationV2Run) =>
+    run.status === "failed" ? runHandedOn(run.id) : Effect.succeed(false);
+
   /** Side chats live inside their parent, so deleting or archiving the parent takes them too. */
   const liveSideChatIds = Effect.fn("Orchestrator.liveSideChatIds")(
     function* (threadId: ThreadId) {
@@ -2137,6 +2155,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         controls.thread.deletedAt !== null
       )
         return;
+      // A handed-on parent takes no result, as an archived one takes none.
+      if (yield* spawningRunHandedOn(parentRun)) return;
       const messages = yield* projectionStore.getThreadRecords(threadId, ["messages"], {
         messageIds: [delivery.messageId],
       });
@@ -2556,6 +2576,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       ) {
         return;
       }
+      // Every start of a queued run passes here: a resume, a mode change, recovery, a wake, a run's
+      // end. None starts one on a thread whose work continues in a linked thread.
+      if ((yield* handedOnTo(projection.runs)) !== null) return;
 
       if (yield* cancelStaleQuestionWakes(projection)) {
         projection = yield* readCommandProjection(threadId);
@@ -7200,20 +7223,21 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
   /**
    * A thread whose latest limited run continues in a linked thread is read-only while that thread
    * exists: a second run here would redo the work. What a person, the CLI or a tool sends is
-   * refused; the server's own follow-ups settle quietly, starting nothing.
+   * refused; the server's own follow-ups and a delegated task's result settle quietly, starting
+   * nothing.
    */
   const settleHandedOnThreadMessage = Effect.fnUntraced(function* (
     command: Extract<OrchestrationV2Command, { readonly type: "message.dispatch" }>,
     projection: Pick<OrchestrationV2ThreadProjection, "thread" | "runs">,
     events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
   ) {
-    const latest = latestExecutedRun(projection.runs);
-    if (latest?.status !== "failed" || !(yield* runHandedOn(latest.id))) return false;
-    if (!isServerFollowUp(command)) {
+    const continuedIn = yield* handedOnTo(projection.runs);
+    if (continuedIn === null) return false;
+    if (!isServerFollowUp(command) && command.delegatedCompletion === undefined) {
       return yield* new OrchestratorThreadHandedOnError({
         commandId: command.commandId,
         threadId: command.threadId,
-        continuedIn: limitedLeadHandoffThreadId(latest.id),
+        continuedIn,
       });
     }
     // The unchanged row gives the automatic delivery an accepted receipt, so it is not retried.
@@ -14860,7 +14884,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       input.parentRun === undefined ||
       input.parentProjection.thread.archivedAt !== null ||
       input.parentProjection.thread.deletedAt !== null ||
-      (cohort !== undefined && cohort.disposition !== "open")
+      (cohort !== undefined && cohort.disposition !== "open") ||
+      // A handed-on parent takes no result, as an archived one takes none.
+      (yield* spawningRunHandedOn(input.parentRun))
     ) {
       return {
         task: {
@@ -16049,6 +16075,14 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             commandId: command.commandId,
             commandType: command.type,
             cause: `Thread ${command.threadId} is not active.`,
+          });
+        }
+        const continuedIn = yield* handedOnTo(projection.runs);
+        if (continuedIn !== null) {
+          return yield* new OrchestratorThreadHandedOnError({
+            commandId: command.commandId,
+            threadId: command.threadId,
+            continuedIn,
           });
         }
         const selectedRunId = command.type === "queued-run.start" ? command.runId : undefined;
