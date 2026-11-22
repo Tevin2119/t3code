@@ -1015,6 +1015,46 @@ it.effect.each([
   }),
 );
 
+it.effect("lists no seat or side chat rooted at server-owned work, with or without subagents", () =>
+  Effect.gen(function* () {
+    const projectId = ProjectId.make("project:thread-management:family");
+    const row = (id: string, root: string, lineage: object = {}) => ({
+      id: ThreadId.make(id),
+      projectId,
+      updatedAt: DateTime.makeUnsafe("2026-06-20T01:00:00.000Z"),
+      lineage: {
+        parentThreadId: id === root ? null : ThreadId.make(root),
+        rootThreadId: ThreadId.make(root),
+        ...lineage,
+      },
+    });
+    const layerTest = ThreadManagementService.layer.pipe(
+      Layer.provide(Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({})),
+      Layer.provide(
+        Layer.mock(Orchestrator.OrchestratorV2)({
+          listActiveThreads: () =>
+            Effect.succeed([
+              row("ordinary", "ordinary"),
+              row("ordinary-seat", "ordinary", { relationshipToParent: "subagent" }),
+              row("board", "board", { engineIntake: "board-task:board-1:task-7" }),
+              row("board-seat", "board", { relationshipToParent: "subagent" }),
+            ] as never),
+        }),
+      ),
+      Layer.provide(ServerSettings.layerTest()),
+      Layer.provide(layerReceiptsTest),
+    );
+    const list = (includeSubagents: boolean) =>
+      Effect.gen(function* () {
+        const service = yield* ThreadManagementService.ThreadManagementService;
+        const listed = yield* service.listProjectThreads({ projectId, includeSubagents });
+        return listed.map((thread) => thread.id).toSorted();
+      }).pipe(Effect.provide(layerTest));
+    expect(yield* list(true)).toEqual(["ordinary", "ordinary-seat"]);
+    expect(yield* list(false)).toEqual(["ordinary"]);
+  }),
+);
+
 it.effect("Force stop refuses once a newer run has started, before killing anything", () =>
   Effect.gen(function* () {
     const threadId = ThreadId.make("thread:thread-management:force-stop-superseded");

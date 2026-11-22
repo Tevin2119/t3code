@@ -14,8 +14,16 @@ export interface ThreadDeletionPlan {
   readonly effects: ReadonlyArray<PendingOrchestrationEffectV2>;
 }
 
+/**
+ * Ends a thread's work and removes it. With `keep: "archived"` the thread is archived instead: its
+ * runs, requests and sessions end the same way, and the conversation and its attachments stay.
+ */
 export const planThreadDeletion = Effect.fn("ThreadDeletion.planThreadDeletion")(function* (input: {
-  readonly command: Extract<OrchestrationV2Command, { readonly type: "thread.delete" }>;
+  readonly command: Pick<
+    Extract<OrchestrationV2Command, { readonly type: "thread.delete" | "thread.archive" }>,
+    "commandId" | "threadId"
+  >;
+  readonly keep?: "archived";
   readonly projection: Pick<
     OrchestrationV2ThreadProjection,
     "thread" | "runs" | "attempts" | "nodes" | "runtimeRequests" | "subagents" | "providerSessions"
@@ -25,6 +33,8 @@ export const planThreadDeletion = Effect.fn("ThreadDeletion.planThreadDeletion")
   readonly idAllocator: IdAllocator.IdAllocatorV2["Service"];
 }): Effect.fn.Return<ThreadDeletionPlan, IdAllocator.IdAllocatorV2Error> {
   const { command, projection, now, idAllocator } = input;
+  const ended = input.keep === "archived" ? "The thread was archived." : "The thread was deleted.";
+  const detached = input.keep === "archived" ? "Thread archived." : "Thread deleted.";
   const events: Array<OrchestrationV2DomainEvent> = [];
   const effects: Array<PendingOrchestrationEffectV2> = [];
   let current = projection;
@@ -53,18 +63,39 @@ export const planThreadDeletion = Effect.fn("ThreadDeletion.planThreadDeletion")
     }
   });
 
-  yield* emitEvent({
-    type: "thread.deleted",
-    threadId: command.threadId,
-    providerInstanceId: projection.thread.providerInstanceId,
-    occurredAt: now,
-    payload: {
-      ...projection.thread,
-      deletedAt: projection.thread.deletedAt ?? now,
-      titleRegeneration: null,
-      updatedAt: now,
-    },
-  });
+  yield* emitEvent(
+    input.keep === "archived"
+      ? {
+          type: "thread.archived",
+          threadId: command.threadId,
+          providerInstanceId: projection.thread.providerInstanceId,
+          occurredAt: now,
+          // The fields an archive through the orchestrator sets: the share and the watches end.
+          payload: {
+            ...projection.thread,
+            archivedAt: projection.thread.archivedAt ?? now,
+            titleRegeneration: null,
+            guestShare: null,
+            pullRequests: projection.thread.pullRequests?.map(({ watch, endedWatch, ...link }) => {
+              const ended = watch ?? endedWatch;
+              return ended === undefined ? link : { ...link, endedWatch: ended };
+            }),
+            updatedAt: now,
+          },
+        }
+      : {
+          type: "thread.deleted",
+          threadId: command.threadId,
+          providerInstanceId: projection.thread.providerInstanceId,
+          occurredAt: now,
+          payload: {
+            ...projection.thread,
+            deletedAt: projection.thread.deletedAt ?? now,
+            titleRegeneration: null,
+            updatedAt: now,
+          },
+        },
+  );
 
   const activeRuns = projection.runs.filter((run) =>
     ["preparing", "queued", "starting", "running", "waiting"].includes(run.status),
@@ -121,7 +152,7 @@ export const planThreadDeletion = Effect.fn("ThreadDeletion.planThreadDeletion")
       payload: {
         ...request,
         status: "cancelled",
-        responseCapability: { type: "not_resumable", reason: "The thread was deleted." },
+        responseCapability: { type: "not_resumable", reason: ended },
         resolvedAt: now,
       },
     });
@@ -194,7 +225,7 @@ export const planThreadDeletion = Effect.fn("ThreadDeletion.planThreadDeletion")
       payload: {
         providerSessionId: session.id,
         detachedAt: now,
-        reason: "Thread deleted.",
+        reason: detached,
       },
     });
     effects.push({
@@ -204,7 +235,7 @@ export const planThreadDeletion = Effect.fn("ThreadDeletion.planThreadDeletion")
       request: {
         type: "provider-session.detach",
         providerSessionId: session.id,
-        detail: "Thread deleted.",
+        detail: detached,
         revokeMcpCredential: true,
       },
     });
@@ -227,7 +258,8 @@ export const planThreadDeletion = Effect.fn("ThreadDeletion.planThreadDeletion")
     threadId: command.threadId,
     request: { type: "preview.cleanup" },
   });
-  const attachmentIds = Array.from(new Set(input.attachmentIds));
+  // An archived thread keeps its conversation, so its files stay with it.
+  const attachmentIds = input.keep === "archived" ? [] : Array.from(new Set(input.attachmentIds));
   if (attachmentIds.length > 0) {
     effects.push({
       id: `effect:${command.commandId}:attachment.cleanup`,

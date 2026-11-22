@@ -63,7 +63,7 @@ import {
   scopeProjectSettingsGroup,
 } from "./ProjectSettingsPanel.logic";
 import { useSettingsProjectGroups } from "./useSettingsProjectGroups";
-import { readUnloadedThreadCount } from "../../state/olderSettledShelf";
+import { readServerOwnedThreadCount, readUnloadedThreadCount } from "../../state/olderSettledShelf";
 import { settingsScopeEnvironmentLabels } from "./settingsScopeAxis";
 
 const ProjectIconPickerDialog = lazy(() =>
@@ -367,6 +367,7 @@ function ProjectDetail({
         displayName: group.displayName,
         threads,
         unloadedThreadCount: readUnloadedThreadCount(members, threads),
+        serverOwnedThreadCount: readServerOwnedThreadCount(members, threads),
       },
       resolveMessage,
     );

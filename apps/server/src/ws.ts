@@ -145,6 +145,7 @@ import {
   shellStreamItemFromThreadShell,
   shellStreamItemsFromInitialSnapshot,
   loadSubscriberShellSnapshot,
+  omitServerOwnedArchivedShells,
   canResumeShellFrom,
   resumeIdentityRoots,
   shellStreamItemsFromResumeSnapshot,
@@ -1952,7 +1953,7 @@ export const layerWsRpc = (
           schemaVersion: threads.schemaVersion,
           snapshotSequence,
           projects,
-          threads: threads.archivedThreads,
+          threads: omitServerOwnedArchivedShells(threads.archivedThreads),
         } as const;
       }).pipe(
         Effect.flatMap((snapshot) =>

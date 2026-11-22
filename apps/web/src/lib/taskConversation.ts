@@ -155,6 +155,54 @@ export function openSeatThread(
   return target ?? thread;
 }
 
+/** Whether the open seat reads through a link (`linked`) or in its own environment (`direct`). */
+const seatMode = (seat: SeatThread) => (seat.linked === undefined ? "direct" : "linked");
+
+/** Two targets that draw the same view: swapping one for the other remounts nothing. */
+export const sameSeatView = (a: SeatThread | null, b: SeatThread | null): boolean =>
+  a === b ||
+  (sameThread(a, b) &&
+    a?.linked?.viaEnvironmentId === b?.linked?.viaEnvironmentId &&
+    a?.linked?.label === b?.linked?.label);
+
+/** What the centre does with the seat a person opened. */
+export type SteadySeat =
+  | { readonly kind: "none" }
+  /** Opened, but how to reach it is not known yet. Nothing is mounted, so nothing is swapped. */
+  | { readonly kind: "resolving" }
+  /**
+   * `later` is the read-only view to move to if this client's connection stays down. Until
+   * then the direct view stays, which says it is offline and keeps its composer and scroll.
+   */
+  | { readonly kind: "shown"; readonly seat: SeatThread; readonly later?: SeatThread };
+
+/** What decides whether an open seat's view may change now. */
+export interface SeatCertainty {
+  /** The answer does not rest on links that have not loaded yet. */
+  readonly certain: boolean;
+  /** This client's own connection to the seat's environment is up. */
+  readonly connected: boolean;
+}
+
+/**
+ * Holds an open seat's view steady: the direct and the linked view are two components, so a swap
+ * remounts the conversation. `resolved` is what `openSeatThread` says now, which changes while
+ * links load and during a reconnect; `shown` is what the centre shows.
+ */
+export function steadySeatThread(
+  shown: SeatThread | null,
+  resolved: SeatThread | null,
+  reach: SeatCertainty,
+): SteadySeat {
+  if (resolved === null) return { kind: "none" };
+  if (shown === null || !sameThread(shown, resolved)) {
+    return reach.certain ? { kind: "shown", seat: resolved } : { kind: "resolving" };
+  }
+  if (seatMode(shown) === seatMode(resolved)) return { kind: "shown", seat: resolved };
+  if (seatMode(shown) === "direct") return { kind: "shown", seat: shown, later: resolved };
+  return { kind: "shown", seat: reach.connected || reach.certain ? resolved : shown };
+}
+
 /**
  * Why a task waits, as the engine reports it on the card. `place` is the engine's own position;
  * without one there is no place to show, and nothing is worked out.

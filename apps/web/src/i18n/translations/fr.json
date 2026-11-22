@@ -723,6 +723,8 @@
   "bac5ef48aafb20b1": "Cela retire {count} entrées de projet regroupées.",
   "3e46fbf3eadf0745": "Ces fils et tous les fils archivés sont supprimés de T3 Code. Les sessions du fournisseur sont conservées.",
   "1a50cbc984f8fe1c": "Tous les fils archivés sont supprimés de T3 Code. Les sessions du fournisseur sont conservées.",
+  "361080ce34c8e8ed": "{count, plural, one {{count} conversation lancée par un tableau ou par le moteur est archivée, pas supprimée.} other {{count} conversations lancées par un tableau ou par le moteur sont archivées, pas supprimées.}} Les conversations de tableaux et du moteur déjà archivées sont conservées.",
+  "fea770db813e04c2": "Ce fil est archivé et ne peut pas recevoir de messages.",
   "4f076ebbf1c8846e": "Cela retire uniquement les entrées de projet, pas les fichiers sur le disque.",
   "19b8f3ad79efb9e1": "Les autres entrées de ce projet regroupé ne sont pas affectées.",
   "2207c69b042b2e37": "Cette action est irréversible.",

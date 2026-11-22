@@ -1,5 +1,6 @@
 import { useAtomValue } from "@effect/atom-react";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/models";
+import { serverOwnedThreadCount } from "@t3tools/client-runtime/state/projects";
 import {
   isListedSettledThread,
   settledShelfFrontier,
@@ -120,5 +121,21 @@ export function readUnloadedThreadCount(
         (member) => member.environmentId === thread.environmentId && member.id === thread.projectId,
       ),
     ),
+  });
+}
+
+/**
+ * Threads of these projects that the server started for itself, which the shell counts and does
+ * not send: see `serverOwnedThreadCount`. A project removal archives them.
+ */
+export function readServerOwnedThreadCount(
+  members: ReadonlyArray<{ readonly environmentId: EnvironmentId; readonly id: ProjectId }>,
+  threads: ReadonlyArray<EnvironmentThreadShell>,
+): number {
+  return serverOwnedThreadCount({
+    members,
+    counted: (environmentId) =>
+      appAtomRegistry.get(threadFamilies.snapshotAtom(environmentId))?.serverOwnedThreads,
+    threads,
   });
 }

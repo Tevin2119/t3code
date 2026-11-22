@@ -1,17 +1,26 @@
 import { EnvironmentId, ThreadId } from "@t3tools/contracts";
+import { useEffect } from "react";
 import { page } from "vite-plus/test/browser";
-import { expect, it, vi } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
 
 import "~/index.css";
 
-import { render } from "../../../test/render";
+import { act, fakeTimers, render } from "../../../test/render";
 import { parseTask } from "../../lib/delivery";
+import type { SeatThread } from "../../lib/taskConversation";
 import { useThreadInspection } from "../chat/ThreadInspectionContext";
 import { TaskConversation } from "./TaskConversation";
+import { SEAT_LINKED_VIEW_DELAY_MS, useSteadySeat } from "./useTaskConversation";
+
+/** Every thread the direct view was mounted for, in order. */
+const mountedThreads: string[] = [];
 
 vi.mock("../ChatView", () => ({
   default: ({ threadId }: { threadId: string }) => {
     const inspect = useThreadInspection();
+    useEffect(() => {
+      mountedThreads.push(threadId);
+    }, [threadId]);
     return (
       <div>
         <p>Thread view {threadId}</p>
@@ -29,6 +38,13 @@ vi.mock("../ChatView", () => ({
       </div>
     );
   },
+}));
+
+// The read-only view of a linked environment's thread, which reads over the task's connection.
+vi.mock("../chat/LinkedThreadPane", () => ({
+  LinkedThread: ({ surface }: { surface: { threadId: string } }) => (
+    <p>Linked view of {surface.threadId}</p>
+  ),
 }));
 
 const ref = { environmentId: EnvironmentId.make("env-1"), threadId: ThreadId.make("lead-thread") };
@@ -50,6 +66,7 @@ const task = (extra: Record<string, unknown> = {}) => {
 
 const idle = {
   seat: null,
+  seatResolving: false,
   seatName: null,
   onOpenThread: () => {},
   onBackToTask: () => {},
@@ -141,4 +158,94 @@ it("hands a thread the conversation opens to the view, and offers the way back f
   await expect.element(screen.getByText("Seat qa")).toBeVisible();
   await page.getByRole("button", { name: "Back to task #12" }).click();
   expect(onBackToTask).toHaveBeenCalledOnce();
+});
+
+describe("a seat in a linked environment", () => {
+  const remote = EnvironmentId.make("env-remote");
+  const direct = { environmentId: remote, threadId: ThreadId.make("seat-thread") };
+  const linked = { ...direct, linked: { viaEnvironmentId: ref.environmentId, label: "Desktop" } };
+  const loading = { certain: false, connected: false };
+  const loaded = { certain: true, connected: false };
+  const online = { certain: true, connected: true };
+
+  // The hook and the view together, as TaskWorkspace wires them.
+  function Seat(props: {
+    readonly resolved: SeatThread;
+    readonly reach: { readonly certain: boolean; readonly connected: boolean };
+  }) {
+    const { seat, resolving } = useSteadySeat(props.resolved, props.reach);
+    return (
+      <TaskConversation
+        {...idle}
+        task={task()}
+        state={{ kind: "open", ref, offline: false }}
+        seat={seat}
+        seatResolving={resolving}
+        seatName="qa"
+      />
+    );
+  }
+
+  it("waits for the links before it mounts either view, and never shows the task's own thread", async () => {
+    mountedThreads.length = 0;
+    await using screen = await render(<Seat resolved={direct} reach={loading} />);
+    await expect.element(screen.getByText("Seat qa")).toBeVisible();
+    await expect.element(screen.getByText("Loading the conversation...")).toBeVisible();
+    await screen.rerender(<Seat resolved={linked} reach={loaded} />);
+    await expect.element(screen.getByText("Linked view of seat-thread")).toBeVisible();
+    expect(mountedThreads).toEqual([]);
+  });
+
+  it("stays in the direct view, composer and all, while a saved environment that nothing links to is offline", async () => {
+    using _timers = fakeTimers();
+    await using screen = await render(<Seat resolved={direct} reach={online} />);
+    const composer = screen.getByRole("textbox", { name: "Composer" });
+    await composer.fill("half a sentence");
+    const element = composer.element();
+    // Offline with no link: the links answer, and there is still nothing to read it through.
+    for (const reach of [loading, loaded]) {
+      await screen.rerender(<Seat resolved={direct} reach={reach} />);
+      await act(() => vi.advanceTimersByTime(SEAT_LINKED_VIEW_DELAY_MS * 3));
+      expect(element.isConnected).toBe(true);
+      expect(document.activeElement).toBe(element);
+    }
+    // Back online: the same view, with what was typed.
+    await screen.rerender(<Seat resolved={direct} reach={online} />);
+    expect((element as HTMLTextAreaElement).value).toBe("half a sentence");
+    expect(document.body.textContent).not.toContain("Linked view");
+  });
+
+  it("keeps the composer, its text and its focus through a reconnect, and moves to the linked view only when the connection stays down", async () => {
+    // The hook's wait is a timer, held here until the test moves it.
+    using _timers = fakeTimers();
+    await using screen = await render(<Seat resolved={direct} reach={online} />);
+    const composer = screen.getByRole("textbox", { name: "Composer" });
+    await composer.fill("half a sentence");
+    const element = composer.element();
+    const untouched = () =>
+      document.activeElement === element &&
+      element.isConnected &&
+      (element as HTMLTextAreaElement).value === "half a sentence";
+    expect(untouched()).toBe(true);
+
+    // The connection drops and the link answers: the linked view is only offered for later.
+    await screen.rerender(<Seat resolved={linked} reach={loaded} />);
+    await act(() => vi.advanceTimersByTime(SEAT_LINKED_VIEW_DELAY_MS - 1));
+    expect(untouched()).toBe(true);
+    // Back before the wait is over, and the wait does not carry into the next drop.
+    await screen.rerender(<Seat resolved={direct} reach={online} />);
+    await act(() => vi.advanceTimersByTime(SEAT_LINKED_VIEW_DELAY_MS));
+    expect(untouched()).toBe(true);
+    await screen.rerender(<Seat resolved={linked} reach={loaded} />);
+    await act(() => vi.advanceTimersByTime(SEAT_LINKED_VIEW_DELAY_MS - 1));
+    expect(untouched()).toBe(true);
+
+    // It stays down: the read-only view through the link takes over.
+    await act(() => vi.advanceTimersByTime(1));
+    await expect.element(screen.getByText("Linked view of seat-thread")).toBeVisible();
+    expect(element.isConnected).toBe(false);
+    // Its own connection returns: the direct view is back at once.
+    await screen.rerender(<Seat resolved={direct} reach={online} />);
+    await expect.element(screen.getByText("Thread view seat-thread")).toBeVisible();
+  });
 });

@@ -23,6 +23,8 @@ import {
   dedupeShellEnrichment,
   omitIdleSubagentShells,
   omitOlderSettledShells,
+  omitServerOwnedArchivedShells,
+  omitServerOwnedShells,
   shellStreamItemFromEnrichmentRefresh,
   shellStreamItemsFromInitialSnapshot,
   shouldPublishShellApplicationEvent,
@@ -214,6 +216,78 @@ describe("omitIdleSubagentShells", () => {
         omitted.subagentThreadIds,
       ),
     ).toBe(false);
+  });
+});
+
+describe("omitServerOwnedShells", () => {
+  const row = (
+    id: string,
+    lineage: Partial<OrchestrationV2ThreadShell["lineage"]> = {},
+    overrides: Partial<OrchestrationV2ThreadShell> = {},
+  ) =>
+    shellFixture({
+      id: ThreadId.make(id),
+      lineage: {
+        parentThreadId: null,
+        relationshipToParent: null,
+        rootThreadId: ThreadId.make(id),
+        ...lineage,
+      },
+      status: "completed",
+      activityRunStatus: null,
+      pendingRuntimeRequest: null,
+      pendingBackgroundTasks: [],
+      ...overrides,
+    });
+  const boardTask = { engineIntake: "board-task:board-1:task-7" };
+  const under = (parent: string) => ({
+    parentThreadId: ThreadId.make(parent),
+    rootThreadId: ThreadId.make(parent),
+  });
+  const threads = [
+    row("listed"),
+    row("listed-seat", { ...under("listed"), relationshipToParent: "subagent" }),
+    row("task", boardTask),
+    // Running does not keep it: no list or badge reads a board task's row.
+    row("task-running", boardTask, { activityRunStatus: "running" }),
+    row("seat", { ...under("task-running"), relationshipToParent: "subagent" }),
+    row("task-side-chat", { ...under("task"), relationshipToParent: "fork", sideChat: true }),
+  ];
+
+  it("leaves out a board task's thread and the seats and side chats under it", () => {
+    expect(omitServerOwnedShells(threads).map((thread) => thread.id)).toEqual([
+      "listed",
+      "listed-seat",
+    ]);
+    expect(activeShellRowsForSubscriber(threads, true).threads.map((thread) => thread.id)).toEqual([
+      "listed",
+    ]);
+    // A subscriber that cannot read families has no other way to these rows.
+    expect(activeShellRowsForSubscriber(threads, false).threads).toEqual(threads);
+  });
+
+  it("keeps one that delegated a task to a linked environment, which nests under it there", () => {
+    const delegating = { ...row("task-remote", boardTask), hasRemoteTasks: true };
+    expect(omitServerOwnedShells([...threads, delegating]).map((thread) => thread.id)).toEqual([
+      "listed",
+      "listed-seat",
+      "task-remote",
+    ]);
+  });
+
+  it("returns the same rows when none is server-owned", () => {
+    const listed = threads.slice(0, 2);
+    expect(omitServerOwnedShells(listed)).toBe(listed);
+    expect(omitServerOwnedArchivedShells(listed)).toBe(listed);
+  });
+
+  it("leaves an archived board task's thread out of the archive snapshot", () => {
+    expect(omitServerOwnedArchivedShells(threads).map((thread) => thread.id)).toEqual([
+      "listed",
+      "listed-seat",
+      "seat",
+      "task-side-chat",
+    ]);
   });
 });
 
