@@ -268,7 +268,7 @@ export class ThreadManagementThreadArchivedError extends Schema.TaggedError<Thre
   },
 ) {
   override get message(): string {
-    return `Thread ${this.threadId} is archived and cannot receive messages.`;
+    return Orchestrator.archivedThreadRefusal(this.threadId);
   }
 }
 

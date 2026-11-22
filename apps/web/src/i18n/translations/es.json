@@ -724,6 +724,7 @@
   "3e46fbf3eadf0745": "Esos hilos y los hilos archivados se eliminan de T3 Code. Las sesiones del proveedor se conservan.",
   "1a50cbc984f8fe1c": "Los hilos archivados se eliminan de T3 Code. Las sesiones del proveedor se conservan.",
   "cc23bb20eefeac3b": "{count, plural, one {{count} conversación iniciada por un tablero o por el motor se archiva, no se elimina.} other {{count} conversaciones iniciadas por un tablero o por el motor se archivan, no se eliminan.}}",
+  "fea770db813e04c2": "Este hilo está archivado y no puede recibir mensajes.",
   "4f076ebbf1c8846e": "Esto solo quita las entradas del proyecto, no los archivos del disco.",
   "19b8f3ad79efb9e1": "Las demás entradas de este proyecto agrupado no se ven afectadas.",
   "2207c69b042b2e37": "Esta acción no se puede deshacer.",
