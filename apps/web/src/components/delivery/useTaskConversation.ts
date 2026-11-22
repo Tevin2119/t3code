@@ -112,7 +112,14 @@ export function useTaskConversation(task: TaskView | null) {
     open,
     backToTask: () => setSeat(null),
     seats: {
-      thread: (name: string) => seatConversation(ref, children, name, reach),
+      thread: (name: string) =>
+        seatConversation(
+          ref,
+          children,
+          name,
+          reach,
+          task?.council?.seats.find((item) => item.seat === name)?.threadId ?? null,
+        ),
       current,
       open,
     },

@@ -1387,6 +1387,8 @@ export interface CouncilSeat {
   readonly attempts: number;
   /** What it is doing now, from its own output, while it works; null otherwise. */
   readonly live: SeatLive | null;
+  /** The seat's own conversation as the engine records it, in the task's environment. */
+  readonly threadId: string | null;
 }
 
 /** What a seat at work last did: the tools it called and what it said, newest last. */
@@ -1781,6 +1783,8 @@ const parseCouncil = (council: Json): TaskCouncil => {
       verdict: textOrNull(seat.verdict),
       attempts: list(seat.attempts).length,
       live: parseSeatLive(seat.live),
+      // Blank is none: `ThreadId` refuses a blank id.
+      threadId: text(seat.threadId).trim() || null,
     })),
     documents: [...new Set(strings(council.documents))],
     steers: records(council.steers).map((steer) => ({

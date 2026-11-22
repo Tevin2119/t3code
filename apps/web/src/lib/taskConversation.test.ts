@@ -147,6 +147,17 @@ describe("a seat's conversation", () => {
     expect(seatConversation(null, children, "qa")).toBeNull();
   });
 
+  it("is the engine's thread for the seat in the task's environment, after T3's own child", () => {
+    expect(seatConversation(ref, children, "reviewer", undefined, "engine-thread")).toEqual({
+      environmentId: ref.environmentId,
+      threadId: "engine-thread",
+    });
+    expect(seatConversation(ref, children, "builder", undefined, "engine-thread")?.threadId).toBe(
+      "child-c",
+    );
+    expect(seatConversation(null, children, "reviewer", undefined, "engine-thread")).toBeNull();
+  });
+
   it("opens a seat that runs in a linked environment there, or read-only through the link", () => {
     const there = { environmentId: remote, threadId: "child-b" };
     const throughLink = {

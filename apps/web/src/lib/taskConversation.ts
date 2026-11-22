@@ -95,22 +95,24 @@ const LOCAL_ONLY: SeatReach = { ownConnection: () => undefined, isLinked: () => 
 
 /**
  * The child conversation of a seat. In an orchestrator team chat the lead hands each seat a
- * delegated child thread named by the seat (`teamChat.seat`), the model this slice copies. A seat
- * the lead has not handed work to has none, and its row opens nothing. A seat that runs in a
- * linked environment opens there, or read-only through the task's environment (`linked`).
+ * delegated child thread named by the seat (`teamChat.seat`), the model this slice copies. Without
+ * one, the engine's thread for the seat in the task's environment; a seat with neither opens none.
+ * A seat that runs in a linked environment opens there, or read-only through the task's (`linked`).
  */
 export function seatConversation(
   conversation: ScopedThreadRef | null,
   children: ReadonlyArray<SeatChild>,
   seat: string,
   reach: SeatReach = LOCAL_ONLY,
+  engineThreadId: string | null = null,
 ): SeatThread | null {
   if (!conversation) return null;
-  const child = children.findLast(
-    (item) =>
-      item.teamChat?.seat === seat &&
-      (item.childThreadId !== null || item.remoteChild !== undefined),
-  );
+  const child =
+    children.findLast(
+      (item) =>
+        item.teamChat?.seat === seat &&
+        (item.childThreadId !== null || item.remoteChild !== undefined),
+    ) ?? (engineThreadId ? { childThreadId: ThreadId.make(engineThreadId) } : undefined);
   return child === undefined
     ? null
     : subagentThreadTarget(child, conversation.environmentId, reach.ownConnection, reach.isLinked);
