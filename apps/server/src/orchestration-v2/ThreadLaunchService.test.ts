@@ -686,10 +686,10 @@ it.effect("an archived thread receives no message, a board task's or any other",
           "messages",
         ])
         .pipe(Effect.map((records) => [records.runs.length, records.messages.length]));
-    const marker = boardTaskThreadMarker({ board: "board-1", id: "task-9" });
+    const marker = boardTaskThreadMarker(boardTaskOf("board-1", "task-9")!);
     yield* create("archived-board", marker);
     yield* create("archived-ordinary");
-    yield* create("live-board", boardTaskThreadMarker({ board: "board-1", id: "task-10" }));
+    yield* create("live-board", boardTaskThreadMarker(boardTaskOf("board-1", "task-10")!));
     for (const name of ["archived-board", "archived-ordinary"]) {
       yield* threads.dispatch({
         type: "thread.archive",
