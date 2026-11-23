@@ -1,5 +1,14 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { EnvironmentId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
+import {
+  type DeliveryQaReceipt,
+  type DeliverySeatHandoff,
+  EnvironmentId,
+  NodeId,
+  type OrchestratorMcpDelegateTaskInput,
+  type OrchestratorMcpTerminalDelegatedTaskStatus,
+  ProviderInstanceId,
+  ThreadId,
+} from "@t3tools/contracts";
 import { assert, it } from "@effect/vitest";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Effect from "effect/Effect";
@@ -8,6 +17,7 @@ import * as Layer from "effect/Layer";
 import * as ServerConfig from "../config.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import type { McpInvocationScope } from "../mcp/McpInvocationContext.ts";
+import * as OrchestratorMcpService from "../mcp/OrchestratorMcpService.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import { deriveProviderInstanceConfigMap } from "../provider/ProviderInstanceRegistryHydration.ts";
 import * as ServerSettings from "../serverSettings.ts";
@@ -24,6 +34,7 @@ const BUILDER = ThreadId.make("thread:builder");
 const TASK_PATH = "/api/tasks/task-17";
 const RUN = "run-24";
 const ATTESTATION_PATH = `/api/runs/${RUN}/seat-attestations`;
+const HANDOFF_PATH = `/api/runs/${RUN}/handoffs`;
 const RECEIPT_PATH = `${TASK_PATH}/qa-receipts`;
 const ACCEPTANCE = "The preview renders the report.";
 const KEY = "scratch-key";
@@ -45,6 +56,10 @@ const scopeFor = (threadId: ThreadId): McpInvocationScope => ({
 function harness(
   options: {
     readonly key?: boolean;
+    readonly checklist?: string[];
+    readonly seatThread?: { readonly environmentId: string; readonly threadId: string } | null;
+    readonly boardThread?: { readonly environmentId: string; readonly threadId: string };
+    readonly handoffResponse?: "lost" | "conflict" | "independence";
     readonly receiptRefusal?: {
       readonly status: number;
       readonly code: string;
@@ -54,7 +69,16 @@ function harness(
 ) {
   const engine = scratchEngine();
   const task = boardTaskOf("board", "task-17")!;
-  let acceptance = [ACCEPTANCE];
+  let acceptance = options.checklist ?? [ACCEPTANCE];
+  let handoff: typeof DeliverySeatHandoff.Type | undefined;
+  let handoffResponse = options.handoffResponse;
+  let attestedThread: string = QA;
+  let qaReceipts: ReadonlyArray<typeof DeliveryQaReceipt.Type> = [];
+  let terminal: OrchestratorMcpTerminalDelegatedTaskStatus | null = null;
+  const admissions = new Map<string, { childThreadId: ThreadId; taskId: NodeId }>();
+  const launches: Array<{ namespace: string; input: OrchestratorMcpDelegateTaskInput }> = [];
+  const cancels: Array<NodeId> = [];
+  const statusReads: NodeId[] = [];
   const layer = SeatHandoffs.layer.pipe(
     Layer.provideMerge(DeliveryService.layer(deriveProviderInstanceConfigMap)),
     Layer.provide(
@@ -66,36 +90,103 @@ function harness(
             return {
               status: 200,
               body: {
+                title: "Verify report preview",
+                body: "A report should appear in the preview pane.",
+                boardThread: options.boardThread ?? {
+                  environmentId: ENVIRONMENT,
+                  threadId: PARENT,
+                },
                 acceptance,
+                handoffs: handoff ? [handoff] : [],
+                qaReceipts,
                 council: {
                   run: RUN,
+                  candidate: "a".repeat(40),
+                  base: "b".repeat(40),
                   seats: [
-                    { seat: "validation", threadId: QA, actualModel: "qa-model" },
+                    { seat: "unavailable", harness: "dsh", requestedModel: "unavailable-model" },
+                    {
+                      seat: "validation",
+                      threadId: options.seatThread ? "old-thread-field" : attestedThread,
+                      seatThread: options.seatThread,
+                      actualModel: "qa-model",
+                      harness: "dsh",
+                      requestedModel: "original-model",
+                      currentModel: { model: "picked-model", harness: "codex", source: "picked" },
+                    },
                     { seat: "builder", threadId: BUILDER, actualModel: "build-model" },
+                    { seat: "backup", harness: "codex", requestedModel: "backup-model" },
                   ],
                 },
                 roster: [
+                  { seat: "unavailable", inGate: true },
                   { seat: "validation", inGate: true },
                   { seat: "builder", inGate: false, stages: ["build"] },
+                  { seat: "backup", inGate: true },
                 ],
               },
             };
           }
           if (method === "POST" && path === ATTESTATION_PATH) {
             engine.requests.push({ method, path, body });
+            const input = body as {
+              seat: string;
+              threadId: string;
+              model: string;
+              harness?: string;
+            };
+            attestedThread = input.threadId;
             return {
               status: 200,
               body: {
                 attestation: {
                   run: RUN,
-                  seat: "validation",
-                  threadId: QA,
+                  seat: input.seat,
+                  threadId: input.threadId,
                   environmentId: ENVIRONMENT,
-                  model: "qa-model",
-                  harness: "codex",
+                  model: input.model,
+                  harness: input.harness,
                 },
               },
             };
+          }
+          if (method === "POST" && path === HANDOFF_PATH) {
+            engine.requests.push({ method, path, body });
+            if (handoffResponse === "lost") {
+              handoffResponse = undefined;
+              return { status: 503, body: { error: "Engine unavailable." } };
+            }
+            if (handoffResponse === "independence") {
+              handoffResponse = undefined;
+              return { status: 409, body: { code: "independence", error: "Engine refusal." } };
+            }
+            handoff = {
+              id: (handoff?.id ?? 0) + 1,
+              run: RUN,
+              stage: "qa",
+              seat: (body as { seat: string }).seat,
+              seatThread: { environmentId: ENVIRONMENT, threadId: attestedThread },
+              state: "handed",
+            };
+            if (handoffResponse === "conflict") {
+              handoffResponse = undefined;
+              return {
+                status: 409,
+                body: { code: "conflict", error: "Already handed.", current: handoff },
+              };
+            }
+            return { status: 200, body: { run: RUN, handoff } };
+          }
+          if (method === "POST" && handoff && path.startsWith(`${HANDOFF_PATH}/qa/`)) {
+            engine.requests.push({ method, path, body });
+            const delivered = path.endsWith("/delivered");
+            handoff = {
+              ...handoff,
+              id: handoff.id! + 1,
+              state: delivered ? "delivered" : "fallen-back",
+              reason: delivered ? null : (body as { reason: string }).reason,
+            };
+            return { status: 200, body: { run: RUN, handoff } };
           }
           if (method === "POST" && path === RECEIPT_PATH) {
             engine.requests.push({ method, path, body });
@@ -120,13 +211,61 @@ function harness(
     ),
     Layer.provide(
       Layer.succeed(ThreadManagementService.ThreadManagementService, {
-        getThreadShell: (threadId: ThreadId) =>
-          Effect.succeed(
+        getThreadShell: (threadId: ThreadId) => {
+          const child = [...admissions.values()].find(
+            ({ childThreadId }) => childThreadId === threadId,
+          );
+          return Effect.succeed(
             threadId === PARENT
               ? { lineage: { engineIntake: boardTaskThreadMarker(task) } }
-              : { lineage: { parentThreadId: PARENT } },
-          ),
+              : {
+                  lineage: { parentThreadId: PARENT },
+                  forkedFrom: child ? { type: "node", nodeId: child.taskId } : null,
+                },
+          );
+        },
       } as unknown as ThreadManagementService.ThreadManagementService["Service"]),
+    ),
+    Layer.provide(
+      Layer.succeed(OrchestratorMcpService.OrchestratorMcpService, {
+        capabilities: () =>
+          Effect.succeed({
+            providers: [
+              { driverKind: "deepseek", providerInstanceId: "deepseek", canRunChildTask: false },
+              { driverKind: "codex", providerInstanceId: "other-codex", canRunChildTask: true },
+              { driverKind: "codex", providerInstanceId: "codex", canRunChildTask: true },
+            ],
+          }),
+        delegateTask: (scope: McpInvocationScope, input: OrchestratorMcpDelegateTaskInput) => {
+          launches.push({ namespace: scope.requestNamespace, input });
+          const request = `${scope.requestNamespace}:${input.clientRequestId}`;
+          const existing = admissions.get(request);
+          const child = existing ?? {
+            taskId: NodeId.make(`node:qa:${admissions.size}`),
+            childThreadId: ThreadId.make(`thread:qa:${admissions.size}`),
+          };
+          admissions.set(request, child);
+          return Effect.succeed({
+            ...child,
+            providerInstanceId: input.target?.providerInstanceId,
+            model: "launched-model",
+          });
+        },
+        cancelTask: (_scope: McpInvocationScope, input: { readonly taskId: NodeId }) => {
+          cancels.push(input.taskId);
+          return Effect.succeed({});
+        },
+        taskStatus: (_scope: McpInvocationScope, taskId: NodeId) => {
+          statusReads.push(taskId);
+          return Effect.succeed({
+            childThreadId: [...admissions.values()].find((entry) => entry.taskId === taskId)
+              ?.childThreadId,
+            workState: terminal === null ? "working" : "result_available",
+            hasPendingChildRuns: false,
+            latestTerminalStatus: terminal,
+          });
+        },
+      } as unknown as OrchestratorMcpService.OrchestratorMcpService["Service"]),
     ),
     Layer.provide(
       ServerSettings.layerTest({
@@ -146,7 +285,18 @@ function harness(
       ),
     ),
   );
-  return { layer, requests: engine.requests };
+  return {
+    layer,
+    requests: engine.requests,
+    admissions,
+    launches,
+    statusReads,
+    cancels,
+    finish(status: OrchestratorMcpTerminalDelegatedTaskStatus, receipts: typeof qaReceipts = []) {
+      terminal = status;
+      qaReceipts = receipts;
+    },
+  };
 }
 
 it.effect("attests a seat with the launched model, harness and server identity", () => {
@@ -172,8 +322,14 @@ it.effect("attests a seat with the launched model, harness and server identity",
   }).pipe(Effect.provide(layer));
 });
 
-it.effect("files a receipt from the current attested seat and hashes the acceptance text", () => {
-  const { layer, requests } = harness();
+it.effect.each([
+  { label: "infers an omitted seat thread", seatThread: undefined },
+  {
+    label: "uses the engine's seat thread in preference to the legacy thread id",
+    seatThread: { environmentId: ENVIRONMENT, threadId: QA },
+  },
+])("files a receipt and $label", ({ seatThread }) => {
+  const { layer, requests } = harness(seatThread ? { seatThread } : {});
   return Effect.gen(function* () {
     const handoffs = yield* SeatHandoffs.SeatHandoffs;
     const input = {
@@ -202,6 +358,183 @@ it.effect("files a receipt from the current attested seat and hashes the accepta
   }).pipe(Effect.provide(layer));
 });
 
+it.effect("rejects a child caller and a lead whose task is held by another thread", () => {
+  const { layer, requests, launches } = harness({
+    boardThread: { environmentId: ENVIRONMENT, threadId: "different-lead" },
+  });
+  return Effect.gen(function* () {
+    const service = yield* SeatHandoffs.SeatHandoffs;
+    for (const caller of [QA, PARENT]) {
+      const failure = yield* Effect.flip(service.handQa(scopeFor(caller), {}));
+      assert.equal(failure.code, "invalid_request");
+      assert.match(failure.message, /lead thread/);
+    }
+    assert.isEmpty(launches);
+    assert.deepEqual(
+      requests.map(({ method }) => method),
+      ["GET"],
+    );
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect("hands QA to the first launchable gate seat and attests the model T3 launched", () => {
+  const { layer, launches, requests } = harness();
+  return Effect.gen(function* () {
+    const service = yield* SeatHandoffs.SeatHandoffs;
+    const result = yield* service.handQa(scopeFor(PARENT), {});
+    assert.equal(result.state, "working");
+    assert.match(result.next ?? "", /end your turn.*do not poll/);
+    assert.equal(result.handoff.seat, "validation");
+    assert.lengthOf(launches, 1);
+    const launch = launches[0]!.input;
+    assert.equal(launch.isolation, "worktree");
+    assert.equal(launch.mode, "async");
+    assert.deepEqual(launch.target, {
+      providerInstanceId: ProviderInstanceId.make("codex"),
+      model: "picked-model",
+      options: [],
+    });
+    for (const text of [
+      "Verify report preview",
+      "A report should appear in the preview pane.",
+      `0. ${ACCEPTANCE}`,
+      "a".repeat(40),
+      "b".repeat(40),
+      "exactly one delivery_qa_receipt",
+      "Do not edit code.",
+    ])
+      assert.include(launch.task, text);
+    assert.deepEqual(
+      requests.filter(({ method }) => method === "POST"),
+      [
+        {
+          method: "POST",
+          path: ATTESTATION_PATH,
+          body: {
+            seat: "validation",
+            environmentId: ENVIRONMENT,
+            threadId: "thread:qa:0",
+            model: "launched-model",
+            harness: "codex",
+            setBy: ENVIRONMENT,
+            key: KEY,
+          },
+        },
+        {
+          method: "POST",
+          path: HANDOFF_PATH,
+          body: { stage: "qa", seat: "validation", setBy: ENVIRONMENT, key: KEY },
+        },
+      ],
+    );
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect(
+  "recovers the same filing across sessions and launches a new child after settlement",
+  () => {
+    const { layer, launches, admissions, statusReads, finish } = harness({
+      handoffResponse: "lost",
+    });
+    const lead = scopeFor(PARENT);
+    return Effect.gen(function* () {
+      const service = yield* SeatHandoffs.SeatHandoffs;
+      yield* Effect.flip(service.handQa(lead, {}));
+      const newSession = { ...lead, requestNamespace: "another-session" };
+      const recovered = yield* service.handQa(newSession, {});
+      assert.equal(recovered.state, "working");
+      assert.equal(admissions.size, 1);
+      assert.deepEqual(
+        launches.map(({ namespace }) => namespace),
+        [`delivery-handoff:${RUN}:qa:0`, `delivery-handoff:${RUN}:qa:0`],
+      );
+      assert.deepEqual(yield* service.handQa(newSession, {}), recovered);
+      assert.deepEqual(statusReads, ["node:qa:0"]);
+      assert.lengthOf(launches, 2);
+
+      finish("interrupted");
+      assert.equal((yield* service.handQa(newSession, {})).handoff.reason, "seat-failed");
+      const refiled = yield* service.handQa(newSession, {});
+      assert.equal(refiled.handoff.seatThread?.threadId, "thread:qa:1");
+      assert.equal(admissions.size, 2);
+    }).pipe(Effect.provide(layer));
+  },
+);
+
+it.effect("recovers the current record carried by an engine conflict", () => {
+  const { layer, statusReads, launches } = harness({ handoffResponse: "conflict" });
+  return Effect.gen(function* () {
+    const service = yield* SeatHandoffs.SeatHandoffs;
+    const result = yield* service.handQa(scopeFor(PARENT), { seat: "backup" });
+    assert.equal(result.state, "working");
+    assert.equal(result.handoff.seat, "backup");
+    assert.deepEqual(statusReads, ["node:qa:0"]);
+    assert.equal(launches[0]?.input.target?.model, "backup-model");
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect("maps the engine's independence refusal and names the other gate seats", () => {
+  const { layer, cancels } = harness({ handoffResponse: "independence" });
+  return Effect.gen(function* () {
+    const service = yield* SeatHandoffs.SeatHandoffs;
+    const failure = yield* Effect.flip(service.handQa(scopeFor(PARENT), {}));
+    assert.equal(failure.code, "invalid_request");
+    // The refused seat is stopped before it can file receipts.
+    assert.deepEqual(cancels, ["node:qa:0"]);
+    assert.equal(
+      failure.message,
+      "That QA seat shares the builder's model family; pick another seat (seat: unavailable, backup)",
+    );
+    assert.equal(
+      (yield* service.handQa(scopeFor(PARENT), { seat: "backup" })).handoff.seat,
+      "backup",
+    );
+  }).pipe(Effect.provide(layer));
+});
+
+const currentReceipt = {
+  run: RUN,
+  seat: "validation",
+  acceptance: { index: 0 },
+  verdict: "fail",
+} as const;
+const secondReceipt = { ...currentReceipt, acceptance: { index: 1 }, verdict: "blocked" } as const;
+it.effect.each([
+  { terminal: "completed", receipts: [currentReceipt, secondReceipt], reason: null },
+  {
+    terminal: "completed",
+    receipts: [
+      currentReceipt,
+      { ...secondReceipt, run: "old-run" },
+      { ...secondReceipt, seat: "backup" },
+    ],
+    reason: "no-receipts",
+  },
+  { terminal: "failed", receipts: [currentReceipt], reason: "seat-failed" },
+  { terminal: "cancelled", receipts: [], reason: "seat-failed" },
+] as const)(
+  "settles a $terminal QA child with reason $reason",
+  ({ terminal, receipts, reason }) => {
+    const { layer, finish, requests } = harness({
+      checklist: [ACCEPTANCE, "The report can be exported."],
+    });
+    return Effect.gen(function* () {
+      const service = yield* SeatHandoffs.SeatHandoffs;
+      const lead = scopeFor(PARENT);
+      yield* service.handQa(lead, {});
+      finish(terminal, receipts);
+      const result = yield* service.handQa(lead, {});
+      assert.equal(result.state, reason ? "fallen-back" : "delivered");
+      assert.equal(result.handoff.reason, reason);
+      assert.deepEqual(requests.at(-1), {
+        method: "POST",
+        path: `${HANDOFF_PATH}/qa/${reason ? "fallback" : "delivered"}`,
+        body: { ...(reason ? { reason } : {}), setBy: ENVIRONMENT, key: KEY },
+      });
+    }).pipe(Effect.provide(layer));
+  },
+);
+
 it.effect("refuses callers without an attested QA seat on the current run", () => {
   const { layer, requests } = harness();
   return Effect.gen(function* () {
@@ -209,7 +542,7 @@ it.effect("refuses callers without an attested QA seat on the current run", () =
     for (const threadId of [PARENT, ThreadId.make("thread:unattested"), BUILDER]) {
       const failure = yield* Effect.flip(handoffs.fileQaReceipt(scopeFor(threadId), INPUT));
       assert.equal(failure.code, "invalid_request");
-      assert.match(failure.message, /attested QA seat/);
+      assert.match(failure.message, /attested/);
     }
     assert.isFalse(requests.some((request) => request.method === "POST"));
   }).pipe(Effect.provide(layer));
@@ -268,7 +601,13 @@ it.effect("keeps seat attestations and receipts out of the generic delivery rela
   const { layer, requests } = harness();
   return Effect.gen(function* () {
     const delivery = yield* DeliveryService.DeliveryService;
-    for (const path of [ATTESTATION_PATH, RECEIPT_PATH]) {
+    for (const path of [
+      ATTESTATION_PATH,
+      RECEIPT_PATH,
+      HANDOFF_PATH,
+      `${HANDOFF_PATH}/qa/delivered`,
+      `${HANDOFF_PATH}/qa/fallback`,
+    ]) {
       const error = yield* Effect.flip(delivery.act({ path, body: { key: KEY } }));
       assert.equal(error.reason, "refused");
     }

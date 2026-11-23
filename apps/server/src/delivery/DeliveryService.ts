@@ -133,7 +133,8 @@ const BOARD_THREAD_CLAIM = /^\/api\/orchestration\/tasks\/[\w-]+\/(claim|ack|rel
 // The conversation's mirror and the steer handshake (spec 6a, slice 5).
 const BOARD_THREAD_CONVERSATION =
   /^\/api\/tasks\/[\w-]+\/(activity|steers\/\d+\/(delivered|failed))$/;
-const BOARD_SEAT_POST = /^\/api\/(?:tasks\/[\w-]+\/qa-receipts|runs\/[\w-]+\/seat-attestations)$/;
+const BOARD_SEAT_POST =
+  /^\/api\/(?:tasks\/[\w-]+\/qa-receipts|runs\/[\w-]+\/(?:seat-attestations|handoffs(?:\/qa\/(?:delivered|fallback))?))$/;
 const BOARD_THREAD_POST = new RegExp(
   `${BOARD_THREAD_CLAIM.source}|${BOARD_THREAD_CONVERSATION.source}|${BOARD_SEAT_POST.source}`,
 );

@@ -34,7 +34,14 @@ const handlers = {
       const scope = yield* McpInvocationContext.McpInvocationContext;
       const service = yield* SeatHandoffs.SeatHandoffs;
       return yield* service.fileQaReceipt(scope, input);
-    }).pipe(Effect.provide(SeatHandoffs.layer)),
+    }),
+  ),
+  delivery_seat_handoff: McpToolAccess.actsAsCaller(({ seat }) =>
+    Effect.gen(function* () {
+      const scope = yield* McpInvocationContext.McpInvocationContext;
+      const service = yield* SeatHandoffs.SeatHandoffs;
+      return yield* service.handQa(scope, { seat });
+    }),
   ),
   orchestrator_capabilities: McpToolAccess.reads((input) =>
     Effect.gen(function* () {

@@ -6,6 +6,8 @@ import {
   DeliveryNativeBuildStepResult,
   DeliveryQaReceiptInput,
   DeliveryQaReceiptResult,
+  DeliverySeatHandoffInput,
+  DeliverySeatHandoffResult,
   OrchestratorMcpCapabilitiesInput,
   OrchestratorMcpCapabilitiesResult,
   OrchestrationV2StopWorkflowInput,
@@ -58,6 +60,7 @@ import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as OrchestratorMcpService from "../../OrchestratorMcpService.ts";
 import * as ThreadMetadataMcpService from "../../ThreadMetadataMcpService.ts";
 import { DeliveryService } from "../../../delivery/DeliveryService.ts";
+import { SeatHandoffs } from "../../../delivery/SeatHandoffs.ts";
 
 const dependencies = [
   McpInvocationContext.McpInvocationContext,
@@ -411,9 +414,22 @@ const QaReceiptTool = Tool.make("delivery_qa_receipt", {
   success: DeliveryQaReceiptResult,
   failure: OrchestratorMcpFailure,
   failureMode: "return",
-  dependencies: [...dependencies, DeliveryService],
+  dependencies: [...dependencies, SeatHandoffs],
 })
   .annotate(Tool.Title, "File a QA receipt")
+  .annotate(Tool.Destructive, true)
+  .annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenWhileDeliveryOff);
+
+const SeatHandoffTool = Tool.make("delivery_seat_handoff", {
+  description:
+    "From a board task's lead thread, hand QA to a gate seat in its own worktree. Call again after the child completion wake to settle the hand-off.",
+  parameters: DeliverySeatHandoffInput,
+  success: DeliverySeatHandoffResult,
+  failure: OrchestratorMcpFailure,
+  failureMode: "return",
+  dependencies: [...dependencies, SeatHandoffs],
+})
+  .annotate(Tool.Title, "Hand off QA to a team seat")
   .annotate(Tool.Destructive, true)
   .annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenWhileDeliveryOff);
 
@@ -421,6 +437,7 @@ export const OrchestratorToolkit = Toolkit.make(
   DeliveryReadTool,
   NativeBuildStepTool,
   QaReceiptTool,
+  SeatHandoffTool,
   OrchestratorCapabilitiesTool,
   DelegateTaskTool,
   TaskStatusTool,

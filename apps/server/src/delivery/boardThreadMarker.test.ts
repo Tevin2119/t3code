@@ -93,6 +93,10 @@ const BOARD_TASK_READS = [
     file: "apps/server/src/delivery/SeatHandoffs.ts",
     line: "const task = boardTaskOfMarker(parent?.lineage.engineIntake);",
   },
+  {
+    file: "apps/server/src/delivery/SeatHandoffs.ts",
+    line: "const task = boardTaskOfMarker(lead?.lineage.engineIntake);",
+  },
 ];
 
 it("only the engine intake and the named board task readers read the marker's value", () => {

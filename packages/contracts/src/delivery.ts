@@ -212,6 +212,16 @@ export const DeliverySeatAttestation = Schema.Struct({
   setAt: Schema.optional(Schema.NullOr(Schema.String)),
 });
 
+export const DeliverySeatHandoffInput = Schema.Struct({
+  stage: Schema.Literal("qa"),
+  seat: Schema.optional(TrimmedNonEmptyString),
+});
+export const DeliverySeatHandoffResult = Schema.Struct({
+  handoff: DeliverySeatHandoff,
+  state: Schema.Literals(["working", "delivered", "fallen-back"]),
+  next: Schema.optional(Schema.String),
+});
+
 export const DeliveryQaReceiptInput = Schema.Struct({
   acceptanceIndex: DeliveryAcceptanceIndex.annotate({ description: "Zero-based checklist index." }),
   verdict: DeliveryQaVerdict,
