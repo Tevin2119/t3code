@@ -16,6 +16,16 @@ export function archivedThreadsOfBoard(
 }
 
 /**
+ * Where a row opens. A task that can take its conversation back has a view on the board, where
+ * the conversation opens with it; a row whose task cannot has no task view, so it opens alone.
+ */
+export function archivedThreadTarget(thread: ArchivedBoardThread) {
+  return thread.task === "open"
+    ? ({ kind: "task", taskId: thread.taskId } as const)
+    : ({ kind: "thread", threadId: thread.threadId } as const);
+}
+
+/**
  * What the archive says under a thread whose task cannot take it back, or null for one that can
  * and is offered a restore. A restored thread of any other task holds nothing and is archived
  * again, so the restore is not offered for it.

@@ -14,6 +14,7 @@ import { Popover, PopoverPopup, PopoverTitle, PopoverTrigger } from "../ui/popov
 import { toastManager } from "../ui/toast";
 import {
   archivedThreadsOfBoard,
+  archivedThreadTarget,
   archivedThreadTaskNote,
   type ArchivedBoardThread,
 } from "./ArchivedBoardThreads.logic";
@@ -111,15 +112,22 @@ export function ArchivedBoardThreads(props: {
                     <button
                       type="button"
                       className="block max-w-full truncate text-left text-xs font-medium underline-offset-2 hover:underline"
-                      onClick={() =>
-                        void navigate({
-                          to: "/$environmentId/$threadId",
-                          params: {
-                            environmentId: props.environmentId,
-                            threadId: thread.threadId,
-                          },
-                        })
-                      }
+                      onClick={() => {
+                        const target = archivedThreadTarget(thread);
+                        setOpen(false);
+                        void (target.kind === "task"
+                          ? navigate({
+                              to: "/board",
+                              search: { environment: props.environmentId, task: target.taskId },
+                            })
+                          : navigate({
+                              to: "/$environmentId/$threadId",
+                              params: {
+                                environmentId: props.environmentId,
+                                threadId: target.threadId,
+                              },
+                            }));
+                      }}
                     >
                       {thread.title}
                     </button>

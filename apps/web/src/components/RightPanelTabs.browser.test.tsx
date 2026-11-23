@@ -2,7 +2,7 @@ import "~/index.css";
 
 import { EnvironmentId } from "@t3tools/contracts";
 import { describe, expect, it, vi } from "vite-plus/test";
-import { userEvent } from "vite-plus/test/browser";
+import { page, userEvent } from "vite-plus/test/browser";
 
 import { InputGroup, InputGroupAddon, InputGroupInput } from "~/components/ui/input-group";
 import type { RightPanelSurface } from "~/rightPanelStore";
@@ -252,6 +252,29 @@ describe("right panel thumb buttons", () => {
     // The page canvas already went back in the tab; the panel must not go back a second time.
     releaseThumbButton(screen.getByTestId("page-canvas").element(), 3);
     expect(actions).toEqual(["back", "forward", "back"]);
+  });
+});
+
+describe("board task tabs", () => {
+  it("are in the + menu only where a board task's view hosts the thread", async () => {
+    const onAddTaskSurface = vi.fn();
+    const props = panel(DIFF_SURFACE).props as RightPanelTabsProps;
+    await using screen = await render(<RightPanelTabs {...props}>{null}</RightPanelTabs>);
+    await screen.getByRole("button", { name: "Add panel surface" }).click();
+    await expect.element(page.getByRole("menuitem", { name: /Files/ })).toBeVisible();
+    await expect
+      .element(page.getByRole("menuitem", { name: /Task evidence/ }))
+      .not.toBeInTheDocument();
+    await userEvent.keyboard("{Escape}");
+    await screen.rerender(
+      <RightPanelTabs {...props} onAddTaskSurface={onAddTaskSurface}>
+        {null}
+      </RightPanelTabs>,
+    );
+    await screen.getByRole("button", { name: "Add panel surface" }).click();
+    await expect.element(page.getByRole("menuitem", { name: /Task evidence/ })).toBeVisible();
+    await page.getByRole("menuitem", { name: /Deployments/ }).click();
+    expect(onAddTaskSurface).toHaveBeenCalledExactlyOnceWith("task-deployments");
   });
 });
 

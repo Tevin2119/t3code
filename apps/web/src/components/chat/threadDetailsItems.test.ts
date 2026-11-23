@@ -1,13 +1,16 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  isDefaultThreadDetailsVisibility,
   resolveThreadDetailsVisibility,
+  RESET_THREAD_DETAILS_ITEMS,
   setThreadDetailsItem,
   THREAD_DETAILS_ITEMS,
 } from "./threadDetailsItems";
 
 const usage = THREAD_DETAILS_ITEMS.find((item) => item.id === "usage")!;
 const servers = THREAD_DETAILS_ITEMS.find((item) => item.id === "servers")!;
+const task = THREAD_DETAILS_ITEMS.find((item) => item.id === "task")!;
 
 describe("thread details items", () => {
   it.each([
@@ -32,5 +35,22 @@ describe("thread details items", () => {
 
     const hidden = { threadDetailsItems: { servers: false }, threadDetailsUsageEnabled: false };
     expect(setThreadDetailsItem(hidden, servers, true)).toEqual({});
+  });
+
+  it("shows the Task item by default, keeps it off once switched off, and resets it to on", () => {
+    const fresh = { threadDetailsItems: {}, threadDetailsUsageEnabled: false };
+    expect(resolveThreadDetailsVisibility(fresh).task).toBe(true);
+    expect(isDefaultThreadDetailsVisibility(resolveThreadDetailsVisibility(fresh))).toBe(true);
+
+    const off = setThreadDetailsItem(fresh, task, false);
+    expect(off).toEqual({ task: false });
+    const switchedOff = { threadDetailsItems: off, threadDetailsUsageEnabled: false };
+    expect(resolveThreadDetailsVisibility(switchedOff).task).toBe(false);
+    expect(isDefaultThreadDetailsVisibility(resolveThreadDetailsVisibility(switchedOff))).toBe(
+      false,
+    );
+    expect(setThreadDetailsItem(switchedOff, task, true)).toEqual({});
+
+    expect(resolveThreadDetailsVisibility(RESET_THREAD_DETAILS_ITEMS).task).toBe(true);
   });
 });

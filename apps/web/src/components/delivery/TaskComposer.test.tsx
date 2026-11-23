@@ -4,7 +4,7 @@ import { create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
 import { parseTask } from "../../lib/delivery";
 import { replyDraftKey, useDeliveryReplyDrafts } from "../../state/deliveryReplyDrafts";
-import { TaskComposer } from "./TaskWorkspace";
+import { TaskComposer } from "./TaskComposer";
 
 const mock = vi.hoisted(() => ({ action: vi.fn(), target: vi.fn(), sent: vi.fn() }));
 vi.mock("../../state/delivery", () => ({

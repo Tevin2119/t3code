@@ -53,6 +53,8 @@ export function MergePermissionControls(props: {
   onDone: () => void;
   readOnly?: boolean;
   stale?: boolean;
+  /** Where the section around the controls already carries their title. */
+  untitled?: boolean;
 }) {
   const allowed = useAtomValue(deliveryEnvironment.act.permissionAtom(props.environmentId));
   const [setting, setSetting] = useState<"on" | "off" | "inherit" | null>(null);
@@ -60,7 +62,7 @@ export function MergePermissionControls(props: {
   const selected = setting ?? props.policy?.setting ?? "inherit";
   return (
     <section className="min-w-0 space-y-2" aria-label="Automatic merge permission">
-      <h3 className="text-sm font-medium">Automatic merge permission</h3>
+      {props.untitled ? null : <h3 className="text-sm font-medium">Automatic merge permission</h3>}
       <MergePermissionSummary policy={props.policy} />
       <p className="text-xs text-muted-foreground">
         Permission alone never merges. Full-auto mode and the engine's independent merge checks

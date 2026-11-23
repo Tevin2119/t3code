@@ -8,6 +8,8 @@ import {
   buildNestedSearchItems,
   resolveCommandPaletteProject,
   buildThreadActionItems,
+  boardTaskSearchPath,
+  buildBoardTaskActionItems,
   buildLinkedThreadActionItems,
   filterPinnedBrowseEntries,
   filterCommandPaletteGroups,
@@ -94,6 +96,78 @@ describe("linked pull request thread navigation", () => {
     expect(
       buildLinkedThreadActionItems({ ...linkedThreads, query, icon: null, runThread }),
     ).toEqual([]);
+  });
+});
+
+describe("board tasks", () => {
+  it("lists the board's tasks as the person types, by number or title, each opening its task", async () => {
+    const runTask = vi.fn(async () => {});
+    const taskSearchItems = buildBoardTaskActionItems({
+      tasks: [
+        { id: "task-1", number: 1001, title: "Rework the board sync" },
+        { id: "task-2", number: 1002, title: "Ship the onboarding copy" },
+      ],
+      icon: null,
+      runTask,
+    });
+    const search = (query: string, tasks = taskSearchItems) =>
+      filterCommandPaletteGroups({
+        activeGroups: [],
+        query,
+        isInSubmenu: false,
+        projectSearchItems: [],
+        threadSearchItems: [],
+        taskSearchItems: tasks,
+      });
+    const titles = (query: string, tasks = taskSearchItems) =>
+      search(query, tasks)
+        .filter((group) => group.value === "tasks-search")
+        .flatMap((group) => group.items.map((item) => item.title));
+    expect(titles("sync")).toEqual(["#1001 Rework the board sync"]);
+    expect(titles("1002")).toEqual(["#1002 Ship the onboarding copy"]);
+    expect(titles("#1001")).toEqual(["#1001 Rework the board sync"]);
+    // Nothing before anything is typed, and nothing from a board that is not there.
+    expect(search("")).toEqual([]);
+    expect(titles("sync", [])).toEqual([]);
+    const [group] = search("onboarding");
+    expect(group?.label).toBe("Tasks");
+    const picked = group?.items[0];
+    if (picked?.kind === "action") await picked.run();
+    expect(runTask).toHaveBeenCalledExactlyOnceWith("task-2");
+  });
+
+  it("asks the board's own search for what is typed, so a task older than the newest 200 is found", () => {
+    // 250 tasks, newest first as the engine lists them; the one asked for is the oldest.
+    const board = Array.from({ length: 250 }, (_, index) => {
+      const number = 250 - index;
+      return { id: `task-${number}`, number, title: number === 1 ? "Migrate the ledger" : "Chore" };
+    });
+    // The engine's list: `q` looks through every task, and `limit` cuts what comes back.
+    const engine = (path: string) => {
+      const params = new URL(path, "http://engine").searchParams;
+      const q = (params.get("q") ?? "").toLowerCase();
+      return board
+        .filter((task) => `#${task.number} ${task.title}`.toLowerCase().includes(q))
+        .slice(0, Number(params.get("limit")));
+    };
+    const path = boardTaskSearchPath(" ledger ", "work");
+    expect(path).toBe("/api/tasks?q=ledger&limit=100&set=work");
+    const groups = filterCommandPaletteGroups({
+      activeGroups: [],
+      query: "ledger",
+      isInSubmenu: false,
+      projectSearchItems: [],
+      threadSearchItems: [],
+      taskSearchItems: buildBoardTaskActionItems({
+        tasks: engine(path!),
+        icon: null,
+        runTask: async () => {},
+      }),
+    });
+    expect(groups.flatMap((group) => group.items.map((item) => item.title))).toEqual([
+      "#1 Migrate the ledger",
+    ]);
+    expect(boardTaskSearchPath("  ", "work")).toBeNull();
   });
 });
 
@@ -704,13 +778,25 @@ describe("buildThreadActionItems", () => {
     ]);
   });
 
-  it("hides subagent threads and tasks shown under their parent but keeps forks", () => {
+  it("hides subagent threads, board tasks' conversations and tasks shown under their parent but keeps forks", () => {
     const parentId = ThreadId.make("parent");
     const delegatedId = ThreadId.make("delegated");
+    const boardTaskId = ThreadId.make("board-task");
     const items = buildThreadActionItems({
       threads: [
         makeThread({ id: parentId, title: "Parent" }),
         makeThread({ id: delegatedId, title: "Delegated task" }),
+        // A board task's conversation opens in the task's view, which the board's rows list.
+        makeThread({
+          id: boardTaskId,
+          title: "Board task conversation",
+          lineage: {
+            rootThreadId: boardTaskId,
+            parentThreadId: null,
+            relationshipToParent: null,
+            engineIntake: "board-task:board-1:task-7",
+          },
+        }),
         makeThread({
           id: ThreadId.make("subagent"),
           title: "Subagent",

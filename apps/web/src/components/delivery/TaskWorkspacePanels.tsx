@@ -1,21 +1,14 @@
 import { workspaceAreaProps } from "../../lib/workspaceFocus";
-import { FileExplorerPane } from "../files/FileExplorerPane";
-import { ThreadInspectionContext } from "../chat/ThreadInspectionContext";
+import type { ScopedThreadRef } from "@t3tools/contracts";
 import type { ReactNode } from "react";
-import { ScopedThreadRef } from "@t3tools/contracts";
-const ChatView = lazy(() => import("../ChatView"));
-const ThreadRelationshipsPanel = lazy(() =>
-  import("../chat/ThreadRelationshipsControl").then((module) => ({
-    default: module.ThreadRelationshipsPanel,
-  })),
-);
-const optionalThreadSchema = Schema.NullOr(ScopedThreadRef);
 import { useAtomValue } from "@effect/atom-react";
-import { lazy, Suspense, useEffect } from "react";
+import { useEffect, useLayoutEffect, useState } from "react";
 import * as Schema from "effect/Schema";
 import { isElectron } from "../../env";
 import { useLocalStorage } from "../../hooks/useLocalStorage";
 import { useMediaQuery } from "../../hooks/useMediaQuery";
+import { observeResize } from "../../lib/observeResize";
+import { cn } from "../../lib/utils";
 import { RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY } from "../../rightPanelLayout";
 import {
   selectThreadRightPanelState,
@@ -29,7 +22,11 @@ import { RightPanelSheet } from "../RightPanelSheet";
 import { RightPanelTabs } from "../RightPanelTabs";
 import { Button } from "../ui/button";
 
+type TaskTab = "task-evidence" | "task-deployments";
+
 const NO_SURFACES = new Set<string>();
+/** Below this width the task's badges leave the header for a row of their own under it. */
+const BADGES_IN_HEADER_MIN_WIDTH = 760;
 const NO_PREVIEW_SESSIONS = {};
 const NO_PREVIEW_DESKTOP_STATE = {};
 const NO_TERMINAL_LABELS = new Map<string, string>();
@@ -46,11 +43,16 @@ function getShortcutContext() {
   };
 }
 
-/** Opens a task's panel. A first open, or one after every tab was closed, brings both tabs back. */
-function openTaskPanel(owner: string, surface?: "task-evidence" | "task-deployments") {
-  const ref = taskPanelRef(owner);
+const isTaskTab = (surface: RightPanelSurface) =>
+  surface.kind === "task-evidence" || surface.kind === "task-deployments";
+
+/**
+ * Opens a task's tabs on a panel: the task's own, or its thread's. A first open, or one after
+ * every task tab was closed, brings both back.
+ */
+function openTaskTabs(ref: ScopedThreadRef, surface?: TaskTab) {
   const store = useRightPanelStore.getState();
-  if (selectThreadRightPanelState(store.byThreadKey, ref).surfaces.length === 0) {
+  if (!selectThreadRightPanelState(store.byThreadKey, ref).surfaces.some(isTaskTab)) {
     store.open(ref, "task-evidence");
     store.open(ref, "task-deployments");
     store.activateSurface(ref, surface ?? "task-evidence");
@@ -61,78 +63,87 @@ function openTaskPanel(owner: string, surface?: "task-evidence" | "task-deployme
 }
 
 /**
- * Task-owned panels share native sizing and sheet behavior without inventing a thread owner. The
- * right panel is T3's own tab panel, owned by `taskPanelRef`, so a thread view never shows it.
+ * Task-owned panels share native sizing and sheet behavior without inventing a thread owner. A
+ * task with a thread keeps its tabs on that thread's right panel, behind the native toggle; one
+ * without (a draft, a queued or a moved task) gets a panel owned by `taskPanelRef`, its toggles
+ * under the native header. The details open as a sheet wherever no thread view holds them.
  */
 export function TaskWorkspacePanels(props: {
   owner: string;
-  source?: ScopedThreadRef | null;
-  navigation?: ReactNode;
-  /** Opens a related thread in the centre, where the task's own conversation is. Without it, a related thread opens in the full workspace view. */
-  onOpenThread?: (thread: ScopedThreadRef) => void;
+  /** The task's own thread, whose right panel holds the task's tabs. */
+  thread: ScopedThreadRef | null;
   /** Open the right panel the first time this task is shown. */
   openFirst?: boolean;
+  /** The sheet's content: the task's details where no thread view hosts them. */
   details: ReactNode;
-  conversation?: ReactNode;
-  renderConversation?: (showDetails: () => void) => ReactNode;
+  renderConversation: (panel: {
+    /** The task panel's toggles, for a page whose details are the sheet; none with a thread. */
+    readonly controls: ReactNode;
+    readonly showDetails: () => void;
+    readonly openTab: (tab: TaskTab) => void;
+    /** The centre is too narrow for the task's badges in its header. */
+    readonly narrow: boolean;
+  }) => ReactNode;
   evidence: ReactNode;
-  /** The deployments tab: the task's deployment status, one row per environment. */
+  /** The deployments tab: delivering the task and its deployments. */
   deployments: ReactNode;
   detailsOpen: boolean;
   onDetailsOpenChange: (open: boolean) => void;
 }) {
   const sheet = useMediaQuery(RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY);
+  const [centre, setCentre] = useState<HTMLDivElement | null>(null);
+  const [narrow, setNarrow] = useState(false);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- follows the centre's laid-out width, which only the DOM knows, so the badges sit where they fit before the first paint
+  useLayoutEffect(() => {
+    if (!centre) return;
+    const measure = () => setNarrow(centre.clientWidth < BADGES_IN_HEADER_MIN_WIDTH);
+    measure();
+    return observeResize(centre, measure);
+  }, [centre]);
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
-  const panelRef = taskPanelRef(props.owner);
+  const panelRef = props.thread ?? taskPanelRef(props.owner);
   const panel = useRightPanelStore((state) =>
     selectThreadRightPanelState(state.byThreadKey, panelRef),
   );
-  const evidenceOpen = panel.isOpen;
+  const ownPanel = props.thread === null;
+  const evidenceOpen = ownPanel && panel.isOpen;
   // A task never opened before shows its engine facts beside the conversation when the width holds
-  // task details, conversation and panel together. That it happened is kept apart from the tabs:
-  // closing every tab empties them, and the panel must stay closed all the same.
+  // conversation and panel together. That it happened is kept apart from the tabs: closing every
+  // tab empties them, and the panel must stay closed all the same.
   const roomy = useMediaQuery("(min-width: 1360px)");
   const [firstOpenDone, setFirstOpenDone] = useLocalStorage(
     `t3code:task-panel-first-open:${props.owner}`,
     false,
     Schema.Boolean,
   );
-  const hasTabs = panel.surfaces.length > 0;
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- opens the task's right panel in the external panel store on a first visit, and records in local storage that the task has had its panel
+  const hasTabs = panel.surfaces.some(isTaskTab);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- opens the task's tabs in the external panel store on a first visit, and records in local storage that the task has had them
   useEffect(() => {
     if (firstOpenDone) return;
     if (hasTabs) setFirstOpenDone(true);
-    else if (props.openFirst && roomy && !sheet) openTaskPanel(props.owner);
-  }, [props.openFirst, firstOpenDone, hasTabs, roomy, sheet, props.owner, setFirstOpenDone]);
-  const maximized = panel.isOpen && panel.maximized === true;
-  const [selectedThread, setSelectedThread] = useLocalStorage(
-    `t3code:task-inspected-thread:${props.owner}`,
-    null as ScopedThreadRef | null,
-    optionalThreadSchema,
-  );
-  const inspectingSource = selectedThread !== null;
-  const inspectThread = (thread: ScopedThreadRef) => setSelectedThread(thread);
-  const lineageThread = props.onOpenThread ?? inspectThread;
+    else if (props.openFirst && roomy && !sheet) openTaskTabs(panelRef);
+  }, [props.openFirst, firstOpenDone, hasTabs, roomy, sheet, panelRef, setFirstOpenDone]);
+  const maximized = evidenceOpen && panel.maximized === true;
   const closeEvidence = () => {
     useRightPanelStore.getState().close(panelRef);
     useRightPanelStore.getState().setMaximized(panelRef, false);
   };
-  const openEvidence = () => openTaskPanel(props.owner);
   const setMaximized = (next: boolean) =>
     useRightPanelStore.getState().setMaximized(panelRef, next);
-  const controls = (
+  const controls = ownPanel ? (
     <PanelLayoutControls
+      showThreadPanelControl
       detailsLabel="Toggle task details panel"
       showTerminalControl={false}
       terminalAvailable={false}
       terminalOpen={false}
       terminalShortcutLabel={null}
       onToggleTerminal={() => {}}
-      threadPanelOpen={props.detailsOpen && !maximized && !(sheet && evidenceOpen)}
+      threadPanelOpen={props.detailsOpen && !(sheet && evidenceOpen)}
       threadPanelPresentation="inline"
       threadPanelShortcutLabel={null}
       onToggleThreadPanel={() => {
-        if (maximized || (sheet && evidenceOpen)) {
+        if (sheet && evidenceOpen) {
           closeEvidence();
           props.onDetailsOpenChange(true);
         } else props.onDetailsOpenChange(!props.detailsOpen);
@@ -144,16 +155,16 @@ export function TaskWorkspacePanels(props: {
         if (evidenceOpen) closeEvidence();
         else {
           if (sheet) props.onDetailsOpenChange(false);
-          openEvidence();
+          openTaskTabs(panelRef);
         }
       }}
     />
-  );
-  const panelMode = sheet || inspectingSource ? "sheet" : "inline";
+  ) : null;
+  const panelMode = sheet ? "sheet" : "inline";
   const activeSurface =
     panel.surfaces.find((surface) => surface.id === panel.activeSurfaceId) ?? null;
   const store = () => useRightPanelStore.getState();
-  const evidence = (
+  const evidence = ownPanel ? (
     <RightPanelTabs
       mode={panelMode}
       open={evidenceOpen}
@@ -164,7 +175,8 @@ export function TaskWorkspacePanels(props: {
       widthStorageKey={`t3code:task-evidence-width:${props.owner}`}
       defaultWidth={400}
       layoutControls={
-        <span className="flex shrink-0 items-center gap-1">
+        // Inline, the panel's top right sits under the window's own panel toggles.
+        <span className={cn("flex shrink-0 items-center gap-1", panelMode === "inline" && "pe-28")}>
           {panelMode === "inline" ? (
             <RightPanelMaximizeControl
               maximized={maximized}
@@ -198,6 +210,7 @@ export function TaskWorkspacePanels(props: {
       onAddPullRequest={NOTHING}
       onAddPullRequests={NOTHING}
       onAddDevice={NOTHING}
+      onAddTaskSurface={(kind) => store().open(panelRef, kind)}
       browserAvailable={false}
       terminalAvailable={false}
       diffAvailable={false}
@@ -206,172 +219,60 @@ export function TaskWorkspacePanels(props: {
       pullRequestsAvailable={false}
       deviceAvailable={false}
     >
-      <div className="flex min-h-0 flex-1 overflow-y-auto">
+      <div className="flex min-h-0 flex-1">
         {activeSurface?.kind === "task-deployments" ? props.deployments : props.evidence}
       </div>
     </RightPanelTabs>
-  );
+  ) : null;
+  const detailsShown = props.detailsOpen && !(sheet && evidenceOpen);
   return (
-    <div className="flex min-h-0 flex-1 flex-col" data-task-workspace-panels>
-      <header className="flex shrink-0 items-center justify-between border-b px-3 py-1">
-        <span className="text-xs text-muted-foreground">Conversation</span>
-        <div className="flex items-center gap-2">
-          <Button
-            size="xs"
-            variant="ghost"
-            disabled={!props.source && !selectedThread}
-            title={
-              selectedThread
-                ? "Return to the task conversation"
-                : props.source
-                  ? "Inspect the source conversation and its workspace"
-                  : "This task has no source conversation. Native thread tools and terminal are unavailable."
-            }
-            onClick={() => setSelectedThread(inspectingSource ? null : (props.source ?? null))}
-          >
-            {inspectingSource ? "Back to task conversation" : "Inspect source workspace"}
-          </Button>
-          {selectedThread &&
-          props.source &&
-          (selectedThread.threadId !== props.source.threadId ||
-            selectedThread.environmentId !== props.source.environmentId) ? (
-            <Button
-              size="xs"
-              variant="ghost"
-              onClick={() => setSelectedThread(props.source ?? null)}
-            >
-              Source conversation
-            </Button>
-          ) : null}
-          {inspectingSource ? (
-            <Button
-              size="xs"
-              variant="ghost"
-              onClick={() => (evidenceOpen ? closeEvidence() : openEvidence())}
-            >
-              Task evidence and actions
-            </Button>
-          ) : (
-            controls
-          )}
-        </div>
-      </header>
-      {selectedThread ? (
-        <div className="flex min-h-0 flex-1 flex-col">
-          <p className="shrink-0 border-b px-3 py-1 text-xs text-muted-foreground">
-            Source conversation workspace. Tools and terminal belong to this conversation and its
-            project, not an engine run.
-          </p>
-          <ThreadInspectionContext value={inspectThread}>
-            <Suspense fallback={<p>Loading conversation...</p>}>
-              <ChatView
-                environmentId={selectedThread.environmentId}
-                threadId={selectedThread.threadId}
-                routeKind="server"
-                unavailableContent={
-                  <p role="status" className="p-4 text-sm text-muted-foreground">
-                    This conversation is loading or unavailable in its environment. Return to the
-                    task to keep reading its history and evidence.
-                  </p>
-                }
-              />
-            </Suspense>
-          </ThreadInspectionContext>
-        </div>
-      ) : null}
-      <div className={inspectingSource ? "hidden" : "flex min-h-0 min-w-0 flex-1"}>
-        {!sheet && props.detailsOpen && !maximized ? (
-          <FileExplorerPane
-            resizable
-            label="Task details"
-            resizeLabel="Resize task navigation"
-            storageKey="t3code:task-navigation-width"
-            defaultWidth={300}
-            minWidth={220}
-            edge="right"
-          >
-            <div
-              {...workspaceAreaProps("task-navigation", 1, "Task team and details")}
-              data-workspace-focus-key={`task-navigation:${props.owner}`}
-              className="flex min-h-0 flex-1 flex-col overflow-y-auto"
-            >
-              {props.navigation ? (
-                <div className="shrink-0 border-b p-3">{props.navigation}</div>
-              ) : null}
-              {props.source ? (
-                <ThreadInspectionContext value={lineageThread}>
-                  <Suspense fallback={<p className="p-3 text-xs">Loading agent lineage...</p>}>
-                    <div className="shrink-0 border-b p-3">
-                      <ThreadRelationshipsPanel
-                        environmentId={props.source.environmentId}
-                        threadId={props.source.threadId}
-                        showLineage
-                        showSideChats
-                      />
-                    </div>
-                  </Suspense>
-                </ThreadInspectionContext>
-              ) : null}
-              {props.details}
-            </div>
-          </FileExplorerPane>
-        ) : null}
-        <div
-          className={maximized && !sheet && evidenceOpen ? "hidden" : "flex min-h-0 min-w-0 flex-1"}
-        >
-          {props.renderConversation
-            ? props.renderConversation(() => {
-                closeEvidence();
-                props.onDetailsOpenChange(true);
-              })
-            : props.conversation}
-        </div>
-        {!sheet && !inspectingSource ? evidence : null}
+    <div className="flex min-h-0 min-w-0 flex-1" data-task-workspace-panels>
+      <div
+        ref={setCentre}
+        className={maximized && !sheet ? "hidden" : "flex min-h-0 min-w-0 flex-1"}
+      >
+        {props.renderConversation({
+          controls,
+          showDetails: () => {
+            if (ownPanel) closeEvidence();
+            props.onDetailsOpenChange(true);
+          },
+          openTab: (tab) => {
+            if (sheet) props.onDetailsOpenChange(false);
+            openTaskTabs(panelRef, tab);
+          },
+          narrow,
+        })}
       </div>
-      {sheet || inspectingSource ? (
+      {sheet ? (
         <RightPanelSheet animationDurationMs={0} open={evidenceOpen} onClose={closeEvidence}>
           {evidence}
         </RightPanelSheet>
-      ) : null}
-      {sheet && !inspectingSource ? (
-        <RightPanelSheet
-          animationDurationMs={0}
-          open={props.detailsOpen && !evidenceOpen}
-          onClose={() => props.onDetailsOpenChange(false)}
-        >
-          <div className="flex h-full min-h-0 flex-col">
-            <header className="flex justify-end border-b p-2">
-              <Button size="xs" variant="ghost" onClick={() => props.onDetailsOpenChange(false)}>
-                Close task details
-              </Button>
-            </header>
-            <div
-              {...workspaceAreaProps("task-navigation", 1, "Task team and details")}
-              data-workspace-focus-key={`task-navigation:${props.owner}`}
-              className="flex min-h-0 flex-1 flex-col overflow-y-auto"
-            >
-              {props.navigation ? (
-                <div className="shrink-0 border-b p-3">{props.navigation}</div>
-              ) : null}
-              {props.source ? (
-                <ThreadInspectionContext value={lineageThread}>
-                  <Suspense fallback={<p className="p-3 text-xs">Loading agent lineage...</p>}>
-                    <div className="shrink-0 border-b p-3">
-                      <ThreadRelationshipsPanel
-                        environmentId={props.source.environmentId}
-                        threadId={props.source.threadId}
-                        showLineage
-                        showSideChats
-                      />
-                    </div>
-                  </Suspense>
-                </ThreadInspectionContext>
-              ) : null}
-              {props.details}
-            </div>
+      ) : (
+        evidence
+      )}
+      <RightPanelSheet
+        animationDurationMs={0}
+        open={detailsShown}
+        onClose={() => props.onDetailsOpenChange(false)}
+      >
+        <div className="flex h-full min-h-0 flex-col">
+          <header className="flex justify-end border-b p-2">
+            <Button size="xs" variant="ghost" onClick={() => props.onDetailsOpenChange(false)}>
+              Close task details
+            </Button>
+          </header>
+          <div
+            {...workspaceAreaProps("task-navigation", 1, "Task team and details")}
+            data-workspace-focus-key={`task-navigation:${props.owner}`}
+            className="flex min-h-0 flex-1 flex-col overflow-y-auto"
+            data-task-details-sheet
+          >
+            {/* Mounted only while open, so the thread view's own details are the only copy. */}
+            {detailsShown ? props.details : null}
           </div>
-        </RightPanelSheet>
-      ) : null}
+        </div>
+      </RightPanelSheet>
     </div>
   );
 }

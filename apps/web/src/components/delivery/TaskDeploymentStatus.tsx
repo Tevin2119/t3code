@@ -76,7 +76,7 @@ function PublicationDetails({
             </p>
           ) : null}
           <p className="font-medium">Qualification evidence</p>
-          <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-all">
+          <pre className="whitespace-pre-wrap break-all">
             {JSON.stringify(value.candidate.evidence, null, 2) ?? "Not recorded"}
           </pre>
         </div>
@@ -92,7 +92,7 @@ function PublicationDetails({
                 {entry.at} · {entry.state}
                 {entry.problem ? ` · ${entry.problem}` : ""}
                 {entry.candidate ? (
-                  <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-all">
+                  <pre className="whitespace-pre-wrap break-all">
                     {JSON.stringify(entry.candidate, null, 2)}
                   </pre>
                 ) : null}

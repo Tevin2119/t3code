@@ -246,6 +246,8 @@ export interface FakeThread {
   readonly tags?: ReadonlyArray<string>;
   readonly id: ThreadId;
   readonly title: string;
+  /** Defaults to the one project; one the environment does not have leaves the thread without. */
+  readonly projectId?: ProjectId;
   /** Defaults to GPT-5.4 on Codex. */
   readonly modelSelection?: ModelSelection;
   /** The first is the thread's active provider thread. */
@@ -331,7 +333,7 @@ function shellOf(thread: FakeThread): OrchestrationV2ThreadShell {
   const modelSelection = thread.modelSelection ?? MODEL;
   return {
     id: thread.id,
-    projectId: PROJECT_ID,
+    projectId: thread.projectId ?? PROJECT_ID,
     title: thread.title,
     providerInstanceId: modelSelection.instanceId,
     modelSelection,

@@ -19,6 +19,7 @@ import {
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
+  type ReactNode,
 } from "react";
 import { isTrailingDoubleClick } from "../Sidebar.logic";
 import { Badge } from "../ui/badge";
@@ -58,6 +59,8 @@ interface ChatHeaderProps {
   onNewThreadInProject: () => void;
   onOpenProjectSettings?: (() => void) | undefined;
   onFindInThread?: ((threadRef: ScopedThreadRef) => void) | undefined;
+  /** Beside the share indicator: what a view hosting the thread adds to its header. */
+  actions?: ReactNode;
 }
 
 function resolveRenameCommit(input: {
@@ -83,6 +86,7 @@ export const ChatHeader = memo(function ChatHeader({
   onNewThreadInProject,
   onOpenProjectSettings,
   onFindInThread,
+  actions,
 }: ChatHeaderProps) {
   const gt = useGT();
   const activeProjectName = activeProject?.isScratch ? gt("No project") : activeProject?.title;
@@ -412,6 +416,7 @@ export const ChatHeader = memo(function ChatHeader({
         </WorkspaceBreadcrumbItem>
       </WorkspaceBreadcrumb>
       {isServerThread ? <GuestShareIndicator threadRef={activeThreadRef} /> : null}
+      {actions}
     </div>
   );
 });
