@@ -244,3 +244,21 @@ it("opens the right panel on a task's first visit only when asked, and not again
   await expect.element(toggle).toHaveAttribute("aria-pressed", "false");
   expect(page.getByText("Engine facts").query()).toBeNull();
 });
+
+it("offers its tabs on an empty panel and in the + menu, adding only the one picked", async () => {
+  const ref = taskPanelRef("plus-menu-task");
+  const surfaces = () =>
+    selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, ref).surfaces;
+  await using screen = await render(<TaskExample owner="plus-menu-task" />);
+  await act(() => useRightPanelStore.getState().show(ref));
+  await screen.getByRole("button", { name: /Deployments/ }).click();
+  await expect.element(page.getByText("Deployment rows for plus-menu-task")).toBeVisible();
+  expect(surfaces()).toEqual([{ id: "task-deployments", kind: "task-deployments" }]);
+  await page.getByRole("button", { name: "Add panel surface" }).click();
+  await page.getByRole("menuitem", { name: /Task evidence/ }).click();
+  await expect.element(page.getByText("Candidate evidence for plus-menu-task")).toBeVisible();
+  expect(surfaces()).toEqual([
+    { id: "task-deployments", kind: "task-deployments" },
+    { id: "task-evidence", kind: "task-evidence" },
+  ]);
+});

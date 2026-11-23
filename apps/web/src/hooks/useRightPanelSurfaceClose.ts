@@ -35,6 +35,8 @@ import { useStableCallback } from "./useStableCallback";
 export function useRightPanelSurfaceClose(input: {
   readonly threadRef: ScopedThreadRef | null;
   readonly terminalLabelsById: ReadonlyMap<string, string>;
+  /** The tabs the view shows, where it leaves saved ones out; closing acts on these alone. */
+  readonly surfaces?: readonly RightPanelSurface[];
 }) {
   const { threadRef, terminalLabelsById } = input;
   const closePreview = useAtomCommand(previewEnvironment.close, "preview close");
@@ -46,9 +48,10 @@ export function useRightPanelSurfaceClose(input: {
   const previewState = useThreadPreviewState(threadRef);
   const terminalActions = useThreadTerminalActions(threadRef);
   const storeCloseTerminal = useTerminalUiStateStore((state) => state.closeTerminal);
-  const surfaces = useRightPanelStore(
+  const savedSurfaces = useRightPanelStore(
     (state) => selectThreadRightPanelState(state.byThreadKey, threadRef).surfaces,
   );
+  const surfaces = input.surfaces ?? savedSurfaces;
 
   const releaseSurfaceResources = (ref: ScopedThreadRef, surface: RightPanelSurface) => {
     // Without preview access, server state remains until an authorized close or restart.
@@ -115,6 +118,14 @@ export function useRightPanelSurfaceClose(input: {
       // first so the close stays a user action that hides the panel after the last tab.
       store.closeSurface(threadRef, surface.id);
       releaseSurfaceResources(threadRef, surface);
+    }
+    // With the last shown tab gone the panel closes, as an emptied one does; hidden ones stay saved.
+    const closedIds = new Set(toClose.map((surface) => surface.id));
+    if (
+      surfaces.length < savedSurfaces.length &&
+      surfaces.every((surface) => closedIds.has(surface.id))
+    ) {
+      store.close(threadRef);
     }
     const nextActiveSurface = selectActiveRightPanelSurface(
       useRightPanelStore.getState().byThreadKey,

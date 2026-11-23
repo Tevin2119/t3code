@@ -39,7 +39,7 @@ import stylesheet from "~/index.css?inline";
 import { environmentContextRecord } from "~/lib/composerContextRecords";
 import { startWorkspaceFocus } from "~/lib/workspaceFocus";
 import { usePromptStashStore } from "~/promptStashStore";
-import { useRightPanelStore } from "~/rightPanelStore";
+import { selectThreadRightPanelState, useRightPanelStore } from "~/rightPanelStore";
 import { getRouter } from "~/router";
 import { appAtomRegistry } from "~/rpc/atomRegistry";
 import { environmentThreadDetails } from "~/state/threads";
@@ -933,6 +933,26 @@ it("opens a timeline parent through the containing workspace", async () => {
   expect(router.state.location.pathname).toBe(path);
 });
 
+/** The board task a task's view provides to what it hosts. */
+const boardTask = () => ({
+  environmentId: null,
+  taskId: "t7",
+  task: parseTask({
+    id: "t7",
+    number: 7,
+    title: "Fix the sync",
+    body: "Make the sync stop dropping rows.",
+    state: "ready",
+    lane: "ready",
+    card: { id: "t7", number: 7, title: "Fix the sync", lane: "ready" },
+  }),
+  stale: false,
+  refresh: () => {},
+  openTask: () => {},
+  openThread: () => {},
+  seats: { thread: () => null, current: null, open: () => {} },
+});
+
 it("a thread a board task's view shows in its own thread's place keeps the task's panels", async () => {
   await page.viewport(1400, 900);
   const lead = threadWithHistory("task-lead", 1);
@@ -946,36 +966,20 @@ it("a thread a board task's view shows in its own thread's place keeps the task'
   // The task's tabs and its details are open on the task thread's panels; the seat's are empty.
   useRightPanelStore.getState().open(leadRef, "task-evidence");
   useRightPanelStore.getState().setThreadPanelOpen(leadRef, "inline", true);
-  const task = parseTask({
-    id: "t7",
-    number: 7,
-    title: "Fix the sync",
-    body: "Make the sync stop dropping rows.",
-    state: "ready",
-    lane: "ready",
-    card: { id: "t7", number: 7, title: "Fix the sync", lane: "ready" },
-  });
-  const board = {
-    environmentId: null,
-    taskId: "t7",
-    task,
-    stale: false,
-    refresh: () => {},
-    openTask: () => {},
-    openThread: () => {},
-    seats: { thread: () => null, current: null, open: () => {} },
-  };
   const router = getRouter(
     createMemoryHistory({ initialEntries: [`/${ENVIRONMENT_ID}/${seat.id}`] }),
   );
   await router.load();
   await using screen = await render(
-    <BoardTaskContext value={board}>
+    <BoardTaskContext value={boardTask()}>
       <ThreadPanelHostContext value={leadRef}>
         <AppRoot router={router} />
       </ThreadPanelHostContext>
     </BoardTaskContext>,
-    { router: false },
+    {
+      // AppRoot brings its own router.
+      router: false,
+    },
   );
   await expect
     .element(screen.getByRole("textbox", { name: `Message ${seat.title}`, exact: true }))
@@ -988,6 +992,44 @@ it("a thread a board task's view shows in its own thread's place keeps the task'
   // So are the details, whose Task item reads the board's task.
   const taskItem = page.getByRole("region", { name: "Task", exact: true });
   await expect.element(taskItem.getByText("Make the sync stop dropping rows.")).toBeVisible();
+});
+
+it("a board task's thread opened by its own route keeps the task's tabs saved for its task view, out of sight", async () => {
+  await page.viewport(1400, 900);
+  const lead = threadWithHistory("task-own-route", 1);
+  using _environment = installFakeEnvironment([lead]);
+  __setClientSettingsForTests({
+    ...DEFAULT_CLIENT_SETTINGS,
+    onboardingCompletedAt: "2026-01-01T00:00:00.000Z",
+  });
+  const leadRef = scopeThreadRef(ENVIRONMENT_ID, lead.id);
+  useRightPanelStore.getState().open(leadRef, "task-evidence");
+  const router = getRouter(
+    createMemoryHistory({ initialEntries: [`/${ENVIRONMENT_ID}/${lead.id}`] }),
+  );
+  await router.load();
+  const app = (board: ReturnType<typeof boardTask> | null) => (
+    <BoardTaskContext value={board}>
+      <AppRoot router={router} />
+    </BoardTaskContext>
+  );
+  await using screen = await render(app(null), {
+    // AppRoot brings its own router.
+    router: false,
+  });
+  await expect
+    .element(screen.getByRole("textbox", { name: `Message ${lead.title}`, exact: true }))
+    .toBeVisible();
+  // With no board task around it, the panel is the thread's own: no task tab, and none offered.
+  await expect.element(screen.getByText("Open a surface")).toBeVisible();
+  await expect.element(screen.getByText("Task evidence")).not.toBeInTheDocument();
+  expect(
+    selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, leadRef).surfaces,
+  ).toEqual([{ id: "task-evidence", kind: "task-evidence" }]);
+  await screen.rerender(app(boardTask()));
+  await expect
+    .element(screen.getByRole("button", { name: "Task evidence", exact: true }))
+    .toBeVisible();
 });
 
 it("a subagent tab shows its read-only bar under no header of its own", async () => {

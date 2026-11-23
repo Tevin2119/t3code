@@ -49,6 +49,7 @@ function Deployment(props: { readonly board: BoardTask; readonly task: TaskView 
             policy={task.card.mergePermission}
             stale={board.stale}
             onDone={board.refresh}
+            untitled
           />
         ) : (
           <div data-task-merge-summary>

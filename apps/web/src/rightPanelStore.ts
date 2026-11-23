@@ -1470,6 +1470,44 @@ export function selectThreadRightPanelState(
   return byThreadKey[scopedThreadKey(ref)] ?? EMPTY_THREAD_STATE;
 }
 
+const isBoardTaskSurface = (surface: RightPanelSurface) =>
+  surface.kind === "task-evidence" || surface.kind === "task-deployments";
+// One shown state per saved one: the panel's presence compares what it shows by reference.
+const shownStates = new WeakMap<ThreadRightPanelState, ThreadRightPanelState>();
+
+/**
+ * The panel as a thread's view shows it. Away from a board task's view, the task's tabs stay saved
+ * but are left out, and an active one gives way to the last tab that is shown.
+ */
+export function shownRightPanelState(
+  state: ThreadRightPanelState,
+  boardTaskInView: boolean,
+): ThreadRightPanelState {
+  if (boardTaskInView || !state.surfaces.some(isBoardTaskSurface)) return state;
+  const cached = shownStates.get(state);
+  if (cached) return cached;
+  const surfaces = state.surfaces.filter((surface) => !isBoardTaskSurface(surface));
+  const activeShown = surfaces.some((surface) => surface.id === state.activeSurfaceId);
+  const shown = {
+    ...state,
+    surfaces,
+    activeSurfaceId: activeShown ? state.activeSurfaceId : (surfaces.at(-1)?.id ?? null),
+  };
+  shownStates.set(state, shown);
+  return shown;
+}
+
+/** Where a move to `toIndex` among the shown tabs lands among the saved ones. */
+export function savedMoveIndex(
+  saved: readonly RightPanelSurface[],
+  shown: readonly RightPanelSurface[],
+  toIndex: number,
+): number {
+  const target = shown[toIndex]?.id;
+  const index = saved.findIndex((surface) => surface.id === target);
+  return index < 0 ? toIndex : index;
+}
+
 export function selectThreadPanelVisibility(
   byThreadKey: Record<string, ThreadPanelVisibility>,
   ref: ScopedThreadRef | null | undefined,

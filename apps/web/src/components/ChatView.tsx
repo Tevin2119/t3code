@@ -1,5 +1,6 @@
 import { useThreadInspection } from "./chat/ThreadInspectionContext";
 import { useThreadPanelHost } from "./chat/ThreadPanelHostContext";
+import { useBoardTask } from "./delivery/BoardTaskContext";
 import { deriveTeamChatPhase } from "@t3tools/client-runtime/state/thread-workflows";
 import { m } from "../i18n/messages";
 import { thrownErrorMessage } from "@t3tools/client-runtime/errors";
@@ -224,10 +225,10 @@ import { FileMetadataThreadProvider } from "../hooks/FileMetadataThreadProvider"
 import { RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY } from "../rightPanelLayout";
 import { PopoverCreateHandle } from "./ui/popover";
 import {
-  selectActiveRightPanel,
-  selectActiveRightPanelSurface,
+  savedMoveIndex,
   selectThreadPanelOpen,
   selectThreadRightPanelState,
+  shownRightPanelState,
   useRightPanelStore,
 } from "../rightPanelStore";
 import { isPreviewSupportedInRuntime, useThreadPreviewState } from "../previewStateStore";
@@ -1223,17 +1224,18 @@ export default function ChatView(props: ChatViewProps) {
   if (anchorRunSettled) {
     setTimelineAnchor({ threadKey: activeThreadKey, messageId: null });
   }
-  const activeRightPanelKind = useRightPanelStore((state) =>
-    selectActiveRightPanel(state.byThreadKey, panelThreadRef),
-  );
-  const diffOpen = activeRightPanelKind === "diff";
-  const rightPanelState = useRightPanelStore((state) =>
+  const savedRightPanelState = useRightPanelStore((state) =>
     selectThreadRightPanelState(state.byThreadKey, panelThreadRef),
   );
+  const boardTaskInView = useBoardTask() !== null;
+  const rightPanelState = shownRightPanelState(savedRightPanelState, boardTaskInView);
+  const activeRightPanelSurface = rightPanelState.isOpen
+    ? (rightPanelState.surfaces.find((surface) => surface.id === rightPanelState.activeSurfaceId) ??
+      null)
+    : null;
+  const activeRightPanelKind = activeRightPanelSurface?.kind ?? null;
+  const diffOpen = activeRightPanelKind === "diff";
   const shouldUsePlanSidebarSheet = prefersPlanSidebarSheet && rightPanelState.maximized !== true;
-  const activeRightPanelSurface = useRightPanelStore((state) =>
-    selectActiveRightPanelSurface(state.byThreadKey, panelThreadRef),
-  );
   const activePreviewState = useThreadPreviewState(panelThreadRef);
   const activePreviewServerEpoch = activePreviewState.serverEpoch;
   const resolvePreviewRuntimeTabId = panelThreadRef
@@ -2284,6 +2286,7 @@ export default function ChatView(props: ChatViewProps) {
   } = useRightPanelSurfaceClose({
     threadRef: panelThreadRef,
     terminalLabelsById: activeTerminalLabelsById,
+    surfaces: rightPanelState.surfaces,
   });
   const closeRightPanelSurfaceStable = closeRightPanelSurface;
   const persistThreadSettingsForNextTurn = async (input: {
@@ -4573,7 +4576,12 @@ export default function ChatView(props: ChatViewProps) {
           onCloseOtherSurfaces={closeOtherRightPanelSurfacesStable}
           onCloseSurfacesToRight={closeRightPanelSurfacesToRightStable}
           onCloseAllSurfaces={closeAllRightPanelSurfacesStable}
-          onMoveSurface={moveRightPanelSurfaceStable}
+          onMoveSurface={(surfaceId, toIndex) =>
+            moveRightPanelSurfaceStable(
+              surfaceId,
+              savedMoveIndex(savedRightPanelState.surfaces, renderedRightPanelSurfaces, toIndex),
+            )
+          }
           onCopyFilePath={copyRightPanelFilePathStable}
           onAddBrowser={() => createBrowserSurface()}
           onAddBrowserInProfile={createBrowserSurfaceStable}

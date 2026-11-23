@@ -210,6 +210,7 @@ export function TaskWorkspacePanels(props: {
       onAddPullRequest={NOTHING}
       onAddPullRequests={NOTHING}
       onAddDevice={NOTHING}
+      onAddTaskSurface={(kind) => store().open(panelRef, kind)}
       browserAvailable={false}
       terminalAvailable={false}
       diffAvailable={false}

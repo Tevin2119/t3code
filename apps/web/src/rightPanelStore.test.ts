@@ -10,10 +10,12 @@ import {
   migratePersistedRightPanelState,
   pullRequestSurface,
   pullRequestSurfaceId,
+  savedMoveIndex,
   selectActiveRightPanel,
   selectActiveRightPanelSurface,
   selectThreadPanelVisibility,
   selectThreadRightPanelState,
+  shownRightPanelState,
   taskPanelRef,
   useRightPanelStore,
 } from "./rightPanelStore";
@@ -1441,5 +1443,29 @@ describe("task panels", () => {
         },
       }).byThreadKey,
     ).toEqual({});
+  });
+
+  it("leaves a task's tabs out of its thread's view away from the task, where moves keep their places", () => {
+    const store = useRightPanelStore.getState();
+    const kinds = ["diff", "task-evidence", "files", "task-deployments", "pull-requests"] as const;
+    for (const kind of kinds) store.open(refA, kind);
+    const saved = () =>
+      selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA);
+    const ids = (surfaces: readonly { id: string }[]) => surfaces.map(({ id }) => id);
+    const shown = shownRightPanelState(saved(), false);
+    expect(ids(shown.surfaces)).toEqual(["diff", "files", "pull-requests"]);
+    expect(shownRightPanelState(saved(), false)).toBe(shown);
+    expect(shownRightPanelState(saved(), true)).toBe(saved());
+    // The diff tab dropped on the last shown place lands after it among the saved tabs.
+    store.moveSurface(refA, "diff", savedMoveIndex(saved().surfaces, shown.surfaces, 2));
+    expect(ids(saved().surfaces)).toEqual([
+      "task-evidence",
+      "files",
+      "task-deployments",
+      "pull-requests",
+      "diff",
+    ]);
+    store.activateSurface(refA, "task-evidence");
+    expect(shownRightPanelState(saved(), false).activeSurfaceId).toBe("diff");
   });
 });
