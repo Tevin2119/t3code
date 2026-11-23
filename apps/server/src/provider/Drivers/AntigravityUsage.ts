@@ -76,7 +76,7 @@ const make = Effect.gen(function* () {
     // tokens come out of the account's plan; an API key or Agent Platform bills
     // them at Gemini's or Vertex AI's rates.
     const billingByRoot = new Map<string, string>();
-    for (const { instanceId, config } of instances.filter((instance) => instance.configured)) {
+    for (const { instanceId, config } of instances) {
       const directories = yield* resolveAntigravityInstanceDirectories(
         host.paths.stateDir,
         instanceId,
