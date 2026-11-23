@@ -156,6 +156,72 @@ export const DeliveryNativeBuildStepResult = Schema.Struct({
   next: Schema.optional(Schema.String),
 });
 
+const DeliverySeatThread = Schema.Struct({
+  environmentId: Schema.optional(Schema.NullOr(Schema.String)),
+  threadId: Schema.optional(Schema.NullOr(Schema.String)),
+});
+const DeliveryQaVerdict = Schema.Literals(["pass", "fail", "blocked"]);
+const DeliveryAcceptanceIndex = Schema.Number.check(
+  Schema.isInt(),
+  Schema.isGreaterThanOrEqualTo(0),
+);
+const DeliveryEvidenceRef = Schema.String.check(Schema.isPattern(/^[^\s\p{C}]{1,1024}$/u));
+
+export const DeliveryQaReceipt = Schema.Struct({
+  id: Schema.optional(Schema.NullOr(Schema.Number)),
+  task: Schema.optional(Schema.NullOr(Schema.String)),
+  run: Schema.optional(Schema.NullOr(Schema.String)),
+  seat: Schema.optional(Schema.NullOr(Schema.String)),
+  seatThread: Schema.optional(Schema.NullOr(DeliverySeatThread)),
+  acceptance: Schema.optional(
+    Schema.NullOr(
+      Schema.Struct({
+        index: Schema.optional(Schema.NullOr(DeliveryAcceptanceIndex)),
+        hash: Schema.optional(Schema.NullOr(Schema.String)),
+      }),
+    ),
+  ),
+  verdict: Schema.optional(Schema.NullOr(DeliveryQaVerdict)),
+  evidence: Schema.optional(Schema.NullOr(Schema.Array(Schema.String))),
+  model: Schema.optional(Schema.NullOr(Schema.String)),
+  modelSource: Schema.optional(Schema.NullOr(Schema.Literals(["attested", "picked", "requested"]))),
+  independenceChecked: Schema.optional(Schema.NullOr(Schema.Boolean)),
+  filedBy: Schema.optional(Schema.NullOr(Schema.String)),
+  filedAt: Schema.optional(Schema.NullOr(Schema.String)),
+});
+
+export const DeliverySeatHandoff = Schema.Struct({
+  id: Schema.optional(Schema.NullOr(Schema.Number)),
+  run: Schema.optional(Schema.NullOr(Schema.String)),
+  stage: Schema.optional(Schema.NullOr(Schema.Literals(["build", "review", "qa"]))),
+  seat: Schema.optional(Schema.NullOr(Schema.String)),
+  seatThread: Schema.optional(Schema.NullOr(DeliverySeatThread)),
+  state: Schema.optional(Schema.NullOr(Schema.Literals(["handed", "delivered", "fallen-back"]))),
+  reason: Schema.optional(Schema.NullOr(Schema.String)),
+  setBy: Schema.optional(Schema.NullOr(Schema.String)),
+  setAt: Schema.optional(Schema.NullOr(Schema.String)),
+});
+
+export const DeliverySeatAttestation = Schema.Struct({
+  ...DeliverySeatThread.fields,
+  run: Schema.optional(Schema.NullOr(Schema.String)),
+  seat: Schema.optional(Schema.NullOr(Schema.String)),
+  model: Schema.optional(Schema.NullOr(Schema.String)),
+  harness: Schema.optional(Schema.NullOr(Schema.String)),
+  setBy: Schema.optional(Schema.NullOr(Schema.String)),
+  setAt: Schema.optional(Schema.NullOr(Schema.String)),
+});
+
+export const DeliveryQaReceiptInput = Schema.Struct({
+  acceptanceIndex: DeliveryAcceptanceIndex.annotate({ description: "Zero-based checklist index." }),
+  verdict: DeliveryQaVerdict,
+  evidence: Schema.Array(DeliveryEvidenceRef),
+});
+export const DeliveryQaReceiptResult = Schema.Struct({
+  qaReceipt: DeliveryQaReceipt,
+  unchanged: Schema.optional(Schema.NullOr(Schema.Boolean)),
+});
+
 /**
  * What a thread was started with. Pinned at bind time: a thread keeps its
  * team, role and configuration revision even when the team is edited later.

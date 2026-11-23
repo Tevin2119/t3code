@@ -133,8 +133,9 @@ const BOARD_THREAD_CLAIM = /^\/api\/orchestration\/tasks\/[\w-]+\/(claim|ack|rel
 // The conversation's mirror and the steer handshake (spec 6a, slice 5).
 const BOARD_THREAD_CONVERSATION =
   /^\/api\/tasks\/[\w-]+\/(activity|steers\/\d+\/(delivered|failed))$/;
+const BOARD_SEAT_POST = /^\/api\/(?:tasks\/[\w-]+\/qa-receipts|runs\/[\w-]+\/seat-attestations)$/;
 const BOARD_THREAD_POST = new RegExp(
-  `${BOARD_THREAD_CLAIM.source}|${BOARD_THREAD_CONVERSATION.source}`,
+  `${BOARD_THREAD_CLAIM.source}|${BOARD_THREAD_CONVERSATION.source}|${BOARD_SEAT_POST.source}`,
 );
 const BOARD_THREAD_WRITE = new RegExp(`${BOARD_THREAD_LINK.source}|${BOARD_THREAD_POST.source}`);
 
@@ -174,8 +175,7 @@ export class DeliveryService extends Context.Service<
       input: DeliveryActInput,
     ) => Effect.Effect<DeliveryResponse, DeliveryError>;
     /**
-     * The server's own writes for a board task's conversation: the `boardThread` link (PUT and
-     * DELETE) and the task claim with its heartbeat. No client reaches these: `act` refuses them.
+     * Server-owned board conversation and seat writes. The generic `act` relay refuses them.
      */
     readonly boardThreadAct: (input: {
       readonly method: "PUT" | "DELETE" | "POST";
@@ -268,6 +268,7 @@ const make = Effect.fn("DeliveryService.make")(function* (
   const lineups = new Map<string, DeliveryOrchestrationConfig | null>();
   const rememberedLineups = new Map<string, DeliveryRememberedLineup>();
   const writeLock = yield* Semaphore.make(1);
+  const boardSeatWrites = yield* Semaphore.make(1);
 
   // Only a file that is not there means that no thread is bound. A file that
   // is there and cannot be read or understood holds bindings this service
@@ -1574,8 +1575,7 @@ const make = Effect.fn("DeliveryService.make")(function* (
           ? Effect.fail(
               new DeliveryError({
                 reason: "refused",
-                detail:
-                  "A board task's conversation is claimed and linked by the server, when the engine says the task started.",
+                detail: "Board conversation and seat records can only be written by the server.",
               }),
             )
           : new URL(input.path, "http://delivery.invalid").pathname === "/api/delivery/requests"
@@ -1604,16 +1604,16 @@ const make = Effect.fn("DeliveryService.make")(function* (
             }),
           ),
     ),
-    boardThreadAct: Effect.fn("DeliveryService.boardThreadAct")((input) =>
-      (input.method === "POST" ? BOARD_THREAD_POST : BOARD_THREAD_LINK).test(input.path)
-        ? request(input.method, input.path, input.body)
-        : Effect.fail(
-            new DeliveryError({
-              reason: "invalid",
-              detail: "Invalid board thread mutation path.",
-            }),
-          ),
-    ),
+    boardThreadAct: Effect.fn("DeliveryService.boardThreadAct")(function* (input) {
+      if (!(input.method === "POST" ? BOARD_THREAD_POST : BOARD_THREAD_LINK).test(input.path))
+        return yield* new DeliveryError({
+          reason: "invalid",
+          detail: "Invalid board thread mutation path.",
+        });
+      const write = request(input.method, input.path, input.body);
+      // The engine's approval throttle expects one seat write at a time.
+      return yield* BOARD_SEAT_POST.test(input.path) ? boardSeatWrites.withPermit(write) : write;
+    }),
     nativeIntakeAct: Effect.fn("DeliveryService.nativeIntakeAct")((input) =>
       /^\/api\/native-intakes\/intake-[a-f0-9]{64}\/(claim|attach|complete|abandon|cancel)$/.test(
         input.path,

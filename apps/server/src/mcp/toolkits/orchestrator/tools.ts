@@ -4,6 +4,8 @@ import {
   DeliveryDiscoverySnapshot,
   DeliveryNativeBuildStepInput,
   DeliveryNativeBuildStepResult,
+  DeliveryQaReceiptInput,
+  DeliveryQaReceiptResult,
   OrchestratorMcpCapabilitiesInput,
   OrchestratorMcpCapabilitiesResult,
   OrchestrationV2StopWorkflowInput,
@@ -402,9 +404,23 @@ const NativeBuildStepTool = Tool.make("delivery_native_build_step", {
   .annotate(Tool.Destructive, true)
   .annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenWhileDeliveryOff);
 
+const QaReceiptTool = Tool.make("delivery_qa_receipt", {
+  description:
+    "File a verdict and evidence refs for one acceptance item from the current run's attested QA seat thread. Use a zero-based index. The server resolves the task, seat, and checklist hash.",
+  parameters: DeliveryQaReceiptInput,
+  success: DeliveryQaReceiptResult,
+  failure: OrchestratorMcpFailure,
+  failureMode: "return",
+  dependencies: [...dependencies, DeliveryService],
+})
+  .annotate(Tool.Title, "File a QA receipt")
+  .annotate(Tool.Destructive, true)
+  .annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenWhileDeliveryOff);
+
 export const OrchestratorToolkit = Toolkit.make(
   DeliveryReadTool,
   NativeBuildStepTool,
+  QaReceiptTool,
   OrchestratorCapabilitiesTool,
   DelegateTaskTool,
   TaskStatusTool,

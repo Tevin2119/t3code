@@ -12,6 +12,7 @@ import * as McpToolAccess from "../../McpToolAccess.ts";
 import * as OrchestratorMcpService from "../../OrchestratorMcpService.ts";
 import * as ThreadMetadataMcpService from "../../ThreadMetadataMcpService.ts";
 import * as NativeBuildExecution from "../../../delivery/NativeBuildExecution.ts";
+import * as SeatHandoffs from "../../../delivery/SeatHandoffs.ts";
 
 const handlers = {
   delivery_read: McpToolAccess.reads(({ environmentId, ...input }) =>
@@ -27,6 +28,13 @@ const handlers = {
       const service = yield* NativeBuildExecution.NativeBuildExecution;
       return yield* service.step(scope, input);
     }).pipe(Effect.provide(NativeBuildExecution.layer)),
+  ),
+  delivery_qa_receipt: McpToolAccess.actsAsCaller((input) =>
+    Effect.gen(function* () {
+      const scope = yield* McpInvocationContext.McpInvocationContext;
+      const service = yield* SeatHandoffs.SeatHandoffs;
+      return yield* service.fileQaReceipt(scope, input);
+    }).pipe(Effect.provide(SeatHandoffs.layer)),
   ),
   orchestrator_capabilities: McpToolAccess.reads((input) =>
     Effect.gen(function* () {
