@@ -37,7 +37,7 @@ const ref = { environmentId: EnvironmentId.make("env-1"), threadId: ThreadId.mak
 describe("which conversation a task has", () => {
   it("is the thread the engine links the task to, in work or sent back to the queue", () => {
     for (const lane of ["implementation", "queue", "completed"]) {
-      expect(taskConversation({ boardThread, isDraft: false, lane })).toEqual({
+      expect(taskConversation({ boardThread, isDraft: false, lane, state: lane })).toEqual({
         kind: "thread",
         ref,
       });
@@ -45,12 +45,11 @@ describe("which conversation a task has", () => {
   });
 
   it("has none for a draft or a queued task with no link", () => {
-    expect(taskConversation({ boardThread: null, isDraft: true, lane: "draft" })).toEqual({
-      kind: "none",
-      why: "draft",
-    });
+    expect(
+      taskConversation({ boardThread: null, isDraft: true, lane: "draft", state: "draft" }),
+    ).toEqual({ kind: "none", why: "draft" });
     for (const lane of ["intake", "ready", "queue"]) {
-      expect(taskConversation({ boardThread: null, isDraft: false, lane })).toEqual({
+      expect(taskConversation({ boardThread: null, isDraft: false, lane, state: lane })).toEqual({
         kind: "none",
         why: "queued",
       });
@@ -58,8 +57,18 @@ describe("which conversation a task has", () => {
   });
 
   it("is unlinked for a task in work with no link, and never the thread it was filed from", () => {
-    const task = { boardThread: null, source, isDraft: false, lane: "planning" };
+    const task = { boardThread: null, source, isDraft: false, lane: "planning", state: "planning" };
     expect(taskConversation(task)).toEqual({ kind: "none", why: "unlinked" });
+  });
+
+  it("opens none for a task the engine reports moved or moving, link or not", () => {
+    for (const state of ["moved", "moving"]) {
+      for (const link of [boardThread, null]) {
+        expect(
+          taskConversation({ boardThread: link, isDraft: false, lane: "implementation", state }),
+        ).toEqual({ kind: "none", why: "moved" });
+      }
+    }
   });
 
   it("reads the link as the engine serves it, on the task and on its card", () => {
@@ -102,7 +111,7 @@ describe("what the centre shows", () => {
     expect(conversationState(conversation, false)).toEqual({ kind: "open", ref, offline: true });
   });
 
-  it("keeps a task with no conversation waiting or unlinked, whether or not T3 is running", () => {
+  it("keeps a task with no conversation waiting, unlinked or moved, whether or not T3 is running", () => {
     expect(conversationState({ kind: "none", why: "queued" }, false)).toEqual({
       kind: "waiting",
       why: "queued",
@@ -110,6 +119,7 @@ describe("what the centre shows", () => {
     expect(conversationState({ kind: "none", why: "unlinked" }, true)).toEqual({
       kind: "unlinked",
     });
+    expect(conversationState({ kind: "none", why: "moved" }, true)).toEqual({ kind: "moved" });
   });
 });
 
@@ -147,6 +157,17 @@ describe("a seat's conversation", () => {
     expect(seatConversation(null, children, "qa")).toBeNull();
   });
 
+  it("is the engine's thread for the seat in the task's environment, after T3's own child", () => {
+    expect(seatConversation(ref, children, "reviewer", undefined, "engine-thread")).toEqual({
+      environmentId: ref.environmentId,
+      threadId: "engine-thread",
+    });
+    expect(seatConversation(ref, children, "builder", undefined, "engine-thread")?.threadId).toBe(
+      "child-c",
+    );
+    expect(seatConversation(null, children, "reviewer", undefined, "engine-thread")).toBeNull();
+  });
+
   it("opens a seat that runs in a linked environment there, or read-only through the link", () => {
     const there = { environmentId: remote, threadId: "child-b" };
     const throughLink = {
@@ -178,6 +199,28 @@ describe("a seat's conversation", () => {
       seatOfThread(ref, children, { environmentId: remote, threadId: id("child-a") }),
     ).toBeNull();
     expect(seatOfThread(ref, children, { ...ref, threadId: id("plain") })).toBeNull();
+  });
+
+  it("names the seat of a thread the engine names, as it names one T3 spawned", () => {
+    const engineSeats = [
+      { seat: "reviewer", threadId: "engine-thread" },
+      { seat: "builder", threadId: null },
+    ];
+    expect(
+      seatOfThread(ref, children, { ...ref, threadId: id("engine-thread") }, engineSeats),
+    ).toBe("reviewer");
+    // T3's own child keeps its seat, and an engine thread is only ever in the task's environment.
+    expect(seatOfThread(ref, children, { ...ref, threadId: id("child-b") }, engineSeats)).toBe(
+      "qa",
+    );
+    expect(
+      seatOfThread(
+        ref,
+        children,
+        { environmentId: remote, threadId: id("engine-thread") },
+        engineSeats,
+      ),
+    ).toBeNull();
   });
 
   it("follows the connection of a seat thread that is already open", () => {

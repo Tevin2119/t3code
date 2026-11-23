@@ -1,2042 +1,44 @@
-import * as Schema from "effect/Schema";
-import { RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY } from "../../rightPanelLayout";
-import { useLocalStorage } from "../../hooks/useLocalStorage";
-import {
-  EMPTY_REPLY,
-  replyDraftKey,
-  useDeliveryReplyDrafts,
-} from "../../state/deliveryReplyDrafts";
-import { TaskWorkspacePanels } from "./TaskWorkspacePanels";
-import { TaskConversation } from "./TaskConversation";
-import { TaskFacts } from "./TaskFacts";
-import { useTaskConversation } from "./useTaskConversation";
-import { fullAutoAttribution } from "../../lib/delivery";
 import { EnvironmentId, ThreadId, type ScopedThreadRef } from "@t3tools/contracts";
-import { taskPanelRef, useRightPanelStore } from "../../rightPanelStore";
-import { SharedTaskAllocation } from "./SharedBoard";
-import {
-  ArrowLeftIcon,
-  CheckIcon,
-  CircleAlertIcon,
-  CircleCheckIcon,
-  CircleDotIcon,
-  CircleHelpIcon,
-  CirclePauseIcon,
-  CirclePlayIcon,
-  CircleXIcon,
-  CornerDownRightIcon,
-  EllipsisIcon,
-  FileIcon,
-  GitCommitHorizontalIcon,
-  InfoIcon,
-  ListChecksIcon,
-  PaperclipIcon,
-  PencilIcon,
-  SendIcon,
-  XIcon,
-} from "lucide-react";
-import { useEffect, useRef, useState } from "react";
-
-import { useNavigate } from "@tanstack/react-router";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import { isElectron } from "../../env";
 import { useMediaQuery } from "../../hooks/useMediaQuery";
-import { usePrimarySettings } from "../../hooks/useSettings";
+import { parseTask } from "../../lib/delivery";
+import { deliveryReadDiagnostic } from "../../lib/deliveryStates";
+import { RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY } from "../../rightPanelLayout";
+import { taskPanelRef, useRightPanelStore } from "../../rightPanelStore";
 import {
-  parseTarget,
-  parseTask,
-  seatSettingsToSend,
-  TASK_PRIORITIES,
-  targetLine,
-  type TaskBrief,
-  type TaskFile,
-  type TaskPriority,
-  repeatKeys,
-  type TaskBriefing,
-  type TaskView,
-  type TimelineEntry,
-  waitingWords,
-} from "../../lib/delivery";
-import {
-  ageLabel,
-  COMPOSER_EFFECT,
-  COMPOSER_KIND_HELP,
-  COMPOSER_KIND_LABEL,
-  isSendKey,
-  LANE_TITLE,
-  boardMoveIntent,
-  messageStateLabel,
-  PRIORITY_LABEL,
-  sectionOf,
-  tagsFromText,
-  type ComposerKind,
-} from "../../lib/deliveryBoard";
-import { BOARD_LANES, boardLaneOf } from "../../lib/boardLanes";
-import { boardChoiceKind, type MoveBoard } from "../../lib/deliveryMove";
-import { seatsChangedForTask, harnessLabel } from "../../lib/deliverySeats";
-import { cn } from "../../lib/utils";
-import {
-  useBoardStore,
   useDeliveryAct,
   useDeliveryRead,
-  useMinuteClock,
   usePersonName,
   useStaleReading,
-  withSeatChoice,
 } from "../../state/delivery";
-import ChatMarkdown from "../ChatMarkdown";
-import { Dialog, DialogHeader, DialogPanel, DialogPopup, DialogTitle } from "../ui/dialog";
-import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
-import { Input } from "../ui/input";
-import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
-import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
-import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
+import { Dialog, DialogHeader, DialogPanel, DialogPopup, DialogTitle } from "../ui/dialog";
+import { Empty, EmptyHeader, EmptyTitle } from "../ui/empty";
 import { SidebarInset } from "../ui/sidebar";
 import { Textarea } from "../ui/textarea";
-import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { WorkspacePageHeader } from "../WorkspacePageHeader";
-import { MoveTaskDialog } from "./MoveTaskDialog";
-import { SeatSettingsPanel } from "./SeatSettingsPanel";
-import { actionHelp, actionLabel, useTaskActions } from "./taskActions";
-import { TaskEditor } from "./TaskEditor";
-import {
-  AttachButton,
-  FilesInTransit,
-  TaskFileList,
-  useFileIntake,
-  useTaskUploads,
-} from "./taskFiles";
-import {
-  Age,
-  Avatar,
-  laneTone,
-  PriorityPill,
-  PublicationRows,
-  QaVotes,
-  Row,
-  TagList,
-  WaitingOn,
-} from "./taskParts";
-import { TaskDisclosure } from "./TaskDisclosure";
-import { relatedTaskGroups } from "./relatedTaskGroups";
-import { TaskDeploymentsPanel } from "./TaskDeploymentStatus";
-import { CardDeliveryStatus } from "./CardDeliveryStatus";
+import { BoardTaskContext, type BoardTask } from "./BoardTaskContext";
+import { DecisionBar } from "./DecisionBar";
 import { DeliveryDiagnosticNotice } from "./DeliveryDiagnosticNotice";
-import { deliveryReadDiagnostic } from "../../lib/deliveryStates";
-import { MergePermissionControls } from "./MergePermissionControls";
-import { BoardDelivery } from "./BoardDelivery";
-
-const EVENT_ICON: Record<string, typeof CircleDotIcon> = {
-  pass: CircleCheckIcon,
-  approved: CircleCheckIcon,
-  done: CircleCheckIcon,
-  checks: ListChecksIcon,
-  fail: CircleXIcon,
-  rejected: CircleXIcon,
-  problem: CircleAlertIcon,
-  finding: CircleAlertIcon,
-  paused: CirclePauseIcon,
-  resumed: CirclePlayIcon,
-  submitted: CirclePlayIcon,
-  decision: CircleHelpIcon,
-  candidate: GitCommitHorizontalIcon,
-  file: FileIcon,
-  edited: PencilIcon,
-  plan: ListChecksIcon,
-};
-
-const EVENT_TONE: Record<string, string> = {
-  pass: "text-emerald-600 dark:text-emerald-400",
-  approved: "text-emerald-600 dark:text-emerald-400",
-  fail: "text-rose-600 dark:text-rose-400",
-  rejected: "text-rose-600 dark:text-rose-400",
-  problem: "text-amber-600 dark:text-amber-400",
-  finding: "text-amber-600 dark:text-amber-400",
-  decision: "text-fuchsia-600 dark:text-fuchsia-400",
-};
-
-const MESSAGE_KIND_LABEL: Record<string, string> = {
-  message: "message",
-  status: "asked for status",
-  answer: "answer",
-  change: "change to what is asked",
-  note: "note for the record",
-  question: "question",
-  proposal: "proposed change",
-  reply: "reply",
-  said: "its part",
-  started: "submitted",
-  control: "control",
-  "decision-needed": "needs your decision",
-  error: "problem",
-};
-
-const time = (iso: string) => {
-  const at = new Date(iso);
-  return Number.isNaN(at.getTime())
-    ? iso
-    : at.toLocaleString(undefined, {
-        month: "short",
-        day: "numeric",
-        hour: "2-digit",
-        minute: "2-digit",
-      });
-};
-
-/** A link from a line of the history to the section it points at, if it points at one. */
-function ShowSection(props: {
-  readonly entry: TimelineEntry;
-  readonly onShow: ((section: "acceptance" | "plan") => void) | undefined;
-}) {
-  const section = sectionOf({ kind: props.entry.kind ?? null, text: props.entry.text ?? "" });
-  if (!section || !props.onShow) return null;
-  return (
-    <button
-      type="button"
-      className="ml-1 cursor-pointer text-primary underline-offset-2 hover:underline"
-      onClick={() => props.onShow?.(section)}
-      data-task-show={section}
-    >
-      {section === "acceptance" ? "See the checklist" : "Read the plan"}
-    </button>
-  );
-}
-
-export function FullAutoAttribution({
-  entry,
-}: {
-  readonly entry: Pick<TimelineEntry, "by" | "fullAuto">;
-}) {
-  const attribution = fullAutoAttribution(entry);
-  if (!attribution) return null;
-  return (
-    <span
-      className="inline-flex max-w-full flex-wrap items-center gap-1 wrap-break-word"
-      data-full-auto-attribution
-    >
-      <Badge variant="outline">Full auto</Badge>
-      {attribution.by || attribution.since ? (
-        <span>
-          {attribution.by ? `turned on by ${attribution.by}` : null}
-          {attribution.by && attribution.since ? ", " : null}
-          {attribution.since ? time(attribution.since) : null}
-        </span>
-      ) : null}
-    </span>
-  );
-}
-
-function Message(props: {
-  readonly onShow?: ((section: "acceptance" | "plan") => void) | undefined;
-  readonly environmentId: EnvironmentId | null;
-  readonly entry: TimelineEntry;
-  readonly repliedTo: TimelineEntry | null;
-  readonly onReply: ((entry: TimelineEntry) => void) | undefined;
-  readonly onSettle: ((entry: TimelineEntry, accept: boolean) => void) | undefined;
-  readonly busy: boolean;
-}) {
-  const { entry } = props;
-  const mine = entry.sender === "person";
-  const open = entry.state === "open";
-  const state = messageStateLabel(entry.state, entry.revision);
-  return (
-    <div
-      data-timeline-entry={entry.id}
-      data-message-kind={entry.kind}
-      data-message-state={entry.state ?? ""}
-      data-message-from={entry.sender ?? ""}
-      className={cn("flex max-w-[88%] gap-2", mine ? "ml-auto flex-row-reverse" : "")}
-    >
-      <Avatar
-        name={entry.by}
-        seat={!mine}
-        detail={mine ? entry.by : `${entry.by}, ${entry.sender ?? "team"}`}
-      />
-      <div
-        className={cn(
-          "flex min-w-0 flex-col gap-1 rounded-lg px-3 py-2 text-sm",
-          mine ? "bg-accent" : "border border-border",
-          open && "border-warning/70 bg-warning/5",
-        )}
-      >
-        <p className="text-3xs text-muted-foreground">
-          <span className="font-medium text-foreground">{mine ? entry.by : entry.by}</span>
-          {", "}
-          {MESSAGE_KIND_LABEL[entry.kind] ?? entry.kind}, {time(entry.at)}
-          <FullAutoAttribution entry={entry} />
-        </p>
-        {props.repliedTo ? (
-          <p className="flex items-start gap-1 border-l-2 border-border pl-2 text-xs text-muted-foreground">
-            <CornerDownRightIcon className="mt-0.5 size-3 shrink-0" />
-            <span className="line-clamp-2">
-              {props.repliedTo.by}: {props.repliedTo.text}
-            </span>
-          </p>
-        ) : null}
-        {entry.text ? (
-          <p className="break-words whitespace-pre-wrap">
-            {entry.text}
-            <ShowSection entry={entry} onShow={props.onShow} />
-          </p>
-        ) : null}
-        {entry.change ? (
-          <p className="rounded border border-border bg-muted/40 px-2 py-1 text-xs whitespace-pre-wrap">
-            {entry.change}
-          </p>
-        ) : null}
-        <TaskFileList environmentId={props.environmentId} files={entry.files} />
-        {entry.evidence ? (
-          <p className="font-mono text-3xs break-all text-muted-foreground">
-            evidence: {entry.evidence}
-          </p>
-        ) : null}
-        {open && entry.kind === "question" && props.onReply ? (
-          <div>
-            <Button size="xs" variant="outline" onClick={() => props.onReply?.(entry)}>
-              Answer
-            </Button>
-          </div>
-        ) : null}
-        {open && entry.kind === "proposal" && props.onSettle ? (
-          <div className="flex gap-1">
-            <Button
-              size="xs"
-              disabled={props.busy}
-              onClick={() => props.onSettle?.(entry, true)}
-              data-proposal-confirm
-            >
-              <CheckIcon />
-              Confirm the change
-            </Button>
-            <Button
-              size="xs"
-              variant="outline"
-              disabled={props.busy}
-              onClick={() => props.onSettle?.(entry, false)}
-              data-proposal-decline
-            >
-              Decline
-            </Button>
-          </div>
-        ) : null}
-        {state && (mine || open) ? (
-          <p className="text-3xs text-muted-foreground" data-message-state-label>
-            {state}
-          </p>
-        ) : null}
-      </div>
-    </div>
-  );
-}
-
-function Happening(props: {
-  readonly entry: TimelineEntry;
-  readonly onShow?: ((section: "acceptance" | "plan") => void) | undefined;
-}) {
-  const { entry } = props;
-  const Icon = EVENT_ICON[entry.icon] ?? CircleDotIcon;
-  return (
-    <div
-      data-timeline-entry={entry.id}
-      data-event-kind={entry.kind}
-      className={cn(
-        "flex items-start gap-2 px-1 text-xs",
-        entry.detail ? "text-muted-foreground/80" : "text-muted-foreground",
-      )}
-    >
-      <Icon className={cn("mt-0.5 size-3.5 shrink-0", EVENT_TONE[entry.icon])} />
-      <p className="min-w-0 flex-1 break-words">
-        <span className="font-medium text-foreground/80">{entry.by}</span> {entry.text}
-        <FullAutoAttribution entry={entry} />
-        <ShowSection entry={entry} onShow={props.onShow} />
-        {entry.evidence ? (
-          <span className="block font-mono text-3xs break-all">{entry.evidence}</span>
-        ) : null}
-      </p>
-      <span className="shrink-0 text-3xs">{time(entry.at)}</span>
-    </div>
-  );
-}
-
-// Expanded controls need both width and height: landscape phones still need room for history.
-function MobileHelp(props: {
-  readonly label: string;
-  readonly children: React.ReactNode;
-  /** Shown on every screen, not only a small one. */
-  readonly always?: boolean;
-}) {
-  return (
-    <Popover>
-      <PopoverTrigger
-        render={
-          <Button
-            size="icon-sm"
-            variant="ghost"
-            className={
-              props.always ? undefined : "[@media(min-width:640px)_and_(min-height:600px)]:hidden"
-            }
-            aria-label={props.label}
-          />
-        }
-      >
-        <InfoIcon />
-      </PopoverTrigger>
-      <PopoverPopup side="top" className="max-w-[min(20rem,calc(100vw-2rem))]">
-        <div className="text-xs">{props.children}</div>
-      </PopoverPopup>
-    </Popover>
-  );
-}
-
-const DOCUMENT_LABEL: Record<string, string> = {
-  "PLAN.md": "Plan",
-  "REVIEW.md": "Review",
-  "PACK.md": "Evidence pack",
-};
+import { SharedTaskAllocation } from "./SharedBoard";
+import { useTaskActions } from "./taskActions";
+import { TaskBadges } from "./TaskBadges";
+import { TaskConversation } from "./TaskConversation";
+import { TaskDetailsItem } from "./TaskDetails";
+import { TaskEditor } from "./TaskEditor";
+import { TaskMenu } from "./TaskMenu";
+import { TaskPanelTab } from "./TaskPanelTab";
+import { TaskRelatedWork } from "./TaskRelatedWork";
+import { TaskWorkspacePanels } from "./TaskWorkspacePanels";
+import { forgetOpenSeat, useTaskConversation } from "./useTaskConversation";
 
 /**
- * The run under way, for a person following it: the documents it wrote, to read here or have
- * summarised, the instructions given to it, and a way to give one. An instruction reaches the
- * seat at work it is for, which starts its step again with it; what is asked is changed by a
- * change, which goes through triage, not here.
- */
-function RunPanel(props: {
-  readonly environmentId: EnvironmentId | null;
-  readonly task: TaskView;
-  readonly onChanged: () => void;
-}) {
-  const { task } = props;
-  const council = task.council;
-  const person = usePersonName();
-  const act = useDeliveryAct(props.environmentId, "run");
-  const [reading, setReading] = useState<string | null>(null);
-  const [text, setText] = useState("");
-  const [seat, setSeat] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [said, setSaid] = useState<string | null>(null);
-  if (!council) return null;
-  const steerable = ["running", "paused", "needs-decision"].includes(council.state);
-  const steerKeys = repeatKeys(council.steers.map((steer) => `${steer.at}:${steer.text}`));
-  const give = async () => {
-    if (!text.trim() || busy) return;
-    setBusy(true);
-    const result = await act(`/api/tasks/${task.id}/steer`, {
-      text: text.trim(),
-      seat: seat || null,
-      by: person,
-    });
-    setBusy(false);
-    if (result.ok) {
-      setText("");
-      setSaid(
-        "Given. It is in the history; the step starts again with it once its seats have stopped.",
-      );
-    } else setSaid(result.why);
-    props.onChanged();
-  };
-  const summarise = async (name: string) => {
-    setBusy(true);
-    const result = await act(`/api/tasks/${task.id}/messages`, {
-      kind: "message",
-      text: `Summarise the ${DOCUMENT_LABEL[name] ?? name} (${name}) of run ${council.run} for me in a few lines: what it says will be done, how it will be checked, and anything I should look at.`,
-      by: person,
-    });
-    setBusy(false);
-    setSaid(result.ok ? "Asked the coordinator. The answer comes in the history." : result.why);
-    props.onChanged();
-  };
-  return (
-    <section className="flex flex-col gap-2" data-task-run-panel>
-      <h3 className="text-xs font-medium text-muted-foreground">Run {council.run}</h3>
-      {council.documents.length > 0 ? (
-        <div className="flex flex-col gap-1" data-run-documents>
-          {council.documents.map((name) => (
-            <div key={name} className="flex items-center justify-between gap-2 text-xs">
-              <Button
-                size="xs"
-                variant="outline"
-                onClick={() => setReading(name)}
-                data-run-document={name}
-              >
-                Read the {(DOCUMENT_LABEL[name] ?? name).toLowerCase()}
-              </Button>
-              <Button
-                size="xs"
-                variant="ghost"
-                disabled={busy}
-                onClick={() => void summarise(name)}
-                data-run-summarise={name}
-              >
-                Summarise
-              </Button>
-            </div>
-          ))}
-        </div>
-      ) : (
-        <p className="text-2xs text-muted-foreground">
-          No plan, review or evidence written yet. Each shows here once the run writes it.
-        </p>
-      )}
-      {council.steers.length > 0 ? (
-        <ul className="flex flex-col gap-1 text-2xs" data-run-steers>
-          {council.steers.map((steer, index) => (
-            <li key={steerKeys[index]} className="rounded border border-border px-2 py-1">
-              <span className="text-muted-foreground">
-                {steer.by} to {steer.seat ?? "every seat"}:{" "}
-              </span>
-              {steer.text}
-            </li>
-          ))}
-        </ul>
-      ) : null}
-      {steerable ? (
-        <div className="flex flex-col gap-1" data-run-steer>
-          <Select value={seat} onValueChange={(value) => setSeat(String(value ?? ""))}>
-            <SelectTrigger
-              aria-label="Who the instruction is for"
-              size="compact"
-              variant="ghost"
-              className="w-auto min-w-0 self-start"
-            >
-              <SelectValue>{seat ? `To ${seat}` : "To every seat"}</SelectValue>
-            </SelectTrigger>
-            <SelectPopup alignItemWithTrigger={false}>
-              <SelectItem value="">To every seat</SelectItem>
-              {council.seats.map((item) => (
-                <SelectItem key={item.seat} value={item.seat}>
-                  To {item.seat} ({harnessLabel(item.harness)})
-                </SelectItem>
-              ))}
-            </SelectPopup>
-          </Select>
-          <Textarea
-            aria-label="An instruction for the run"
-            placeholder="Steer the work: say what to do differently from now on"
-            value={text}
-            onChange={(event) => setText(event.target.value)}
-          />
-          <Button
-            size="xs"
-            className="self-start"
-            disabled={busy || !text.trim()}
-            onClick={() => void give()}
-            data-run-steer-give
-          >
-            Give the instruction
-          </Button>
-          <p className="text-3xs text-muted-foreground">
-            Every seat at work stops, and the step starts again once all have ended, with the
-            instruction given to the seat it names (or to all). To change what is asked, write a
-            change instead: that goes through triage.
-          </p>
-        </div>
-      ) : null}
-      {said ? <p className="text-2xs text-muted-foreground">{said}</p> : null}
-      {reading ? (
-        <RunDocument
-          environmentId={props.environmentId}
-          run={council.run}
-          name={reading}
-          onClose={() => setReading(null)}
-        />
-      ) : null}
-    </section>
-  );
-}
-
-/** A document a run wrote (PLAN.md, REVIEW.md, PACK.md), read in a dialog. */
-function RunDocument(props: {
-  readonly environmentId: EnvironmentId | null;
-  readonly run: string;
-  readonly name: string;
-  readonly onClose: () => void;
-}) {
-  const read = useDeliveryRead(
-    props.environmentId,
-    `/api/runs/${props.run}/document?name=${encodeURIComponent(props.name)}`,
-  );
-  const body = read.body as { readonly text?: unknown; readonly cut?: unknown } | null;
-  const doc = typeof body?.text === "string" ? body.text : null;
-  return (
-    <Dialog open onOpenChange={(open) => !open && props.onClose()}>
-      <DialogPopup className="max-w-3xl" data-run-document-open={props.name}>
-        <DialogHeader>
-          <DialogTitle>
-            {DOCUMENT_LABEL[props.name] ?? props.name}, run {props.run}
-          </DialogTitle>
-        </DialogHeader>
-        <DialogPanel>
-          <div className="space-y-4 text-sm">
-            {doc !== null ? (
-              <>
-                <ChatMarkdown
-                  text={doc}
-                  cwd={undefined}
-                  environmentId={props.environmentId ?? undefined}
-                  parseRawHtml={false}
-                  allowMedia={false}
-                />
-                {body?.cut === true ? (
-                  <p className="pt-2 text-xs text-muted-foreground">
-                    Only the first part is shown; the whole is in the run's evidence folder.
-                  </p>
-                ) : null}
-              </>
-            ) : (
-              <p className="text-xs text-muted-foreground">
-                {read.error ? `It cannot be read: ${read.error}` : "Reading it."}
-              </p>
-            )}
-          </div>
-        </DialogPanel>
-      </DialogPopup>
-    </Dialog>
-  );
-}
-
-/**
- * What is needed of you, in plain words: the bottom line, then what the task is, what happened,
- * why it stopped, and what each choice would do. The steps themselves are in the bar below.
- */
-function Briefing(props: { readonly brief: TaskBriefing }) {
-  const { brief } = props;
-  const now = useMinuteClock();
-  const since = brief.since && !Number.isNaN(Date.parse(brief.since)) ? brief.since : null;
-  // Lines and actions come from the engine and can repeat: each key says which repeat it is.
-  const happenedKeys = repeatKeys(brief.happened);
-  const optionKeys = repeatKeys(brief.options.map((option) => option.action));
-  const [open, setOpen] = useState(true);
-  return (
-    // The whole panel, headline too, is held to part of the screen and scrolls within, so the
-    // history and the composer keep their room on a phone.
-    <div
-      className="max-h-[40dvh] shrink-0 overflow-y-auto overscroll-contain border-b border-warning/40 bg-warning/5 px-3 py-2 text-xs"
-      data-task-brief
-    >
-      <button
-        type="button"
-        className="flex w-full cursor-pointer items-start gap-2 text-left"
-        aria-expanded={open}
-        onClick={() => setOpen(!open)}
-      >
-        <span className="mt-0.5 shrink-0 font-medium text-warning-foreground">Needs you</span>
-        <span className="min-w-0 flex-1 font-medium">{brief.headline}</span>
-        <span className="shrink-0 text-3xs text-muted-foreground">{open ? "Less" : "More"}</span>
-      </button>
-      {open ? (
-        <dl className="mt-1.5 grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1">
-          {brief.what ? (
-            <>
-              <dt className="text-muted-foreground">What</dt>
-              <dd>{brief.what}</dd>
-            </>
-          ) : null}
-          {brief.happened.length > 0 ? (
-            <>
-              <dt className="text-muted-foreground">Happened</dt>
-              <dd>
-                <ul className="flex flex-col gap-0.5">
-                  {brief.happened.map((line, index) => (
-                    // A line the engine indents belongs to the one above it.
-                    <li
-                      key={happenedKeys[index]}
-                      className={line.startsWith("  ") ? "pl-3 text-muted-foreground" : undefined}
-                    >
-                      {line.trim()}
-                    </li>
-                  ))}
-                </ul>
-              </dd>
-            </>
-          ) : null}
-          {brief.why ? (
-            <>
-              <dt className="text-muted-foreground">Why</dt>
-              <dd>{brief.why}</dd>
-            </>
-          ) : null}
-          {brief.options.length > 0 || brief.reply ? (
-            <>
-              <dt className="text-muted-foreground">Choices</dt>
-              <dd>
-                <ul className="flex flex-col gap-0.5">
-                  {brief.options.map((option, index) => (
-                    <li key={optionKeys[index]}>
-                      <span className="font-medium">{option.label}</span>
-                      {option.recommended ? (
-                        <span className="ml-1 rounded bg-warning/15 px-1 text-3xs text-warning-foreground">
-                          suggested
-                        </span>
-                      ) : null}
-                      <span className="text-muted-foreground"> {option.does}</span>
-                    </li>
-                  ))}
-                  {brief.reply ? <li className="text-muted-foreground">{brief.reply}</li> : null}
-                </ul>
-              </dd>
-            </>
-          ) : null}
-          {brief.where || since ? (
-            <>
-              <dt className="text-muted-foreground">Where</dt>
-              <dd className="text-muted-foreground">
-                {brief.where}
-                {brief.where && since ? ", " : ""}
-                {since ? (
-                  <>
-                    waiting since{" "}
-                    <time dateTime={since}>
-                      {new Date(since).toLocaleString([], {
-                        dateStyle: "medium",
-                        timeStyle: "short",
-                      })}
-                    </time>{" "}
-                    (<Age at={since} now={now} label="Waiting since" />)
-                  </>
-                ) : null}
-              </dd>
-            </>
-          ) : null}
-        </dl>
-      ) : null}
-    </div>
-  );
-}
-
-const composerKindSchema = Schema.Literals(["message", "note", "change", "status", "answer"]);
-const replySequenceSchema = Schema.NullOr(Schema.Number);
-const draftFilesSchema = Schema.Array(
-  Schema.Struct({
-    id: Schema.String,
-    name: Schema.String,
-    type: Schema.String,
-    size: Schema.Number,
-    by: Schema.String,
-    at: Schema.String,
-    message: Schema.NullOr(Schema.Number),
-    path: Schema.String,
-  }),
-);
-
-export function TaskComposer(props: {
-  readonly environmentId: EnvironmentId | null;
-  readonly task: TaskView;
-  readonly replyTo: TimelineEntry | null;
-  readonly onReplyTo: (entry: TimelineEntry | null) => void;
-  readonly onSent: () => void;
-  readonly onReplySent?: (seq: number) => void;
-  readonly expanded: boolean;
-  readonly onExpandedChange: (expanded: boolean) => void;
-}) {
-  const { task } = props;
-  const person = usePersonName();
-  const sendShortcut = usePrimarySettings((settings) => settings.sendShortcut);
-  const act = useDeliveryAct(props.environmentId, "task message");
-  const uploads = useTaskUploads(props.environmentId, person);
-  const [messageText, setMessageText] = useLocalStorage(
-    `t3code:task-message:${JSON.stringify([props.environmentId, task.id])}`,
-    "",
-    Schema.String,
-  );
-  const draftKey = replyDraftKey(props.environmentId ?? "", task.id, props.replyTo?.seq ?? -1);
-  const answerDraft = useDeliveryReplyDrafts((state) => state.drafts[draftKey] ?? EMPTY_REPLY);
-  const replyPending = useDeliveryReplyDrafts((state) => state.pending[draftKey] === true);
-  const updateDraft = useDeliveryReplyDrafts((state) => state.update);
-  const beginReply = useDeliveryReplyDrafts((state) => state.begin);
-  const finishReply = useDeliveryReplyDrafts((state) => state.finish);
-  const discardReply = useDeliveryReplyDrafts((state) => state.discard);
-  const text = props.replyTo ? answerDraft.text : messageText;
-  const setText = (value: string) =>
-    props.replyTo ? updateDraft(draftKey, { text: value }) : setMessageText(value);
-  const [chosen, setChosen] = useLocalStorage(
-    `t3code:task-message-kind:${JSON.stringify([props.environmentId, task.id])}`,
-    "message" as ComposerKind,
-    composerKindSchema,
-  );
-  const [files, setFiles] = useLocalStorage(
-    `t3code:task-draft-files:${JSON.stringify([props.environmentId, task.id, props.replyTo?.seq ?? null])}`,
-    [] as ReadonlyArray<TaskFile>,
-    draftFilesSchema,
-  );
-  const [busy, setBusy] = useState(false);
-  const sending = useRef(false);
-  const [problem, setProblem] = useState<{ target: number | null; text: string } | null>(null);
-
-  const waits = task.questions.at(-1) ?? null;
-  const replying = props.replyTo;
-  const kind: ComposerKind = replying ? "answer" : chosen === "answer" ? "message" : chosen;
-  const staleReply =
-    replying !== null && !task.questions.some((question) => question.seq === replying.seq);
-  // A chat has nothing that is asked of the team to change: what is written is the conversation.
-  const chat = task.workflow === "chat";
-  const kinds: ReadonlyArray<ComposerKind> = [
-    ...(waits ? (["answer"] as const) : []),
-    ...(chat
-      ? (["message", "note", "status"] as const)
-      : (["message", "note", "change", "status"] as const)),
-  ];
-  const help = (item: ComposerKind) =>
-    chat && item === "message"
-      ? "Read by the seat that leads the chat, which answers, or brings in the seats it concerns. Each answers under its own name."
-      : COMPOSER_KIND_HELP[item];
-  const closed = task.state === "rejected" || task.state === "closed";
-
-  const attach = async (picked: File[]) => {
-    const sent = await Promise.all(picked.map((file) => uploads.send(task.id, file)));
-    setFiles((current) => [...current, ...sent.filter((file): file is TaskFile => file !== null)]);
-  };
-  const intake = useFileIntake((picked) => void attach(picked));
-  const uploading = uploads.transit.some((item) => item.problem === null);
-  const canSend =
-    props.environmentId !== null &&
-    !busy &&
-    !uploading &&
-    !closed &&
-    !staleReply &&
-    !(replying && (answerDraft.uncertain || replyPending)) &&
-    (text.trim().length > 0 || files.length > 0);
-
-  const send = async () => {
-    if (!canSend || sending.current) return;
-    if (replying && !beginReply(draftKey)) return;
-    sending.current = true;
-    setBusy(true);
-    setProblem(null);
-    const result = await act(`/api/tasks/${task.id}/messages`, {
-      text: text.trim(),
-      kind,
-      ...(replying ? { replyTo: replying.seq } : {}),
-      files: files.map((file) => file.id),
-      by: person,
-    });
-    if (replying) {
-      const rejected =
-        !result.ok && result.status !== null && result.status >= 400 && result.status < 500;
-      finishReply(draftKey, result.ok ? "accepted" : rejected ? "rejected" : "unknown");
-    }
-    sending.current = false;
-    setBusy(false);
-    props.onSent();
-    if (!result.ok) {
-      setProblem({ target: replying?.seq ?? null, text: result.why });
-      return;
-    }
-    if (!replying) setMessageText("");
-    setFiles([]);
-    setChosen("message");
-    if (replying && props.onReplySent) props.onReplySent(replying.seq!);
-    else props.onReplyTo(null);
-  };
-  const effect = COMPOSER_EFFECT[kind];
-
-  return (
-    <div
-      className={cn(
-        "flex min-h-0 shrink-0 flex-col border-t border-border p-2 [@media(min-width:640px)_and_(min-height:600px)]:p-3 max-h-[45%] [@media(min-width:640px)_and_(min-height:600px)]:max-h-none",
-        intake.over && "outline-2 -outline-offset-4 outline-ring outline-dashed",
-      )}
-      data-task-composer
-      {...intake.handlers}
-    >
-      <Button
-        size="sm"
-        variant="ghost"
-        className="shrink-0 justify-start [@media(min-width:640px)_and_(min-height:600px)]:hidden"
-        aria-expanded={props.expanded}
-        aria-controls={`composer-${task.id}`}
-        onClick={() => props.onExpandedChange(!props.expanded)}
-        data-task-composer-toggle
-      >
-        <PencilIcon />
-        {props.expanded
-          ? "Hide message"
-          : text.trim() || files.length
-            ? "Continue draft"
-            : "Write to the team"}
-      </Button>
-      <div
-        id={`composer-${task.id}`}
-        className={cn(
-          "min-h-0 flex-col gap-2 overflow-y-auto [@media(min-width:640px)_and_(min-height:600px)]:flex",
-          props.expanded ? "flex" : "hidden",
-        )}
-      >
-        {problem && problem.target === (replying?.seq ?? null) ? (
-          <p className="text-sm text-warning" data-delivery-problem>
-            {problem.text}
-          </p>
-        ) : null}
-        {staleReply || (replying && answerDraft.uncertain) ? (
-          <p role="alert" className="text-xs text-warning">
-            {staleReply
-              ? "This question is no longer waiting. Your draft is kept and cannot be sent."
-              : "Delivery is unconfirmed. Check the engine record before discarding this draft; it will not be sent again automatically."}
-          </p>
-        ) : null}
-        {replying && (answerDraft.uncertain || staleReply) && !replyPending ? (
-          <Button
-            size="xs"
-            variant="ghost"
-            onClick={() => {
-              discardReply(draftKey);
-              setFiles([]);
-              props.onReplyTo(null);
-            }}
-          >
-            Discard draft
-          </Button>
-        ) : null}
-        {replying ? (
-          <p
-            className="flex items-start gap-1 rounded border border-warning/60 bg-warning/5 px-2 py-1 text-xs"
-            data-task-composer-reply
-          >
-            <CornerDownRightIcon className="mt-0.5 size-3 shrink-0" />
-            {/* Two lines are enough to say which question: the whole of it is in the history above. */}
-            <span className="line-clamp-2 min-w-0 flex-1">
-              Answering {replying.by}:{" "}
-              <span className="text-muted-foreground">{replying.text}</span>
-            </span>
-            <button
-              type="button"
-              aria-label="Do not answer this question"
-              className="cursor-pointer"
-              onClick={() => {
-                props.onReplyTo(null);
-                setChosen("message");
-              }}
-            >
-              <XIcon className="size-3" />
-            </button>
-          </p>
-        ) : waits ? (
-          <p className="text-xs text-warning-foreground">
-            A question of {waits.by} waits for you. Choose Answer a question below, or press Answer
-            on it.
-          </p>
-        ) : null}
-        <Textarea
-          aria-label="Message on the task"
-          placeholder={
-            closed
-              ? "This is closed. What was said is kept."
-              : kind === "answer"
-                ? "Your answer"
-                : kind === "status"
-                  ? "What do you want to know? The record is read out."
-                  : kind === "change"
-                    ? "What is to change in what is asked"
-                    : kind === "note"
-                      ? "A note for the record"
-                      : "Write to the team. Paste or drop files here."
-          }
-          disabled={closed || busy || replyPending}
-          value={text}
-          onChange={(event) => setText(event.target.value)}
-          onKeyDown={(event) => {
-            if (isSendKey(event.nativeEvent, sendShortcut, text)) {
-              event.preventDefault();
-              void send();
-            }
-          }}
-        />
-        <TaskFileList
-          environmentId={props.environmentId}
-          files={files}
-          compact
-          onRemove={(file) => setFiles((current) => current.filter((item) => item.id !== file.id))}
-        />
-        <FilesInTransit transit={uploads.transit} onDismiss={uploads.dismiss} />
-        <div className="flex items-center gap-1">
-          <AttachButton
-            label="Attach files"
-            disabled={closed}
-            onFiles={(picked) => void attach(picked)}
-          >
-            <PaperclipIcon />
-          </AttachButton>
-          {props.replyTo ? (
-            <Badge size="sm" variant="outline">
-              {COMPOSER_KIND_LABEL.answer}
-            </Badge>
-          ) : (
-            <Select
-              value={kind}
-              onValueChange={(value) => {
-                if (value === "answer") {
-                  const target = task.timeline.find(
-                    (entry) => entry.seq === waits?.seq && entry.kind === "question",
-                  );
-                  if (target) props.onReplyTo(target);
-                } else setChosen(value as ComposerKind);
-              }}
-            >
-              <SelectTrigger
-                aria-label="What this message is"
-                size="compact"
-                variant="ghost"
-                className="w-auto min-w-0"
-              >
-                <SelectValue>{COMPOSER_KIND_LABEL[kind]}</SelectValue>
-              </SelectTrigger>
-              <SelectPopup alignItemWithTrigger={false}>
-                {kinds.map((item) => (
-                  <SelectItem key={item} value={item}>
-                    <span className="flex max-w-96 flex-col">
-                      <span>{COMPOSER_KIND_LABEL[item]}</span>
-                      <span className="text-xs text-muted-foreground">{help(item)}</span>
-                    </span>
-                  </SelectItem>
-                ))}
-              </SelectPopup>
-            </Select>
-          )}
-          <span className="min-w-0 flex-1" />
-          <MobileHelp label="About this message" always>
-            <p>
-              {effect.moves ? "Moves the work:" : "Changes nothing:"} {effect.label}
-            </p>
-            <p className="mt-2 text-muted-foreground">{help(kind)}</p>
-          </MobileHelp>
-          {/* The send button is round, like the chat composer's. */}
-          <span className="ml-auto flex shrink-0 [--control-radius:9999px]">
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <Button
-                    size="icon-sm"
-                    aria-label={`Send: ${COMPOSER_KIND_LABEL[kind]}`}
-                    disabled={!canSend}
-                    onClick={() => void send()}
-                    data-task-send
-                  />
-                }
-              >
-                <SendIcon />
-              </TooltipTrigger>
-              <TooltipPopup side="top">
-                {uploading ? "Files are still on their way." : `Send: ${COMPOSER_KIND_LABEL[kind]}`}
-              </TooltipPopup>
-            </Tooltip>
-          </span>
-        </div>
-        {/* Said only when sending moves the work; the rest is behind the info icon. */}
-        {effect.moves ? (
-          <p
-            className="hidden items-start gap-1.5 text-2xs text-warning-foreground [@media(min-width:640px)_and_(min-height:600px)]:flex"
-            data-task-composer-effect="moves"
-          >
-            <span className="shrink-0 font-medium">Moves the work:</span>
-            <span className="min-w-0">{effect.label}</span>
-          </p>
-        ) : null}
-      </div>
-    </div>
-  );
-}
-
-/**
- * The decisions a person makes on the task: approve what was tested, send it back with a
- * reason, start or submit it. Kept apart from the composer, and below every tab, so that
- * what is written is never taken for a decision and the buttons are in reach on a phone.
- */
-function DecisionBar(props: {
-  readonly task: TaskView;
-  readonly actions: ReadonlyArray<string>;
-  readonly busy: boolean;
-  readonly onAction: (action: string) => void;
-}) {
-  if (props.actions.length === 0) return null;
-  const deciding = props.actions.some((action) => action === "approve" || action === "reject");
-  return (
-    <section
-      className="flex shrink-0 flex-col border-t border-border bg-muted/30 pb-safe"
-      aria-label="Your decision"
-      data-task-decisions
-    >
-      <div className="flex flex-col gap-1 px-3 py-1 [@media(min-width:640px)_and_(min-height:600px)]:gap-2 [@media(min-width:640px)_and_(min-height:600px)]:py-2">
-        <p className="hidden text-xs font-medium [@media(min-width:640px)_and_(min-height:600px)]:block">
-          {deciding ? "Your decision" : "What you can do next"}
-          {deciding ? (
-            <span className="font-normal text-muted-foreground">
-              {" "}
-              Messages never count as a decision.
-            </span>
-          ) : null}
-        </p>
-        <div className="flex items-center gap-2 [@media(min-width:640px)_and_(min-height:600px)]:flex-wrap">
-          {props.actions.map((action) => (
-            <div
-              key={action}
-              className="flex min-w-0 flex-1 flex-col gap-0.5 [@media(min-width:640px)_and_(min-height:600px)]:max-w-80 [@media(min-width:640px)_and_(min-height:600px)]:flex-none"
-            >
-              <Button
-                size="sm"
-                variant={action === "reject" ? "outline" : "default"}
-                className="w-full justify-center"
-                disabled={props.busy}
-                onClick={() => props.onAction(action)}
-                data-task-action={action}
-              >
-                <span className="truncate">{actionLabel(action, props.task.card)}</span>
-              </Button>
-              <span className="hidden text-3xs text-muted-foreground [@media(min-width:640px)_and_(min-height:600px)]:block">
-                {actionHelp(action, props.task.card)}
-              </span>
-            </div>
-          ))}
-          <MobileHelp label="About your decision">
-            {deciding ? <p>Messages never count as a decision.</p> : null}
-            {props.actions.map((item) => (
-              <p key={item} className="mt-2">
-                <strong>{actionLabel(item, props.task.card)}: </strong>
-                {actionHelp(item, props.task.card)}
-              </p>
-            ))}
-          </MobileHelp>
-        </div>
-      </div>
-    </section>
-  );
-}
-
-function Communications(props: {
-  readonly environmentId: EnvironmentId | null;
-  readonly task: TaskView;
-  readonly onChanged: () => void;
-  /** Shows a section of the task: the checklist or the plan a line of the history points at. */
-  readonly onShow: (section: "acceptance" | "plan") => void;
-}) {
-  const { task } = props;
-  const person = usePersonName();
-  const showDetail = useBoardStore((state) => state.showDetail);
-  const setShowDetail = useBoardStore((state) => state.setShowDetail);
-  const act = useDeliveryAct(props.environmentId, "task proposal");
-  const [replySeq, setReplySeq] = useLocalStorage(
-    `t3code:task-reply-target:${JSON.stringify([props.environmentId, task.id])}`,
-    null as number | null,
-    replySequenceSchema,
-  );
-  const replyTo =
-    task.timeline.find((entry) => entry.seq === replySeq && entry.kind === "question") ?? null;
-  const setReplyTo = (entry: TimelineEntry | null) => setReplySeq(entry?.seq ?? null);
-  const [composerExpanded, setComposerExpanded] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [problem, setProblem] = useState<string | null>(null);
-  const entries = task.timeline.filter((entry) => showDetail || !entry.detail);
-  const bySeq = new Map(
-    task.timeline
-      .filter((entry) => entry.seq !== null)
-      .map((entry) => [entry.seq as number, entry]),
-  );
-  const replying = replyTo;
-
-  const scroller = useRef<HTMLDivElement>(null);
-  const atEnd = useRef(true);
-  useEffect(() => {
-    const node = scroller.current;
-    if (node && atEnd.current) node.scrollTop = node.scrollHeight;
-    // oxlint-disable-next-line react/exhaustive-effect-dependencies -- Follow new visible entries without scrolling again on unrelated renders.
-  }, [entries.length]);
-
-  const settle = async (entry: TimelineEntry, accept: boolean) => {
-    setBusy(true);
-    setProblem(null);
-    const result = await act(`/api/tasks/${task.id}/proposals`, {
-      proposal: entry.seq,
-      accept,
-      by: person,
-    });
-    setBusy(false);
-    if (!result.ok) setProblem(result.why);
-    props.onChanged();
-  };
-
-  const hidden = task.timeline.length - entries.length;
-  return (
-    <section className="flex min-h-0 min-w-0 flex-1 flex-col" data-task-communications>
-      {props.task.brief && props.task.card.waitingOn === "person" ? (
-        <Briefing brief={props.task.brief} />
-      ) : null}
-      <div className="flex items-center justify-between gap-2 border-b border-border px-3 py-1.5">
-        <h2 className="text-xs font-medium">History and messages</h2>
-        <button
-          type="button"
-          className="cursor-pointer text-2xs text-muted-foreground underline"
-          aria-pressed={showDetail}
-          onClick={() => setShowDetail(!showDetail)}
-          data-task-detail-toggle
-        >
-          {showDetail
-            ? "Hide the detail"
-            : `Show every step${hidden > 0 ? ` (${hidden} more)` : ""}`}
-        </button>
-      </div>
-      <div
-        ref={scroller}
-        className="flex min-h-0 flex-1 flex-col gap-2.5 overflow-y-auto p-3"
-        onScroll={(event) => {
-          const node = event.currentTarget;
-          atEnd.current = node.scrollHeight - node.scrollTop - node.clientHeight < 80;
-        }}
-        data-task-timeline
-      >
-        {entries.map((entry) =>
-          entry.source === "message" ? (
-            <Message
-              key={entry.id}
-              environmentId={props.environmentId}
-              entry={entry}
-              repliedTo={entry.replyTo !== null ? (bySeq.get(entry.replyTo) ?? null) : null}
-              busy={busy}
-              onReply={(entry) => {
-                setReplyTo(entry);
-                setComposerExpanded(true);
-              }}
-              onSettle={(item, accept) => void settle(item, accept)}
-              onShow={props.onShow}
-            />
-          ) : (
-            <Happening key={entry.id} entry={entry} onShow={props.onShow} />
-          ),
-        )}
-        {task.working ? (
-          <p className="px-1 text-xs text-muted-foreground" data-task-working>
-            The engine is moving this task on.
-          </p>
-        ) : null}
-        {task.pendingFromPerson > 0 ? (
-          <p className="px-1 text-xs text-muted-foreground">
-            {task.pendingFromPerson} of your messages wait for the running step to end.
-          </p>
-        ) : null}
-      </div>
-      {problem ? <p className="px-3 pb-1 text-sm text-warning">{problem}</p> : null}
-      <TaskComposer
-        expanded={composerExpanded}
-        onExpandedChange={setComposerExpanded}
-        environmentId={props.environmentId}
-        task={task}
-        replyTo={replying}
-        onReplyTo={setReplyTo}
-        onReplySent={(seq) => setReplySeq((current) => (current === seq ? null : current))}
-        onSent={props.onChanged}
-      />
-    </section>
-  );
-}
-
-function Listed(props: {
-  readonly title: string;
-  readonly items: ReadonlyArray<string>;
-  /** A name a line of the history can point at; see sectionOf. */
-  readonly section?: string;
-}) {
-  if (props.items.length === 0) return null;
-  return (
-    <section data-task-section={props.section}>
-      <h3 className="pb-1 text-xs font-medium text-muted-foreground">{props.title}</h3>
-      <ul className="flex list-disc flex-col gap-0.5 pl-5 text-sm">
-        {props.items.map((item) => (
-          <li key={item}>{item}</li>
-        ))}
-      </ul>
-    </section>
-  );
-}
-
-function Briefs(props: {
-  readonly title: string;
-  readonly tasks: ReadonlyArray<
-    TaskBrief & { readonly kind?: string; readonly direction?: string }
-  >;
-  readonly onOpen: (id: string) => void;
-}) {
-  if (props.tasks.length === 0) return null;
-  return (
-    <section>
-      <h3 className="pb-1 text-xs font-medium text-muted-foreground">{props.title}</h3>
-      <ul className="flex flex-col gap-1 text-sm">
-        {props.tasks.map((item) => (
-          <li key={`${item.id}:${item.kind ?? ""}:${item.direction ?? ""}`}>
-            <button
-              type="button"
-              onClick={() => props.onOpen(item.id)}
-              className="flex w-full cursor-pointer items-start gap-2 rounded px-1 py-1.5 text-left hover:bg-accent"
-            >
-              <span className={cn("size-2 shrink-0 rounded-full", laneTone(item.lane).bar)} />
-              <span className="font-mono text-xs text-muted-foreground">#{item.number}</span>
-              <span className="min-w-0 flex-1 break-words">{item.title}</span>
-              <span className="max-w-28 shrink-0 text-right text-xs text-muted-foreground">
-                {item.kind === "depends-on"
-                  ? item.direction === "out"
-                    ? "this waits for it"
-                    : "it waits for this"
-                  : ""}{" "}
-                {LANE_TITLE[boardLaneOf(item.lane ?? "")] ?? item.state}
-              </span>
-            </button>
-          </li>
-        ))}
-      </ul>
-    </section>
-  );
-}
-
-function Details(props: {
-  readonly environmentId: EnvironmentId | null;
-  readonly task: TaskView;
-  readonly onOpenTask: (id: string) => void;
-  readonly open: boolean;
-  readonly onOpenChange: (open: boolean) => void;
-}) {
-  const { task } = props;
-  const [showRevisions, setShowRevisions] = useState(false);
-  const parts = relatedTaskGroups(task.card.parts);
-  const followUps = relatedTaskGroups(task.followUps);
-  const hasRelated =
-    task.parent || task.card.parts.length || task.links.length || task.followUps.length;
-  return (
-    <section className="flex min-h-0 min-w-0 flex-col gap-4 overflow-y-auto p-4" data-task-details>
-      {hasRelated ? (
-        <section className="rounded-lg border border-border p-3" data-task-related-work>
-          <TaskDisclosure
-            title={`Related work (${parts.current.length} current parts, ${followUps.current.length} QA follow-ups)`}
-          >
-            {task.card.blocker ? (
-              <p className="text-sm text-muted-foreground">{task.card.blocker}</p>
-            ) : null}
-            {task.parent ? (
-              <Briefs title="Parent task" tasks={[task.parent]} onOpen={props.onOpenTask} />
-            ) : null}
-            <Briefs
-              title={`Current parts (${parts.current.length})`}
-              tasks={parts.current}
-              onOpen={props.onOpenTask}
-            />
-            <Briefs
-              title={`QA follow-ups (${followUps.current.length})`}
-              tasks={followUps.current}
-              onOpen={props.onOpenTask}
-            />
-            <Briefs
-              title="Dependencies and related tasks"
-              tasks={task.links}
-              onOpen={props.onOpenTask}
-            />
-            {parts.completed.length + followUps.completed.length > 0 ? (
-              <TaskDisclosure
-                title={`Completed related work (${parts.completed.length + followUps.completed.length})`}
-                defaultOpen={false}
-              >
-                <Briefs title="Completed parts" tasks={parts.completed} onOpen={props.onOpenTask} />
-                <Briefs
-                  title="Completed QA follow-ups"
-                  tasks={followUps.completed}
-                  onOpen={props.onOpenTask}
-                />
-              </TaskDisclosure>
-            ) : null}
-            {parts.historical.length + followUps.historical.length > 0 ? (
-              <TaskDisclosure
-                title={`Previous or closed work (${parts.historical.length + followUps.historical.length})`}
-                defaultOpen={false}
-              >
-                <p className="text-xs text-muted-foreground">
-                  Kept for history. Rejected or closed parts are not proof of delivery.
-                </p>
-                <Briefs title="Previous parts" tasks={parts.historical} onOpen={props.onOpenTask} />
-                <Briefs
-                  title="Closed QA follow-ups"
-                  tasks={followUps.historical}
-                  onOpen={props.onOpenTask}
-                />
-              </TaskDisclosure>
-            ) : null}
-          </TaskDisclosure>
-        </section>
-      ) : null}
-      <TaskDisclosure title="Task details" open={props.open} onOpenChange={props.onOpenChange}>
-        <section>
-          <h3 className="pb-1 text-xs font-medium text-muted-foreground">
-            What is asked, revision {task.revision}
-          </h3>
-          <p className="text-sm break-words whitespace-pre-wrap">{task.body}</p>
-        </section>
-        {task.plan ? (
-          <section
-            className="flex flex-col gap-2 rounded-md border border-border p-2"
-            data-task-plan
-            data-task-section="plan"
-          >
-            <h3 className="text-xs font-medium">
-              The plan{task.plan.agreed ? ", agreed and being delivered" : ", for you to read"}
-            </h3>
-            <p className="text-sm break-words whitespace-pre-wrap">{task.plan.approach}</p>
-            <Listed title="Steps" items={task.plan.steps} />
-            <Listed title="Checks" items={task.plan.checks} />
-            <Listed title="What it does not cover" items={task.plan.limits} />
-            {task.plan.comments.map((comment) => (
-              <p key={comment.seat} className="text-xs text-muted-foreground">
-                {comment.seat}: {comment.stance}
-                {comment.points.length > 0 ? `. ${comment.points.join(" ")}` : ""}
-              </p>
-            ))}
-            <p className="font-mono text-3xs break-all text-muted-foreground">{task.plan.file}</p>
-          </section>
-        ) : null}
-        {task.review ? (
-          <section
-            className="flex flex-col gap-2 rounded-md border border-border p-2"
-            data-task-review
-          >
-            <h3 className="text-xs font-medium">What the review found</h3>
-            {task.review.seats.map((seat) => (
-              <div
-                key={seat.seat}
-                className="flex flex-col gap-1 text-sm"
-                data-review-seat={seat.seat}
-              >
-                <p className="text-xs font-medium">
-                  {seat.seat} on {harnessLabel(seat.harness)}
-                </p>
-                <p className="break-words whitespace-pre-wrap">{seat.summary}</p>
-                {seat.findings.length === 0 ? (
-                  <p className="text-xs text-muted-foreground">No findings.</p>
-                ) : (
-                  <ul className="flex list-disc flex-col gap-0.5 pl-5 text-xs">
-                    {seat.findings.map((finding) => (
-                      <li key={`${finding.title}:${finding.where}`}>
-                        {finding.blocking ? <span className="text-warning">Blocking. </span> : null}
-                        {finding.title}{" "}
-                        <span className="font-mono text-3xs text-muted-foreground">
-                          {finding.where}
-                        </span>
-                        <span className="block text-muted-foreground">{finding.detail}</span>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </div>
-            ))}
-            {task.review.missing.length > 0 ? (
-              <p className="text-xs text-warning">
-                No answer from {task.review.missing.join(", ")}.
-              </p>
-            ) : null}
-            <p className="font-mono text-3xs break-all text-muted-foreground">{task.review.file}</p>
-          </section>
-        ) : null}
-        <Listed title="Requirements" items={task.requirements} />
-        <Listed title="Acceptance criteria" items={task.acceptance} section="acceptance" />
-        {task.files.length > 0 ? (
-          <section>
-            <h3 className="pb-1 text-xs font-medium text-muted-foreground">
-              Files ({task.files.length})
-            </h3>
-            <TaskFileList environmentId={props.environmentId} files={task.files} />
-          </section>
-        ) : null}
-        {task.revisions.length > 1 ? (
-          <section>
-            <button
-              type="button"
-              className="cursor-pointer pb-1 text-xs font-medium text-muted-foreground underline"
-              aria-expanded={showRevisions}
-              onClick={() => setShowRevisions((current) => !current)}
-            >
-              {showRevisions ? "Hide" : "Show"} the {task.revisions.length} revisions
-            </button>
-            {showRevisions ? (
-              <ul className="flex flex-col gap-2">
-                {task.revisions.toReversed().map((revision) => (
-                  <li key={revision.revision} className="rounded border border-border p-2 text-xs">
-                    <p className="font-mono text-3xs text-muted-foreground">
-                      r{revision.revision}, {time(revision.created)}
-                      {revision.notes ? `, ${revision.notes}` : ""}
-                    </p>
-                    <p className="break-words whitespace-pre-wrap">{revision.body}</p>
-                  </li>
-                ))}
-              </ul>
-            ) : null}
-          </section>
-        ) : null}
-      </TaskDisclosure>
-    </section>
-  );
-}
-
-function Info(props: {
-  readonly environmentId: EnvironmentId | null;
-  readonly from: "Board" | "Orchestrator";
-  readonly task: TaskView;
-  readonly onChanged: () => void;
-  readonly stale: boolean;
-  /** Takes the task to a column, by the step that leads there; see moveIntent. */
-  readonly onMoveTo: (lane: string) => void;
-  /** A request is out: nothing more is sent until it returns. */
-  readonly busy: boolean;
-}) {
-  const { task } = props;
-  const { card } = task;
-  const person = usePersonName();
-  const name = useBoardStore((state) => state.person);
-  const setPerson = useBoardStore((state) => state.setPerson);
-  const now = useMinuteClock();
-  const act = useDeliveryAct(props.environmentId, "task edit");
-  const [tags, setTags] = useState<string | null>(null);
-  const [problem, setProblem] = useState<string | null>(null);
-  const [problems, setProblems] = useState<ReadonlyArray<string>>([]);
-  const closed = ["approved", "rejected", "closed"].includes(task.state);
-  const flow = task.flows.find((item) => item.id === task.workflow) ?? null;
-  const navigate = useNavigate();
-  // The boards of the person's own, to move the task between, with where each one's work is done.
-  const boardsRead = useDeliveryRead(props.environmentId, "/api/boards");
-  const boards: ReadonlyArray<MoveBoard> = (
-    Array.isArray(boardsRead.body) ? boardsRead.body : []
-  ).flatMap((item: unknown) =>
-    item && typeof item === "object" && "id" in item && "title" in item
-      ? [
-          {
-            id: String(item.id),
-            title: String(item.title),
-            target: "target" in item ? parseTarget(item.target) : null,
-          },
-        ]
-      : [],
-  );
-  // The board triage thinks the task belongs on, and the move a person is about to confirm.
-  const suggested = task.suggestedBoard ?? card.suggestedBoard ?? null;
-  const [moving, setMoving] = useState<{
-    readonly board: string;
-  } | null>(null);
-  const startMove = (board: string) => setMoving({ board });
-  // What is set for the task, which the switches change.
-  const set = Object.fromEntries(task.settings.map((item) => [item.seat, item.set]));
-  // The seat choices last sent. Until a read of the task shows it changed since (its last
-  // change is later), a second switch builds on the first, instead of on a read from before
-  // it, a poll included, which would undo it.
-  const sentSeats = useRef<{ readonly updated: string; readonly set: typeof set } | null>(null);
-  const switchSeat = async (seat: string, choice: Record<string, string>) => {
-    setProblems([]);
-    const pending = sentSeats.current && task.updated <= sentSeats.current.updated;
-    const base = pending && sentSeats.current ? sentSeats.current.set : set;
-    const next = withSeatChoice(base, seat, choice);
-    sentSeats.current = {
-      updated: pending && sentSeats.current ? sentSeats.current.updated : task.updated,
-      set: next,
-    };
-    const result = await act(`/api/tasks/${task.id}/edit`, {
-      seats: seatSettingsToSend(task.settings, next),
-      by: person,
-    });
-    if (!result.ok) setProblems(result.problems.length > 0 ? result.problems : [result.why]);
-    props.onChanged();
-  };
-
-  const edit = async (patch: Record<string, unknown>) => {
-    setProblem(null);
-    const result = await act(`/api/tasks/${task.id}/edit`, { ...patch, by: person });
-    if (!result.ok) setProblem(result.why);
-    props.onChanged();
-  };
-
-  return (
-    <aside
-      className="flex min-h-0 min-w-0 flex-col gap-4 overflow-y-auto p-4"
-      data-task-info
-      aria-label="About this task"
-    >
-      {suggested && suggested.id !== card.set ? (
-        <div
-          className="flex items-start justify-between gap-2 rounded border border-warning/60 bg-warning/5 px-2 py-1.5 text-xs"
-          data-task-suggested-board={suggested.id}
-        >
-          <span>
-            Triage suggests board <span className="font-medium">{suggested.title}</span>
-            {suggested.repositoryTitle ? ` (${suggested.repositoryTitle})` : ""}
-          </span>
-          <Button size="xs" variant="outline" onClick={() => startMove(suggested.id)}>
-            Move...
-          </Button>
-        </div>
-      ) : null}
-      {moving ? (
-        <MoveTaskDialog
-          environmentId={props.environmentId}
-          task={task}
-          boards={boards}
-          board={moving.board}
-          onClose={() => setMoving(null)}
-          onMoved={props.onChanged}
-        />
-      ) : null}
-      <section className="flex flex-col gap-1.5">
-        <TaskDisclosure title="Status and decisions">
-          <Row label="Stands in">
-            {task.isDraft || !task.lane ? (
-              <span className="inline-flex items-center gap-1.5" data-task-lane={task.lane ?? ""}>
-                <span className={cn("size-2 rounded-full", laneTone(task.lane).bar)} />
-                {LANE_TITLE[boardLaneOf(task.lane ?? "")] ?? task.state}
-              </span>
-            ) : (
-              <Select
-                value={boardLaneOf(task.lane)}
-                onValueChange={(value) =>
-                  value &&
-                  value !== boardLaneOf(task.lane) &&
-                  props.onMoveTo(boardMoveIntent(card, String(value)).lane)
-                }
-              >
-                <SelectTrigger
-                  aria-label="Column"
-                  size="compact"
-                  variant="ghost"
-                  className="w-auto min-w-0"
-                  disabled={props.busy}
-                  data-task-lane={task.lane}
-                >
-                  <SelectValue>
-                    <span className="inline-flex items-center gap-1.5">
-                      <span className={cn("size-2 rounded-full", laneTone(task.lane).bar)} />
-                      {LANE_TITLE[boardLaneOf(task.lane)] ?? task.state}
-                    </span>
-                  </SelectValue>
-                </SelectTrigger>
-                <SelectPopup alignItemWithTrigger={false}>
-                  {BOARD_LANES.filter(
-                    (item) => item.id !== "draft" && item.id !== "closed-not-done",
-                  )
-                    .map((item) => [item.id, LANE_TITLE[item.id] ?? item.id] as const)
-                    .map(([lane, title]) => {
-                      const intent = boardMoveIntent(card, lane).intent;
-                      // What choosing it does, or why it cannot be chosen, is said to every reader.
-                      const said =
-                        intent.kind === "refused"
-                          ? intent.why
-                          : intent.kind === "action"
-                            ? actionLabel(intent.action, card)
-                            : lane === boardLaneOf(task.lane)
-                              ? "Here now"
-                              : intent.label;
-                      return (
-                        <SelectItem
-                          key={lane}
-                          value={lane}
-                          aria-label={`${title}: ${said}`}
-                          data-move={intent.kind}
-                        >
-                          <span
-                            className={cn(
-                              "inline-flex items-center gap-1.5",
-                              intent.kind === "refused" && "text-muted-foreground",
-                            )}
-                          >
-                            <span className={cn("size-2 rounded-full", laneTone(lane).bar)} />
-                            {title}
-                            {lane !== boardLaneOf(task.lane) ? (
-                              <span className="text-3xs text-muted-foreground">
-                                {intent.kind === "refused"
-                                  ? "not from here, choose to see why"
-                                  : said}
-                              </span>
-                            ) : null}
-                          </span>
-                        </SelectItem>
-                      );
-                    })}
-                </SelectPopup>
-              </Select>
-            )}
-          </Row>
-          {card.set === "qualification" ? (
-            <Row label="Kept as">
-              <span data-task-set="qualification">
-                the qualification's evidence, not pilot work
-              </span>
-            </Row>
-          ) : (
-            <Row label="Board">
-              <Select
-                value={card.set ?? NO_BOARD}
-                onValueChange={(value) => {
-                  const chosen =
-                    value === NO_BOARD ? null : (boards.find((item) => item.id === value) ?? null);
-                  if (value === (card.set ?? NO_BOARD)) return;
-                  // A board done in another repository moves the task's work there, which is confirmed first.
-                  if (
-                    value !== NO_BOARD &&
-                    !["chat", "non-code"].includes(task.workflow) &&
-                    boardChoiceKind(task.target?.repository ?? null, chosen) === "move"
-                  ) {
-                    startMove(String(value));
-                    return;
-                  }
-                  void act(`/api/tasks/${task.id}/board`, {
-                    board: value === NO_BOARD ? null : String(value),
-                    by: person,
-                  }).then((result) => {
-                    if (!result.ok) setProblem(result.why);
-                    props.onChanged();
-                  });
-                }}
-              >
-                {/* A board other than the suggested one is outlined in the warning tone. */}
-                <span
-                  className={cn(
-                    "inline-flex min-w-0 rounded-md",
-                    suggested && suggested.id !== card.set && "ring-1 ring-warning/60",
-                  )}
-                >
-                  <SelectTrigger
-                    aria-label="Board"
-                    size="compact"
-                    variant="ghost"
-                    className="w-auto min-w-0"
-                    data-task-board={card.set ?? ""}
-                  >
-                    <SelectValue>
-                      {boards.find((item) => item.id === card.set)?.title ??
-                        (card.set ? card.set : "Not on a board")}
-                    </SelectValue>
-                  </SelectTrigger>
-                </span>
-                <SelectPopup alignItemWithTrigger={false}>
-                  <SelectItem value={NO_BOARD}>Not on a board</SelectItem>
-                  {boards.map((item) => (
-                    <SelectItem key={item.id} value={item.id}>
-                      {item.title}
-                    </SelectItem>
-                  ))}
-                </SelectPopup>
-              </Select>
-            </Row>
-          )}
-          <Row label="Now">
-            <WaitingOn card={card} />
-          </Row>
-          {card.blocker ? (
-            <p
-              className={cn(
-                "rounded border px-2 py-1 text-xs",
-                card.waitingOn === "person"
-                  ? "border-warning/60 bg-warning/5"
-                  : "border-border text-muted-foreground",
-              )}
-              data-task-blocker
-            >
-              {card.blocker}
-            </p>
-          ) : null}
-          {card.workers.map((worker) => (
-            <Row
-              key={`${worker.seat}:${worker.stage}`}
-              label={worker.waiting ? "Waiting" : "Working"}
-            >
-              {worker.seat} on {harnessLabel(worker.harness)}, {worker.stage}
-              {worker.waiting ? `, ${waitingWords(worker.waiting)}` : ""}
-              {worker.waitingWhy ? (
-                <span className="block text-2xs text-muted-foreground">{worker.waitingWhy}</span>
-              ) : null}
-              {worker.specialist ? ` as ${worker.specialist}` : ""}{" "}
-              <Age at={worker.since} now={now} label="Since" />
-            </Row>
-          ))}
-          {card.qa && card.qa.votes.length > 0 ? (
-            <Row label="QA">
-              <QaVotes qa={card.qa} />
-            </Row>
-          ) : null}
-          {card.findings.all > 0 ? (
-            <Row label="Findings">
-              {card.findings.open} open of {card.findings.all}
-            </Row>
-          ) : null}
-          {card.approvals.map((approval) => (
-            <Row key={`${approval.actor}:${approval.decision}:${approval.stands}`} label="Decision">
-              <span
-                className="flex flex-col items-end"
-                data-task-approval-verified={approval.verifiedAt ?? ""}
-              >
-                <span>
-                  {approval.decision} by {approval.actor},{" "}
-                  {approval.stands ? "stands" : "no longer stands"}
-                </span>
-                {approval.verifiedAt ? (
-                  <span className="text-3xs text-muted-foreground">
-                    checked{" "}
-                    {ageLabel(approval.verifiedAt, now) === "now" ||
-                    !ageLabel(approval.verifiedAt, now)
-                      ? "just now"
-                      : `${ageLabel(approval.verifiedAt, now)} ago`}
-                    ; proved again before anything is published
-                  </span>
-                ) : null}
-              </span>
-            </Row>
-          ))}
-        </TaskDisclosure>
-      </section>
-
-      <section className="flex flex-col gap-1.5">
-        <TaskDisclosure title="Ownership and repository">
-          <Row label="Priority">
-            {closed ? (
-              <PriorityPill priority={task.priority} by={task.priorityBy} />
-            ) : (
-              <Select
-                value={task.priority}
-                onValueChange={(value) => void edit({ priority: value as TaskPriority })}
-              >
-                <SelectTrigger
-                  aria-label="Priority"
-                  size="compact"
-                  variant="ghost"
-                  className="ml-auto w-auto min-w-0"
-                >
-                  <SelectValue>
-                    <PriorityPill priority={task.priority} />
-                  </SelectValue>
-                </SelectTrigger>
-                <SelectPopup alignItemWithTrigger={false}>
-                  {TASK_PRIORITIES.map((priority) => (
-                    <SelectItem key={priority} value={priority}>
-                      {PRIORITY_LABEL[priority]}
-                    </SelectItem>
-                  ))}
-                </SelectPopup>
-              </Select>
-            )}
-          </Row>
-          {/* Where its work is done. A task keeps it; moving it to another board does not change it. */}
-          <Row label="Repository">
-            <span
-              className="flex min-w-0 flex-col"
-              data-task-target={task.target?.ok ? "ok" : "none"}
-            >
-              <span className={task.target?.ok ? "" : "text-warning"}>
-                {targetLine(task.target)}
-              </span>
-              {task.target?.ok && task.target.path ? (
-                <span className="truncate font-mono text-2xs text-muted-foreground">
-                  {task.target.path}
-                </span>
-              ) : null}
-            </span>
-          </Row>
-          <Row label="Team">{task.team}</Row>
-          <Row label="Flow">
-            <span data-task-flow={task.workflow}>{flow?.title ?? task.workflow}</span>
-          </Row>
-          <Row label="Owner">{task.owner || "nobody"}</Row>
-          <Row label="Tags">
-            {tags === null ? (
-              <span className="inline-flex flex-wrap items-center justify-end gap-1">
-                <TagList tags={task.tags} />
-                {closed ? null : (
-                  <button
-                    type="button"
-                    aria-label="Change the tags"
-                    className="cursor-pointer text-muted-foreground hover:text-foreground"
-                    onClick={() => setTags(task.tags.join(", "))}
-                  >
-                    <PencilIcon className="size-3" />
-                  </button>
-                )}
-              </span>
-            ) : (
-              <Input
-                aria-label="Tags"
-                size="compact"
-                className="w-44"
-                autoFocus
-                value={tags}
-                onChange={(event) => setTags(event.target.value)}
-                onBlur={() => {
-                  void edit({ tags: tagsFromText(tags) });
-                  setTags(null);
-                }}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter") event.currentTarget.blur();
-                  if (event.key === "Escape") setTags(null);
-                }}
-              />
-            )}
-          </Row>
-          {task.deadline ? <Row label="Wanted by">{task.deadline.slice(0, 10)}</Row> : null}
-          <Row label="Created">{time(task.created)}</Row>
-          {task.submitted ? <Row label="Submitted">{time(task.submitted)}</Row> : null}
-          <Row label="Last changed">{time(task.updated)}</Row>
-          <Row label="Id">
-            <span className="font-mono text-3xs">{task.id}</span>
-          </Row>
-          {problem ? <p className="text-xs text-warning">{problem}</p> : null}
-        </TaskDisclosure>
-      </section>
-
-      {card.run ? (
-        <section className="flex flex-col gap-1.5">
-          <TaskDisclosure title="Run and evidence" defaultOpen={false}>
-            <Row label="Run">
-              <span className="font-mono text-3xs">{card.run.id}</span>
-            </Row>
-            <Row label="State">
-              {card.run.state} at {card.run.stage}
-            </Row>
-            {card.run.candidate ? (
-              <Row label="Candidate">
-                <span className="font-mono text-3xs">{card.run.candidate.slice(0, 12)}</span>
-              </Row>
-            ) : null}
-            <Row label="Setup">
-              <span className="font-mono text-3xs">{card.run.configuration}</span>
-            </Row>
-            {task.council?.evidence ? (
-              <Row label="Evidence">
-                <span className="font-mono text-3xs break-all">{task.council.evidence}</span>
-              </Row>
-            ) : null}
-            {task.children.length > 1 ? (
-              <Row label="Runs">{task.children.length} for this task</Row>
-            ) : null}
-          </TaskDisclosure>
-        </section>
-      ) : null}
-
-      {props.environmentId ? (
-        <TaskDisclosure title="Automatic merge permission" defaultOpen={false}>
-          <MergePermissionControls
-            environmentId={props.environmentId}
-            path={`/api/tasks/${task.id}/merge-permission`}
-            policy={card.mergePermission}
-            stale={props.stale}
-            onDone={props.onChanged}
-          />
-        </TaskDisclosure>
-      ) : null}
-
-      <section className="flex flex-col gap-1.5" data-task-related>
-        <TaskDisclosure title="Linked conversations" defaultOpen={false}>
-          <p className="text-2xs text-muted-foreground">
-            What is said on this task is its conversation with the team. A thread in the chat list
-            is a conversation of its own; it becomes a task only when you create one from it.
-          </p>
-          {task.source ? (
-            <Row label="Made from">
-              <button
-                type="button"
-                className="text-primary underline-offset-2 hover:underline"
-                data-task-related-source
-                onClick={() =>
-                  void navigate({
-                    to: "/$environmentId/$threadId",
-                    params: {
-                      environmentId: task.source!.environmentId,
-                      threadId: task.source!.threadId,
-                    },
-                  })
-                }
-              >
-                the conversation it came from
-              </button>
-            </Row>
-          ) : null}
-          {card.run ? (
-            <Row label="Run">
-              <span className="font-mono text-3xs" data-task-related-run>
-                {card.run.id}
-                {card.run.candidate ? ` · commit ${card.run.candidate.slice(0, 10)}` : ""}
-              </span>
-            </Row>
-          ) : null}
-          {card.waitingOn ? (
-            <Row label="Waiting on you">
-              <span data-task-related-waiting>yes: {card.waitingOn}</span>
-            </Row>
-          ) : null}
-          <PublicationRows task={task} />
-        </TaskDisclosure>
-      </section>
-
-      {closed ? null : (
-        <section className="flex flex-col gap-1.5" data-task-seats>
-          <TaskDisclosure title="Seat settings" defaultOpen={false}>
-            <SeatSettingsPanel
-              environmentId={props.environmentId}
-              settings={task.settings.map((item) => ({ ...item, now: item.effective }))}
-              chosen={{}}
-              taking={flow?.seats}
-              switchesOnly
-              onChange={(seat, choice) =>
-                void switchSeat(seat, {
-                  ...set[seat],
-                  active: choice.active === "" || choice.active === undefined ? "" : choice.active,
-                })
-              }
-            />
-            {seatsChangedForTask(task.settings).length > 0 ? (
-              <div
-                className="rounded border border-border bg-muted/40 px-2 py-1.5 text-2xs"
-                data-task-seats-changed
-              >
-                <p className="font-medium">
-                  Changed for this task only. The team's own setting is as it was.
-                </p>
-                <ul className="list-disc pl-4 text-muted-foreground">
-                  {seatsChangedForTask(task.settings).map((line) => (
-                    <li key={line}>{line}</li>
-                  ))}
-                </ul>
-              </div>
-            ) : null}
-            {problems.length > 0 ? (
-              <ul className="list-disc pl-5 text-2xs text-warning" data-delivery-problem>
-                {problems.map((item) => (
-                  <li key={item}>{item}</li>
-                ))}
-              </ul>
-            ) : null}
-            <p className="text-2xs text-muted-foreground">
-              {task.workflow === "chat"
-                ? "A change counts from the next message on."
-                : "A run keeps the seats it started with. A change counts for the next run. A seat that is working when it is switched off is asked to stop."}
-            </p>
-          </TaskDisclosure>
-        </section>
-      )}
-
-      <TaskDisclosure title="Execution and checkpoints" defaultOpen={false}>
-        <RunPanel
-          key={task.id}
-          environmentId={props.environmentId}
-          task={task}
-          onChanged={props.onChanged}
-        />
-      </TaskDisclosure>
-
-      <section className="flex flex-col gap-1">
-        <h3 className="text-xs font-medium text-muted-foreground">Your name</h3>
-        <Input
-          aria-label="Your name"
-          placeholder="Written on what you do here"
-          size="compact"
-          value={name}
-          onChange={(event) => setPerson(event.target.value)}
-        />
-      </section>
-    </aside>
-  );
-}
-
-/** The value of the board choice for a task on no board. */
-const NO_BOARD = "__no_board__";
-
-/**
- * A task with everything about it in one place: what is asked, what was said
- * and what happened, and where it stands. The Board and the Orchestrator
- * both open this, on the same record.
+ * A board task opened as its native thread: the thread view T3 shows any thread in, with the
+ * task's number, title and actions in its header, or the native page with the task's words while
+ * it has no thread. A draft has the same page, with the task editor as its centre. The board's own
+ * read is the only source.
  */
 export function TaskWorkspace(props: {
   readonly environmentId: EnvironmentId | null;
@@ -2056,29 +58,31 @@ export function TaskWorkspace(props: {
     onDone: read.refresh,
     onDiscarded: () => props.onClose(),
   });
-  const detailsSheet = useMediaQuery(RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY);
-  const [detailsOpen, setDetailsOpen] = useLocalStorage(
-    `t3code:task-details:${JSON.stringify([props.environmentId, props.taskId, detailsSheet ? "sheet" : "inline"])}`,
-    !detailsSheet,
-    Schema.Boolean,
-  );
-  const [briefOpen, setBriefOpen] = useState(true);
+  const narrow = useMediaQuery(RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY);
+  // A thread view keeps the task's details in its own panel. Where none stands they are a sheet,
+  // closed until asked for, and fresh each time something points into them.
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const [detailsMount, setDetailsMount] = useState(0);
   const [taskBrief, setTaskBrief] = useState<string | null>(null);
   const [creatingTask, setCreatingTask] = useState(false);
   const [createProblem, setCreateProblem] = useState<string | null>(null);
   const [allocatingTask, setAllocatingTask] = useState<string | null>(null);
-  const wide = useMediaQuery("(min-width: 640px) and (min-height: 600px)");
-  const conversation = useTaskConversation(task);
-  // A thread opened from a panel appears in the centre, so a panel that covers it, or fills the
-  // width, gives way. The right panel stays on the task otherwise.
+  const [menuProblem, setMenuProblem] = useState<string | null>(null);
+  const conversation = useTaskConversation(props.environmentId, task);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- clears the seat this task left open in the shared store, so it opens on its own conversation next time
+  useEffect(
+    () => () => forgetOpenSeat(props.environmentId, props.taskId),
+    [props.environmentId, props.taskId],
+  );
+  // A thread opened from a panel appears in the centre, so the details sheet over it closes, and a
+  // panel that fills the width gives way. The right panel stays on the task otherwise.
   const openInCentre = (thread: ScopedThreadRef) => {
     conversation.open(thread);
-    const panel = taskPanelRef(JSON.stringify([props.environmentId, props.taskId]));
+    const panel =
+      conversation.ref ?? taskPanelRef(JSON.stringify([props.environmentId, props.taskId]));
     useRightPanelStore.getState().setMaximized(panel, false);
-    if (detailsSheet) {
-      useRightPanelStore.getState().close(panel);
-      setDetailsOpen(false);
-    }
+    setDetailsOpen(false);
+    if (narrow) useRightPanelStore.getState().close(panel);
   };
 
   // Opened and looked at, what the team said is read.
@@ -2093,233 +97,78 @@ export function TaskWorkspace(props: {
     void act(`/api/tasks/${task.id}/seen`, { by: person });
   }, [act, person, task, unread]);
 
-  if (task?.isDraft) {
-    return (
-      <TaskEditor
-        environmentId={props.environmentId}
-        taskId={task.id}
-        from={props.from}
-        onClose={props.onClose}
-        onSaved={(id) => props.onOpenTask(id)}
-      />
-    );
-  }
+  // Provided where the task view mounts: what it hosts reads the board's task from here.
+  const board: BoardTask = {
+    environmentId: props.environmentId,
+    taskId: props.taskId,
+    task,
+    stale: stale || !!read.error,
+    refresh: read.refresh,
+    openTask: props.onOpenTask,
+    openThread: openInCentre,
+    seats: { ...conversation.seats, open: openInCentre },
+  };
 
   const primary = task?.actions.filter((action) =>
     ["approve", "reject", "publish", "submit", "deliver", "accept-artifacts"].includes(action),
   );
   const others = task?.actions.filter((action) => !primary?.includes(action)) ?? [];
+  const source = task?.source
+    ? {
+        environmentId: EnvironmentId.make(task.source.environmentId),
+        threadId: ThreadId.make(task.source.threadId),
+      }
+    : null;
+  const problem = actions.problem ?? menuProblem;
+  // Under the native header: the engine's notices and the last refusal.
+  const notices = (
+    <>
+      {read.error ? (
+        deliveryReadDiagnostic(read.failure, { task: true }) === "unreachable" ? (
+          <p className="shrink-0 border-b border-border px-3 py-1.5 text-xs text-warning">
+            Delivery engine not reachable. {read.error} This is not an ordinary chat and it will not
+            answer as one.
+          </p>
+        ) : (
+          <DeliveryDiagnosticNotice
+            className="min-w-0 shrink-0 space-y-0.5 border-b border-border px-3 py-1.5 text-xs"
+            code={deliveryReadDiagnostic(read.failure, { task: true })}
+            problem={read.error}
+          />
+        )
+      ) : null}
+      {problem ? (
+        <p
+          className="shrink-0 border-b border-border px-3 py-1.5 text-xs text-warning"
+          data-delivery-problem
+        >
+          {problem}
+        </p>
+      ) : null}
+    </>
+  );
 
   return (
-    <SidebarInset className="isolate h-dvh min-h-0 overflow-hidden overscroll-y-none">
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-task-workspace={props.taskId}>
-        <WorkspacePageHeader electron={isElectron} className="h-auto">
-          <div
-            className={cn(
-              "flex min-w-0 flex-1 items-center gap-1 py-1 [@media(min-width:640px)_and_(min-height:600px)]:gap-2 [@media(min-width:640px)_and_(min-height:600px)]:py-2",
-              // With the thread view below, one row: the title gives way so the controls it draws stay clear.
-              conversation.state.kind !== "open" &&
-                "[@media(min-width:640px)_and_(min-height:600px)]:flex-wrap",
-            )}
-          >
-            <Button
-              size="xs"
-              variant="ghost"
-              onClick={props.onClose}
-              aria-label={`Back to ${props.from}`}
-            >
-              <ArrowLeftIcon />
-              <span className="hidden [@media(min-width:640px)_and_(min-height:600px)]:inline">
-                {props.from}
-              </span>
-            </Button>
-            {task ? (
-              <>
-                <span className="shrink-0 font-mono text-xs text-muted-foreground" data-task-number>
-                  #{task.number}
-                </span>
-                <h1
-                  className={cn(
-                    "min-w-0 flex-1 truncate text-sm font-medium",
-                    conversation.state.kind !== "open" &&
-                      "[@media(min-width:640px)_and_(min-height:600px)]:flex-none",
-                  )}
-                >
-                  {task.title}
-                </h1>
-                <PriorityPill priority={task.priority} by={task.priorityBy} />
-                <Badge
-                  size="sm"
-                  variant="outline"
-                  className="hidden [@media(min-width:640px)_and_(min-height:600px)]:inline-flex"
-                  data-task-state={task.state}
-                >
-                  {LANE_TITLE[boardLaneOf(task.lane ?? "")] ?? task.state}
-                  {task.held ? ", paused" : ""}
-                </Badge>
-                <span
-                  className={cn(
-                    "font-mono text-3xs text-muted-foreground",
-                    !stale && "hidden [@media(min-width:640px)_and_(min-height:600px)]:inline-flex",
-                  )}
-                >
-                  {stale ? "stale" : "live"}
-                </span>
-              </>
-            ) : null}
-            <div
-              className={cn(
-                "ml-auto flex shrink-0 items-center gap-1",
-                // The thread view in the centre draws its own controls over the top right corner.
-                conversation.state.kind === "open" && "pe-32",
-              )}
-            >
-              {task?.workflow === "chat" && task.state === "chat" ? (
-                <span className="hidden [@media(min-width:640px)_and_(min-height:600px)]:inline-flex">
-                  <Button
-                    size="xs"
-                    variant="outline"
-                    onClick={() => {
-                      setCreateProblem(null);
-                      setTaskBrief("");
-                    }}
-                  >
-                    Create task from chat
-                  </Button>
-                </span>
-              ) : null}
-              {task ? (
-                <SharedTaskAllocation
-                  environmentId={props.environmentId}
-                  taskId={task.id}
-                  open={allocatingTask === task.id}
-                  onOpenChange={(open) => setAllocatingTask(open ? task.id : null)}
-                />
-              ) : null}
-              {task && (!wide || others.length > 0) ? (
-                <Menu>
-                  <MenuTrigger
-                    render={
-                      <Button
-                        size="icon-sm"
-                        variant="ghost"
-                        aria-label="What can be done with this task"
-                        data-task-actions
-                      />
-                    }
-                  >
-                    <EllipsisIcon />
-                  </MenuTrigger>
-                  <MenuPopup align="end">
-                    {!wide && task.workflow === "chat" && task.state === "chat" ? (
-                      <MenuItem
-                        disabled={actions.busy}
-                        onClick={() => {
-                          setCreateProblem(null);
-                          setTaskBrief("");
-                        }}
-                      >
-                        <span className="flex max-w-80 flex-col">
-                          <span>Create task from chat</span>
-                          <span className="text-xs text-muted-foreground">
-                            Make this chat a task; nothing starts yet.
-                          </span>
-                        </span>
-                      </MenuItem>
-                    ) : null}
-                    {!wide ? (
-                      <MenuItem disabled={actions.busy} onClick={() => setAllocatingTask(task.id)}>
-                        <span className="flex max-w-80 flex-col">
-                          <span>Allocate</span>
-                          <span className="text-xs text-muted-foreground">
-                            Choose the machine for it, or follow its move.
-                          </span>
-                        </span>
-                      </MenuItem>
-                    ) : null}
-                    {others.map((action) => (
-                      <MenuItem
-                        key={action}
-                        disabled={actions.busy}
-                        onClick={() => actions.run(task.card, action)}
-                      >
-                        <span className="flex max-w-80 flex-col">
-                          <span>{actionLabel(action, task.card)}</span>
-                          <span className="text-xs text-muted-foreground">
-                            {actionHelp(action, task.card)}
-                          </span>
-                        </span>
-                      </MenuItem>
-                    ))}
-                  </MenuPopup>
-                </Menu>
-              ) : null}
-            </div>
-          </div>
-        </WorkspacePageHeader>
-
-        {read.error ? (
-          deliveryReadDiagnostic(read.failure, { task: true }) === "unreachable" ? (
-            <p className="px-5 pt-3 text-sm text-warning">
-              Delivery engine not reachable. {read.error} This is not an ordinary chat and it will
-              not answer as one.
-            </p>
-          ) : (
-            <DeliveryDiagnosticNotice
-              className="min-w-0 space-y-0.5 px-5 pt-3 text-sm"
-              code={deliveryReadDiagnostic(read.failure, { task: true })}
-              problem={read.error}
-            />
-          )
-        ) : null}
-        {actions.problem ? (
-          <p className="px-5 pt-3 text-sm text-warning" data-delivery-problem>
-            {actions.problem}
-          </p>
-        ) : null}
-
-        {task ? (
-          <>
-            {props.environmentId && task.origin.startsWith(`thread:${props.environmentId}/`) ? (
-              <BoardDelivery
-                key={`${props.environmentId}:${task.id}`}
-                environmentId={props.environmentId}
-                task={{
-                  id: task.id,
-                  origin: task.origin,
-                  held: task.held,
-                  state: task.state,
-                  repository: task.target?.repository ?? null,
-                  base: task.target?.base ?? null,
-                }}
-              />
-            ) : null}
+    <BoardTaskContext value={board}>
+      <SidebarInset className="isolate h-dvh min-h-0 overflow-hidden overscroll-y-none">
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-task-workspace={props.taskId}>
+          {task ? (
             <TaskWorkspacePanels
               key={`${props.environmentId}:${task.id}`}
               owner={JSON.stringify([props.environmentId, task.id])}
-              source={
-                task.source
-                  ? {
-                      environmentId: EnvironmentId.make(task.source.environmentId),
-                      threadId: ThreadId.make(task.source.threadId),
-                    }
-                  : null
-              }
+              thread={conversation.ref}
               detailsOpen={detailsOpen}
               onDetailsOpenChange={setDetailsOpen}
-              onOpenThread={openInCentre}
               openFirst
               details={
-                <Details
-                  key={task.id}
-                  environmentId={props.environmentId}
-                  task={task}
-                  onOpenTask={props.onOpenTask}
-                  open={briefOpen}
-                  onOpenChange={setBriefOpen}
-                />
+                <div key={detailsMount} className="flex flex-col gap-2 py-2">
+                  <div className="px-2">
+                    <TaskRelatedWork />
+                  </div>
+                  <TaskDetailsItem />
+                </div>
               }
-              renderConversation={(showDetails) => (
+              renderConversation={(panel) => (
                 <TaskConversation
                   key={task.id}
                   task={task}
@@ -2327,98 +176,120 @@ export function TaskWorkspace(props: {
                   seat={conversation.seat}
                   seatResolving={conversation.seatResolving}
                   seatName={conversation.seatName}
+                  source={source}
                   onOpenThread={openInCentre}
                   onBackToTask={conversation.backToTask}
-                  log={
-                    <Communications
-                      key={task.id}
-                      environmentId={props.environmentId}
-                      task={task}
-                      onChanged={read.refresh}
-                      onShow={(section) => {
-                        showDetails();
-                        setBriefOpen(true);
-                        requestAnimationFrame(() =>
-                          document
-                            .querySelector(`[data-task-section="${section}"]`)
-                            ?.scrollIntoView({ block: "start", behavior: "smooth" }),
-                        );
-                      }}
-                    />
+                  draft={
+                    task.isDraft ? (
+                      <TaskEditor
+                        framed
+                        environmentId={props.environmentId}
+                        taskId={task.id}
+                        from={props.from}
+                        onClose={props.onClose}
+                        onSaved={(id) => props.onOpenTask(id)}
+                      />
+                    ) : undefined
                   }
+                  chrome={{
+                    title: `#${task.number} ${task.title}`,
+                    actions: (
+                      <TaskMenu
+                        environmentId={props.environmentId}
+                        task={task}
+                        actions={others}
+                        taskActions={actions}
+                        onCreateTask={() => {
+                          setCreateProblem(null);
+                          setTaskBrief("");
+                        }}
+                        onAllocate={() => setAllocatingTask(task.id)}
+                        onChanged={read.refresh}
+                        onProblem={setMenuProblem}
+                      />
+                    ),
+                    notices,
+                    panelControls: panel.controls,
+                    openTab: panel.openTab,
+                    showLog: () => {
+                      // The log is in the details, which a page holds in the sheet.
+                      panel.showDetails();
+                      setDetailsMount((count) => count + 1);
+                      requestAnimationFrame(() =>
+                        document
+                          .querySelector('[data-task-details-sheet] [data-task-section="log"]')
+                          ?.scrollIntoView({ block: "start", behavior: "smooth" }),
+                      );
+                    },
+                    decisions: (
+                      <DecisionBar
+                        task={task}
+                        actions={primary ?? []}
+                        busy={actions.busy}
+                        onAction={(action) => actions.run(task.card, action)}
+                      />
+                    ),
+                    renderBadges: (openDetails, wrap) => (
+                      <TaskBadges
+                        className={wrap ? "flex-wrap" : "shrink-0"}
+                        onOpenDetails={openDetails}
+                        onOpenTab={panel.openTab}
+                      />
+                    ),
+                    narrow: panel.narrow,
+                    showDetails: panel.showDetails,
+                    backToBoard: props.onClose,
+                  }}
                 />
               )}
-              deployments={
-                <div className="flex min-w-0 flex-1 flex-col">
-                  <CardDeliveryStatus card={task.card} variant="panel" />
-                  <TaskDeploymentsPanel card={task.card} stale={stale || !!read.error} />
-                </div>
-              }
-              evidence={
-                <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-                  <TaskFacts
-                    environmentId={props.environmentId}
-                    task={task}
-                    stale={stale || !!read.error}
-                    conversations={{ ...conversation.seats, open: openInCentre }}
-                  />
-                  <Info
-                    key={task.id}
-                    environmentId={props.environmentId}
-                    from={props.from}
-                    task={task}
-                    onChanged={read.refresh}
-                    stale={stale || !!read.error}
-                    onMoveTo={(lane) => actions.moveTo(task.card, lane, null)}
-                    busy={actions.busy}
-                  />
-                </div>
-              }
+              deployments={<TaskPanelTab kind="task-deployments" />}
+              evidence={<TaskPanelTab kind="task-evidence" />}
             />
-            <DecisionBar
-              task={task}
-              actions={primary ?? []}
-              busy={actions.busy}
-              onAction={(action) => actions.run(task.card, action)}
-            />
-          </>
-        ) : read.error ? null : (
-          <p className="p-6 text-sm text-muted-foreground">
-            {read.isPending ? "Reading the task." : "There is no such task."}
-          </p>
-        )}
-      </div>
-      {actions.dialog}
-      <Dialog
-        open={taskBrief !== null}
-        onOpenChange={(open) => {
-          if (!open && !creatingTask) setTaskBrief(null);
-        }}
-      >
-        <DialogPopup>
-          <DialogHeader>
-            <DialogTitle>Create a non-code task</DialogTitle>
-          </DialogHeader>
-          <DialogPanel>
-            <div className="flex flex-col gap-3">
-              <p className="text-sm text-muted-foreground">
-                Write the agreed brief. The draft keeps this conversation, project folder and
-                attachments. Creating it does not start work.
-              </p>
-              <Textarea
-                aria-label="Agreed task brief"
-                value={taskBrief ?? ""}
-                disabled={creatingTask}
-                onChange={(event) => setTaskBrief(event.target.value)}
-              />
-              {createProblem ? <p role="alert">{createProblem}</p> : null}
-              <Button
-                disabled={creatingTask || !taskBrief?.trim() || !task}
-                onClick={() => {
-                  if (!task || !taskBrief?.trim() || creatingTask) return;
-                  setCreatingTask(true);
-                  void act(`/api/tasks/${task.id}/from-chat`, { text: taskBrief, by: person }).then(
-                    (result) => {
+          ) : (
+            <TaskEmpty notices={notices} reading={read.isPending} failed={!!read.error} />
+          )}
+        </div>
+        {actions.dialog}
+        {task ? (
+          <SharedTaskAllocation
+            environmentId={props.environmentId}
+            taskId={task.id}
+            open={allocatingTask === task.id}
+            onOpenChange={(open) => setAllocatingTask(open ? task.id : null)}
+          />
+        ) : null}
+        <Dialog
+          open={taskBrief !== null}
+          onOpenChange={(open) => {
+            if (!open && !creatingTask) setTaskBrief(null);
+          }}
+        >
+          <DialogPopup>
+            <DialogHeader>
+              <DialogTitle>Create a non-code task</DialogTitle>
+            </DialogHeader>
+            <DialogPanel>
+              <div className="flex flex-col gap-3">
+                <p className="text-sm text-muted-foreground">
+                  Write the agreed brief. The draft keeps this conversation, project folder and
+                  attachments. Creating it does not start work.
+                </p>
+                <Textarea
+                  aria-label="Agreed task brief"
+                  value={taskBrief ?? ""}
+                  disabled={creatingTask}
+                  onChange={(event) => setTaskBrief(event.target.value)}
+                />
+                {createProblem ? <p role="alert">{createProblem}</p> : null}
+                <Button
+                  disabled={creatingTask || !taskBrief?.trim() || !task}
+                  onClick={() => {
+                    if (!task || !taskBrief?.trim() || creatingTask) return;
+                    setCreatingTask(true);
+                    void act(`/api/tasks/${task.id}/from-chat`, {
+                      text: taskBrief,
+                      by: person,
+                    }).then((result) => {
                       setCreatingTask(false);
                       if (!result.ok) {
                         setCreateProblem(result.why);
@@ -2432,16 +303,39 @@ export function TaskWorkspace(props: {
                       setTaskBrief(null);
                       read.refresh();
                       props.onOpenTask(created.id);
-                    },
-                  );
-                }}
-              >
-                {creatingTask ? "Creating draft..." : "Create draft"}
-              </Button>
-            </div>
-          </DialogPanel>
-        </DialogPopup>
-      </Dialog>
-    </SidebarInset>
+                    });
+                  }}
+                >
+                  {creatingTask ? "Creating draft..." : "Create draft"}
+                </Button>
+              </div>
+            </DialogPanel>
+          </DialogPopup>
+        </Dialog>
+      </SidebarInset>
+    </BoardTaskContext>
+  );
+}
+
+/** No task to show yet, or none by that id: the native empty state under the native header. */
+function TaskEmpty(props: {
+  readonly notices: ReactNode;
+  readonly reading: boolean;
+  readonly failed: boolean;
+}) {
+  return (
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-background">
+      <WorkspacePageHeader electron={isElectron} />
+      {props.notices}
+      {props.failed ? null : (
+        <Empty>
+          <EmptyHeader>
+            <EmptyTitle>
+              {props.reading ? "Reading the task." : "There is no such task."}
+            </EmptyTitle>
+          </EmptyHeader>
+        </Empty>
+      )}
+    </div>
   );
 }

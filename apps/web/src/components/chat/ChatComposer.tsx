@@ -1,4 +1,5 @@
 import { TeamBadge } from "../delivery/TeamBadge";
+import { useBoardTask } from "../delivery/BoardTaskContext";
 import { TeamChatToggle } from "../delivery/TeamChatToggle";
 import { TeamPicker } from "../delivery/TeamPicker";
 import { OrchestratorChatSetup } from "../delivery/OrchestratorChatSetup";
@@ -517,6 +518,7 @@ const NO_PROVIDER_SLASH_COMMANDS: ServerProvider["slashCommands"] = [];
 
 export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps) {
   const navigate = useNavigate();
+  const boardTask = useBoardTask();
   const gt = useGT();
   const m = useMessages();
   const {
@@ -2681,7 +2683,10 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           />
         ) : activeThreadId && !orchestratorMode ? (
           <span className="flex min-w-0 flex-wrap items-center gap-0.5">
-            <TeamBadge environmentId={environmentId} threadId={activeThreadId} />
+            {/* A board task's view shows its team in the header, once. */}
+            {boardTask ? null : (
+              <TeamBadge environmentId={environmentId} threadId={activeThreadId} />
+            )}
             <TeamChatToggle
               environmentId={environmentId}
               threadId={activeThreadId}

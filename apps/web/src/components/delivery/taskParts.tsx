@@ -3,6 +3,7 @@ import {
   ClockIcon,
   GitBranchIcon,
   HourglassIcon,
+  InfoIcon,
   MessageSquareIcon,
   PaperclipIcon,
   UserIcon,
@@ -20,6 +21,8 @@ import { cardActivityOf } from "../../lib/boardLaneCards";
 import { ageLabel, initialsOf, PRIORITY_LABEL } from "../../lib/deliveryBoard";
 import { harnessLabel } from "../../lib/deliverySeats";
 import { cn } from "../../lib/utils";
+import { Button } from "../ui/button";
+import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { relatedTaskGroups } from "./relatedTaskGroups";
 
@@ -46,16 +49,18 @@ export function PriorityPill(props: { readonly priority: TaskPriority; readonly 
   return (
     <Tooltip>
       <TooltipTrigger render={<span className="inline-flex" />}>{pill}</TooltipTrigger>
-      <TooltipPopup side="top">
-        {props.by === "person"
-          ? "Set by a person"
-          : props.by === "triage"
-            ? "Set by triage. A person may change it."
-            : "The default. Triage or a person may change it."}
-      </TooltipPopup>
+      <TooltipPopup side="top">{priorityByWords(props.by)}</TooltipPopup>
     </Tooltip>
   );
 }
+
+/** Who set a task's priority, as the engine reports it. */
+export const priorityByWords = (by: string) =>
+  by === "person"
+    ? "Set by a person"
+    : by === "triage"
+      ? "Set by triage. A person may change it."
+      : "The default. Triage or a person may change it.";
 
 /** Lanes are told apart by colour, as the columns of a board are. */
 const LANE_TONE: Record<string, { readonly bar: string; readonly tint: string }> = {
@@ -452,5 +457,47 @@ export function PublicationRows(props: { readonly task: TaskView }) {
         </Row>
       ) : null}
     </>
+  );
+}
+
+export const time = (iso: string) => {
+  const at = new Date(iso);
+  return Number.isNaN(at.getTime())
+    ? iso
+    : at.toLocaleString(undefined, {
+        month: "short",
+        day: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+      });
+};
+
+// Expanded controls need both width and height: landscape phones still need room for history.
+export function MobileHelp(props: {
+  readonly label: string;
+  readonly children: React.ReactNode;
+  /** Shown on every screen, not only a small one. */
+  readonly always?: boolean;
+}) {
+  return (
+    <Popover>
+      <PopoverTrigger
+        render={
+          <Button
+            size="icon-sm"
+            variant="ghost"
+            className={
+              props.always ? undefined : "[@media(min-width:640px)_and_(min-height:600px)]:hidden"
+            }
+            aria-label={props.label}
+          />
+        }
+      >
+        <InfoIcon />
+      </PopoverTrigger>
+      <PopoverPopup side="top" className="max-w-[min(20rem,calc(100vw-2rem))]">
+        <div className="text-xs">{props.children}</div>
+      </PopoverPopup>
+    </Popover>
   );
 }

@@ -256,6 +256,7 @@ import {
   remoteProjectSourceIcon,
   sourceControlHostIcon,
 } from "./CommandPaletteAddProject";
+import { useCommandPaletteTaskItems } from "./CommandPaletteTaskItems";
 import { useCommandPaletteThreadItems } from "./CommandPaletteThreadItems";
 import { useCommandPaletteThemeItems } from "./CommandPaletteThemeItems";
 import {
@@ -970,6 +971,7 @@ function OpenCommandPaletteDialog(props: {
     isSearchPending: isThreadSearchPending,
     isSearchFailed: isThreadSearchFailed,
   } = useCommandPaletteThreadItems({ activeThread: activeThread ?? null, threadSearchQuery });
+  const taskSearchItems = useCommandPaletteTaskItems(threadSearchQuery);
   // Recent means used recently: written in or opened, whichever is later. The
   // open thread would always lead that list, so it is left out.
   const activeThreadValue = activeThread
@@ -1981,6 +1983,7 @@ function OpenCommandPaletteDialog(props: {
               messages,
             )
           : allThreadItems,
+      taskSearchItems,
       threadMessageItems: isLinkedThreadSearch ? [] : threadMessageItems,
       now: searchNow,
     },

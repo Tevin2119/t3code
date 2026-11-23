@@ -67,6 +67,7 @@ const seat = (extra: Partial<CouncilSeat>): CouncilSeat => ({
   verdict: null,
   attempts: 1,
   live: null,
+  threadId: null,
   ...extra,
 });
 

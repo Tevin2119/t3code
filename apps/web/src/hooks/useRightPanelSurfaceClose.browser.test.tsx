@@ -133,6 +133,35 @@ it.each([
   },
 );
 
+it("closes only the tabs a view shows, keeping the rest saved, and the panel with the last of them", async () => {
+  fixture.allowed = new Set(["environment-a"]);
+  useRightPanelStore.setState({ byThreadKey: {} });
+  const ref: ScopedThreadRef = {
+    environmentId: EnvironmentId.make("environment-a"),
+    threadId: ThreadId.make("thread-a"),
+  };
+  const store = useRightPanelStore.getState();
+  store.open(ref, "task-evidence");
+  store.open(ref, "diff");
+  store.open(ref, "files");
+  const saved = () => selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, ref);
+  const shown = saved().surfaces.filter((surface) => surface.kind !== "task-evidence");
+  function Harness() {
+    const { closeAllSurfaces } = useRightPanelSurfaceClose({
+      threadRef: ref,
+      terminalLabelsById: new Map(),
+      surfaces: shown,
+    });
+    return <button onClick={closeAllSurfaces}>Close all</button>;
+  }
+  await using screen = await render(<Harness />);
+  await screen.getByRole("button").click();
+  expect(saved()).toMatchObject({
+    isOpen: false,
+    surfaces: [{ id: "task-evidence", kind: "task-evidence" }],
+  });
+});
+
 it.each([
   { mode: "single", outcome: "cancel" },
   { mode: "single", outcome: "revoked" },

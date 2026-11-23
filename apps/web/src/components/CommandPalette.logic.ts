@@ -28,6 +28,7 @@ import {
   type KeybindingCommand,
   type SourceControlDiscoveryResult,
   type SourceControlRepositoryInfo,
+  isServerOwnedThreadLineage,
   THREAD_JUMP_KEYBINDING_COMMANDS,
 } from "@t3tools/contracts";
 import { filterFilesystemBrowseEntries } from "@t3tools/client-runtime/state/filesystem";
@@ -35,6 +36,7 @@ import { isShownUnderParent } from "@t3tools/client-runtime/state/threads";
 import { type ReactNode } from "react";
 import { msg } from "gt-react";
 import { m, type MessageResolver } from "../i18n/messages";
+import { queryValue } from "../lib/deliveryBoard";
 import { formatRelativeTimeLabel } from "../timestampFormat";
 import { type Project, type SidebarThreadSummary, type Thread } from "../types";
 
@@ -91,6 +93,42 @@ export function buildLinkedThreadActionItems(
             }),
         }))),
   ];
+}
+
+/**
+ * The board's own search for what is typed, as its task list makes it: the engine looks through
+ * every task on the board, not only the newest it lists. With nothing typed there is no read.
+ */
+export function boardTaskSearchPath(query: string, boardSet: string): string | null {
+  const q = query.trim();
+  return q ? `/api/tasks?q=${queryValue(q)}&limit=100&set=${boardSet}` : null;
+}
+
+/** The board's tasks as rows, found by number or title; each opens its task's view. */
+export function buildBoardTaskActionItems(
+  input: {
+    readonly tasks: ReadonlyArray<{
+      readonly id: string;
+      readonly number: number;
+      readonly title: string;
+    }>;
+    readonly icon: ReactNode;
+    readonly runTask: (taskId: string) => Promise<void>;
+  },
+  resolve: MessageResolver = m,
+): CommandPaletteActionItem[] {
+  return input.tasks.map((task) => {
+    const title = `#${task.number} ${task.title}`;
+    return {
+      kind: "action",
+      value: `open-task:${task.id}`,
+      title,
+      searchTerms: [title, String(task.number)],
+      description: resolve(msg("Opens the task on the board")),
+      icon: input.icon,
+      run: () => input.runTask(task.id),
+    };
+  });
 }
 
 export function browseInputEndPaddingClass(input: {
@@ -487,6 +525,8 @@ export function buildThreadActionItems<TThread extends BuildThreadActionItemsThr
   const visibleThreads = input.threads.filter(
     (thread) =>
       thread.archivedAt === null &&
+      // A board task's conversation opens in its task, which the board's own rows list.
+      !isServerOwnedThreadLineage(thread.lineage) &&
       !isShownUnderParent(
         { environmentId: thread.environmentId, threadId: thread.id },
         thread.lineage,
@@ -614,6 +654,8 @@ export function filterCommandPaletteGroups(
     projectSearchItems: ReadonlyArray<CommandPaletteActionItem>;
     settingsSearchItems?: ReadonlyArray<CommandPaletteActionItem>;
     threadSearchItems: ReadonlyArray<CommandPaletteActionItem>;
+    /** The board's tasks, listed as threads are: only while searching. */
+    taskSearchItems?: ReadonlyArray<CommandPaletteActionItem>;
     /** Threads whose messages match, best first; threads already listed are skipped. */
     threadMessageItems?: ReadonlyArray<CommandPaletteActionItem>;
     now?: number;
@@ -671,6 +713,13 @@ export function filterCommandPaletteGroups(
         items: input.threadSearchItems,
       });
     }
+    if (input.taskSearchItems && input.taskSearchItems.length > 0) {
+      searchableGroups.push({
+        value: "tasks-search",
+        label: resolve(msg("Tasks")),
+        items: input.taskSearchItems,
+      });
+    }
     if (input.projectSearchItems.length > 0) {
       searchableGroups.push({
         value: "projects-search",
@@ -696,7 +745,7 @@ export function filterCommandPaletteGroups(
   const groups = ranked.map(({ group, ranked }): CommandPaletteGroup => {
     // Secondary items stay below the rest; the sort is stable, so score order holds.
     const limit =
-      group.value === "threads-search"
+      group.value === "threads-search" || group.value === "tasks-search"
         ? PALETTE_THREAD_LIMIT
         : group.value === "nested-search" || (searchesEverything && threadsMatch)
           ? PALETTE_SECONDARY_LIMIT

@@ -37,6 +37,9 @@ const DevicePanel = lazy(() =>
   import("../device/DevicePanel").then((module) => ({ default: module.DevicePanel })),
 );
 const FilePreviewPanel = lazy(() => import("../files/FilePreviewPanel"));
+const BoardTaskTab = lazy(() =>
+  import("../delivery/TaskPanelTab").then((module) => ({ default: module.TaskPanelTab })),
+);
 
 type RightPanelTerminalProps = Omit<
   PersistentThreadTerminalPanelProps,
@@ -287,9 +290,13 @@ export function RightPanelSurfaceContent(props: {
         </Suspense>
       );
     }
-    // Board task surfaces belong to a task's own panel; a thread never hosts them.
+    // A board task's tabs show only where a board task's view hosts the thread; elsewhere nothing.
     case "task-evidence":
     case "task-deployments":
-      return null;
+      return (
+        <Suspense fallback={null}>
+          <BoardTaskTab kind={surface.kind} />
+        </Suspense>
+      );
   }
 }

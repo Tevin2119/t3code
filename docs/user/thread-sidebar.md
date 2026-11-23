@@ -304,18 +304,37 @@ back the standard rows.
 
 ## Inspect a board task's conversation
 
-Open a board task and choose **Inspect source workspace** to read the conversation
-that created it. Its agent lineage and parent links let you inspect related
-conversations without leaving the task. **Back to task conversation** returns to
-the engine history and its question-bound drafts.
+A board task opens as its own thread, titled with its number and title. The
+badges in its header show the task's stage, team, evidence and deployment. Select
+the stage to open the **Task** item of the thread details card, the team to see who
+is doing what and open a seat's conversation, and evidence or deployment to open
+its tab. On a narrow window the badges sit in a row under the header.
 
-Native tools and terminals belong to the inspected conversation and its project,
-not to the engine run's working folder. Two tasks from the same conversation use
-the same native tool tabs. Task evidence and settings remain available separately.
-A task with no source conversation still has its own history, configuration and
-evidence, but has no native conversation workspace to open. Forking into new work,
-opening a citation or following an explicit Open link still uses its ordinary
-destination; these actions are not lineage inspection.
+**Task evidence** and **Deployments** are tabs on the thread's right panel. Closed,
+they come back from the panel's **+** menu, on a task's thread only. While a
+seat's conversation is open, the panel, the details and the badges stay the
+task's.
+
+The **Task** item holds what is asked, the plan, who owns the task, its seat
+settings and the engine's log. The log's composer writes to the team as notes,
+changes, status questions or answers; a proposed change is confirmed or declined
+on its entry, which **Needs you** links to while it waits. Under **Linked
+conversations**, **Made from** opens the conversation that created the task in its
+place, and **Back to task** returns to the task. The card's lineage also lists the
+task's parent, parts and follow-ups; select one to open that task. A task with no
+source conversation has no **Made from** row. Forking into new work, opening a
+citation or following an explicit Open link still uses its ordinary destination.
+
+A task with no conversation yet keeps its tabs and details on its own page: a
+saved draft opens there with its editor, a queued task shows its text and its
+place in the queue, and a task already at work links to the engine's log.
+
+While a task is open, the Board's sidebar column switches between tasks. The
+open task is highlighted, with its parent above it and its parts, follow-ups and
+seat conversations nested under it; select a seat to open its conversation in
+the task. Search there narrows only this list. **Back to board** returns to the
+board with its filters as you left them. On a phone, the arrow at the start of
+the task's bar also goes back to the board.
 
 ## Open a thread beside the one you are in
 

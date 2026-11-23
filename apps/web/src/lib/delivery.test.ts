@@ -722,6 +722,22 @@ describe("parseTask", () => {
     expect(task?.defaults).toBe(3);
   });
 
+  it("keeps the thread the engine names on a seat, and none when it is absent, null or blank", () => {
+    const seats = parseTask({
+      id: "task-3",
+      card: card({}),
+      council: {
+        seats: [
+          { seat: "builder", threadId: "thread-builder" },
+          { seat: "qa", threadId: null },
+          { seat: "reviewer", threadId: "  " },
+          { seat: "lead" },
+        ],
+      },
+    })?.council?.seats;
+    expect(seats?.map((seat) => seat.threadId)).toEqual(["thread-builder", null, null, null]);
+  });
+
   it("knows a draft, and is null for what is not a task", () => {
     expect(
       parseTask({ id: "task-2", state: "draft", card: card({ lane: "draft" }) })?.isDraft,

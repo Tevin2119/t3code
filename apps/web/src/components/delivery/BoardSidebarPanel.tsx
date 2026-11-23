@@ -1,22 +1,29 @@
 import { useLocation, useNavigate, useSearch } from "@tanstack/react-router";
 import type { EnvironmentId } from "@t3tools/contracts";
-import { ChevronRightIcon, PlusIcon, SearchIcon, UsersIcon, XIcon } from "lucide-react";
+import { useGT } from "gt-react";
+import {
+  ArrowLeftIcon,
+  ChevronRightIcon,
+  PlusIcon,
+  SearchIcon,
+  UsersIcon,
+  XIcon,
+} from "lucide-react";
 import { useMemo, useState, type ReactNode } from "react";
 
 import {
   parseBoard,
   parseCards,
+  parseTask,
   TASK_PRIORITIES,
   type DeliveryCard,
   type TaskPriority,
   crewLine,
-  seatsAtWork,
 } from "../../lib/delivery";
 import {
   activeFilters,
   hasFilters,
   LANE_TITLE,
-  matchesCard,
   PRIORITY_LABEL,
   queryValue,
   boardSetOf,
@@ -41,10 +48,33 @@ import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../
 import { SidebarContent, SidebarGroup, useSidebar } from "../ui/sidebar";
 import { APP_BUILD } from "../../branding";
 import { ActiveFilterChips, LaneFilterMenu, TagFilterMenu } from "./BoardFilterControls";
+import {
+  PANEL_GROUPS,
+  panelCards,
+  panelGroups,
+  switcherGroups,
+  taskRowOf,
+  type PanelGroup,
+  type SwitcherFamily,
+  type SwitcherRow,
+} from "./BoardSidebarPanel.logic";
+import { BoardSwitcherRows } from "./BoardSwitcher";
 import { Age, CardSigns, laneTone, PriorityPill } from "./taskParts";
 import { BoardIcon } from "./BoardIcon";
 import { EnvironmentPicker } from "./EnvironmentPicker";
 import { EngineDownNotice } from "./EnginePanel";
+import { relatedTaskGroups } from "./relatedTaskGroups";
+import { useTaskConversation } from "./useTaskConversation";
+
+/** Each group's name, title and what it says when it is empty, in the order they show. */
+const GROUP_TITLES: Readonly<Record<PanelGroup, string>> = {
+  waiting: "Waiting on you",
+  working: "Being worked on",
+  chats: "Team chats",
+  drafts: "Drafts",
+  open: "With the team",
+  done: "Done",
+};
 
 const ANY = "__any__";
 
@@ -168,6 +198,34 @@ function Section(props: {
   );
 }
 
+/** A group of the switcher: its tasks as rows, with the open task's family nested under its root. */
+function SwitcherSection(props: {
+  readonly environmentId: EnvironmentId | null;
+  readonly name: string;
+  readonly title: string;
+  readonly rows: ReadonlyArray<SwitcherRow>;
+  readonly empty?: string;
+  readonly defaultFolded?: boolean;
+  readonly list: (rows: ReadonlyArray<SwitcherRow>) => ReactNode;
+}) {
+  if (props.rows.length === 0 && !props.empty) return null;
+  return (
+    <Group
+      environmentId={props.environmentId}
+      name={props.name}
+      title={props.title}
+      count={props.rows.filter((row) => row.kind === "task").length}
+      {...(props.defaultFolded ? { defaultFolded: true } : {})}
+    >
+      {props.rows.length === 0 ? (
+        <p className="px-2 pb-1 text-xs text-sidebar-muted-foreground">{props.empty}</p>
+      ) : (
+        props.list(props.rows)
+      )}
+    </Group>
+  );
+}
+
 /**
  * The sidebar while the Board is open: tasks in place of
  * threads. A task is started, found and opened from here, and what waits for
@@ -209,8 +267,20 @@ function EnvironmentBoardSidebar({
   const { setFilters, clearFilters } = useBoardControls(environmentId);
   const boardSet = boardSetOf(preferences.boardSet);
   const now = useMinuteClock();
+  const gt = useGT();
+  // With a task open the column is a switcher: its search is its own, and the board's filters
+  // stay as they were for the board.
+  const openTaskId = location.pathname === "/board" ? (location.search.task ?? null) : null;
+  const switching = openTaskId !== null;
+  const [switcherQuery, setSwitcherQuery] = useState("");
+  // The switcher's search lasts from task to task; the next time a task opens it starts empty.
+  const [wasSwitching, setWasSwitching] = useState(switching);
+  if (wasSwitching !== switching) {
+    setWasSwitching(switching);
+    if (!switching) setSwitcherQuery("");
+  }
 
-  const q = filters.q.trim();
+  const q = (switching ? switcherQuery : filters.q).trim();
   // The engine looks in what is asked too, which a card does not carry.
   const read = useDeliveryRead(
     enabled && !shared ? environmentId : null,
@@ -246,10 +316,29 @@ function EnvironmentBoardSidebar({
     () => sidebarCandidates(taskCards, boardCards, q),
     [taskCards, boardCards, q],
   );
-  const kept = useMemo(
-    () => cards.filter((card) => matchesCard(card, { ...filters, q: "" })),
-    [cards, filters],
+  const kept = panelCards(cards, filters, switching);
+  // The open task as the board reads it, for its family. The task view polls this same read.
+  const taskRead = useDeliveryRead(
+    enabled && openTaskId ? environmentId : null,
+    openTaskId ? `/api/tasks/${openTaskId}` : null,
   );
+  const readTask = parseTask(taskRead.body);
+  const openTask = readTask?.id === openTaskId ? readTask : null;
+  const conversation = useTaskConversation(environmentId, openTask);
+  const family: SwitcherFamily | null = openTask
+    ? {
+        open: openTask.card,
+        parent: openTask.parent,
+        children: [
+          ...relatedTaskGroups(openTask.card.parts).current,
+          ...relatedTaskGroups(openTask.followUps).current,
+        ],
+        seats: (openTask.council?.seats ?? []).flatMap((item) => {
+          const thread = conversation.seats.thread(item.seat);
+          return thread ? [{ seat: item.seat, activity: item.activity, thread }] : [];
+        }),
+      }
+    : null;
   const teams = useMemo(() => [...new Set(cards.map((card) => card.team))].sort(), [cards]);
   // From every card that was read, never from the ones a filter kept.
   const tags = useMemo(
@@ -260,13 +349,14 @@ function EnvironmentBoardSidebar({
   const close = () => {
     if (isMobile) setOpenMobile(false);
   };
-  const open = (card: DeliveryCard) => {
+  const goToTask = (taskId: string) => {
     close();
     void navigate({
       to: "/board",
-      search: { task: card.id, ...(environmentId ? { environment: environmentId } : {}) },
+      search: { task: taskId, ...(environmentId ? { environment: environmentId } : {}) },
     });
   };
+  const open = (card: DeliveryCard) => goToTask(card.id);
   const chooseEnvironment = (environment: string) => {
     setDeliveryEnvironment(environment);
     void navigate({ to: "/board", search: { environment } });
@@ -278,16 +368,26 @@ function EnvironmentBoardSidebar({
         ? "The engine did not answer."
         : "Reading the board..."
       : null;
-  const searching = hasFilters(filters);
+  const searching = switching ? q !== "" : hasFilters(filters);
   const filterCount = activeFilters(filters, laneTitle).filter((item) => item.key !== "q").length;
-  const live = kept.filter((card) => !["completed", "draft", "chat"].includes(card.lane));
-  const chats = kept.filter((card) => card.lane === "chat");
-  const waiting = live.filter((card) => card.waitingOn === "person");
-  // Being worked on: a seat is at work. A card whose seats are all held waits with the rest.
-  const working = live.filter(
-    (card) => card.waitingOn !== "person" && seatsAtWork(card).length > 0,
+  const groups = panelGroups(kept);
+  const switcherRows = switching && !searching ? switcherGroups(kept, family) : null;
+  const found = kept.map((card) => taskRowOf(card, card, 0, card.id === openTaskId));
+  const backToBoard = () => {
+    close();
+    void navigate({ to: "/board", search: environmentId ? { environment: environmentId } : {} });
+  };
+  const switcherList = (rows: ReadonlyArray<SwitcherRow>) => (
+    <BoardSwitcherRows
+      rows={rows}
+      openSeat={conversation.seats.current}
+      onOpenTask={goToTask}
+      onOpenSeat={(thread) => {
+        close();
+        conversation.seats.open(thread);
+      }}
+    />
   );
-  const rest = live.filter((card) => card.waitingOn !== "person" && seatsAtWork(card).length === 0);
 
   if (shared)
     return (
@@ -305,6 +405,14 @@ function EnvironmentBoardSidebar({
     <SidebarContent className="overflow-x-hidden" data-board-panel>
       <SidebarGroup>
         <div className="flex flex-col gap-2">
+          {switching ? (
+            <div className="flex">
+              <Button size="sm" variant="ghost" onClick={backToBoard} data-board-panel-back>
+                <ArrowLeftIcon />
+                {gt("Back to board")}
+              </Button>
+            </div>
+          ) : null}
           <EnvironmentPicker value={environmentId} onChoose={chooseEnvironment} />
           <div className="flex items-center gap-1">
             <Button
@@ -336,23 +444,19 @@ function EnvironmentBoardSidebar({
             >
               <UsersIcon />
             </Button>
+            {switching ? null : (
+              <Button
+                size="icon-sm"
+                variant="ghost"
+                aria-label="Show the board"
+                onClick={backToBoard}
+              >
+                <BoardIcon />
+              </Button>
+            )}
             <Button
               size="icon-sm"
-              variant="ghost"
-              aria-label="Show the board"
-              onClick={() => {
-                close();
-                void navigate({
-                  to: "/board",
-                  search: { ...(environmentId ? { environment: environmentId } : {}) },
-                });
-              }}
-            >
-              <BoardIcon />
-            </Button>
-            <Button
-              size="icon-sm"
-              variant={filters.q ? "secondary" : "ghost"}
+              variant={q ? "secondary" : "ghost"}
               aria-label={mobileSearchOpen ? "Close task search" : "Search tasks"}
               aria-expanded={mobileSearchOpen}
               className="md:hidden"
@@ -371,8 +475,12 @@ function EnvironmentBoardSidebar({
               type="search"
               aria-label="Search tasks"
               placeholder="#1001, a title, a tag"
-              value={filters.q}
-              onChange={(event) => setFilters({ q: event.target.value })}
+              value={switching ? switcherQuery : filters.q}
+              onChange={(event) =>
+                switching
+                  ? setSwitcherQuery(event.target.value)
+                  : setFilters({ q: event.target.value })
+              }
               data-board-panel-search
             />
           </InputGroup>
@@ -386,8 +494,12 @@ function EnvironmentBoardSidebar({
                 type="search"
                 aria-label="Search tasks"
                 placeholder="#1001, a title, a tag"
-                value={filters.q}
-                onChange={(event) => setFilters({ q: event.target.value })}
+                value={switching ? switcherQuery : filters.q}
+                onChange={(event) =>
+                  switching
+                    ? setSwitcherQuery(event.target.value)
+                    : setFilters({ q: event.target.value })
+                }
                 data-board-panel-search
                 autoFocus
               />
@@ -403,94 +515,99 @@ function EnvironmentBoardSidebar({
               it at the top of the Board.
             </p>
           ) : null}
-          <Group
-            environmentId={environmentId}
-            name="filters"
-            title="Filters"
-            count={filterCount}
-            hint={filterCount > 0 ? "Some are on: see below." : null}
-          >
-            <div className="flex flex-wrap items-center gap-1 pb-1 pl-1">
-              <Button
-                size="xs"
-                variant={filters.waiting ? "secondary" : "ghost"}
-                aria-pressed={filters.waiting}
-                onClick={() => setFilters({ waiting: !filters.waiting })}
+          {/* While a task is open the board keeps its filters; the column neither shows nor applies them. */}
+          {switching ? null : (
+            <>
+              <Group
+                environmentId={environmentId}
+                name="filters"
+                title="Filters"
+                count={filterCount}
+                hint={filterCount > 0 ? "Some are on: see below." : null}
               >
-                Waiting on you
-              </Button>
-              <LaneFilterMenu
-                lanes={laneChoices}
-                chosen={filters.lanes}
-                onChange={(chosen) => setFilters({ lanes: chosen })}
-              />
-              <Select
-                value={filters.priority ?? ANY}
-                onValueChange={(value) =>
-                  setFilters({ priority: value === ANY ? null : (value as TaskPriority) })
-                }
-              >
-                <SelectTrigger
-                  aria-label="Priority"
-                  size="compact"
-                  variant="ghost"
-                  className="w-auto min-w-0"
-                >
-                  <SelectValue>
-                    {filters.priority ? PRIORITY_LABEL[filters.priority] : "Priority"}
-                  </SelectValue>
-                </SelectTrigger>
-                <SelectPopup alignItemWithTrigger={false}>
-                  <SelectItem value={ANY}>Any priority</SelectItem>
-                  {TASK_PRIORITIES.map((priority) => (
-                    <SelectItem key={priority} value={priority}>
-                      {PRIORITY_LABEL[priority]}
-                    </SelectItem>
-                  ))}
-                </SelectPopup>
-              </Select>
-              {teams.length > 1 ? (
-                <Select
-                  value={filters.team ?? ANY}
-                  onValueChange={(value) =>
-                    setFilters({ team: value === ANY ? null : String(value) })
-                  }
-                >
-                  <SelectTrigger
-                    aria-label="Team"
-                    size="compact"
-                    variant="ghost"
-                    className="w-auto min-w-0"
+                <div className="flex flex-wrap items-center gap-1 pb-1 pl-1">
+                  <Button
+                    size="xs"
+                    variant={filters.waiting ? "secondary" : "ghost"}
+                    aria-pressed={filters.waiting}
+                    onClick={() => setFilters({ waiting: !filters.waiting })}
                   >
-                    <SelectValue>{filters.team ?? "Team"}</SelectValue>
-                  </SelectTrigger>
-                  <SelectPopup alignItemWithTrigger={false}>
-                    <SelectItem value={ANY}>Any team</SelectItem>
-                    {teams.map((team) => (
-                      <SelectItem key={team} value={team}>
-                        {team}
-                      </SelectItem>
-                    ))}
-                  </SelectPopup>
-                </Select>
-              ) : null}
-              {tags.length > 0 ? (
-                <TagFilterMenu
-                  tags={tags}
-                  chosen={filters.tags}
-                  onChange={(chosen) => setFilters({ tags: chosen })}
-                />
-              ) : null}
-            </div>
-          </Group>
-          {/* What is on is shown whether the filters are folded or not. */}
-          <ActiveFilterChips
-            filters={filters}
-            laneTitle={laneTitle}
-            shown={kept.length}
-            onClear={(patch) => setFilters(patch)}
-            onReset={clearFilters}
-          />
+                    Waiting on you
+                  </Button>
+                  <LaneFilterMenu
+                    lanes={laneChoices}
+                    chosen={filters.lanes}
+                    onChange={(chosen) => setFilters({ lanes: chosen })}
+                  />
+                  <Select
+                    value={filters.priority ?? ANY}
+                    onValueChange={(value) =>
+                      setFilters({ priority: value === ANY ? null : (value as TaskPriority) })
+                    }
+                  >
+                    <SelectTrigger
+                      aria-label="Priority"
+                      size="compact"
+                      variant="ghost"
+                      className="w-auto min-w-0"
+                    >
+                      <SelectValue>
+                        {filters.priority ? PRIORITY_LABEL[filters.priority] : "Priority"}
+                      </SelectValue>
+                    </SelectTrigger>
+                    <SelectPopup alignItemWithTrigger={false}>
+                      <SelectItem value={ANY}>Any priority</SelectItem>
+                      {TASK_PRIORITIES.map((priority) => (
+                        <SelectItem key={priority} value={priority}>
+                          {PRIORITY_LABEL[priority]}
+                        </SelectItem>
+                      ))}
+                    </SelectPopup>
+                  </Select>
+                  {teams.length > 1 ? (
+                    <Select
+                      value={filters.team ?? ANY}
+                      onValueChange={(value) =>
+                        setFilters({ team: value === ANY ? null : String(value) })
+                      }
+                    >
+                      <SelectTrigger
+                        aria-label="Team"
+                        size="compact"
+                        variant="ghost"
+                        className="w-auto min-w-0"
+                      >
+                        <SelectValue>{filters.team ?? "Team"}</SelectValue>
+                      </SelectTrigger>
+                      <SelectPopup alignItemWithTrigger={false}>
+                        <SelectItem value={ANY}>Any team</SelectItem>
+                        {teams.map((team) => (
+                          <SelectItem key={team} value={team}>
+                            {team}
+                          </SelectItem>
+                        ))}
+                      </SelectPopup>
+                    </Select>
+                  ) : null}
+                  {tags.length > 0 ? (
+                    <TagFilterMenu
+                      tags={tags}
+                      chosen={filters.tags}
+                      onChange={(chosen) => setFilters({ tags: chosen })}
+                    />
+                  ) : null}
+                </div>
+              </Group>
+              {/* What is on is shown whether the filters are folded or not. */}
+              <ActiveFilterChips
+                filters={filters}
+                laneTitle={laneTitle}
+                shown={kept.length}
+                onClear={(patch) => setFilters(patch)}
+                onReset={clearFilters}
+              />
+            </>
+          )}
         </div>
       </SidebarGroup>
 
@@ -510,6 +627,30 @@ function EnvironmentBoardSidebar({
               environmentId={environmentId}
               message={`Delivery engine not reachable. ${read.error}`}
             />
+          ) : switching ? (
+            searching ? (
+              <SwitcherSection
+                environmentId={environmentId}
+                name="found"
+                title="Found"
+                rows={found}
+                empty={unread ?? "No task matches."}
+                list={switcherList}
+              />
+            ) : (
+              PANEL_GROUPS.map((group) => (
+                <SwitcherSection
+                  key={group}
+                  environmentId={environmentId}
+                  name={group}
+                  title={GROUP_TITLES[group]}
+                  rows={switcherRows?.[group] ?? []}
+                  {...(group === "waiting" ? { empty: unread ?? "Nothing waits for you." } : {})}
+                  {...(group === "done" ? { defaultFolded: true } : {})}
+                  list={switcherList}
+                />
+              ))
+            )
           ) : searching ? (
             <Section
               environmentId={environmentId}
@@ -527,7 +668,7 @@ function EnvironmentBoardSidebar({
                 environmentId={environmentId}
                 name="waiting"
                 title="Waiting on you"
-                cards={waiting}
+                cards={groups.waiting}
                 empty={unread ?? "Nothing waits for you."}
                 now={now}
                 selected={selected}
@@ -537,7 +678,7 @@ function EnvironmentBoardSidebar({
                 environmentId={environmentId}
                 name="working"
                 title="Being worked on"
-                cards={working}
+                cards={groups.working}
                 now={now}
                 selected={selected}
                 onOpen={open}
@@ -546,7 +687,7 @@ function EnvironmentBoardSidebar({
                 environmentId={environmentId}
                 name="chats"
                 title="Team chats"
-                cards={chats}
+                cards={groups.chats}
                 now={now}
                 selected={selected}
                 onOpen={open}
@@ -555,7 +696,7 @@ function EnvironmentBoardSidebar({
                 environmentId={environmentId}
                 name="drafts"
                 title="Drafts"
-                cards={kept.filter((card) => card.lane === "draft")}
+                cards={groups.drafts}
                 now={now}
                 selected={selected}
                 onOpen={open}
@@ -564,7 +705,7 @@ function EnvironmentBoardSidebar({
                 environmentId={environmentId}
                 name="open"
                 title="With the team"
-                cards={rest}
+                cards={groups.open}
                 now={now}
                 selected={selected}
                 onOpen={open}
@@ -573,7 +714,7 @@ function EnvironmentBoardSidebar({
                 environmentId={environmentId}
                 name="done"
                 title="Done"
-                cards={kept.filter((card) => card.lane === "completed").slice(0, 20)}
+                cards={groups.done}
                 now={now}
                 selected={selected}
                 onOpen={open}

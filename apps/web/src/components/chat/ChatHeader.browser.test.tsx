@@ -21,10 +21,12 @@ vi.mock(import("~/hooks/useThreadActionMenu"), () => ({
   useThreadActionMenu: () => ({ openMenu, closeMenu: () => {} }),
 }));
 
+import type { ReactNode } from "react";
+
 import { render, stubGlobal } from "../../../test/render";
 import { ChatHeader } from "./ChatHeader";
 
-function header(title: string) {
+function header(title: string, actions?: ReactNode) {
   return (
     <>
       <ChatHeader
@@ -37,11 +39,25 @@ function header(title: string) {
         onOpenThread={() => {}}
         rightPanelOpen={false}
         onNewThreadInProject={() => {}}
+        actions={actions}
       />
       <div tabIndex={0}>Outside rename</div>
     </>
   );
 }
+
+it("shows what a hosting view adds to the header, and nothing of it on an ordinary thread", async () => {
+  await using screen = await render(
+    header("#12 Fix the sync", <button>What can be done with this task</button>),
+  );
+  await expect
+    .element(screen.getByRole("button", { name: "What can be done with this task" }))
+    .toBeVisible();
+  await screen.rerender(header("New thread"));
+  await expect
+    .element(screen.getByRole("button", { name: "What can be done with this task" }))
+    .not.toBeInTheDocument();
+});
 
 it.each(["blur", "Enter"] as const)(
   "preserves a concurrent title update when an untouched rename ends with %s",

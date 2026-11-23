@@ -1,4 +1,4 @@
-import type { TaskBrief } from "../../lib/delivery";
+import type { TaskBrief, TaskView } from "../../lib/delivery";
 
 export function relatedTaskGroups(tasks: ReadonlyArray<TaskBrief>) {
   const historical = tasks.filter(
@@ -11,3 +11,7 @@ export function relatedTaskGroups(tasks: ReadonlyArray<TaskBrief>) {
   const current = tasks.filter((task) => !excluded.has(task.id));
   return { current, completed, historical };
 }
+
+/** A parent, parts or QA follow-ups: the board tasks a task's lineage shows beside its agents. */
+export const taskHasRelatedWork = (task: Pick<TaskView, "parent" | "followUps" | "card">) =>
+  Boolean(task.parent) || task.card.parts.length > 0 || task.followUps.length > 0;

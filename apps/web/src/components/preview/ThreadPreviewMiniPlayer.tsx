@@ -79,6 +79,8 @@ import {
 interface Props {
   readonly threadRef: ScopedThreadRef;
   readonly miniPlayer: PreviewMiniPlayerState;
+  /** After the preview opens in its thread's panel, for a view that does not show that panel. */
+  readonly onOpenedInPanel?: () => void;
 }
 
 const frameCornerRadius = () => PREVIEW_MINI_PLAYER_CORNER_RADIUS;
@@ -200,14 +202,16 @@ export function useThreadPreviewCanvasSource(
   };
 }
 
-export function ThreadPreviewMiniPlayer({ threadRef, miniPlayer }: Props) {
+export function ThreadPreviewMiniPlayer({ threadRef, miniPlayer, onOpenedInPanel }: Props) {
   const { source } = miniPlayer;
+  const opened = onOpenedInPanel ? { onOpenedInPanel } : {};
   return source.kind === "browser" ? (
     <BrowserMiniPlayer
       key={source.tabId}
       threadRef={threadRef}
       tabId={source.tabId}
       miniPlayer={miniPlayer}
+      {...opened}
     />
   ) : (
     <DeviceMiniPlayer
@@ -215,11 +219,17 @@ export function ThreadPreviewMiniPlayer({ threadRef, miniPlayer }: Props) {
       threadRef={threadRef}
       source={source}
       miniPlayer={miniPlayer}
+      {...opened}
     />
   );
 }
 
-function BrowserMiniPlayer({ threadRef, tabId, miniPlayer }: Props & { readonly tabId: string }) {
+function BrowserMiniPlayer({
+  threadRef,
+  tabId,
+  miniPlayer,
+  onOpenedInPanel,
+}: Props & { readonly tabId: string }) {
   const gt = useGT();
   const httpBaseUrl = useEnvironmentHttpBaseUrl(threadRef.environmentId);
   const { serverEpoch, snapshot, desktopOverlay, serverTab, sourceSize } =
@@ -240,6 +250,7 @@ function BrowserMiniPlayer({ threadRef, tabId, miniPlayer }: Props & { readonly 
   const openInPanel = () => {
     usePreviewMiniPlayerStore.getState().close(threadRef);
     useRightPanelStore.getState().openBrowser(threadRef, tabId);
+    onOpenedInPanel?.();
   };
 
   const toggleNativePictureInPicture = async () => {
@@ -382,6 +393,7 @@ function DeviceMiniPlayer({
   threadRef,
   source,
   miniPlayer,
+  onOpenedInPanel,
 }: Props & { readonly source: Extract<PreviewMiniPlayerSource, { kind: "device" }> }) {
   const gt = useGT();
   const { state: deviceState } = useDeviceState(threadRef.environmentId);
@@ -404,6 +416,7 @@ function DeviceMiniPlayer({
       platform: source.platform,
       name: source.name,
     });
+    onOpenedInPanel?.();
   };
 
   return (

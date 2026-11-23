@@ -1,7 +1,11 @@
 import { ProjectId, ThreadId } from "@t3tools/contracts";
 import { expect, it } from "vite-plus/test";
 
-import { archivedThreadsOfBoard, archivedThreadTaskNote } from "./ArchivedBoardThreads.logic";
+import {
+  archivedThreadsOfBoard,
+  archivedThreadTarget,
+  archivedThreadTaskNote,
+} from "./ArchivedBoardThreads.logic";
 
 const thread = (board: string, taskId: string, archivedAt: string) => ({
   threadId: ThreadId.make(`thread-${taskId}`),
@@ -38,4 +42,21 @@ it("offers a restore only for a task that can take the thread back, and says why
     "The task could not be checked.",
   );
   expect(archivedThreadTaskNote({ ...row, task: "held" })).toBe("The task is held elsewhere.");
+});
+
+it("opens a restorable task's conversation in the task's view, and a deleted task's on its own", () => {
+  const row = thread("work", "task-a", "2026-11-20T10:00:00.000Z");
+  // The task comes from what the server serves for the row, never from the thread itself.
+  expect(archivedThreadTarget(row)).toEqual({ kind: "task", taskId: "task-a" });
+  expect(archivedThreadTarget({ ...row, task: "deleted" })).toEqual({
+    kind: "thread",
+    threadId: row.threadId,
+  });
+  // A task held elsewhere or not checked cannot take the thread back, so neither has a view here.
+  for (const task of ["held", "unknown"] as const) {
+    expect(archivedThreadTarget({ ...row, task })).toEqual({
+      kind: "thread",
+      threadId: row.threadId,
+    });
+  }
 });
