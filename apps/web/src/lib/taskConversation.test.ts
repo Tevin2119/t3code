@@ -9,6 +9,7 @@ import {
   conversationState,
   queueWait,
   openSeatThread,
+  seatChildrenWithAttestations,
   seatConversation,
   seatOfThread,
   steadySeatThread,
@@ -188,6 +189,19 @@ describe("a seat's conversation", () => {
     expect(seatConversation(ref, children, "remote-qa", reach(undefined, false))).toEqual(
       throughLink,
     );
+
+    const withAttestation = seatChildrenWithAttestations(ref, children, [
+      { seat: "qa", seatThread: { environmentId: remote, threadId: "attested-qa" } },
+    ]);
+    const attested = { environmentId: remote, threadId: id("attested-qa") };
+    expect(seatConversation(ref, withAttestation, "qa", reach({ connected: true }, true))).toEqual(
+      attested,
+    );
+    expect(openSeatThread(ref, withAttestation, attested, reach(undefined, true))).toEqual({
+      ...attested,
+      linked: { viaEnvironmentId: ref.environmentId, label: remote },
+    });
+    expect(seatOfThread(ref, withAttestation, attested)).toBe("qa");
   });
 
   it("names the seat a child thread was given, telling two environments' threads apart", () => {

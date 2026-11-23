@@ -126,14 +126,21 @@ function SeatRow(props: {
   readonly seat: CouncilSeat;
   readonly catalog: ReturnType<typeof useSeatCatalog>;
   readonly conversations?: SeatConversations | undefined;
+  readonly openConversationLabel?: string | undefined;
 }) {
   const { seat, catalog, conversations } = props;
   const thread = conversations?.thread(seat.seat) ?? null;
+  const showOpenAction = thread !== null && props.openConversationLabel !== undefined;
   const m = useMessages();
   const status = seatStatus(seat.activity);
-  const entry = entryForHarness(catalog.entries, seat.harness);
+  const actualModel = seat.attestedModel?.model ?? seat.actualModel;
+  const harness =
+    props.openConversationLabel !== undefined
+      ? (seat.attestedModel?.harness ?? seat.harness)
+      : seat.harness;
+  const entry = entryForHarness(catalog.entries, harness);
   const provider = catalog.providers.find((item) => item.instanceId === entry?.instanceId);
-  const fallback = driverOfHarness(seat.harness);
+  const fallback = driverOfHarness(harness);
   const driver = entry?.driverKind ?? (fallback ? ProviderDriverKind.make(fallback) : undefined);
   const live = isOrchestrationV2WorkActive(status);
   const timing = {
@@ -149,6 +156,11 @@ function SeatRow(props: {
         ? "unavailable"
         : (seat.stage ?? threadRelationshipStatusLabel(status, m));
   const latest = seat.live?.items.at(-1)?.text ?? null;
+  const seatName = (
+    <span className="min-w-0 flex-1 truncate text-left text-sm font-medium leading-4 text-foreground/85">
+      {seat.seat}
+    </span>
+  );
   return (
     <li
       data-task-seat={seat.seat}
@@ -163,6 +175,7 @@ function SeatRow(props: {
               size="sm"
               variant="ghost"
               part="row"
+              multiline={showOpenAction}
               render={thread ? undefined : <div tabIndex={0} />}
               aria-current={sameThread(thread, conversations?.current ?? null) ? "true" : undefined}
               onClick={thread ? () => conversations?.open(thread) : undefined}
@@ -175,9 +188,16 @@ function SeatRow(props: {
             providerEntries={catalog.entries}
             status={status}
           />
-          <span className="min-w-0 flex-1 truncate text-left text-sm font-medium leading-4 text-foreground/85">
-            {seat.seat}
-          </span>
+          {showOpenAction ? (
+            <span className="flex min-w-0 flex-1 flex-col text-left">
+              {seatName}
+              <span className="whitespace-normal text-2xs leading-4 font-normal text-primary">
+                {props.openConversationLabel}
+              </span>
+            </span>
+          ) : (
+            seatName
+          )}
           <span className="sr-only">{seat.activity}</span>
           <span
             className={cn(
@@ -198,7 +218,7 @@ function SeatRow(props: {
         <ThreadHoverCardPopup side="right">
           <SubagentTooltipContent
             title={seat.seat}
-            model={seat.actualModel ?? seat.requestedModel}
+            model={actualModel ?? seat.requestedModel}
             providerInstanceId={entry?.instanceId ?? (seat.harness as ProviderInstanceId)}
             origin="provider_native"
             provider={provider}
@@ -213,7 +233,10 @@ function SeatRow(props: {
       </Tooltip>
       <div className="ps-9 pe-2.5 pb-1">
         <span className="block text-3xs text-muted-foreground">
-          {harnessLabel(seat.harness)}, {seat.requestedModel ?? "its own model"}
+          {harnessLabel(harness)},{" "}
+          {props.openConversationLabel !== undefined && actualModel
+            ? actualModel
+            : (seat.requestedModel ?? "its own model")}
           {seat.reasoning ? `, ${seat.reasoning}` : ""}
           {seat.access && seat.access !== "full" ? `, ${seat.access}` : ""}
         </span>
@@ -237,6 +260,7 @@ export function TaskTeamActivity(props: {
   readonly task: TaskView;
   readonly conversations?: SeatConversations | undefined;
   readonly flow?: boolean | undefined;
+  readonly conversationLabels?: { readonly title: string; readonly open: string } | undefined;
 }) {
   const { task } = props;
   const catalog = useSeatCatalog(props.environmentId);
@@ -256,8 +280,10 @@ export function TaskTeamActivity(props: {
         </ThreadDetailsSection>
       )}
       <ThreadDetailsSection
-        headingId={`task-team-${task.id}`}
-        title={running > 0 ? `${team} · ${running} running` : team}
+        headingId={`${props.conversationLabels ? "task-seats" : "task-team"}-${task.id}`}
+        title={
+          props.conversationLabels?.title ?? (running > 0 ? `${team} · ${running} running` : team)
+        }
         data-task-roster
       >
         {task.council ? (
@@ -268,6 +294,7 @@ export function TaskTeamActivity(props: {
                 seat={seat}
                 catalog={catalog}
                 conversations={props.conversations}
+                openConversationLabel={props.conversationLabels?.open}
               />
             ))}
           </ul>
