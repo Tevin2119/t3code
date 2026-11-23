@@ -14829,12 +14829,24 @@ it.layer(layerRuntimeModeCeilingTest)("the queue of a handed-on thread", (it) =>
         substitute: { instanceId: alternateInstanceId, model: "gpt-5.4" },
       }))
         yield* orchestrator.dispatch(command);
-      // The queued message is for a provider with no limit, so the limit does not hold it: only
+      // The queued message picked a provider with no limit, so the limit does not hold it: only
       // the hand-off stands between it and a second run here.
       const events = yield* EventSink.EventSinkV2;
       const substitute = { instanceId: alternateInstanceId, model: "gpt-5.4" };
+      const { followsThreadSelection: _follows, ...queuedMessage } =
+        (yield* orchestrator.getThreadProjection(threadId)).messages.find(
+          (message) => message.id === queued.userMessageId,
+        )!;
       yield* events.write({
         events: [
+          {
+            id: EventId.make("limited-lead-queue:other-provider-message"),
+            type: "message.updated",
+            threadId,
+            runId: queued.id,
+            occurredAt: yield* DateTime.now,
+            payload: queuedMessage,
+          },
           {
             id: EventId.make("limited-lead-queue:other-provider"),
             type: "run.updated",
