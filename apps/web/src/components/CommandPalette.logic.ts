@@ -121,7 +121,7 @@ export function buildBoardTaskActionItems(
     const title = `#${task.number} ${task.title}`;
     return {
       kind: "action",
-      value: `board-task:${task.id}`,
+      value: `open-task:${task.id}`,
       title,
       searchTerms: [title, String(task.number)],
       description: resolve(msg("Opens the task on the board")),
