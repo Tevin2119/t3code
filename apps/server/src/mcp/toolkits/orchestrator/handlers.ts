@@ -36,11 +36,11 @@ const handlers = {
       return yield* service.fileQaReceipt(scope, input);
     }),
   ),
-  delivery_seat_handoff: McpToolAccess.actsAsCaller(({ seat }) =>
+  delivery_seat_handoff: McpToolAccess.actsAsCaller((input) =>
     Effect.gen(function* () {
       const scope = yield* McpInvocationContext.McpInvocationContext;
       const service = yield* SeatHandoffs.SeatHandoffs;
-      return yield* service.handQa(scope, { seat });
+      return yield* service.handQa(scope, input);
     }),
   ),
   orchestrator_capabilities: McpToolAccess.reads((input) =>

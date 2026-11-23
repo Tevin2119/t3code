@@ -2115,9 +2115,12 @@ export function parseTask(body: unknown): TaskView | null {
     target: parseTarget(body.target),
     suggestedBoard: parseSuggestedBoard(body.suggestedBoard),
     boardThread: parseBoardThread(body.boardThread),
-    conversationMirrorEnvironment: isRecord(body.conversation)
-      ? textOrNull(records(body.conversation.latest)[0]?.setBy)
-      : null,
+    // A source-scoped engine mirrors each environment separately, so no source stops being
+    // mirrored; only an older engine's single sequence makes the last source the only one.
+    conversationMirrorEnvironment:
+      isRecord(body.conversation) && body.conversation.sourceScoped !== true
+        ? textOrNull(records(body.conversation.latest)[0]?.setBy)
+        : null,
     source: (() => {
       const source = isRecord(body.source) ? body.source : null;
       const ref = source ? text(source.ref) : "";

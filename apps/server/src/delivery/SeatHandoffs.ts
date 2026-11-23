@@ -608,3 +608,11 @@ const make = Effect.gen(function* () {
 });
 
 export const layer = Layer.effect(SeatHandoffs, make);
+
+const turnedOff = () => Effect.fail(invalidRequest("Delivery is turned off."));
+
+/** Inert service, for suites that only need the tool surface to resolve. */
+export const layerTest = Layer.succeed(
+  SeatHandoffs,
+  SeatHandoffs.of({ attestSeat: turnedOff, fileQaReceipt: turnedOff, handQa: turnedOff }),
+);
