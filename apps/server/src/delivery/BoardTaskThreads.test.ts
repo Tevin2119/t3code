@@ -26,7 +26,7 @@ import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.
 import { deriveProviderInstanceConfigMap } from "../provider/ProviderInstanceRegistryHydration.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as BoardConversation from "./BoardConversation.ts";
-import { steerMessageId } from "./BoardConversation.ts";
+import { handoffNoticeMessageId, steerMessageId } from "./BoardConversation.ts";
 import * as BoardTaskThreads from "./BoardTaskThreads.ts";
 import {
   scratchEngine,
@@ -347,6 +347,9 @@ it.effect("gives a started task one thread, led as the engine's team says, and l
     assert.deepInclude(put?.body, { expect: null });
     // The claim names the conversation that holds the task, and the next pass is its heartbeat.
     assert.equal(engine.leaseOf("task-7")?.origin, `thread:${ENVIRONMENT}/${THREAD}`);
+    // The claim opts the task into the engine holding QA for the lead's hand-off.
+    const claim = engine.requests.find((request) => request.path.endsWith("/claim"));
+    assert.deepInclude(claim?.body, { handoffs: ["qa"] });
     engine.advance(100_000);
     yield* threads.reconcile();
     engine.advance(100_000);
@@ -814,6 +817,21 @@ it.effect("mirrors each conversation event once, across a restart and a replaced
     yield* (yield* service(store)).reconcile();
     assert.equal(ingests(engine), beforeTransfer);
   }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-mirror-")));
+});
+
+it.effect("tells the lead once per run that QA is held for its hand-off", () => {
+  const engine = board();
+  engine.addTask({ id: "task-7", handoffHold: { run: "run-1", stage: "qa" } });
+  const store = threadStore();
+  return Effect.gen(function* () {
+    yield* (yield* service(store)).reconcile();
+    yield* (yield* service(store)).reconcile();
+    const notices = steerSends(store).filter(
+      (command) => command.messageId === handoffNoticeMessageId(TASK, "run-1", "qa"),
+    );
+    assert.equal(notices.length, 1);
+    assert.match(String(notices[0]?.text), /delivery_seat_handoff/);
+  }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-handoff-notice-")));
 });
 
 it.effect("delivers a queued steer at the next turn boundary, once, and confirms it", () => {

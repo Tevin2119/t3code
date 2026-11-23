@@ -42,6 +42,11 @@ interface Activity {
 }
 
 const STEER_MESSAGE_PREFIX = "message:board-steer:";
+const HANDOFF_NOTICE_PREFIX = "message:board-handoff:";
+
+/** The one notice per run and stage that the lead's hand-off is awaited. */
+export const handoffNoticeMessageId = (task: BoardTask, run: string, stage: string) =>
+  MessageId.make(`${HANDOFF_NOTICE_PREFIX}${task.board}:${task.id}:${run}:${stage}`);
 
 /** The message a queued steer is delivered as: one per steer, on every attempt. */
 export const steerMessageId = (task: BoardTask, steerId: number) =>
@@ -97,7 +102,10 @@ function scanActivity(
       }
       if (message.role !== "user" || state.messages.has(message.id)) continue;
       state.messages.add(message.id);
-      const steer = message.id.startsWith(STEER_MESSAGE_PREFIX) || message.createdBy === "user";
+      const steer =
+        message.id.startsWith(STEER_MESSAGE_PREFIX) ||
+        message.id.startsWith(HANDOFF_NOTICE_PREFIX) ||
+        message.createdBy === "user";
       found.push({
         seq: stored.sequence,
         at: DateTime.formatIso(event.occurredAt),
@@ -135,6 +143,7 @@ export interface ConversationCard {
   /** Absent on an engine before slice 5, which takes no ingest. */
   readonly conversation?: unknown;
   readonly steers?: { readonly pending: number } | null | undefined;
+  readonly handoffHold?: { readonly run: string; readonly stage: string } | null | undefined;
 }
 
 const Detail = Schema.Struct({
@@ -332,6 +341,30 @@ export const make = Effect.gen(function* () {
     }
   });
 
+  /** Tells the lead once that the engine holds QA for its hand-off; the lead does the handing. */
+  const noticeHandoff = Effect.fn("BoardConversation.noticeHandoff")(function* (
+    task: BoardTask,
+    threadId: ThreadId,
+    run: string,
+  ) {
+    const messageId = handoffNoticeMessageId(task, run, "qa");
+    const present = yield* projections.getMessagesById(threadId, [messageId]).pipe(Effect.result);
+    if (present._tag === "Failure" || present.success.has(messageId)) return;
+    yield* threads
+      .dispatch({
+        type: "message.dispatch",
+        commandId: CommandId.make(`${boardTaskThreadMarker(task)}:handoff:${run}:qa`),
+        threadId,
+        messageId,
+        text: `Run ${run} reached QA and the engine is holding it for your hand-off. Call delivery_seat_handoff with stage "qa".`,
+        attachments: [],
+        dispatchMode: { type: "queue_after_active" },
+        createdBy: "system",
+        creationSource: "server",
+      })
+      .pipe(Effect.ignore);
+  });
+
   const sync = Effect.fn("BoardConversation.sync")(
     function* (input: {
       readonly cards: ReadonlyArray<ConversationCard>;
@@ -360,6 +393,8 @@ export const make = Effect.gen(function* () {
           yield* mirror(card, threadId, context, detail);
         if (steering && (card.steers?.pending ?? 0) > 0)
           yield* steer(task, threadId, context, detail);
+        if (steering && card.handoffHold?.stage === "qa")
+          yield* noticeHandoff(task, threadId, card.handoffHold.run);
       }
     },
     (effect) =>

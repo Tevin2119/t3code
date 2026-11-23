@@ -59,6 +59,10 @@ const Card = Schema.Struct({
   // Slice 5's mirror and steer counts; absent on an engine before it.
   conversation: Schema.optional(Schema.NullOr(Schema.Unknown)),
   steers: Schema.optional(Schema.NullOr(Schema.Struct({ pending: Schema.Number }))),
+  // A stage the engine holds for a hand-off that has none yet; the engine field is provisional.
+  handoffHold: Schema.optional(
+    Schema.NullOr(Schema.Struct({ run: Schema.String, stage: Schema.String })),
+  ),
 });
 type Card = typeof Card.Type;
 
@@ -299,7 +303,12 @@ export const make = Effect.gen(function* () {
       .boardThreadAct({
         method: "POST",
         path: `${path}/claim`,
-        body: { origin: `thread:${environmentId}/${threadId}`, by: environmentId },
+        // The opt-in asks the engine to hold its QA stage for the lead's hand-off.
+        body: {
+          origin: `thread:${environmentId}/${threadId}`,
+          by: environmentId,
+          handoffs: ["qa"],
+        },
       })
       .pipe(Effect.result);
     if (claimed._tag !== "Success") return;
