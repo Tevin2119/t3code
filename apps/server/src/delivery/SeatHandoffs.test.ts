@@ -59,7 +59,8 @@ function harness(
     readonly checklist?: string[];
     readonly seatThread?: { readonly environmentId: string; readonly threadId: string } | null;
     readonly boardThread?: { readonly environmentId: string; readonly threadId: string };
-    readonly handoffResponse?: "lost" | "conflict" | "independence";
+    readonly handoffResponse?: "lost" | "committed-lost" | "conflict" | "independence";
+    readonly settleResponse?: "committed-lost";
     readonly receiptRefusal?: {
       readonly status: number;
       readonly code: string;
@@ -78,6 +79,7 @@ function harness(
   const admissions = new Map<string, { childThreadId: ThreadId; taskId: NodeId }>();
   const launches: Array<{ namespace: string; input: OrchestratorMcpDelegateTaskInput }> = [];
   const cancels: Array<NodeId> = [];
+  let settleLost = false;
   const statusReads: NodeId[] = [];
   const layer = SeatHandoffs.layer.pipe(
     Layer.provideMerge(DeliveryService.layer(deriveProviderInstanceConfigMap)),
@@ -168,6 +170,10 @@ function harness(
               seatThread: { environmentId: ENVIRONMENT, threadId: attestedThread },
               state: "handed",
             };
+            if (handoffResponse === "committed-lost") {
+              handoffResponse = undefined;
+              return { status: 503, body: { error: "Engine unavailable." } };
+            }
             if (handoffResponse === "conflict") {
               handoffResponse = undefined;
               return {
@@ -186,6 +192,10 @@ function harness(
               state: delivered ? "delivered" : "fallen-back",
               reason: delivered ? null : (body as { reason: string }).reason,
             };
+            if (options.settleResponse === "committed-lost" && !settleLost) {
+              settleLost = true;
+              return { status: 503, body: { error: "Engine unavailable." } };
+            }
             return { status: 200, body: { run: RUN, handoff } };
           }
           if (method === "POST" && path === RECEIPT_PATH) {
@@ -454,12 +464,41 @@ it.effect(
 
       finish("interrupted");
       assert.equal((yield* service.handQa(newSession, {})).handoff.reason, "seat-failed");
-      const refiled = yield* service.handQa(newSession, {});
+      // A settled hand-off is returned on retry; only `again` files QA anew.
+      assert.equal((yield* service.handQa(newSession, {})).handoff.reason, "seat-failed");
+      assert.equal(admissions.size, 1);
+      const refiled = yield* service.handQa(newSession, { again: true });
       assert.equal(refiled.handoff.seatThread?.threadId, "thread:qa:1");
       assert.equal(admissions.size, 2);
     }).pipe(Effect.provide(layer));
   },
 );
+
+it.effect("keeps a seat whose hand-off the engine took when the answer is lost", () => {
+  const { layer, cancels, launches } = harness({ handoffResponse: "committed-lost" });
+  return Effect.gen(function* () {
+    const service = yield* SeatHandoffs.SeatHandoffs;
+    const result = yield* service.handQa(scopeFor(PARENT), {});
+    assert.equal(result.state, "working");
+    assert.deepEqual(cancels, []);
+    assert.lengthOf(launches, 1);
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect("returns a settled hand-off whose answer was lost instead of filing QA again", () => {
+  const { layer, finish, launches } = harness({ settleResponse: "committed-lost" });
+  return Effect.gen(function* () {
+    const service = yield* SeatHandoffs.SeatHandoffs;
+    const lead = scopeFor(PARENT);
+    yield* service.handQa(lead, {});
+    finish("failed", []);
+    yield* Effect.flip(service.handQa(lead, {}));
+    const retried = yield* service.handQa(lead, {});
+    assert.equal(retried.state, "fallen-back");
+    assert.equal(retried.handoff.reason, "seat-failed");
+    assert.lengthOf(launches, 1);
+  }).pipe(Effect.provide(layer));
+});
 
 it.effect("recovers the current record carried by an engine conflict", () => {
   const { layer, statusReads, launches } = harness({ handoffResponse: "conflict" });
@@ -483,7 +522,7 @@ it.effect("maps the engine's independence refusal and names the other gate seats
     assert.deepEqual(cancels, ["node:qa:0"]);
     assert.equal(
       failure.message,
-      "That QA seat shares the builder's model family; pick another seat (seat: unavailable, backup)",
+      "That QA seat shares the builder's model family; pick another seat (seat: backup)",
     );
     assert.equal(
       (yield* service.handQa(scopeFor(PARENT), { seat: "backup" })).handoff.seat,

@@ -214,6 +214,7 @@ export const DeliverySeatAttestation = Schema.Struct({
 export const DeliverySeatHandoffInput = Schema.Struct({
   stage: Schema.Literal("qa"),
   seat: Schema.optional(Schema.String),
+  again: Schema.optional(Schema.Boolean).annotate({ description: "Hand off a settled QA again." }),
 });
 export const DeliverySeatHandoffResult = Schema.Struct({
   handoff: DeliverySeatHandoff,

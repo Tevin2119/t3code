@@ -266,15 +266,17 @@ const make = Effect.gen(function* () {
       "Check out the candidate commit in your worktree and test it. Do not edit code. File receipts only after testing.",
       "File exactly one delivery_qa_receipt for each acceptance item with its zero-based index, a pass, fail or blocked verdict, and evidence refs. Then end your turn.",
     ].join("\n");
-    for (const seat of gates) {
-      if (namedSeat !== undefined && seat.seat !== namedSeat) continue;
+    const launchable = gates.flatMap((seat) => {
       const { model, harness } = seat.currentModel ?? {
         model: seat.requestedModel,
         harness: seat.harness,
       };
-      if (!model || !harness) continue;
+      if (!model || !harness) return [];
       const provider = resolveSeatProvider(providers, harness, (entry) => entry.providerInstanceId);
-      if (typeof provider === "string") continue;
+      return typeof provider === "string" ? [] : [{ seat, model, provider }];
+    });
+    for (const { seat, model, provider } of launchable) {
+      if (namedSeat !== undefined && seat.seat !== namedSeat) continue;
 
       const delegated = yield* orchestrator
         .delegateTask(nativeScope, {
@@ -311,7 +313,9 @@ const make = Effect.gen(function* () {
         harness: launchedHarness,
         taskId: child.taskId,
         scope: nativeScope,
-        otherSeats: gates.filter((entry) => entry !== seat).map((entry) => entry.seat),
+        otherSeats: launchable
+          .filter((entry) => entry.seat !== seat)
+          .map((entry) => entry.seat.seat),
       };
     }
     return yield* invalidRequest(
@@ -365,6 +369,13 @@ const make = Effect.gen(function* () {
             body: { ...body, setBy: environmentId, key },
           });
         let current = currentQaHandoff(detail, run);
+        // A settled hand-off is returned as it stands, so a retry after a lost settle answer
+        // never files QA again; only an explicit `again` does.
+        if (current && current.state !== "handed" && !input.again)
+          return {
+            state: current.state === "delivered" ? "delivered" : "fallen-back",
+            handoff: current,
+          };
         if (current?.state !== "handed") {
           if (current && current.id == null)
             return yield* invalidRequest("The engine's previous QA hand-off has no filing id.");
@@ -392,11 +403,25 @@ const make = Effect.gen(function* () {
             return working(handoff);
           }
           const refusal = refusalOf(handed.failure);
+          if (refusal?.code === undefined) {
+            // The answer is unknown: the engine may have taken the hand-off. Read what it holds,
+            // and never stop a seat it may have.
+            const latest = yield* readTask(path).pipe(Effect.option);
+            const recovered = Option.isSome(latest)
+              ? currentQaHandoff(latest.value, run)
+              : undefined;
+            if (recovered?.state === "handed" && recovered.seatThread?.threadId === seat.threadId)
+              return working(recovered);
+            return yield* new OrchestratorMcpFailure({
+              code: "orchestration_error",
+              message: "The engine's answer was lost. Call delivery_seat_handoff again to recover.",
+            });
+          }
           const held =
-            handed.failure.status === 409 && refusal?.code === "conflict"
+            handed.failure.status === 409 && refusal.code === "conflict"
               ? yield* readHandoff({ handoff: refusal.current }, run)
               : undefined;
-          // A seat the engine did not take must not go on to file receipts.
+          // A seat the engine refused must not go on to file receipts.
           if (held?.seatThread?.threadId !== seat.threadId)
             yield* orchestrator
               .cancelTask(seat.scope, {
@@ -407,7 +432,9 @@ const make = Effect.gen(function* () {
               .pipe(Effect.ignore);
           if (handed.failure.status === 409 && refusal?.code === "independence")
             return yield* invalidRequest(
-              `That QA seat shares the builder's model family; pick another seat (seat: ${seat.otherSeats.join(", ") || "none"})`,
+              seat.otherSeats.length > 0
+                ? `That QA seat shares the builder's model family; pick another seat (seat: ${seat.otherSeats.join(", ")})`
+                : "That QA seat shares the builder's model family, and no other QA gate seat can be launched.",
             );
           if (held === undefined) return yield* engineFailure(handed.failure, "hand off QA");
           current = held;
