@@ -330,9 +330,12 @@ seat's conversation is open, the panel, the details and the badges stay the
 task's.
 
 The **Task** item holds what is asked, the plan, who owns the task, its seat
-settings and the engine's log. The log's composer writes to the team as notes,
-changes, status questions or answers; a proposed change is confirmed or declined
-on its entry, which **Needs you** links to while it waits. Under **Linked
+settings and the engine's log. To change the work, write in the task's thread
+like any other. A steer sent from the board joins the conversation when its
+current turn ends, never in the middle of one; until then **Where it stands**
+shows it waiting, or why it did not arrive. The engine's own questions are
+answered under **Needs you**, and a proposed change is confirmed or declined on
+its entry in the log, which **Needs you** links to while it waits. Under **Linked
 conversations**, **Made from** opens the conversation that created the task in its
 place, and **Back to task** returns to the task. The card's lineage also lists the
 task's parent, parts and follow-ups; select one to open that task. A task with no

@@ -31,6 +31,7 @@ import {
 } from "../../state/delivery";
 import { ThreadDetailsSection } from "../chat/ThreadDetailsSection";
 import { THREAD_DETAILS_ITEMS } from "../chat/threadDetailsItems";
+import { Badge } from "../ui/badge";
 import { Input } from "../ui/input";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { useBoardTask, type BoardTask } from "./BoardTaskContext";
@@ -50,8 +51,85 @@ import {
   WaitingOn,
 } from "./taskParts";
 import { TaskPipelineStrip } from "./TaskTeamActivity";
+import { ThreadTaskQuestions } from "./ThreadTaskQuestions";
 
 const TASK_ITEM = THREAD_DETAILS_ITEMS.find((item) => item.id === "task")!;
+
+const STEER_STATE: Record<
+  string,
+  { readonly label: string; readonly variant: "outline" | "warning" }
+> = {
+  pending: { label: "Waits for the next turn", variant: "outline" },
+  delivered: { label: "Delivered", variant: "outline" },
+  failed: { label: "Not delivered", variant: "warning" },
+};
+
+/**
+ * The engine's mirror of the task's conversation and the steers queued for it (spec 6a, slice 5).
+ * The conversation itself is the thread in the centre; this is what the card is told of it.
+ */
+function ConversationFacts(props: { readonly task: TaskView }) {
+  const gt = useGT();
+  const { conversation, steers } = props.task.card;
+  const { boardThread, conversationMirrorEnvironment } = props.task;
+  const transferred =
+    boardThread &&
+    conversationMirrorEnvironment &&
+    boardThread.environmentId !== conversationMirrorEnvironment;
+  const open = props.task.steers.filter((steer) => steer.state !== "delivered");
+  if (conversation === null && (steers === null || open.length === 0)) return null;
+  return (
+    <>
+      {conversation ? (
+        <Row label="Conversation">
+          <span className="flex min-w-0 flex-col items-end" data-task-conversation-mirror>
+            <span>
+              {conversation.count} {conversation.count === 1 ? "event" : "events"}
+              {conversation.lastAt ? `, last ${time(conversation.lastAt)}` : ""}
+            </span>
+            {transferred ? (
+              <span className="text-2xs text-muted-foreground">
+                {gt(
+                  "Activity is no longer mirrored after the conversation moved to another environment.",
+                )}
+              </span>
+            ) : null}
+            {conversation.lastExcerpt ? (
+              <span className="line-clamp-2 text-2xs text-muted-foreground">
+                {conversation.lastExcerpt}
+              </span>
+            ) : null}
+          </span>
+        </Row>
+      ) : null}
+      {open.length > 0 ? (
+        <Row label="Steers">
+          <ul className="flex min-w-0 flex-col items-end gap-1" data-task-steers>
+            {open.map((steer) => (
+              <li
+                key={steer.id}
+                className="flex min-w-0 flex-col items-end gap-0.5"
+                data-task-steer={steer.state}
+              >
+                <span className="flex items-center gap-1">
+                  <span className="text-2xs text-muted-foreground">
+                    {steer.author}, {time(steer.created)}
+                  </span>
+                  <Badge size="sm" variant={STEER_STATE[steer.state]?.variant ?? "outline"}>
+                    {STEER_STATE[steer.state]?.label ?? steer.state}
+                  </Badge>
+                </span>
+                {steer.failure ? (
+                  <span className="text-2xs text-warning-foreground">{steer.failure}</span>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        </Row>
+      ) : null}
+    </>
+  );
+}
 
 function Listed(props: {
   readonly title: string;
@@ -330,11 +408,22 @@ function TaskDetailsBody(props: { readonly board: BoardTask; readonly task: Task
       null)
     : null;
 
+  // The engine's own questions are answered here; a question the lead asks in the conversation
+  // is answered there, as any thread's request is.
+  const asks = environmentId !== null && task.questions.length > 0;
+
   return (
     <div ref={container} className="flex min-w-0 flex-col gap-2 px-2.5" data-task-details>
-      {card.waitingOn === "person" ? (
+      {card.waitingOn === "person" || asks ? (
         <TaskDisclosure title={gt("Needs you")}>
           <WaitKinds card={card} />
+          {asks && environmentId !== null ? (
+            <ThreadTaskQuestions
+              environmentId={environmentId}
+              tasks={[card]}
+              summaryTaskIds={[card.id]}
+            />
+          ) : null}
           {proposal ? (
             <button
               type="button"
@@ -374,6 +463,7 @@ function TaskDetailsBody(props: { readonly board: BoardTask; readonly task: Task
         <Row label="Now">
           <WaitingOn card={card} />
         </Row>
+        <ConversationFacts task={task} />
         {card.blocker ? (
           <p
             className={cn(

@@ -14,7 +14,6 @@ import {
   formatBytes,
   groupCards,
   initialsOf,
-  isSendKey,
   isTaskId,
   linesFromText,
   matchesCard,
@@ -231,25 +230,6 @@ describe("what is typed", () => {
     expect(isTaskId("task-../../x")).toBe(false);
     expect(isTaskId("#1001")).toBe(false);
     expect(isTaskId(1001)).toBe(false);
-  });
-
-  it("follows the person's own send key", () => {
-    const key = (overrides: Partial<Parameters<typeof isSendKey>[0]> = {}) => ({
-      key: "Enter",
-      shiftKey: false,
-      metaKey: false,
-      ctrlKey: false,
-      ...overrides,
-    });
-    expect(isSendKey(key(), "enter", "one line")).toBe(true);
-    expect(isSendKey(key({ shiftKey: true }), "enter", "one line")).toBe(false);
-    expect(isSendKey(key(), "mod-enter", "one line")).toBe(false);
-    expect(isSendKey(key({ ctrlKey: true }), "mod-enter", "one line")).toBe(true);
-    expect(isSendKey(key(), "mod-enter-multiline", "one line")).toBe(true);
-    expect(isSendKey(key(), "mod-enter-multiline", "two\nlines")).toBe(false);
-    expect(isSendKey(key({ metaKey: true }), "mod-enter-multiline", "two\nlines")).toBe(true);
-    expect(isSendKey(key({ isComposing: true }), "enter", "x")).toBe(false);
-    expect(isSendKey(key({ key: "a" }), "enter", "x")).toBe(false);
   });
 });
 

@@ -1,4 +1,5 @@
 import {
+  CircleAlertIcon,
   CircleHelpIcon,
   ClockIcon,
   GitBranchIcon,
@@ -6,6 +7,7 @@ import {
   InfoIcon,
   MessageSquareIcon,
   PaperclipIcon,
+  SendIcon,
   UserIcon,
 } from "lucide-react";
 import type { ReactNode } from "react";
@@ -243,6 +245,18 @@ export function CardSigns(props: { readonly card: DeliveryCard }) {
         icon={<HourglassIcon />}
         count={card.unanswered}
         label={`${plural(card.unanswered, "message", "messages")} of yours not yet taken up by the team`}
+      />
+      <Count
+        icon={<SendIcon />}
+        count={card.steers?.pending ?? 0}
+        label={`${plural(card.steers?.pending ?? 0, "steer waits", "steers wait")} for the conversation's next turn`}
+      />
+      {/* A steer that did not arrive marks the card, and raises no Waiting on you: nothing blocks. */}
+      <Count
+        icon={<CircleAlertIcon />}
+        count={card.steers?.failed ?? 0}
+        label={`${plural(card.steers?.failed ?? 0, "steer", "steers")} did not reach the conversation. Open the task to see why.`}
+        tone="text-warning"
       />
       <Count
         icon={<PaperclipIcon />}

@@ -26,6 +26,7 @@ import * as ThreadManagementService from "../orchestration-v2/ThreadManagementSe
 import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { forkParked } from "../serverActivation.ts";
+import * as BoardConversation from "./BoardConversation.ts";
 import * as BoardThreadRows from "./boardThreadRows.ts";
 import {
   boardTaskOf,
@@ -55,6 +56,9 @@ const Card = Schema.Struct({
   set: Schema.optional(Schema.NullOr(Schema.String)),
   // Absent on an engine without the link: such an engine is never written to.
   boardThread: Schema.optional(Schema.NullOr(BoardThread)),
+  // Slice 5's mirror and steer counts; absent on an engine before it.
+  conversation: Schema.optional(Schema.NullOr(Schema.Unknown)),
+  steers: Schema.optional(Schema.NullOr(Schema.Struct({ pending: Schema.Number }))),
 });
 type Card = typeof Card.Type;
 
@@ -223,6 +227,7 @@ export const make = Effect.gen(function* () {
   const projects = yield* ProjectStore.ProjectStoreV2;
   const instances = yield* ProviderInstanceRegistry.ProviderInstanceRegistry;
   const rows = yield* BoardThreadRows.BoardThreadRows;
+  const conversation = yield* BoardConversation.BoardConversation;
   const hostEnvironment = yield* HostProcess.Environment;
   const lock = yield* Semaphore.make(1);
   // The one queue every `boardThread` write of this server waits in: the engine is sent one link
@@ -473,6 +478,7 @@ export const make = Effect.gen(function* () {
       // An engine that serves no `boardThread` has no link to write to. Nothing is made for it.
       if ([...cards.values()].some((card) => card.boardThread === undefined)) return holds;
       const starting = [...cards.values()].filter(awaitsThread);
+      const key = hostEnvironment[BOARD_THREAD_KEY_VARIABLE] || undefined;
       if (starting.length > 0) {
         const revisions = new Map(
           (yield* local(rows.list({ archived: false }))).map((row) => [row.threadId, row.revision]),
@@ -485,12 +491,12 @@ export const make = Effect.gen(function* () {
             set.target?.path ? [[set.id, set.target.path] as const] : [],
           ),
         );
-        const key = hostEnvironment[BOARD_THREAD_KEY_VARIABLE] || undefined;
         for (const card of starting) {
           const hold = yield* bind(card, { environmentId, teams, folders, key, revisions });
           if (hold !== null) holds.set(card.id, hold);
         }
       }
+      const steering = new Set<string>();
       for (const card of cards.values()) {
         const link = card.boardThread;
         if (link === null || link === undefined || link.environmentId !== environmentId) continue;
@@ -498,9 +504,14 @@ export const make = Effect.gen(function* () {
           yield* releaseClaim(card.id);
           continue;
         }
+        steering.add(card.id);
         yield* holdClaim(card, environmentId, link.threadId);
       }
       yield* settleEnded(cards, environmentId);
+      // Moved tasks are worked on another machine: their conversation is not told from here.
+      const mirrored = [...cards.values()].filter((card) => !MOVED.has(card.state));
+      if (key !== undefined)
+        yield* conversation.sync({ cards: mirrored, steering, environmentId, key });
       for (const [task, hold] of holds) {
         if (told.get(task) === hold) continue;
         yield* Effect.logWarning("A started board task has no conversation yet.", { task, hold });

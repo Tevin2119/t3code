@@ -9,6 +9,7 @@ import * as StorageCleanup from "./storageCleanup.ts";
 import * as PullRequestSyncReactor from "./orchestration-v2/PullRequestSyncReactor.ts";
 import * as PullRequestWatchReactor from "./orchestration-v2/PullRequestWatchReactor.ts";
 import * as DelegatedTaskQuestionReactor from "./orchestration-v2/DelegatedTaskQuestionReactor.ts";
+import * as BoardConversation from "./delivery/BoardConversation.ts";
 import * as BoardTaskThreads from "./delivery/BoardTaskThreads.ts";
 import * as BoardThreadRows from "./delivery/boardThreadRows.ts";
 import * as NativeIntake from "./delivery/NativeIntake.ts";
@@ -242,6 +243,7 @@ import * as ThreadPullRequestService from "./orchestration-v2/ThreadPullRequestS
 import * as ThreadIssueService from "./orchestration-v2/ThreadIssueService.ts";
 import * as RunFinalizationService from "./orchestration-v2/RunFinalizationService.ts";
 import * as ProjectionMaintenance from "./orchestration-v2/ProjectionMaintenance.ts";
+import * as EventStoreV2 from "./orchestration-v2/EventStore.ts";
 import * as ProjectionStoreV2 from "./orchestration-v2/ProjectionStore.ts";
 import { makePersistedServerRuntimeState } from "./serverRuntimeState.ts";
 import { closeNonPrivateNetworkConnections, loopbackUrlHostForAddress } from "./startupAccess.ts";
@@ -766,7 +768,9 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
     }),
   ).pipe(
     Layer.provide(BoardTaskThreads.layer),
+    Layer.provide(BoardConversation.layer),
     Layer.provide(BoardThreadRows.layer),
+    Layer.provide(EventStoreV2.layer),
     Layer.provide(ProjectionStoreV2.layer),
     Layer.provide(layerDelivery),
     Layer.provide(ServerEnvironment.layerIdentity),

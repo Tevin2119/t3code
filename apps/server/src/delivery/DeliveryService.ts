@@ -130,7 +130,13 @@ const decodeDeliveryRequest = Schema.decodeUnknownEffect(
 /** The engine writes for a board task's conversation; only the server makes them. */
 const BOARD_THREAD_LINK = /^\/api\/tasks\/[\w-]+\/board-thread$/;
 const BOARD_THREAD_CLAIM = /^\/api\/orchestration\/tasks\/[\w-]+\/(claim|ack|release)$/;
-const BOARD_THREAD_WRITE = new RegExp(`${BOARD_THREAD_LINK.source}|${BOARD_THREAD_CLAIM.source}`);
+// The conversation's mirror and the steer handshake (spec 6a, slice 5).
+const BOARD_THREAD_CONVERSATION =
+  /^\/api\/tasks\/[\w-]+\/(activity|steers\/\d+\/(delivered|failed))$/;
+const BOARD_THREAD_POST = new RegExp(
+  `${BOARD_THREAD_CLAIM.source}|${BOARD_THREAD_CONVERSATION.source}`,
+);
+const BOARD_THREAD_WRITE = new RegExp(`${BOARD_THREAD_LINK.source}|${BOARD_THREAD_POST.source}`);
 
 /** Two spellings of one folder compare equal: slashes, case on Windows, a trailing slash. */
 const normalFolder = (value: string, platform: NodeJS.Platform) => {
@@ -1599,7 +1605,7 @@ const make = Effect.fn("DeliveryService.make")(function* (
           ),
     ),
     boardThreadAct: Effect.fn("DeliveryService.boardThreadAct")((input) =>
-      (input.method === "POST" ? BOARD_THREAD_CLAIM : BOARD_THREAD_LINK).test(input.path)
+      (input.method === "POST" ? BOARD_THREAD_POST : BOARD_THREAD_LINK).test(input.path)
         ? request(input.method, input.path, input.body)
         : Effect.fail(
             new DeliveryError({

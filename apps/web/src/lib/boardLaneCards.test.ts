@@ -151,4 +151,21 @@ describe("what was said on a card", () => {
       text: null,
     });
   });
+
+  it("shows the conversation's mirror once it has one, and a steer's count without its words", () => {
+    const mirrored = (lastKind: string, lastExcerpt: string | null) =>
+      card({ messages: 4, unread: 1, last, conversation: { count: 7, lastKind, lastExcerpt } });
+    expect(cardActivityOf(mirrored("summary", "Tests pass."))).toEqual({
+      messages: 7,
+      unread: 1,
+      by: null,
+      text: "Tests pass.",
+    });
+    expect(cardActivityOf(mirrored("steer", null))).toEqual({
+      messages: 7,
+      unread: 1,
+      by: null,
+      text: null,
+    });
+  });
 });
