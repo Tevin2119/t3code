@@ -816,6 +816,69 @@ it.effect("mirrors each conversation event once, across a restart and a replaced
   }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-mirror-")));
 });
 
+const ownSeqs = (engine: ScratchEngine) =>
+  engine
+    .activityOf("task-7")
+    .filter((row) => row.setBy === ENVIRONMENT)
+    .map((row) => row.seq);
+
+it.effect("mirrors beside another environment on a scoped engine, from its own floor", () => {
+  const engine = board({ sourceScoped: true });
+  engine.addTask({ id: "task-7" });
+  const store = threadStore();
+  return Effect.gen(function* () {
+    const first = yield* service(store);
+    yield* first.reconcile();
+    engine.writeLink("task-7", { environmentId: OTHER, threadId: THEIRS, setBy: OTHER });
+    engine.ingestFrom("task-7", { seq: 1, setBy: OTHER });
+    engine.ingestFrom("task-7", { seq: 90, setBy: OTHER });
+    engine.writeLink("task-7", {
+      environmentId: ENVIRONMENT,
+      threadId: THREAD,
+      setBy: ENVIRONMENT,
+    });
+    store.say(THREAD, "m-1", "One", "system");
+    store.say(THREAD, "m-2", "Two", "system");
+    yield* (yield* service(store)).reconcile();
+    assert.deepEqual(ownSeqs(engine), [1, 2]);
+    // The same seq from two sources is kept twice.
+    assert.deepEqual(
+      engine
+        .activityOf("task-7")
+        .filter((row) => row.seq === 1)
+        .map((row) => row.setBy)
+        .toSorted(),
+      [ENVIRONMENT, OTHER].toSorted(),
+    );
+    // A restarted server resumes from its own entry in the floors (2), never the other's (90).
+    store.say(THREAD, "m-3", "Three", "system");
+    const before = ingests(engine);
+    yield* (yield* service(store)).reconcile();
+    assert.deepEqual(ownSeqs(engine), [1, 2, 3]);
+    assert.equal(ingests(engine), before + 1);
+  }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-scoped-")));
+});
+
+it.effect("stays paused beside another source on an older engine, then resumes", () => {
+  const engine = board();
+  engine.addTask({ id: "task-7" });
+  const store = threadStore();
+  return Effect.gen(function* () {
+    const threads = yield* service(store);
+    yield* threads.reconcile();
+    engine.ingestFrom("task-7", { seq: 7, setBy: OTHER });
+    store.say(THREAD, "m-1", "One", "system");
+    // Without the marker the other source's row would be taken for this one's floor.
+    yield* threads.reconcile();
+    yield* threads.reconcile();
+    assert.equal(ingests(engine), 0);
+    // The engine is installed under the running server: the pause lifts, from no floor.
+    engine.setSourceScoped(true);
+    yield* threads.reconcile();
+    assert.deepEqual(ownSeqs(engine), [1]);
+  }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-paused-")));
+});
+
 it.effect("delivers a queued steer at the next turn boundary, once, and confirms it", () => {
   const engine = board();
   engine.addTask({ id: "task-7" });
