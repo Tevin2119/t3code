@@ -38,7 +38,6 @@ function menu(props: Partial<Parameters<typeof TaskMenu>[0]> = {}) {
       taskActions={{ busy: false, run: vi.fn(), moveTo: vi.fn() }}
       onCreateTask={() => {}}
       onAllocate={() => {}}
-      onInspectSource={undefined}
       onChanged={() => {}}
       onProblem={() => {}}
       {...props}
@@ -73,19 +72,15 @@ it("names each action with what it does, and runs it on the task", async () => {
   expect(onAllocate).toHaveBeenCalledOnce();
 });
 
-it("offers the source workspace only for a task filed from a conversation", async () => {
-  const onInspectSource = vi.fn();
-  await using screen = await render(menu());
+it("leaves the source conversation to the Task item's Made from row, even for a task filed from one", async () => {
+  await using _screen = await render(
+    menu({ task: task({ source: { kind: "thread", ref: "env-source/filed-from" } }) }),
+  );
   await open();
   await expect.element(page.getByRole("menuitem", { name: /^Allocate/ })).toBeVisible();
   await expect
     .element(page.getByRole("menuitem", { name: /Inspect source workspace/ }))
     .not.toBeInTheDocument();
-  await userEvent.keyboard("{Escape}");
-  await screen.rerender(menu({ onInspectSource }));
-  await open();
-  await page.getByRole("menuitem", { name: /Inspect source workspace/ }).click();
-  expect(onInspectSource).toHaveBeenCalledOnce();
 });
 
 it("offers to make a task of a chat only while it is a chat", async () => {

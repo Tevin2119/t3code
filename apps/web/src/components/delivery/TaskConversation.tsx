@@ -13,6 +13,7 @@ import {
 } from "../../lib/taskConversation";
 import { cn } from "../../lib/utils";
 import { linkedThreadSurface } from "../../linkedThreadSurface";
+import { useRightPanelStore } from "../../rightPanelStore";
 import type { ChatViewSlots } from "../ChatView";
 import { ThreadInspectionContext } from "../chat/ThreadInspectionContext";
 import { RenderErrorBoundary } from "../RenderErrorBoundary";
@@ -41,13 +42,58 @@ export interface TaskChrome {
   readonly actions: ReactNode;
   /** Lines under the header: the engine's notices, the last refusal, the delivery disclosure. */
   readonly notices: ReactNode;
-  /** The task's own panel toggles, until the thread's own panels host the task. */
+  /** The task's own panel toggles on a page, whose details are the sheet. */
   readonly panelControls: ReactNode;
+  /** The right panel toggle alone, beside a thread view whose details panel is its own. */
+  readonly rightPanelControl: ReactNode;
   /** The decisions, in the lane above the composer. */
   readonly decisions: ReactNode;
+  /** The task's badges. `openDetails` opens the details of the view they sit in. */
+  readonly renderBadges: (openDetails: () => void, wrap: boolean) => ReactNode;
+  /** The header has no room for the badges, so they take a row of their own under it. */
+  readonly narrow: boolean;
+  /** Opens the details sheet, which holds the task's details where no thread view stands. */
+  readonly showDetails: () => void;
 }
 
 type Back = NonNullable<ChatViewSlots["parent"]>;
+
+/** The native details card of the thread on screen, opened at the Task item in either form it takes. */
+function openThreadDetails(thread: ScopedThreadRef) {
+  const store = useRightPanelStore.getState();
+  store.setThreadPanelOpen(thread, "inline", true);
+  store.setThreadPanelOpen(thread, "popover", true);
+  requestAnimationFrame(() =>
+    document
+      .querySelector("[data-thread-details-card] [data-thread-details-task]")
+      ?.scrollIntoView({ block: "start" }),
+  );
+}
+
+/** The badges in the header's actions when it has room, else in a row under the header. */
+function badgePlaces(chrome: TaskChrome, openDetails: () => void) {
+  return chrome.narrow
+    ? {
+        actions: chrome.actions,
+        row: (
+          <div
+            className="flex shrink-0 items-center border-b border-border px-2 py-1"
+            data-task-badges-row
+          >
+            {chrome.renderBadges(openDetails, true)}
+          </div>
+        ),
+      }
+    : {
+        actions: (
+          <>
+            {chrome.renderBadges(openDetails, false)}
+            {chrome.actions}
+          </>
+        ),
+        row: null,
+      };
+}
 
 /** The task's own words, kept on the screen whenever the conversation cannot be. */
 function TaskText(props: { readonly task: TaskView }) {
@@ -292,13 +338,17 @@ function OpenConversation(props: {
   const seatTitle = props.seatName
     ? gt("Seat {seat}", { seat: props.seatName })
     : gt("Seat conversation");
+  // The thread view's details are its own panel's; a page's are the sheet.
+  const threadPlaces = badgePlaces(chrome, () => openThreadDetails(shown));
+  const pagePlaces = badgePlaces(chrome, chrome.showDetails);
   // A seat's thread view titles itself, so the bar names the seat; a page titles it instead.
-  const banner = (nameSeat: boolean) => (
+  const banner = (threadView: boolean) => (
     <>
       {chrome.notices}
-      <TaskBar controls={chrome.panelControls}>
+      {(threadView ? threadPlaces : pagePlaces).row}
+      <TaskBar controls={threadView ? chrome.rightPanelControl : chrome.panelControls}>
         {inSeat ? (
-          nameSeat && !sourceOpen ? (
+          threadView && !sourceOpen ? (
             <SeatLabel seatName={props.seatName} />
           ) : null
         ) : (
@@ -333,7 +383,7 @@ function OpenConversation(props: {
     <TaskPage
       title={inSeat ? (sourceOpen ? gt("Conversation") : seatTitle) : chrome.title}
       back={inSeat ? back : undefined}
-      actions={chrome.actions}
+      actions={pagePlaces.actions}
       banner={banner(false)}
       lane={<Lane closed={props.closed} decisions={chrome.decisions} className="px-3 pb-3" />}
     >
@@ -385,7 +435,7 @@ function OpenConversation(props: {
                   )}
                   slots={{
                     ...(inSeat ? { parent: back } : { title: chrome.title }),
-                    headerActions: chrome.actions,
+                    headerActions: threadPlaces.actions,
                     banner: banner(true),
                     composerLane: (
                       <Lane closed={props.closed} decisions={chrome.decisions} className="pb-2" />
@@ -426,13 +476,15 @@ export function TaskConversation(props: {
   const { state, task, chrome } = props;
   // A closed or rejected task keeps what was said, and nothing more is written to it.
   const closed = task.state === "rejected" || task.state === "closed";
+  const places = badgePlaces(chrome, chrome.showDetails);
   const page = (content: ReactNode) => (
     <TaskPage
       title={chrome.title}
-      actions={chrome.actions}
+      actions={places.actions}
       banner={
         <>
           {chrome.notices}
+          {places.row}
           <TaskBar controls={chrome.panelControls} />
         </>
       }

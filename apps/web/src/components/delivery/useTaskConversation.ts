@@ -108,7 +108,7 @@ export function useTaskConversation(task: TaskView | null) {
     seat,
     /** A seat is open but cannot be placed yet: the centre waits instead of showing the task. */
     seatResolving: resolving,
-    seatName: seatOfThread(ref, children, current),
+    seatName: seatOfThread(ref, children, current, task?.council?.seats),
     open,
     backToTask: () => setSeat(null),
     seats: {

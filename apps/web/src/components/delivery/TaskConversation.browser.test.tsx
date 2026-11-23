@@ -8,6 +8,7 @@ import "~/index.css";
 import { act, fakeTimers, render } from "../../../test/render";
 import { parseTask } from "../../lib/delivery";
 import type { SeatThread } from "../../lib/taskConversation";
+import { selectThreadPanelOpen, useRightPanelStore } from "../../rightPanelStore";
 import type { ChatViewSlots } from "../ChatView";
 import { useThreadInspection } from "../chat/ThreadInspectionContext";
 import { TaskConversation } from "./TaskConversation";
@@ -73,6 +74,18 @@ const task = (extra: Record<string, unknown> = {}) => {
   return view;
 };
 
+const chrome = {
+  title: "#12 Fix the sync",
+  actions: <button>Task menu</button>,
+  notices: <p>Engine notice</p>,
+  panelControls: <button>Task panels</button>,
+  rightPanelControl: <button>Task right panel</button>,
+  decisions: <p>Your decision</p>,
+  renderBadges: (openDetails: () => void) => <button onClick={openDetails}>Task badges</button>,
+  narrow: false,
+  showDetails: () => {},
+};
+
 const idle = {
   seat: null,
   seatResolving: false,
@@ -81,13 +94,7 @@ const idle = {
   onOpenThread: () => {},
   onBackToTask: () => {},
   log: <p>The engine log</p>,
-  chrome: {
-    title: "#12 Fix the sync",
-    actions: <button>Task menu</button>,
-    notices: <p>Engine notice</p>,
-    panelControls: <button>Task panels</button>,
-    decisions: <p>Your decision</p>,
-  },
+  chrome,
 };
 
 it("shows a queued task's text and the engine's place in the native page, with nothing to type into", async () => {
@@ -162,6 +169,9 @@ it("opens the thread as the native view, titled by the task, with the engine log
   await expect.element(screen.getByRole("button", { name: "Task menu" })).toBeVisible();
   await expect.element(screen.getByText("Your decision")).toBeVisible();
   await expect.element(screen.getByRole("textbox", { name: "Composer" })).toBeVisible();
+  // The thread view's own details panel holds the task's details, so only the right panel's is here.
+  await expect.element(screen.getByRole("button", { name: "Task right panel" })).toBeVisible();
+  await expect.element(screen.getByRole("button", { name: "Task panels" })).not.toBeInTheDocument();
   await page.getByRole("button", { name: "Engine log" }).click();
   await expect.element(screen.getByText("The engine log")).toBeVisible();
   await expect.element(screen.getByText("Thread view lead-thread")).not.toBeInTheDocument();
@@ -170,6 +180,41 @@ it("opens the thread as the native view, titled by the task, with the engine log
   await expect.element(screen.getByRole("button", { name: "Task menu" })).toBeVisible();
   await page.getByRole("button", { name: "Conversation" }).click();
   await expect.element(screen.getByText("Thread view lead-thread")).toBeVisible();
+});
+
+it("puts the badges in the header when it has room, else in a row under it, opening the details where the view keeps them", async () => {
+  useRightPanelStore.setState(useRightPanelStore.getInitialState());
+  const showDetails = vi.fn();
+  const queued = { kind: "waiting", why: "queued" } as const;
+  const open = { kind: "open", ref, offline: false } as const;
+  await using screen = await render(
+    <TaskConversation {...idle} chrome={{ ...chrome, showDetails }} task={task()} state={queued} />,
+  );
+  const badges = screen.getByRole("button", { name: "Task badges" });
+  const inRow = () => badges.element().closest("[data-task-badges-row]") !== null;
+  await expect.element(badges).toBeVisible();
+  expect(inRow()).toBe(false);
+  // A page has no thread view: its details are the sheet.
+  await badges.click();
+  expect(showDetails).toHaveBeenCalledOnce();
+
+  // A thread view: the badges sit in its header and open its own details panel.
+  await screen.rerender(
+    <TaskConversation {...idle} chrome={{ ...chrome, showDetails }} task={task()} state={open} />,
+  );
+  expect(badges.element().closest("header")).not.toBeNull();
+  await badges.click();
+  const { threadPanelVisibilityByThreadKey } = useRightPanelStore.getState();
+  expect(selectThreadPanelOpen(threadPanelVisibilityByThreadKey, ref, "inline")).toBe(true);
+  expect(showDetails).toHaveBeenCalledOnce();
+
+  // Narrow: the badges leave the header for a row of their own under it.
+  await screen.rerender(
+    <TaskConversation {...idle} chrome={{ ...chrome, narrow: true }} task={task()} state={open} />,
+  );
+  await expect.element(badges).toBeVisible();
+  expect(inRow()).toBe(true);
+  expect(badges.element().closest("header")).toBeNull();
 });
 
 it("keeps a closed task's thread to read, with no composer", async () => {

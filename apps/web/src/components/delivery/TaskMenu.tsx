@@ -53,8 +53,6 @@ export function TaskMenu(props: {
   readonly taskActions: Pick<ReturnType<typeof useTaskActions>, "busy" | "run" | "moveTo">;
   readonly onCreateTask: () => void;
   readonly onAllocate: () => void;
-  /** Opens the conversation the task was filed from in the centre. Absent when there is none. */
-  readonly onInspectSource: (() => void) | undefined;
   readonly onChanged: () => void;
   /** Why a board move was refused, for the line under the header; null clears it. */
   readonly onProblem: (why: string | null) => void;
@@ -233,16 +231,6 @@ export function TaskMenu(props: {
               </MenuSubPopup>
             </MenuSub>
           )}
-          {props.onInspectSource ? (
-            <>
-              <MenuSeparator />
-              <Action
-                onClick={props.onInspectSource}
-                label="Inspect source workspace"
-                help="Inspect the source conversation and its workspace"
-              />
-            </>
-          ) : null}
         </MenuPopup>
       </Menu>
       {moving ? (

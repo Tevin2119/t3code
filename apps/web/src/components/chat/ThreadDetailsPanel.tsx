@@ -20,7 +20,9 @@ import ProjectScriptsControl, {
   type ProjectScriptActionResult,
 } from "../ProjectScriptsControl";
 import { T, useGT } from "gt-react";
-import { useState, type ComponentProps } from "react";
+import { lazy, Suspense, useState, type ComponentProps } from "react";
+import { useBoardTask } from "../delivery/BoardTaskContext";
+import { taskHasRelatedWork } from "../delivery/relatedTaskGroups";
 import { ThreadDetailsCard } from "./ThreadDetailsCard";
 import { OpenInPicker } from "./OpenInPicker";
 import { ThreadDetailsSection } from "./ThreadDetailsSection";
@@ -48,6 +50,14 @@ import {
   THREAD_DETAILS_PANEL_LABEL_CLASS,
 } from "./threadDetailsPanelStyles";
 import { Menu, MenuPopup } from "../ui/menu";
+
+// Board code loads only where a board task's view hosts the thread.
+const TaskDetailsItem = lazy(() =>
+  import("../delivery/TaskDetails").then((module) => ({ default: module.TaskDetailsItem })),
+);
+const TaskRelatedWork = lazy(() =>
+  import("../delivery/TaskRelatedWork").then((module) => ({ default: module.TaskRelatedWork })),
+);
 
 interface ThreadDetailsPanelProps extends Pick<
   ComponentProps<typeof ThreadDetailsCard>,
@@ -98,6 +108,9 @@ interface ThreadDetailsPanelProps extends Pick<
 export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
   const visible = useClientSettings(resolveThreadDetailsVisibility);
   const gt = useGT();
+  // The Task item and the child tasks come from the board task whose view hosts this thread.
+  const boardTask = useBoardTask()?.task ?? null;
+  const taskShown = boardTask !== null && visible.task;
   const [menuPosition, setMenuPosition] = useState<{ x: number; y: number } | null>(null);
   const fileScripts = useT3ProjectFileScripts(
     props.environmentId,
@@ -201,11 +214,17 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
         return (
           <>
             <div className="group/details-items">
+              {taskShown ? (
+                <Suspense fallback={null}>
+                  <TaskDetailsItem />
+                </Suspense>
+              ) : null}
+
               {show.environment || show.openIn || show.scripts ? (
                 <ThreadDetailsSection
                   headingId="thread-details-workspace-heading"
                   title={gt("Workspace")}
-                  separated={false}
+                  separated={taskShown}
                   showHeading={false}
                 >
                   <div className="flex flex-col">
@@ -319,6 +338,13 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
                   threadId={props.threadId}
                   showLineage={visible.lineage}
                   showSideChats={visible.sideChats}
+                  extraGroup={
+                    boardTask && taskHasRelatedWork(boardTask) ? (
+                      <Suspense fallback={null}>
+                        <TaskRelatedWork />
+                      </Suspense>
+                    ) : undefined
+                  }
                 />
               ) : null}
 

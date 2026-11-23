@@ -201,6 +201,28 @@ describe("a seat's conversation", () => {
     expect(seatOfThread(ref, children, { ...ref, threadId: id("plain") })).toBeNull();
   });
 
+  it("names the seat of a thread the engine names, as it names one T3 spawned", () => {
+    const engineSeats = [
+      { seat: "reviewer", threadId: "engine-thread" },
+      { seat: "builder", threadId: null },
+    ];
+    expect(
+      seatOfThread(ref, children, { ...ref, threadId: id("engine-thread") }, engineSeats),
+    ).toBe("reviewer");
+    // T3's own child keeps its seat, and an engine thread is only ever in the task's environment.
+    expect(seatOfThread(ref, children, { ...ref, threadId: id("child-b") }, engineSeats)).toBe(
+      "qa",
+    );
+    expect(
+      seatOfThread(
+        ref,
+        children,
+        { environmentId: remote, threadId: id("engine-thread") },
+        engineSeats,
+      ),
+    ).toBeNull();
+  });
+
   it("follows the connection of a seat thread that is already open", () => {
     const open = { environmentId: remote, threadId: id("child-b") };
     expect(openSeatThread(ref, children, open, reach(undefined, true))?.linked).toEqual({

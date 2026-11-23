@@ -139,14 +139,21 @@ const childOfThread = (
         item.remoteChild.environmentId === thread.environmentId,
   );
 
-/** The seat a child thread was given, for the line above a seat conversation. */
+/**
+ * The seat a child thread was given, for the line above a seat conversation. A thread the engine
+ * names for a seat, in the task's environment, is that seat's as much as one T3 spawned.
+ */
 export function seatOfThread(
   conversation: ScopedThreadRef | null,
   children: ReadonlyArray<SeatChild>,
   thread: ScopedThreadRef | null,
+  engineSeats: ReadonlyArray<{ readonly seat: string; readonly threadId: string | null }> = [],
 ): string | null {
   if (!conversation || !thread) return null;
-  return childOfThread(conversation, children, thread)?.teamChat?.seat ?? null;
+  const spawned = childOfThread(conversation, children, thread)?.teamChat?.seat;
+  if (spawned) return spawned;
+  if (thread.environmentId !== conversation.environmentId) return null;
+  return engineSeats.find((item) => item.threadId === thread.threadId)?.seat ?? null;
 }
 
 /** How an open thread is reached now, so a connection made or lost while it is open shows. */

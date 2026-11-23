@@ -1,30 +1,10 @@
-import { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import { useState, type ReactNode } from "react";
-import { beforeEach, expect, it, vi } from "vite-plus/test";
+import { beforeEach, expect, it } from "vite-plus/test";
 import { page } from "vite-plus/test/browser";
 import { act, render } from "../../../test/render";
 import "~/index.css";
-import { useThreadInspection } from "../chat/ThreadInspectionContext";
 import { taskPanelRef, useRightPanelStore } from "../../rightPanelStore";
 import { TaskWorkspacePanels } from "./TaskWorkspacePanels";
-
-vi.mock("../chat/ThreadRelationshipsControl", () => ({
-  ThreadRelationshipsPanel: () => {
-    const inspect = useThreadInspection();
-    return (
-      <button
-        onClick={() =>
-          inspect?.({
-            environmentId: EnvironmentId.make("child-env"),
-            threadId: ThreadId.make("child-thread"),
-          })
-        }
-      >
-        Agent lineage
-      </button>
-    );
-  },
-}));
 
 beforeEach(async () => {
   await page.viewport(1400, 900);
@@ -105,49 +85,46 @@ it("remembers the evidence panel width per task, not across tasks", async () => 
   }
 });
 
-it("keeps a task filed from no conversation usable: its details open with no lineage", async () => {
+it("holds the task's details in the sheet only while it is open, and never a lineage of its own", async () => {
   await using screen = await render(<TaskExample owner="originless" />);
+  expect(document.body.textContent).not.toContain("TaskExample configuration");
   await screen.getByRole("button", { name: "Toggle task details panel", exact: true }).click();
   await expect.element(page.getByText("TaskExample configuration")).toBeVisible();
-  await expect.element(page.getByRole("button", { name: "Agent lineage" })).not.toBeInTheDocument();
+  expect(
+    document.querySelector("[data-task-details-sheet] [data-thread-relationships-panel]"),
+  ).toBe(null);
   await page.getByRole("button", { name: "Close task details", exact: true }).click();
+  await expect.element(page.getByText("TaskExample configuration")).not.toBeInTheDocument();
   await expect.element(screen.getByRole("textbox", { name: "TaskExample reply" })).toBeVisible();
 });
 
-it("opens a thread of the source's lineage in the centre, never on another route", async () => {
-  const onOpenThread = vi.fn();
-  function Sourced() {
+it("gives a thread view the right panel toggle alone, and opens a tab by name", async () => {
+  function ThreadView() {
     const [details, setDetails] = useState(false);
     return (
       <TaskWorkspacePanels
-        owner="board-env:task"
-        source={{
-          environmentId: EnvironmentId.make("source-env"),
-          threadId: ThreadId.make("source-thread"),
-        }}
-        onOpenThread={onOpenThread}
+        owner="thread-view-task"
         detailsOpen={details}
         onDetailsOpenChange={setDetails}
         details={<p>Configuration</p>}
-        evidence={<p>Evidence</p>}
-        deployments={<p>Deployments</p>}
-        renderConversation={centre("Bound task answer")}
+        evidence={<p>Evidence rows</p>}
+        deployments={<p>Deployment rows</p>}
+        renderConversation={({ rightPanelControl, openTab }) => (
+          <div>
+            {rightPanelControl}
+            <button onClick={() => openTab("task-deployments")}>Open the deployments</button>
+          </div>
+        )}
       />
     );
   }
-  await using screen = await render(<Sourced />);
-  await screen.getByRole("textbox", { name: "Bound task answer" }).fill("Task answer");
-  await screen.getByRole("button", { name: "Toggle task details panel", exact: true }).click();
-  await page.getByRole("button", { name: "Agent lineage" }).click();
-  expect(onOpenThread).toHaveBeenCalledWith({
-    environmentId: "child-env",
-    threadId: "child-thread",
-  });
-  expect(screen.router?.state.location.pathname).toBe("/");
-  await page.getByRole("button", { name: "Close task details", exact: true }).click();
+  await using screen = await render(<ThreadView />);
+  await expect.element(screen.getByRole("button", { name: "Toggle right panel" })).toBeVisible();
   await expect
-    .element(screen.getByRole("textbox", { name: "Bound task answer" }))
-    .toHaveValue("Task answer");
+    .element(screen.getByRole("button", { name: "Toggle task details panel" }))
+    .not.toBeInTheDocument();
+  await screen.getByRole("button", { name: "Open the deployments" }).click();
+  await expect.element(page.getByText("Deployment rows")).toBeVisible();
 });
 
 it("opens the task details as a sheet at desktop width, and closes them", async () => {
@@ -157,7 +134,7 @@ it("opens the task details as a sheet at desktop width, and closes them", async 
   await expect.element(page.getByRole("dialog")).toBeVisible();
   await expect.element(page.getByText("TaskExample configuration")).toBeVisible();
   await page.getByRole("button", { name: "Close task details", exact: true }).click();
-  await expect.element(page.getByText("TaskExample configuration")).not.toBeVisible();
+  await expect.element(page.getByText("TaskExample configuration")).not.toBeInTheDocument();
   await expect
     .element(screen.getByRole("textbox", { name: "TaskExample reply" }))
     .toHaveValue("Keep details draft");

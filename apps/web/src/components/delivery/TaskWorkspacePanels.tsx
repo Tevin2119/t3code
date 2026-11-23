@@ -1,18 +1,12 @@
 import { workspaceAreaProps } from "../../lib/workspaceFocus";
-import { ThreadInspectionContext } from "../chat/ThreadInspectionContext";
 import type { ReactNode } from "react";
-import type { ScopedThreadRef } from "@t3tools/contracts";
-const ThreadRelationshipsPanel = lazy(() =>
-  import("../chat/ThreadRelationshipsControl").then((module) => ({
-    default: module.ThreadRelationshipsPanel,
-  })),
-);
 import { useAtomValue } from "@effect/atom-react";
-import { lazy, Suspense, useEffect } from "react";
+import { useEffect, useLayoutEffect, useState } from "react";
 import * as Schema from "effect/Schema";
 import { isElectron } from "../../env";
 import { useLocalStorage } from "../../hooks/useLocalStorage";
 import { useMediaQuery } from "../../hooks/useMediaQuery";
+import { observeResize } from "../../lib/observeResize";
 import { cn } from "../../lib/utils";
 import { RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY } from "../../rightPanelLayout";
 import {
@@ -28,6 +22,8 @@ import { RightPanelTabs } from "../RightPanelTabs";
 import { Button } from "../ui/button";
 
 const NO_SURFACES = new Set<string>();
+/** Below this width the task's badges leave the header for a row of their own under it. */
+const BADGES_IN_HEADER_MIN_WIDTH = 760;
 const NO_PREVIEW_SESSIONS = {};
 const NO_PREVIEW_DESKTOP_STATE = {};
 const NO_TERMINAL_LABELS = new Map<string, string>();
@@ -61,20 +57,25 @@ function openTaskPanel(owner: string, surface?: "task-evidence" | "task-deployme
 /**
  * Task-owned panels share native sizing and sheet behavior without inventing a thread owner. The
  * right panel is T3's own tab panel, owned by `taskPanelRef`, so a thread view never shows it.
- * The task's details open as a sheet. Both toggles are handed to the centre, which puts them under
- * the native header, clear of the window's own panel toggles.
+ * A thread view keeps the task's details in its own details panel; where none stands, they open
+ * as a sheet. The toggles are handed to the centre, which puts them under the native header,
+ * clear of the window's own panel toggles.
  */
 export function TaskWorkspacePanels(props: {
   owner: string;
-  source?: ScopedThreadRef | null;
-  /** Opens a related thread in the centre, where the task's own conversation is. Without it, a related thread opens on its own route. */
-  onOpenThread?: (thread: ScopedThreadRef) => void;
   /** Open the right panel the first time this task is shown. */
   openFirst?: boolean;
+  /** The sheet's content: the task's details where no thread view hosts them. */
   details: ReactNode;
   renderConversation: (panel: {
+    /** Both toggles, for a page whose details are the sheet. */
     readonly controls: ReactNode;
+    /** The right panel toggle alone, beside a thread view whose details are its own. */
+    readonly rightPanelControl: ReactNode;
     readonly showDetails: () => void;
+    readonly openTab: (tab: "task-evidence" | "task-deployments") => void;
+    /** The centre is too narrow for the task's badges in its header. */
+    readonly narrow: boolean;
   }) => ReactNode;
   evidence: ReactNode;
   /** The deployments tab: the task's deployment status, one row per environment. */
@@ -83,6 +84,15 @@ export function TaskWorkspacePanels(props: {
   onDetailsOpenChange: (open: boolean) => void;
 }) {
   const sheet = useMediaQuery(RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY);
+  const [centre, setCentre] = useState<HTMLDivElement | null>(null);
+  const [narrow, setNarrow] = useState(false);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- follows the centre's laid-out width, which only the DOM knows, so the badges sit where they fit before the first paint
+  useLayoutEffect(() => {
+    if (!centre) return;
+    const measure = () => setNarrow(centre.clientWidth < BADGES_IN_HEADER_MIN_WIDTH);
+    measure();
+    return observeResize(centre, measure);
+  }, [centre]);
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const panelRef = taskPanelRef(props.owner);
   const panel = useRightPanelStore((state) =>
@@ -113,8 +123,9 @@ export function TaskWorkspacePanels(props: {
   const openEvidence = () => openTaskPanel(props.owner);
   const setMaximized = (next: boolean) =>
     useRightPanelStore.getState().setMaximized(panelRef, next);
-  const controls = (
+  const toggles = (withDetails: boolean) => (
     <PanelLayoutControls
+      showThreadPanelControl={withDetails}
       detailsLabel="Toggle task details panel"
       showTerminalControl={false}
       terminalAvailable={false}
@@ -205,17 +216,25 @@ export function TaskWorkspacePanels(props: {
       </div>
     </RightPanelTabs>
   );
+  const detailsShown = props.detailsOpen && !(sheet && evidenceOpen);
   return (
     <div className="flex min-h-0 min-w-0 flex-1" data-task-workspace-panels>
       <div
+        ref={setCentre}
         className={maximized && !sheet && evidenceOpen ? "hidden" : "flex min-h-0 min-w-0 flex-1"}
       >
         {props.renderConversation({
-          controls,
+          controls: toggles(true),
+          rightPanelControl: toggles(false),
           showDetails: () => {
             closeEvidence();
             props.onDetailsOpenChange(true);
           },
+          openTab: (tab) => {
+            if (sheet) props.onDetailsOpenChange(false);
+            openTaskPanel(props.owner, tab);
+          },
+          narrow,
         })}
       </div>
       {sheet ? (
@@ -227,7 +246,7 @@ export function TaskWorkspacePanels(props: {
       )}
       <RightPanelSheet
         animationDurationMs={0}
-        open={props.detailsOpen && !(sheet && evidenceOpen)}
+        open={detailsShown}
         onClose={() => props.onDetailsOpenChange(false)}
       >
         <div className="flex h-full min-h-0 flex-col">
@@ -240,22 +259,10 @@ export function TaskWorkspacePanels(props: {
             {...workspaceAreaProps("task-navigation", 1, "Task team and details")}
             data-workspace-focus-key={`task-navigation:${props.owner}`}
             className="flex min-h-0 flex-1 flex-col overflow-y-auto"
+            data-task-details-sheet
           >
-            {props.source ? (
-              <ThreadInspectionContext value={props.onOpenThread ?? null}>
-                <Suspense fallback={<p className="p-3 text-xs">Loading agent lineage...</p>}>
-                  <div className="shrink-0 border-b p-3">
-                    <ThreadRelationshipsPanel
-                      environmentId={props.source.environmentId}
-                      threadId={props.source.threadId}
-                      showLineage
-                      showSideChats
-                    />
-                  </div>
-                </Suspense>
-              </ThreadInspectionContext>
-            ) : null}
-            {props.details}
+            {/* Mounted only while open, so the thread view's own details are the only copy. */}
+            {detailsShown ? props.details : null}
           </div>
         </div>
       </RightPanelSheet>

@@ -1,7 +1,8 @@
-import type { EnvironmentId } from "@t3tools/contracts";
+import type { EnvironmentId, ScopedThreadRef } from "@t3tools/contracts";
 import { createContext, useContext } from "react";
 
 import type { TaskView } from "../../lib/delivery";
+import type { SeatConversations } from "./TaskTeamActivity";
 
 /** The board task a view belongs to: its id and the board's own read of it. */
 export interface BoardTask {
@@ -9,6 +10,16 @@ export interface BoardTask {
   readonly taskId: string;
   /** Null while the first read is out, or when there is no such task. */
   readonly task: TaskView | null;
+  /** What is shown is the last reading, not a live one: it is old, or the engine did not answer. */
+  readonly stale: boolean;
+  /** Reads the task again, after something here changed it. */
+  readonly refresh: () => void;
+  /** Opens another board task in place of this one. */
+  readonly openTask: (taskId: string) => void;
+  /** Opens a conversation in the centre, the way a seat's opens. */
+  readonly openThread: (thread: ScopedThreadRef) => void;
+  /** The seats' own conversations, which the team's rows open. */
+  readonly seats: SeatConversations;
 }
 
 /**
@@ -17,5 +28,4 @@ export interface BoardTask {
  */
 export const BoardTaskContext = createContext<BoardTask | null>(null);
 
-/** @public */
 export const useBoardTask = () => useContext(BoardTaskContext);

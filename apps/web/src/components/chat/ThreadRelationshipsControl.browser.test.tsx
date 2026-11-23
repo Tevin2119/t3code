@@ -2,6 +2,7 @@ import "~/index.css";
 import { ThreadInspectionContext } from "./ThreadInspectionContext";
 import * as DateTime from "effect/DateTime";
 import { EnvironmentId, NodeId, ThreadId } from "@t3tools/contracts";
+import type { ReactNode } from "react";
 import * as Cause from "effect/Cause";
 import { AsyncResult } from "effect/reactivity";
 import { expect, it, vi } from "vite-plus/test";
@@ -175,6 +176,36 @@ it.each([
   if (action === "disconnect") {
     await expect.element(screen.getByRole("button", { name: "More thread actions" })).toBeEnabled();
   }
+});
+
+it("shows a group its host adds after the lineage's own, even where the thread has no other", async () => {
+  setup();
+  state.projection = {
+    ...(state.projection as object),
+    thread: {
+      id: threadId,
+      title: "Task conversation",
+      activeProviderThreadId: null,
+      lineage: { parentThreadId: null },
+      forkedFrom: null,
+    },
+  };
+  const panel = (extraGroup?: ReactNode, showLineage = true) => (
+    <ThreadRelationshipsPanel
+      environmentId={environmentId}
+      threadId={threadId}
+      showLineage={showLineage}
+      showSideChats
+      extraGroup={extraGroup}
+    />
+  );
+  await using screen = await render(panel());
+  expect(screen.container.querySelector("[data-thread-relationships-panel]")).toBeNull();
+  await screen.rerender(panel(<p>Child tasks of the host</p>));
+  await expect.element(screen.getByText("Child tasks of the host")).toBeVisible();
+  // Lineage switched off hides the host's group with it.
+  await screen.rerender(panel(<p>Child tasks of the host</p>, false));
+  await expect.element(screen.getByText("Child tasks of the host")).not.toBeInTheDocument();
 });
 
 it("opens an idle child beside the thread, and in its place with the modifier", async () => {

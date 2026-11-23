@@ -49,16 +49,18 @@ export function PriorityPill(props: { readonly priority: TaskPriority; readonly 
   return (
     <Tooltip>
       <TooltipTrigger render={<span className="inline-flex" />}>{pill}</TooltipTrigger>
-      <TooltipPopup side="top">
-        {props.by === "person"
-          ? "Set by a person"
-          : props.by === "triage"
-            ? "Set by triage. A person may change it."
-            : "The default. Triage or a person may change it."}
-      </TooltipPopup>
+      <TooltipPopup side="top">{priorityByWords(props.by)}</TooltipPopup>
     </Tooltip>
   );
 }
+
+/** Who set a task's priority, as the engine reports it. */
+export const priorityByWords = (by: string) =>
+  by === "person"
+    ? "Set by a person"
+    : by === "triage"
+      ? "Set by triage. A person may change it."
+      : "The default. Triage or a person may change it.";
 
 /** Lanes are told apart by colour, as the columns of a board are. */
 const LANE_TONE: Record<string, { readonly bar: string; readonly tint: string }> = {

@@ -3,7 +3,6 @@ import { RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY } from "../../rightPanelLayout";
 import { useLocalStorage } from "../../hooks/useLocalStorage";
 import { TaskWorkspacePanels } from "./TaskWorkspacePanels";
 import { TaskConversation } from "./TaskConversation";
-import { TaskFacts } from "./TaskFacts";
 import { useTaskConversation } from "./useTaskConversation";
 import { fullAutoAttribution } from "../../lib/delivery";
 import { EnvironmentId, ThreadId, type ScopedThreadRef } from "@t3tools/contracts";
@@ -28,20 +27,13 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import { isElectron } from "../../env";
 import { useMediaQuery } from "../../hooks/useMediaQuery";
-import {
-  parseTask,
-  repeatKeys,
-  type TaskBriefing,
-  type TaskView,
-  type TimelineEntry,
-} from "../../lib/delivery";
+import { parseTask, type TaskView, type TimelineEntry } from "../../lib/delivery";
 import { messageStateLabel, sectionOf } from "../../lib/deliveryBoard";
 import { cn } from "../../lib/utils";
 import {
   useBoardStore,
   useDeliveryAct,
   useDeliveryRead,
-  useMinuteClock,
   usePersonName,
   useStaleReading,
 } from "../../state/delivery";
@@ -52,16 +44,19 @@ import { Empty, EmptyHeader, EmptyTitle } from "../ui/empty";
 import { SidebarInset } from "../ui/sidebar";
 import { Textarea } from "../ui/textarea";
 import { WorkspacePageHeader } from "../WorkspacePageHeader";
-import { BoardTaskContext } from "./BoardTaskContext";
+import { BoardTaskContext, type BoardTask } from "./BoardTaskContext";
 import { useTaskActions } from "./taskActions";
 import { TaskEditor } from "./TaskEditor";
 import { TaskFileList } from "./taskFiles";
 import { TaskMenu } from "./TaskMenu";
-import { Age, Avatar, time } from "./taskParts";
+import { Avatar, PublicationRows, time } from "./taskParts";
 import { TaskComposer } from "./TaskComposer";
 import { DecisionBar } from "./DecisionBar";
-import { Details } from "./TaskDetails";
+import { TaskBadges } from "./TaskBadges";
+import { TaskDetailsItem } from "./TaskDetails";
 import { Info } from "./TaskInfo";
+import { MergePermissionSummary } from "./MergePermissionControls";
+import { TaskRelatedWork } from "./TaskRelatedWork";
 import { TaskDeploymentsPanel } from "./TaskDeploymentStatus";
 import { CardDeliveryStatus } from "./CardDeliveryStatus";
 import { DeliveryDiagnosticNotice } from "./DeliveryDiagnosticNotice";
@@ -288,115 +283,6 @@ function Happening(props: {
   );
 }
 
-/**
- * What is needed of you, in plain words: the bottom line, then what the task is, what happened,
- * why it stopped, and what each choice would do. The steps themselves are in the bar below.
- */
-function Briefing(props: { readonly brief: TaskBriefing }) {
-  const { brief } = props;
-  const now = useMinuteClock();
-  const since = brief.since && !Number.isNaN(Date.parse(brief.since)) ? brief.since : null;
-  // Lines and actions come from the engine and can repeat: each key says which repeat it is.
-  const happenedKeys = repeatKeys(brief.happened);
-  const optionKeys = repeatKeys(brief.options.map((option) => option.action));
-  const [open, setOpen] = useState(true);
-  return (
-    // The whole panel, headline too, is held to part of the screen and scrolls within, so the
-    // history and the composer keep their room on a phone.
-    <div
-      className="max-h-[40dvh] shrink-0 overflow-y-auto overscroll-contain border-b border-warning/40 bg-warning/5 px-3 py-2 text-xs"
-      data-task-brief
-    >
-      <button
-        type="button"
-        className="flex w-full cursor-pointer items-start gap-2 text-left"
-        aria-expanded={open}
-        onClick={() => setOpen(!open)}
-      >
-        <span className="mt-0.5 shrink-0 font-medium text-warning-foreground">Needs you</span>
-        <span className="min-w-0 flex-1 font-medium">{brief.headline}</span>
-        <span className="shrink-0 text-3xs text-muted-foreground">{open ? "Less" : "More"}</span>
-      </button>
-      {open ? (
-        <dl className="mt-1.5 grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1">
-          {brief.what ? (
-            <>
-              <dt className="text-muted-foreground">What</dt>
-              <dd>{brief.what}</dd>
-            </>
-          ) : null}
-          {brief.happened.length > 0 ? (
-            <>
-              <dt className="text-muted-foreground">Happened</dt>
-              <dd>
-                <ul className="flex flex-col gap-0.5">
-                  {brief.happened.map((line, index) => (
-                    // A line the engine indents belongs to the one above it.
-                    <li
-                      key={happenedKeys[index]}
-                      className={line.startsWith("  ") ? "pl-3 text-muted-foreground" : undefined}
-                    >
-                      {line.trim()}
-                    </li>
-                  ))}
-                </ul>
-              </dd>
-            </>
-          ) : null}
-          {brief.why ? (
-            <>
-              <dt className="text-muted-foreground">Why</dt>
-              <dd>{brief.why}</dd>
-            </>
-          ) : null}
-          {brief.options.length > 0 || brief.reply ? (
-            <>
-              <dt className="text-muted-foreground">Choices</dt>
-              <dd>
-                <ul className="flex flex-col gap-0.5">
-                  {brief.options.map((option, index) => (
-                    <li key={optionKeys[index]}>
-                      <span className="font-medium">{option.label}</span>
-                      {option.recommended ? (
-                        <span className="ml-1 rounded bg-warning/15 px-1 text-3xs text-warning-foreground">
-                          suggested
-                        </span>
-                      ) : null}
-                      <span className="text-muted-foreground"> {option.does}</span>
-                    </li>
-                  ))}
-                  {brief.reply ? <li className="text-muted-foreground">{brief.reply}</li> : null}
-                </ul>
-              </dd>
-            </>
-          ) : null}
-          {brief.where || since ? (
-            <>
-              <dt className="text-muted-foreground">Where</dt>
-              <dd className="text-muted-foreground">
-                {brief.where}
-                {brief.where && since ? ", " : ""}
-                {since ? (
-                  <>
-                    waiting since{" "}
-                    <time dateTime={since}>
-                      {new Date(since).toLocaleString([], {
-                        dateStyle: "medium",
-                        timeStyle: "short",
-                      })}
-                    </time>{" "}
-                    (<Age at={since} now={now} label="Waiting since" />)
-                  </>
-                ) : null}
-              </dd>
-            </>
-          ) : null}
-        </dl>
-      ) : null}
-    </div>
-  );
-}
-
 const replySequenceSchema = Schema.NullOr(Schema.Number);
 
 function Communications(props: {
@@ -454,9 +340,6 @@ function Communications(props: {
   const hidden = task.timeline.length - entries.length;
   return (
     <section className="flex min-h-0 min-w-0 flex-1 flex-col" data-task-communications>
-      {props.task.brief && props.task.card.waitingOn === "person" ? (
-        <Briefing brief={props.task.brief} />
-      ) : null}
       <div className="flex items-center justify-between gap-2 border-b border-border px-3 py-1.5">
         <h2 className="text-xs font-medium">History and messages</h2>
         <button
@@ -549,13 +432,10 @@ export function TaskWorkspace(props: {
     onDiscarded: () => props.onClose(),
   });
   const narrow = useMediaQuery(RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY);
-  // The details are a sheet at every width, closed until asked for.
-  const [detailsOpen, setDetailsOpen] = useLocalStorage(
-    `t3code:task-details:${JSON.stringify([props.environmentId, props.taskId, "sheet"])}`,
-    false,
-    Schema.Boolean,
-  );
-  const [briefOpen, setBriefOpen] = useState(true);
+  // A thread view keeps the task's details in its own panel. Where none stands they are a sheet,
+  // closed until asked for, and fresh each time a line of the log points into them.
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const [detailsMount, setDetailsMount] = useState(0);
   const [taskBrief, setTaskBrief] = useState<string | null>(null);
   const [creatingTask, setCreatingTask] = useState(false);
   const [createProblem, setCreateProblem] = useState<string | null>(null);
@@ -585,7 +465,16 @@ export function TaskWorkspace(props: {
   }, [act, person, task, unread]);
 
   // Provided where the task view mounts: what it hosts reads the board's task from here.
-  const board = { environmentId: props.environmentId, taskId: props.taskId, task };
+  const board: BoardTask = {
+    environmentId: props.environmentId,
+    taskId: props.taskId,
+    task,
+    stale: stale || !!read.error,
+    refresh: read.refresh,
+    openTask: props.onOpenTask,
+    openThread: openInCentre,
+    seats: { ...conversation.seats, open: openInCentre },
+  };
 
   if (task?.isDraft) {
     return (
@@ -664,20 +553,16 @@ export function TaskWorkspace(props: {
             <TaskWorkspacePanels
               key={`${props.environmentId}:${task.id}`}
               owner={JSON.stringify([props.environmentId, task.id])}
-              source={source}
               detailsOpen={detailsOpen}
               onDetailsOpenChange={setDetailsOpen}
-              onOpenThread={openInCentre}
               openFirst
               details={
-                <Details
-                  key={task.id}
-                  environmentId={props.environmentId}
-                  task={task}
-                  onOpenTask={props.onOpenTask}
-                  open={briefOpen}
-                  onOpenChange={setBriefOpen}
-                />
+                <div key={detailsMount} className="flex flex-col gap-2 py-2">
+                  <div className="px-2">
+                    <TaskRelatedWork />
+                  </div>
+                  <TaskDetailsItem />
+                </div>
               }
               renderConversation={(panel) => (
                 <TaskConversation
@@ -703,13 +588,13 @@ export function TaskWorkspace(props: {
                           setTaskBrief("");
                         }}
                         onAllocate={() => setAllocatingTask(task.id)}
-                        onInspectSource={source ? () => openInCentre(source) : undefined}
                         onChanged={read.refresh}
                         onProblem={setMenuProblem}
                       />
                     ),
                     notices,
                     panelControls: panel.controls,
+                    rightPanelControl: panel.rightPanelControl,
                     decisions: (
                       <DecisionBar
                         task={task}
@@ -718,6 +603,15 @@ export function TaskWorkspace(props: {
                         onAction={(action) => actions.run(task.card, action)}
                       />
                     ),
+                    renderBadges: (openDetails, wrap) => (
+                      <TaskBadges
+                        className={wrap ? "flex-wrap" : "shrink-0"}
+                        onOpenDetails={openDetails}
+                        onOpenTab={panel.openTab}
+                      />
+                    ),
+                    narrow: panel.narrow,
+                    showDetails: panel.showDetails,
                   }}
                   log={
                     <Communications
@@ -726,11 +620,14 @@ export function TaskWorkspace(props: {
                       task={task}
                       onChanged={read.refresh}
                       onShow={(section) => {
+                        // The log stands where no thread view does, so the sheet holds the details.
                         panel.showDetails();
-                        setBriefOpen(true);
+                        setDetailsMount((count) => count + 1);
                         requestAnimationFrame(() =>
                           document
-                            .querySelector(`[data-task-section="${section}"]`)
+                            .querySelector(
+                              `[data-task-details-sheet] [data-task-section="${section}"]`,
+                            )
                             ?.scrollIntoView({ block: "start", behavior: "smooth" }),
                         );
                       }}
@@ -740,22 +637,23 @@ export function TaskWorkspace(props: {
               )}
               deployments={
                 <div className="flex min-w-0 flex-1 flex-col">
+                  {task.publications.length > 0 || task.state === "approved" ? (
+                    <div className="flex flex-col gap-2 border-b px-4 py-3" data-task-publication>
+                      <PublicationRows task={task} />
+                    </div>
+                  ) : null}
+                  <div className="border-b px-4 py-3" data-task-merge-summary>
+                    <MergePermissionSummary policy={task.card.mergePermission} />
+                  </div>
                   <CardDeliveryStatus card={task.card} variant="panel" />
                   <TaskDeploymentsPanel card={task.card} stale={stale || !!read.error} />
                 </div>
               }
               evidence={
                 <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-                  <TaskFacts
-                    environmentId={props.environmentId}
-                    task={task}
-                    stale={stale || !!read.error}
-                    conversations={{ ...conversation.seats, open: openInCentre }}
-                  />
                   <Info
                     key={task.id}
                     environmentId={props.environmentId}
-                    from={props.from}
                     task={task}
                     onChanged={read.refresh}
                     stale={stale || !!read.error}

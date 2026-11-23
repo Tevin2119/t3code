@@ -487,6 +487,8 @@ export function ThreadRelationshipsPanel(props: {
   readonly threadId: ThreadId;
   readonly showLineage: boolean;
   readonly showSideChats: boolean;
+  /** A group the host adds after the lineage's own, such as a board task's child tasks. */
+  readonly extraGroup?: ReactNode;
 }) {
   const gt = useGT();
   const m = useMessages();
@@ -677,7 +679,8 @@ export function ThreadRelationshipsPanel(props: {
 
   const lineageVisible =
     props.showLineage &&
-    (related.length > 0 ||
+    (props.extraGroup !== undefined ||
+      related.length > 0 ||
       active.length > 0 ||
       previous.length > 0 ||
       runningCount > 0 ||
@@ -1144,6 +1147,7 @@ export function ThreadRelationshipsPanel(props: {
               }
             </ThreadLineageGroup>
           ))}
+          {props.extraGroup}
         </ThreadDetailsSection>
       ) : null}
       {sideChatsVisible ? (

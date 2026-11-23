@@ -61,7 +61,7 @@ function SeatNow(props: { readonly live: SeatLive }) {
 }
 
 /** Where the task is in the engine's flow. It shows the step; it asks nothing. */
-function TaskPipelineStrip(props: { readonly task: TaskView }) {
+export function TaskPipelineStrip(props: { readonly task: TaskView }) {
   const stage = taskPipelineStage(props.task);
   // A settled step is done, so its marker shows the check the steps ahead of it show, and the
   // tinted marker moves to the step after it. The step a screen reader hears as current is the
@@ -229,13 +229,14 @@ function SeatRow(props: {
 }
 
 /**
- * The task's team in the left pane, the way a thread's lineage shows its agents: one row per
- * seat with its harness and status, and above them where the task is in the flow.
+ * The task's team, the way a thread's lineage shows its agents: one row per seat with its harness
+ * and status, and above them, unless `flow` is false, where the task is in the flow.
  */
 export function TaskTeamActivity(props: {
   readonly environmentId: EnvironmentId | null;
   readonly task: TaskView;
   readonly conversations?: SeatConversations | undefined;
+  readonly flow?: boolean | undefined;
 }) {
   const { task } = props;
   const catalog = useSeatCatalog(props.environmentId);
@@ -244,14 +245,16 @@ export function TaskTeamActivity(props: {
   const team = `Team ${task.team}${task.defaults > 0 ? `, defaults r${task.defaults}` : ""}`;
   return (
     <div className="flex flex-col">
-      <ThreadDetailsSection
-        headingId={`task-pipeline-${task.id}`}
-        title="Flow"
-        separated={false}
-        data-task-pipeline-section
-      >
-        <TaskPipelineStrip task={task} />
-      </ThreadDetailsSection>
+      {props.flow === false ? null : (
+        <ThreadDetailsSection
+          headingId={`task-pipeline-${task.id}`}
+          title="Flow"
+          separated={false}
+          data-task-pipeline-section
+        >
+          <TaskPipelineStrip task={task} />
+        </ThreadDetailsSection>
+      )}
       <ThreadDetailsSection
         headingId={`task-team-${task.id}`}
         title={running > 0 ? `${team} · ${running} running` : team}

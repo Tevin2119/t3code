@@ -82,7 +82,9 @@ vi.mock(import("~/state/vcs"), async (importOriginal) => {
 });
 
 import { render } from "../../../test/render";
+import { parseTask } from "../../lib/delivery";
 import { useRightPanelStore } from "../../rightPanelStore";
+import { BoardTaskContext } from "../delivery/BoardTaskContext";
 import { PopoverCreateHandle } from "../ui/popover";
 import { ChatCanvasContext } from "./ChatCanvasContext";
 import { resolveChatCanvasLayout } from "./chatCanvasLayout";
@@ -201,6 +203,40 @@ it("shows a linked pull request in a folder that is not a git repository", async
   await expect.element(page.getByRole("region", { name: "Workspace" })).toBeVisible();
   await expect.element(page.getByText("#27513")).toBeVisible();
   await expect.element(page.getByRole("button", { name: "Initialize Git" })).toBeVisible();
+});
+
+it("shows the Task item only where a board task's view hosts the thread, with the item on", async () => {
+  using fixture = setup({ workspaceRoot: "/work/plain", folder: "/work/plain" });
+  await using screen = await render(<Panel fixture={fixture} />);
+  await expect.element(page.getByRole("region", { name: "Workspace" })).toBeVisible();
+  expect(document.querySelector("[data-thread-details-task]")).toBeNull();
+  const task = parseTask({
+    id: "t1",
+    number: 12,
+    title: "Fix the sync",
+    body: "Make the sync stop dropping rows.",
+    state: "closed",
+    lane: "completed",
+    card: { id: "t1", number: 12, title: "Fix the sync", lane: "completed" },
+  });
+  await screen.rerender(
+    <BoardTaskContext
+      value={{
+        environmentId: null,
+        taskId: "t1",
+        task,
+        stale: false,
+        refresh: () => {},
+        openTask: () => {},
+        openThread: () => {},
+        seats: { thread: () => null, current: null, open: () => {} },
+      }}
+    >
+      <Panel fixture={fixture} />
+    </BoardTaskContext>,
+  );
+  await expect.element(page.getByRole("region", { name: "Task" })).toBeVisible();
+  await expect.element(page.getByText("Make the sync stop dropping rows.")).toBeVisible();
 });
 
 it("offers no Initialize Git before the server config says where No project lives", async () => {
