@@ -228,11 +228,12 @@ it("moves the legacy snapshot into the shared database", async () => {
 
 it("persists new visits from an open document after its history database is deleted", async () => {
   await resetHistoryFixture();
-  localStorage.setItem(
-    storageKey,
-    JSON.stringify({ state: { byProjectKey: { a: [page] } }, version: 1 }),
-  );
   try {
+    {
+      using fixture = new DisposableStack();
+      const db = await openHistoryFixture(fixture);
+      await writeHistoryFixture(db, { byProjectKey: { a: [page] }, projectKeyByThreadKey: {} });
+    }
     using documents = new DisposableStack();
     const first = await openHistoryDocument(documents);
     await vi.waitFor(() => expect(first.getState().byProjectKey).toEqual({ a: [page] }));
@@ -243,8 +244,8 @@ it("persists new visits from an open document after its history database is dele
     first.getState().recordVisit("b", otherEntry.url, otherEntry.lastVisitedAt);
     await vi.waitFor(() => expect(first.getState().byProjectKey.b).toEqual([otherEntry]));
 
-    const reopened = await openHistoryDocument(documents);
-    await vi.waitFor(() => expect(reopened.getState().byProjectKey).toEqual({ b: [otherEntry] }));
+    const db = await openHistoryFixture(documents);
+    expect(await readHistoryFixture(db)).toHaveProperty("byProjectKey", { b: [otherEntry] });
   } finally {
     await resetHistoryFixture();
   }
@@ -252,16 +253,12 @@ it("persists new visits from an open document after its history database is dele
 
 it("keeps overlapping visits from independent documents", async () => {
   await resetHistoryFixture();
-  localStorage.setItem(
-    storageKey,
-    JSON.stringify({ state: { byProjectKey: { a: [page] } }, version: 1 }),
-  );
   try {
     using documents = new DisposableStack();
-    const [first, second] = await Promise.all([
-      openHistoryDocument(documents),
-      openHistoryDocument(documents),
-    ]);
+    const db = await openHistoryFixture(documents);
+    await writeHistoryFixture(db, { byProjectKey: { a: [page] }, projectKeyByThreadKey: {} });
+    const first = useBrowserHistoryStore;
+    const second = await openHistoryDocument(documents);
     first.getState().recordVisit("a", oldEntry.url, oldEntry.lastVisitedAt);
     second.getState().recordVisit("b", otherEntry.url, otherEntry.lastVisitedAt);
     const expected = { a: [page, oldEntry], b: [otherEntry] };
@@ -270,10 +267,7 @@ it("keeps overlapping visits from independent documents", async () => {
       expect(second.getState().byProjectKey).toEqual(expected);
     });
 
-    // A fresh document should read the committed visits even after the legacy seed is gone.
-    localStorage.removeItem(storageKey);
-    const reopened = await openHistoryDocument(documents);
-    await vi.waitFor(() => expect(reopened.getState().byProjectKey).toEqual(expected));
+    expect(await readHistoryFixture(db)).toHaveProperty("byProjectKey", expected);
   } finally {
     await resetHistoryFixture();
   }
@@ -291,9 +285,12 @@ it("keeps visits saved while IndexedDB could not open", async () => {
       expect(storedHistory()).toHaveProperty("byProjectKey", { b: [otherEntry] }),
     );
 
-    const online = await openHistoryDocument(documents);
+    useBrowserHistoryStore.getState().setTitleForUrl("a", page.url, "Updated page");
     await vi.waitFor(() =>
-      expect(online.getState().byProjectKey).toEqual({ a: [page], b: [otherEntry] }),
+      expect(useBrowserHistoryStore.getState().byProjectKey).toEqual({
+        a: [{ ...page, title: "Updated page" }],
+        b: [otherEntry],
+      }),
     );
     expect(storedHistory()).toBeUndefined();
   } finally {
