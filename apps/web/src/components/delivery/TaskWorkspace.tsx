@@ -3,7 +3,7 @@ import { RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY } from "../../rightPanelLayout";
 import { useLocalStorage } from "../../hooks/useLocalStorage";
 import { TaskWorkspacePanels } from "./TaskWorkspacePanels";
 import { TaskConversation } from "./TaskConversation";
-import { useTaskConversation } from "./useTaskConversation";
+import { forgetOpenSeat, useTaskConversation } from "./useTaskConversation";
 import { fullAutoAttribution } from "../../lib/delivery";
 import { EnvironmentId, ThreadId, type ScopedThreadRef } from "@t3tools/contracts";
 import { taskPanelRef, useRightPanelStore } from "../../rightPanelStore";
@@ -441,7 +441,12 @@ export function TaskWorkspace(props: {
   const [createProblem, setCreateProblem] = useState<string | null>(null);
   const [allocatingTask, setAllocatingTask] = useState<string | null>(null);
   const [menuProblem, setMenuProblem] = useState<string | null>(null);
-  const conversation = useTaskConversation(task);
+  const conversation = useTaskConversation(props.environmentId, task);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- clears the seat this task left open in the shared store, so it opens on its own conversation next time
+  useEffect(
+    () => () => forgetOpenSeat(props.environmentId, props.taskId),
+    [props.environmentId, props.taskId],
+  );
   // A thread opened from a panel appears in the centre, so the details sheet over it closes, and a
   // panel that fills the width gives way. The right panel stays on the task otherwise.
   const openInCentre = (thread: ScopedThreadRef) => {
@@ -612,6 +617,7 @@ export function TaskWorkspace(props: {
                     ),
                     narrow: panel.narrow,
                     showDetails: panel.showDetails,
+                    backToBoard: props.onClose,
                   }}
                   log={
                     <Communications

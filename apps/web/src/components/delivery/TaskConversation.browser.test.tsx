@@ -84,6 +84,7 @@ const chrome = {
   renderBadges: (openDetails: () => void) => <button onClick={openDetails}>Task badges</button>,
   narrow: false,
   showDetails: () => {},
+  backToBoard: () => {},
 };
 
 const idle = {

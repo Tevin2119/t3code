@@ -486,8 +486,8 @@ const sidebarRowSurfaceClassName = (surface: {
           "bg-transparent text-sidebar-foreground hover:bg-sidebar-row-hover"),
   );
 
-// Level 1 lines titles up with the folder name, past its chevron and icon.
-const SIDEBAR_ROW_INDENT_CLASS_NAME = ["", "ps-9"] as const;
+// Level 1 lines titles up with the folder name, past its chevron and icon; level 2 nests once more.
+const SIDEBAR_ROW_INDENT_CLASS_NAME = ["", "ps-9", "ps-15"] as const;
 
 /**
  * A sidebar row's look without its behaviour: the surface (active, selected, or idle with a hover
@@ -514,7 +514,7 @@ export function SidebarRowShell({
   multiline?: boolean;
   // A second line under the title line, shown on a multiline row only.
   below?: ReactNode;
-  indent?: 0 | 1;
+  indent?: 0 | 1 | 2;
   // Colours a dot before the title.
   dotClassName?: string | undefined;
 }) {

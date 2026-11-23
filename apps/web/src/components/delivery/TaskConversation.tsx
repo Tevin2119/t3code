@@ -1,6 +1,6 @@
 import type { ScopedThreadRef } from "@t3tools/contracts";
 import { useGT } from "gt-react";
-import { CornerDownRightIcon } from "lucide-react";
+import { ArrowLeftIcon, CornerDownRightIcon } from "lucide-react";
 import { lazy, Suspense, useEffect, useState, type ReactNode } from "react";
 
 import { isElectron } from "../../env";
@@ -54,6 +54,8 @@ export interface TaskChrome {
   readonly narrow: boolean;
   /** Opens the details sheet, which holds the task's details where no thread view stands. */
   readonly showDetails: () => void;
+  /** Back to the board, for a phone, where the board's column is a sheet behind the trigger. */
+  readonly backToBoard: () => void;
 }
 
 type Back = NonNullable<ChatViewSlots["parent"]>;
@@ -201,13 +203,31 @@ function SeatLabel(props: { readonly seatName: string | null }) {
   );
 }
 
-/** The row under the header with the task's own panel toggles, until the thread's panels host it. */
-function TaskBar(props: { readonly controls: ReactNode; readonly children?: ReactNode }) {
+/**
+ * The row under the header with the task's own panel toggles, until the thread's panels host it.
+ * Below the width where the board's column becomes a sheet, it starts with the way back to the board.
+ */
+function TaskBar(props: {
+  readonly controls: ReactNode;
+  readonly onBack: () => void;
+  readonly children?: ReactNode;
+}) {
+  const gt = useGT();
   return (
     <div
       className="flex shrink-0 items-center gap-2 border-b border-border px-3 py-1"
       data-task-bar
     >
+      <span className="flex shrink-0 md:hidden" data-task-back-to-board>
+        <Button
+          size="icon-sm"
+          variant="ghost"
+          aria-label={gt("Back to board")}
+          onClick={props.onBack}
+        >
+          <ArrowLeftIcon />
+        </Button>
+      </span>
       <div className="flex min-w-0 flex-1 items-center gap-2">{props.children}</div>
       {props.controls}
     </div>
@@ -346,7 +366,10 @@ function OpenConversation(props: {
     <>
       {chrome.notices}
       {(threadView ? threadPlaces : pagePlaces).row}
-      <TaskBar controls={threadView ? chrome.rightPanelControl : chrome.panelControls}>
+      <TaskBar
+        controls={threadView ? chrome.rightPanelControl : chrome.panelControls}
+        onBack={chrome.backToBoard}
+      >
         {inSeat ? (
           threadView && !sourceOpen ? (
             <SeatLabel seatName={props.seatName} />
@@ -485,7 +508,7 @@ export function TaskConversation(props: {
         <>
           {chrome.notices}
           {places.row}
-          <TaskBar controls={chrome.panelControls} />
+          <TaskBar controls={chrome.panelControls} onBack={chrome.backToBoard} />
         </>
       }
       lane={<Lane closed={closed} decisions={chrome.decisions} className="px-3 pb-3" />}

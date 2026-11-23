@@ -28,7 +28,10 @@ vi.mock("./taskActions", () => ({
     dialog: null,
   }),
 }));
-vi.mock("./useTaskConversation", () => ({ useTaskConversation: () => ({ open: () => {} }) }));
+vi.mock("./useTaskConversation", () => ({
+  useTaskConversation: () => ({ open: () => {} }),
+  forgetOpenSeat: () => {},
+}));
 vi.mock("../../hooks/useMediaQuery", () => ({ useMediaQuery: () => false }));
 vi.mock("../../hooks/useLocalStorage", async () => {
   const { useState } = await import("react");

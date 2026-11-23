@@ -318,6 +318,13 @@ open that task. A task with no source conversation has no **Made from** row.
 Forking into new work, opening a citation or following an explicit Open link
 still uses its ordinary destination.
 
+While a task is open, the Board's sidebar column switches between tasks. The
+open task is highlighted, with its parent above it and its parts, follow-ups and
+seat conversations nested under it; select a seat to open its conversation in
+the task. Search there narrows only this list. **Back to board** returns to the
+board with its filters as you left them. On a phone, the arrow at the start of
+the task's bar also goes back to the board.
+
 ## Open a thread beside the one you are in
 
 On web and desktop, a subagent, a side chat, and a
