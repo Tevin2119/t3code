@@ -362,7 +362,7 @@ const make = Effect.gen(function* () {
         if (!council?.run) return yield* invalidRequest("The board task has no current run.");
         const { run } = council;
         const endpoint = `/api/runs/${encodeURIComponent(run)}/handoffs`;
-        const post = (action: string, body: Record<string, string>) =>
+        const post = (action: string, body: Record<string, string | number>) =>
           delivery.boardThreadAct({
             method: "POST",
             path: endpoint + action,
@@ -490,15 +490,37 @@ const make = Effect.gen(function* () {
             : (latest.acceptance ?? []).every((_, index) => received.has(index))
               ? undefined
               : "no-receipts";
-        const settled = yield* post(
+        const filing = current.filing == null ? {} : { filing: current.filing };
+        let settled = yield* post(
           reason ? "/qa/fallback" : "/qa/delivered",
-          reason ? { reason } : {},
+          reason ? { ...filing, reason } : filing,
         ).pipe(Effect.result);
+        if (
+          reason === undefined &&
+          settled._tag === "Failure" &&
+          settled.failure.status === 409 &&
+          refusalOf(settled.failure)?.code === "no-receipt"
+        )
+          settled = yield* post("/qa/fallback", { ...filing, reason: "no-receipts" }).pipe(
+            Effect.result,
+          );
         let body: unknown;
         if (settled._tag === "Success") {
           body = settled.success.body;
         } else {
           const refusal = refusalOf(settled.failure);
+          if (settled.failure.status === 409 && refusal?.code === "stale-filing") {
+            const refreshed = yield* readTask(path);
+            if (!isLead(refreshed)) return yield* notLead();
+            const latestHandoff = currentQaHandoff(refreshed, run);
+            if (refreshed.council?.run !== run || !latestHandoff?.state)
+              return yield* invalidRequest(
+                "The run or its QA hand-off changed. Read the current board task.",
+              );
+            return latestHandoff.state === "handed"
+              ? working(latestHandoff)
+              : { state: latestHandoff.state, handoff: latestHandoff };
+          }
           if (settled.failure.status !== 409 || refusal?.code !== "conflict")
             return yield* engineFailure(settled.failure, "settle the QA hand-off");
           body = { handoff: refusal.current };

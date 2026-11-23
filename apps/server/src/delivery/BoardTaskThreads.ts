@@ -59,9 +59,15 @@ const Card = Schema.Struct({
   // Slice 5's mirror and steer counts; absent on an engine before it.
   conversation: Schema.optional(Schema.NullOr(Schema.Unknown)),
   steers: Schema.optional(Schema.NullOr(Schema.Struct({ pending: Schema.Number }))),
-  // A stage the engine holds for a hand-off that has none yet; the engine field is provisional.
-  handoffHold: Schema.optional(
-    Schema.NullOr(Schema.Struct({ run: Schema.String, stage: Schema.String })),
+  run: Schema.optional(Schema.NullOr(Schema.Struct({ id: Schema.String }))),
+  hold: Schema.optional(
+    Schema.NullOr(
+      Schema.Struct({
+        stage: Schema.String,
+        deadline: Schema.String,
+        handoff: Schema.NullOr(Schema.Literal("handed")),
+      }),
+    ),
   ),
 });
 type Card = typeof Card.Type;
