@@ -544,7 +544,7 @@ function TaskDetailsBody(props: { readonly board: BoardTask; readonly task: Task
         ) : null}
         <Listed title="Requirements" items={task.requirements} />
         {task.qaReceipts === null ? (
-          <Listed title="Acceptance criteria" items={task.acceptance} section="acceptance" />
+          <Listed title={gt("Acceptance criteria")} items={task.acceptance} section="acceptance" />
         ) : (
           <TaskAcceptanceReceipts acceptance={task.acceptance} receipts={task.qaReceipts} />
         )}

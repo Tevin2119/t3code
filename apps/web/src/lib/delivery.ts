@@ -949,8 +949,8 @@ export interface BoardThreadLink {
 
 export function parseBoardThread(value: unknown): BoardThreadLink | null {
   if (!isRecord(value)) return null;
-  const environmentId = text(value.environmentId);
-  const threadId = text(value.threadId);
+  const environmentId = text(value.environmentId).trim();
+  const threadId = text(value.threadId).trim();
   return environmentId && threadId
     ? { environmentId, threadId, setBy: text(value.setBy), setAt: text(value.setAt) }
     : null;
@@ -1866,6 +1866,7 @@ const parseSeatHandoffs = (value: unknown): ReadonlyArray<TaskSeatHandoff> => {
 const parseQaReceipts = (value: unknown): ReadonlyArray<TaskQaReceipt> | null => {
   if (!Array.isArray(value)) return null;
   const receipts: TaskQaReceipt[] = [];
+  const seen = new Set<string>();
   for (const row of records(value)) {
     const { verdict, modelSource } = row;
     const acceptance = isRecord(row.acceptance) ? row.acceptance : null;
@@ -1879,6 +1880,10 @@ const parseQaReceipts = (value: unknown): ReadonlyArray<TaskQaReceipt> | null =>
       (verdict !== "pass" && verdict !== "fail" && verdict !== "blocked")
     )
       continue;
+    // The engine serves receipts newest first.
+    const key = `${index}:${seat}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
     receipts.push({
       seat,
       acceptance: { index, hash: textOrNull(acceptance?.hash) },

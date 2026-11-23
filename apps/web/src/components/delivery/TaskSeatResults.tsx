@@ -61,7 +61,7 @@ function QaReceipt(props: { readonly receipt: TaskQaReceipt; readonly acceptance
             : (model ?? (modelSource && sources[modelSource]))}
         </p>
       ) : null}
-      {independenceChecked === false ? (
+      {independenceChecked !== true ? (
         <p className="text-warning-foreground">{gt("Not independence-checked")}</p>
       ) : null}
       {acceptance.hash && acceptance.hash.toLowerCase() !== props.acceptanceHash ? (
