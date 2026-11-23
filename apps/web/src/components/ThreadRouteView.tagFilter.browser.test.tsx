@@ -7,6 +7,7 @@ import { page } from "vite-plus/test/browser";
 import { AppRoot } from "~/AppRoot";
 // The route loads ChatView lazily; importing it here keeps its first transform out of the test.
 import "~/components/ChatView";
+import { useComposerDraftStore } from "~/composerDraftStore";
 import { __setClientSettingsForTests } from "~/hooks/useSettings";
 import { getRouter } from "~/router";
 import {
@@ -41,6 +42,10 @@ const HIDDEN_TAGS = ["private"];
 const SETTLED = { timeout: 10_000 };
 
 it("still opens an ordinary thread with the tag filter on, and still keeps a hidden or an archived one closed", async () => {
+  using stack = new DisposableStack();
+  const initialDrafts = useComposerDraftStore.getState();
+  stack.defer(() => useComposerDraftStore.setState(initialDrafts, true));
+  useComposerDraftStore.setState(useComposerDraftStore.getInitialState(), true);
   const listed = threadWithHistory("ordinary-listed", 1);
   const other = threadWithHistory("ordinary-other", 1);
   const tagged: FakeThread = { ...threadWithHistory("ordinary-tagged", 1), tags: HIDDEN_TAGS };
@@ -81,13 +86,13 @@ it("still opens an ordinary thread with the tag filter on, and still keeps a hid
   await expect.element(page.getByText("ordinary-other: question 0")).toBeVisible();
   expect(pathname()).toBe(`/${ENVIRONMENT_ID}/${other.id}`);
 
-  // Hidden by its tag: its address does not open it.
+  // The index opens a draft after a rejected thread address redirects home.
   await open(tagged);
-  await expect.poll(pathname, SETTLED).toBe("/");
+  await expect.poll(pathname, SETTLED).toMatch(/^\/draft\/[^/]+$/);
   expect(document.body.textContent).not.toContain("ordinary-tagged: question 0");
 
   // Archived, and not server-owned: it is restored from the archive, not opened by id.
   await open(archived);
-  await expect.poll(pathname, SETTLED).toBe("/");
+  await expect.poll(pathname, SETTLED).toMatch(/^\/draft\/[^/]+$/);
   expect(document.body.textContent).not.toContain("ordinary-archived: question 0");
 });
