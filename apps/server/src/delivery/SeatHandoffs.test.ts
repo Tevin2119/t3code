@@ -60,7 +60,7 @@ function harness(
     readonly seatThread?: { readonly environmentId: string; readonly threadId: string } | null;
     readonly boardThread?: { readonly environmentId: string; readonly threadId: string };
     readonly handoffResponse?: "lost" | "committed-lost" | "conflict" | "independence";
-    readonly settleResponse?: "committed-lost";
+    readonly settleResponse?: "committed-lost" | "no-receipt" | "stale-filing";
     readonly receiptRefusal?: {
       readonly status: number;
       readonly code: string;
@@ -162,8 +162,10 @@ function harness(
               handoffResponse = undefined;
               return { status: 409, body: { code: "independence", error: "Engine refusal." } };
             }
+            const id = (handoff?.id ?? 0) + 1;
             handoff = {
-              id: (handoff?.id ?? 0) + 1,
+              id,
+              filing: id,
               run: RUN,
               stage: "qa",
               seat: (body as { seat: string }).seat,
@@ -186,6 +188,16 @@ function harness(
           if (method === "POST" && handoff && path.startsWith(`${HANDOFF_PATH}/qa/`)) {
             engine.requests.push({ method, path, body });
             const delivered = path.endsWith("/delivered");
+            if (options.settleResponse === "no-receipt" && delivered)
+              return { status: 409, body: { code: "no-receipt", error: "Engine refusal." } };
+            if (options.settleResponse === "stale-filing") {
+              const id = handoff.id! + 2;
+              handoff = { ...handoff, id, filing: id };
+              return {
+                status: 409,
+                body: { code: "stale-filing", error: "Engine refusal.", current: handoff },
+              };
+            }
             handoff = {
               ...handoff,
               id: handoff.id! + 1,
@@ -395,6 +407,7 @@ it.effect("hands QA to the first launchable gate seat and attests the model T3 l
     assert.equal(result.state, "working");
     assert.match(result.next ?? "", /end your turn.*do not poll/);
     assert.equal(result.handoff.seat, "validation");
+    assert.equal(result.handoff.filing, 1);
     assert.lengthOf(launches, 1);
     const launch = launches[0]!.input;
     assert.equal(launch.isolation, "worktree");
@@ -542,6 +555,12 @@ it.effect.each([
   { terminal: "completed", receipts: [currentReceipt, secondReceipt], reason: null },
   {
     terminal: "completed",
+    receipts: [currentReceipt, secondReceipt],
+    reason: "no-receipts",
+    settleResponse: "no-receipt",
+  },
+  {
+    terminal: "completed",
     receipts: [
       currentReceipt,
       { ...secondReceipt, run: "old-run" },
@@ -551,28 +570,57 @@ it.effect.each([
   },
   { terminal: "failed", receipts: [currentReceipt], reason: "seat-failed" },
   { terminal: "cancelled", receipts: [], reason: "seat-failed" },
-] as const)(
-  "settles a $terminal QA child with reason $reason",
-  ({ terminal, receipts, reason }) => {
-    const { layer, finish, requests } = harness({
-      checklist: [ACCEPTANCE, "The report can be exported."],
-    });
-    return Effect.gen(function* () {
-      const service = yield* SeatHandoffs.SeatHandoffs;
-      const lead = scopeFor(PARENT);
-      yield* service.handQa(lead, {});
-      finish(terminal, receipts);
-      const result = yield* service.handQa(lead, {});
-      assert.equal(result.state, reason ? "fallen-back" : "delivered");
-      assert.equal(result.handoff.reason, reason);
-      assert.deepEqual(requests.at(-1), {
+] as const)("settles a $terminal QA child with reason $reason", (scenario) => {
+  const { terminal, receipts, reason } = scenario;
+  const settleResponse = "settleResponse" in scenario ? scenario.settleResponse : undefined;
+  const { layer, finish, requests } = harness({
+    checklist: [ACCEPTANCE, "The report can be exported."],
+    ...(settleResponse ? { settleResponse } : {}),
+  });
+  return Effect.gen(function* () {
+    const service = yield* SeatHandoffs.SeatHandoffs;
+    const lead = scopeFor(PARENT);
+    yield* service.handQa(lead, {});
+    finish(terminal, receipts);
+    const result = yield* service.handQa(lead, {});
+    assert.equal(result.state, reason ? "fallen-back" : "delivered");
+    assert.equal(result.handoff.reason, reason);
+    const settleRequests = requests.filter(({ path }) => path.startsWith(`${HANDOFF_PATH}/qa/`));
+    assert.lengthOf(settleRequests, settleResponse ? 2 : 1);
+    if (settleResponse)
+      assert.deepEqual(settleRequests[0], {
         method: "POST",
-        path: `${HANDOFF_PATH}/qa/${reason ? "fallback" : "delivered"}`,
-        body: { ...(reason ? { reason } : {}), setBy: ENVIRONMENT, key: KEY },
+        path: `${HANDOFF_PATH}/qa/delivered`,
+        body: { filing: 1, setBy: ENVIRONMENT, key: KEY },
       });
-    }).pipe(Effect.provide(layer));
-  },
-);
+    assert.deepEqual(settleRequests.at(-1), {
+      method: "POST",
+      path: `${HANDOFF_PATH}/qa/${reason ? "fallback" : "delivered"}`,
+      body: { filing: 1, ...(reason ? { reason } : {}), setBy: ENVIRONMENT, key: KEY },
+    });
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect("reads the current QA hand-off after a stale filing refusal", () => {
+  const { layer, finish, requests } = harness({ settleResponse: "stale-filing" });
+  return Effect.gen(function* () {
+    const service = yield* SeatHandoffs.SeatHandoffs;
+    const lead = scopeFor(PARENT);
+    yield* service.handQa(lead, {});
+    finish("completed", [currentReceipt]);
+    const result = yield* service.handQa(lead, {});
+    assert.equal(result.state, "working");
+    assert.equal(result.handoff.filing, 3);
+    assert.deepEqual(requests.slice(-2), [
+      {
+        method: "POST",
+        path: `${HANDOFF_PATH}/qa/delivered`,
+        body: { filing: 1, setBy: ENVIRONMENT, key: KEY },
+      },
+      { method: "GET", path: TASK_PATH, body: undefined },
+    ]);
+  }).pipe(Effect.provide(layer));
+});
 
 it.effect("refuses callers without an attested QA seat on the current run", () => {
   const { layer, requests } = harness();

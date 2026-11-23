@@ -26,7 +26,7 @@ import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.
 import { deriveProviderInstanceConfigMap } from "../provider/ProviderInstanceRegistryHydration.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as BoardConversation from "./BoardConversation.ts";
-import { handoffNoticeMessageId, steerMessageId } from "./BoardConversation.ts";
+import { steerMessageId } from "./BoardConversation.ts";
 import * as BoardTaskThreads from "./BoardTaskThreads.ts";
 import {
   scratchEngine,
@@ -819,18 +819,31 @@ it.effect("mirrors each conversation event once, across a restart and a replaced
   }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-mirror-")));
 });
 
-it.effect("tells the lead once per run that QA is held for its hand-off", () => {
+it.effect("tells the lead once per QA entry when its hand-off is awaited", () => {
   const engine = board();
-  engine.addTask({ id: "task-7", handoffHold: { run: "run-1", stage: "qa" } });
+  const task = engine.addTask({ id: "task-7", run: { id: "run-1" } });
   const store = threadStore();
   return Effect.gen(function* () {
-    yield* (yield* service(store)).reconcile();
-    yield* (yield* service(store)).reconcile();
-    const notices = steerSends(store).filter(
-      (command) => command.messageId === handoffNoticeMessageId(TASK, "run-1", "qa"),
-    );
-    assert.equal(notices.length, 1);
-    assert.match(String(notices[0]?.text), /delivery_seat_handoff/);
+    const threads = yield* service(store);
+    const firstDeadline = "2026-11-22T10:30:00.000Z";
+    const reworkDeadline = "2026-11-22T11:00:00.000Z";
+    for (const { hold, noticeCount } of [
+      { hold: null, noticeCount: 0 },
+      { hold: { stage: "qa", deadline: firstDeadline, handoff: "handed" }, noticeCount: 0 },
+      { hold: { stage: "qa", deadline: firstDeadline, handoff: null }, noticeCount: 1 },
+      { hold: { stage: "qa", deadline: reworkDeadline, handoff: null }, noticeCount: 2 },
+    ] as const) {
+      task.hold = hold;
+      yield* threads.reconcile();
+      yield* threads.reconcile();
+      assert.lengthOf(steerSends(store), noticeCount);
+    }
+    const [first, rework] = steerSends(store);
+    assert.include(first?.text, firstDeadline);
+    assert.include(rework?.text, reworkDeadline);
+    assert.match(String(first?.text), /delivery_seat_handoff/);
+    assert.notEqual(first?.messageId, rework?.messageId);
+    assert.notEqual(first?.commandId, rework?.commandId);
   }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-handoff-notice-")));
 });
 

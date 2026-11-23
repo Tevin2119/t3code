@@ -191,6 +191,7 @@ export const DeliveryQaReceipt = Schema.Struct({
 
 export const DeliverySeatHandoff = Schema.Struct({
   id: Schema.optional(Schema.NullOr(Schema.Number)),
+  filing: Schema.optional(Schema.NullOr(Schema.Number)),
   run: Schema.optional(Schema.NullOr(Schema.String)),
   stage: Schema.optional(Schema.NullOr(Schema.Literals(["build", "review", "qa"]))),
   seat: Schema.optional(Schema.NullOr(Schema.String)),
