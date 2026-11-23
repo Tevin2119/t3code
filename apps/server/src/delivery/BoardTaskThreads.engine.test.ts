@@ -42,6 +42,7 @@ import * as ThreadManagementService from "../orchestration-v2/ThreadManagementSe
 import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
 import { deriveProviderInstanceConfigMap } from "../provider/ProviderInstanceRegistryHydration.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import * as BoardConversation from "./BoardConversation.ts";
 import * as BoardTaskThreads from "./BoardTaskThreads.ts";
 import * as BoardThreadRows from "./boardThreadRows.ts";
 import { boardTaskOf, boardTaskOfMarker, boardTaskThreadId } from "./boardThreadMarker.ts";
@@ -195,6 +196,8 @@ function threadStore() {
 
 function service(store: ReturnType<typeof threadStore>, key: string | null = PHRASE) {
   return BoardTaskThreads.make.pipe(
+    // The conversation mirror is proven against the scratch engine in BoardTaskThreads.test.ts.
+    Effect.provideService(BoardConversation.BoardConversation, { sync: () => Effect.void }),
     Effect.provideService(
       HostProcess.Environment,
       key === null ? {} : { [BoardTaskThreads.BOARD_THREAD_KEY_VARIABLE]: key },

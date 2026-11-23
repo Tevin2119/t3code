@@ -159,15 +159,22 @@ export function waitKindsOf(card: Waiting): ReadonlyArray<WaitKind> {
 
 /**
  * What was said on a card, as the engine counts it: how many messages, how many of them new to
- * the person, and the last one's line. Null when nothing was said. The engine keeps these today
- * from its own log; the conversation's activity is mirrored onto them by a later engine slice.
+ * the person, and the last one's line. Null when nothing was said. Once the task's conversation
+ * is mirrored (spec 6a, slice 5), its count and last summary line stand in for the engine log's.
  */
-export function cardActivityOf(card: Pick<DeliveryCard, "messages" | "unread" | "last">): {
+export function cardActivityOf(
+  card: Pick<DeliveryCard, "messages" | "unread" | "last" | "conversation">,
+): {
   readonly messages: number;
   readonly unread: number;
   readonly by: string | null;
   readonly text: string | null;
 } | null {
+  const mirror = card.conversation;
+  if (mirror !== null && mirror.count > 0) {
+    // A steer carries no excerpt: the card shows the count, never a person's words.
+    return { messages: mirror.count, unread: card.unread, by: null, text: mirror.lastExcerpt };
+  }
   if (card.messages <= 0 && card.unread <= 0 && !card.last?.text) return null;
   return {
     // The engine counts both; a count it sent smaller than the other is still not made up here.

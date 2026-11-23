@@ -1,6 +1,6 @@
 // A scratch engine serving the frozen task-to-thread contract (BOARD-REVAMP-UI-SPEC.md 6a), with
-// the shapes of the merged engine half (Operation-PaperClip main at a658892b) and the task claim
-// of slice 1. A model, not the engine: BoardTaskThreads.engine.test.ts runs against the real one.
+// the shapes of the merged engine half (Operation-PaperClip main at a658892b), the task claim of
+// slice 1, and slice 5's activity ingest and steer queue (conversation.mjs at f6dd59e0). A model, not the engine: BoardTaskThreads.engine.test.ts runs against the real one.
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -34,6 +34,22 @@ interface Lease {
   heartbeat: number;
 }
 
+interface Activity {
+  readonly seq: number;
+  readonly at: string;
+  readonly kind: string;
+  readonly excerpt: string | null;
+  readonly setBy: string;
+}
+
+export interface ScratchSteer {
+  readonly id: number;
+  readonly author: string;
+  readonly text: string;
+  state: "pending" | "delivered" | "failed";
+  failure: string | null;
+}
+
 interface Answer {
   readonly status: number;
   readonly body: unknown;
@@ -59,6 +75,8 @@ export function scratchEngine(
     readonly cap?: number;
     /** `false` models an engine before slice 2: no card carries `boardThread`. */
     readonly servesLink?: boolean;
+    /** `false` models an engine before slice 5: no conversation mirror and no steer queue. */
+    readonly servesConversation?: boolean;
   } = {},
 ) {
   const key = options.key ?? "scratch approval passphrase";
@@ -68,6 +86,10 @@ export function scratchEngine(
   const events: Array<{ kind: string; task: string; data: unknown }> = [];
   const requests: Array<{ method: string; path: string; body: unknown }> = [];
   const sets = new Map<string, { path: string | null }>();
+  const activity = new Map<string, Array<Activity>>();
+  const steers: Array<ScratchSteer & { readonly task: string }> = [];
+  /** Requests whose path matches are lost on the way, once each, as a dropped connection. */
+  const drops: Array<RegExp> = [];
   let teams: unknown = [];
   let clock = Date.parse("2026-11-22T10:00:00.000Z");
   let holderSeq = 0;
@@ -83,6 +105,7 @@ export function scratchEngine(
     }
     return leases;
   };
+  const conversing = options.servesLink !== false && options.servesConversation !== false;
   const cardOf = (task: ScratchTask) => ({
     id: task.id,
     number: task.number,
@@ -94,7 +117,69 @@ export function scratchEngine(
     submitted: task.submitted ? "2026-11-22T09:00:00.000Z" : null,
     held: task.held,
     ...(options.servesLink === false ? {} : { boardThread: links.get(task.id) ?? null }),
+    ...(conversing ? { conversation: mirrorOf(task.id), steers: steerCounts(task.id) } : {}),
   });
+  const mirrorOf = (id: string) => {
+    const rows = activity.get(id) ?? [];
+    if (rows.length === 0) return null;
+    const top = rows.reduce((a, b) => (b.seq > a.seq ? b : a));
+    return { count: rows.length, lastAt: top.at, lastKind: top.kind, lastExcerpt: top.excerpt };
+  };
+  const steersOf = (id: string) =>
+    steers
+      .filter((steer) => steer.task === id)
+      .toReversed()
+      .map(({ task: _task, ...steer }) => steer);
+  const steerCounts = (id: string) => {
+    const counts = { pending: 0, delivered: 0, failed: 0 };
+    for (const steer of steersOf(id)) counts[steer.state] += 1;
+    return counts;
+  };
+
+  const ingest = (id: string, body: Record<string, unknown>): Answer => {
+    const task = tasks.get(id);
+    if (!task) return refused(404, `no task ${id}`, { code: "not-found", task: null });
+    const invalid = (field: string) =>
+      refused(400, `bad ${field}`, { code: "invalid-field", field });
+    if (typeof body.at !== "string" || Number.isNaN(Date.parse(body.at))) return invalid("at");
+    if (!["message", "steer", "summary"].includes(body.kind as string)) return invalid("kind");
+    if (typeof body.excerpt === "string" && [...body.excerpt].length > 200)
+      return invalid("excerpt");
+    if (!Number.isSafeInteger(body.seq) || (body.seq as number) < 0) return invalid("seq");
+    if (typeof body.setBy !== "string" || !ENVIRONMENT_PART.test(body.setBy))
+      return invalid("setBy");
+    const rows = activity.get(id) ?? [];
+    activity.set(id, rows);
+    if (rows.some((row) => row.seq === body.seq))
+      return { status: 200, body: { task: id, conversation: mirrorOf(id), unchanged: true } };
+    const row = {
+      seq: body.seq as number,
+      at: body.at,
+      kind: body.kind as string,
+      excerpt: typeof body.excerpt === "string" ? body.excerpt : null,
+      setBy: body.setBy,
+    };
+    rows.push(row);
+    events.push({ kind: "task.conversation-activity", task: id, data: { activity: row } });
+    return { status: 200, body: { task: id, conversation: mirrorOf(id) } };
+  };
+
+  const settle = (id: string, steerId: number, how: string, body: Record<string, unknown>) => {
+    const task = tasks.get(id);
+    if (!task) return refused(404, `no task ${id}`, { code: "not-found", task: null });
+    const steer = steers.find((item) => item.id === steerId && item.task === id);
+    if (!steer) return refused(404, `no steer ${steerId}`, { code: "not-found", steer: null });
+    const reason = how === "failed" ? String(body.reason ?? "").trim() : null;
+    if (how === "failed" && !reason)
+      return refused(400, "say why", { code: "invalid-field", field: "reason" });
+    if (steer.state !== "pending" && steer.state !== how)
+      return refused(409, `steer ${steerId} is already ${steer.state}`, { code: "conflict" });
+    if (steer.state === how) return { status: 200, body: { task: id, steer, unchanged: true } };
+    steer.state = how as ScratchSteer["state"];
+    steer.failure = reason;
+    events.push({ kind: `task.steer-${how}`, task: id, data: { steer: steerId } });
+    return { status: 200, body: { task: id, steer } };
+  };
 
   const putLink = (id: string, body: Record<string, unknown>): Answer => {
     const task = tasks.get(id);
@@ -240,6 +325,17 @@ export function scratchEngine(
               ...(task.state === "moved" ? { lane: null } : {}),
               thread: task.id,
               source: null,
+              ...(conversing
+                ? {
+                    conversation: mirrorOf(task.id) && {
+                      ...mirrorOf(task.id),
+                      latest: (activity.get(task.id) ?? [])
+                        .toSorted((a, b) => b.seq - a.seq)
+                        .slice(0, 10),
+                    },
+                    steers: steersOf(task.id),
+                  }
+                : {}),
             },
           }
         : refused(404, `no task ${detail[1]}`);
@@ -267,6 +363,16 @@ export function scratchEngine(
       beforeNextPut = null;
       before?.();
       return putLink(link[1]!, body);
+    }
+    const keyed = conversing
+      ? /^\/api\/tasks\/([\w-]+)\/(activity|steers\/(\d+)\/(delivered|failed))$/.exec(pathname)
+      : null;
+    if (keyed && method === "POST") {
+      if (body.key !== key)
+        return refused(403, "the approval key is wrong or missing", { code: "refused" });
+      return keyed[2] === "activity"
+        ? ingest(keyed[1]!, body)
+        : settle(keyed[1]!, Number(keyed[3]), keyed[4]!, body);
     }
     const lease = /^\/api\/orchestration\/tasks\/([\w-]+)\/(claim|ack|release)$/.exec(pathname);
     if (lease && method === "POST") {
@@ -331,6 +437,31 @@ export function scratchEngine(
     },
     isDown: () => down,
     linkWrites,
+    /** A person's steer, queued the way the engine's steer route queues it. */
+    queueSteer: (task: string, text: string) => {
+      const steer = {
+        id: steers.length + 1,
+        task,
+        author: "Tevin",
+        text,
+        state: "pending" as const,
+        failure: null,
+      };
+      steers.push(steer);
+      return steer.id;
+    },
+    steer: (id: number) => steers.find((steer) => steer.id === id)!,
+    activityOf: (task: string) => activity.get(task) ?? [],
+    dropNext: (path: RegExp) => {
+      drops.push(path);
+    },
+    /** Whether this request is lost on the way: true once for each drop that matches it. */
+    drops: (path: string) => {
+      const at = drops.findIndex((drop) => drop.test(path));
+      if (at < 0) return false;
+      drops.splice(at, 1);
+      return true;
+    },
   };
 }
 
@@ -342,8 +473,9 @@ export const scratchEngineHttp = (engine: ScratchEngine) =>
     HttpClient.HttpClient,
     HttpClient.make((request) =>
       Effect.suspend(() => {
-        if (engine.isDown()) return Effect.fail(new Error("connection refused") as never);
         const url = new URL(request.url);
+        if (engine.isDown() || engine.drops(url.pathname))
+          return Effect.fail(new Error("connection refused") as never);
         const body =
           request.body._tag === "Uint8Array"
             ? decodeJson(new TextDecoder().decode(request.body.body))

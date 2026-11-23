@@ -956,6 +956,55 @@ export function parseBoardThread(value: unknown): BoardThreadLink | null {
     : null;
 }
 
+/** The engine's bounded mirror of a task's conversation (spec 6a, slice 5). */
+export interface ConversationMirror {
+  /** Conversation events mirrored, not the transcript's length. */
+  readonly count: number;
+  readonly lastAt: string | null;
+  /** `message`, `steer` or `summary`. */
+  readonly lastKind: string | null;
+  /** The last summary line. A steer carries none, so a person's words stay off the card. */
+  readonly lastExcerpt: string | null;
+}
+
+const parseConversationMirror = (value: unknown): ConversationMirror | null =>
+  isRecord(value)
+    ? {
+        count: count(value.count),
+        lastAt: textOrNull(value.lastAt),
+        lastKind: textOrNull(value.lastKind),
+        lastExcerpt: textOrNull(value.lastExcerpt),
+      }
+    : null;
+
+/** Steers queued for a task's conversation, by state. A card carries no steer's text. */
+export interface SteerCounts {
+  readonly pending: number;
+  readonly delivered: number;
+  readonly failed: number;
+}
+
+const parseSteerCounts = (value: unknown): SteerCounts | null =>
+  isRecord(value)
+    ? {
+        pending: count(value.pending),
+        delivered: count(value.delivered),
+        failed: count(value.failed),
+      }
+    : null;
+
+/** One steer of the task's queue, as the task detail serves it, newest first. */
+export interface TaskSteer {
+  readonly id: number;
+  readonly author: string;
+  readonly text: string;
+  readonly created: string;
+  /** `pending`, `delivered` or `failed`. */
+  readonly state: string;
+  readonly deliveredAt: string | null;
+  readonly failure: string | null;
+}
+
 export interface DeliveryCard {
   readonly id: string;
   /** The number a person says and searches by, e.g. 1001. */
@@ -1066,6 +1115,9 @@ export interface DeliveryCard {
   readonly queue: DeliveryQueueFact | null;
   /** Rework rounds so far, when the engine counts them; null when it does not send a count. */
   readonly reworkRounds: number | null;
+  /** The conversation's mirror; null with nothing mirrored, or on an engine before slice 5. */
+  readonly conversation: ConversationMirror | null;
+  readonly steers: SteerCounts | null;
   /** The board triage thinks it belongs on; it waits on a person to move it. Older engines omit it. */
   readonly suggestedBoard?: SuggestedBoard | null;
 }
@@ -1318,6 +1370,8 @@ export const parseCard = (value: Json): DeliveryCard => {
       typeof value.reworkRounds === "number" && Number.isFinite(value.reworkRounds)
         ? value.reworkRounds
         : null,
+    conversation: parseConversationMirror(value.conversation),
+    steers: parseSteerCounts(value.steers),
     suggestedBoard: parseSuggestedBoard(value.suggestedBoard),
   };
 };
@@ -1627,6 +1681,8 @@ export interface TaskView {
   readonly card: DeliveryCard;
   readonly actions: ReadonlyArray<string>;
   readonly timeline: ReadonlyArray<TimelineEntry>;
+  /** The steers queued for the task's conversation, newest first. */
+  readonly steers: ReadonlyArray<TaskSteer>;
   readonly questions: ReadonlyArray<{
     readonly seq: number;
     readonly at: string;
@@ -1728,6 +1784,7 @@ export interface TaskView {
   readonly suggestedBoard?: SuggestedBoard | null;
   /** The conversation the board's lead runs this task in. Read through `lib/taskConversation`. */
   readonly boardThread: BoardThreadLink | null;
+  readonly conversationMirrorEnvironment?: string | null;
   /**
    * The conversation this task was filed from: `<environment>/<thread>`. A thread of its own, and
    * never the task's conversation.
@@ -1847,6 +1904,15 @@ export function parseTask(body: unknown): TaskView | null {
     actions: strings(body.actions),
     brief: parseBriefing(body.brief),
     timeline: parseTimeline(body.timeline),
+    steers: records(body.steers).map((steer) => ({
+      id: count(steer.id),
+      author: text(steer.author),
+      text: text(steer.text),
+      created: text(steer.created),
+      state: text(steer.state),
+      deliveredAt: textOrNull(steer.deliveredAt),
+      failure: textOrNull(steer.failure),
+    })),
     questions: records(body.questions).map((question) => ({
       seq: count(question.seq),
       at: text(question.at),
@@ -1956,6 +2022,9 @@ export function parseTask(body: unknown): TaskView | null {
     target: parseTarget(body.target),
     suggestedBoard: parseSuggestedBoard(body.suggestedBoard),
     boardThread: parseBoardThread(body.boardThread),
+    conversationMirrorEnvironment: isRecord(body.conversation)
+      ? textOrNull(records(body.conversation.latest)[0]?.setBy)
+      : null,
     source: (() => {
       const source = isRecord(body.source) ? body.source : null;
       const ref = source ? text(source.ref) : "";

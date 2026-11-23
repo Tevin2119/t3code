@@ -5,21 +5,28 @@ import {
   ProjectId,
   ThreadId,
   type OrchestrationV2ServerCommand,
+  type OrchestrationV2StoredEvent,
 } from "@t3tools/contracts";
 import { assert, it } from "@effect/vitest";
 import * as HostProcess from "@t3tools/shared/HostProcess";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Stream from "effect/Stream";
 
 import * as ServerConfig from "../config.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
+import * as EventStore from "../orchestration-v2/EventStore.ts";
+import { OrchestratorCommandRejectedError } from "../orchestration-v2/Orchestrator.ts";
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
 import { deriveProviderInstanceConfigMap } from "../provider/ProviderInstanceRegistryHydration.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import * as BoardConversation from "./BoardConversation.ts";
+import { steerMessageId } from "./BoardConversation.ts";
 import * as BoardTaskThreads from "./BoardTaskThreads.ts";
 import {
   scratchEngine,
@@ -62,48 +69,104 @@ interface StoredThread {
   revision: number;
 }
 
-/** What the thread store keeps across a server restart: threads and command receipts. */
+/**
+ * What the thread store keeps across a server restart: threads, command receipts, and the
+ * committed events with their global sequence, the messages they hold and the runs still active.
+ */
 function threadStore() {
   const threads = new Map<string, StoredThread>();
   const receipts = new Set<string>();
   const commands: Array<OrchestrationV2ServerCommand> = [];
   const hooks: { afterCreate: (() => void) | null } = { afterCreate: null };
-  const dispatch = (command: OrchestrationV2ServerCommand) =>
-    Effect.suspend(() => {
-      commands.push(command);
-      // A command already answered is answered again with what it did the first time.
-      if (receipts.has(command.commandId)) return Effect.succeed({ storedEvents: [] });
-      if (command.type === "thread.create") {
-        if (threads.has(command.threadId))
-          return Effect.fail(new BoardTaskThreads.BoardTaskThreadsError({ reason: "thread" }));
-        threads.set(command.threadId, {
-          commandId: command.commandId,
-          projectId: command.projectId,
-          title: command.title,
-          modelSelection: command.modelSelection,
-          marker: command.engineIntake,
-          archivedAt: null,
-          revision: 0,
-        });
-        receipts.add(command.commandId);
-        const after = hooks.afterCreate;
-        hooks.afterCreate = null;
-        after?.();
-      }
-      if (command.type === "thread.archive") {
-        const thread = threads.get(command.threadId)!;
-        thread.archivedAt = "2026-11-22T11:00:00.000Z";
-        thread.revision += 1;
-        receipts.add(command.commandId);
-      }
-      if (command.type === "thread.unarchive") {
-        const thread = threads.get(command.threadId)!;
-        thread.archivedAt = null;
-        thread.revision += 1;
-        receipts.add(command.commandId);
-      }
-      return Effect.succeed({ storedEvents: [] });
+  const events: Array<OrchestrationV2StoredEvent> = [];
+  const messages = new Map<string, Set<string>>();
+  const active = new Map<string, string>();
+  const rejects = new Set<string>();
+  const commit = (threadId: string, type: string, payload: Record<string, unknown>) =>
+    events.push({
+      sequence: events.length + 1,
+      commandId: null,
+      event: {
+        type,
+        threadId,
+        occurredAt: DateTime.makeUnsafe(Date.parse("2026-11-22T10:00:00.000Z") + events.length),
+        payload,
+      },
+    } as unknown as OrchestrationV2StoredEvent);
+  /** A user message, complete, and the run it starts. */
+  const say = (threadId: string, id: string, text: string, createdBy = "user") => {
+    messages.set(threadId, (messages.get(threadId) ?? new Set()).add(id));
+    commit(threadId, "message.updated", {
+      id,
+      role: "user",
+      text,
+      streaming: false,
+      runId: null,
+      createdBy,
     });
+    active.set(threadId, `run:${id}`);
+  };
+  /** The active run's reply, streamed then complete, and the run's completion. */
+  const reply = (threadId: string, text: string) => {
+    const runId = active.get(threadId)!;
+    const message = { id: `reply:${runId}`, role: "assistant", runId, createdBy: "agent" };
+    commit(threadId, "message.updated", { ...message, text: text.slice(0, 5), streaming: true });
+    commit(threadId, "message.updated", { ...message, text, streaming: false });
+    commit(threadId, "run.updated", { id: runId, status: "completed" });
+    active.delete(threadId);
+  };
+  const dispatch = (command: OrchestrationV2ServerCommand) =>
+    Effect.suspend(
+      (): Effect.Effect<
+        { readonly storedEvents: ReadonlyArray<never> },
+        BoardTaskThreads.BoardTaskThreadsError | OrchestratorCommandRejectedError
+      > => {
+        commands.push(command);
+        // A command already answered is answered again with what it did the first time.
+        if (receipts.has(command.commandId)) return Effect.succeed({ storedEvents: [] });
+        if (command.type === "message.dispatch") {
+          if (rejects.has(command.messageId))
+            return Effect.fail(
+              new OrchestratorCommandRejectedError({
+                commandId: command.commandId,
+                commandType: command.type,
+              }),
+            );
+          receipts.add(command.commandId);
+          say(command.threadId, command.messageId, command.text, command.createdBy);
+        }
+        if (command.type === "thread.create") {
+          if (threads.has(command.threadId))
+            return Effect.fail(new BoardTaskThreads.BoardTaskThreadsError({ reason: "thread" }));
+          threads.set(command.threadId, {
+            commandId: command.commandId,
+            projectId: command.projectId,
+            title: command.title,
+            modelSelection: command.modelSelection,
+            marker: command.engineIntake,
+            archivedAt: null,
+            revision: 0,
+          });
+          receipts.add(command.commandId);
+          const after = hooks.afterCreate;
+          hooks.afterCreate = null;
+          after?.();
+        }
+        if (command.type === "thread.archive") {
+          const thread = threads.get(command.threadId)!;
+          thread.archivedAt = "2026-11-22T11:00:00.000Z";
+          thread.revision += 1;
+          receipts.add(command.commandId);
+        }
+        if (command.type === "thread.unarchive") {
+          const thread = threads.get(command.threadId)!;
+          thread.archivedAt = null;
+          thread.revision += 1;
+          receipts.add(command.commandId);
+        }
+        return Effect.succeed({ storedEvents: [] });
+      },
+    );
   /** A person restores an archived thread from the board's archive. */
   const restore = (threadId: ThreadId) =>
     dispatch({
@@ -111,7 +174,19 @@ function threadStore() {
       commandId: CommandId.make(`person:restore:${threads.get(threadId)!.revision}`),
       threadId,
     });
-  return { threads, commands, hooks, dispatch, restore };
+  return {
+    threads,
+    commands,
+    hooks,
+    dispatch,
+    restore,
+    events,
+    messages,
+    active,
+    rejects,
+    say,
+    reply,
+  };
 }
 type ThreadStore = ReturnType<typeof threadStore>;
 
@@ -128,7 +203,22 @@ function service(
     readonly projects?: ReadonlyArray<string>;
   } = {},
 ) {
-  return BoardTaskThreads.make.pipe(
+  return Effect.gen(function* () {
+    const conversation = yield* BoardConversation.make;
+    return yield* BoardTaskThreads.make.pipe(
+      Effect.provideService(BoardConversation.BoardConversation, conversation),
+    );
+  }).pipe(
+    Effect.provideService(EventStore.EventStoreV2, {
+      read: (input?: { readonly threadId?: string; readonly afterSequence?: number }) =>
+        Stream.fromIterable(
+          store.events.filter(
+            (stored) =>
+              stored.event.threadId === input?.threadId &&
+              stored.sequence > (input?.afterSequence ?? 0),
+          ),
+        ),
+    } as unknown as EventStore.EventStoreV2["Service"]),
     Effect.provideService(
       HostProcess.Environment,
       options.key === null
@@ -151,7 +241,14 @@ function service(
             lineage: { engineIntake: store.threads.get(threadId)?.marker },
             archivedAt: store.threads.get(threadId)?.archivedAt ?? null,
           },
+          runs: store.active.has(threadId) ? [{ id: store.active.get(threadId) }] : [],
         }),
+      getMessagesById: (threadId: string, ids: ReadonlyArray<string>) =>
+        Effect.succeed(
+          new Map(
+            ids.filter((id) => store.messages.get(threadId)?.has(id)).map((id) => [id, { id }]),
+          ),
+        ),
     } as unknown as ProjectionStore.ProjectionStoreV2["Service"]),
     Effect.provideService(ProjectStore.ProjectStoreV2, {
       findActiveByWorkspaceRoot: (root: string) =>
@@ -629,6 +726,8 @@ it.effect("keeps the link and claim routes for the server: a client's act is ref
       "/api/tasks/task-7/board-thread",
       "/api/orchestration/tasks/task-7/claim",
       "/api/orchestration/tasks/task-7/release",
+      "/api/tasks/task-7/activity",
+      "/api/tasks/task-7/steers/1/delivered",
     ]) {
       const refused = yield* delivery.act({ path, body: { key: engine.key } }).pipe(Effect.result);
       assert.equal(refused._tag, "Failure");
@@ -651,3 +750,129 @@ it.effect("keeps the link and claim routes for the server: a client's act is ref
     assert.equal(unknown._tag === "Failure" ? unknown.failure.status : null, 404);
   }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-act-")));
 });
+
+const ingests = (engine: ScratchEngine) =>
+  engine.requests.filter((request) => request.path.endsWith("/activity")).length;
+const steerSends = (store: ThreadStore) =>
+  store.commands.filter((command) => command.type === "message.dispatch");
+
+it.effect("mirrors each conversation event once, across a restart and a replaced thread", () => {
+  const engine = board();
+  engine.addTask({ id: "task-7" });
+  const store = threadStore();
+  return Effect.gen(function* () {
+    const first = yield* service(store);
+    yield* first.reconcile();
+    store.say(THREAD, "m-1", "Build the  thing\nplease", "system");
+    store.reply(THREAD, "x".repeat(300));
+    store.say(THREAD, "m-2", "a person's words", "user");
+    yield* first.reconcile();
+    // Each seq is the event store's own; a streamed reply counts once, when its run completes. A
+    // person's words are a steer with no excerpt, so they never reach the card.
+    assert.deepEqual(
+      engine.activityOf("task-7").map((row) => [row.seq, row.kind, row.excerpt, row.setBy]),
+      [
+        [1, "message", "Build the thing please", ENVIRONMENT],
+        [4, "summary", `${"x".repeat(199)}…`, ENVIRONMENT],
+        [5, "steer", null, ENVIRONMENT],
+      ],
+    );
+    yield* first.reconcile();
+    assert.equal(ingests(engine), 3);
+    // A restarted server starts from the engine's highest seq and sends nothing it already has.
+    const after = yield* service(store);
+    yield* after.reconcile();
+    assert.equal(ingests(engine), 3);
+    // A replacing conversation's events come later in the one sequence, so no seq is reused.
+    const replacement = ThreadId.make("board-task:work:task-7:replacement");
+    engine.writeLink("task-7", {
+      environmentId: ENVIRONMENT,
+      threadId: replacement,
+      setBy: ENVIRONMENT,
+    });
+    store.say(replacement, "m-3", "Start again", "system");
+    yield* after.reconcile();
+    assert.deepEqual(
+      engine.activityOf("task-7").map((row) => row.seq),
+      [1, 4, 5, 6],
+    );
+    const delivery = yield* DeliveryService.DeliveryService;
+    yield* delivery.boardThreadAct({
+      method: "POST",
+      path: "/api/tasks/task-7/activity",
+      body: {
+        seq: 7,
+        at: "2026-11-23T00:00:00.000Z",
+        kind: "message",
+        setBy: "previous-environment",
+        key: engine.key,
+      },
+    });
+    store.say(replacement, "m-4", "From a separate sequence", "system");
+    store.say(replacement, "m-5", "Another event after transfer", "system");
+    const beforeTransfer = ingests(engine);
+    yield* (yield* service(store)).reconcile();
+    assert.equal(ingests(engine), beforeTransfer);
+  }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-mirror-")));
+});
+
+it.effect("delivers a queued steer at the next turn boundary, once, and confirms it", () => {
+  const engine = board();
+  engine.addTask({ id: "task-7" });
+  const store = threadStore();
+  return Effect.gen(function* () {
+    const threads = yield* service(store);
+    yield* threads.reconcile();
+    store.say(THREAD, "m-1", "Build it", "system");
+    const steer = engine.queueSteer("task-7", "Use the other API");
+    yield* threads.reconcile();
+    // The running turn is never interrupted: the steer waits, pending.
+    assert.equal(steerSends(store).length, 0);
+    assert.equal(engine.steer(steer).state, "pending");
+    store.reply(THREAD, "Done");
+    // The confirmation is lost on the way, after the steer reached the conversation.
+    engine.dropNext(/\/steers\/\d+\/delivered$/);
+    yield* threads.reconcile();
+    assert.equal(steerSends(store).length, 1);
+    assert.deepInclude(steerSends(store)[0], {
+      threadId: THREAD,
+      messageId: steerMessageId(TASK, steer),
+      text: "Use the other API",
+      dispatchMode: { type: "queue_after_active" },
+    });
+    assert.equal(engine.steer(steer).state, "pending");
+    // A restarted server confirms it from the conversation and never sends it twice.
+    const after = yield* service(store);
+    yield* after.reconcile();
+    yield* after.reconcile();
+    assert.equal(steerSends(store).length, 1);
+    assert.equal(engine.steer(steer).state, "delivered");
+    assert.deepInclude(engine.activityOf("task-7").at(-1), { kind: "steer", excerpt: null });
+  }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-steer-")));
+});
+
+it.effect(
+  "keeps a steer pending while its conversation is archived, and tells a refusal failed",
+  () => {
+    const engine = board();
+    engine.addTask({ id: "task-7" });
+    const store = threadStore();
+    return Effect.gen(function* () {
+      const threads = yield* service(store);
+      yield* threads.reconcile();
+      const steer = engine.queueSteer("task-7", "Stop and ask first");
+      store.threads.get(THREAD)!.archivedAt = "2026-11-22T11:00:00.000Z";
+      yield* threads.reconcile();
+      assert.equal(steerSends(store).length, 0);
+      assert.equal(engine.steer(steer).state, "pending");
+      yield* store.restore(THREAD);
+      store.rejects.add(steerMessageId(TASK, steer));
+      yield* threads.reconcile();
+      assert.deepInclude(engine.steer(steer), { state: "failed" });
+      assert.match(engine.steer(steer).failure ?? "", /rejected/);
+      // A failed steer is settled for good: it is not sent again.
+      yield* threads.reconcile();
+      assert.equal(steerSends(store).length, 1);
+    }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-steer-failed-")));
+  },
+);

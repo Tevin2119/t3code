@@ -1,5 +1,4 @@
 import type { EnvironmentId } from "@t3tools/contracts";
-import * as Schema from "effect/Schema";
 import {
   CheckIcon,
   CircleAlertIcon,
@@ -17,14 +16,12 @@ import {
 } from "lucide-react";
 import { useState } from "react";
 
-import { useLocalStorage } from "../../hooks/useLocalStorage";
 import { fullAutoAttribution, type TaskView, type TimelineEntry } from "../../lib/delivery";
 import { messageStateLabel, sectionOf } from "../../lib/deliveryBoard";
 import { cn } from "../../lib/utils";
 import { useBoardStore, useDeliveryAct, usePersonName } from "../../state/delivery";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
-import { TaskComposer } from "./TaskComposer";
 import { TaskFileList } from "./taskFiles";
 import { Avatar, time } from "./taskParts";
 
@@ -121,7 +118,6 @@ function Message(props: {
   readonly environmentId: EnvironmentId | null;
   readonly entry: TimelineEntry;
   readonly repliedTo: TimelineEntry | null;
-  readonly onReply: ((entry: TimelineEntry) => void) | undefined;
   readonly onSettle: ((entry: TimelineEntry, accept: boolean) => void) | undefined;
   readonly busy: boolean;
 }) {
@@ -179,13 +175,6 @@ function Message(props: {
           <p className="font-mono text-3xs break-all text-muted-foreground">
             evidence: {entry.evidence}
           </p>
-        ) : null}
-        {open && entry.kind === "question" && props.onReply ? (
-          <div>
-            <Button size="xs" variant="outline" onClick={() => props.onReply?.(entry)}>
-              Answer
-            </Button>
-          </div>
         ) : null}
         {open && entry.kind === "proposal" && props.onSettle ? (
           <div className="flex gap-1">
@@ -248,12 +237,10 @@ function Happening(props: {
   );
 }
 
-const replySequenceSchema = Schema.NullOr(Schema.Number);
-
 /**
- * The engine's own log of the task, its messages and its steps, with its composer at the foot of
- * them. It lives in the Task item of the details. The composer is temporary: it goes once the
- * conversation carries change and answer natively.
+ * The engine's own log of the task, its messages and its steps. It lives in the Task item of the
+ * details. Nothing is written here: a change is said in the task's conversation, and the engine's
+ * questions are answered under Needs you.
  */
 export function TaskEngineLog(props: {
   readonly environmentId: EnvironmentId | null;
@@ -267,15 +254,6 @@ export function TaskEngineLog(props: {
   const showDetail = useBoardStore((state) => state.showDetail);
   const setShowDetail = useBoardStore((state) => state.setShowDetail);
   const act = useDeliveryAct(props.environmentId, "task proposal");
-  const [replySeq, setReplySeq] = useLocalStorage(
-    `t3code:task-reply-target:${JSON.stringify([props.environmentId, task.id])}`,
-    null as number | null,
-    replySequenceSchema,
-  );
-  const replyTo =
-    task.timeline.find((entry) => entry.seq === replySeq && entry.kind === "question") ?? null;
-  const setReplyTo = (entry: TimelineEntry | null) => setReplySeq(entry?.seq ?? null);
-  const [composerExpanded, setComposerExpanded] = useState(false);
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
   const entries = task.timeline.filter((entry) => showDetail || !entry.detail);
@@ -323,10 +301,6 @@ export function TaskEngineLog(props: {
               entry={entry}
               repliedTo={entry.replyTo !== null ? (bySeq.get(entry.replyTo) ?? null) : null}
               busy={busy}
-              onReply={(entry) => {
-                setReplyTo(entry);
-                setComposerExpanded(true);
-              }}
               onSettle={(item, accept) => void settle(item, accept)}
               onShow={props.onShow}
             />
@@ -346,16 +320,6 @@ export function TaskEngineLog(props: {
         ) : null}
       </div>
       {problem ? <p className="text-sm text-warning">{problem}</p> : null}
-      <TaskComposer
-        expanded={composerExpanded}
-        onExpandedChange={setComposerExpanded}
-        environmentId={props.environmentId}
-        task={task}
-        replyTo={replyTo}
-        onReplyTo={setReplyTo}
-        onReplySent={(seq) => setReplySeq((current) => (current === seq ? null : current))}
-        onSent={props.onChanged}
-      />
     </section>
   );
 }
