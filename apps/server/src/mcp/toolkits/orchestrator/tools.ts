@@ -302,7 +302,7 @@ const ThreadSendTool = Tool.make("t3_thread_send", {
 
 const ThreadWaitTool = Tool.make("t3_thread_wait", {
   description:
-    "Wait for a thread's run to finish. A failed start includes `failureReason`. No `runId`: latest. Idle: at once. On timeout, with `next` end your turn; without, call again.",
+    "Wait for a thread's run to finish. No `runId`: latest. Idle: at once. On timeout, with `next` end your turn; without, call again.",
   parameters: OrchestratorMcpThreadWaitInput,
   success: OrchestratorMcpThreadWaitResult,
   failure: OrchestratorMcpFailure,
@@ -369,7 +369,7 @@ const EnvironmentUnlinkTool = Tool.make("t3_environment_unlink", {
   .annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenWhileLinksOff);
 const DeliveryReadTool = Tool.make("delivery_read", {
   description:
-    "Read Operation-PaperClip board and deployment observations for a folder: repository, boards, teams, routes, deployments, linked tasks. Read-only; never repairs setup. `fresh` bypasses the cache; `preflight` reports delivery readiness.",
+    "Read a folder's Operation-PaperClip repository, boards, teams, routes, deployments and linked tasks. Read-only; never repairs setup. `fresh` skips the cache; `preflight` reports readiness.",
   // PeerForwarding.readDelivery also sanitizes remote failures into discovery diagnostics.
   parameters: Schema.Struct({
     ...DeliveryDiscoveryInput.fields,
@@ -391,7 +391,7 @@ const DeliveryReadTool = Tool.make("delivery_read", {
 
 const NativeBuildStepTool = Tool.make("delivery_native_build_step", {
   description:
-    "Step an opted-in build from its exact engine worktree. Retries reuse one native child; the server reads its result. Step after completion or engine cancellation. Read-only flows stay legacy. No caller-supplied results.",
+    "Step an opted-in build from its exact engine worktree. Retries reuse one native child; the server reads its result. Step after completion or cancellation. Read-only flows stay legacy. No caller-supplied results.",
   parameters: DeliveryNativeBuildStepInput,
   success: DeliveryNativeBuildStepResult,
   failure: OrchestratorMcpFailure,
