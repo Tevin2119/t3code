@@ -244,6 +244,30 @@ describe("threadRoutes", () => {
     },
   );
 
+  it("opens an archived board task's thread, which no archive list can restore", () => {
+    const projection = makeThreadProjectionFixture();
+    const archivedAt = DateTime.makeUnsafe("2026-01-02T00:00:00Z");
+    const boardTask = {
+      ...projection.thread,
+      archivedAt,
+      lineage: { ...projection.thread.lineage, engineIntake: "board-task:board-1:task-7" },
+    };
+    const stateOf = (thread: typeof boardTask) =>
+      resolveThreadRouteRenderState({
+        bootstrapComplete: true,
+        serverThreadExists: false,
+        serverThreadDeleted: false,
+        draftThreadExists: false,
+        unlistedThreadDetail: {
+          ...EMPTY_ENVIRONMENT_THREAD_STATE,
+          status: "live",
+          data: Option.some({ ...projection, thread }),
+        },
+      });
+    expect(stateOf(boardTask)).toBe("ready");
+    expect(stateOf({ ...boardTask, deletedAt: archivedAt })).toBe("missing");
+  });
+
   it("waits for the live shell before redirecting a deleted thread", () => {
     expect(
       resolveThreadRouteRenderState({

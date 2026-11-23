@@ -2001,6 +2001,8 @@ export const ServerSettingsPatch = Schema.Struct({
   setModelFavorites: Schema.optionalKey(
     Schema.Array(Schema.Struct({ ...ModelFavorite.fields, favorite: Schema.Boolean })),
   ),
+  /** Puts these favorites first, in this order. Ones not listed keep their order after them. */
+  setModelFavoriteOrder: Schema.optionalKey(ModelFavorites),
   setModelsHidden: Schema.optionalKey(
     Schema.Array(Schema.Struct({ ...ModelFavorite.fields, hidden: Schema.Boolean })),
   ),

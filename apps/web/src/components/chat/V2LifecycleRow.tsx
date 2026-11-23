@@ -584,6 +584,7 @@ function SubagentTimelineLink(props: {
           elapsed={agent ? <AgentElapsed agent={projectedSubagentsToRuntime([agent])[0]!} /> : null}
           model={agent?.model ?? null}
           modelSelection={agent?.modelSelection}
+          substituteFor={agent?.teamChat?.substituteFor}
           status={liveStatus}
           result={agent?.result ?? props.result}
           progress={agent?.progress ?? props.progress}
@@ -597,6 +598,7 @@ function SubagentTimelineTooltip(
   props: Parameters<typeof SubagentTimelineLink>[0] & {
     model: string | null;
     modelSelection: OrchestrationV2Subagent["modelSelection"];
+    substituteFor: NonNullable<OrchestrationV2Subagent["teamChat"]>["substituteFor"];
     elapsed: ReactNode;
   },
 ) {
@@ -619,6 +621,7 @@ function SubagentTimelineTooltip(
       providerInstanceId={props.providerInstanceId}
       origin={props.origin}
       modelSelection={props.modelSelection}
+      substituteFor={props.substituteFor}
       provider={providers.find((provider) => provider.instanceId === props.providerInstanceId)}
       providers={providers}
       driver={props.driver}

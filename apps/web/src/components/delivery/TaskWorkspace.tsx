@@ -2325,6 +2325,7 @@ export function TaskWorkspace(props: {
                   task={task}
                   state={conversation.state}
                   seat={conversation.seat}
+                  seatResolving={conversation.seatResolving}
                   seatName={conversation.seatName}
                   onOpenThread={openInCentre}
                   onBackToTask={conversation.backToTask}

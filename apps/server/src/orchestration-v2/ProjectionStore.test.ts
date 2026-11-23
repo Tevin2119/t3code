@@ -58,6 +58,7 @@ import {
   THREAD_HISTORY_SNAPSHOT_ROW_LIMIT,
   THREAD_HISTORY_TURN_SNAPSHOT_ROW_LIMIT,
 } from "./threadHistoryPaging.ts";
+import { loadSubscriberShellSnapshot } from "./ShellStream.ts";
 import { buildBoundedThreadStreamSnapshot } from "./ThreadStream.ts";
 import { limitRecoveryCommand } from "./UsageLimitRecoveryWorker.ts";
 
@@ -3314,6 +3315,35 @@ it.effect("SQL list older settled threads below a cursor", () =>
         .map((thread) => thread.id),
       [id("child"), id("engine-intake"), id("engine-intake-open")],
     );
+    // What a client is sent: a subscriber that reads families gets no server-owned thread, open
+    // or settled. One that cannot read families still gets every row.
+    const sql = yield* SqlClient.SqlClient;
+    const serverOwnedSentTo = (omitIdleSubagents: boolean) =>
+      loadSubscriberShellSnapshot({
+        sql,
+        listShellIndex: store.listActiveShellIndex(),
+        readThreads: (threadIds) =>
+          store.readShellSnapshot({
+            location: "active",
+            ...(threadIds === undefined ? {} : { threadIds }),
+          }),
+        listProjects: Effect.succeed([]),
+        latestSequence: Effect.succeed(0),
+        options: { omitIdleSubagents, omitOlderSettled: false },
+      }).pipe(
+        Effect.map(({ snapshot }) => ({
+          sent: snapshot.threads
+            .map((thread) => thread.id)
+            .filter((threadId) => threadId.includes("engine-intake")),
+          counted: snapshot.serverOwnedThreads,
+        })),
+      );
+    // Either way the snapshot counts them per project, so a client can say the project has them.
+    const counted = [{ projectId: ProjectId.make("project:a"), count: 2 }];
+    assert.deepEqual(yield* serverOwnedSentTo(true), { sent: [], counted });
+    const everyRow = yield* serverOwnedSentTo(false);
+    assert.sameMembers(everyRow.sent, [id("engine-intake"), id("engine-intake-open")]);
+    assert.deepEqual(everyRow.counted, counted);
 
     const list = (
       before: { readonly settledAt: string; readonly threadId?: ThreadId },

@@ -84,6 +84,7 @@ import {
   managedRuntimeModeCeilingMessage,
 } from "@t3tools/contracts";
 import * as KeyedLock from "@t3tools/shared/KeyedLock";
+import { limitedLeadHandoffThreadId } from "@t3tools/shared/limitedSeat";
 import { modelSelectionsEqual } from "@t3tools/shared/model";
 import { expandAssistantCitationsForProvider } from "@t3tools/shared/assistantCitations";
 import { modelSwitchSince } from "./modelSwitch.ts";
@@ -300,6 +301,34 @@ export class OrchestratorSubagentThreadReadOnlyError extends Schema.TaggedError<
   }
 }
 
+/** The one sentence every entry point gives for a send into an archived thread. */
+export const archivedThreadRefusal = (threadId: ThreadId) =>
+  `Thread ${threadId} is archived and cannot receive messages.`;
+
+/** An archived thread receives nothing: no client, CLI or tool send starts or steers a turn in it. */
+export class OrchestratorThreadArchivedError extends Schema.TaggedError<OrchestratorThreadArchivedError>()(
+  "OrchestratorThreadArchivedError",
+  { commandId: CommandId, threadId: ThreadId },
+) {
+  override get message(): string {
+    return archivedThreadRefusal(this.threadId);
+  }
+}
+
+/** The one sentence every entry point gives for a send into a thread whose work was handed on. */
+const handedOnThreadRefusal =
+  "This conversation continues in a linked thread. Open that thread instead of resuming this one.";
+
+/** A thread whose limited run continues in a linked thread receives nothing while that one exists. */
+export class OrchestratorThreadHandedOnError extends Schema.TaggedError<OrchestratorThreadHandedOnError>()(
+  "OrchestratorThreadHandedOnError",
+  { commandId: CommandId, threadId: ThreadId, continuedIn: ThreadId },
+) {
+  override get message(): string {
+    return handedOnThreadRefusal;
+  }
+}
+
 export class OrchestratorThreadAboveModeLimitError extends Schema.TaggedError<OrchestratorThreadAboveModeLimitError>()(
   "OrchestratorThreadAboveModeLimitError",
   {
@@ -387,6 +416,8 @@ export const OrchestratorV2Error = Schema.Union([
   OrchestratorCommandPreviouslyRejectedError,
   OrchestratorCommandIdConflictError,
   OrchestratorSubagentThreadReadOnlyError,
+  OrchestratorThreadArchivedError,
+  OrchestratorThreadHandedOnError,
   OrchestratorThreadAboveModeLimitError,
   OrchestratorProviderSelectionBusyError,
   OrchestratorRuntimeModeAboveCeilingError,
@@ -831,6 +862,19 @@ function metadataUpdateContinuation(
         createdBy: "agent",
         creationSource: "mcp",
       };
+}
+
+/** The server's own follow-up to a run, as against what a person, the CLI or a tool sends. */
+function isServerFollowUp(
+  command: Extract<OrchestrationV2Command, { readonly type: "message.dispatch" }>,
+): boolean {
+  return (
+    command.steerFollowUpOfRunId !== undefined ||
+    command.usageLimitContinuationOfRunId !== undefined ||
+    command.restartContinuationOfRunId !== undefined ||
+    command.notification !== undefined ||
+    command.idleCompaction !== undefined
+  );
 }
 
 // A later command for the first message would leave the new thread committed with no run,
@@ -1893,6 +1937,33 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       .findThread(threadId)
       .pipe(Effect.mapError((cause) => new OrchestratorProjectionError({ threadId, cause })));
 
+  /**
+   * Whether a limited lead's run was handed on to a linked thread. Resuming it here as well would
+   * run the same work twice, so nothing arms or resumes it while that thread exists.
+   */
+  const runHandedOn = (runId: RunId) =>
+    findThread(limitedLeadHandoffThreadId(runId)).pipe(
+      Effect.map((continued) => continued !== null && continued.deletedAt === null),
+    );
+
+  /**
+   * The linked thread these runs' work continues in, when the latest executed one is a limited run
+   * that was handed on. Such a thread is read-only while that thread exists: a second run here
+   * would redo the work, so it takes no message and starts nothing from its queue.
+   */
+  const handedOnTo = Effect.fnUntraced(function* (runs: ReadonlyArray<OrchestrationV2Run>) {
+    const latest = latestExecutedRun(runs);
+    if (latest?.status !== "failed" || !(yield* runHandedOn(latest.id))) return null;
+    return limitedLeadHandoffThreadId(latest.id);
+  });
+
+  /**
+   * `handedOnTo` for a delegated task's result, read from the run that spawned the task alone so a
+   * long parent costs nothing more. A task of an earlier run is caught where its wake would start.
+   */
+  const spawningRunHandedOn = (run: OrchestrationV2Run) =>
+    run.status === "failed" ? runHandedOn(run.id) : Effect.succeed(false);
+
   /** Side chats live inside their parent, so deleting or archiving the parent takes them too. */
   const liveSideChatIds = Effect.fn("Orchestrator.liveSideChatIds")(
     function* (threadId: ThreadId) {
@@ -2084,6 +2155,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         controls.thread.deletedAt !== null
       )
         return;
+      // A handed-on parent takes no result, as an archived one takes none.
+      if (yield* spawningRunHandedOn(parentRun)) return;
       const messages = yield* projectionStore.getThreadRecords(threadId, ["messages"], {
         messageIds: [delivery.messageId],
       });
@@ -2503,6 +2576,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       ) {
         return;
       }
+      // Every start of a queued run passes here: a resume, a mode change, recovery, a wake, a run's
+      // end. None starts one on a thread whose work continues in a linked thread.
+      if ((yield* handedOnTo(projection.runs)) !== null) return;
 
       if (yield* cancelStaleQuestionWakes(projection)) {
         projection = yield* readCommandProjection(threadId);
@@ -4827,6 +4903,19 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           cause: "The provider limit changed before recovery could be configured.",
         });
       }
+      const previous = thread.limitRecovery;
+      const resumes =
+        command.limitRecovery.autoResume ??
+        (previous?.runId === command.limitRecovery.runId &&
+          previous.resetAt === command.limitRecovery.resetAt &&
+          previous.autoResume);
+      if (resumes && (yield* runHandedOn(command.limitRecovery.runId))) {
+        return yield* new OrchestratorDispatchError({
+          commandId: command.commandId,
+          commandType: command.type,
+          cause: handedOnThreadRefusal,
+        });
+      }
     }
     let restoredUnsettledAt: DateTime.Utc | null | undefined;
     if (command.type === "thread.unsettle" && command.restoreUnsettledAt !== undefined) {
@@ -7114,6 +7203,56 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     return thread;
   });
 
+  /**
+   * An archived thread receives nothing a person, the CLI or a tool sends. The server's own
+   * follow-ups to a run (a steer follow-up, a usage-limit or restart continuation, a notification,
+   * an idle compaction) are not refused here: each settles quietly on an archived thread below.
+   */
+  const refuseArchivedThreadMessage = Effect.fnUntraced(function* (
+    command: Extract<OrchestrationV2Command, { readonly type: "message.dispatch" }>,
+    thread: Pick<OrchestrationV2AppThread, "archivedAt">,
+  ) {
+    if (thread.archivedAt !== null && !isServerFollowUp(command)) {
+      return yield* new OrchestratorThreadArchivedError({
+        commandId: command.commandId,
+        threadId: command.threadId,
+      });
+    }
+  });
+
+  /**
+   * A thread whose latest limited run continues in a linked thread is read-only while that thread
+   * exists: a second run here would redo the work. What a person, the CLI or a tool sends is
+   * refused; the server's own follow-ups and a delegated task's result settle quietly, starting
+   * nothing.
+   */
+  const settleHandedOnThreadMessage = Effect.fnUntraced(function* (
+    command: Extract<OrchestrationV2Command, { readonly type: "message.dispatch" }>,
+    projection: Pick<OrchestrationV2ThreadProjection, "thread" | "runs">,
+    events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
+  ) {
+    const continuedIn = yield* handedOnTo(projection.runs);
+    if (continuedIn === null) return false;
+    if (!isServerFollowUp(command) && command.delegatedCompletion === undefined) {
+      return yield* new OrchestratorThreadHandedOnError({
+        commandId: command.commandId,
+        threadId: command.threadId,
+        continuedIn,
+      });
+    }
+    // The unchanged row gives the automatic delivery an accepted receipt, so it is not retried.
+    yield* emit(
+      events,
+      command,
+    )({
+      type: "thread.metadata-updated",
+      threadId: command.threadId,
+      occurredAt: yield* DateTime.now,
+      payload: projection.thread,
+    });
+    return true;
+  });
+
   const dispatchMessage = Effect.fn("Orchestrator.dispatchMessage")(function* (
     command: Extract<OrchestrationV2Command, { readonly type: "message.dispatch" }>,
     events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
@@ -7141,6 +7280,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           }
         : undefined,
     );
+    if (yield* settleHandedOnThreadMessage(command, projection, events)) return;
     if (command.steerFollowUpOfRunId !== undefined) {
       const source = projection.runs.find((run) => run.id === command.steerFollowUpOfRunId);
       if (
@@ -14744,7 +14884,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       input.parentRun === undefined ||
       input.parentProjection.thread.archivedAt !== null ||
       input.parentProjection.thread.deletedAt !== null ||
-      (cohort !== undefined && cohort.disposition !== "open")
+      (cohort !== undefined && cohort.disposition !== "open") ||
+      // A handed-on parent takes no result, as an archived one takes none.
+      (yield* spawningRunHandedOn(input.parentRun))
     ) {
       return {
         task: {
@@ -15842,6 +15984,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         break;
       case "message.dispatch": {
         const thread = yield* refuseNativeSubagentMessage(command);
+        yield* refuseArchivedThreadMessage(command, thread);
         const guestSend =
           command.guestMessageId === undefined
             ? undefined
@@ -15932,6 +16075,14 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             commandId: command.commandId,
             commandType: command.type,
             cause: `Thread ${command.threadId} is not active.`,
+          });
+        }
+        const continuedIn = yield* handedOnTo(projection.runs);
+        if (continuedIn !== null) {
+          return yield* new OrchestratorThreadHandedOnError({
+            commandId: command.commandId,
+            threadId: command.threadId,
+            continuedIn,
           });
         }
         const selectedRunId = command.type === "queued-run.start" ? command.runId : undefined;
@@ -17019,7 +17170,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           // A Stop that reached the run before its limit failure landed had nothing to disarm.
           const stopped = yield* stopReachedRun(command, input.threadId, input.limitRecovery.runId);
           yield* dispatchWithReceiptEffect(
-            stopped
+            stopped || (yield* runHandedOn(input.limitRecovery.runId))
               ? {
                   ...command,
                   limitRecovery: { ...input.limitRecovery, autoResume: false, snooze: false },

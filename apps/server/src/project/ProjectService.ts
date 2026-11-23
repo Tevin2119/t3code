@@ -1,6 +1,8 @@
 import {
   CommandId,
+  isServerOwnedThreadLineage,
   type OrchestrationProjectShell,
+  type OrchestrationV2ThreadShell,
   PROJECT_TRACKED_FOLDERS_MAX,
   ProjectId,
   type Project,
@@ -655,9 +657,11 @@ export const make = Effect.gen(function* () {
     },
   );
 
+  // `keep: "archived"` ends the thread's work and archives it; see `deleteChildThreads`.
   const deleteChildThread = Effect.fn("ProjectService.deleteChildThread")(function* (
     input: ProjectDeleteInput,
     threadId: ThreadId,
+    keep?: "archived",
   ) {
     yield* legacyImporter.ensureTranscript(threadId);
     const projection = yield* threadProjections.getThreadRecords(threadId, [
@@ -671,16 +675,26 @@ export const make = Effect.gen(function* () {
     if (projection.thread.deletedAt !== null || projection.thread.projectId !== input.projectId) {
       return;
     }
-    const command = {
-      type: "thread.delete" as const,
-      commandId: CommandId.make(`${input.commandId}:delete-thread:${threadId}`),
-      threadId,
-    };
+    if (keep === "archived" && projection.thread.archivedAt !== null) return;
+    const command =
+      keep === "archived"
+        ? {
+            type: "thread.archive" as const,
+            commandId: CommandId.make(`${input.commandId}:archive-thread:${threadId}`),
+            threadId,
+          }
+        : {
+            type: "thread.delete" as const,
+            commandId: CommandId.make(`${input.commandId}:delete-thread:${threadId}`),
+            threadId,
+          };
     const now = yield* DateTime.now;
     const plan = yield* planThreadDeletion({
       command,
+      ...(keep === undefined ? {} : { keep }),
       projection,
-      attachmentIds: yield* threadProjections.getThreadAttachmentIds(threadId),
+      attachmentIds:
+        keep === "archived" ? [] : yield* threadProjections.getThreadAttachmentIds(threadId),
       now,
       idAllocator,
     });
@@ -705,6 +719,24 @@ export const make = Effect.gen(function* () {
     }
   });
 
+  /**
+   * The project's threads the server started for itself, a board task's conversation among them,
+   * with the seats and side chats under them. No list shows these, so removing the project must
+   * not delete them out of sight: their work ends and they are archived.
+   */
+  const serverOwnedFamilyIds = (
+    threads: ReadonlyArray<Pick<OrchestrationV2ThreadShell, "id" | "lineage">>,
+  ) => {
+    const owned = new Set<ThreadId>(
+      threads.filter((thread) => isServerOwnedThreadLineage(thread.lineage)).map(({ id }) => id),
+    );
+    return new Set(
+      threads
+        .filter((thread) => owned.has(thread.id) || owned.has(thread.lineage.rootThreadId))
+        .map(({ id }) => id),
+    );
+  };
+
   const deleteChildThreads = Effect.fn("ProjectService.deleteChildThreads")(function* (
     input: ProjectDeleteInput,
   ) {
@@ -723,12 +755,18 @@ export const make = Effect.gen(function* () {
     if (projectThreads.length > 0 && input.force !== true) {
       return yield* new ProjectNotEmptyError({ projectId });
     }
+    const kept = serverOwnedFamilyIds(projectThreads);
     // Delete children durably before the project so a failed cascade can be retried.
     yield* Effect.forEach(
       projectThreads,
       (thread) =>
         threadCommands
-          .withDeletionLock(threadCommands.withLock(thread.id, deleteChildThread(input, thread.id)))
+          .withDeletionLock(
+            threadCommands.withLock(
+              thread.id,
+              deleteChildThread(input, thread.id, kept.has(thread.id) ? "archived" : undefined),
+            ),
+          )
           .pipe(
             Effect.mapError(
               (cause) =>

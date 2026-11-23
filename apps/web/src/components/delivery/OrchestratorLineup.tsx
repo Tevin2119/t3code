@@ -1,5 +1,6 @@
 import {
   DELIVERY_HARNESS_BY_DRIVER,
+  deliveryLimitedSeatPolicy,
   type DeliveryOrchestrationConfig,
   type EnvironmentId,
   type ModelSelection,
@@ -45,6 +46,8 @@ function valueOfLineup(
                 included: true,
                 modelSelection: joined.modelSelection,
                 ...(joined.access ? { access: joined.access } : {}),
+                ...(joined.picked ? { picked: true } : {}),
+                ...(joined.substitute ? { substitute: joined.substitute } : {}),
               }
             : { included: false },
         ];
@@ -57,9 +60,12 @@ function valueOfLineup(
         role: item.role,
         modelSelection: item.modelSelection,
         ...(item.access ? { access: item.access } : {}),
+        ...(item.substitute ? { substitute: item.substitute } : {}),
       })),
     ...(lineup.critique ? { critique: lineup.critique } : {}),
     ...(lineup.access ? { access: lineup.access } : {}),
+    // A started conversation keeps its own answer; the team's default is for new ones.
+    limitedSeat: deliveryLimitedSeatPolicy(lineup),
   };
 }
 
@@ -81,6 +87,8 @@ export function OrchestratorLineup(props: {
     readonly role: string;
     readonly modelSelection: ModelSelection;
   }) => void;
+  /** A board task's conversation, where the team's own setting decides for a limited seat. */
+  readonly boardOwned?: boolean | undefined;
   /** Leaves the team for ordinary chat; the composer remembers it server-side. */
   readonly onLeaveToSingle?: () => void;
 }) {
@@ -119,6 +127,7 @@ export function OrchestratorLineup(props: {
       entries: props.entries,
       critique: forValue.critique,
       access: forValue.access,
+      limitedSeat: forValue.limitedSeat,
       extras: forValue.extraParticipants,
       orchestrator: {
         harness:
@@ -227,6 +236,7 @@ export function OrchestratorLineup(props: {
         roster={roster}
         entries={props.entries}
         models={props.models}
+        boardOwned={props.boardOwned}
         {...(props.onFocusChat ? { onFocus: props.onFocusChat } : {})}
         {...(binding ? { about: "A conversation keeps the team it started with." } : {})}
         {...(lineup && props.onLeaveToSingle

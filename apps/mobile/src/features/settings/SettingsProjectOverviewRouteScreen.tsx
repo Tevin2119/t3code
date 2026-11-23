@@ -6,7 +6,10 @@ import { Button } from "../../components/ui/Button";
 import { ProjectFavicon } from "../../components/ProjectFavicon";
 import * as Dialog from "../../components/ui/Dialog";
 import { AuthOrchestrationOperateScope } from "@t3tools/contracts";
-import { planProjectRemoval } from "@t3tools/client-runtime/state/projects";
+import {
+  archivedServerOwnedThreadCount,
+  planProjectRemoval,
+} from "@t3tools/client-runtime/state/projects";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
@@ -22,6 +25,7 @@ import { Platform, Pressable, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { projectEnvironment } from "../../state/projects";
+import { deliveryEnvironment } from "../../state/delivery";
 import { useThreadShells } from "../../state/entities";
 import { appAtomRegistry } from "../../state/atom-registry";
 import {
@@ -46,7 +50,7 @@ import { useSettingsEnvironmentFilter, type SettingsTarget } from "./settings-en
 import { leaveSettingsPage } from "./settings-navigation";
 import { workspaceHasColumns } from "../layout/workspace/workspace-selection-store";
 import { DEFAULT_SETTINGS_PAGE } from "../layout/workspace/workspace-tab-navigation";
-import { readUnloadedThreadCount } from "../../state/olderSettledShelf";
+import { readServerOwnedThreadCount, readUnloadedThreadCount } from "../../state/olderSettledShelf";
 import { m } from "../../i18n/messages";
 
 export function SettingsProjectOverviewRouteScreen() {
@@ -160,6 +164,9 @@ function ProjectOverviewContent(props: {
     removableEnvironments.has(member.environmentId),
   );
   const deleteProject = useAtomCommand(projectEnvironment.delete, { reportFailure: false });
+  const fetchArchivedBoardThreads = useAtomCommand(deliveryEnvironment.fetchArchivedBoardThreads, {
+    reportFailure: false,
+  });
   const updateProject = useAtomCommand(projectEnvironment.update, {
     label: "project name update",
     reportFailure: true,
@@ -237,9 +244,18 @@ function ProjectOverviewContent(props: {
     return false;
   };
 
-  const removeMembers = (members: readonly EnvironmentProject[]) => {
+  const removeMembers = async (members: readonly EnvironmentProject[]) => {
     if (!checkRemovalAccess(members) || !startRemoval()) return;
     const projectKey = props.projectKey;
+    // The shell counts only the active board conversations; the archived ones are kept. This
+    // settles on its own deadline and never rejects, so the removal guard is always released.
+    const archivedKept = await archivedServerOwnedThreadCount({
+      members,
+      read: async (environmentId) => {
+        const result = await fetchArchivedBoardThreads({ environmentId, input: {} });
+        return result._tag === "Success" ? result.value.threads : null;
+      },
+    });
     const plan = planProjectRemoval(
       {
         members: members.map((member) => ({
@@ -253,6 +269,8 @@ function ProjectOverviewContent(props: {
         displayName,
         threads,
         unloadedThreadCount: readUnloadedThreadCount(members, threads),
+        serverOwnedThreadCount: readServerOwnedThreadCount(members, threads),
+        archivedServerOwnedThreadCount: archivedKept,
       },
       m,
     );
@@ -433,7 +451,7 @@ function ProjectOverviewContent(props: {
                 <RemoveCheckoutAction
                   member={member}
                   disabled={isRemoving}
-                  onPress={() => removeMembers([member])}
+                  onPress={() => void removeMembers([member])}
                 />
               ) : null}
             </View>
@@ -485,7 +503,7 @@ function ProjectOverviewContent(props: {
           tone="danger"
           disabled={!canRemoveGroup || isRemoving}
           loading={isRemoving}
-          onPress={() => removeMembers(props.members)}
+          onPress={() => void removeMembers(props.members)}
         />
       </SettingsSection>
     </>

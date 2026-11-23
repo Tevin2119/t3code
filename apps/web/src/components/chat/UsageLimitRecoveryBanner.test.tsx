@@ -6,7 +6,7 @@ import { usageLimitRecoveryBannerItem } from "./UsageLimitRecoveryBanner";
 
 const stoppedAt = new Date(2026, 9, 20, 12, 0);
 
-function bannerItem(resetAt: Date, timestampFormat: TimestampFormat = "24-hour") {
+function bannerItem(resetAt: Date, timestampFormat: TimestampFormat = "24-hour", handedOn = false) {
   return usageLimitRecoveryBannerItem({
     runId: RunId.make("run-1"),
     errorCode: null,
@@ -14,6 +14,7 @@ function bannerItem(resetAt: Date, timestampFormat: TimestampFormat = "24-hour")
     stoppedAt: stoppedAt.toISOString(),
     settled: false,
     requestPending: false,
+    handedOn,
     snoozedUntil: null,
     recovery: null,
     timestampFormat,
@@ -28,6 +29,15 @@ describe("usageLimitRecoveryBannerItem", () => {
   ] as const)("formats a same-day reset with the %s setting", (timestampFormat, expected) => {
     using _now = vi.spyOn(Date, "now").mockReturnValue(stoppedAt.getTime());
     expect(bannerItem(new Date(2026, 9, 20, 17, 30), timestampFormat).description).toBe(expected);
+  });
+
+  it("offers no resume or snooze once the run continues in a linked thread", () => {
+    using _now = vi.spyOn(Date, "now").mockReturnValue(stoppedAt.getTime());
+    const resetAt = new Date(2026, 9, 20, 17, 30);
+    expect(bannerItem(resetAt).actions).not.toBeNull();
+    const handedOn = bannerItem(resetAt, "24-hour", true);
+    expect(handedOn.actions).toBeNull();
+    expect(handedOn.description).toBe("Resets 17:30");
   });
 
   it("names the day when the reset is tomorrow", () => {

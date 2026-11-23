@@ -22,6 +22,7 @@ import {
   CircleDashedIcon,
   CircleXIcon,
   FolderIcon,
+  GaugeIcon,
   GitBranchIcon,
   TerminalIcon,
 } from "lucide-react";
@@ -37,6 +38,8 @@ export function SubagentTooltipContent(props: {
   providerInstanceId: ProviderInstanceId;
   origin: OrchestrationV2Subagent["origin"];
   modelSelection?: OrchestrationV2Subagent["modelSelection"];
+  /** The seat's own model, when a substitute ran this turn because that one was limited. */
+  substituteFor?: NonNullable<OrchestrationV2Subagent["teamChat"]>["substituteFor"];
   provider?: ServerProvider | undefined;
   providers?: ReadonlyArray<ServerProvider> | undefined;
   driver?: ProviderDriverKind | undefined;
@@ -197,6 +200,16 @@ export function SubagentTooltipContent(props: {
         </span>
         {props.elapsed}
       </div>
+      {props.substituteFor ? (
+        <div className="flex min-w-0 items-center gap-2" data-subagent-substitute>
+          <GaugeIcon aria-hidden className="size-3 shrink-0" />
+          <span className="min-w-0 truncate">
+            {gt("Substitute for {model}, which reached its usage limit", {
+              model: props.substituteFor.model,
+            })}
+          </span>
+        </div>
+      ) : null}
       {metadata.map(({ label, value }, index) => {
         const Icon =
           props.childThread?.branch && !(hasProjectRow && index === 0) ? GitBranchIcon : FolderIcon;

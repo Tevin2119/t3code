@@ -1,6 +1,7 @@
 import { PullRequestProviderError } from "@t3tools/source-control-core/server/PullRequestProvider";
 import { PullRequestUnavailableError, SourceControlProviderKind } from "@t3tools/contracts";
 import { limitRecoveryCommand } from "./UsageLimitRecoveryWorker.ts";
+import { leadHandoffCommands, leadHandoffThreadId } from "../delivery/LimitedSeatSwap.ts";
 import { createOrchestrationV2TurnItemVisibility } from "@t3tools/shared/orchestrationV2Timeline";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
@@ -13352,7 +13353,254 @@ it.layer(layerSharedApplicationDataPlaneTest)("shared application data plane", (
   );
 });
 
+/**
+ * A thread whose first run failed on a usage limit that resets in a minute. `queueBehind` leaves a
+ * message queued behind that run, which the limit holds without writing a hold on it.
+ */
+const failLimitedLead = Effect.fn("failLimitedLead")(function* (
+  name: string,
+  options?: { readonly queueBehind?: boolean },
+) {
+  const orchestrator = yield* Orchestrator.OrchestratorV2;
+  const events = yield* EventSink.EventSinkV2;
+  const threadId = ThreadId.make(name);
+  const projectId = ProjectId.make(`${name}:project`);
+  const now = yield* DateTime.now;
+  yield* seedProject({
+    projectId,
+    title: "Hand-off project",
+    workspaceRoot: process.cwd(),
+    defaultModelSelection: modelSelection,
+    createdAt: DateTime.formatIso(now),
+  });
+  yield* orchestrator.dispatch({
+    type: "thread.create",
+    commandId: CommandId.make(`${name}:create`),
+    threadId,
+    projectId,
+    title: "Limited lead",
+    modelSelection,
+    runtimeMode: "full-access",
+    interactionMode: "default",
+    branch: null,
+    worktreePath: null,
+    createdBy: "user",
+    creationSource: "web",
+  });
+  yield* orchestrator.dispatch({
+    type: "message.dispatch",
+    commandId: CommandId.make(`${name}:start`),
+    threadId,
+    messageId: MessageId.make(`${name}:start`),
+    text: "Start work.",
+    attachments: [],
+    dispatchMode: { type: "defer_start" },
+    createdBy: "user",
+    creationSource: "web",
+  });
+  if (options?.queueBehind === true) {
+    yield* orchestrator.dispatch({
+      type: "message.dispatch",
+      commandId: CommandId.make(`${name}:queue`),
+      threadId,
+      messageId: MessageId.make(`${name}:queue`),
+      text: "Follow up.",
+      attachments: [],
+      dispatchMode: { type: "queue_after_active" },
+      createdBy: "user",
+      creationSource: "web",
+    });
+  }
+  const [source] = (yield* orchestrator.getThreadProjection(threadId)).runs as [
+    OrchestrationV2Run,
+    ...Array<OrchestrationV2Run>,
+  ];
+  const resetAt = DateTime.formatIso(DateTime.add(now, { minutes: 1 }));
+  yield* events.write({
+    events: [
+      {
+        id: EventId.make(`${name}:failed`),
+        type: "run.updated",
+        threadId,
+        occurredAt: now,
+        payload: { ...source, status: "failed", completedAt: now },
+      },
+      {
+        id: EventId.make(`${name}:error`),
+        type: "turn-item.updated",
+        threadId,
+        occurredAt: now,
+        payload: {
+          id: TurnItemId.make(`${name}:error`),
+          type: "error",
+          threadId,
+          runId: source.id,
+          nodeId: source.rootNodeId,
+          providerThreadId: null,
+          providerTurnId: null,
+          nativeItemRef: null,
+          parentItemId: null,
+          ordinal: 2,
+          status: "failed",
+          title: "Usage limit reached",
+          startedAt: now,
+          completedAt: now,
+          updatedAt: now,
+          failure: {
+            class: "usage_limit",
+            message: "Plan limit reached.",
+            code: "usageLimitExceeded",
+            retryable: null,
+            resetAt,
+          },
+        },
+      },
+    ],
+  });
+  const shellOf = Effect.map(orchestrator.getShellSnapshot(), (snapshot) =>
+    snapshot.threads.find((thread) => thread.id === threadId)!,
+  );
+  return { orchestrator, threadId, source, resetAt, now, shellOf };
+});
+
 it.layer(layerTest)("usage-limit recovery", (it) => {
+  it.effect("hands a limited lead on to a linked thread once, and stops its own resume", () =>
+    Effect.gen(function* () {
+      const { orchestrator, threadId, source, resetAt, now, shellOf } =
+        yield* failLimitedLead("limited-lead");
+      // Left alone, the recovery worker would arm this thread and resume it at the reset.
+      assert.isNotNull(limitRecoveryCommand(yield* shellOf, true, DateTime.toEpochMillis(now)));
+
+      const substitute = { instanceId: alternateInstanceId, model: "gpt-5.4" };
+      const handOff = leadHandoffCommands({
+        threadId,
+        title: "Limited lead",
+        runId: source.id,
+        resetAt,
+        substitute,
+      });
+      // The notice's button pressed twice: every command is sent again.
+      for (const command of [...handOff, ...handOff]) yield* orchestrator.dispatch(command);
+
+      const target = leadHandoffThreadId(source.id);
+      const continued = yield* orchestrator.getThreadProjection(target);
+      assert.deepInclude(continued.thread.lineage, {
+        parentThreadId: threadId,
+        relationshipToParent: "fork",
+      });
+      assert.deepEqual(continued.thread.forkedFrom, { type: "run", threadId, runId: source.id });
+      assert.lengthOf(continued.runs, 1);
+      assert.equal(continued.runs[0]?.providerInstanceId, alternateInstanceId);
+
+      const old = yield* shellOf;
+      assert.deepInclude(old.limitRecovery, { runId: source.id, autoResume: false });
+      assert.isNull(limitRecoveryCommand(old, true, Date.parse(resetAt)));
+      assert.lengthOf((yield* orchestrator.getThreadProjection(threadId)).runs, 1);
+
+      // "Resume at reset" pressed on the old thread: refused, and the recovery stays disarmed.
+      const rearm = yield* Effect.flip(
+        orchestrator.dispatch({
+          type: "thread.metadata.update",
+          commandId: CommandId.make("limited-lead:rearm"),
+          threadId,
+          limitRecovery: { runId: source.id, resetAt, autoResume: true },
+        }),
+      );
+      assert.include(String(rearm.cause), "continues in a linked thread");
+      assert.deepInclude((yield* shellOf).limitRecovery, { autoResume: false });
+      // Snoozing the old thread until its reset resumes nothing, so it stays allowed.
+      yield* orchestrator.dispatch({
+        type: "thread.metadata.update",
+        commandId: CommandId.make("limited-lead:snooze"),
+        threadId,
+        limitRecovery: { runId: source.id, resetAt, snooze: true },
+      });
+      assert.deepInclude((yield* shellOf).limitRecovery, { autoResume: false, snooze: true });
+      // A resume that still reaches the old thread starts no run there.
+      yield* orchestrator.dispatch({
+        type: "message.dispatch",
+        commandId: CommandId.make("limited-lead:resume"),
+        messageId: MessageId.make("limited-lead:resume"),
+        threadId,
+        usageLimitContinuationOfRunId: source.id,
+        text: "Continue where you left off.",
+        attachments: [],
+        dispatchMode: { type: "start_immediately" },
+        createdBy: "agent",
+        creationSource: "server",
+      });
+      assert.lengthOf((yield* orchestrator.getThreadProjection(threadId)).runs, 1);
+
+      // The composer's "Resume thread", a typed message, and the send the CLI and tools make.
+      const send = (name: string, extra: { readonly manualContinuationOfRunId?: RunId } = {}) =>
+        orchestrator.dispatch({
+          type: "message.dispatch",
+          commandId: CommandId.make(`limited-lead:${name}`),
+          messageId: MessageId.make(`limited-lead:${name}`),
+          threadId,
+          ...extra,
+          text: "Continue where you left off.",
+          attachments: [],
+          dispatchMode: { type: "start_immediately" },
+          ...(name === "cli"
+            ? { deliveryIntent: "auto" as const, createdBy: "agent", creationSource: "mcp" }
+            : { createdBy: "user", creationSource: "web" }),
+        });
+      for (const refusedSend of [
+        send("manual-resume", { manualContinuationOfRunId: source.id }),
+        send("typed"),
+        send("cli"),
+      ]) {
+        const refused = yield* Effect.flip(refusedSend);
+        assert.equal(refused._tag, "OrchestratorThreadHandedOnError");
+        assert.equal(
+          refused.message,
+          "This conversation continues in a linked thread. Open that thread instead of resuming this one.",
+        );
+      }
+      const kept = yield* orchestrator.getThreadProjection(threadId);
+      assert.deepEqual(
+        kept.runs.map((run) => run.id),
+        [source.id],
+      );
+      assert.lengthOf(kept.messages, 1);
+
+      // Deleting the linked thread reopens this one.
+      yield* orchestrator.dispatch({
+        type: "thread.delete",
+        commandId: CommandId.make("limited-lead:delete-continued"),
+        threadId: target,
+      });
+      yield* send("reopened");
+      assert.lengthOf((yield* orchestrator.getThreadProjection(threadId)).runs, 2);
+    }),
+  );
+
+  it.effect("records the worker's arming of a handed-on run as disarmed", () =>
+    Effect.gen(function* () {
+      const { orchestrator, threadId, source, resetAt, shellOf } =
+        yield* failLimitedLead("limited-lead-armed");
+      // Handed on with nothing to disarm, as when no recovery was on record yet.
+      for (const command of leadHandoffCommands({
+        threadId,
+        title: "Limited lead",
+        runId: source.id,
+        resetAt: null,
+        substitute: { instanceId: alternateInstanceId, model: "gpt-5.4" },
+      }))
+        yield* orchestrator.dispatch(command);
+      assert.isUndefined((yield* shellOf).limitRecovery?.autoResume);
+      yield* orchestrator.autoArmLimitRecovery({
+        commandId: CommandId.make("limited-lead-armed:auto-arm"),
+        threadId,
+        limitRecovery: { runId: source.id, resetAt, autoResume: true },
+      });
+      const old = yield* shellOf;
+      assert.deepInclude(old.limitRecovery, { runId: source.id, autoResume: false });
+      assert.isNull(limitRecoveryCommand(old, true, Date.parse(resetAt)));
+    }),
+  );
+
   it.effect.each(["interrupted", "usage_limit"] as const)(
     "manually resumes an %s run ahead of its queued message only once",
     (reason) =>
@@ -14225,6 +14473,130 @@ it.layer(layerTest)("usage-limit recovery", (it) => {
         assert.equal(resumed.runs[2]?.status, "starting");
         assert.isFalse(resumed.runs[2]?.queueHeld);
       }
+    }),
+  );
+});
+
+// The orchestrator starts a thread's queue on a runtime mode change only under a managed ceiling.
+const layerRuntimeModeCeilingTest = Layer.mergeAll(
+  RuntimeLayer.layer,
+  RuntimeLayer.layerEventSink,
+  ProjectStore.layer,
+  ProjectionStore.layer,
+  EffectOutbox.layer,
+  ThreadCommandExecutor.layer,
+).pipe(
+  Layer.provide(McpSessionRegistryTestkit.layer),
+  Layer.provide(McpProviderSessions.layer),
+  Layer.provide(SqlitePersistence.layerMemory),
+  Layer.provide(layerCheckpointStoreTest),
+  Layer.provide(layerServerConfig),
+  Layer.provide(
+    ServerSettings.layerTest(
+      {},
+      {
+        organization: "Example Corp",
+        lockedSettings: [],
+        limits: { maxRuntimeMode: "full-access" },
+      },
+    ),
+  ),
+  Layer.provide(layerTestProviderInstanceRegistry),
+  Layer.provide(layerGitWorkflowTest),
+  Layer.provide(layerProjectServiceTest),
+  Layer.provide(layerPlatformTest),
+);
+
+it.layer(layerRuntimeModeCeilingTest)("the queue of a handed-on thread", (it) => {
+  it.effect("starts no queued run while the work continues in a linked thread", () =>
+    Effect.gen(function* () {
+      const { orchestrator, threadId, source, resetAt } = yield* failLimitedLead(
+        "limited-lead-queue",
+        { queueBehind: true },
+      );
+      const runsOf = Effect.map(orchestrator.getThreadProjection(threadId), ({ runs }) =>
+        runs.map((run) => [run.id, run.status]),
+      );
+      const queued = (yield* orchestrator.getThreadProjection(threadId)).runs.find(
+        (run) => run.status === "queued",
+      )!;
+      assert.notEqual(queued.queueHeld, true);
+      for (const command of leadHandoffCommands({
+        threadId,
+        title: "Limited lead",
+        runId: source.id,
+        resetAt,
+        substitute: { instanceId: alternateInstanceId, model: "gpt-5.4" },
+      }))
+        yield* orchestrator.dispatch(command);
+      // The queued message is for a provider with no limit, so the limit does not hold it: only
+      // the hand-off stands between it and a second run here.
+      const events = yield* EventSink.EventSinkV2;
+      const substitute = { instanceId: alternateInstanceId, model: "gpt-5.4" };
+      yield* events.write({
+        events: [
+          {
+            id: EventId.make("limited-lead-queue:other-provider"),
+            type: "run.updated",
+            threadId,
+            occurredAt: yield* DateTime.now,
+            payload: {
+              ...queued,
+              modelSelection: substitute,
+              providerInstanceId: alternateInstanceId,
+            },
+          },
+        ],
+      });
+
+      // The CLI's, a tool's or another client's resume learns why nothing starts.
+      for (const resume of [
+        orchestrator.dispatch({
+          type: "queue.resume",
+          commandId: CommandId.make("limited-lead-queue:resume"),
+          threadId,
+        }),
+        orchestrator.dispatch({
+          type: "queued-run.start",
+          commandId: CommandId.make("limited-lead-queue:start-queued"),
+          threadId,
+          runId: queued.id,
+        }),
+      ]) {
+        const refused = yield* Effect.flip(resume);
+        assert.equal(refused._tag, "OrchestratorThreadHandedOnError");
+        assert.equal(
+          refused.message,
+          "This conversation continues in a linked thread. Open that thread instead of resuming this one.",
+        );
+      }
+      // What starts a queue with no one asking settles quietly: a mode change, and recovery.
+      yield* orchestrator.dispatch({
+        type: "thread.runtime-mode.set",
+        commandId: CommandId.make("limited-lead-queue:mode"),
+        threadId,
+        runtimeMode: "approval-required",
+      });
+      yield* orchestrator.resumeQueuedRuns;
+      assert.deepEqual(yield* runsOf, [
+        [source.id, "failed"],
+        [queued.id, "queued"],
+      ]);
+
+      // Deleting the linked thread gives the queue back.
+      yield* orchestrator.dispatch({
+        type: "thread.delete",
+        commandId: CommandId.make("limited-lead-queue:delete-continued"),
+        threadId: leadHandoffThreadId(source.id),
+      });
+      yield* orchestrator.dispatch({
+        type: "queue.resume",
+        commandId: CommandId.make("limited-lead-queue:resume-reopened"),
+        threadId,
+      });
+      const reopened = yield* runsOf;
+      assert.lengthOf(reopened, 2);
+      assert.notEqual(reopened[1]?.[1], "queued");
     }),
   );
 });

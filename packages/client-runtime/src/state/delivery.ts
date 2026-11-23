@@ -1,18 +1,124 @@
-import { WS_METHODS } from "@t3tools/contracts";
-import { Atom } from "effect/reactivity";
+import {
+  type DeliveryThreadState,
+  type EnvironmentId,
+  type ScopedThreadRef,
+  type ServerProvider,
+  type ServerSettings,
+  type ThreadId,
+  WS_METHODS,
+} from "@t3tools/contracts";
+import { limitedLeadHandoffThreadId } from "@t3tools/shared/limitedSeat";
+import { AsyncResult, Atom } from "effect/reactivity";
 
 import { deliveryBindingAtom } from "../deliveryModelLock.ts";
 import type { EnvironmentRegistry } from "../connection/registry.ts";
+import { scopeThreadRef } from "../environment/scoped.ts";
+import type { EnvironmentThreadShell } from "./models.ts";
 import { createEnvironmentRpcCommand, createEnvironmentRpcQueryAtomFamily } from "./runtime.ts";
+
+type LimitedSeatsShell = Pick<EnvironmentThreadShell, "latestRun" | "runtime" | "modelSelection">;
+
+/**
+ * Everything a conversation's limited-seat notices are decided from, as one value that changes
+ * when any of it does: the lead's latest run and the reset it reported, the thread that run was
+ * handed on to, the lineup with its setting, Favorites, and what each provider can run now.
+ */
+export function limitedSeatsRevision(input: {
+  readonly shell: LimitedSeatsShell | null;
+  /** The thread the latest run was handed on to, once the client holds it. */
+  readonly continued: LimitedSeatsShell | null;
+  readonly lineup: DeliveryThreadState["lineup"];
+  readonly settings: Pick<ServerSettings, "favorites" | "projectSettingsOverrides"> | null;
+  readonly providers: ReadonlyArray<ServerProvider> | null;
+}): string {
+  const { shell, continued } = input;
+  return JSON.stringify([
+    shell?.latestRun?.runId ?? null,
+    shell?.latestRun?.status ?? null,
+    shell?.runtime?.usageLimitResetAt ?? null,
+    shell?.modelSelection ?? null,
+    continued === null ? null : [continued.modelSelection, continued.latestRun?.runId ?? null],
+    input.lineup ?? null,
+    input.settings?.favorites ?? null,
+    input.settings?.projectSettingsOverrides ?? null,
+    (input.providers ?? []).map((provider) => [
+      provider.instanceId,
+      provider.enabled,
+      provider.installed,
+      provider.status,
+      provider.availability ?? null,
+      provider.auth.status,
+      provider.auth.email ?? null,
+      provider.supportsSessions ?? null,
+      // A window's fill moves all day; only reaching or leaving its limit changes a notice.
+      (provider.usageLimits?.windows ?? [])
+        .filter((window) => (window.usedPercent ?? 0) >= 100)
+        .map((window) => [window.id, window.resetsAt ?? null]),
+    ]),
+  ]);
+}
+
+/** Whether a thread's limited run continues in a linked thread, so it must not resume here too. */
+export function limitedLeadHandedOn(
+  shell: Pick<EnvironmentThreadShell, "latestRun"> | null,
+  hasThread: (threadId: ThreadId) => boolean,
+): boolean {
+  const runId = shell?.latestRun?.runId;
+  return runId !== undefined && hasThread(limitedLeadHandoffThreadId(runId));
+}
 
 export function createDeliveryEnvironmentAtoms<R, E>(
   runtime: Atom.AtomRuntime<EnvironmentRegistry | R, E>,
+  options: {
+    /** A thread as the client holds it, so its limited-seat notices follow its runs. */
+    readonly threadShellAtom?: (ref: ScopedThreadRef) => Atom.Atom<LimitedSeatsShell | null>;
+    /** Favorites and provider statuses decide a substitute, so the notices follow them too. */
+    readonly settingsAtom?: (
+      environmentId: EnvironmentId,
+    ) => Atom.Atom<Pick<ServerSettings, "favorites" | "projectSettingsOverrides"> | null>;
+    readonly providersAtom?: (
+      environmentId: EnvironmentId,
+    ) => Atom.Atom<ReadonlyArray<ServerProvider> | null>;
+  } = {},
 ) {
+  const { threadShellAtom, settingsAtom, providersAtom } = options;
   const threadBinding = createEnvironmentRpcQueryAtomFamily(runtime, {
     label: "environment-data:delivery:thread-binding",
     tag: WS_METHODS.deliveryThreadBinding,
     staleTimeMs: 1_000,
   });
+  const limitedSeatsRevisionAtom = Atom.family((key: string) =>
+    Atom.make((get) => {
+      const [environmentId, threadId] = JSON.parse(key) as [EnvironmentId, ThreadId];
+      const shell = threadShellAtom
+        ? get(threadShellAtom(scopeThreadRef(environmentId, threadId)))
+        : null;
+      const runId = shell?.latestRun?.runId;
+      return limitedSeatsRevision({
+        shell,
+        continued:
+          threadShellAtom && runId !== undefined
+            ? get(threadShellAtom(scopeThreadRef(environmentId, limitedLeadHandoffThreadId(runId))))
+            : null,
+        lineup: AsyncResult.getOrElse(
+          get(threadBinding({ environmentId, input: { threadId } })),
+          () => null,
+        )?.lineup,
+        settings: settingsAtom ? get(settingsAtom(environmentId)) : null,
+        providers: providersAtom ? get(providersAtom(environmentId)) : null,
+      });
+    }),
+  );
+  const limitedLeadHandedOnAtom = Atom.family((key: string) =>
+    Atom.make((get) => {
+      if (threadShellAtom === undefined) return false;
+      const [environmentId, threadId] = JSON.parse(key) as [EnvironmentId, ThreadId];
+      return limitedLeadHandedOn(
+        get(threadShellAtom(scopeThreadRef(environmentId, threadId))),
+        (continued) => get(threadShellAtom(scopeThreadRef(environmentId, continued))) !== null,
+      );
+    }),
+  );
   const modelBinding = Atom.family((query: ReturnType<typeof threadBinding>) =>
     Atom.family((threadId: string) => deliveryBindingAtom(query, threadId)),
   );
@@ -22,6 +128,17 @@ export function createDeliveryEnvironmentAtoms<R, E>(
       label: "environment-data:delivery:read",
       tag: WS_METHODS.deliveryRead,
       staleTimeMs: 2_000,
+    }),
+    /** The archived conversations of board tasks, for the board's own list of them. */
+    archivedBoardThreads: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:delivery:archived-board-threads",
+      tag: WS_METHODS.deliveryArchivedBoardThreads,
+      staleTimeMs: 2_000,
+    }),
+    /** The same list read once by hand, for a project removal to count what it keeps. */
+    fetchArchivedBoardThreads: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:delivery:fetch-archived-board-threads",
+      tag: WS_METHODS.deliveryArchivedBoardThreads,
     }),
     /** A thread's team, or the team choice that is still held. Cheap, and read often. */
     threadBinding,
@@ -49,6 +166,27 @@ export function createDeliveryEnvironmentAtoms<R, E>(
       concurrency: {
         mode: "serial",
         key: ({ environmentId, input }) => JSON.stringify([environmentId, input.threadId]),
+      },
+    }),
+    /** Which seats of a conversation are limited now, and what could stand in. */
+    limitedSeats: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:delivery:limited-seats",
+      tag: WS_METHODS.deliveryLimitedSeats,
+      staleTimeMs: 2_000,
+      refreshTrigger: ({ environmentId, input }) =>
+        limitedSeatsRevisionAtom(JSON.stringify([environmentId, input.threadId])),
+    }),
+    /** Whether a thread's limited run continues in a linked thread; it then offers no resume. */
+    limitedLeadHandedOn: (ref: ScopedThreadRef) =>
+      limitedLeadHandedOnAtom(JSON.stringify([ref.environmentId, ref.threadId])),
+    /** One click of a limited-seat notice. A second click while the first runs joins it. */
+    swapLimitedSeat: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:delivery:swap-limited-seat",
+      tag: WS_METHODS.deliverySwapLimitedSeat,
+      concurrency: {
+        mode: "singleFlight",
+        key: ({ environmentId, input }) =>
+          JSON.stringify([environmentId, input.threadId, input.seat]),
       },
     }),
     bindThread: createEnvironmentRpcCommand(runtime, {

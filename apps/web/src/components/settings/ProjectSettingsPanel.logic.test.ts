@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vite-plus/test";
 import { EnvironmentId, ProjectId, SourceControlProviderKind, ThreadId } from "@t3tools/contracts";
-import { planProjectRemoval } from "@t3tools/client-runtime/state/projects";
+import {
+  archivedServerOwnedThreadCount,
+  planProjectRemoval,
+  serverOwnedThreadCount,
+} from "@t3tools/client-runtime/state/projects";
 
 import { buildSidebarProjectSnapshots } from "../../sidebarProjectGrouping";
 import type { Project } from "../../types";
@@ -138,6 +142,129 @@ describe("project removal confirmation", () => {
     expect(plan.confirmationMessage).toBe(
       'Remove checkout "Repo" and delete its 1 thread?\nPath: /work/repo\nEnvironment: Local\nThose threads and any archived threads are deleted from T3 Code. Provider sessions are kept.\nOther entries in this grouped project are unaffected.\nThis action cannot be undone.',
     );
+  });
+
+  it("says how many board task conversations a removal archives, which no list shows", () => {
+    const boardTask = { ...listed, engineIntake: "board-task:board-1:task-7" };
+    const held = { environmentId: local.environmentId, projectId: local.id, lineage: boardTask };
+    // Each environment counts its own projects, and these two share a project id.
+    const counted = (count: number) => (environmentId: EnvironmentId) => [
+      { projectId: local.id, count: environmentId === local.environmentId ? count : 9 },
+    ];
+    // The shell leaves these rows out and counts them, so the count is all the client has.
+    expect(serverOwnedThreadCount({ members: [local], counted: counted(3), threads: [] })).toBe(3);
+    // A row that came in since as a delta is one of the counted, or newer than the count.
+    expect(
+      serverOwnedThreadCount({ members: [local], counted: counted(1), threads: [held, held] }),
+    ).toBe(2);
+    // A server that does not count sends every row.
+    expect(
+      serverOwnedThreadCount({ members: [local], counted: () => undefined, threads: [held] }),
+    ).toBe(1);
+    expect(
+      serverOwnedThreadCount({ members: [local, remote], counted: counted(3), threads: [] }),
+    ).toBe(12);
+
+    const plan = planProjectRemoval({
+      members: [local],
+      groupMemberCount: 1,
+      hasOtherMembers: false,
+      displayName: "Repo",
+      threads: [{ environmentId: local.environmentId, projectId: local.id, lineage: listed }, held],
+      serverOwnedThreadCount: 3,
+    });
+    expect(plan.confirmationMessage).toBe(
+      'Remove project "Repo" and delete its 1 thread?\nPath: /work/repo\nEnvironment: Local\nThose threads and any archived threads are deleted from T3 Code. Provider sessions are kept.\n3 conversations started by a board or the engine are archived, not deleted. Board and engine conversations already archived are kept.\nThis removes only the project entries, not the files on disk.\nThis action cannot be undone.',
+    );
+    // With no listed thread the line still shows: it is the only sign these exist.
+    expect(
+      planProjectRemoval({
+        members: [local],
+        groupMemberCount: 1,
+        hasOtherMembers: false,
+        displayName: "Repo",
+        threads: [],
+        serverOwnedThreadCount: 1,
+      }).confirmationMessage,
+    ).toContain("1 conversation started by a board or the engine is archived, not deleted.");
+  });
+
+  it("says a project's already archived board conversations are kept when none is active", async () => {
+    const other = ProjectId.make("other-project");
+    const rows = [{ projectId: local.id }, { projectId: local.id }, { projectId: other }];
+    // Each environment is asked once, and only the members' projects are counted.
+    const asked: EnvironmentId[] = [];
+    const read = async (environmentId: EnvironmentId) => {
+      asked.push(environmentId);
+      return environmentId === local.environmentId ? rows : [{ projectId: local.id }];
+    };
+    expect(await archivedServerOwnedThreadCount({ members: [local], read })).toBe(2);
+    expect(await archivedServerOwnedThreadCount({ members: [local, remote], read })).toBe(3);
+    expect(asked).toEqual([local.environmentId, local.environmentId, remote.environmentId]);
+    // A server without the list, a failed read and a read that never answers all count as none.
+    expect(await archivedServerOwnedThreadCount({ members: [local], read: async () => null })).toBe(
+      0,
+    );
+    expect(
+      await archivedServerOwnedThreadCount({
+        members: [local],
+        read: () => Promise.reject(new Error("offline")),
+      }),
+    ).toBe(0);
+    expect(
+      await archivedServerOwnedThreadCount({
+        members: [local],
+        read: () => new Promise(() => {}),
+        timeoutMs: 5,
+      }),
+    ).toBe(0);
+
+    // Every board conversation of the project is archived: the shell counts none.
+    const plan = planProjectRemoval({
+      members: [local],
+      groupMemberCount: 1,
+      hasOtherMembers: false,
+      displayName: "Repo",
+      threads: [],
+      serverOwnedThreadCount: 0,
+      archivedServerOwnedThreadCount: 2,
+    });
+    expect(plan.confirmationMessage).toBe(
+      'Remove project "Repo"?\nPath: /work/repo\nEnvironment: Local\nAny archived threads are deleted from T3 Code. Provider sessions are kept.\n2 archived conversations started by a board are kept, not deleted.\nThis removes only the project entries, not the files on disk.\nThis action cannot be undone.',
+    );
+    expect(
+      planProjectRemoval({
+        members: [local],
+        groupMemberCount: 1,
+        hasOtherMembers: false,
+        displayName: "Repo",
+        threads: [],
+        archivedServerOwnedThreadCount: 1,
+      }).confirmationMessage,
+    ).toContain("1 archived conversation started by a board is kept, not deleted.");
+    // With an active one the archive line already says the archived are kept: one line, not two.
+    const both = planProjectRemoval({
+      members: [local],
+      groupMemberCount: 1,
+      hasOtherMembers: false,
+      displayName: "Repo",
+      threads: [],
+      serverOwnedThreadCount: 1,
+      archivedServerOwnedThreadCount: 2,
+    }).confirmationMessage;
+    expect(both).toContain("Board and engine conversations already archived are kept.");
+    expect(both).not.toContain("archived conversations started by a board are kept");
+    // No board conversation at all: the dialog is what it was.
+    expect(
+      planProjectRemoval({
+        members: [local],
+        groupMemberCount: 1,
+        hasOtherMembers: false,
+        displayName: "Repo",
+        threads: [],
+        archivedServerOwnedThreadCount: 0,
+      }).confirmationMessage,
+    ).not.toContain("started by a board");
   });
 
   it("keeps an environment-filtered group scoped to its selected checkout", () => {

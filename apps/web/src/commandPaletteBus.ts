@@ -1,10 +1,16 @@
-import type { EnvironmentId, PullRequestLinkedThreadsResult } from "@t3tools/contracts";
+import type {
+  EnvironmentId,
+  LinkedBoardTask,
+  PullRequestLinkedThreadsResult,
+} from "@t3tools/contracts";
 
 import { dispatchCommandPalette, isCommandPaletteMounted } from "./commandPaletteStore";
 
 export interface CommandPaletteLinkedThreads {
   readonly environmentId: EnvironmentId;
   readonly threads: PullRequestLinkedThreadsResult["threads"];
+  /** Board tasks whose conversation is linked. Each opens its task view, never its thread. */
+  readonly boardTasks?: ReadonlyArray<LinkedBoardTask>;
 }
 
 export interface CommandPaletteOpenDetail {

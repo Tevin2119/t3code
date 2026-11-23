@@ -27,6 +27,7 @@ import * as Stream from "effect/Stream";
 import { rpcInitialItems } from "./rpcInitialItems.ts";
 import { subscribeChatGptHandoff } from "./provider/CodexChatGptHandoff.ts";
 import {
+  DeliveryError,
   AcpRegistryOperationError,
   CommandId,
   authScopeResponse,
@@ -145,6 +146,7 @@ import {
   shellStreamItemFromThreadShell,
   shellStreamItemsFromInitialSnapshot,
   loadSubscriberShellSnapshot,
+  omitServerOwnedArchivedShells,
   canResumeShellFrom,
   resumeIdentityRoots,
   shellStreamItemsFromResumeSnapshot,
@@ -257,6 +259,7 @@ import { commandFeatureUsage, featureUsage } from "./telemetry/FeatureUsage.ts";
 import type { TelemetryOwner } from "./telemetry/Identify.ts";
 import * as UsageService from "./usage/UsageService.ts";
 import * as DeliveryService from "./delivery/DeliveryService.ts";
+import * as LimitedSeatSwap from "./delivery/LimitedSeatSwap.ts";
 import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
 import * as TriageService from "./triage/TriageService.ts";
 import * as PullRequestService from "./pullRequest/PullRequestService.ts";
@@ -265,6 +268,8 @@ import * as ThreadIssueService from "./orchestration-v2/ThreadIssueService.ts";
 import * as IssueTrackerConnections from "./issue/IssueTrackerConnections.ts";
 import * as PullRequestReviewGuideService from "./pullRequest/PullRequestReviewGuideService.ts";
 import { listLinkedPullRequestThreads } from "./pullRequest/linkedThreads.ts";
+import { archivedBoardThreads } from "./delivery/archivedBoardThreads.ts";
+import { linkedBoardTasks } from "./delivery/linkedBoardTasks.ts";
 import { pullRequestSyncKey } from "./pullRequest/pullRequestSyncKey.ts";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as PullRequestSyncReactor from "./orchestration-v2/PullRequestSyncReactor.ts";
@@ -1952,7 +1957,7 @@ export const layerWsRpc = (
           schemaVersion: threads.schemaVersion,
           snapshotSequence,
           projects,
-          threads: threads.archivedThreads,
+          threads: omitServerOwnedArchivedShells(threads.archivedThreads),
         } as const;
       }).pipe(
         Effect.flatMap((snapshot) =>
@@ -1993,13 +1998,34 @@ export const layerWsRpc = (
         return yield* mutateProjectWithClone(projectService, projectCloneTracker, mutation);
       });
 
+      // A board task's conversation is in no thread list: where it is linked, it shows as its task.
+      const boardDelivery = yield* Effect.serviceOption(DeliveryService.DeliveryService);
+      const withBoardTasks = <A extends object>(
+        result: A,
+        link: Parameters<typeof linkedBoardTasks>[0],
+      ) =>
+        linkedBoardTasks(
+          link,
+          Option.isSome(boardDelivery)
+            ? boardDelivery.value.read({ path: "/api/lanes?view=development&set=all" })
+            : null,
+        ).pipe(
+          Effect.provideService(SqlClient.SqlClient, sql),
+          Effect.map((boardTasks) =>
+            boardTasks.length === 0 ? result : { ...result, boardTasks },
+          ),
+        );
+
       const handlers = CoreServerWsRpcGroup.of({
         [WS_METHODS.issuesList]: (input) => issues.list(input),
         [WS_METHODS.issuesDetail]: (input) => issues.detail(input),
         [WS_METHODS.issuesComments]: (input) => issues.comments(input),
         [WS_METHODS.issuesTemplates]: (input) => issues.templates(input),
         [WS_METHODS.issuesCandidates]: (input) => issues.candidates(input),
-        [WS_METHODS.issuesLinkedThreads]: (input) => threadIssues.linkedThreads(input),
+        [WS_METHODS.issuesLinkedThreads]: (input) =>
+          threadIssues
+            .linkedThreads(input)
+            .pipe(Effect.flatMap((result) => withBoardTasks(result, { issue: input }))),
         [WS_METHODS.issuesCreate]: (input) => issues.create(input),
         [WS_METHODS.issuesComment]: (input) => issues.comment(input),
         [WS_METHODS.issuesUpdate]: (input) => issues.update(input),
@@ -2845,6 +2871,7 @@ export const layerWsRpc = (
                 ? Effect.succeed({ threads: [] })
                 : listLinkedPullRequestThreads(key).pipe(
                     Effect.provideService(SqlClient.SqlClient, sql),
+                    Effect.flatMap((result) => withBoardTasks(result, { pullRequest: key })),
                   ),
             ),
           ),
@@ -3691,6 +3718,9 @@ const layerForkWsRpc = (currentSession: EnvironmentAuth.AuthenticatedSession) =>
     Effect.gen(function* () {
       const checkoutUpdate = yield* CheckoutUpdate.CheckoutUpdate;
       const delivery = yield* DeliveryService.DeliveryService;
+      const limitedSeatSwap = yield* Effect.serviceOption(LimitedSeatSwap.LimitedSeatSwap);
+      const sql = yield* SqlClient.SqlClient;
+      const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
       return ForkServerWsRpcGroup.of({
         [WS_METHODS.serverSubscribeCheckoutUpdate]: (_input) => checkoutUpdate.states,
         [WS_METHODS.serverCheckCheckoutUpdate]: (_input) =>
@@ -3707,8 +3737,35 @@ const layerForkWsRpc = (currentSession: EnvironmentAuth.AuthenticatedSession) =>
             : delivery.act(input),
         [WS_METHODS.deliveryBindThread]: (input) => delivery.bindThread(input),
         [WS_METHODS.deliveryThreadBinding]: (input) => delivery.threadState(input.threadId),
+        [WS_METHODS.deliveryArchivedBoardThreads]: () =>
+          serverEnvironment.getEnvironmentId.pipe(
+            Effect.flatMap((environmentId) =>
+              archivedBoardThreads(environmentId, (path) => delivery.read({ path })),
+            ),
+            Effect.provideService(SqlClient.SqlClient, sql),
+            Effect.mapError(
+              () =>
+                new DeliveryError({
+                  reason: "storage",
+                  detail: "The archived board conversations could not be read.",
+                }),
+            ),
+          ),
         [WS_METHODS.deliveryReleaseThread]: (input) => delivery.releaseThread(input.threadId),
         [WS_METHODS.deliverySetThreadLineup]: (input) => delivery.setThreadLineup(input),
+        [WS_METHODS.deliveryLimitedSeats]: (input) =>
+          Option.match(limitedSeatSwap, {
+            onNone: () => Effect.succeed({ policy: null, notices: [] }),
+            onSome: (swaps) => swaps.status(input.threadId),
+          }),
+        [WS_METHODS.deliverySwapLimitedSeat]: (input) =>
+          Option.match(limitedSeatSwap, {
+            onNone: () =>
+              Effect.fail(
+                new DeliveryError({ reason: "disabled", detail: "Delivery is turned off." }),
+              ),
+            onSome: (swaps) => swaps.swap(input),
+          }),
       });
     }),
   );

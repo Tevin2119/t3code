@@ -1,22 +1,61 @@
 import type { EnvironmentId, ScopedThreadRef } from "@t3tools/contracts";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import type { TaskView } from "../../lib/delivery";
 import {
   conversationState,
   openSeatThread,
+  sameSeatView,
   sameThread,
   seatConversation,
   seatOfThread,
+  steadySeatThread,
   taskConversation,
+  type SeatCertainty,
   type SeatReach,
   type SeatThread,
 } from "../../lib/taskConversation";
 import { useEnvironment, useEnvironments } from "../../state/environments";
 import { useQuietThreadProjection } from "../../state/entities";
-import { useLinkedEnvironments } from "../../state/peerLinks";
+import { useLinkedEnvironmentsRead } from "../../state/peerLinks";
 
 const NO_CHILDREN: ReadonlyArray<never> = [];
+
+/**
+ * How long this client's connection to a seat's environment may stay down before the open seat
+ * moves to the read-only view through the link. A reconnect is usually over well inside it.
+ */
+export const SEAT_LINKED_VIEW_DELAY_MS = 10_000;
+
+const seatViewKey = (seat: SeatThread) =>
+  `${seat.environmentId}:${seat.threadId}:${seat.linked?.viaEnvironmentId ?? ""}`;
+
+/**
+ * The seat the centre shows, held steady while the links load and through a short reconnect: see
+ * `steadySeatThread`. `resolving` is a seat that was opened and cannot be placed yet.
+ */
+export function useSteadySeat(
+  resolved: SeatThread | null,
+  reach: SeatCertainty,
+): { readonly seat: SeatThread | null; readonly resolving: boolean } {
+  const [shown, setShown] = useState<SeatThread | null>(null);
+  // The view whose wait is over. Kept by key, so a wait that ended for one view moves no other.
+  const [waitedFor, setWaitedFor] = useState<string | null>(null);
+  const steady = steadySeatThread(shown, resolved, reach);
+  const later = steady.kind === "shown" ? (steady.later ?? null) : null;
+  const laterKey = later === null ? null : seatViewKey(later);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- a timer: the linked view replaces the direct one only after the connection has stayed down this long
+  useEffect(() => {
+    if (laterKey === null) return;
+    const timer = setTimeout(() => setWaitedFor(laterKey), SEAT_LINKED_VIEW_DELAY_MS);
+    return () => clearTimeout(timer);
+  }, [laterKey]);
+  const seat =
+    steady.kind !== "shown" ? null : later !== null && waitedFor === laterKey ? later : steady.seat;
+  if (!sameSeatView(seat, shown)) setShown(seat);
+  if (laterKey === null && waitedFor !== null) setWaitedFor(null);
+  return { seat, resolving: steady.kind === "resolving" };
+}
 
 /**
  * The task's conversation for the task view: what the centre shows, which seat conversation is
@@ -35,7 +74,7 @@ export function useTaskConversation(task: TaskView | null) {
     return own && { connected: own.connection.phase === "connected" };
   };
   // Links are read only while a seat runs somewhere this client is not connected to.
-  const links = useLinkedEnvironments(
+  const links = useLinkedEnvironmentsRead(
     ref !== null &&
       children.some(
         (child) =>
@@ -46,9 +85,19 @@ export function useTaskConversation(task: TaskView | null) {
       ? ref.environmentId
       : null,
   );
-  const reach: SeatReach = { ownConnection, isLinked: (id) => links.has(id) };
+  const reach: SeatReach = { ownConnection, isLinked: (id) => links.names.has(id) };
   const [opened, setSeat] = useState<ScopedThreadRef | null>(null);
-  const seat: SeatThread | null = openSeatThread(ref, children, opened, reach);
+  const resolved = openSeatThread(ref, children, opened, reach);
+  const connected = resolved !== null && ownConnection(resolved.environmentId)?.connected === true;
+  const { seat, resolving } = useSteadySeat(resolved, {
+    connected,
+    // A seat in the task's own environment needs no link, and an environment that is not
+    // reachable cannot be asked for its links, nor read through one.
+    certain:
+      connected || resolved?.environmentId === ref?.environmentId || links.settled || !reachable,
+  });
+  // A seat still being placed is the open one, so its row and its name do not wait.
+  const current: SeatThread | null = seat ?? (resolving ? opened : null);
 
   // A seat's thread, or the task's own: what a lineage link or a seat row asks to open.
   const open = (thread: ScopedThreadRef) => setSeat(sameThread(thread, ref) ? null : thread);
@@ -57,12 +106,14 @@ export function useTaskConversation(task: TaskView | null) {
     state: conversationState(conversation, reachable),
     ref,
     seat,
-    seatName: seatOfThread(ref, children, seat),
+    /** A seat is open but cannot be placed yet: the centre waits instead of showing the task. */
+    seatResolving: resolving,
+    seatName: seatOfThread(ref, children, current),
     open,
     backToTask: () => setSeat(null),
     seats: {
       thread: (name: string) => seatConversation(ref, children, name, reach),
-      current: seat,
+      current,
       open,
     },
   };

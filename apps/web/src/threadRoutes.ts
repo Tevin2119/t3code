@@ -1,7 +1,12 @@
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import type { EnvironmentShellStatus } from "@t3tools/client-runtime/state/shell";
 import type { EnvironmentThreadState } from "@t3tools/client-runtime/state/threads";
-import type { EnvironmentId, ScopedThreadRef, ThreadId } from "@t3tools/contracts";
+import {
+  isServerOwnedThreadLineage,
+  type EnvironmentId,
+  type ScopedThreadRef,
+  type ThreadId,
+} from "@t3tools/contracts";
 import * as Option from "effect/Option";
 import type { DraftId } from "./composerDraftStore";
 
@@ -50,7 +55,11 @@ export function resolveThreadRouteRenderState(input: {
   if (projection === null) {
     return "loading";
   }
-  return projection.thread.deletedAt !== null || projection.thread.archivedAt !== null
+  if (projection.thread.deletedAt !== null) return "missing";
+  // An archived thread is restored from the archive before it opens. Server-owned work is in no
+  // archive list, so an archived board task's conversation still opens by id.
+  return projection.thread.archivedAt !== null &&
+    !isServerOwnedThreadLineage(projection.thread.lineage)
     ? "missing"
     : "ready";
 }

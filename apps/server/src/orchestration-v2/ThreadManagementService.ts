@@ -268,7 +268,7 @@ export class ThreadManagementThreadArchivedError extends Schema.TaggedError<Thre
   },
 ) {
   override get message(): string {
-    return `Thread ${this.threadId} is archived and cannot receive messages.`;
+    return Orchestrator.archivedThreadRefusal(this.threadId);
   }
 }
 
@@ -883,19 +883,28 @@ const make = Effect.gen(function* () {
             cause,
           }),
       ),
-      Effect.map((threads) =>
-        threads
+      Effect.map((threads) => {
+        // The shell's family rule: server-owned work is listed nowhere, and neither is a seat or
+        // side chat rooted at it.
+        const serverOwnedIds = new Set(
+          threads
+            .filter((thread) => isServerOwnedThreadLineage(thread.lineage))
+            .map((thread) => thread.id),
+        );
+        return threads
           .filter((thread) =>
             input.includeSubagents
-              ? thread.lineage.sideChat !== true && !isServerOwnedThreadLineage(thread.lineage)
+              ? thread.lineage.sideChat !== true &&
+                !serverOwnedIds.has(thread.id) &&
+                !serverOwnedIds.has(thread.lineage.rootThreadId)
               : isListedThreadLineage(thread.lineage) && !isDelegatedAppThread(thread),
           )
           .toSorted(
             (left, right) =>
               DateTime.toEpochMillis(right.updatedAt) - DateTime.toEpochMillis(left.updatedAt) ||
               right.id.localeCompare(left.id),
-          ),
-      ),
+          );
+      }),
     );
 
   const sendToThread: ThreadManagementServiceShape["sendToThread"] = Effect.fn(

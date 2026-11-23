@@ -1015,6 +1015,14 @@ const TeamChatParticipation = Schema.Struct({
   sourceRunId: RunId,
   stage: Schema.Literals(["contribution", "critique"]),
   seat: TrimmedNonEmptyString,
+  /** The seat's own model, when this turn runs on a substitute because that one was limited. */
+  substituteFor: Schema.optional(
+    Schema.Struct({
+      instanceId: ProviderInstanceId,
+      model: TrimmedNonEmptyString,
+      resetAt: Schema.NullOr(IsoDateTime),
+    }),
+  ),
 });
 
 export const OrchestrationV2Subagent = Schema.Struct({
@@ -2513,6 +2521,12 @@ export const OrchestrationV2ShellSnapshot = Schema.Struct({
   ...OrchestrationV2ThreadShellSnapshot.fields,
   projects: Schema.Array(OrchestrationProjectShell),
   olderSettled: Schema.optionalKey(OrchestrationV2OlderSettledThreads),
+  /**
+   * Per project, the active threads carrying the server-owned marker, sent or not (their seats
+   * and side chats are not counted). No list shows them, so this is how a client can say a
+   * project has them. Exact at `snapshotSequence`; absent when there are none.
+   */
+  serverOwnedThreads: Schema.optionalKey(Schema.Array(OrchestrationV2OlderSettledCount)),
 });
 export type OrchestrationV2ShellSnapshot = typeof OrchestrationV2ShellSnapshot.Type;
 
@@ -4152,8 +4166,9 @@ export const OrchestrationV2SubscribeShellInput = Schema.Struct({
   knownProjectIdentities: Schema.optionalKey(Schema.String),
   requestCompletionMarker: Schema.optionalKey(Schema.Boolean),
   /**
-   * Snapshots leave out idle subagent children; read them with `getThreadFamily`. Send only to
-   * servers that advertise `shellThreadFamilies`.
+   * Snapshots leave out idle subagent children and server-owned threads with their families (see
+   * `isServerOwnedThreadLineage`); read them with `getThreadFamily`. Send only to servers that
+   * advertise `shellThreadFamilies`.
    */
   omitIdleSubagents: Schema.optionalKey(Schema.Boolean),
   /**
