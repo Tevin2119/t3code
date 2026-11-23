@@ -10,10 +10,14 @@ import {
   useDeliveryEnvironmentId,
   useDeliveryRead,
 } from "../state/delivery";
-import { buildBoardTaskActionItems, ITEM_ICON_CLASS } from "./CommandPalette.logic";
+import {
+  boardTaskSearchPath,
+  buildBoardTaskActionItems,
+  ITEM_ICON_CLASS,
+} from "./CommandPalette.logic";
 
 /**
- * The board's tasks for a palette search, from the read the board's own list makes. It is read
+ * The board's tasks for a palette search, from the search the board's own list makes. It is read
  * only while there is something to search for; with no board there is nothing to list.
  */
 export function useCommandPaletteTaskItems(searchQuery: string) {
@@ -22,10 +26,8 @@ export function useCommandPaletteTaskItems(searchQuery: string) {
   const environmentId = useDeliveryEnvironmentId();
   const enabled = useDeliveryEnabled(environmentId);
   const { boardSet, shared } = useBoardPreferences(environmentId);
-  const read = useDeliveryRead(
-    enabled && !shared && searchQuery.trim().length > 0 ? environmentId : null,
-    `/api/tasks?limit=200&set=${boardSetOf(boardSet)}`,
-  );
+  const path = boardTaskSearchPath(searchQuery, boardSetOf(boardSet));
+  const read = useDeliveryRead(enabled && !shared && path ? environmentId : null, path);
   return buildBoardTaskActionItems(
     {
       tasks: parseCards(read.body),

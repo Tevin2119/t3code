@@ -8,6 +8,7 @@ import {
   buildNestedSearchItems,
   resolveCommandPaletteProject,
   buildThreadActionItems,
+  boardTaskSearchPath,
   buildBoardTaskActionItems,
   buildLinkedThreadActionItems,
   filterPinnedBrowseEntries,
@@ -133,6 +134,40 @@ describe("board tasks", () => {
     const picked = group?.items[0];
     if (picked?.kind === "action") await picked.run();
     expect(runTask).toHaveBeenCalledExactlyOnceWith("task-2");
+  });
+
+  it("asks the board's own search for what is typed, so a task older than the newest 200 is found", () => {
+    // 250 tasks, newest first as the engine lists them; the one asked for is the oldest.
+    const board = Array.from({ length: 250 }, (_, index) => {
+      const number = 250 - index;
+      return { id: `task-${number}`, number, title: number === 1 ? "Migrate the ledger" : "Chore" };
+    });
+    // The engine's list: `q` looks through every task, and `limit` cuts what comes back.
+    const engine = (path: string) => {
+      const params = new URL(path, "http://engine").searchParams;
+      const q = (params.get("q") ?? "").toLowerCase();
+      return board
+        .filter((task) => `#${task.number} ${task.title}`.toLowerCase().includes(q))
+        .slice(0, Number(params.get("limit")));
+    };
+    const path = boardTaskSearchPath(" ledger ", "work");
+    expect(path).toBe("/api/tasks?q=ledger&limit=100&set=work");
+    const groups = filterCommandPaletteGroups({
+      activeGroups: [],
+      query: "ledger",
+      isInSubmenu: false,
+      projectSearchItems: [],
+      threadSearchItems: [],
+      taskSearchItems: buildBoardTaskActionItems({
+        tasks: engine(path!),
+        icon: null,
+        runTask: async () => {},
+      }),
+    });
+    expect(groups.flatMap((group) => group.items.map((item) => item.title))).toEqual([
+      "#1 Migrate the ledger",
+    ]);
+    expect(boardTaskSearchPath("  ", "work")).toBeNull();
   });
 });
 

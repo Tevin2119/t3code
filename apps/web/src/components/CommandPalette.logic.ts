@@ -36,6 +36,7 @@ import { isShownUnderParent } from "@t3tools/client-runtime/state/threads";
 import { type ReactNode } from "react";
 import { msg } from "gt-react";
 import { m, type MessageResolver } from "../i18n/messages";
+import { queryValue } from "../lib/deliveryBoard";
 import { formatRelativeTimeLabel } from "../timestampFormat";
 import { type Project, type SidebarThreadSummary, type Thread } from "../types";
 
@@ -92,6 +93,15 @@ export function buildLinkedThreadActionItems(
             }),
         }))),
   ];
+}
+
+/**
+ * The board's own search for what is typed, as its task list makes it: the engine looks through
+ * every task on the board, not only the newest it lists. With nothing typed there is no read.
+ */
+export function boardTaskSearchPath(query: string, boardSet: string): string | null {
+  const q = query.trim();
+  return q ? `/api/tasks?q=${queryValue(q)}&limit=100&set=${boardSet}` : null;
 }
 
 /** The board's tasks as rows, found by number or title; each opens its task's view. */
