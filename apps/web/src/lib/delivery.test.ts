@@ -738,6 +738,16 @@ describe("parseTask", () => {
     expect(seats?.map((seat) => seat.threadId)).toEqual(["thread-builder", null, null, null]);
   });
 
+  it("names the one mirrored environment only on an engine that is not source-scoped", () => {
+    const conversation = { count: 2, latest: [{ seq: 7, setBy: "env-b" }] };
+    const mirrored = (value: unknown) =>
+      parseTask({ id: "task-4", card: card({}), conversation: value })
+        ?.conversationMirrorEnvironment;
+    const scoped = { ...conversation, sourceScoped: true, sourceFloors: { "env-b": 7 } };
+    expect(mirrored(conversation)).toBe("env-b");
+    expect(mirrored(scoped)).toBeNull();
+  });
+
   it("knows a draft, and is null for what is not a task", () => {
     expect(
       parseTask({ id: "task-2", state: "draft", card: card({ lane: "draft" }) })?.isDraft,
