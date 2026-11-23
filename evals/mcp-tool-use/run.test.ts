@@ -45,6 +45,7 @@ import {
 } from "./run.ts";
 import { briefRoute, gradeDevice, shellInvocations } from "./device-grading.ts";
 import * as DeliveryService from "../../apps/server/src/delivery/DeliveryService.ts";
+import * as SeatHandoffs from "../../apps/server/src/delivery/SeatHandoffs.ts";
 import { taskPrompt } from "../../apps/server/src/mcp/delegatedTaskModes.ts";
 
 it("grades Codex shell and subagent calls with the shared rules", () => {
@@ -1853,7 +1854,14 @@ it.effect("seeds T3's error for a prior background wait whose IDs match nothing"
     }
   }).pipe(
     Effect.scoped,
-    Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer, DeliveryService.layerTest)),
+    Effect.provide(
+      Layer.mergeAll(
+        NodeServices.layer,
+        NodeCrypto.layer,
+        DeliveryService.layerTest,
+        SeatHandoffs.layerTest,
+      ),
+    ),
   ),
 );
 
