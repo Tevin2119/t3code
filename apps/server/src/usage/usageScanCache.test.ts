@@ -54,7 +54,7 @@ function cacheWith(entries: readonly [string, number, readonly UsageRecord[]][])
       provider: "claude",
       records,
       tailRecords: [],
-      malformedRecords: 0,
+      malformedRecords: [],
       position: position(),
     });
   }
@@ -144,16 +144,16 @@ describe("scan cache round trip", () => {
   });
   // Codex entries before v14 re-parse; the fork's v12 and upstream's v12 share a version number.
   it.each([
-    { layout: "upstream", version: 9, malformedRecords: 0, reparse: true, resumes: false },
-    { layout: "fork", version: 9, malformedRecords: 2, reparse: true, resumes: false },
-    { layout: "fork", version: 10, malformedRecords: 0, reparse: true, resumes: false },
-    { layout: "upstream", version: 11, malformedRecords: 2, reparse: true, resumes: false },
-    { layout: "fork", version: 12, malformedRecords: 0, reparse: true, resumes: false },
-    { layout: "upstream", version: 12, malformedRecords: 0, reparse: true, resumes: false },
-    { layout: "upstream", version: 14, malformedRecords: 0, reparse: false, resumes: false },
-    { layout: "upstream", version: 14, malformedRecords: 2, reparse: true, resumes: false },
-    { layout: "upstream", version: 17, malformedRecords: 2, reparse: false, resumes: true },
-    { layout: "fork", version: 18, malformedRecords: 2, reparse: false, resumes: true },
+    { layout: "upstream", version: 9, malformedRecords: [], reparse: true, resumes: false },
+    { layout: "fork", version: 9, malformedRecords: [1, 2], reparse: true, resumes: false },
+    { layout: "fork", version: 10, malformedRecords: [], reparse: true, resumes: false },
+    { layout: "upstream", version: 11, malformedRecords: [1, 2], reparse: true, resumes: false },
+    { layout: "fork", version: 12, malformedRecords: [], reparse: true, resumes: false },
+    { layout: "upstream", version: 12, malformedRecords: [], reparse: true, resumes: false },
+    { layout: "upstream", version: 14, malformedRecords: [], reparse: false, resumes: false },
+    { layout: "upstream", version: 14, malformedRecords: [1, 2], reparse: true, resumes: false },
+    { layout: "upstream", version: 17, malformedRecords: [1, 2], reparse: false, resumes: true },
+    { layout: "fork", version: 18, malformedRecords: [1, 2], reparse: false, resumes: true },
   ])(
     "preserves $layout v$version history with $malformedRecords malformed records (reparse: $reparse)",
     ({ layout, version, malformedRecords, reparse, resumes }) => {
@@ -281,7 +281,7 @@ describe("scan cache round trip", () => {
     ]);
     original.set("/grok.jsonl", {
       size: 40,
-      malformedRecords: 2,
+      malformedRecords: [1, 2],
       mtimeMs: 300,
       provider: "grok",
       records: [
@@ -317,7 +317,7 @@ describe("scan cache round trip", () => {
     const pendingTail = { ...pending, unresolvedServiceTierTurnId: "native-tail" };
     original.set("/codex.jsonl", {
       size: 80,
-      malformedRecords: 3,
+      malformedRecords: [1, 2, 3],
       mtimeMs: 400,
       provider: "codex",
       records: [
@@ -352,6 +352,16 @@ describe("scan cache round trip", () => {
 
     expect(restored.size).toBe(4);
     expect(restored).toEqual(original);
+    const encoded = parse(makeScanCacheWriter()(original, {}));
+    const { mt: _dates, ...undated } = encoded.files["/codex.jsonl"]!;
+    const reparsed = decodeScanCache(
+      { ...encoded, files: { ...encoded.files, "/codex.jsonl": undated } },
+      TEST_FORMAT_MAP,
+    ).get("/codex.jsonl")!;
+    expect(reparsed.size).toBe(-1);
+    expect(reparsed.position.resumeOffset).toBe(0);
+    expect(reparsed.records).toEqual(original.get("/codex.jsonl")!.records);
+    expect(reparsed.malformedRecords).toEqual([]);
   });
 
   it.each([5, 6, 7, 8, 10, 11, 12, 13])(
@@ -361,7 +371,7 @@ describe("scan cache round trip", () => {
       original.set("/gone-codex.jsonl", {
         ...original.get("/gone.jsonl")!,
         provider: "codex",
-        malformedRecords: 1,
+        malformedRecords: [1],
         records: [record({ provider: "codex", speed: "fast", dedupeKey: null })],
         position: position({
           state: {
@@ -381,12 +391,12 @@ describe("scan cache round trip", () => {
         size: 256,
         provider: "pi",
         records: [record({ provider: "pi", model: "anthropic/claude-fable-5" })],
-        malformedRecords: 3,
+        malformedRecords: [1, 2, 3],
         position: position({ state: { sessionId: "session-a" } }),
       });
       const cleanCodex = {
         ...original.get("/gone-codex.jsonl")!,
-        malformedRecords: 0,
+        malformedRecords: [],
       };
       original.set("/clean-codex.jsonl", cleanCodex);
       const encoded = writtenCache(original);
@@ -471,7 +481,7 @@ describe("scan cache round trip", () => {
   );
 
   it("re-parses a v14 Codex entry that skipped records and restarts a clean one when it grows", () => {
-    const codex = (malformedRecords: number): CachedFile => ({
+    const codex = (malformedRecords: readonly number[]): CachedFile => ({
       size: 10,
       mtimeMs: 100,
       provider: "codex",
@@ -483,20 +493,20 @@ describe("scan cache round trip", () => {
       }),
     });
     const original: ScanCache = new Map([
-      ["/skipped-codex.jsonl", codex(1)],
-      ["/clean-codex.jsonl", codex(0)],
+      ["/skipped-codex.jsonl", codex([1])],
+      ["/clean-codex.jsonl", codex([])],
     ]);
     const v14 = asUpstream(writtenCache(original), 14);
 
     const restored = decodeScanCache(JSON.parse(JSON.stringify(v14)), TEST_FORMAT_MAP);
     expect(restored.get("/skipped-codex.jsonl")).toEqual({
-      ...unattributed(codex(1)),
+      ...unattributed(codex([1])),
       size: -1,
       position: { resumeOffset: 0, guardLength: 0, guardHash: 0, state: null },
     });
     // Served while unchanged, but its state predates the latest snapshot time, so it cannot resume.
     expect(restored.get("/clean-codex.jsonl")).toEqual({
-      ...unattributed(codex(0)),
+      ...unattributed(codex([])),
       position: { resumeOffset: 0, guardLength: 0, guardHash: 0, state: null },
     });
     // The migrated entries persist without a state and load again under the current version.
@@ -520,7 +530,7 @@ describe("scan cache round trip", () => {
       provider: "codex",
       records: [record({ provider: "codex", model: "gpt-6-astra", dedupeKey: null })],
       tailRecords: [],
-      malformedRecords: 0,
+      malformedRecords: [],
       position: position({
         state: {
           ...initialCodexScanState(),
@@ -595,14 +605,14 @@ describe("scan cache round trip", () => {
       ["/a.jsonl", 100, [record()]],
       ["/b.jsonl", 200, [record({ sessionId: "session-b" })]],
     ]);
-    cache.set("/b.jsonl", { ...cache.get("/b.jsonl")!, malformedRecords: 2 });
+    cache.set("/b.jsonl", { ...cache.get("/b.jsonl")!, malformedRecords: [1, 2] });
     const sources = { "claude\u0000/projects": { dir: "/projects", volumeId: "1:2" } };
     expect(decodeScanCache(parse(write(cache, { sources })), TEST_FORMAT_MAP)).toEqual(cache);
 
     cache.set("/b.jsonl", {
       ...cache.get("/b.jsonl")!,
       size: 30,
-      malformedRecords: 4,
+      malformedRecords: [1, 2, 3, 4],
       records: [record({ sessionId: "session-c", model: "claude-opus-5-5", dedupeKey: "msg_3:" })],
     });
     const document = parse(write(cache, { sources }));
