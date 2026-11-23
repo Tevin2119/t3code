@@ -77,6 +77,12 @@ export function scratchEngine(
     readonly servesLink?: boolean;
     /** `false` models an engine before slice 5: no conversation mirror and no steer queue. */
     readonly servesConversation?: boolean;
+    /**
+     * `true` models the engine after its source-scoped amendment (spec 6a): activity keyed by
+     * `(task, setBy, seq)`, and a detail that serves `sourceScoped` and `sourceFloors`. Default is
+     * the legacy engine, which keys by `(task, seq)` and serves neither.
+     */
+    readonly sourceScoped?: boolean;
   } = {},
 ) {
   const key = options.key ?? "scratch approval passphrase";
@@ -94,6 +100,7 @@ export function scratchEngine(
   let clock = Date.parse("2026-11-22T10:00:00.000Z");
   let holderSeq = 0;
   let down = false;
+  let sourceScoped = options.sourceScoped === true;
   /** Link writes the engine is answering now, and the most it ever answered at once. */
   const linkWrites = { inFlight: 0, most: 0 };
   /** Runs once, just before the next link write is admitted: another writer getting in first. */
@@ -119,11 +126,42 @@ export function scratchEngine(
     ...(options.servesLink === false ? {} : { boardThread: links.get(task.id) ?? null }),
     ...(conversing ? { conversation: mirrorOf(task.id), steers: steerCounts(task.id) } : {}),
   });
+  /** Each source's highest seq; a row below its source's floor is superseded. */
+  const floorsOf = (rows: ReadonlyArray<Activity>) => {
+    const floors = new Map<string, number>();
+    for (const row of rows) floors.set(row.setBy, Math.max(floors.get(row.setBy) ?? -1, row.seq));
+    return floors;
+  };
   const mirrorOf = (id: string) => {
     const rows = activity.get(id) ?? [];
     if (rows.length === 0) return null;
-    const top = rows.reduce((a, b) => (b.seq > a.seq ? b : a));
+    // Scoped: the last-arrived row that stands. Legacy: the highest seq, whoever sent it.
+    const floors = floorsOf(rows);
+    const top = sourceScoped
+      ? rows.findLast((row) => row.seq === floors.get(row.setBy))!
+      : rows.reduce((a, b) => (b.seq > a.seq ? b : a));
     return { count: rows.length, lastAt: top.at, lastKind: top.kind, lastExcerpt: top.excerpt };
+  };
+  /** The task detail's conversation: the legacy object, or the scoped one, never null. */
+  const detailConversationOf = (id: string) => {
+    const rows = activity.get(id) ?? [];
+    if (!sourceScoped)
+      return (
+        mirrorOf(id) && {
+          ...mirrorOf(id),
+          latest: rows.toSorted((a, b) => b.seq - a.seq).slice(0, 10),
+        }
+      );
+    const floors = floorsOf(rows);
+    return {
+      ...(mirrorOf(id) ?? { count: 0, lastAt: null, lastKind: null, lastExcerpt: null }),
+      sourceScoped: true,
+      sourceFloors: Object.fromEntries(floors),
+      latest: rows
+        .filter((row) => row.seq === floors.get(row.setBy))
+        .toReversed()
+        .slice(0, 10),
+    };
   };
   const steersOf = (id: string) =>
     steers
@@ -150,7 +188,7 @@ export function scratchEngine(
       return invalid("setBy");
     const rows = activity.get(id) ?? [];
     activity.set(id, rows);
-    if (rows.some((row) => row.seq === body.seq))
+    if (rows.some((row) => row.seq === body.seq && (!sourceScoped || row.setBy === body.setBy)))
       return { status: 200, body: { task: id, conversation: mirrorOf(id), unchanged: true } };
     const row = {
       seq: body.seq as number,
@@ -327,12 +365,7 @@ export function scratchEngine(
               source: null,
               ...(conversing
                 ? {
-                    conversation: mirrorOf(task.id) && {
-                      ...mirrorOf(task.id),
-                      latest: (activity.get(task.id) ?? [])
-                        .toSorted((a, b) => b.seq - a.seq)
-                        .slice(0, 10),
-                    },
+                    conversation: detailConversationOf(task.id),
                     steers: steersOf(task.id),
                   }
                 : {}),
@@ -452,6 +485,13 @@ export function scratchEngine(
     },
     steer: (id: number) => steers.find((steer) => steer.id === id)!,
     activityOf: (task: string) => activity.get(task) ?? [],
+    /** Another source's ingest, as its own server would send it. */
+    ingestFrom: (task: string, row: { seq: number; setBy: string; kind?: string }) =>
+      ingest(task, { at: "2026-11-23T00:00:00.000Z", kind: "message", ...row }),
+    /** The engine installed, or rolled back, between two passes of one running server. */
+    setSourceScoped: (value: boolean) => {
+      sourceScoped = value;
+    },
     dropNext: (path: RegExp) => {
       drops.push(path);
     },

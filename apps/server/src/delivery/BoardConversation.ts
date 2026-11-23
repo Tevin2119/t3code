@@ -141,6 +141,10 @@ const Detail = Schema.Struct({
   conversation: Schema.optional(
     Schema.NullOr(
       Schema.Struct({
+        // The marker of an engine that scopes activity to its source (spec 6a amendment): this
+        // server's resume floor is its own entry in `sourceFloors`. An older engine serves neither.
+        sourceScoped: Schema.optional(Schema.Boolean),
+        sourceFloors: Schema.optional(Schema.Record(Schema.String, Schema.Number)),
         latest: Schema.optional(
           Schema.Array(Schema.Struct({ seq: Schema.Number, setBy: Schema.String })),
         ),
@@ -219,9 +223,17 @@ export const make = Effect.gen(function* () {
       else {
         const read = yield* detail();
         if (Option.isNone(read)) return;
-        const latest = read.value.conversation?.latest?.[0];
-        if (latest && latest.setBy !== context.environmentId) return;
-        floor = latest?.seq ?? -1;
+        const mirrored = read.value.conversation;
+        if (mirrored?.sourceScoped === true && mirrored.sourceFloors !== undefined) {
+          // No entry is no floor: the first eligible item goes.
+          floor = mirrored.sourceFloors[context.environmentId] ?? -1;
+        } else {
+          // An engine before the amendment orders by one seq across sources, so another
+          // environment's latest row is a floor this server's seqs cannot be compared with.
+          const latest = mirrored?.latest?.[0];
+          if (latest && latest.setBy !== context.environmentId) return;
+          floor = latest?.seq ?? -1;
+        }
       }
       floors.set(scanKey, floor);
     }
