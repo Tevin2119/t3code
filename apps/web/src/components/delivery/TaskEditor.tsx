@@ -129,12 +129,38 @@ function Field(props: {
   );
 }
 
+/** The editor's page: its own, or for a saved draft the centre of the task's page. */
+function EditorShell(props: { readonly framed: boolean; readonly children: React.ReactNode }) {
+  return props.framed ? (
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col">{props.children}</div>
+  ) : (
+    <SidebarInset className="isolate h-dvh min-h-0 overflow-hidden overscroll-y-none">
+      {props.children}
+    </SidebarInset>
+  );
+}
+
+/** The editor's controls: its own page's header, or a bar under the header of the task's page. */
+function EditorBar(props: { readonly framed: boolean; readonly children: React.ReactNode }) {
+  return props.framed ? (
+    <div className="flex shrink-0 items-center border-b border-border px-3" data-task-editor-bar>
+      {props.children}
+    </div>
+  ) : (
+    <WorkspacePageHeader electron={isElectron} className="h-auto">
+      {props.children}
+    </WorkspacePageHeader>
+  );
+}
+
 /**
  * Where a task is written: what is asked, what it must meet, how it is known
  * to be done, and anything that helps. Saved as a draft it asks nothing of
  * anyone. Submitted, the team takes it on and the engine moves it from there.
  */
 export function TaskEditor(props: {
+  /** A saved draft opened in the task's page, whose header and frame it sits under. */
+  readonly framed?: boolean;
   readonly environmentId: EnvironmentId | null;
   /** A draft that was saved before, or null for a new task. */
   readonly taskId: string | null;
@@ -480,9 +506,9 @@ export function TaskEditor(props: {
   const state = !props.taskId ? "Not saved yet" : changed ? "Changed since it was saved" : "Saved";
 
   return (
-    <SidebarInset className="isolate h-dvh min-h-0 overflow-hidden overscroll-y-none  ">
+    <EditorShell framed={props.framed === true}>
       <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-task-editor {...intake.handlers}>
-        <WorkspacePageHeader electron={isElectron} className="h-auto">
+        <EditorBar framed={props.framed === true}>
           <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2 py-2">
             <Button size="xs" variant="ghost" onClick={props.onClose}>
               <ArrowLeftIcon />
@@ -593,7 +619,7 @@ export function TaskEditor(props: {
               </Tooltip>
             </div>
           </div>
-        </WorkspacePageHeader>
+        </EditorBar>
 
         {engineDown ? (
           <p className="px-5 pt-3 text-sm text-warning">
@@ -979,6 +1005,6 @@ export function TaskEditor(props: {
           }}
         />
       ) : null}
-    </SidebarInset>
+    </EditorShell>
   );
 }

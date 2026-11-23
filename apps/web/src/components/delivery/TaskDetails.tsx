@@ -4,7 +4,7 @@ import { PencilIcon } from "lucide-react";
 import { useRef, useState } from "react";
 
 import { BOARD_LANE, boardLaneOf, boardLaneTitle } from "../../lib/boardLanes";
-import { reworkOf, WORK_STAGE_TITLE, workStageOf } from "../../lib/boardLaneCards";
+import { reworkOf, waitKindsOf, WORK_STAGE_TITLE, workStageOf } from "../../lib/boardLaneCards";
 import {
   parseTarget,
   repeatKeys,
@@ -19,6 +19,7 @@ import {
 import { LANE_TITLE, PRIORITY_LABEL, tagsFromText } from "../../lib/deliveryBoard";
 import type { MoveBoard } from "../../lib/deliveryMove";
 import { seatsChangedForTask } from "../../lib/deliverySeats";
+import { taskConversation } from "../../lib/taskConversation";
 import { cn } from "../../lib/utils";
 import {
   useBoardStore,
@@ -36,6 +37,7 @@ import { useBoardTask, type BoardTask } from "./BoardTaskContext";
 import { ReworkCount, WaitKinds } from "./BoardLaneCards";
 import { SeatSettingsPanel } from "./SeatSettingsPanel";
 import { TaskDisclosure } from "./TaskDisclosure";
+import { TaskEngineLog } from "./TaskEngineLog";
 import { TaskFileList } from "./taskFiles";
 import {
   Age,
@@ -308,12 +310,44 @@ function TaskDetailsBody(props: { readonly board: BoardTask; readonly task: Task
     board.refresh();
   };
   const source = task.source;
+  const container = useRef<HTMLDivElement>(null);
+  const [askedOpen, setAskedOpen] = useState(true);
+  // The log stands in for the conversation while the task has none, so it starts open then.
+  const [logOpen, setLogOpen] = useState(() => taskConversation(task).kind !== "thread");
+  const reveal = (selector: string) =>
+    requestAnimationFrame(() =>
+      container.current
+        ?.querySelector(selector)
+        ?.scrollIntoView({ block: "start", behavior: "smooth" }),
+    );
+  const showSection = (section: "acceptance" | "plan") => {
+    setAskedOpen(true);
+    reveal(`[data-task-section="${section}"]`);
+  };
+  // A proposal owed is answered on its own entry in the log.
+  const proposal = waitKindsOf(card).includes("proposal")
+    ? (task.timeline.findLast((entry) => entry.kind === "proposal" && entry.state === "open") ??
+      null)
+    : null;
 
   return (
-    <div className="flex min-w-0 flex-col gap-2 px-2.5" data-task-details>
+    <div ref={container} className="flex min-w-0 flex-col gap-2 px-2.5" data-task-details>
       {card.waitingOn === "person" ? (
         <TaskDisclosure title={gt("Needs you")}>
           <WaitKinds card={card} />
+          {proposal ? (
+            <button
+              type="button"
+              className="self-start text-xs text-primary underline-offset-2 hover:underline"
+              onClick={() => {
+                setLogOpen(true);
+                reveal(`[data-timeline-entry="${CSS.escape(proposal.id)}"]`);
+              }}
+              data-task-see-proposal
+            >
+              {gt("See the proposal")}
+            </button>
+          ) : null}
           {task.brief ? <Briefing brief={task.brief} /> : null}
         </TaskDisclosure>
       ) : null}
@@ -374,7 +408,11 @@ function TaskDetailsBody(props: { readonly board: BoardTask; readonly task: Task
         )}
       </TaskDisclosure>
 
-      <TaskDisclosure title={`What is asked, revision ${task.revision}`}>
+      <TaskDisclosure
+        title={`What is asked, revision ${task.revision}`}
+        open={askedOpen}
+        onOpenChange={setAskedOpen}
+      >
         <p className="text-sm break-words whitespace-pre-wrap" data-task-asked>
           {task.body}
         </p>
@@ -436,6 +474,17 @@ function TaskDetailsBody(props: { readonly board: BoardTask; readonly task: Task
           </section>
         ) : null}
       </TaskDisclosure>
+
+      <div data-task-section="log">
+        <TaskDisclosure title={gt("Engine log")} open={logOpen} onOpenChange={setLogOpen}>
+          <TaskEngineLog
+            environmentId={environmentId}
+            task={task}
+            onChanged={board.refresh}
+            onShow={showSection}
+          />
+        </TaskDisclosure>
+      </div>
 
       {task.links.length > 0 ? (
         <TaskDisclosure title="Dependencies and related tasks">

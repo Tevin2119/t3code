@@ -1,8 +1,9 @@
-import { act, use } from "react";
+import { act, use, type ReactNode } from "react";
 import { create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
 import { BoardTaskContext } from "./BoardTaskContext";
-import { FullAutoAttribution, TaskWorkspace } from "./TaskWorkspace";
+import { FullAutoAttribution } from "./TaskEngineLog";
+import { TaskWorkspace } from "./TaskWorkspace";
 
 const read = vi.hoisted(() => ({ body: null as unknown }));
 vi.mock("../ui/badge", () => ({ Badge: "strong" }));
@@ -39,10 +40,36 @@ vi.mock("../../hooks/useLocalStorage", async () => {
 });
 // The editor, as it reads the board task it is opened in.
 vi.mock("./TaskEditor", () => ({
-  TaskEditor: (props: { readonly taskId: string | null }) => {
+  TaskEditor: (props: { readonly taskId: string | null; readonly framed?: boolean }) => {
     const board = use(BoardTaskContext);
-    return <p>{`Editor for ${props.taskId} in board task ${board?.taskId}`}</p>;
+    return (
+      <p>{`Editor for ${props.taskId}${props.framed ? " framed" : ""} in board task ${board?.taskId}`}</p>
+    );
   },
+}));
+// The task's page and its centre, as the task view hands them what they draw.
+vi.mock("./TaskWorkspacePanels", () => ({
+  TaskWorkspacePanels: (props: { readonly renderConversation: (panel: object) => ReactNode }) =>
+    props.renderConversation({ controls: null, showDetails() {}, openTab() {}, narrow: false }),
+}));
+vi.mock("./TaskConversation", () => ({
+  TaskConversation: (props: { readonly chrome: { title: string }; readonly draft?: ReactNode }) => (
+    <section>
+      <h2>{props.chrome.title}</h2>
+      {props.draft}
+    </section>
+  ),
+}));
+vi.mock("./SharedBoard", () => ({ SharedTaskAllocation: () => null }));
+vi.mock("../ui/dialog", () => ({
+  Dialog: () => null,
+  DialogHeader: () => null,
+  DialogPanel: () => null,
+  DialogPopup: () => null,
+  DialogTitle: () => null,
+}));
+vi.mock("../ui/sidebar", () => ({
+  SidebarInset: (props: { children: ReactNode }) => props.children,
 }));
 
 let renderer: ReactTestRenderer;
@@ -93,7 +120,7 @@ it("omits the badge for ordinary actors", async () => {
   });
   expect(renderer.toJSON()).toBeNull();
 });
-it("opens a draft in the task editor, inside the board task it belongs to", async () => {
+it("opens a draft's editor as the centre of the task's page, inside the board task it belongs to", async () => {
   read.body = { id: "t9", number: 9, title: "Draft", state: "draft", card: { id: "t9" } };
   await act(() => {
     renderer = create(
@@ -106,7 +133,7 @@ it("opens a draft in the task editor, inside the board task it belongs to", asyn
       />,
     );
   });
-  expect(renderer.toJSON()).toEqual(
-    expect.objectContaining({ children: ["Editor for t9 in board task t9"] }),
-  );
+  const centre = renderer.root.findByType("section");
+  expect(centre.findByType("h2").props.children).toBe("#9 Draft");
+  expect(centre.findByType("p").props.children).toBe("Editor for t9 framed in board task t9");
 });

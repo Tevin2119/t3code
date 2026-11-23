@@ -112,9 +112,9 @@ export type RightPanelSurface =
   | ThreadSurface
   /** A linked environment's thread, read through `viaEnvironmentId`; it has no thread here. */
   | LinkedThreadSurface
-  /** A board task's evidence and settings. Only a task's own panel (`taskPanelRef`) opens it. */
+  /** A board task's evidence: on its thread's panel, or on `taskPanelRef` while it has no thread. */
   | { id: "task-evidence"; kind: "task-evidence" }
-  /** A board task's deployment status, one row per environment. Task panels only, like evidence. */
+  /** A board task's delivery and deployments, opened where its evidence is. */
   | { id: "task-deployments"; kind: "task-deployments" };
 
 export type ThreadSurface = { id: `thread:${string}`; kind: "thread"; threadId: ThreadId };

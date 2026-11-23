@@ -310,13 +310,24 @@ the stage to open the **Task** item of the thread details card, the team to see 
 is doing what and open a seat's conversation, and evidence or deployment to open
 its tab. On a narrow window the badges sit in a row under the header.
 
-The **Task** item holds what is asked, the plan, who owns the task and its seat
-settings. Under **Linked conversations**, **Made from** opens the conversation that
-created the task in its place, and **Back to task** returns to the task. The
-card's lineage also lists the task's parent, parts and follow-ups; select one to
-open that task. A task with no source conversation has no **Made from** row.
-Forking into new work, opening a citation or following an explicit Open link
-still uses its ordinary destination.
+**Task evidence** and **Deployments** are tabs on the thread's right panel. Closed,
+they come back from the panel's **+** menu, on a task's thread only. While a
+seat's conversation is open, the panel, the details and the badges stay the
+task's.
+
+The **Task** item holds what is asked, the plan, who owns the task, its seat
+settings and the engine's log. The log's composer writes to the team as notes,
+changes, status questions or answers; a proposed change is confirmed or declined
+on its entry, which **Needs you** links to while it waits. Under **Linked
+conversations**, **Made from** opens the conversation that created the task in its
+place, and **Back to task** returns to the task. The card's lineage also lists the
+task's parent, parts and follow-ups; select one to open that task. A task with no
+source conversation has no **Made from** row. Forking into new work, opening a
+citation or following an explicit Open link still uses its ordinary destination.
+
+A task with no conversation yet keeps its tabs and details on its own page: a
+saved draft opens there with its editor, a queued task shows its text and its
+place in the queue, and a task already at work links to the engine's log.
 
 While a task is open, the Board's sidebar column switches between tasks. The
 open task is highlighted, with its parent above it and its parts, follow-ups and

@@ -162,7 +162,7 @@ export function TaskComposer(props: {
   return (
     <div
       className={cn(
-        "flex min-h-0 shrink-0 flex-col border-t border-border p-2 [@media(min-width:640px)_and_(min-height:600px)]:p-3 max-h-[45%] [@media(min-width:640px)_and_(min-height:600px)]:max-h-none",
+        "flex min-h-0 shrink-0 flex-col border-t border-border p-2 [@media(min-width:640px)_and_(min-height:600px)]:p-3",
         intake.over && "outline-2 -outline-offset-4 outline-ring outline-dashed",
       )}
       data-task-composer

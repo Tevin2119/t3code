@@ -171,6 +171,8 @@ export interface RightPanelTabsProps {
   sideChatAvailable?: boolean;
   /** Overrides the default reason while side chats are available but cannot start. */
   sideChatDisabledReason?: string | null;
+  /** Absent where no board task's view hosts the thread. */
+  onAddTaskSurface?: ((kind: TaskSurfaceKind) => void) | undefined;
   pullRequestStatusSeeds?: Readonly<Record<string, PullRequestTabStatusSeed>>;
   children: ReactNode;
 }
@@ -224,6 +226,31 @@ const SURFACE_UNAVAILABLE_HINTS = {
   device: msg("Available from a thread."),
   sideChat: msg("Available after the first message."),
 } as const;
+
+type TaskSurfaceKind = "task-evidence" | "task-deployments";
+
+/** A board task's own tabs, offered only where a board task's view hosts the thread. */
+function taskSurfaceActions(onAdd: ((kind: TaskSurfaceKind) => void) | undefined) {
+  if (!onAdd) return [];
+  return [
+    {
+      label: msg("Task evidence"),
+      icon: ClipboardListIcon,
+      shortcut: "E",
+      available: true,
+      disabledReason: "",
+      onClick: () => onAdd("task-evidence"),
+    },
+    {
+      label: msg("Deployments"),
+      icon: RocketIcon,
+      shortcut: "O",
+      available: true,
+      disabledReason: "",
+      onClick: () => onAdd("task-deployments"),
+    },
+  ];
+}
 
 type TabContextMenuAction =
   | "open-in-main-view"
@@ -356,6 +383,7 @@ function RightPanelEmptyState(props: {
   deviceAvailable: boolean;
   sideChatAvailable: boolean;
   sideChatDisabledReason: string | null;
+  onAddTaskSurface?: ((kind: TaskSurfaceKind) => void) | undefined;
 }) {
   const gt = useGT();
   const messages = useMessages();
@@ -433,6 +461,7 @@ function RightPanelEmptyState(props: {
           },
         ]
       : []),
+    ...taskSurfaceActions(props.onAddTaskSurface),
   ] as const;
 
   type SurfaceAction = (typeof actions)[number];
@@ -1282,6 +1311,7 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
           },
         ]
       : []),
+    ...taskSurfaceActions(props.onAddTaskSurface),
   ] as const;
 
   const handleAddSurfaceMenuKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
@@ -1712,6 +1742,7 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
             deviceAvailable={props.deviceAvailable}
             sideChatAvailable={props.sideChatAvailable === true}
             sideChatDisabledReason={props.sideChatDisabledReason ?? null}
+            onAddTaskSurface={props.onAddTaskSurface}
           />
         ) : (
           props.children

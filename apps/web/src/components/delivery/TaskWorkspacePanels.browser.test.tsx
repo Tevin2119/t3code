@@ -1,9 +1,14 @@
+import { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import { useState, type ReactNode } from "react";
 import { beforeEach, expect, it } from "vite-plus/test";
 import { page } from "vite-plus/test/browser";
 import { act, render } from "../../../test/render";
 import "~/index.css";
-import { taskPanelRef, useRightPanelStore } from "../../rightPanelStore";
+import {
+  selectThreadRightPanelState,
+  taskPanelRef,
+  useRightPanelStore,
+} from "../../rightPanelStore";
 import { TaskWorkspacePanels } from "./TaskWorkspacePanels";
 
 beforeEach(async () => {
@@ -26,6 +31,7 @@ function TaskExample({ owner }: { owner: string }) {
     <div style={{ height: 700 }}>
       <TaskWorkspacePanels
         owner={owner}
+        thread={null}
         detailsOpen={details}
         onDetailsOpenChange={setDetails}
         details={<p>TaskExample configuration</p>}
@@ -98,33 +104,60 @@ it("holds the task's details in the sheet only while it is open, and never a lin
   await expect.element(screen.getByRole("textbox", { name: "TaskExample reply" })).toBeVisible();
 });
 
-it("gives a thread view the right panel toggle alone, and opens a tab by name", async () => {
-  function ThreadView() {
-    const [details, setDetails] = useState(false);
-    return (
-      <TaskWorkspacePanels
-        owner="thread-view-task"
-        detailsOpen={details}
-        onDetailsOpenChange={setDetails}
-        details={<p>Configuration</p>}
-        evidence={<p>Evidence rows</p>}
-        deployments={<p>Deployment rows</p>}
-        renderConversation={({ rightPanelControl, openTab }) => (
-          <div>
-            {rightPanelControl}
-            <button onClick={() => openTab("task-deployments")}>Open the deployments</button>
-          </div>
-        )}
-      />
-    );
-  }
-  await using screen = await render(<ThreadView />);
-  await expect.element(screen.getByRole("button", { name: "Toggle right panel" })).toBeVisible();
+const taskThread = (name: string) => ({
+  environmentId: EnvironmentId.make("env-panels"),
+  threadId: ThreadId.make(name),
+});
+const threadPanel = (name: string) =>
+  selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, taskThread(name));
+
+function ThreadTask(props: { readonly name: string; readonly openFirst?: boolean }) {
+  return (
+    <TaskWorkspacePanels
+      owner={`owner-${props.name}`}
+      thread={taskThread(props.name)}
+      openFirst={props.openFirst === true}
+      detailsOpen={false}
+      onDetailsOpenChange={() => {}}
+      details={<p>Configuration</p>}
+      evidence={<p>Evidence rows</p>}
+      deployments={<p>Deployment rows</p>}
+      renderConversation={({ controls, openTab }) => (
+        <div>
+          {controls}
+          <button onClick={() => openTab("task-deployments")}>Open the deployments</button>
+        </div>
+      )}
+    />
+  );
+}
+
+it("gives a task with a thread no panel or toggles of its own, and opens its tabs on the thread's", async () => {
+  await using screen = await render(<ThreadTask name="tabs-thread" />);
+  await expect
+    .element(screen.getByRole("button", { name: "Toggle right panel" }))
+    .not.toBeInTheDocument();
   await expect
     .element(screen.getByRole("button", { name: "Toggle task details panel" }))
     .not.toBeInTheDocument();
   await screen.getByRole("button", { name: "Open the deployments" }).click();
-  await expect.element(page.getByText("Deployment rows")).toBeVisible();
+  expect(threadPanel("tabs-thread")).toMatchObject({
+    isOpen: true,
+    activeSurfaceId: "task-deployments",
+    surfaces: [{ kind: "task-evidence" }, { kind: "task-deployments" }],
+  });
+  // The thread view draws them; nothing here does.
+  expect(page.getByText("Deployment rows").query()).toBeNull();
+});
+
+it("opens a task thread's panel at its tabs on the task's first visit, once", async () => {
+  localStorage.removeItem("t3code:task-panel-first-open:owner-first-thread");
+  await using screen = await render(<ThreadTask key="a" name="first-thread" openFirst />);
+  await expect.poll(() => threadPanel("first-thread").isOpen).toBe(true);
+  expect(threadPanel("first-thread").activeSurfaceId).toBe("task-evidence");
+  await act(() => useRightPanelStore.getState().closeAllSurfaces(taskThread("first-thread")));
+  await screen.rerender(<ThreadTask key="b" name="first-thread" openFirst />);
+  expect(threadPanel("first-thread").surfaces).toEqual([]);
 });
 
 it("opens the task details as a sheet at desktop width, and closes them", async () => {
@@ -182,6 +215,7 @@ it("opens the right panel on a task's first visit only when asked, and not again
     <TaskWorkspacePanels
       key={key}
       owner="first-visit-task"
+      thread={null}
       openFirst
       detailsOpen={false}
       onDetailsOpenChange={() => {}}

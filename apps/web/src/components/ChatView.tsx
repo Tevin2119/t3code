@@ -1,4 +1,5 @@
 import { useThreadInspection } from "./chat/ThreadInspectionContext";
+import { useThreadPanelHost } from "./chat/ThreadPanelHostContext";
 import { deriveTeamChatPhase } from "@t3tools/client-runtime/state/thread-workflows";
 import { m } from "../i18n/messages";
 import { thrownErrorMessage } from "@t3tools/client-runtime/errors";
@@ -482,6 +483,8 @@ export interface ChatViewSlots {
   readonly composerLane?: ReactNode;
   /** False when the thread takes no messages here: there is no composer. */
   readonly composer?: boolean;
+  /** The host's own tabs, which the right panel's + menu then offers. */
+  readonly onAddTaskSurface?: (kind: "task-evidence" | "task-deployments") => void;
 }
 
 type ChatViewProps =
@@ -1150,6 +1153,16 @@ export default function ChatView(props: ChatViewProps) {
   })();
   const activeThreadRef = useActiveThreadRef(activeThread);
   const activeThreadKey = activeThreadRef ? scopedThreadKey(activeThreadRef) : null;
+  // The right panel and the details panel are the host's when a workspace shows this thread in its
+  // own thread's place. An embedded thread has none of its own, so it takes no host.
+  const panelHost = useThreadPanelHost();
+  const panelThreadRef =
+    useActiveThreadRef(
+      panelHost && !embedded
+        ? { environmentId: panelHost.environmentId, id: panelHost.threadId }
+        : null,
+    ) ?? activeThreadRef;
+  const panelThreadKey = panelThreadRef ? scopedThreadKey(panelThreadRef) : null;
   const lastThreadSelectionRef = useRef<{ key: string; selection: ModelSelection } | null>(null);
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- the thread's selection is server state outside React; a switch from any surface must retire an explicit composer pick left on the old provider, which would otherwise pin the picker and revert the next send
   useEffect(() => {
@@ -1211,23 +1224,23 @@ export default function ChatView(props: ChatViewProps) {
     setTimelineAnchor({ threadKey: activeThreadKey, messageId: null });
   }
   const activeRightPanelKind = useRightPanelStore((state) =>
-    selectActiveRightPanel(state.byThreadKey, activeThreadRef),
+    selectActiveRightPanel(state.byThreadKey, panelThreadRef),
   );
   const diffOpen = activeRightPanelKind === "diff";
   const rightPanelState = useRightPanelStore((state) =>
-    selectThreadRightPanelState(state.byThreadKey, activeThreadRef),
+    selectThreadRightPanelState(state.byThreadKey, panelThreadRef),
   );
   const shouldUsePlanSidebarSheet = prefersPlanSidebarSheet && rightPanelState.maximized !== true;
   const activeRightPanelSurface = useRightPanelStore((state) =>
-    selectActiveRightPanelSurface(state.byThreadKey, activeThreadRef),
+    selectActiveRightPanelSurface(state.byThreadKey, panelThreadRef),
   );
-  const activePreviewState = useThreadPreviewState(activeThreadRef);
+  const activePreviewState = useThreadPreviewState(panelThreadRef);
   const activePreviewServerEpoch = activePreviewState.serverEpoch;
-  const resolvePreviewRuntimeTabId = activeThreadRef
-    ? (tabId: string) => previewRuntimeTabId(activeThreadRef, activePreviewServerEpoch, tabId)
+  const resolvePreviewRuntimeTabId = panelThreadRef
+    ? (tabId: string) => previewRuntimeTabId(panelThreadRef, activePreviewServerEpoch, tabId)
     : undefined;
   const activePreviewMiniPlayer = usePreviewMiniPlayerStore((state) =>
-    selectThreadPreviewMiniPlayer(state.byThreadKey, activeThreadRef),
+    selectThreadPreviewMiniPlayer(state.byThreadKey, panelThreadRef),
   );
   const panelTerminalIds = new Set(
     rightPanelState.surfaces.flatMap((surface) =>
@@ -1247,7 +1260,7 @@ export default function ChatView(props: ChatViewProps) {
     rightPanelOpen && activeThreadRef !== null,
     rightPanelPresenceValue,
     panelAnimationsActive,
-    activeThreadKey,
+    panelThreadKey,
     panelAnimationDurationMs,
   );
   const rightPanelPresent = rightPanelPresence.present;
@@ -1337,9 +1350,9 @@ export default function ChatView(props: ChatViewProps) {
 
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- drops file surfaces from the right panel store once bootstrap shows the thread has no workspace
   useEffect(() => {
-    if (!activeThreadRef || !activeEnvironmentBootstrapComplete) return;
-    useRightPanelStore.getState().reconcileFileSurfaces(activeThreadRef, activeProject !== null);
-  }, [activeEnvironmentBootstrapComplete, activeProject, activeThreadRef]);
+    if (!panelThreadRef || !activeEnvironmentBootstrapComplete) return;
+    useRightPanelStore.getState().reconcileFileSurfaces(panelThreadRef, activeProject !== null);
+  }, [activeEnvironmentBootstrapComplete, activeProject, panelThreadRef]);
 
   const activeEnvironment =
     activeThread == null ? null : (environmentById.get(activeThread.environmentId) ?? null);
@@ -1743,8 +1756,8 @@ export default function ChatView(props: ChatViewProps) {
   };
   const downloadFileAttachmentStable = useStableCallback(downloadFileAttachment);
   const openFileAttachment = (attachment: ChatFileAttachment) => {
-    if (activeThreadRef) {
-      useRightPanelStore.getState().openAttachment(activeThreadRef, attachment);
+    if (panelThreadRef) {
+      useRightPanelStore.getState().openAttachment(panelThreadRef, attachment);
       return;
     }
   };
@@ -2174,9 +2187,9 @@ export default function ChatView(props: ChatViewProps) {
     (activePreviewMiniPlayer.source.kind === "device" || canOperatePreview)
       ? activePreviewMiniPlayer
       : null;
-  const canvasPreview = useThreadPreviewCanvasSource(activeThreadRef, shownPreviewMiniPlayer);
+  const canvasPreview = useThreadPreviewCanvasSource(panelThreadRef, shownPreviewMiniPlayer);
   const threadPanelInlineOpen = useRightPanelStore((state) =>
-    selectThreadPanelOpen(state.threadPanelVisibilityByThreadKey, activeThreadRef, "inline"),
+    selectThreadPanelOpen(state.threadPanelVisibilityByThreadKey, panelThreadRef, "inline"),
   );
   // Selects only the mode, so canvas resizes rerender the chat view only when the
   // card switches presentation.
@@ -2194,7 +2207,7 @@ export default function ChatView(props: ChatViewProps) {
   const threadPanelOpen = useRightPanelStore((state) =>
     selectThreadPanelOpen(
       state.threadPanelVisibilityByThreadKey,
-      activeThreadRef,
+      panelThreadRef,
       threadPanelPresentation,
     ),
   );
@@ -2269,7 +2282,7 @@ export default function ChatView(props: ChatViewProps) {
     closeSurfacesToRight: closeRightPanelSurfacesToRightStable,
     closeAllSurfaces: closeAllRightPanelSurfacesStable,
   } = useRightPanelSurfaceClose({
-    threadRef: activeThreadRef,
+    threadRef: panelThreadRef,
     terminalLabelsById: activeTerminalLabelsById,
   });
   const closeRightPanelSurfaceStable = closeRightPanelSurface;
@@ -2627,7 +2640,7 @@ export default function ChatView(props: ChatViewProps) {
     toggleThreadPanelStable,
     shortcuts: rightPanelShortcuts,
   } = useRightPanelActions({
-    activeThreadRef,
+    activeThreadRef: panelThreadRef,
     activeProject,
     activeRightPanelSurface,
     activePreviewState,
@@ -3219,7 +3232,7 @@ export default function ChatView(props: ChatViewProps) {
     embedded && (activeThread?.worktreePath ?? null) !== (panelHostShell?.worktreePath ?? null);
   // A maximized panel covers the terminal drawer the command runs in.
   const runSideChatShellCommandStable = useStableCallback((command: string) => {
-    if (activeThreadRef) useRightPanelStore.getState().setMaximized(activeThreadRef, false);
+    if (panelThreadRef) useRightPanelStore.getState().setMaximized(panelThreadRef, false);
     runShellCommandStable(command);
   });
   // Main-thread surfaces show this reason; `/side` sent anyway gets it as a toast.
@@ -3242,7 +3255,7 @@ export default function ChatView(props: ChatViewProps) {
                 ? gt("Available once the thread's worktree is set up.")
                 : null;
   const openSideChatStable = useStableCallback(() => void sideChat.open());
-  const openSurfaceInMainView = useOpenSurfaceInMainView(activeThreadRef);
+  const openSurfaceInMainView = useOpenSurfaceInMainView(panelThreadRef);
   const sendSideChatStable = useStableCallback(sideChat.open);
   const { onConfirmRevertStable, onForkFromRunStable, onRevertTimelineTurnStable } =
     useTimelineRewind({
@@ -3718,11 +3731,11 @@ export default function ChatView(props: ChatViewProps) {
     );
   }
 
-  const rightPanelContent = activeThreadRef ? (
+  const rightPanelContent = panelThreadRef ? (
     <RightPanelSurfaceContent
       surface={renderedRightPanelSurface}
       activeSurfaceId={activeRightPanelSurface?.id ?? null}
-      threadRef={activeThreadRef}
+      threadRef={panelThreadRef}
       environmentId={activeThread.environmentId}
       visible={rightPanelOpen}
       composerDraftTarget={composerDraftTarget}
@@ -3817,8 +3830,8 @@ export default function ChatView(props: ChatViewProps) {
     >
       {embedded ? null : (
         <DeviceSetupDialogHost
-          threadKey={activeThreadKey}
-          threadRef={activeThreadRef}
+          threadKey={panelThreadKey}
+          threadRef={panelThreadRef}
           state={deviceState}
         />
       )}
@@ -4399,13 +4412,13 @@ export default function ChatView(props: ChatViewProps) {
               </div>
             </div>
 
-            {canOperatePreview && activeThreadRef && activeEnvironmentServerBrowser && !embedded ? (
-              <PreviewSessionSync threadRef={activeThreadRef} />
+            {canOperatePreview && panelThreadRef && activeEnvironmentServerBrowser && !embedded ? (
+              <PreviewSessionSync threadRef={panelThreadRef} />
             ) : null}
-            {activeThreadRef && shownPreviewMiniPlayer && !embedded ? (
+            {panelThreadRef && shownPreviewMiniPlayer && !embedded ? (
               <ThreadPreviewMiniPlayer
-                key={`${activeThreadKey}:${previewMiniPlayerSourceKey(shownPreviewMiniPlayer.source)}`}
-                threadRef={activeThreadRef}
+                key={`${panelThreadKey}:${previewMiniPlayerSourceKey(shownPreviewMiniPlayer.source)}`}
+                threadRef={panelThreadRef}
                 miniPlayer={shownPreviewMiniPlayer}
               />
             ) : null}
@@ -4524,7 +4537,7 @@ export default function ChatView(props: ChatViewProps) {
         <ChatRightPanel
           sheet={shouldUsePlanSidebarSheet}
           workspaceLayoutElement={workspaceLayoutElement}
-          widthStorageKey={`t3code:preview-panel-width:${activeThreadKey}`}
+          widthStorageKey={`t3code:preview-panel-width:${panelThreadKey}`}
           sheetAnimationDurationMs={panelAnimationsActive ? panelAnimationDurationMs : 0}
           onCloseSheet={closePreviewPanelStable}
           open={rightPanelOpen}
@@ -4554,8 +4567,8 @@ export default function ChatView(props: ChatViewProps) {
           onCloseSurface={closeRightPanelSurfaceStable}
           onOpenInMainView={openSurfaceInMainView}
           onRenameDevice={(surfaceId, title) => {
-            if (activeThreadRef)
-              useRightPanelStore.getState().renameDevice(activeThreadRef, surfaceId, title);
+            if (panelThreadRef)
+              useRightPanelStore.getState().renameDevice(panelThreadRef, surfaceId, title);
           }}
           onCloseOtherSurfaces={closeOtherRightPanelSurfacesStable}
           onCloseSurfacesToRight={closeRightPanelSurfacesToRightStable}
@@ -4581,6 +4594,7 @@ export default function ChatView(props: ChatViewProps) {
           deviceAvailable={activeThreadRef !== null}
           sideChatAvailable={sideChat.available}
           sideChatDisabledReason={sideChatDisabledReason}
+          onAddTaskSurface={slots?.onAddTaskSurface}
         >
           {rightPanelContent}
         </ChatRightPanel>

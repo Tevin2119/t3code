@@ -16,10 +16,9 @@ import { linkedThreadSurface } from "../../linkedThreadSurface";
 import { useRightPanelStore } from "../../rightPanelStore";
 import type { ChatViewSlots } from "../ChatView";
 import { ThreadInspectionContext } from "../chat/ThreadInspectionContext";
+import { ThreadPanelHostContext } from "../chat/ThreadPanelHostContext";
 import { RenderErrorBoundary } from "../RenderErrorBoundary";
 import { Button } from "../ui/button";
-import { Toggle } from "../ui/toggle";
-import { ToggleGroup } from "../ui/toggle-group";
 import {
   WorkspaceBreadcrumb,
   WorkspaceBreadcrumbItem,
@@ -40,12 +39,14 @@ export interface TaskChrome {
   readonly title: string;
   /** The header's overflow menu of what can be done with the task. */
   readonly actions: ReactNode;
-  /** Lines under the header: the engine's notices, the last refusal, the delivery disclosure. */
+  /** Lines under the header: the engine's notices and the last refusal. */
   readonly notices: ReactNode;
-  /** The task's own panel toggles on a page, whose details are the sheet. */
+  /** The task's own panel toggles on a page, whose details are the sheet; none with a thread. */
   readonly panelControls: ReactNode;
-  /** The right panel toggle alone, beside a thread view whose details panel is its own. */
-  readonly rightPanelControl: ReactNode;
+  /** Opens one of the task's tabs, where its right panel is. */
+  readonly openTab: (tab: "task-evidence" | "task-deployments") => void;
+  /** Opens the details sheet at the engine's log, for a page whose details are the sheet. */
+  readonly showLog: () => void;
   /** The decisions, in the lane above the composer. */
   readonly decisions: ReactNode;
   /** The task's badges. `openDetails` opens the details of the view they sit in. */
@@ -60,7 +61,7 @@ export interface TaskChrome {
 
 type Back = NonNullable<ChatViewSlots["parent"]>;
 
-/** The native details card of the thread on screen, opened at the Task item in either form it takes. */
+/** The task thread's native details card, opened at the Task item in either form it takes. */
 function openThreadDetails(thread: ScopedThreadRef) {
   const store = useRightPanelStore.getState();
   store.setThreadPanelOpen(thread, "inline", true);
@@ -204,18 +205,23 @@ function SeatLabel(props: { readonly seatName: string | null }) {
 }
 
 /**
- * The row under the header with the task's own panel toggles, until the thread's panels host it.
- * Below the width where the board's column becomes a sheet, it starts with the way back to the board.
+ * The row under the header: the way back to the board below the width where the board's column
+ * becomes a sheet, whose conversation is open, and a page's own panel toggles. A row with nothing
+ * but the way back shows only at that width.
  */
 function TaskBar(props: {
-  readonly controls: ReactNode;
+  readonly controls?: ReactNode;
   readonly onBack: () => void;
+  readonly phoneOnly?: boolean;
   readonly children?: ReactNode;
 }) {
   const gt = useGT();
   return (
     <div
-      className="flex shrink-0 items-center gap-2 border-b border-border px-3 py-1"
+      className={cn(
+        "flex shrink-0 items-center gap-2 border-b border-border px-3 py-1",
+        props.phoneOnly && "md:hidden",
+      )}
       data-task-bar
     >
       <span className="flex shrink-0 md:hidden" data-task-back-to-board>
@@ -326,8 +332,8 @@ function LinkedSeat(props: {
 /**
  * The task's conversation as the native thread view, its composer included, with the task's
  * title and actions in its header. A seat's conversation replaces it, and its parent breadcrumb
- * leads back to the task. Until the lead's conversation carries what the engine still says in its
- * log, the log stays one toggle away: it is where a question waits and where a proposal is answered.
+ * leads back to the task. The panels stay the task thread's all along: its right panel with the
+ * task's tabs, and its details with the Task item, where the engine's log is.
  */
 function OpenConversation(props: {
   readonly task: TaskView;
@@ -339,13 +345,11 @@ function OpenConversation(props: {
   readonly source: ScopedThreadRef | null;
   readonly onOpenThread: (thread: ScopedThreadRef) => void;
   readonly onBackToTask: () => void;
-  readonly log: ReactNode;
   readonly chrome: TaskChrome;
   readonly closed: boolean;
 }) {
   const gt = useGT();
   const { chrome } = props;
-  const [view, setView] = useState<"conversation" | "log">("conversation");
   const [attempt, setAttempt] = useState(0);
   const shown = props.seat ?? props.thread;
   const inSeat = props.seat !== null || props.seatResolving;
@@ -358,35 +362,22 @@ function OpenConversation(props: {
   const seatTitle = props.seatName
     ? gt("Seat {seat}", { seat: props.seatName })
     : gt("Seat conversation");
-  // The thread view's details are its own panel's; a page's are the sheet.
-  const threadPlaces = badgePlaces(chrome, () => openThreadDetails(shown));
+  // The thread view's details are the task thread's panel, whichever thread is on screen; a
+  // page's are the sheet.
+  const threadPlaces = badgePlaces(chrome, () => openThreadDetails(props.thread));
   const pagePlaces = badgePlaces(chrome, chrome.showDetails);
   // A seat's thread view titles itself, so the bar names the seat; a page titles it instead.
+  const seatLabel = inSeat && !sourceOpen;
   const banner = (threadView: boolean) => (
     <>
       {chrome.notices}
       {(threadView ? threadPlaces : pagePlaces).row}
       <TaskBar
-        controls={threadView ? chrome.rightPanelControl : chrome.panelControls}
+        controls={threadView ? null : chrome.panelControls}
         onBack={chrome.backToBoard}
+        phoneOnly={threadView && !seatLabel}
       >
-        {inSeat ? (
-          threadView && !sourceOpen ? (
-            <SeatLabel seatName={props.seatName} />
-          ) : null
-        ) : (
-          <ToggleGroup
-            aria-label={gt("What the centre shows")}
-            value={[view]}
-            onValueChange={(next) => {
-              const value = next[0];
-              if (value === "conversation" || value === "log") setView(value);
-            }}
-          >
-            <Toggle value="conversation">{gt("Conversation")}</Toggle>
-            <Toggle value="log">{gt("Engine log")}</Toggle>
-          </ToggleGroup>
-        )}
+        {threadView && seatLabel ? <SeatLabel seatName={props.seatName} /> : null}
       </TaskBar>
       {props.offline ? (
         <p
@@ -427,48 +418,51 @@ function OpenConversation(props: {
         // The seat is open but its links are not known yet. The task's own conversation is not
         // shown in its place, and neither view is mounted only to be swapped for the other.
         page(loading)
-      ) : view === "log" && !inSeat ? (
-        page(props.log)
       ) : (
         <ThreadInspectionContext value={props.onOpenThread}>
-          <RenderErrorBoundary
-            resetKeys={[attempt, shown.threadId]}
-            fallback={page(
-              <ConversationFailed attempt={attempt} onRetry={() => setAttempt((n) => n + 1)} />,
-            )}
-          >
-            <Suspense fallback={page(loading)}>
-              {props.seat?.linked ? (
-                page(<LinkedSeat seat={props.seat} linked={props.seat.linked} />)
-              ) : (
-                <ChatView
-                  key={`${shown.environmentId}:${shown.threadId}`}
-                  environmentId={shown.environmentId}
-                  threadId={shown.threadId}
-                  routeKind="server"
-                  unavailableContent={page(
-                    <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-4">
-                      <TaskText task={props.task} />
-                      <p role="status" className="text-xs text-muted-foreground">
-                        {gt(
-                          "This conversation is loading or is not available here. The task's facts beside it stand.",
-                        )}
-                      </p>
-                    </div>,
-                  )}
-                  slots={{
-                    ...(inSeat ? { parent: back } : { title: chrome.title }),
-                    headerActions: threadPlaces.actions,
-                    banner: banner(true),
-                    composerLane: (
-                      <Lane closed={props.closed} decisions={chrome.decisions} className="pb-2" />
-                    ),
-                    composer: !props.closed,
-                  }}
-                />
+          <ThreadPanelHostContext value={props.thread}>
+            <RenderErrorBoundary
+              resetKeys={[attempt, shown.threadId]}
+              fallback={page(
+                <ConversationFailed attempt={attempt} onRetry={() => setAttempt((n) => n + 1)} />,
               )}
-            </Suspense>
-          </RenderErrorBoundary>
+            >
+              <Suspense fallback={page(loading)}>
+                {props.seat?.linked ? (
+                  page(<LinkedSeat seat={props.seat} linked={props.seat.linked} />)
+                ) : (
+                  <ChatView
+                    key={`${shown.environmentId}:${shown.threadId}`}
+                    environmentId={shown.environmentId}
+                    threadId={shown.threadId}
+                    routeKind="server"
+                    unavailableContent={page(
+                      <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-4">
+                        <TaskText task={props.task} />
+                        <p role="status" className="text-xs text-muted-foreground">
+                          {gt(
+                            "This conversation is loading or is not available here. The task's facts beside it stand.",
+                          )}
+                        </p>
+                      </div>,
+                    )}
+                    slots={{
+                      ...(inSeat ? { parent: back } : { title: chrome.title }),
+                      headerActions: threadPlaces.actions,
+                      banner: banner(true),
+                      composerLane: (
+                        <Lane closed={props.closed} decisions={chrome.decisions} className="pb-2" />
+                      ),
+                      composer: !props.closed,
+                      // The + menu adds the one tab it names; a badge brings both back.
+                      onAddTaskSurface: (kind) =>
+                        useRightPanelStore.getState().open(props.thread, kind),
+                    }}
+                  />
+                )}
+              </Suspense>
+            </RenderErrorBoundary>
+          </ThreadPanelHostContext>
         </ThreadInspectionContext>
       )}
     </div>
@@ -477,8 +471,9 @@ function OpenConversation(props: {
 
 /**
  * The centre of the task view (BOARD-REVAMP-UI-SPEC section 6): the native thread view when the
- * task has one, else the native page with the task's words. Which conversation, and whether T3 can
- * serve it, are decided by `lib/taskConversation`; this only draws each case.
+ * task has one, else the native page with the task's words, or for a draft its editor. Which
+ * conversation, and whether T3 can serve it, are decided by `lib/taskConversation`; this only
+ * draws each case.
  */
 export function TaskConversation(props: {
   readonly task: TaskView;
@@ -491,8 +486,8 @@ export function TaskConversation(props: {
   readonly source: ScopedThreadRef | null;
   readonly onOpenThread: (thread: ScopedThreadRef) => void;
   readonly onBackToTask: () => void;
-  /** The engine's own log and its composer, for a task whose conversation is not known yet. */
-  readonly log: ReactNode;
+  /** The task editor, which is a draft's centre. Its own controls submit and discard it. */
+  readonly draft?: ReactNode;
   readonly chrome: TaskChrome;
 }) {
   const gt = useGT();
@@ -500,6 +495,8 @@ export function TaskConversation(props: {
   // A closed or rejected task keeps what was said, and nothing more is written to it.
   const closed = task.state === "rejected" || task.state === "closed";
   const places = badgePlaces(chrome, chrome.showDetails);
+  // A draft's editor carries its own controls, so its lane has no decisions.
+  const decisions = props.draft ? null : chrome.decisions;
   const page = (content: ReactNode) => (
     <TaskPage
       title={chrome.title}
@@ -511,11 +508,12 @@ export function TaskConversation(props: {
           <TaskBar controls={chrome.panelControls} onBack={chrome.backToBoard} />
         </>
       }
-      lane={<Lane closed={closed} decisions={chrome.decisions} className="px-3 pb-3" />}
+      lane={<Lane closed={closed} decisions={decisions} className="px-3 pb-3" />}
     >
       {content}
     </TaskPage>
   );
+  if (props.draft) return page(props.draft);
   switch (state.kind) {
     case "waiting":
       return page(<ConversationWaiting task={task} why={state.why} />);
@@ -523,16 +521,24 @@ export function TaskConversation(props: {
       return page(<ConversationElsewhere task={task} />);
     case "unlinked":
       return page(
-        <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-task-conversation="unlinked">
-          <p className="shrink-0 border-b border-border px-3 py-1.5 text-2xs text-muted-foreground">
+        <div
+          className="flex min-h-0 min-w-0 flex-1 flex-col gap-4 overflow-y-auto p-4"
+          data-task-conversation="unlinked"
+        >
+          <TaskText task={task} />
+          <p className="text-xs text-muted-foreground" role="status">
             {gt(
               "No conversation is linked to this task yet. The engine's log stands in until one is.",
-            )}
+            )}{" "}
+            <button
+              type="button"
+              className="cursor-pointer text-primary underline-offset-2 hover:underline"
+              onClick={chrome.showLog}
+              data-task-open-log
+            >
+              {gt("Open the engine log")}
+            </button>
           </p>
-          <div className="shrink-0 border-b border-border p-4">
-            <TaskText task={task} />
-          </div>
-          {props.log}
         </div>,
       );
     case "open":
@@ -547,7 +553,6 @@ export function TaskConversation(props: {
           source={props.source}
           onOpenThread={props.onOpenThread}
           onBackToTask={props.onBackToTask}
-          log={props.log}
           chrome={chrome}
           closed={closed}
         />
