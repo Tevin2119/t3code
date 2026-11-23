@@ -142,7 +142,9 @@ const engineFailure = (error: DeliveryError, operation: string) => {
           "The engine could not find the task or run. Ask the lead to check the current run.",
       });
     case "invalid-field":
-      return invalidRequest(`The engine rejected a field while trying to ${operation}.`);
+      return invalidRequest(
+        `The engine rejected ${refusalOf(error)?.field ?? "a field"} while trying to ${operation}.`,
+      );
     default:
       return new OrchestratorMcpFailure({
         code: "orchestration_error",

@@ -165,7 +165,6 @@ const DeliveryAcceptanceIndex = Schema.Number.check(
   Schema.isInt(),
   Schema.isGreaterThanOrEqualTo(0),
 );
-const DeliveryEvidenceRef = Schema.String.check(Schema.isPattern(/^[^\s\p{C}]{1,1024}$/u));
 
 export const DeliveryQaReceipt = Schema.Struct({
   id: Schema.optional(Schema.NullOr(Schema.Number)),
@@ -214,7 +213,7 @@ export const DeliverySeatAttestation = Schema.Struct({
 
 export const DeliverySeatHandoffInput = Schema.Struct({
   stage: Schema.Literal("qa"),
-  seat: Schema.optional(TrimmedNonEmptyString),
+  seat: Schema.optional(Schema.String),
 });
 export const DeliverySeatHandoffResult = Schema.Struct({
   handoff: DeliverySeatHandoff,
@@ -223,9 +222,10 @@ export const DeliverySeatHandoffResult = Schema.Struct({
 });
 
 export const DeliveryQaReceiptInput = Schema.Struct({
-  acceptanceIndex: DeliveryAcceptanceIndex.annotate({ description: "Zero-based checklist index." }),
+  acceptanceIndex: DeliveryAcceptanceIndex.annotate({ description: "Zero-based." }),
   verdict: DeliveryQaVerdict,
-  evidence: Schema.Array(DeliveryEvidenceRef),
+  // The engine validates each ref and refuses a bad one by field.
+  evidence: Schema.Array(Schema.String),
 });
 export const DeliveryQaReceiptResult = Schema.Struct({
   qaReceipt: DeliveryQaReceipt,

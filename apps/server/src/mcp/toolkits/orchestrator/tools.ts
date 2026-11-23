@@ -396,7 +396,7 @@ const DeliveryReadTool = Tool.make("delivery_read", {
 
 const NativeBuildStepTool = Tool.make("delivery_native_build_step", {
   description:
-    "Step an opted-in build from its exact engine worktree. Retries reuse one native child; the server reads its result. Step after completion or engine cancellation. Read-only flows stay legacy. No caller-supplied results.",
+    "Step an opted-in build from its exact engine worktree. Retries reuse one native child; the server reads its result. Step after completion or engine cancellation.",
   parameters: DeliveryNativeBuildStepInput,
   success: DeliveryNativeBuildStepResult,
   failure: OrchestratorMcpFailure,
@@ -409,7 +409,7 @@ const NativeBuildStepTool = Tool.make("delivery_native_build_step", {
 
 const QaReceiptTool = Tool.make("delivery_qa_receipt", {
   description:
-    "File a verdict and evidence refs for one acceptance item from the current run's attested QA seat thread. Use a zero-based index. The server resolves the task, seat, and checklist hash.",
+    "From a QA seat thread, file one acceptance item's verdict and evidence refs. The server fills in task, seat and hash.",
   parameters: DeliveryQaReceiptInput,
   success: DeliveryQaReceiptResult,
   failure: OrchestratorMcpFailure,
@@ -422,7 +422,7 @@ const QaReceiptTool = Tool.make("delivery_qa_receipt", {
 
 const SeatHandoffTool = Tool.make("delivery_seat_handoff", {
   description:
-    "From a board task's lead thread, hand QA to a gate seat in its own worktree. Call again after the child completion wake to settle the hand-off.",
+    "From a board lead thread, hand QA to a gate seat. Call again after its completion wake to settle.",
   parameters: DeliverySeatHandoffInput,
   success: DeliverySeatHandoffResult,
   failure: OrchestratorMcpFailure,
