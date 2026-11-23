@@ -1164,6 +1164,8 @@ export default function ChatView(props: ChatViewProps) {
         : null,
     ) ?? activeThreadRef;
   const panelThreadKey = panelThreadRef ? scopedThreadKey(panelThreadRef) : null;
+  // This thread stands in the host's place, as a seat in its task's view; its previews stay its own.
+  const shownInHostPlace = panelThreadKey !== activeThreadKey;
   const lastThreadSelectionRef = useRef<{ key: string; selection: ModelSelection } | null>(null);
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- the thread's selection is server state outside React; a switch from any surface must retire an explicit composer pick left on the old provider, which would otherwise pin the picker and revert the next send
   useEffect(() => {
@@ -1242,7 +1244,7 @@ export default function ChatView(props: ChatViewProps) {
     ? (tabId: string) => previewRuntimeTabId(panelThreadRef, activePreviewServerEpoch, tabId)
     : undefined;
   const activePreviewMiniPlayer = usePreviewMiniPlayerStore((state) =>
-    selectThreadPreviewMiniPlayer(state.byThreadKey, panelThreadRef),
+    selectThreadPreviewMiniPlayer(state.byThreadKey, activeThreadRef),
   );
   const panelTerminalIds = new Set(
     rightPanelState.surfaces.flatMap((surface) =>
@@ -1352,9 +1354,10 @@ export default function ChatView(props: ChatViewProps) {
 
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- drops file surfaces from the right panel store once bootstrap shows the thread has no workspace
   useEffect(() => {
-    if (!panelThreadRef || !activeEnvironmentBootstrapComplete) return;
+    // Another thread's project says nothing of the files in a panel that is the host's.
+    if (!panelThreadRef || !activeEnvironmentBootstrapComplete || shownInHostPlace) return;
     useRightPanelStore.getState().reconcileFileSurfaces(panelThreadRef, activeProject !== null);
-  }, [activeEnvironmentBootstrapComplete, activeProject, panelThreadRef]);
+  }, [activeEnvironmentBootstrapComplete, activeProject, panelThreadRef, shownInHostPlace]);
 
   const activeEnvironment =
     activeThread == null ? null : (environmentById.get(activeThread.environmentId) ?? null);
@@ -2189,7 +2192,15 @@ export default function ChatView(props: ChatViewProps) {
     (activePreviewMiniPlayer.source.kind === "device" || canOperatePreview)
       ? activePreviewMiniPlayer
       : null;
-  const canvasPreview = useThreadPreviewCanvasSource(panelThreadRef, shownPreviewMiniPlayer);
+  const canvasPreview = useThreadPreviewCanvasSource(activeThreadRef, shownPreviewMiniPlayer);
+  // The preview opens in this thread's own panel, which only its own view shows.
+  const openInOwnView = () => {
+    if (!activeThreadRef) return;
+    void navigate({
+      to: "/$environmentId/$threadId",
+      params: buildThreadRouteParams(activeThreadRef),
+    });
+  };
   const threadPanelInlineOpen = useRightPanelStore((state) =>
     selectThreadPanelOpen(state.threadPanelVisibilityByThreadKey, panelThreadRef, "inline"),
   );
@@ -4415,14 +4426,23 @@ export default function ChatView(props: ChatViewProps) {
               </div>
             </div>
 
-            {canOperatePreview && panelThreadRef && activeEnvironmentServerBrowser && !embedded ? (
+            {canOperatePreview && activeThreadRef && activeEnvironmentServerBrowser && !embedded ? (
+              <PreviewSessionSync threadRef={activeThreadRef} />
+            ) : null}
+            {/* The host's own preview tabs stay in its panel, so its sessions stay current too. */}
+            {canOperatePreview &&
+            panelThreadRef &&
+            shownInHostPlace &&
+            activeEnvironmentServerBrowser &&
+            !embedded ? (
               <PreviewSessionSync threadRef={panelThreadRef} />
             ) : null}
-            {panelThreadRef && shownPreviewMiniPlayer && !embedded ? (
+            {activeThreadRef && shownPreviewMiniPlayer && !embedded ? (
               <ThreadPreviewMiniPlayer
-                key={`${panelThreadKey}:${previewMiniPlayerSourceKey(shownPreviewMiniPlayer.source)}`}
-                threadRef={panelThreadRef}
+                key={`${activeThreadKey}:${previewMiniPlayerSourceKey(shownPreviewMiniPlayer.source)}`}
+                threadRef={activeThreadRef}
                 miniPlayer={shownPreviewMiniPlayer}
+                {...(shownInHostPlace ? { onOpenedInPanel: openInOwnView } : {})}
               />
             ) : null}
 

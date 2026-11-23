@@ -9,6 +9,7 @@ import {
   NodeId,
   IssueTrackerKind,
   ORCHESTRATION_V2_WS_METHODS,
+  ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
   RunId,
@@ -38,10 +39,12 @@ import { __setClientSettingsForTests } from "~/hooks/useSettings";
 import stylesheet from "~/index.css?inline";
 import { environmentContextRecord } from "~/lib/composerContextRecords";
 import { startWorkspaceFocus } from "~/lib/workspaceFocus";
+import { usePreviewMiniPlayerStore } from "~/previewMiniPlayerStore";
 import { usePromptStashStore } from "~/promptStashStore";
 import { selectThreadRightPanelState, useRightPanelStore } from "~/rightPanelStore";
 import { getRouter } from "~/router";
 import { appAtomRegistry } from "~/rpc/atomRegistry";
+import { environmentShell } from "~/state/shell";
 import { environmentThreadDetails } from "~/state/threads";
 import {
   ENVIRONMENT_ID,
@@ -1030,6 +1033,106 @@ it("a board task's thread opened by its own route keeps the task's tabs saved fo
   await expect
     .element(screen.getByRole("button", { name: "Task evidence", exact: true }))
     .toBeVisible();
+});
+
+it("a thread without the task's project, shown in a board task's view, leaves the task's file tabs alone", async () => {
+  await page.viewport(1400, 900);
+  const lead = threadWithHistory("task-files-lead", 1);
+  // The conversation the task was filed from, in a project this environment does not have.
+  const source = {
+    ...threadWithHistory("task-files-source", 1),
+    projectId: ProjectId.make("project-elsewhere"),
+  };
+  using _environment = installFakeEnvironment([lead, source]);
+  __setClientSettingsForTests({
+    ...DEFAULT_CLIENT_SETTINGS,
+    onboardingCompletedAt: "2026-01-01T00:00:00.000Z",
+  });
+  const leadRef = scopeThreadRef(ENVIRONMENT_ID, lead.id);
+  useRightPanelStore.getState().open(leadRef, "files");
+  useRightPanelStore.getState().open(leadRef, "task-evidence");
+  const router = getRouter(
+    createMemoryHistory({ initialEntries: [`/${ENVIRONMENT_ID}/${source.id}`] }),
+  );
+  await router.load();
+  const hosted = () => (
+    <BoardTaskContext value={boardTask()}>
+      <ThreadPanelHostContext value={leadRef}>
+        <AppRoot router={router} />
+      </ThreadPanelHostContext>
+    </BoardTaskContext>
+  );
+  await using screen = await render(hosted(), {
+    // AppRoot brings its own router.
+    router: false,
+  });
+  await expect
+    .element(screen.getByRole("textbox", { name: `Message ${source.title}`, exact: true }))
+    .toBeVisible();
+  // With the environment's snapshot in, the next render reconciles a panel's file tabs.
+  await expect
+    .poll(() => appAtomRegistry.get(environmentShell.hasSnapshotAtom(ENVIRONMENT_ID)))
+    .toBe(true);
+  await screen.rerender(hosted());
+  expect(
+    selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, leadRef).surfaces.map(
+      ({ kind }) => kind,
+    ),
+  ).toEqual(["files", "task-evidence"]);
+});
+
+it("a seat in a board task's view floats its own preview, which opens in the seat's own view", async () => {
+  await page.viewport(1400, 900);
+  const lead = threadWithHistory("task-preview-lead", 1);
+  const seat = threadWithHistory("task-preview-seat", 1);
+  using _environment = installFakeEnvironment([lead, seat]);
+  __setClientSettingsForTests({
+    ...DEFAULT_CLIENT_SETTINGS,
+    onboardingCompletedAt: "2026-01-01T00:00:00.000Z",
+  });
+  const leadRef = scopeThreadRef(ENVIRONMENT_ID, lead.id);
+  const seatRef = scopeThreadRef(ENVIRONMENT_ID, seat.id);
+  usePreviewMiniPlayerStore.getState().open(seatRef, {
+    kind: "device",
+    hostId: "local",
+    deviceId: "phone",
+    platform: "ios",
+    name: "Phone",
+  });
+  using _miniPlayer = {
+    [Symbol.dispose]: () => usePreviewMiniPlayerStore.getState().removeThread(seatRef),
+  };
+  const router = getRouter(
+    createMemoryHistory({ initialEntries: [`/${ENVIRONMENT_ID}/${seat.id}`] }),
+  );
+  await router.load();
+  using navigate = vi.spyOn(router, "navigate");
+  await using screen = await render(
+    <BoardTaskContext value={boardTask()}>
+      <ThreadPanelHostContext value={leadRef}>
+        <AppRoot router={router} />
+      </ThreadPanelHostContext>
+    </BoardTaskContext>,
+    {
+      // AppRoot brings its own router.
+      router: false,
+    },
+  );
+  await expect
+    .element(screen.getByRole("region", { name: "Floating device preview" }))
+    .toBeVisible();
+  // The pill shows on hover; the click is what is under test.
+  screen
+    .getByRole("button", { name: "Open preview in right panel" })
+    .element()
+    .dispatchEvent(new MouseEvent("click", { bubbles: true }));
+  const panel = (ref: typeof leadRef) =>
+    selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, ref).surfaces;
+  expect(panel(seatRef)).toEqual([expect.objectContaining({ kind: "device" })]);
+  expect(panel(leadRef)).toEqual([]);
+  expect(navigate).toHaveBeenCalledWith(
+    expect.objectContaining({ to: "/$environmentId/$threadId" }),
+  );
 });
 
 it("a subagent tab shows its read-only bar under no header of its own", async () => {
