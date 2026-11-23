@@ -180,7 +180,7 @@ export class SeatHandoffs extends Context.Service<
     ) => Effect.Effect<typeof DeliveryQaReceiptResult.Type, OrchestratorMcpFailure>;
     readonly handQa: (
       scope: McpInvocationScope,
-      input: Pick<typeof DeliverySeatHandoffInput.Type, "seat">,
+      input: Pick<typeof DeliverySeatHandoffInput.Type, "seat" | "again">,
     ) => Effect.Effect<typeof DeliverySeatHandoffResult.Type, OrchestratorMcpFailure>;
   }
 >()("t3/delivery/SeatHandoffs") {}
@@ -373,7 +373,8 @@ const make = Effect.gen(function* () {
         // never files QA again; only an explicit `again` does.
         if (current && current.state !== "handed" && !input.again)
           return {
-            state: current.state === "delivered" ? "delivered" : "fallen-back",
+            state:
+              current.state === "delivered" ? ("delivered" as const) : ("fallen-back" as const),
             handoff: current,
           };
         if (current?.state !== "handed") {
