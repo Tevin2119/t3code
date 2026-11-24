@@ -2,6 +2,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   CommandId,
   EnvironmentId,
+  MessageId,
   ProjectId,
   ProviderInstanceId,
   RunId,
@@ -603,7 +604,10 @@ it.effect("starts the successor once after a restart between its create and firs
       (command) => command.type === "message.dispatch" && command.threadId === successor,
     );
     assert.lengthOf(turns, 1);
-    assert.deepInclude(turns[0], { commandId: messageId, messageId });
+    assert.deepInclude(turns[0], {
+      commandId: CommandId.make(messageId),
+      messageId: MessageId.make(messageId),
+    });
   }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-swap-restart-")));
 });
 

@@ -524,7 +524,7 @@ const make = Effect.gen(function* () {
   )(
     (task, shell, runId) =>
       handOffBoardLead(task, shell, runId, shell.usageLimitResetAt ?? null, true),
-    Effect.mapError((cause) => (cause instanceof DeliveryError ? cause : storage(cause))),
+    Effect.mapError((cause) => (Schema.is(DeliveryError)(cause) ? cause : storage(cause))),
   );
 
   const swap: LimitedSeatSwap["Service"]["swap"] = Effect.fn("LimitedSeatSwap.swap")(

@@ -187,9 +187,7 @@ jobs:
           (
             set +e
             vpr typecheck
-            status="$?"
-            if [ "$status" != 0 ]; then vp run --last-details; (cd apps/server && "$GITHUB_WORKSPACE/node_modules/.bin/effect-tsgo" tsrs --noEmit 2>&1 | grep -v "suggestion TS" | grep -B2 -A6 -i "error"); fi
-            echo "$status" > "$RUNNER_TEMP/typecheck-status"
+            echo "$?" > "$RUNNER_TEMP/typecheck-status"
           ) > "$RUNNER_TEMP/typecheck.log" 2>&1 < /dev/null &
 
       - name: Finish installing browser secret helper build libraries
