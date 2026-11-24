@@ -24,7 +24,7 @@ export const threadOrigin = (environmentId: EnvironmentId, threadId: ThreadId) =
   `thread:${environmentId}/${threadId}`;
 
 export const invalidDiscoveryCards = ({ board, cards }: DeliveryDiscoveryInput) =>
-  cards !== undefined && (board === undefined || (cards && isReservedBoardTaskBoard(board)));
+  cards === true && (board === undefined || isReservedBoardTaskBoard(board));
 
 const Text = Schema.String.check(Schema.isMaxLength(4096));
 const NullableText = Schema.NullOr(Text);

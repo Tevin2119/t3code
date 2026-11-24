@@ -13,8 +13,8 @@ const NonBlank = Schema.String.check(Schema.isNonEmpty(), Schema.isPattern(/\S/)
 export const BoardTaskDraft = Schema.Struct({
   board: BoardTaskBoardId,
   title: NonBlank.check(Schema.isMaxLength(120)),
-  body: NonBlank,
-  context: Schema.optionalKey(Schema.String),
+  body: NonBlank.check(Schema.isMaxLength(20_000)),
+  context: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(8_000))),
 });
 export type BoardTaskDraft = typeof BoardTaskDraft.Type;
 

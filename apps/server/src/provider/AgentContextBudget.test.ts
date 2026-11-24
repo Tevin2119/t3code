@@ -1,3 +1,4 @@
+import { BoardThreadTasks } from "../delivery/BoardThreadTasks.ts";
 import * as DeliveryService from "../delivery/DeliveryService.ts";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -62,6 +63,7 @@ const toolHandlerServices = Layer.mergeAll(
   DeliveryService.layerTest,
   Layer.mock(AnalyticsService)({}),
   Layer.mock(AssetSigner)({}),
+  Layer.mock(BoardThreadTasks)({}),
   Layer.mock(DeviceService)({}),
   Layer.mock(DocumentText)({}),
   Layer.mock(EnvironmentThemeService)({}),

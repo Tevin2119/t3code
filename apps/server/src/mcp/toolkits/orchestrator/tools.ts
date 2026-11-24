@@ -377,7 +377,7 @@ const EnvironmentUnlinkTool = Tool.make("t3_environment_unlink", {
   .annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenWhileLinksOff);
 const DeliveryReadTool = Tool.make("delivery_read", {
   description:
-    "Read Operation-PaperClip board and deployment observations for a folder: repository, boards, teams, routes, deployments, linked tasks. Read-only; never repairs setup. `fresh` bypasses the cache; `preflight` reports delivery readiness. Use `cards: true` with a custom board id to read its card summaries.",
+    "Read Operation-PaperClip board and deployment observations for a folder: repository, boards, teams, routes, deployments, linked tasks. Read-only; never repairs setup. `fresh` bypasses the cache; `preflight` reports delivery readiness. `cards: true` returns summaries for one named custom board.",
   // PeerForwarding.readDelivery also sanitizes remote failures into discovery diagnostics.
   parameters: Schema.Struct({
     ...DeliveryDiscoveryInput.fields,
@@ -412,7 +412,7 @@ const NativeBuildStepTool = Tool.make("delivery_native_build_step", {
 
 const FileBoardTaskTool = Tool.make("delivery_file_task", {
   description:
-    "Ask the person to confirm filing a draft task from this thread on a named custom board. Call only when the person asks to file a task. The card shows the exact title, body and optional quoted context. Waits for File or Decline and returns the result.",
+    "When asked to file from this thread, show the exact draft and optional quoted context for a named custom board. Wait for File or Decline and return the outcome.",
   parameters: BoardTaskDraft,
   success: BoardTaskOutcome,
   failure: OrchestratorMcpFailure,

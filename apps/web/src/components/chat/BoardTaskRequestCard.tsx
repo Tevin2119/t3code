@@ -18,7 +18,6 @@ import { useRef, useState } from "react";
 
 import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
-import ChatMarkdown from "../ChatMarkdown";
 import { Button } from "../ui/button";
 
 export function BoardTaskRequestCard(props: {
@@ -73,7 +72,7 @@ export function BoardTaskRequestCard(props: {
         </dt>
         <dd className="min-w-0 whitespace-pre-wrap wrap-anywhere">{draft.title}</dd>
       </dl>
-      <ChatMarkdown text={draft.body} cwd={undefined} parseRawHtml={false} allowMedia={false} />
+      <p className="whitespace-pre-wrap wrap-anywhere text-sm">{draft.body}</p>
       {draft.context === undefined ? null : (
         <div className="flex min-w-0 flex-col gap-1">
           <span className="text-xs text-muted-foreground">

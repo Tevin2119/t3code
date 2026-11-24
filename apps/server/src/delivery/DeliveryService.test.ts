@@ -427,6 +427,9 @@ describe("DeliveryService", () => {
       const service = yield* DeliveryService.DeliveryService;
       const input = { folder: REPO, board: "work" };
       expect((yield* service.discover(input, ordinaryCaller)).cards).toBeNull();
+      const skipped = yield* service.discover({ folder: REPO, cards: false }, ordinaryCaller);
+      expect(skipped.cards).toBeNull();
+      expect(skipped.diagnostics).not.toContain("invalid-request");
       const result = yield* service.discover({ ...input, cards: true }, ordinaryCaller);
       expect(result.cards).toHaveLength(24);
       expect(result.truncated).toBe(true);
@@ -460,13 +463,15 @@ describe("DeliveryService", () => {
         );
         expect(result.diagnostics).toEqual(["invalid-request"]);
       }
-      const refused = yield* Effect.flip(
-        service.act({
-          path: "/api/boards/work/tasks",
-          body: { title: "Bypass confirmation" },
-        }),
-      );
-      expect(refused.reason).toBe("refused");
+      for (const board of ["work", "w%6Frk"]) {
+        const refused = yield* Effect.flip(
+          service.act({
+            path: `/api/boards/${board}/tasks`,
+            body: { title: "Bypass confirmation" },
+          }),
+        );
+        expect(refused.reason).toBe("refused");
+      }
       expect(fake.requests).toEqual([]);
     }).pipe(Effect.provide(layer(fake, { prefix: "discovery-cards-refused-" })));
   });

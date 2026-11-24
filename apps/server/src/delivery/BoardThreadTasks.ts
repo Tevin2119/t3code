@@ -1,5 +1,3 @@
-import { createHash, randomUUID } from "node:crypto";
-
 import {
   BoardTaskFiling,
   CommandId,
@@ -14,8 +12,10 @@ import {
 } from "@t3tools/contracts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Context from "effect/Context";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Hex from "effect/encoding/Hex";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -74,6 +74,7 @@ const make = Effect.gen(function* () {
   const delivery = yield* Delivery.DeliveryService;
   const threads = yield* Threads.ThreadManagementService;
   const orchestrator = yield* Orchestrator.OrchestratorV2;
+  const random = yield* SecureRandom.SecureRandom;
   const hostEnvironment = yield* HostProcess.Environment;
   const pending = new Map<
     TurnItemId,
@@ -88,7 +89,15 @@ const make = Effect.gen(function* () {
     configuration: string,
   ) {
     const { board, title, body, context } = draft;
-    const requestId = createHash("sha256").update(turnItemId).digest("hex");
+    const digest = yield* Effect.tryPromise({
+      try: () => crypto.subtle.digest("SHA-256", new TextEncoder().encode(turnItemId)),
+      catch: () =>
+        new OrchestratorMcpFailure({
+          code: "orchestration_error",
+          message: "Could not derive the board filing request ID.",
+        }),
+    });
+    const requestId = Hex.encode(new Uint8Array(digest));
     const post = delivery.boardThreadAct({
       method: "POST",
       path: `/api/boards/${board}/tasks`,
@@ -149,24 +158,29 @@ const make = Effect.gen(function* () {
     const probe = yield* delivery
       .boardThreadAct({
         method: "POST",
-        path: "/api/boards/all/tasks",
+        path: `/api/boards/${board}/tasks`,
         body: { origin, key },
         configuration,
       })
       .pipe(Effect.result);
     if (probe._tag === "Success")
-      return yield* invalidRequest("The delivery engine did not refuse the reserved board.");
+      return yield* invalidRequest(
+        "The delivery engine did not refuse the incomplete filing probe.",
+      );
     const refusal = refusalOf(probe.failure);
     if (probe.failure.status === 404 && refusal !== undefined && refusal.code === undefined)
       return yield* new OrchestratorMcpFailure({
         code: "unsupported",
         message: "This engine does not take thread filings yet",
       });
+    if (probe.failure.status === 404 && refusal?.code === "not-found")
+      return yield* invalidRequest("no such board");
     if (probe.failure.status !== 400 || refusal?.code !== "invalid-field")
       return yield* engineFailure(probe.failure);
 
     const draft = { board, title, body, ...(context === undefined ? {} : { context }) };
-    const turnItemId = TurnItemId.make(`turn-item:board-task-request:${randomUUID()}`);
+    const uuid = yield* random.uuidV4().pipe(Effect.mapError(recordFailure));
+    const turnItemId = TurnItemId.make(`turn-item:board-task-request:${uuid}`);
     const answered = yield* Deferred.make<BoardTaskOutcome>();
     const lock = yield* Semaphore.make(1);
     const stillActive = loadRun().pipe(
@@ -200,7 +214,8 @@ const make = Effect.gen(function* () {
         .pipe(Effect.mapError(recordFailure));
     const settle = (resolution: BoardTaskOutcome) =>
       record(resolution).pipe(
-        Effect.andThen(Deferred.succeed(answered, resolution)),
+        Effect.catch((error) => Effect.logWarning(error.message)),
+        Effect.ensuring(Deferred.succeed(answered, resolution)),
         Effect.asVoid,
       );
     const answer = (input: BoardTaskAnswerInput) =>
@@ -245,11 +260,7 @@ const make = Effect.gen(function* () {
         ).pipe(
           Effect.andThen(cancel),
           Effect.andThen(Deferred.await(answered)),
-          Effect.onExit((exit) =>
-            exit._tag === "Success"
-              ? Effect.void
-              : cancel.pipe(Effect.catch((error) => Effect.logWarning(error.message))),
-          ),
+          Effect.onExit((exit) => (exit._tag === "Success" ? Effect.void : cancel)),
         );
       }).pipe(
         Effect.ensuring(
