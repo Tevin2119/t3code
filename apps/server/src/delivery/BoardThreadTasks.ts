@@ -25,7 +25,6 @@ import * as Stream from "effect/Stream";
 import { requireThreadScope, type McpInvocationScope } from "../mcp/McpInvocationContext.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as Threads from "../orchestration-v2/ThreadManagementService.ts";
-import { BOARD_THREAD_KEY_VARIABLE } from "./BoardTaskThreads.ts";
 import * as Delivery from "./DeliveryService.ts";
 import { threadOrigin } from "./deliveryDiscovery.ts";
 
@@ -133,7 +132,7 @@ const make = Effect.gen(function* () {
     if (isReservedBoardTaskBoard(board))
       return yield* invalidRequest("Choose a custom board to file on.");
 
-    const key = hostEnvironment[BOARD_THREAD_KEY_VARIABLE];
+    const key = hostEnvironment[Delivery.BOARD_THREAD_KEY_VARIABLE];
     if (!key) return yield* invalidRequest("This server has no board approval key configured.");
     const origin = threadOrigin(caller.environmentId, threadId);
     const afterSequence = yield* orchestrator

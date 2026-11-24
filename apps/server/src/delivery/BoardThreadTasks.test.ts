@@ -27,7 +27,6 @@ import * as TestClock from "effect/testing/TestClock";
 import type { McpInvocationScope } from "../mcp/McpInvocationContext.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as Threads from "../orchestration-v2/ThreadManagementService.ts";
-import { BOARD_THREAD_KEY_VARIABLE } from "./BoardTaskThreads.ts";
 import * as BoardTasks from "./BoardThreadTasks.ts";
 import * as Delivery from "./DeliveryService.ts";
 
@@ -133,7 +132,7 @@ const harness = Effect.fn("BoardThreadTasks.testHarness")(function* (
           streamStoredEventsFrom: () => Stream.fromQueue(events),
         }),
         SecureRandom.layerWebCrypto,
-        Layer.succeed(HostProcess.Environment, { [BOARD_THREAD_KEY_VARIABLE]: key }),
+        Layer.succeed(HostProcess.Environment, { [Delivery.BOARD_THREAD_KEY_VARIABLE]: key }),
       ),
     ),
   );
