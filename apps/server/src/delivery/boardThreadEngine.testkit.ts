@@ -26,6 +26,7 @@ export interface ScratchTask {
   state: string;
   submitted: boolean;
   held: boolean;
+  seatModels?: Record<string, { model: string; harness: string; source: string }>;
   run?: { readonly id: string } | null;
   hold?: {
     readonly stage: string;
@@ -131,6 +132,7 @@ export function scratchEngine(
     held: task.held,
     run: task.run ?? null,
     hold: task.hold ?? null,
+    ...(task.seatModels === undefined ? {} : { seatModels: task.seatModels }),
     ...(options.servesLink === false ? {} : { boardThread: links.get(task.id) ?? null }),
     ...(conversing ? { conversation: mirrorOf(task.id), steers: steerCounts(task.id) } : {}),
   });
@@ -368,6 +370,13 @@ export function scratchEngine(
             status: 200,
             body: {
               ...cardOf(task),
+              ...(task.seatModels === undefined
+                ? {}
+                : {
+                    roster: Array.isArray(teams)
+                      ? teams.find((team) => team.team === task.team)?.seats
+                      : [],
+                  }),
               ...(task.state === "moved" ? { lane: null } : {}),
               thread: task.id,
               source: null,

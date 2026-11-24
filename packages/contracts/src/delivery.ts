@@ -439,6 +439,22 @@ export class DeliveryError extends Schema.TaggedError<DeliveryError>()("Delivery
   }
 }
 
+export const DeliverySeatModels = Schema.optional(
+  Schema.Record(
+    Schema.String,
+    Schema.Struct({
+      model: Schema.String,
+      harness: Schema.String,
+      source: Schema.Literals(["profile", "fallback", "picked", "attested"]),
+      waiting: Schema.optional(Schema.Boolean),
+    }),
+  ),
+);
+
+export const DeliveryLeadPickResult = Schema.Struct({
+  leadPick: Schema.optional(Schema.Struct({ model: Schema.String, harness: Schema.String })),
+});
+
 /** T3 Code driver kind to the engine's harness name. A driver not listed has no team support. */
 export const DELIVERY_HARNESS_BY_DRIVER: Readonly<Record<string, string>> = {
   claudeAgent: "claude",

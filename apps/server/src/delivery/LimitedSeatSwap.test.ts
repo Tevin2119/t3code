@@ -1,6 +1,8 @@
 import {
   DEFAULT_SERVER_SETTINGS,
+  DeliveryError,
   type DeliveryOrchestrationConfig,
+  EnvironmentId,
   type OrchestrationV2ServerCommand,
   ProjectId,
   ProviderDriverKind,
@@ -10,16 +12,22 @@ import {
   ThreadId,
 } from "@t3tools/contracts";
 import { expect, it } from "@effect/vitest";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import type { LimitedSeatFacts } from "@t3tools/shared/limitedSeat";
 import { createModelSelection } from "@t3tools/shared/model";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as TestClock from "effect/testing/TestClock";
 
+import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import * as ProviderAdapterRegistry from "../orchestration-v2/ProviderAdapterRegistry.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import { limitRecoveryCommand } from "../orchestration-v2/UsageLimitRecoveryWorker.ts";
+import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
+import { BOARD_THREAD_KEY_VARIABLE } from "./BoardTaskThreads.ts";
+import { boardTaskOf, boardTaskThreadMarker } from "./boardThreadMarker.ts";
 import * as DeliveryService from "./DeliveryService.ts";
 import * as LimitedSeats from "./LimitedSeats.ts";
 import * as LimitedSeatSwap from "./LimitedSeatSwap.ts";
@@ -29,6 +37,10 @@ const runId = RunId.make("lead-run");
 const target = LimitedSeatSwap.leadHandoffThreadId(runId);
 const NOW = "2026-11-22T12:00:00.000Z";
 const RESET = "2026-11-22T17:00:00.000Z";
+const ENVIRONMENT = EnvironmentId.make("471fea73-5365-4bbb-96eb-8e35be50eaec");
+const BOARD_TASK = boardTaskOf("work", "task-7")!;
+const OLD_LINK = { environmentId: ENVIRONMENT, threadId, setBy: ENVIRONMENT, setAt: NOW };
+const KEY = "scratch approval key";
 const id = ProviderInstanceId.make;
 const model = (instanceId: string, slug: string) => createModelSelection(id(instanceId), slug);
 
@@ -59,6 +71,8 @@ function setup({
   limitedScout = false,
   /** The hand-off's fork lands but its first turn has not: the window a status read can fall in. */
   startsNoTurn = false,
+  leadPick = undefined as "picked" | "none-free" | "moved" | "refused" | "not-found" | undefined,
+  dropFirstPut = false,
 } = {}) {
   const providers = [
     provider("claude", "claudeAgent"),
@@ -82,7 +96,7 @@ function setup({
     title: "Migration plan",
     projectId: ProjectId.make("project"),
     modelSelection: model("claude", "claude-fable"),
-    lineage,
+    lineage: leadPick === undefined ? lineage : { engineIntake: boardTaskThreadMarker(BOARD_TASK) },
     status: "failed",
     lastErrorClass: "usage_limit",
     usageLimitResetAt: RESET,
@@ -103,10 +117,22 @@ function setup({
   // A fork keeps its source's model until its first turn lands, so the fake never updates it.
   const created = new Map<
     string,
-    { id: ThreadId; modelSelection: unknown; deletedAt: null; runs: Array<unknown> }
+    {
+      id: ThreadId;
+      modelSelection: unknown;
+      deletedAt: null;
+      archivedAt?: null;
+      lineage?: { engineIntake: string | undefined };
+      runs: Array<unknown>;
+    }
   >();
   const commands: Array<OrchestrationV2ServerCommand> = [];
   const calls: Array<string> = [];
+  const writes: Array<Parameters<DeliveryService.DeliveryService["Service"]["boardThreadAct"]>[0]> =
+    [];
+  const messages = new Map<ThreadId, Set<string>>();
+  let boardThread = OLD_LINK;
+  let dropPut = dropFirstPut;
   const facts = (): LimitedSeatFacts => ({
     now: Date.parse(NOW),
     projectId: shell.projectId,
@@ -127,6 +153,43 @@ function setup({
     },
   });
   const delivery = {
+    read: () =>
+      Effect.sync(() => ({
+        body: {
+          boardThread,
+          title: "Ship the migration",
+          body: "Keep the existing data.",
+          acceptance: ["Existing records remain readable"],
+          card: { run: { id: "engine-run", stage: "review" } },
+        },
+      })),
+    boardThreadAct: (input: (typeof writes)[number]) =>
+      Effect.suspend(() => {
+        writes.push(input);
+        calls.push(input.method);
+        if (input.method === "PUT") {
+          if (dropPut) {
+            dropPut = false;
+            return Effect.fail(
+              new DeliveryError({ reason: "unreachable", detail: "Disconnected" }),
+            );
+          }
+          boardThread = { ...OLD_LINK, threadId: target };
+          return Effect.succeed({ body: { boardThread } });
+        }
+        if (leadPick === "picked")
+          return Effect.succeed({
+            body: { leadPick: { harness: "kimi", model: "kimi-k3" } },
+          });
+        return Effect.fail(
+          new DeliveryError({
+            reason: "refused",
+            status: leadPick === "refused" ? 403 : leadPick === "not-found" ? 404 : 409,
+            detail: "Lead pick declined.",
+            body: { code: leadPick },
+          }),
+        );
+      }),
     threadState: (thread: ThreadId) =>
       Effect.succeed({
         binding: bindings.get(thread) ?? null,
@@ -150,8 +213,22 @@ function setup({
   const projections = {
     getThreadShell: (thread: ThreadId) => Effect.succeed(thread === threadId ? shell : null),
     findThread: (thread: ThreadId) => Effect.sync(() => created.get(thread) ?? null),
+    getMessagesById: (thread: ThreadId, ids: ReadonlyArray<string>) =>
+      Effect.sync(
+        () =>
+          new Map(
+            ids
+              .filter((messageId) => messages.get(thread)?.has(messageId))
+              .map((messageId) => [messageId, {}]),
+          ),
+      ),
     getThreadRecords: (thread: ThreadId) =>
-      Effect.sync(() => ({ runs: created.get(thread)?.runs ?? [] })),
+      Effect.sync(() => ({
+        runs:
+          thread === threadId
+            ? [{ id: runId, modelSelection: model("claude", "claude-sonnet") }]
+            : (created.get(thread)?.runs ?? []),
+      })),
   } as unknown as ProjectionStore.ProjectionStoreV2["Service"];
   const threads = {
     dispatch: (command: OrchestrationV2ServerCommand) =>
@@ -165,7 +242,19 @@ function setup({
             deletedAt: null,
             runs: [],
           });
+        if (command.type === "thread.create")
+          created.set(command.threadId, {
+            id: command.threadId,
+            modelSelection: command.modelSelection,
+            deletedAt: null,
+            archivedAt: null,
+            lineage: { engineIntake: command.engineIntake },
+            runs: [],
+          });
         if (command.type === "message.dispatch" && command.modelSelection && !startsNoTurn) {
+          const sent = messages.get(command.threadId) ?? new Set<string>();
+          sent.add(command.messageId);
+          messages.set(command.threadId, sent);
           const runs = created.get(command.threadId)!.runs;
           if (runs.length === 0) runs.push({ modelSelection: command.modelSelection });
         }
@@ -182,17 +271,124 @@ function setup({
     Layer.provide(
       Layer.mergeAll(
         Layer.succeed(DeliveryService.DeliveryService, delivery),
+        Layer.succeed(HostProcess.Environment, { [BOARD_THREAD_KEY_VARIABLE]: KEY }),
+        Layer.succeed(ServerEnvironment.ServerEnvironmentIdentity, {
+          getEnvironmentId: Effect.succeed(ENVIRONMENT),
+        }),
+        Layer.succeed(ProviderInstanceRegistry.ProviderInstanceRegistry, {
+          listInstances: Effect.succeed(
+            providers.map(({ instanceId, driver, enabled }) => ({
+              instanceId,
+              driverKind: driver,
+              enabled,
+            })),
+          ),
+        } as unknown as ProviderInstanceRegistry.ProviderInstanceRegistry["Service"]),
         Layer.succeed(LimitedSeats.LimitedSeats, { facts: () => Effect.sync(facts) }),
         Layer.succeed(ProjectionStore.ProjectionStoreV2, projections),
         Layer.succeed(ThreadManagementService.ThreadManagementService, threads),
         Layer.succeed(ProviderAdapterRegistry.ProviderAdapterRegistryV2, {
-          get: (instanceId: ProviderInstanceId) => Effect.succeed({ driver: instanceId }),
+          get: (instanceId: ProviderInstanceId) =>
+            Effect.succeed({
+              driver: providers.find((entry) => entry.instanceId === instanceId)?.driver,
+            }),
         } as unknown as ProviderAdapterRegistry.ProviderAdapterRegistryV2["Service"]),
       ),
     ),
   );
-  return { layer, shell, commands, calls, lineups };
+  return { layer, shell, commands, calls, lineups, writes };
 }
+
+it.effect.each(["picked", "none-free", "moved", "refused", "not-found"] as const)(
+  "hands a limited board lead on only when the engine returns a pick (%s)",
+  (leadPick) => {
+    const fixture = setup({ leadPick });
+    return Effect.gen(function* () {
+      yield* TestClock.setTime(Date.parse(NOW));
+      const swaps = yield* LimitedSeatSwap.LimitedSeatSwap;
+      expect(yield* swaps.handOffLimitedLead(threadId)).toBe(leadPick === "picked" ? target : null);
+      const post = {
+        method: "POST",
+        path: "/api/tasks/task-7/lead-pick",
+        body: {
+          limited: { harness: "claude", model: "claude-sonnet" },
+          reason: "usage-limit",
+          setBy: ENVIRONMENT,
+          key: KEY,
+        },
+      };
+      if (leadPick !== "picked") {
+        expect(fixture.writes).toEqual([post]);
+        expect(fixture.commands).toEqual([]);
+        return;
+      }
+      expect(yield* swaps.handOffLimitedLead(threadId)).toBeNull();
+      expect(fixture.calls).toEqual([
+        "POST",
+        "thread.create",
+        "thread.metadata.update",
+        "message.dispatch",
+        "PUT",
+      ]);
+      expect(fixture.writes).toEqual([
+        post,
+        {
+          method: "PUT",
+          path: "/api/tasks/task-7/board-thread",
+          body: {
+            environmentId: ENVIRONMENT,
+            threadId: target,
+            setBy: ENVIRONMENT,
+            expect: OLD_LINK,
+            key: KEY,
+          },
+        },
+      ]);
+      expect(fixture.commands).toMatchObject([
+        {
+          type: "thread.create",
+          threadId: target,
+          projectId: fixture.shell.projectId,
+          engineIntake: boardTaskThreadMarker(BOARD_TASK),
+          modelSelection: model("kimi", "kimi-k3"),
+        },
+        {
+          type: "thread.metadata.update",
+          threadId,
+          limitRecovery: { runId, resetAt: RESET, autoResume: false },
+        },
+        {
+          type: "message.dispatch",
+          threadId: target,
+          modelSelection: model("kimi", "kimi-k3"),
+          text: expect.stringMatching(
+            /usage limit[\s\S]*Ship the migration[\s\S]*Keep the existing data[\s\S]*Existing records remain readable[\s\S]*engine-run[\s\S]*review/,
+          ),
+        },
+      ]);
+    }).pipe(Effect.provide(fixture.layer));
+  },
+);
+
+it.effect("retries an uncommitted board link move using the existing successor and turn", () => {
+  const fixture = setup({ leadPick: "picked", dropFirstPut: true });
+  return Effect.gen(function* () {
+    yield* TestClock.setTime(Date.parse(NOW));
+    const swaps = yield* LimitedSeatSwap.LimitedSeatSwap;
+    expect(yield* swaps.handOffLimitedLead(threadId)).toBeNull();
+    expect(yield* swaps.handOffLimitedLead(threadId)).toBe(target);
+    expect(yield* swaps.handOffLimitedLead(threadId)).toBeNull();
+    expect(fixture.calls).toEqual([
+      "POST",
+      "thread.create",
+      "thread.metadata.update",
+      "message.dispatch",
+      "PUT",
+      "PUT",
+    ]);
+    expect(fixture.writes[2]).toEqual(fixture.writes[1]);
+  }).pipe(Effect.provide(fixture.layer));
+});
 
 it.effect("hands a limited lead on to a linked thread on the first free favorite", () => {
   const fixture = setup();

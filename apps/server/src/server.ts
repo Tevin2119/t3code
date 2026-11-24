@@ -652,6 +652,7 @@ const layerTaskFolders = TaskFolders.layer.pipe(
 
 const layerOrchestrationV2Runtime = RuntimeLayer.layerProduction.pipe(
   Layer.provide(layerDelivery),
+  Layer.provide(ServerEnvironment.layerIdentity),
   Layer.provide(
     WorkflowForge.layer.pipe(
       Layer.provide(layerIssueService),

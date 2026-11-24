@@ -3,12 +3,16 @@
 // as native turns. The transcript stays here; the engine records facts only.
 import {
   CommandId,
+  DeliverySeatModels,
   MessageId,
   type DeliveryError,
   type EnvironmentId,
+  type ModelSelection,
   type OrchestrationV2StoredEvent,
   type ThreadId,
 } from "@t3tools/contracts";
+import { modelAccountFamily } from "@t3tools/shared/limitedSeat";
+import { createModelSelection } from "@t3tools/shared/model";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -20,8 +24,10 @@ import * as Stream from "effect/Stream";
 import * as EventStore from "../orchestration-v2/EventStore.ts";
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
+import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
 import { boardTaskOf, boardTaskThreadMarker, type BoardTask } from "./boardThreadMarker.ts";
 import * as DeliveryService from "./DeliveryService.ts";
+import { BoardLeadSeat, boardLeadSeat, resolveSeatProvider } from "./seatProvider.ts";
 
 /** The engine's bound on an excerpt. Over it an ingest is refused whole. */
 const EXCERPT_LIMIT = 200;
@@ -140,6 +146,7 @@ export interface ConversationCard {
   readonly conversation?: unknown;
   readonly steers?: { readonly pending: number } | null | undefined;
   readonly run?: { readonly id: string } | null | undefined;
+  readonly seatModels?: typeof DeliverySeatModels.Type;
   readonly hold?:
     | { readonly stage: string; readonly deadline: string; readonly handoff: "handed" | null }
     | null
@@ -147,6 +154,8 @@ export interface ConversationCard {
 }
 
 const Detail = Schema.Struct({
+  seatModels: DeliverySeatModels,
+  roster: Schema.optional(Schema.Array(BoardLeadSeat)),
   conversation: Schema.optional(
     Schema.NullOr(
       Schema.Struct({
@@ -205,6 +214,7 @@ export const make = Effect.gen(function* () {
   const events = yield* EventStore.EventStoreV2;
   const projections = yield* ProjectionStore.ProjectionStoreV2;
   const threads = yield* ThreadManagementService.ThreadManagementService;
+  const instances = yield* ProviderInstanceRegistry.ProviderInstanceRegistry;
   // Kept in memory: after a restart each task starts again from the engine's highest seq.
   const scans = new Map<string, ScanState>();
   const floors = new Map<string, number>();
@@ -218,6 +228,32 @@ export const make = Effect.gen(function* () {
 
   const post = (path: string, body: unknown) =>
     delivery.boardThreadAct({ method: "POST", path, body }).pipe(Effect.result);
+
+  const turnSelection = Effect.fn("BoardConversation.turnSelection")(function* (
+    detail: typeof Detail.Type,
+    current: ModelSelection,
+  ) {
+    const lead = boardLeadSeat(detail.roster ?? []);
+    const published = lead === undefined ? undefined : detail.seatModels?.[lead.seat];
+    if (published === undefined) return undefined;
+    const providers = yield* instances.listInstances;
+    const existing = providers.find((provider) => provider.instanceId === current.instanceId);
+    const next = resolveSeatProvider(
+      providers.filter((provider) => provider.enabled),
+      published.harness,
+      (provider) => provider.instanceId,
+      current.instanceId,
+    );
+    if (
+      typeof next === "string" ||
+      modelAccountFamily(existing?.driverKind, current.model) !==
+        modelAccountFamily(next.driverKind, published.model)
+    )
+      return undefined;
+    return next.instanceId === current.instanceId && published.model === current.model
+      ? current
+      : createModelSelection(next.instanceId, published.model);
+  });
 
   const mirror = Effect.fn("BoardConversation.mirror")(function* (
     card: ConversationCard,
@@ -330,6 +366,10 @@ export const make = Effect.gen(function* () {
       if (records._tag === "Failure") return;
       // An archived conversation is no live one: the steer stays pending, shown on the card.
       if (records.success.thread.archivedAt !== null || records.success.runs.length > 0) return;
+      const modelSelection = yield* turnSelection(
+        read.value,
+        records.success.thread.modelSelection,
+      );
       const sent = yield* threads
         .dispatch({
           type: "message.dispatch",
@@ -338,6 +378,7 @@ export const make = Effect.gen(function* () {
           messageId,
           text: item.text,
           attachments: [],
+          modelSelection,
           dispatchMode: { type: "queue_after_active" },
           createdBy: "user",
           creationSource: "server",
@@ -358,11 +399,21 @@ export const make = Effect.gen(function* () {
     threadId: ThreadId,
     run: string,
     deadline: string,
+    detail: (() => Effect.Effect<Option.Option<typeof Detail.Type>>) | undefined,
   ) {
     const entry = `${run}:qa:${deadline}`;
     const messageId = MessageId.make(`${HANDOFF_NOTICE_PREFIX}${task.board}:${task.id}:${entry}`);
     const present = yield* projections.getMessagesById(threadId, [messageId]).pipe(Effect.result);
     if (present._tag === "Failure" || present.success.has(messageId)) return;
+    let modelSelection: ModelSelection | undefined;
+    if (detail !== undefined) {
+      const read = yield* detail();
+      if (Option.isNone(read)) return;
+      const shell = yield* projections.getThreadShell(threadId).pipe(Effect.result);
+      if (shell._tag === "Failure" || shell.success === null || shell.success.archivedAt !== null)
+        return;
+      modelSelection = yield* turnSelection(read.value, shell.success.modelSelection);
+    }
     yield* threads
       .dispatch({
         type: "message.dispatch",
@@ -371,6 +422,7 @@ export const make = Effect.gen(function* () {
         messageId,
         text: `Run ${run} reached QA and the engine is holding it for your hand-off until ${deadline}. Call delivery_seat_handoff with stage "qa".`,
         attachments: [],
+        modelSelection,
         dispatchMode: { type: "queue_after_active" },
         createdBy: "system",
         creationSource: "server",
@@ -407,7 +459,13 @@ export const make = Effect.gen(function* () {
         if (steering && (card.steers?.pending ?? 0) > 0)
           yield* steer(task, threadId, context, detail);
         if (steering && card.hold?.stage === "qa" && card.hold.handoff === null && card.run?.id)
-          yield* noticeHandoff(task, threadId, card.run.id, card.hold.deadline);
+          yield* noticeHandoff(
+            task,
+            threadId,
+            card.run.id,
+            card.hold.deadline,
+            card.seatModels === undefined ? undefined : detail,
+          );
       }
     },
     (effect) =>

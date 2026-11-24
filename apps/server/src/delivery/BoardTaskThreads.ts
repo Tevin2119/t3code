@@ -3,12 +3,14 @@
 // leads. This never starts a task, and no client asks it to make a thread.
 import {
   CommandId,
+  DeliverySeatModels,
   type DeliveryError,
   ModelSelection,
   type EnvironmentId,
   type ThreadId,
 } from "@t3tools/contracts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
+import { limitedLeadHandoffThreadId } from "@t3tools/shared/limitedSeat";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -33,10 +35,11 @@ import {
   boardTaskThreadCommandId,
   boardTaskThreadId,
   boardTaskThreadMarker,
+  createBoardTaskThread,
   type BoardTask,
 } from "./boardThreadMarker.ts";
 import * as DeliveryService from "./DeliveryService.ts";
-import { resolveSeatProvider } from "./seatProvider.ts";
+import { BoardLeadSeat, boardLeadSeat, resolveSeatProvider } from "./seatProvider.ts";
 
 /** The engine's `boardThread` (spec 6a). The field names are the engine's and are not renamed. */
 const BoardThread = Schema.Struct({
@@ -60,6 +63,7 @@ const Card = Schema.Struct({
   conversation: Schema.optional(Schema.NullOr(Schema.Unknown)),
   steers: Schema.optional(Schema.NullOr(Schema.Struct({ pending: Schema.Number }))),
   run: Schema.optional(Schema.NullOr(Schema.Struct({ id: Schema.String }))),
+  seatModels: DeliverySeatModels,
   hold: Schema.optional(
     Schema.NullOr(
       Schema.Struct({
@@ -88,8 +92,7 @@ const Teams = Schema.Array(
     team: Schema.String,
     seats: Schema.Array(
       Schema.Struct({
-        seat: Schema.String,
-        role: Schema.optional(Schema.NullOr(Schema.String)),
+        ...BoardLeadSeat.fields,
         harness: Schema.String,
         model: Schema.optional(Schema.NullOr(Schema.String)),
       }),
@@ -253,22 +256,23 @@ export const make = Effect.gen(function* () {
   const local = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
     effect.pipe(Effect.mapError((cause) => new BoardTaskThreadsError({ reason: "thread", cause })));
 
-  /** The lead's provider and model, from the engine's team configuration and nothing else. */
   const leadSelection = Effect.fn("BoardTaskThreads.leadSelection")(function* (
     team: (typeof Teams.Type)[number] | undefined,
+    seatModels: Card["seatModels"],
   ) {
-    const lead =
-      team?.seats.find((seat) => seat.role === "team-lead") ??
-      team?.seats.find((seat) => seat.seat === "lead");
+    const lead = boardLeadSeat(team?.seats ?? []);
     if (lead === undefined) return "no-lead" as const;
-    if (!lead.model) return "no-lead-model" as const;
+    const selection = seatModels === undefined ? lead : seatModels[lead.seat];
+    if (!selection?.model) return "no-lead-model" as const;
     const instance = resolveSeatProvider(
       (yield* instances.listInstances).filter((instance) => instance.enabled),
-      lead.harness,
+      selection.harness,
       (instance) => instance.instanceId,
     );
     if (typeof instance === "string") return instance;
-    return yield* local(decodeSelection({ instanceId: instance.instanceId, model: lead.model }));
+    return yield* local(
+      decodeSelection({ instanceId: instance.instanceId, model: selection.model }),
+    );
   });
 
   /**
@@ -342,6 +346,44 @@ export const make = Effect.gen(function* () {
         .pipe(Effect.result),
     );
 
+  const linkThread = Effect.fn("BoardTaskThreads.linkThread")(function* (input: {
+    readonly task: BoardTask;
+    readonly threadId: ThreadId;
+    readonly revision: number;
+    readonly environmentId: EnvironmentId;
+    readonly key: string;
+    readonly expect: Pick<BoardThread, "environmentId" | "threadId"> | null;
+  }) {
+    const { task, threadId, revision, environmentId, key, expect } = input;
+    const put = yield* writeLink(task.id, {
+      environmentId,
+      threadId,
+      setBy: environmentId,
+      expect,
+      key,
+    });
+    if (put._tag === "Success") {
+      const { boardThread } = yield* engine(decodeLinked(put.success.body));
+      return { boardThread, hold: null };
+    }
+    // The refusal's `code` decides, never its words.
+    const refusal = refusalOf(put.failure);
+    if (refusal.code === "conflict") {
+      const read = yield* delivery.read({ path: `/api/tasks/${task.id}` }).pipe(Effect.result);
+      const detail = read._tag === "Success" ? decodeDetail(read.success.body) : Option.none();
+      const boardThread = Option.isSome(detail) ? detail.value.boardThread : refusal.current;
+      if (boardThread?.environmentId !== environmentId || boardThread.threadId !== threadId)
+        yield* archive(task, threadId, "displaced", revision);
+      return { boardThread, hold: null };
+    }
+    if (refusal.code === "moved" || refusal.code === "not-found") {
+      yield* archive(task, threadId, refusal.code === "moved" ? "moved" : "deleted", revision);
+      return { hold: refusal.code === "moved" ? ("moved" as const) : null };
+    }
+    if (refusal.code === "refused") return { hold: "refused" as const };
+    return yield* new BoardTaskThreadsError({ reason: "engine", cause: put.failure });
+  });
+
   /** A started task with no conversation: make its thread once, and tell the engine. */
   const bind = Effect.fn("BoardTaskThreads.bind")(function* (
     card: Card,
@@ -366,27 +408,22 @@ export const make = Effect.gen(function* () {
     if (Option.isNone(project)) return "no-project" as const;
     const modelSelection = yield* leadSelection(
       context.teams.find((team) => team.team === card.team),
+      card.seatModels,
     );
     if (typeof modelSelection === "string") return modelSelection;
     // The command id is the task's, so a second start, a second server pass and a restart between
     // this create and the link below all answer with the one thread. The marker is stamped here
     // and by nothing later.
     yield* local(
-      threads.dispatch({
-        type: "thread.create",
-        commandId: boardTaskThreadCommandId(task),
-        threadId,
-        projectId: project.value.projectId,
-        title: card.title,
-        modelSelection,
-        runtimeMode: "full-access",
-        interactionMode: "default",
-        branch: null,
-        worktreePath: null,
-        createdBy: "system",
-        creationSource: "server",
-        engineIntake: boardTaskThreadMarker(task),
-      }),
+      threads.dispatch(
+        createBoardTaskThread(task, {
+          commandId: boardTaskThreadCommandId(task),
+          threadId,
+          projectId: project.value.projectId,
+          title: card.title,
+          modelSelection,
+        }),
+      ),
     );
     const created = yield* local(projections.getThreadRecords(threadId, []));
     const stamped = boardTaskOfMarker(created.thread.lineage.engineIntake);
@@ -395,43 +432,18 @@ export const make = Effect.gen(function* () {
     // person archived it. Restoring it from the board's archive is what lets it be linked.
     if (created.thread.archivedAt !== null) return "archived-thread" as const;
     if (context.key === undefined) return "no-key" as const;
-    const put = yield* writeLink(card.id, {
-      environmentId: context.environmentId,
+    const { boardThread, hold } = yield* linkThread({
+      task,
       threadId,
-      setBy: context.environmentId,
+      revision,
+      environmentId: context.environmentId,
       // No link was set when the lanes were read. A writer in between is answered 409.
       expect: null,
       key: context.key,
     });
-    if (put._tag === "Success") {
-      yield* engine(decodeLinked(put.success.body));
+    if (boardThread?.environmentId === context.environmentId && boardThread.threadId === threadId)
       yield* holdClaim(card, context.environmentId, threadId);
-      return null;
-    }
-    // The refusal's `code` decides, never its words.
-    const refusal = refusalOf(put.failure);
-    if (refusal.code === "conflict") {
-      // Another writer set the link first. The engine's value is read and stands, never
-      // overwritten; a thread made here that it does not name holds no task and is archived,
-      // where the board still reaches it.
-      const read = yield* delivery.read({ path: `/api/tasks/${card.id}` }).pipe(Effect.result);
-      const detail = read._tag === "Success" ? decodeDetail(read.success.body) : Option.none();
-      const held = Option.isSome(detail) ? detail.value.boardThread : refusal.current;
-      if (held?.environmentId === context.environmentId && held.threadId === threadId) {
-        yield* holdClaim(card, context.environmentId, threadId);
-        return null;
-      }
-      yield* archive(task, threadId, "displaced", revision);
-      return null;
-    }
-    if (refusal.code === "moved" || refusal.code === "not-found") {
-      // The task is worked on another machine, or is gone: it is finished for this server. The
-      // archive is what keeps it so, on every later pass and after a restart.
-      yield* archive(task, threadId, refusal.code === "moved" ? "moved" : "deleted", revision);
-      return refusal.code === "moved" ? ("moved" as const) : null;
-    }
-    if (refusal.code === "refused") return "refused" as const;
-    return yield* new BoardTaskThreadsError({ reason: "engine", cause: put.failure });
+    return hold;
   });
 
   /**
@@ -441,10 +453,41 @@ export const make = Effect.gen(function* () {
    * still gone goes back to the archive on the next pass.
    */
   const settleEnded = Effect.fn("BoardTaskThreads.settleEnded")(function* (
-    cards: ReadonlyMap<string, Card>,
+    cards: Map<string, Card>,
     environmentId: EnvironmentId,
+    key: string | undefined,
   ) {
-    for (const row of yield* local(rows.list({ archived: false }))) {
+    const openThreads = yield* local(rows.list({ archived: false }));
+    const handledSuccessors = new Set<ThreadId>();
+    // Resolve pending link moves before deciding which threads were displaced.
+    for (const row of openThreads) {
+      const card = cards.get(row.task.id);
+      const link = card?.boardThread;
+      if (
+        card === undefined ||
+        link?.environmentId !== environmentId ||
+        link.threadId === row.threadId ||
+        row.threadId === boardTaskThreadId(row.task) ||
+        MOVED.has(card.state)
+      )
+        continue;
+      const linked = yield* local(projections.getThreadShell(link.threadId as ThreadId));
+      if (!linked?.latestRunId || limitedLeadHandoffThreadId(linked.latestRunId) !== row.threadId)
+        continue;
+      handledSuccessors.add(row.threadId);
+      if (key === undefined) continue;
+      const { boardThread } = yield* linkThread({
+        task: row.task,
+        threadId: row.threadId,
+        revision: row.revision,
+        environmentId,
+        key,
+        expect: { environmentId: link.environmentId, threadId: link.threadId },
+      });
+      if (boardThread !== undefined) cards.set(card.id, { ...card, boardThread });
+    }
+    for (const row of openThreads) {
+      if (handledSuccessors.has(row.threadId)) continue;
       const card = cards.get(row.task.id);
       if (card === undefined) {
         const read = yield* delivery
@@ -515,7 +558,7 @@ export const make = Effect.gen(function* () {
         steering.add(card.id);
         yield* holdClaim(card, environmentId, link.threadId);
       }
-      yield* settleEnded(cards, environmentId);
+      yield* settleEnded(cards, environmentId, key);
       // Moved tasks are worked on another machine: their conversation is not told from here.
       const mirrored = [...cards.values()].filter((card) => !MOVED.has(card.state));
       if (key !== undefined)

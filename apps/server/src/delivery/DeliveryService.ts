@@ -134,7 +134,7 @@ const BOARD_THREAD_CLAIM = /^\/api\/orchestration\/tasks\/[\w-]+\/(claim|ack|rel
 const BOARD_THREAD_CONVERSATION =
   /^\/api\/tasks\/[\w-]+\/(activity|steers\/\d+\/(delivered|failed))$/;
 const BOARD_SEAT_POST =
-  /^\/api\/(?:tasks\/[\w-]+\/qa-receipts|runs\/[\w-]+\/(?:seat-attestations|handoffs(?:\/qa\/(?:delivered|fallback))?))$/;
+  /^\/api\/(?:tasks\/[\w-]+\/(?:qa-receipts|lead-pick)|runs\/[\w-]+\/(?:seat-attestations|handoffs(?:\/qa\/(?:delivered|fallback))?))$/;
 const BOARD_THREAD_POST = new RegExp(
   `${BOARD_THREAD_CLAIM.source}|${BOARD_THREAD_CONVERSATION.source}|${BOARD_SEAT_POST.source}`,
 );

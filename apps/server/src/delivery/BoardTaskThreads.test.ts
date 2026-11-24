@@ -3,12 +3,14 @@ import {
   CommandId,
   EnvironmentId,
   ProjectId,
+  RunId,
   ThreadId,
   type OrchestrationV2ServerCommand,
   type OrchestrationV2StoredEvent,
 } from "@t3tools/contracts";
 import { assert, it } from "@effect/vitest";
 import * as HostProcess from "@t3tools/shared/HostProcess";
+import { limitedLeadHandoffThreadId } from "@t3tools/shared/limitedSeat";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -81,6 +83,7 @@ function threadStore() {
   const events: Array<OrchestrationV2StoredEvent> = [];
   const messages = new Map<string, Set<string>>();
   const active = new Map<string, string>();
+  const latestRuns = new Map<string, RunId>();
   const rejects = new Set<string>();
   const commit = (threadId: string, type: string, payload: Record<string, unknown>) =>
     events.push({
@@ -183,6 +186,7 @@ function threadStore() {
     events,
     messages,
     active,
+    latestRuns,
     rejects,
     say,
     reply,
@@ -235,11 +239,24 @@ function service(
       dispatch: store.dispatch,
     } as unknown as ThreadManagementService.ThreadManagementService["Service"]),
     Effect.provideService(ProjectionStore.ProjectionStoreV2, {
+      getThreadShell: (threadId: string) => {
+        const thread = store.threads.get(threadId);
+        return Effect.succeed(
+          thread === undefined
+            ? null
+            : {
+                latestRunId: store.latestRuns.get(threadId) ?? null,
+                modelSelection: thread.modelSelection,
+                archivedAt: thread.archivedAt,
+              },
+        );
+      },
       getThreadRecords: (threadId: string) =>
         Effect.succeed({
           thread: {
             lineage: { engineIntake: store.threads.get(threadId)?.marker },
             archivedAt: store.threads.get(threadId)?.archivedAt ?? null,
+            modelSelection: store.threads.get(threadId)?.modelSelection,
           },
           runs: store.active.has(threadId) ? [{ id: store.active.get(threadId) }] : [],
         }),
@@ -317,48 +334,104 @@ const puts = (engine: ScratchEngine) =>
 const linkWrites = (engine: ScratchEngine) =>
   engine.events.filter((event) => event.kind === "task.board-thread-set");
 
-it.effect("gives a started task one thread, led as the engine's team says, and links it", () => {
-  const engine = board();
-  engine.addTask({ id: "task-7", title: "Ship the thing" });
-  engine.addTask({ id: "draft-1", lane: "draft", state: "draft", submitted: false });
-  engine.addTask({ id: "queued-1", lane: "queue", state: "ready" });
-  engine.addTask({ id: "done-1", lane: "completed", state: "completed" });
-  const store = threadStore();
-  return Effect.gen(function* () {
-    const threads = yield* service(store);
-    assert.deepEqual([...(yield* threads.reconcile())], []);
-    // Only the task the engine says is in work has a thread.
-    assert.deepEqual([...store.threads.keys()], [THREAD]);
-    const [create] = creates(store);
-    assert.equal(create?.type, "thread.create");
-    if (create?.type !== "thread.create") return;
-    assert.equal(create.commandId, boardTaskThreadCommandId(TASK));
-    assert.equal(create.projectId, PROJECT);
-    assert.equal(create.title, "Ship the thing");
-    assert.deepEqual(boardTaskOfMarker(create.engineIntake), TASK);
-    // The lead is the seat the engine's team names as its lead, on that seat's harness and model.
-    assert.deepEqual({ ...create.modelSelection }, { instanceId: "codex", model: "gpt-6-astra" });
-    const link = engine.linkOf("task-7");
-    assert.deepEqual(
-      { environmentId: link?.environmentId, threadId: link?.threadId, setBy: link?.setBy },
-      { environmentId: ENVIRONMENT, threadId: THREAD, setBy: ENVIRONMENT },
-    );
-    const put = engine.requests.find((request) => request.method === "PUT");
-    assert.deepInclude(put?.body, { expect: null });
-    // The claim names the conversation that holds the task, and the next pass is its heartbeat.
-    assert.equal(engine.leaseOf("task-7")?.origin, `thread:${ENVIRONMENT}/${THREAD}`);
-    // The claim opts the task into the engine holding QA for the lead's hand-off.
-    const claim = engine.requests.find((request) => request.path.endsWith("/claim"));
-    assert.deepInclude(claim?.body, { handoffs: ["qa"] });
-    engine.advance(100_000);
-    yield* threads.reconcile();
-    engine.advance(100_000);
-    assert.isNotNull(engine.leaseOf("task-7"));
-    // A second pass made nothing new and wrote nothing new.
-    assert.equal(creates(store).length, 1);
-    assert.equal(linkWrites(engine).length, 1);
-  }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-create-")));
-});
+it.effect.each(["picked", "legacy"] as const)(
+  "binds and links a started task on the %s lead model",
+  (source) => {
+    const engine = board();
+    engine.addTask({
+      id: "task-7",
+      title: "Ship the thing",
+      ...(source === "picked"
+        ? { seatModels: { lead: { harness: "claude", model: "claude-sonnet", source } } }
+        : {}),
+    });
+    engine.addTask({ id: "draft-1", lane: "draft", state: "draft", submitted: false });
+    engine.addTask({ id: "queued-1", lane: "queue", state: "ready" });
+    engine.addTask({ id: "done-1", lane: "completed", state: "completed" });
+    const store = threadStore();
+    return Effect.gen(function* () {
+      const threads = yield* service(store);
+      assert.deepEqual([...(yield* threads.reconcile())], []);
+      // Only the task the engine says is in work has a thread.
+      assert.deepEqual([...store.threads.keys()], [THREAD]);
+      const [create] = creates(store);
+      assert.equal(create?.type, "thread.create");
+      if (create?.type !== "thread.create") return;
+      assert.equal(create.commandId, boardTaskThreadCommandId(TASK));
+      assert.equal(create.projectId, PROJECT);
+      assert.equal(create.title, "Ship the thing");
+      assert.deepEqual(boardTaskOfMarker(create.engineIntake), TASK);
+      assert.deepEqual(
+        { ...create.modelSelection },
+        source === "picked"
+          ? { instanceId: "claudeAgent", model: "claude-sonnet" }
+          : { instanceId: "codex", model: "gpt-6-astra" },
+      );
+      const link = engine.linkOf("task-7");
+      assert.deepEqual(
+        { environmentId: link?.environmentId, threadId: link?.threadId, setBy: link?.setBy },
+        { environmentId: ENVIRONMENT, threadId: THREAD, setBy: ENVIRONMENT },
+      );
+      const put = engine.requests.find((request) => request.method === "PUT");
+      assert.deepInclude(put?.body, { expect: null });
+      // The claim names the conversation that holds the task, and the next pass is its heartbeat.
+      assert.equal(engine.leaseOf("task-7")?.origin, `thread:${ENVIRONMENT}/${THREAD}`);
+      // The claim opts the task into the engine holding QA for the lead's hand-off.
+      const claim = engine.requests.find((request) => request.path.endsWith("/claim"));
+      assert.deepInclude(claim?.body, { handoffs: ["qa"] });
+      engine.advance(100_000);
+      yield* threads.reconcile();
+      engine.advance(100_000);
+      assert.isNotNull(engine.leaseOf("task-7"));
+      // A second pass made nothing new and wrote nothing new.
+      assert.equal(creates(store).length, 1);
+      assert.equal(linkWrites(engine).length, 1);
+    }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-create-")));
+  },
+);
+
+it.effect(
+  "archives the old board lead as displaced only after its successor takes the link",
+  () => {
+    const engine = board();
+    engine.addTask({ id: "task-7" });
+    const store = threadStore();
+    const failedRun = RunId.make("failed-board-lead");
+    const successor = limitedLeadHandoffThreadId(failedRun);
+    return Effect.gen(function* () {
+      const threads = yield* service(store);
+      yield* threads.reconcile();
+      const [create] = creates(store);
+      if (create?.type !== "thread.create") throw new Error("Expected the board lead to open");
+      store.latestRuns.set(THREAD, failedRun);
+      yield* store.dispatch({
+        ...create,
+        commandId: CommandId.make("create-successor"),
+        threadId: successor,
+      });
+      const withoutKey = yield* service(store, { key: null });
+      yield* withoutKey.reconcile();
+      assert.isNull(store.threads.get(successor)!.archivedAt);
+      const previous = engine.linkOf("task-7");
+      const moved = engine.handle("PUT", "/api/tasks/task-7/board-thread", {
+        key: engine.key,
+        environmentId: ENVIRONMENT,
+        threadId: successor,
+        setBy: ENVIRONMENT,
+        expect: previous,
+      });
+      assert.equal(moved?.status, 200);
+      yield* threads.reconcile();
+      assert.deepInclude(store.commands.at(-1), {
+        type: "thread.archive",
+        threadId: THREAD,
+        commandId: `${create.engineIntake}:archive:displaced:0`,
+      });
+      assert.isNotNull(store.threads.get(THREAD)!.archivedAt);
+      assert.isNull(store.threads.get(successor)!.archivedAt);
+    }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-swap-")));
+  },
+);
 
 it.effect("makes one thread when a task is started twice and by two servers at once", () => {
   const engine = board();
@@ -376,6 +449,55 @@ it.effect("makes one thread when a task is started twice and by two servers at o
     assert.equal(engine.linkOf("task-7")?.threadId, THREAD);
     assert.isNull(store.threads.get(THREAD)!.archivedAt);
   }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-double-")));
+});
+
+it.effect("retries a dropped board lead link move during reconciliation", () => {
+  const engine = board();
+  engine.addTask({ id: "task-7" });
+  const store = threadStore();
+  const failedRun = RunId.make("failed-board-lead");
+  const successor = limitedLeadHandoffThreadId(failedRun);
+  return Effect.gen(function* () {
+    const threads = yield* service(store);
+    const delivery = yield* DeliveryService.DeliveryService;
+    yield* threads.reconcile();
+    const [create] = creates(store);
+    if (create?.type !== "thread.create") throw new Error("Expected the board lead to open");
+    store.latestRuns.set(THREAD, failedRun);
+    yield* store.dispatch({
+      ...create,
+      commandId: CommandId.make("create-successor"),
+      threadId: successor,
+    });
+    const path = "/api/tasks/task-7/board-thread";
+    const previous = { environmentId: ENVIRONMENT, threadId: THREAD };
+    const body = {
+      environmentId: ENVIRONMENT,
+      threadId: successor,
+      setBy: ENVIRONMENT,
+      expect: previous,
+      key: engine.key,
+    };
+    engine.dropNext(/\/api\/tasks\/task-7\/board-thread$/);
+    const failed = yield* delivery
+      .boardThreadAct({ method: "PUT", path, body })
+      .pipe(Effect.result);
+    assert.equal(failed._tag, "Failure");
+    assert.equal(engine.linkOf("task-7")?.threadId, THREAD);
+    assert.isNull(store.threads.get(THREAD)!.archivedAt);
+
+    yield* threads.reconcile();
+
+    assert.deepEqual(puts(engine).at(-1), { method: "PUT", path, body });
+    assert.equal(engine.linkOf("task-7")?.threadId, successor);
+    assert.deepInclude(store.commands.at(-1), {
+      type: "thread.archive",
+      threadId: THREAD,
+      commandId: `${create.engineIntake}:archive:displaced:0`,
+    });
+    assert.isNotNull(store.threads.get(THREAD)!.archivedAt);
+    assert.isNull(store.threads.get(successor)!.archivedAt);
+  }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-swap-retry-")));
 });
 
 it.effect("finishes the link after a restart between the create and the engine write", () => {
@@ -731,6 +853,7 @@ it.effect("keeps the link and claim routes for the server: a client's act is ref
       "/api/orchestration/tasks/task-7/release",
       "/api/tasks/task-7/activity",
       "/api/tasks/task-7/steers/1/delivered",
+      "/api/tasks/task-7/lead-pick",
     ]) {
       const refused = yield* delivery.act({ path, body: { key: engine.key } }).pipe(Effect.result);
       assert.equal(refused._tag, "Failure");
@@ -751,6 +874,10 @@ it.effect("keeps the link and claim routes for the server: a client's act is ref
       })
       .pipe(Effect.result);
     assert.equal(unknown._tag === "Failure" ? unknown.failure.status : null, 404);
+    const pick = yield* delivery
+      .boardThreadAct({ method: "POST", path: "/api/tasks/task-7/lead-pick", body: {} })
+      .pipe(Effect.result);
+    assert.equal(pick._tag === "Failure" ? pick.failure.status : null, 404);
   }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-act-")));
 });
 
@@ -910,40 +1037,51 @@ it.effect("stays paused beside another source on an older engine, then resumes",
   }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-paused-")));
 });
 
-it.effect("delivers a queued steer at the next turn boundary, once, and confirms it", () => {
-  const engine = board();
-  engine.addTask({ id: "task-7" });
-  const store = threadStore();
-  return Effect.gen(function* () {
-    const threads = yield* service(store);
-    yield* threads.reconcile();
-    store.say(THREAD, "m-1", "Build it", "system");
-    const steer = engine.queueSteer("task-7", "Use the other API");
-    yield* threads.reconcile();
-    // The running turn is never interrupted: the steer waits, pending.
-    assert.equal(steerSends(store).length, 0);
-    assert.equal(engine.steer(steer).state, "pending");
-    store.reply(THREAD, "Done");
-    // The confirmation is lost on the way, after the steer reached the conversation.
-    engine.dropNext(/\/steers\/\d+\/delivered$/);
-    yield* threads.reconcile();
-    assert.equal(steerSends(store).length, 1);
-    assert.deepInclude(steerSends(store)[0], {
-      threadId: THREAD,
-      messageId: steerMessageId(TASK, steer),
-      text: "Use the other API",
-      dispatchMode: { type: "queue_after_active" },
-    });
-    assert.equal(engine.steer(steer).state, "pending");
-    // A restarted server confirms it from the conversation and never sends it twice.
-    const after = yield* service(store);
-    yield* after.reconcile();
-    yield* after.reconcile();
-    assert.equal(steerSends(store).length, 1);
-    assert.equal(engine.steer(steer).state, "delivered");
-    assert.deepInclude(engine.activityOf("task-7").at(-1), { kind: "steer", excerpt: null });
-  }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-steer-")));
-});
+it.effect.each([
+  { harness: "codex", model: "gpt-6-sol", follows: true },
+  { harness: "claude", model: "claude-sonnet", follows: false },
+])(
+  "delivers and confirms a queued steer when the published model is $model",
+  ({ harness, model, follows }) => {
+    const engine = board();
+    engine.addTask({ id: "task-7" });
+    const store = threadStore();
+    return Effect.gen(function* () {
+      const threads = yield* service(store);
+      yield* threads.reconcile();
+      engine.task("task-7").seatModels = { lead: { harness, model, source: "picked" } };
+      store.say(THREAD, "m-1", "Build it", "system");
+      const steer = engine.queueSteer("task-7", "Use the other API");
+      yield* threads.reconcile();
+      // The running turn is never interrupted: the steer waits, pending.
+      assert.equal(steerSends(store).length, 0);
+      assert.equal(engine.steer(steer).state, "pending");
+      store.reply(THREAD, "Done");
+      // The confirmation is lost on the way, after the steer reached the conversation.
+      engine.dropNext(/\/steers\/\d+\/delivered$/);
+      yield* threads.reconcile();
+      assert.equal(steerSends(store).length, 1);
+      assert.deepInclude(steerSends(store)[0], {
+        threadId: THREAD,
+        messageId: steerMessageId(TASK, steer),
+        text: "Use the other API",
+        dispatchMode: { type: "queue_after_active" },
+      });
+      assert.deepEqual(
+        steerSends(store)[0]?.modelSelection,
+        follows ? { instanceId: "codex", model } : undefined,
+      );
+      assert.equal(engine.steer(steer).state, "pending");
+      // A restarted server confirms it from the conversation and never sends it twice.
+      const after = yield* service(store);
+      yield* after.reconcile();
+      yield* after.reconcile();
+      assert.equal(steerSends(store).length, 1);
+      assert.equal(engine.steer(steer).state, "delivered");
+      assert.deepInclude(engine.activityOf("task-7").at(-1), { kind: "steer", excerpt: null });
+    }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-steer-")));
+  },
+);
 
 it.effect(
   "keeps a steer pending while its conversation is archived, and tells a refusal failed",
