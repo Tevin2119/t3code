@@ -111,7 +111,7 @@ function parseField(
       const values = new Set(options.map(optionValue));
       const minItems = typeof property.minItems === "number" ? property.minItems : 0;
       const maxItems = typeof property.maxItems === "number" ? property.maxItems : Infinity;
-      // Clients require a selection, so empty-only questions cannot be answered.
+      // Empty-only questions carry no choice worth asking.
       if (maxItems === 0 || minItems > maxItems || minItems > values.size) return undefined;
       return { field: { kind: "multiChoice", values, minItems, maxItems }, options };
     }
@@ -224,7 +224,8 @@ export function parseElicitationForm(
   const questions: OrchestrationV2UserInputQuestion[] = [];
   for (const [index, { id, property, options }] of parsedFields.entries()) {
     if (folded.has(id)) continue;
-    const kind = fields.get(id)?.kind;
+    const field = fields.get(id);
+    const kind = field?.kind;
     questions.push({
       id,
       header: text(property.title) ?? `Question ${questions.length + 1}`,
@@ -240,6 +241,10 @@ export function parseElicitationForm(
         ? {}
         : { allowCustomAnswer: false }),
       ...(kind === "multiChoice" ? { multiSelect: true } : {}),
+      // An empty selection answers "none" unless the schema demands a choice.
+      ...(field?.kind === "multiChoice" && field.minItems > 0 && required.has(id)
+        ? { required: true }
+        : {}),
       ...(kind === "text" && !required.has(id) ? { required: false } : {}),
     });
   }
