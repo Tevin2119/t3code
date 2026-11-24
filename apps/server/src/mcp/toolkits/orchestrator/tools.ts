@@ -412,7 +412,7 @@ const NativeBuildStepTool = Tool.make("delivery_native_build_step", {
 
 const FileBoardTaskTool = Tool.make("delivery_file_task", {
   description:
-    "When asked to file from this thread, show the exact draft and optional quoted context for a named custom board. Wait for File or Decline and return the outcome.",
+    "Only when the person asks, file a draft task on a named custom board from this thread: they see the exact draft and optional quoted context. Wait for File or Decline.",
   parameters: BoardTaskDraft,
   success: BoardTaskOutcome,
   failure: OrchestratorMcpFailure,

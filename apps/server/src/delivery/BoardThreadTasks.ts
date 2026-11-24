@@ -284,3 +284,11 @@ const make = Effect.gen(function* () {
 });
 
 export const layer = Layer.effect(BoardThreadTasks, make);
+
+const turnedOff = () => Effect.fail(invalidRequest("Delivery is turned off."));
+
+/** Inert service, for suites that only need the tool surface to resolve. */
+export const layerTest = Layer.succeed(
+  BoardThreadTasks,
+  BoardThreadTasks.of({ request: turnedOff, answer: turnedOff }),
+);
