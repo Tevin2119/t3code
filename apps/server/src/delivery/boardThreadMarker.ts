@@ -1,4 +1,10 @@
-import { CommandId, ThreadId } from "@t3tools/contracts";
+import {
+  CommandId,
+  type ModelSelection,
+  type OrchestrationV2ServerCommand,
+  type ProjectId,
+  ThreadId,
+} from "@t3tools/contracts";
 
 declare const BoardTaskBrand: unique symbol;
 
@@ -37,6 +43,28 @@ export const boardTaskThreadCommandId = (task: BoardTask) =>
 
 /** The thread a task's conversation is created as: one id per task, on every start. */
 export const boardTaskThreadId = (task: BoardTask) => ThreadId.make(boardTaskThreadMarker(task));
+
+export const createBoardTaskThread = (
+  task: BoardTask,
+  input: {
+    readonly commandId: CommandId;
+    readonly threadId: ThreadId;
+    readonly projectId: ProjectId;
+    readonly title: string;
+    readonly modelSelection: ModelSelection;
+  },
+) =>
+  ({
+    ...input,
+    type: "thread.create",
+    runtimeMode: "full-access",
+    interactionMode: "default",
+    branch: null,
+    worktreePath: null,
+    createdBy: "system",
+    creationSource: "server",
+    engineIntake: boardTaskThreadMarker(task),
+  }) satisfies OrchestrationV2ServerCommand;
 
 /** Matches every board task marker in SQL `LIKE`, and nothing an engine intake stamps. */
 export const BOARD_TASK_MARKER_LIKE = `${PREFIX}%`;
