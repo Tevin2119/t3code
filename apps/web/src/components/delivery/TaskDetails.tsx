@@ -50,7 +50,8 @@ import {
   time,
   WaitingOn,
 } from "./taskParts";
-import { TaskPipelineStrip } from "./TaskTeamActivity";
+import { TaskAcceptanceReceipts, TaskSeatHandoffs } from "./TaskSeatResults";
+import { TaskPipelineStrip, TaskTeamActivity } from "./TaskTeamActivity";
 import { ThreadTaskQuestions } from "./ThreadTaskQuestions";
 
 const TASK_ITEM = THREAD_DETAILS_ITEMS.find((item) => item.id === "task")!;
@@ -498,6 +499,19 @@ function TaskDetailsBody(props: { readonly board: BoardTask; readonly task: Task
         )}
       </TaskDisclosure>
 
+      {task.council?.seats.some(
+        (seat) => seat.threadId || seat.seatThread || seat.attestedModel || seat.actualModel,
+      ) ? (
+        <TaskTeamActivity
+          environmentId={environmentId}
+          task={task}
+          conversations={board.seats}
+          flow={false}
+          conversationLabels={{ title: gt("Seats"), open: gt("Open conversation") }}
+        />
+      ) : null}
+      <TaskSeatHandoffs handoffs={task.handoffs} />
+
       <TaskDisclosure
         title={`What is asked, revision ${task.revision}`}
         open={askedOpen}
@@ -529,7 +543,11 @@ function TaskDetailsBody(props: { readonly board: BoardTask; readonly task: Task
           </section>
         ) : null}
         <Listed title="Requirements" items={task.requirements} />
-        <Listed title="Acceptance criteria" items={task.acceptance} section="acceptance" />
+        {task.qaReceipts === null ? (
+          <Listed title={gt("Acceptance criteria")} items={task.acceptance} section="acceptance" />
+        ) : (
+          <TaskAcceptanceReceipts acceptance={task.acceptance} receipts={task.qaReceipts} />
+        )}
         {task.files.length > 0 ? (
           <section>
             <h3 className="pb-1 text-xs font-medium text-muted-foreground">

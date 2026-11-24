@@ -949,8 +949,8 @@ export interface BoardThreadLink {
 
 export function parseBoardThread(value: unknown): BoardThreadLink | null {
   if (!isRecord(value)) return null;
-  const environmentId = text(value.environmentId);
-  const threadId = text(value.threadId);
+  const environmentId = text(value.environmentId).trim();
+  const threadId = text(value.threadId).trim();
   return environmentId && threadId
     ? { environmentId, threadId, setBy: text(value.setBy), setAt: text(value.setAt) }
     : null;
@@ -1058,6 +1058,12 @@ export interface DeliveryCard {
       readonly verdict: string;
     }>;
     readonly needed: number | null;
+  } | null;
+  readonly qaReceipts: {
+    readonly count: number;
+    readonly pass: number;
+    readonly fail: number;
+    readonly blocked: number;
   } | null;
   readonly findings: { readonly open: number; readonly all: number };
   readonly approvals: ReadonlyArray<{
@@ -1322,6 +1328,14 @@ export const parseCard = (value: Json): DeliveryCard => {
           needed: typeof qa.needed === "number" ? qa.needed : null,
         }
       : null,
+    qaReceipts: isRecord(value.qaReceipts)
+      ? {
+          count: count(value.qaReceipts.count),
+          pass: count(value.qaReceipts.pass),
+          fail: count(value.qaReceipts.fail),
+          blocked: count(value.qaReceipts.blocked),
+        }
+      : null,
     findings: { open: count(findings.open), all: count(findings.all) },
     approvals: records(value.approvals).map((approval) => ({
       actor: text(approval.actor),
@@ -1430,6 +1444,7 @@ export interface CouncilSeat {
   readonly required: boolean;
   readonly requestedModel: string | null;
   readonly actualModel: string | null;
+  readonly attestedModel?: { readonly model: string; readonly harness: string | null } | null;
   readonly reasoning: string | null;
   readonly access: string | null;
   readonly activity: string;
@@ -1441,8 +1456,25 @@ export interface CouncilSeat {
   readonly attempts: number;
   /** What it is doing now, from its own output, while it works; null otherwise. */
   readonly live: SeatLive | null;
-  /** The seat's own conversation as the engine records it, in the task's environment. */
   readonly threadId: string | null;
+  readonly seatThread?: Pick<BoardThreadLink, "environmentId" | "threadId"> | null;
+}
+
+export interface TaskSeatHandoff {
+  readonly stage: "build" | "review" | "qa";
+  readonly seat: string;
+  readonly state: "handed" | "delivered" | "fallen-back";
+  readonly reason: string | null;
+}
+
+export interface TaskQaReceipt {
+  readonly seat: string;
+  readonly acceptance: { readonly index: number; readonly hash: string | null };
+  readonly verdict: "pass" | "fail" | "blocked";
+  readonly model: string | null;
+  readonly modelSource: "attested" | "picked" | "requested" | null;
+  readonly independenceChecked: boolean | null;
+  readonly evidence: ReadonlyArray<string>;
 }
 
 /** What a seat at work last did: the tools it called and what it said, newest last. */
@@ -1766,6 +1798,8 @@ export interface TaskView {
     readonly whole: boolean;
   }>;
   readonly council: TaskCouncil | null;
+  readonly handoffs: ReadonlyArray<TaskSeatHandoff>;
+  readonly qaReceipts: ReadonlyArray<TaskQaReceipt> | null;
   readonly pendingFromPerson: number;
   /** Every publication of this task's approved runs, oldest first. */
   readonly publications: ReadonlyArray<DeliveryPublication>;
@@ -1813,6 +1847,66 @@ export function parseSeatLive(value: unknown): SeatLive | null {
   };
 }
 
+const parseSeatHandoffs = (value: unknown): ReadonlyArray<TaskSeatHandoff> => {
+  const handoffs = new Map<TaskSeatHandoff["stage"], TaskSeatHandoff>();
+  for (const { stage, seat, state, reason } of records(value)) {
+    if (
+      (stage === "build" || stage === "review" || stage === "qa") &&
+      (state === "handed" || state === "delivered" || state === "fallen-back") &&
+      typeof seat === "string" &&
+      seat &&
+      !handoffs.has(stage)
+    ) {
+      handoffs.set(stage, { stage, seat, state, reason: textOrNull(reason) });
+    }
+  }
+  return [...handoffs.values()];
+};
+
+const parseQaReceipts = (value: unknown): ReadonlyArray<TaskQaReceipt> | null => {
+  if (!Array.isArray(value)) return null;
+  const receipts: TaskQaReceipt[] = [];
+  const seen = new Set<string>();
+  for (const row of records(value)) {
+    const { verdict, modelSource } = row;
+    const acceptance = isRecord(row.acceptance) ? row.acceptance : null;
+    const seat = text(row.seat);
+    const index = acceptance?.index;
+    if (
+      !seat ||
+      typeof index !== "number" ||
+      !Number.isSafeInteger(index) ||
+      index < 0 ||
+      (verdict !== "pass" && verdict !== "fail" && verdict !== "blocked")
+    )
+      continue;
+    // The engine serves receipts newest first.
+    const key = `${index}:${seat}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    receipts.push({
+      seat,
+      acceptance: { index, hash: textOrNull(acceptance?.hash) },
+      verdict,
+      model: textOrNull(row.model),
+      modelSource:
+        modelSource === "attested" || modelSource === "picked" || modelSource === "requested"
+          ? modelSource
+          : null,
+      independenceChecked:
+        typeof row.independenceChecked === "boolean" ? row.independenceChecked : null,
+      evidence: strings(row.evidence),
+    });
+  }
+  return receipts;
+};
+
+const parseAttestedModel = (value: unknown): NonNullable<CouncilSeat["attestedModel"]> | null => {
+  if (!isRecord(value) || value.source !== "attested") return null;
+  const model = text(value.model);
+  return model ? { model, harness: textOrNull(value.harness) } : null;
+};
+
 const parseCouncil = (council: Json): TaskCouncil => {
   const concurrency = isRecord(council.concurrency) ? council.concurrency : {};
   return {
@@ -1831,6 +1925,7 @@ const parseCouncil = (council: Json): TaskCouncil => {
       required: flag(seat.required),
       requestedModel: textOrNull(seat.requestedModel),
       actualModel: textOrNull(seat.actualModel),
+      attestedModel: parseAttestedModel(seat.currentModel),
       reasoning: textOrNull(seat.reasoning),
       access: textOrNull(seat.access),
       activity: text(seat.activity, "waiting"),
@@ -1842,6 +1937,7 @@ const parseCouncil = (council: Json): TaskCouncil => {
       live: parseSeatLive(seat.live),
       // Blank is none: `ThreadId` refuses a blank id.
       threadId: text(seat.threadId).trim() || null,
+      seatThread: parseBoardThread(seat.seatThread),
     })),
     documents: [...new Set(strings(council.documents))],
     steers: records(council.steers).map((steer) => ({
@@ -2006,6 +2102,8 @@ export function parseTask(body: unknown): TaskView | null {
       whole: flag(child.whole),
     })),
     council: council ? parseCouncil(council) : null,
+    handoffs: parseSeatHandoffs(body.handoffs),
+    qaReceipts: parseQaReceipts(body.qaReceipts),
     pendingFromPerson: count(body.pendingFromPerson),
     publications: records(body.publications).flatMap((item) => parsePublication(item) ?? []),
     publishing: (() => {

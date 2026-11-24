@@ -67,6 +67,7 @@ import {
   CardSigns,
   laneTone,
   PriorityPill,
+  QaReceiptCounts,
   QaVotes,
   TagList,
   WaitingOn,
@@ -172,6 +173,7 @@ const CardFace = memo(function CardFace(props: {
         <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5">
           {showsKinds ? null : <WaitingOn card={card} />}
           <QaVotes qa={card.qa} />
+          <QaReceiptCounts receipts={card.qaReceipts} />
           <CardSigns card={card} />
         </span>
         <CardPeople card={card} />
