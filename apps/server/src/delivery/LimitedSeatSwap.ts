@@ -46,7 +46,8 @@ import * as ThreadManagementService from "../orchestration-v2/ThreadManagementSe
 import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
 import { forkParked } from "../serverActivation.ts";
 import { BOARD_THREAD_KEY_VARIABLE } from "./BoardTaskThreads.ts";
-import { boardTaskOfMarker, createBoardTaskThread, type BoardTask } from "./boardThreadMarker.ts";
+import { createBoardTaskThread, type BoardTask } from "./boardThreadMarker.ts";
+import * as BoardThreadRows from "./boardThreadRows.ts";
 import * as DeliveryService from "./DeliveryService.ts";
 import * as LimitedSeats from "./LimitedSeats.ts";
 import { resolveSeatProvider } from "./seatProvider.ts";
@@ -187,6 +188,7 @@ const make = Effect.gen(function* () {
   const identityOption = yield* Effect.serviceOption(ServerEnvironment.ServerEnvironmentIdentity);
   const hostEnvironment = yield* HostProcess.Environment;
   const limitedSeats = yield* LimitedSeats.LimitedSeats;
+  const rows = yield* BoardThreadRows.BoardThreadRows;
   const projections = yield* ProjectionStore.ProjectionStoreV2;
   const threads = yield* ThreadManagementService.ThreadManagementService;
   const adapters = yield* ProviderAdapterRegistry.ProviderAdapterRegistryV2;
@@ -407,14 +409,9 @@ const make = Effect.gen(function* () {
     const existing = yield* projections.findThread(target);
     let modelSelection: ModelSelection;
     if (existing !== null) {
-      const stamped = boardTaskOfMarker(existing.lineage.engineIntake);
-      if (
-        existing.deletedAt !== null ||
-        existing.archivedAt !== null ||
-        stamped?.id !== task.id ||
-        stamped.board !== task.board
-      )
-        return null;
+      if (existing.deletedAt !== null || existing.archivedAt !== null) return null;
+      const row = (yield* rows.list({ archived: false })).find((row) => row.threadId === target);
+      if (row?.task.id !== task.id || row.task.board !== task.board) return null;
       modelSelection = existing.modelSelection;
     } else {
       const { runs } = yield* projections.getThreadRecords(shell.id, ["runs"], {
@@ -554,8 +551,8 @@ const make = Effect.gen(function* () {
       if (Option.isNone(deliveryOption)) return null;
       const shell = yield* projections.getThreadShell(threadId);
       if (shell === null) return null;
-      const task = boardTaskOfMarker(shell.lineage.engineIntake);
-      if (task !== null) return yield* handOffBoardLead(task, shell);
+      const row = (yield* rows.list({ archived: false })).find((row) => row.threadId === shell.id);
+      if (row !== undefined) return yield* handOffBoardLead(row.task, shell);
       const conversation = yield* governed(threadId, shell);
       if (
         conversation === null ||

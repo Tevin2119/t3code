@@ -1,6 +1,7 @@
 import * as SendFailureNotice from "./SendFailureNotice.ts";
 import * as WorktreeBranchSync from "./WorktreeBranchSync.ts";
 import * as GuestShareService from "../guest/GuestShareService.ts";
+import * as BoardThreadRows from "../delivery/boardThreadRows.ts";
 import * as LimitedSeats from "../delivery/LimitedSeats.ts";
 import * as LimitedSeatSwap from "../delivery/LimitedSeatSwap.ts";
 import * as NativeTeamChat from "../delivery/NativeTeamChat.ts";
@@ -288,6 +289,7 @@ const layerLimitedSeatsProvided = LimitedSeats.layer.pipe(Layer.provide(Projecti
 const layerLimitedSeatSwapProvided = LimitedSeatSwap.layer.pipe(
   Layer.provide(
     Layer.mergeAll(
+      BoardThreadRows.layer,
       layerLimitedSeatsProvided,
       layerThreadManagementProvided,
       ProjectionStore.layer,

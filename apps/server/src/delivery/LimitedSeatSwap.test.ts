@@ -27,7 +27,8 @@ import * as ThreadManagementService from "../orchestration-v2/ThreadManagementSe
 import { limitRecoveryCommand } from "../orchestration-v2/UsageLimitRecoveryWorker.ts";
 import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
 import { BOARD_THREAD_KEY_VARIABLE } from "./BoardTaskThreads.ts";
-import { boardTaskOf, boardTaskThreadMarker } from "./boardThreadMarker.ts";
+import { boardTaskOf, boardTaskOfMarker, boardTaskThreadMarker } from "./boardThreadMarker.ts";
+import * as BoardThreadRows from "./boardThreadRows.ts";
 import * as DeliveryService from "./DeliveryService.ts";
 import * as LimitedSeats from "./LimitedSeats.ts";
 import * as LimitedSeatSwap from "./LimitedSeatSwap.ts";
@@ -122,7 +123,7 @@ function setup({
       modelSelection: unknown;
       deletedAt: null;
       archivedAt?: null;
-      lineage?: { engineIntake: string | undefined };
+      task?: BoardThreadRows.BoardThreadRow["task"] | null;
       runs: Array<unknown>;
     }
   >();
@@ -248,7 +249,7 @@ function setup({
             modelSelection: command.modelSelection,
             deletedAt: null,
             archivedAt: null,
-            lineage: { engineIntake: command.engineIntake },
+            task: boardTaskOfMarker(command.engineIntake),
             runs: [],
           });
         if (command.type === "message.dispatch" && command.modelSelection && !startsNoTurn) {
@@ -267,6 +268,16 @@ function setup({
         return { sequence: commands.length, storedEvents: [] };
       }),
   } as unknown as ThreadManagementService.ThreadManagementService["Service"];
+  const boardRow = (id: ThreadId, task: BoardThreadRows.BoardThreadRow["task"]) => ({
+    threadId: id,
+    projectId: shell.projectId,
+    title: shell.title,
+    archivedAt: null,
+    revision: 1,
+    task,
+    pullRequests: null,
+    issues: null,
+  });
   const layer = LimitedSeatSwap.layer.pipe(
     Layer.provide(
       Layer.mergeAll(
@@ -285,6 +296,17 @@ function setup({
           ),
         } as unknown as ProviderInstanceRegistry.ProviderInstanceRegistry["Service"]),
         Layer.succeed(LimitedSeats.LimitedSeats, { facts: () => Effect.sync(facts) }),
+        Layer.succeed(BoardThreadRows.BoardThreadRows, {
+          list: ({ archived }) =>
+            Effect.sync(() => {
+              if (archived) return [];
+              const rows = leadPick === undefined ? [] : [boardRow(threadId, BOARD_TASK)];
+              for (const entry of created.values()) {
+                if (entry.task != null) rows.push(boardRow(entry.id, entry.task));
+              }
+              return rows;
+            }),
+        }),
         Layer.succeed(ProjectionStore.ProjectionStoreV2, projections),
         Layer.succeed(ThreadManagementService.ThreadManagementService, threads),
         Layer.succeed(ProviderAdapterRegistry.ProviderAdapterRegistryV2, {
