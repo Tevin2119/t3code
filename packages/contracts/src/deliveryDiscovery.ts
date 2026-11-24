@@ -1,5 +1,7 @@
+import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { EnvironmentId } from "./baseSchemas.ts";
+import { BoardTaskBoardId } from "./boardThreadTasks.ts";
 
 const Text = Schema.String.check(Schema.isMaxLength(256));
 const Id = Schema.String.check(Schema.isPattern(/^[A-Za-z0-9_-]{1,100}$/));
@@ -8,10 +10,11 @@ const list = <S extends Schema.Top>(item: S) => Schema.Array(item).check(Schema.
 
 export const DeliveryDiscoveryInput = Schema.Struct({
   folder: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(1024)),
-  board: Schema.optional(Id),
+  board: Schema.optional(BoardTaskBoardId),
   route: Schema.optional(Id),
   team: Schema.optional(Id),
   task: Schema.optional(Id),
+  cards: Schema.optional(Schema.Boolean),
   fresh: Schema.optional(Schema.Boolean),
   preflight: Schema.optional(Schema.Boolean),
 });
@@ -40,6 +43,23 @@ export const DeliveryDiscoveryDiagnostic = Schema.Literals([
 export type DeliveryDiscoveryDiagnostic = typeof DeliveryDiscoveryDiagnostic.Type;
 
 const Task = Schema.Struct({ id: Text, state: Text, branch: Schema.NullOr(Branch) });
+export const DeliveryBoardThread = Schema.Struct({
+  environmentId: Schema.String.check(Schema.isMaxLength(256)),
+  threadId: Schema.String.check(Schema.isMaxLength(1024)),
+  setBy: Schema.String.check(Schema.isMaxLength(256)),
+  setAt: Text,
+});
+
+const Card = Schema.Struct({
+  id: Text,
+  number: Schema.Number,
+  title: Text,
+  lane: Text,
+  state: Text,
+  boardThread: Schema.optionalKey(Schema.NullOr(DeliveryBoardThread)),
+  fromThisThread: Schema.Boolean,
+});
+
 export const DeliveryDiscoverySnapshot = Schema.Struct({
   environmentId: EnvironmentId,
   profile: Schema.NullOr(Text),
@@ -97,6 +117,9 @@ export const DeliveryDiscoverySnapshot = Schema.Struct({
   ),
   linkedTasks: list(Schema.Struct({ ...Task.fields, requestId: Text, origin: Text })),
   task: Schema.NullOr(Task),
+  cards: Schema.NullOr(Schema.Array(Card).check(Schema.isMaxLength(24))).pipe(
+    Schema.withDecodingDefaultKey(Effect.succeed(null)),
+  ),
   truncated: Schema.Boolean,
 });
 export type DeliveryDiscoverySnapshot = typeof DeliveryDiscoverySnapshot.Type;

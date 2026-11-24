@@ -5636,5 +5636,15 @@
   "afeb354df4c94446": "Öffne sie auf dem Board in der Web- oder Desktop-App",
   "a65acdb87eac322b": "{count, plural, one {{count} archiviertes, von einem Board gestartetes Gespräch bleibt erhalten und wird nicht gelöscht.} other {{count} archivierte, von einem Board gestartete Gespräche bleiben erhalten und werden nicht gelöscht.}}",
   "99d51127f573296b": "Weiteres Konto",
-  "8ec2c57414669b79": "Verbinde einen zweiten {tracker}-Workspace oder -Nutzer."
+  "8ec2c57414669b79": "Verbinde einen zweiten {tracker}-Workspace oder -Nutzer.",
+  "d781e5be7bfe4865": "Aufgabe Nr. {number} in {board} angelegt",
+  "4d34bc6da64e12ad": "Anlegen abgelehnt",
+  "1ab001a1a9f0bec3": "Anlegen abgebrochen",
+  "b693c9af54182348": "Anlegen fehlgeschlagen",
+  "e96b2911a5d12031": "Anlegen",
+  "63505f517af0f8f2": "Ablehnen",
+  "6f6fe733fa539b4a": "Aufgabe im Board anlegen?",
+  "f1f55521bea76543": "Board",
+  "3ac8ed47fe50bd34": "Titel",
+  "01a264c40736f6b5": "Zitierter Kontext"
 }

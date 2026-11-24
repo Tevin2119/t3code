@@ -471,6 +471,8 @@ import {
   ScheduledTaskMutationResult,
 } from "./scheduledTask.ts";
 import { SecretRequestAnswerInput, SecretRequestError } from "./secretRequest.ts";
+import { OrchestratorMcpFailure } from "./orchestratorMcp.ts";
+import { BoardTaskAnswerInput } from "./boardThreadTasks.ts";
 import { AgentFeedbackAnswerInput, AgentFeedbackRequestError } from "./agentFeedback.ts";
 import {
   ProjectCloneActionInput,
@@ -654,6 +656,7 @@ export const WS_METHODS = {
   serverRefreshUsageRates: "server.refreshUsageRates",
 
   deliveryRead: "delivery.read",
+  deliveryAnswerBoardTask: "delivery.answerBoardTask",
   deliveryAct: "delivery.act",
   deliveryBindThread: "delivery.bindThread",
   deliveryThreadBinding: "delivery.threadBinding",
@@ -1200,6 +1203,11 @@ const WsServerRetryResourceTelemetryRpc = Rpc.make(WS_METHODS.serverRetryResourc
   payload: Schema.Struct({}),
   success: ResourceTelemetryRetryResult,
   error: EnvironmentAuthorizationError,
+});
+
+const WsDeliveryAnswerBoardTaskRpc = Rpc.make(WS_METHODS.deliveryAnswerBoardTask, {
+  payload: BoardTaskAnswerInput,
+  error: Schema.Union([OrchestratorMcpFailure, EnvironmentAuthorizationError]),
 });
 
 /** Relays a read to the delivery engine. The engine's answer is passed on as it came. */
@@ -2838,6 +2846,7 @@ export const CoreWsRpcGroup = RpcGroup.make(
  */
 export const ForkWsRpcGroup = RpcGroup.make(
   WsDeliveryReadRpc,
+  WsDeliveryAnswerBoardTaskRpc,
   WsDeliveryActRpc,
   WsDeliveryBindThreadRpc,
   WsDeliveryThreadBindingRpc,

@@ -135,8 +135,9 @@ const BOARD_THREAD_CONVERSATION =
   /^\/api\/tasks\/[\w-]+\/(activity|steers\/\d+\/(delivered|failed))$/;
 const BOARD_SEAT_POST =
   /^\/api\/(?:tasks\/[\w-]+\/qa-receipts|runs\/[\w-]+\/(?:seat-attestations|handoffs(?:\/qa\/(?:delivered|fallback))?))$/;
+const BOARD_TASK_POST = /^\/api\/boards\/[\w-]+\/tasks$/;
 const BOARD_THREAD_POST = new RegExp(
-  `${BOARD_THREAD_CLAIM.source}|${BOARD_THREAD_CONVERSATION.source}|${BOARD_SEAT_POST.source}`,
+  `${BOARD_THREAD_CLAIM.source}|${BOARD_THREAD_CONVERSATION.source}|${BOARD_SEAT_POST.source}|${BOARD_TASK_POST.source}`,
 );
 const BOARD_THREAD_WRITE = new RegExp(`${BOARD_THREAD_LINK.source}|${BOARD_THREAD_POST.source}`);
 
@@ -175,11 +176,13 @@ export class DeliveryService extends Context.Service<
     readonly nativeBuildAct: (
       input: DeliveryActInput,
     ) => Effect.Effect<DeliveryResponse, DeliveryError>;
+    readonly boardThreadConfiguration: Effect.Effect<string>;
     /**
-     * Server-owned board conversation and seat writes. The generic `act` relay refuses them.
+     * Server-owned board writes. The generic `act` relay refuses them.
      */
     readonly boardThreadAct: (input: {
       readonly method: "PUT" | "DELETE" | "POST";
+      readonly configuration?: string;
       readonly path: string;
       readonly body: unknown;
     }) => Effect.Effect<DeliveryResponse, DeliveryError>;
@@ -239,6 +242,7 @@ export const layerTest = Layer.succeed(
     act: disabled,
     nativeBuildAct: disabled,
     nativeIntakeAct: disabled,
+    boardThreadConfiguration: Effect.succeed("test"),
     boardThreadAct: disabled,
     bindThread: disabled,
     refreshThread: disabled,
@@ -1094,7 +1098,8 @@ const make = Effect.fn("DeliveryService.make")(function* (
         ),
         diagnostics: ["unauthorized"],
       };
-    if (valid._tag === "Failure") return { ...snapshot, diagnostics: ["invalid-request"] };
+    if (valid._tag === "Failure" || Discovery.invalidDiscoveryCards(input))
+      return { ...snapshot, diagnostics: ["invalid-request"] };
     if (!settings.enabled) return { ...snapshot, diagnostics: ["disabled"] };
     if (input.fresh || input.preflight) discoveryCache.clear();
     const readTimes: string[] = [];
@@ -1129,7 +1134,7 @@ const make = Effect.fn("DeliveryService.make")(function* (
     const result = yield* Effect.gen(function* () {
       const health = yield* read("/api/health", Discovery.DiscoveryHealth);
       if (!health.ok) return { ...snapshot, diagnostics: ["unreachable" as const] };
-      const [[repository, repositories, data], teams] = yield* Effect.all(
+      const [[repository, repositories, data], teams, lanes] = yield* Effect.all(
         [
           Effect.gen(function* () {
             const [repository, registrations, delivery] = yield* Effect.all(
@@ -1214,8 +1219,14 @@ const make = Effect.fn("DeliveryService.make")(function* (
             ] as const;
           }),
           read("/api/teams", Discovery.DiscoveryTeams),
+          input.cards && input.board !== undefined
+            ? read(
+                `/api/lanes?${new URLSearchParams({ set: input.board })}`,
+                Discovery.DiscoveryLanes,
+              )
+            : Effect.succeed(undefined),
         ],
-        { concurrency: 2 },
+        { concurrency: 3 },
       );
 
       const current = yield* delivery;
@@ -1224,6 +1235,8 @@ const make = Effect.fn("DeliveryService.make")(function* (
         key !== configurationKey(current.enabled, current.engineUrl, environment)
       )
         return { ...snapshot, diagnostics: ["configuration-changed" as const] };
+      if (lanes !== undefined && lanes.set !== input.board)
+        return { ...snapshot, diagnostics: ["invalid-request" as const] };
       const readAt = readTimes.toSorted()[0]!;
       return Discovery.projectDiscovery(
         input,
@@ -1245,6 +1258,7 @@ const make = Effect.fn("DeliveryService.make")(function* (
           repositories,
           teams,
           delivery: data,
+          lanes,
         },
       );
     }).pipe(Effect.timeout("10 seconds"), Effect.result);
@@ -1576,7 +1590,8 @@ const make = Effect.fn("DeliveryService.make")(function* (
           ? Effect.fail(
               new DeliveryError({
                 reason: "refused",
-                detail: "Board conversation and seat records can only be written by the server.",
+                detail:
+                  "Board filings, conversation and seat records can only be written by the server.",
               }),
             )
           : new URL(input.path, "http://delivery.invalid").pathname === "/api/delivery/requests"
@@ -1605,15 +1620,25 @@ const make = Effect.fn("DeliveryService.make")(function* (
             }),
           ),
     ),
+    boardThreadConfiguration: readConfiguration(),
     boardThreadAct: Effect.fn("DeliveryService.boardThreadAct")(function* (input) {
       if (!(input.method === "POST" ? BOARD_THREAD_POST : BOARD_THREAD_LINK).test(input.path))
         return yield* new DeliveryError({
           reason: "invalid",
           detail: "Invalid board thread mutation path.",
         });
-      const write = request(input.method, input.path, input.body);
-      // The engine's approval throttle expects one seat write at a time.
-      return yield* BOARD_SEAT_POST.test(input.path) ? boardSeatWrites.withPermit(write) : write;
+      const write = request(
+        input.method,
+        input.path,
+        input.body,
+        false,
+        undefined,
+        input.configuration,
+      );
+      // Serialize keyed seat writes and filings so they share the engine’s approval throttle.
+      return yield* BOARD_SEAT_POST.test(input.path) || BOARD_TASK_POST.test(input.path)
+        ? boardSeatWrites.withPermit(write)
+        : write;
     }),
     nativeIntakeAct: Effect.fn("DeliveryService.nativeIntakeAct")((input) =>
       /^\/api\/native-intakes\/intake-[a-f0-9]{64}\/(claim|attach|complete|abandon|cancel)$/.test(

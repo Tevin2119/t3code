@@ -1,5 +1,7 @@
 import {
   DELIVERY_HARNESS_BY_DRIVER,
+  DeliveryBoardThread,
+  isReservedBoardTaskBoard,
   type DeliveryDiscoveryInput,
   type DeliveryDiscoverySnapshot,
   type EnvironmentId,
@@ -12,10 +14,17 @@ export interface DiscoveryCaller {
   readonly environmentId: EnvironmentId;
   readonly authorized?: boolean;
   readonly threadId?: ThreadId;
+  readonly cardOrigin?: string;
   readonly providerInstanceId?: ProviderInstanceId;
   readonly driver?: string;
   readonly toolsSupported?: boolean;
 }
+
+export const threadOrigin = (environmentId: EnvironmentId, threadId: ThreadId) =>
+  `thread:${environmentId}/${threadId}`;
+
+export const invalidDiscoveryCards = ({ board, cards }: DeliveryDiscoveryInput) =>
+  cards !== undefined && (board === undefined || (cards && isReservedBoardTaskBoard(board)));
 
 const Text = Schema.String.check(Schema.isMaxLength(4096));
 const NullableText = Schema.NullOr(Text);
@@ -56,6 +65,24 @@ export const DiscoveryTeams = rows(
     seats: rows(Schema.Struct({ harness: Text, available: Schema.Boolean, tools: rows(Text) })),
   }),
 );
+export const DiscoveryLanes = Schema.Struct({
+  set: Text,
+  lanes: rows(
+    Schema.Struct({
+      cards: rows(
+        Schema.Struct({
+          id: Text,
+          number: Schema.Number,
+          title: Text,
+          lane: Text,
+          state: Text,
+          origin: NullableText,
+          boardThread: Schema.optionalKey(Schema.NullOr(DeliveryBoardThread)),
+        }),
+      ),
+    }),
+  ),
+});
 const Task = Schema.Struct({ id: Text, state: Text, repository: NullableText, base: NullableText });
 export const DiscoveryDelivery = Schema.Struct({
   version: Schema.optional(Schema.Literal(1)),
@@ -207,6 +234,7 @@ export const emptyDiscovery = (
   routes: [],
   linkedTasks: [],
   task: null,
+  cards: input.cards ? [] : null,
   truncated: false,
 });
 
@@ -219,6 +247,7 @@ export function projectDiscovery(
     repositories: typeof DiscoveryRegistrations.Type;
     teams: typeof DiscoveryTeams.Type;
     delivery: typeof DiscoveryDelivery.Type;
+    lanes?: typeof DiscoveryLanes.Type | undefined;
   },
 ): DeliveryDiscoverySnapshot {
   const diagnostics = [...snapshot.diagnostics];
@@ -327,7 +356,7 @@ export function projectDiscovery(
   if (selected && destinations.length === 0) diagnostics.push("missing-deployment");
   if (input.preflight && destinations.length > 1) diagnostics.push("ambiguous-deployment");
   const origin =
-    caller.threadId === undefined ? null : `thread:${caller.environmentId}/${caller.threadId}`;
+    caller.threadId === undefined ? null : threadOrigin(caller.environmentId, caller.threadId);
   const linked = data.delivery.tracking.filter((row) => {
     const registered = registeredRepository(data.repositories, row.task?.repository);
     return (
@@ -353,6 +382,8 @@ export function projectDiscovery(
     state: observationText(task.state),
     branch: task.base === null ? null : observationText(task.base),
   });
+  const cards = data.lanes?.lanes.flatMap((lane) => lane.cards);
+  const cardOrigin = caller.cardOrigin ?? origin;
   return boundDiscovery({
     ...snapshot,
     boardDeployment: selected
@@ -418,7 +449,20 @@ export function projectDiscovery(
       origin: observationText(row.request!.origin),
     })),
     task: task === null ? null : taskView(task),
+    cards:
+      cards === undefined
+        ? snapshot.cards
+        : cards.slice(0, 24).map((card) => ({
+            id: observationText(card.id),
+            number: card.number,
+            title: observationText(card.title),
+            lane: observationText(card.lane),
+            state: observationText(card.state),
+            ...(card.boardThread === undefined ? {} : { boardThread: card.boardThread }),
+            fromThisThread: cardOrigin !== null && card.origin === cardOrigin,
+          })),
     truncated:
+      (cards?.length ?? 0) > 24 ||
       [boards, data.teams, projects, routes, linked].some((items) => items.length > 12) ||
       data.teams.some(
         (team) => team.seats.length > 12 || team.seats.some((seat) => seat.tools.length > 12),
@@ -428,13 +472,13 @@ export function projectDiscovery(
 
 function boundDiscovery(snapshot: DeliveryDiscoverySnapshot): DeliveryDiscoverySnapshot {
   const bounded = { ...snapshot };
-  const lists = ["teams", "linkedTasks", "deployments", "routes", "boards"] as const;
+  const lists = ["teams", "linkedTasks", "deployments", "routes", "boards", "cards"] as const;
   while (new TextEncoder().encode(JSON.stringify(bounded)).byteLength > 16_384) {
     const largest = lists
       .toSorted((a, b) => JSON.stringify(bounded[b]).length - JSON.stringify(bounded[a]).length)
-      .find((key) => bounded[key].length > 0);
+      .find((key) => (bounded[key]?.length ?? 0) > 0);
     if (largest === undefined) break;
-    Object.assign(bounded, { [largest]: bounded[largest].slice(0, -1), truncated: true });
+    Object.assign(bounded, { [largest]: bounded[largest]?.slice(0, -1), truncated: true });
   }
   return bounded;
 }

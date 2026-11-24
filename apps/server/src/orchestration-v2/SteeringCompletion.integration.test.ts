@@ -1340,6 +1340,19 @@ it.effect("restarts the turn for an image when native steering takes text only",
         commandId: CommandId.make("feedback-pending"),
         feedbackStatus: "pending",
       });
+      const filing = {
+        type: "board_task_request.record" as const,
+        threadId,
+        runId: card.runId,
+        nodeId: card.nodeId,
+        turnItemId: TurnItemId.make("turn-item:board-task-request:steer"),
+        draft: { board: "work", title: "New task", body: "Current body" },
+      };
+      yield* orchestrator.dispatch({
+        ...filing,
+        commandId: CommandId.make("filing-pending"),
+        resolution: { status: "pending" },
+      });
       yield* TestClock.adjust("10 seconds");
       yield* orchestrator.dispatch({
         type: "message.dispatch",
@@ -1394,6 +1407,27 @@ it.effect("restarts the turn for an image when native steering takes text only",
         status: "completed",
         feedbackStatus: "sent",
         nodeId: card.nodeId,
+      });
+      yield* orchestrator.dispatch({
+        ...filing,
+        commandId: CommandId.make("filing-cancelled"),
+        draft: { ...filing.draft, body: "Changed body" },
+        resolution: { status: "cancelled" },
+      });
+      yield* orchestrator.dispatch({
+        ...filing,
+        commandId: CommandId.make("filing-late-decline"),
+        resolution: { status: "declined" },
+      });
+      const cancelled = (yield* orchestrator.getThreadProjection(threadId)).turnItems.find(
+        (item) => item.id === filing.turnItemId,
+      );
+      assert.deepInclude(cancelled, {
+        type: "board_task_request",
+        status: "cancelled",
+        draft: filing.draft,
+        resolution: { status: "cancelled" },
+        nodeId: filing.nodeId,
       });
     }).pipe(Effect.provide(layer));
   }),

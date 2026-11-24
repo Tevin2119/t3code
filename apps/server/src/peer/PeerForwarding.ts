@@ -31,7 +31,11 @@ import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.t
 import * as PeerLinks from "./PeerLinks.ts";
 import * as PeerMcpClient from "./PeerMcpClient.ts";
 import * as DeliveryService from "../delivery/DeliveryService.ts";
-import { emptyDiscovery } from "../delivery/deliveryDiscovery.ts";
+import {
+  emptyDiscovery,
+  invalidDiscoveryCards,
+  threadOrigin,
+} from "../delivery/deliveryDiscovery.ts";
 
 // Match local waits: return before MCP client timeouts and T3 Connect's ~100 s idle drop.
 const DEFAULT_WAIT_TIMEOUT_MS = 30_000;
@@ -224,6 +228,7 @@ const make = Effect.gen(function* () {
     environmentId?: EnvironmentId,
   ): Effect.fn.Return<DeliveryDiscoverySnapshot, never, DeliveryService.DeliveryService> {
     const target = remoteTarget(scope, environmentId);
+    const sender = scope.client?.senderThread;
     const caller = {
       environmentId: target ?? scope.environmentId,
       authorized: scope.capabilities.has("orchestration"),
@@ -231,6 +236,9 @@ const make = Effect.gen(function* () {
         ? {}
         : { threadId: scope.thread.threadId, providerInstanceId: scope.thread.providerInstanceId }),
       toolsSupported: true,
+      ...(sender === undefined
+        ? {}
+        : { cardOrigin: threadOrigin(sender.environmentId, sender.threadId) }),
     };
     if (target === undefined) {
       const delivery = yield* DeliveryService.DeliveryService;
@@ -244,6 +252,7 @@ const make = Effect.gen(function* () {
       null,
     );
     if (!caller.authorized) return { ...empty, diagnostics: ["unauthorized"] };
+    if (invalidDiscoveryCards(input)) return { ...empty, diagnostics: ["invalid-request"] };
     if (scope.linkedEnvironments === false) return { ...empty, diagnostics: ["remote-unpaired"] };
     const result = yield* Effect.gen(function* () {
       yield* forwardingCaller(scope);
@@ -258,9 +267,11 @@ const make = Effect.gen(function* () {
         target,
         input,
       );
-      return snapshot.environmentId === target
-        ? snapshot
-        : { ...empty, diagnostics: ["environment-mismatch" as const] };
+      if (snapshot.environmentId !== target)
+        return { ...empty, diagnostics: ["environment-mismatch" as const] };
+      if (input.cards && snapshot.cards === null)
+        return { ...empty, diagnostics: ["unsupported-server" as const] };
+      return snapshot;
     }).pipe(Effect.timeout("15 seconds"), Effect.result);
     if (result._tag === "Success") return result.success;
     const error = result.failure;

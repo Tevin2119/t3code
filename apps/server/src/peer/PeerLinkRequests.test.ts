@@ -1,3 +1,4 @@
+import * as BoardThreadTasks from "../delivery/BoardThreadTasks.ts";
 import * as DeliveryService from "../delivery/DeliveryService.ts";
 import { NodeHttpServer } from "@effect/platform-node";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
@@ -165,6 +166,7 @@ const makeLaptopWith = (
       Layer.provideMerge(Layer.merge(layerOrchestrator, ServerSettings.layerTest())),
     );
     const layerHere = McpHttpServer.layerOrchestratorToolkit.pipe(
+      Layer.provide(Layer.mock(BoardThreadTasks.BoardThreadTasks)({})),
       Layer.provide(DeliveryService.layerTest),
       Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
       Layer.provideMerge(PeerLinkRequests.layer),

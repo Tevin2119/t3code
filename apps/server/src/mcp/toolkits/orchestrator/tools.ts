@@ -1,5 +1,7 @@
 import {
   EnvironmentId,
+  BoardTaskDraft,
+  BoardTaskOutcome,
   DeliveryDiscoveryInput,
   DeliveryDiscoverySnapshot,
   DeliveryNativeBuildStepInput,
@@ -60,6 +62,7 @@ import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as OrchestratorMcpService from "../../OrchestratorMcpService.ts";
 import * as ThreadMetadataMcpService from "../../ThreadMetadataMcpService.ts";
 import { DeliveryService } from "../../../delivery/DeliveryService.ts";
+import { BoardThreadTasks } from "../../../delivery/BoardThreadTasks.ts";
 import { SeatHandoffs } from "../../../delivery/SeatHandoffs.ts";
 
 const dependencies = [
@@ -374,7 +377,7 @@ const EnvironmentUnlinkTool = Tool.make("t3_environment_unlink", {
   .annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenWhileLinksOff);
 const DeliveryReadTool = Tool.make("delivery_read", {
   description:
-    "Read Operation-PaperClip board and deployment observations for a folder: repository, boards, teams, routes, deployments, linked tasks. Read-only; never repairs setup. `fresh` bypasses the cache; `preflight` reports delivery readiness.",
+    "Read Operation-PaperClip board and deployment observations for a folder: repository, boards, teams, routes, deployments, linked tasks. Read-only; never repairs setup. `fresh` bypasses the cache; `preflight` reports delivery readiness. Use `cards: true` with a custom board id to read its card summaries.",
   // PeerForwarding.readDelivery also sanitizes remote failures into discovery diagnostics.
   parameters: Schema.Struct({
     ...DeliveryDiscoveryInput.fields,
@@ -407,6 +410,19 @@ const NativeBuildStepTool = Tool.make("delivery_native_build_step", {
   .annotate(Tool.Destructive, true)
   .annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenWhileDeliveryOff);
 
+const FileBoardTaskTool = Tool.make("delivery_file_task", {
+  description:
+    "Ask the person to confirm filing a draft task from this thread on a named custom board. Call only when the person asks to file a task. The card shows the exact title, body and optional quoted context. Waits for File or Decline and returns the result.",
+  parameters: BoardTaskDraft,
+  success: BoardTaskOutcome,
+  failure: OrchestratorMcpFailure,
+  failureMode: "return",
+  dependencies: [...dependencies, BoardThreadTasks],
+})
+  .annotate(Tool.Title, "File a task from this thread")
+  .annotate(Tool.Destructive, true)
+  .annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenWhileDeliveryOff);
+
 const QaReceiptTool = Tool.make("delivery_qa_receipt", {
   description:
     "From a QA seat thread, file one acceptance item's verdict and evidence refs. The server fills in task, seat and hash.",
@@ -436,6 +452,7 @@ const SeatHandoffTool = Tool.make("delivery_seat_handoff", {
 export const OrchestratorToolkit = Toolkit.make(
   DeliveryReadTool,
   NativeBuildStepTool,
+  FileBoardTaskTool,
   QaReceiptTool,
   SeatHandoffTool,
   OrchestratorCapabilitiesTool,

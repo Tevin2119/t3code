@@ -265,6 +265,7 @@ import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
 import { commandFeatureUsage, featureUsage } from "./telemetry/FeatureUsage.ts";
 import type { TelemetryOwner } from "./telemetry/Identify.ts";
 import * as UsageService from "./usage/UsageService.ts";
+import * as BoardThreadTasks from "./delivery/BoardThreadTasks.ts";
 import * as DeliveryService from "./delivery/DeliveryService.ts";
 import * as LimitedSeatSwap from "./delivery/LimitedSeatSwap.ts";
 import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
@@ -3764,6 +3765,7 @@ const layerForkWsRpc = (currentSession: EnvironmentAuth.AuthenticatedSession) =>
     Effect.gen(function* () {
       const checkoutUpdate = yield* CheckoutUpdate.CheckoutUpdate;
       const delivery = yield* DeliveryService.DeliveryService;
+      const boardThreadTasks = yield* BoardThreadTasks.BoardThreadTasks;
       const limitedSeatSwap = yield* Effect.serviceOption(LimitedSeatSwap.LimitedSeatSwap);
       const sql = yield* SqlClient.SqlClient;
       const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
@@ -3773,6 +3775,7 @@ const layerForkWsRpc = (currentSession: EnvironmentAuth.AuthenticatedSession) =>
           checkoutUpdate.check.pipe(Effect.as({})),
         [WS_METHODS.serverStartCheckoutUpdate]: (_input) =>
           checkoutUpdate.start.pipe(Effect.as({})),
+        [WS_METHODS.deliveryAnswerBoardTask]: (input) => boardThreadTasks.answer(input),
         [WS_METHODS.deliveryRead]: (input) => delivery.read(input),
         // A request that reaches the workspace needs the file scope the engine would use.
         [WS_METHODS.deliveryAct]: (input) =>
@@ -3832,6 +3835,7 @@ export const layer = Layer.unwrap(
     const reviewGuides = yield* PullRequestReviewGuideService.PullRequestReviewGuideService;
     const peerLinks = yield* PeerLinks.PeerLinks;
     const peerLinkRequests = yield* PeerLinkRequests.PeerLinkRequests;
+    const boardThreadTasks = yield* BoardThreadTasks.BoardThreadTasks;
     const peerThreadRelay = yield* PeerThreadRelay.PeerThreadRelay;
     const peerClientPairing = yield* PeerClientPairing.PeerClientPairing;
     const sql = yield* SqlClient.SqlClient;
@@ -3943,6 +3947,7 @@ export const layer = Layer.unwrap(
               ),
               Layer.provide(Layer.succeed(PeerLinks.PeerLinks, peerLinks)),
               Layer.provide(Layer.succeed(PeerLinkRequests.PeerLinkRequests, peerLinkRequests)),
+              Layer.provide(Layer.succeed(BoardThreadTasks.BoardThreadTasks, boardThreadTasks)),
               Layer.provide(Layer.succeed(PeerThreadRelay.PeerThreadRelay, peerThreadRelay)),
               Layer.provide(Layer.succeed(PeerClientPairing.PeerClientPairing, peerClientPairing)),
               Layer.provide(

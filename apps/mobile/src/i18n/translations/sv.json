@@ -5636,5 +5636,15 @@
   "afeb354df4c94446": "Öppna den på tavlan i webb- eller skrivbordsappen",
   "a65acdb87eac322b": "{count, plural, one {{count} arkiverad konversation som startats av en tavla behålls, den tas inte bort.} other {{count} arkiverade konversationer som startats av en tavla behålls, de tas inte bort.}}",
   "99d51127f573296b": "Ett konto till",
-  "8ec2c57414669b79": "Anslut en andra {tracker}-arbetsyta eller användare."
+  "8ec2c57414669b79": "Anslut en andra {tracker}-arbetsyta eller användare.",
+  "d781e5be7bfe4865": "Uppgift #{number} skapad på {board}",
+  "4d34bc6da64e12ad": "Nekad",
+  "1ab001a1a9f0bec3": "Avbruten",
+  "b693c9af54182348": "Det gick inte att skapa uppgiften",
+  "e96b2911a5d12031": "Skapa",
+  "63505f517af0f8f2": "Neka",
+  "6f6fe733fa539b4a": "Skapa en uppgift på tavlan?",
+  "f1f55521bea76543": "Tavla",
+  "3ac8ed47fe50bd34": "Titel",
+  "01a264c40736f6b5": "Citerad kontext"
 }

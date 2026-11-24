@@ -12937,5 +12937,14 @@
   "99d51127f573296b": "Otra cuenta",
   "8ec2c57414669b79": "Conecta un segundo espacio de trabajo o usuario de {tracker}.",
   "99963c0142e17f00": "Para la nueva cuenta de {tracker}.",
-  "6d8e4ebc889bace9": "Añadir cuenta"
+  "6d8e4ebc889bace9": "Añadir cuenta",
+  "d781e5be7bfe4865": "Tarea n.º {number} registrada en {board}",
+  "4d34bc6da64e12ad": "Registro rechazado",
+  "1ab001a1a9f0bec3": "Registro cancelado",
+  "b693c9af54182348": "No se pudo registrar la tarea",
+  "6f6fe733fa539b4a": "¿Registrar una tarea en el tablero?",
+  "f1f55521bea76543": "Tablero",
+  "3ac8ed47fe50bd34": "Título",
+  "01a264c40736f6b5": "Contexto citado",
+  "4b46c21b83d1fc1f": "Registrar"
 }

@@ -107,6 +107,10 @@
       "types": "./src/secretRequest.ts",
       "default": "./src/secretRequest.ts"
     },
+    "./board-task-request": {
+      "types": "./src/boardTaskRequest.ts",
+      "default": "./src/boardTaskRequest.ts"
+    },
     "./feedback-request": {
       "types": "./src/feedbackRequest.ts",
       "default": "./src/feedbackRequest.ts"

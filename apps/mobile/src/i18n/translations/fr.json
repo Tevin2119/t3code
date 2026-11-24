@@ -5630,5 +5630,15 @@
   "afeb354df4c94446": "Ouvrez-la dans le tableau depuis l'application web ou de bureau",
   "a65acdb87eac322b": "{count, plural, one {{count} conversation archivée lancée par un tableau est conservée, pas supprimée.} other {{count} conversations archivées lancées par un tableau sont conservées, pas supprimées.}}",
   "99d51127f573296b": "Autre compte",
-  "8ec2c57414669b79": "Connectez un second espace de travail ou utilisateur {tracker}."
+  "8ec2c57414669b79": "Connectez un second espace de travail ou utilisateur {tracker}.",
+  "d781e5be7bfe4865": "Tâche nº {number} créée sur {board}",
+  "4d34bc6da64e12ad": "Création refusée",
+  "1ab001a1a9f0bec3": "Création annulée",
+  "b693c9af54182348": "Échec de la création",
+  "e96b2911a5d12031": "Créer",
+  "63505f517af0f8f2": "Refuser",
+  "6f6fe733fa539b4a": "Créer une tâche sur le tableau ?",
+  "f1f55521bea76543": "Tableau",
+  "3ac8ed47fe50bd34": "Titre",
+  "01a264c40736f6b5": "Contexte cité"
 }

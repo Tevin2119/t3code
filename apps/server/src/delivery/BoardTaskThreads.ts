@@ -3,6 +3,7 @@
 // leads. This never starts a task, and no client asks it to make a thread.
 import {
   CommandId,
+  DeliveryBoardThread as BoardThread,
   type DeliveryError,
   ModelSelection,
   type EnvironmentId,
@@ -38,13 +39,6 @@ import {
 import * as DeliveryService from "./DeliveryService.ts";
 import { resolveSeatProvider } from "./seatProvider.ts";
 
-/** The engine's `boardThread` (spec 6a). The field names are the engine's and are not renamed. */
-const BoardThread = Schema.Struct({
-  environmentId: Schema.String,
-  threadId: Schema.String,
-  setBy: Schema.String,
-  setAt: Schema.String,
-});
 type BoardThread = typeof BoardThread.Type;
 
 const Card = Schema.Struct({
