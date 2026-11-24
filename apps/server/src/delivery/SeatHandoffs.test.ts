@@ -21,7 +21,6 @@ import * as OrchestratorMcpService from "../mcp/OrchestratorMcpService.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import { deriveProviderInstanceConfigMap } from "../provider/ProviderInstanceRegistryHydration.ts";
 import * as ServerSettings from "../serverSettings.ts";
-import { BOARD_THREAD_KEY_VARIABLE } from "./BoardTaskThreads.ts";
 import { scratchEngine, scratchEngineHttp } from "./boardThreadEngine.testkit.ts";
 import { boardTaskOf, boardTaskThreadMarker } from "./boardThreadMarker.ts";
 import * as DeliveryService from "./DeliveryService.ts";
@@ -302,7 +301,7 @@ function harness(
         options.key === false
           ? {}
           : {
-              [BOARD_THREAD_KEY_VARIABLE]: KEY,
+              [DeliveryService.BOARD_THREAD_KEY_VARIABLE]: KEY,
             },
       ),
     ),
