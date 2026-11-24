@@ -165,7 +165,7 @@ function setup({
         },
       })),
     boardThreadAct: (input: (typeof writes)[number]) =>
-      Effect.suspend(() => {
+      Effect.suspend((): Effect.Effect<{ readonly body: unknown }, DeliveryError> => {
         writes.push(input);
         calls.push(input.method);
         if (input.method === "PUT") {
