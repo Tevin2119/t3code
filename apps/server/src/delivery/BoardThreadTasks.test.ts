@@ -73,7 +73,7 @@ const refusal = (status: number, detail: string, code?: string) =>
 
 const harness = Effect.fn("BoardThreadTasks.testHarness")(function* (
   file: Act = () => Effect.die("Unexpected filing"),
-  probe = refusal(400, "Missing request ID", "invalid-field"),
+  probe: DeliveryError = refusal(400, "Missing request ID", "invalid-field"),
   failFiledRecord = false,
 ) {
   const cards = yield* Queue.unbounded<Card>();
@@ -104,7 +104,7 @@ const harness = Effect.fn("BoardThreadTasks.testHarness")(function* (
         Layer.mock(Delivery.DeliveryService)({
           boardThreadConfiguration: Effect.succeed("engine-test"),
           boardThreadAct: (input) =>
-            Effect.suspend(() => {
+            Effect.suspend((): ReturnType<Act> => {
               calls.push(input);
               const body = input.body;
               return typeof body === "object" && body !== null && !("requestId" in body)
@@ -275,7 +275,7 @@ it.effect(
           crypto.subtle.digest("SHA-256", new TextEncoder().encode(turnItemId)),
         );
         const expected = {
-          method: "POST",
+          method: "POST" as const,
           path,
           configuration: "engine-test",
           body: {
