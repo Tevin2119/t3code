@@ -132,6 +132,7 @@ export class LimitedSeatSwap extends Context.Service<
 >()("t3/delivery/LimitedSeatSwap") {}
 
 const refused = (detail: string) => new DeliveryError({ reason: "invalid", detail });
+const isDeliveryError = Schema.is(DeliveryError);
 const storage = (cause: unknown) =>
   new DeliveryError({
     reason: "storage",
@@ -524,7 +525,7 @@ const make = Effect.gen(function* () {
   )(
     (task, shell, runId) =>
       handOffBoardLead(task, shell, runId, shell.usageLimitResetAt ?? null, true),
-    Effect.mapError((cause) => (Schema.is(DeliveryError)(cause) ? cause : storage(cause))),
+    Effect.mapError((cause) => (isDeliveryError(cause) ? cause : storage(cause))),
   );
 
   const swap: LimitedSeatSwap["Service"]["swap"] = Effect.fn("LimitedSeatSwap.swap")(
