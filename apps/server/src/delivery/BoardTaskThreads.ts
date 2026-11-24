@@ -2,7 +2,6 @@
 // facts only: its lanes say what started and which thread each task holds, its teams say who
 // leads. This never starts a task, and no client asks it to make a thread.
 import {
-  DELIVERY_HARNESS_BY_DRIVER,
   CommandId,
   type DeliveryError,
   ModelSelection,
@@ -37,6 +36,7 @@ import {
   type BoardTask,
 } from "./boardThreadMarker.ts";
 import * as DeliveryService from "./DeliveryService.ts";
+import { resolveSeatProvider } from "./seatProvider.ts";
 
 /** The engine's `boardThread` (spec 6a). The field names are the engine's and are not renamed. */
 const BoardThread = Schema.Struct({
@@ -59,6 +59,16 @@ const Card = Schema.Struct({
   // Slice 5's mirror and steer counts; absent on an engine before it.
   conversation: Schema.optional(Schema.NullOr(Schema.Unknown)),
   steers: Schema.optional(Schema.NullOr(Schema.Struct({ pending: Schema.Number }))),
+  run: Schema.optional(Schema.NullOr(Schema.Struct({ id: Schema.String }))),
+  hold: Schema.optional(
+    Schema.NullOr(
+      Schema.Struct({
+        stage: Schema.String,
+        deadline: Schema.String,
+        handoff: Schema.NullOr(Schema.Literal("handed")),
+      }),
+    ),
+  ),
 });
 type Card = typeof Card.Type;
 
@@ -252,19 +262,12 @@ export const make = Effect.gen(function* () {
       team?.seats.find((seat) => seat.seat === "lead");
     if (lead === undefined) return "no-lead" as const;
     if (!lead.model) return "no-lead-model" as const;
-    const candidates = (yield* instances.listInstances).filter(
-      (instance) =>
-        instance.enabled && DELIVERY_HARNESS_BY_DRIVER[instance.driverKind] === lead.harness,
+    const instance = resolveSeatProvider(
+      (yield* instances.listInstances).filter((instance) => instance.enabled),
+      lead.harness,
+      (instance) => instance.instanceId,
     );
-    // Two instances of one harness are two accounts: the engine names a harness, not an account,
-    // so only the driver's own default instance or a sole instance is the one it means.
-    const instance =
-      candidates.find(
-        (candidate) => String(candidate.instanceId) === String(candidate.driverKind),
-      ) ?? (candidates.length === 1 ? candidates[0] : undefined);
-    if (instance === undefined) {
-      return candidates.length === 0 ? ("no-provider" as const) : ("ambiguous-provider" as const);
-    }
+    if (typeof instance === "string") return instance;
     return yield* local(decodeSelection({ instanceId: instance.instanceId, model: lead.model }));
   });
 
@@ -306,7 +309,12 @@ export const make = Effect.gen(function* () {
       .boardThreadAct({
         method: "POST",
         path: `${path}/claim`,
-        body: { origin: `thread:${environmentId}/${threadId}`, by: environmentId },
+        // The opt-in asks the engine to hold its QA stage for the lead's hand-off.
+        body: {
+          origin: `thread:${environmentId}/${threadId}`,
+          by: environmentId,
+          handoffs: ["qa"],
+        },
       })
       .pipe(Effect.result);
     if (claimed._tag !== "Success") return;

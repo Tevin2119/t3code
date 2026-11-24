@@ -347,6 +347,9 @@ it.effect("gives a started task one thread, led as the engine's team says, and l
     assert.deepInclude(put?.body, { expect: null });
     // The claim names the conversation that holds the task, and the next pass is its heartbeat.
     assert.equal(engine.leaseOf("task-7")?.origin, `thread:${ENVIRONMENT}/${THREAD}`);
+    // The claim opts the task into the engine holding QA for the lead's hand-off.
+    const claim = engine.requests.find((request) => request.path.endsWith("/claim"));
+    assert.deepInclude(claim?.body, { handoffs: ["qa"] });
     engine.advance(100_000);
     yield* threads.reconcile();
     engine.advance(100_000);
@@ -814,6 +817,34 @@ it.effect("mirrors each conversation event once, across a restart and a replaced
     yield* (yield* service(store)).reconcile();
     assert.equal(ingests(engine), beforeTransfer);
   }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-mirror-")));
+});
+
+it.effect("tells the lead once per QA entry when its hand-off is awaited", () => {
+  const engine = board();
+  const task = engine.addTask({ id: "task-7", run: { id: "run-1" } });
+  const store = threadStore();
+  return Effect.gen(function* () {
+    const threads = yield* service(store);
+    const firstDeadline = "2026-11-22T10:30:00.000Z";
+    const reworkDeadline = "2026-11-22T11:00:00.000Z";
+    for (const { hold, noticeCount } of [
+      { hold: null, noticeCount: 0 },
+      { hold: { stage: "qa", deadline: firstDeadline, handoff: "handed" }, noticeCount: 0 },
+      { hold: { stage: "qa", deadline: firstDeadline, handoff: null }, noticeCount: 1 },
+      { hold: { stage: "qa", deadline: reworkDeadline, handoff: null }, noticeCount: 2 },
+    ] as const) {
+      task.hold = hold;
+      yield* threads.reconcile();
+      yield* threads.reconcile();
+      assert.lengthOf(steerSends(store), noticeCount);
+    }
+    const [first, rework] = steerSends(store);
+    assert.include(first?.text, firstDeadline);
+    assert.include(rework?.text, reworkDeadline);
+    assert.match(String(first?.text), /delivery_seat_handoff/);
+    assert.notEqual(first?.messageId, rework?.messageId);
+    assert.notEqual(first?.commandId, rework?.commandId);
+  }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-handoff-notice-")));
 });
 
 const ownSeqs = (engine: ScratchEngine) =>

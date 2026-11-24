@@ -1,5 +1,4 @@
 import {
-  DELIVERY_HARNESS_BY_DRIVER,
   DeliveryNativeBuildStepInput,
   DeliveryNativeBuildStepResult,
   NodeId,
@@ -15,6 +14,7 @@ import * as Schema from "effect/Schema";
 import type { McpInvocationScope } from "../mcp/McpInvocationContext.ts";
 import { OrchestratorMcpService } from "../mcp/OrchestratorMcpService.ts";
 import { DeliveryService, sameFolder } from "./DeliveryService.ts";
+import { resolveSeatProvider } from "./seatProvider.ts";
 
 const NativeBuild = Schema.Struct({
   version: Schema.Literal(1),
@@ -107,16 +107,13 @@ export const make = Effect.gen(function* () {
       const nativeScope = { ...scope, requestNamespace: `delivery-native:${owner}:${build.id}` };
       if (!build.native) {
         const capabilities = yield* orchestrator.capabilities(scope);
-        const candidates = capabilities.providers.filter(
-          (provider) =>
-            provider.canRunChildTask &&
-            DELIVERY_HARNESS_BY_DRIVER[provider.driverKind] === build.harness,
+        const provider = resolveSeatProvider(
+          capabilities.providers.filter((provider) => provider.canRunChildTask),
+          build.harness,
+          (provider) => provider.providerInstanceId,
+          scope.thread.providerInstanceId,
         );
-        const provider =
-          candidates.find(
-            (provider) => provider.providerInstanceId === scope.thread?.providerInstanceId,
-          ) ?? (candidates.length === 1 ? candidates[0] : undefined);
-        if (!provider)
+        if (typeof provider === "string")
           return yield* refused(
             "The engine harness does not identify one enabled native provider instance.",
           );

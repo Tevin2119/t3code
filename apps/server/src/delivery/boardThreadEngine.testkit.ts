@@ -26,6 +26,12 @@ export interface ScratchTask {
   state: string;
   submitted: boolean;
   held: boolean;
+  run?: { readonly id: string } | null;
+  hold?: {
+    readonly stage: string;
+    readonly deadline: string;
+    readonly handoff: "handed" | null;
+  } | null;
 }
 
 interface Lease {
@@ -123,6 +129,8 @@ export function scratchEngine(
     state: task.state,
     submitted: task.submitted ? "2026-11-22T09:00:00.000Z" : null,
     held: task.held,
+    run: task.run ?? null,
+    hold: task.hold ?? null,
     ...(options.servesLink === false ? {} : { boardThread: links.get(task.id) ?? null }),
     ...(conversing ? { conversation: mirrorOf(task.id), steers: steerCounts(task.id) } : {}),
   });

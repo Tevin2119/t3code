@@ -4,6 +4,10 @@ import {
   DeliveryDiscoverySnapshot,
   DeliveryNativeBuildStepInput,
   DeliveryNativeBuildStepResult,
+  DeliveryQaReceiptInput,
+  DeliveryQaReceiptResult,
+  DeliverySeatHandoffInput,
+  DeliverySeatHandoffResult,
   OrchestratorMcpCapabilitiesInput,
   OrchestratorMcpCapabilitiesResult,
   OrchestrationV2StopWorkflowInput,
@@ -56,6 +60,7 @@ import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as OrchestratorMcpService from "../../OrchestratorMcpService.ts";
 import * as ThreadMetadataMcpService from "../../ThreadMetadataMcpService.ts";
 import { DeliveryService } from "../../../delivery/DeliveryService.ts";
+import { SeatHandoffs } from "../../../delivery/SeatHandoffs.ts";
 
 const dependencies = [
   McpInvocationContext.McpInvocationContext,
@@ -391,7 +396,7 @@ const DeliveryReadTool = Tool.make("delivery_read", {
 
 const NativeBuildStepTool = Tool.make("delivery_native_build_step", {
   description:
-    "Step an opted-in build from its exact engine worktree. Retries reuse one native child; the server reads its result. Step after completion or engine cancellation. Read-only flows stay legacy. No caller-supplied results.",
+    "Step an opted-in build from its exact engine worktree. Retries reuse one native child; the server reads its result. Step after completion or engine cancellation.",
   parameters: DeliveryNativeBuildStepInput,
   success: DeliveryNativeBuildStepResult,
   failure: OrchestratorMcpFailure,
@@ -402,9 +407,37 @@ const NativeBuildStepTool = Tool.make("delivery_native_build_step", {
   .annotate(Tool.Destructive, true)
   .annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenWhileDeliveryOff);
 
+const QaReceiptTool = Tool.make("delivery_qa_receipt", {
+  description:
+    "From a QA seat thread, file one acceptance item's verdict and evidence refs. The server fills in task, seat and hash.",
+  parameters: DeliveryQaReceiptInput,
+  success: DeliveryQaReceiptResult,
+  failure: OrchestratorMcpFailure,
+  failureMode: "return",
+  dependencies: [...dependencies, SeatHandoffs],
+})
+  .annotate(Tool.Title, "File a QA receipt")
+  .annotate(Tool.Destructive, true)
+  .annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenWhileDeliveryOff);
+
+const SeatHandoffTool = Tool.make("delivery_seat_handoff", {
+  description:
+    "From a board lead thread, hand QA to a gate seat. Call again after its completion wake to settle.",
+  parameters: DeliverySeatHandoffInput,
+  success: DeliverySeatHandoffResult,
+  failure: OrchestratorMcpFailure,
+  failureMode: "return",
+  dependencies: [...dependencies, SeatHandoffs],
+})
+  .annotate(Tool.Title, "Hand off QA to a team seat")
+  .annotate(Tool.Destructive, true)
+  .annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenWhileDeliveryOff);
+
 export const OrchestratorToolkit = Toolkit.make(
   DeliveryReadTool,
   NativeBuildStepTool,
+  QaReceiptTool,
+  SeatHandoffTool,
   OrchestratorCapabilitiesTool,
   DelegateTaskTool,
   TaskStatusTool,
