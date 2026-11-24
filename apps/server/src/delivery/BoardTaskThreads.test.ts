@@ -3,6 +3,7 @@ import {
   CommandId,
   EnvironmentId,
   ProjectId,
+  ProviderInstanceId,
   RunId,
   ThreadId,
   type OrchestrationV2ServerCommand,
@@ -425,7 +426,7 @@ it.effect(
       assert.deepInclude(store.commands.at(-1), {
         type: "thread.archive",
         threadId: THREAD,
-        commandId: `${create.engineIntake}:archive:displaced:0`,
+        commandId: CommandId.make(`${create.engineIntake}:archive:displaced:0`),
       });
       assert.isNotNull(store.threads.get(THREAD)!.archivedAt);
       assert.isNull(store.threads.get(successor)!.archivedAt);
@@ -493,7 +494,7 @@ it.effect("retries a dropped board lead link move during reconciliation", () => 
     assert.deepInclude(store.commands.at(-1), {
       type: "thread.archive",
       threadId: THREAD,
-      commandId: `${create.engineIntake}:archive:displaced:0`,
+      commandId: CommandId.make(`${create.engineIntake}:archive:displaced:0`),
     });
     assert.isNotNull(store.threads.get(THREAD)!.archivedAt);
     assert.isNull(store.threads.get(successor)!.archivedAt);
@@ -1069,7 +1070,7 @@ it.effect.each([
       });
       assert.deepEqual(
         steerSends(store)[0]?.modelSelection,
-        follows ? { instanceId: "codex", model } : undefined,
+        follows ? { instanceId: ProviderInstanceId.make("codex"), model } : undefined,
       );
       assert.equal(engine.steer(steer).state, "pending");
       // A restarted server confirms it from the conversation and never sends it twice.
