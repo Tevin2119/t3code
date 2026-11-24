@@ -8,6 +8,7 @@ import {
   openSeatThread,
   sameSeatView,
   sameThread,
+  seatChildrenWithAttestations,
   seatConversation,
   seatOfThread,
   steadySeatThread,
@@ -91,7 +92,8 @@ export function useTaskConversation(environmentId: EnvironmentId | null, task: T
   const ref = conversation.kind === "thread" ? conversation.ref : null;
   const environment = useEnvironment(ref?.environmentId ?? null);
   const reachable = environment?.connection.phase === "connected";
-  const children = useQuietThreadProjection(ref)?.projection.subagents ?? NO_CHILDREN;
+  const projected = useQuietThreadProjection(ref)?.projection.subagents ?? NO_CHILDREN;
+  const children = seatChildrenWithAttestations(ref, projected, task?.council?.seats);
   const { presentationById } = useEnvironments();
   const ownConnection = (id: EnvironmentId) => {
     const own = presentationById.get(id);

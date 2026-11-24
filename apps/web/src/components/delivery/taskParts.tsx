@@ -10,6 +10,7 @@ import {
   SendIcon,
   UserIcon,
 } from "lucide-react";
+import { useGT } from "gt-react";
 import type { ReactNode } from "react";
 
 import {
@@ -297,6 +298,41 @@ export function QaVotes(props: { readonly qa: DeliveryCard["qa"] }) {
         {props.qa.votes.map((vote) => `${vote.provider}: ${vote.verdict}`).join(", ")}
         {props.qa.needed ? `. ${props.qa.needed} providers have to pass.` : ""}
       </TooltipPopup>
+    </Tooltip>
+  );
+}
+
+export function QaReceiptCounts({ receipts }: { readonly receipts: DeliveryCard["qaReceipts"] }) {
+  const gt = useGT();
+  if (!receipts || receipts.count === 0) return null;
+  const { count, pass, fail, blocked } = receipts;
+  const summary = gt("QA receipts: {pass} pass, {fail} fail, {blocked} blocked", {
+    pass,
+    fail,
+    blocked,
+  });
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <span
+            tabIndex={0}
+            className="inline-flex items-center gap-1 text-3xs text-muted-foreground"
+            aria-label={summary}
+          />
+        }
+      >
+        <span>{gt("QA receipts ({count})", { count })}</span>
+        <span className="inline-flex items-center gap-0.5" aria-hidden>
+          <span className="size-2 rounded-full bg-success" />
+          {pass}
+          <span className="size-2 rounded-full bg-destructive" />
+          {fail}
+          <span className="size-2 rounded-full bg-warning" />
+          {blocked}
+        </span>
+      </TooltipTrigger>
+      <TooltipPopup side="top">{summary}</TooltipPopup>
     </Tooltip>
   );
 }

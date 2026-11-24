@@ -6,7 +6,7 @@ import type { ScopedThreadRef } from "@t3tools/contracts";
 import { EnvironmentId, ThreadId } from "@t3tools/contracts";
 
 import { BOARD_LANE, boardLaneOf } from "./boardLanes";
-import type { DeliveryCard, TaskView } from "./delivery";
+import type { CouncilSeat, DeliveryCard, TaskView } from "./delivery";
 
 /**
  * The one place that says which conversation is a task's: the thread the engine links it to
@@ -90,6 +90,39 @@ interface SeatChild {
   readonly teamChat?: { readonly seat: string } | undefined;
 }
 
+export function seatChildrenWithAttestations(
+  conversation: ScopedThreadRef | null,
+  children: ReadonlyArray<SeatChild>,
+  seats: ReadonlyArray<Pick<CouncilSeat, "seat" | "seatThread">> | undefined,
+): ReadonlyArray<SeatChild> {
+  if (!conversation || !seats) return children;
+  const attested = seats.flatMap(({ seat, seatThread }): SeatChild[] => {
+    if (!seatThread) return [];
+    const target = {
+      environmentId: EnvironmentId.make(seatThread.environmentId),
+      threadId: ThreadId.make(seatThread.threadId),
+    };
+    const latest = children.findLast(
+      (child) =>
+        child.teamChat?.seat === seat &&
+        (child.childThreadId !== null || child.remoteChild !== undefined),
+    );
+    if (latest && isChildThread(conversation, latest, target)) {
+      return [];
+    }
+    return [
+      target.environmentId === conversation.environmentId
+        ? { childThreadId: target.threadId, teamChat: { seat } }
+        : {
+            childThreadId: null,
+            remoteChild: { ...target, label: target.environmentId },
+            teamChat: { seat },
+          },
+    ];
+  });
+  return attested.length ? [...children, ...attested] : children;
+}
+
 /** What places a seat that runs in a linked environment: see `subagentThreadTarget`. */
 export interface SeatReach {
   readonly ownConnection: (
@@ -126,18 +159,11 @@ export function seatConversation(
 }
 
 // A thread id alone names no thread: the same id can exist in two environments.
-const childOfThread = (
-  conversation: ScopedThreadRef,
-  children: ReadonlyArray<SeatChild>,
-  thread: ScopedThreadRef,
-) =>
-  children.find((item) =>
-    item.childThreadId !== null
-      ? item.childThreadId === thread.threadId &&
-        conversation.environmentId === thread.environmentId
-      : item.remoteChild?.threadId === thread.threadId &&
-        item.remoteChild.environmentId === thread.environmentId,
-  );
+const isChildThread = (conversation: ScopedThreadRef, child: SeatChild, thread: ScopedThreadRef) =>
+  child.childThreadId !== null
+    ? child.childThreadId === thread.threadId && conversation.environmentId === thread.environmentId
+    : child.remoteChild?.threadId === thread.threadId &&
+      child.remoteChild.environmentId === thread.environmentId;
 
 /**
  * The seat a child thread was given, for the line above a seat conversation. A thread the engine
@@ -150,7 +176,8 @@ export function seatOfThread(
   engineSeats: ReadonlyArray<{ readonly seat: string; readonly threadId: string | null }> = [],
 ): string | null {
   if (!conversation || !thread) return null;
-  const spawned = childOfThread(conversation, children, thread)?.teamChat?.seat;
+  const spawned = children.findLast((child) => isChildThread(conversation, child, thread))?.teamChat
+    ?.seat;
   if (spawned) return spawned;
   if (thread.environmentId !== conversation.environmentId) return null;
   return engineSeats.find((item) => item.threadId === thread.threadId)?.seat ?? null;
@@ -164,7 +191,7 @@ export function openSeatThread(
   reach: SeatReach,
 ): SeatThread | null {
   if (!conversation || !thread) return thread;
-  const child = childOfThread(conversation, children, thread);
+  const child = children.findLast((child) => isChildThread(conversation, child, thread));
   const target =
     child &&
     subagentThreadTarget(child, conversation.environmentId, reach.ownConnection, reach.isLinked);
