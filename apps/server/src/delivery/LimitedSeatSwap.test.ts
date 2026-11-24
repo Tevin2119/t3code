@@ -26,7 +26,6 @@ import * as ProviderAdapterRegistry from "../orchestration-v2/ProviderAdapterReg
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import { limitRecoveryCommand } from "../orchestration-v2/UsageLimitRecoveryWorker.ts";
 import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
-import { BOARD_THREAD_KEY_VARIABLE } from "./BoardTaskThreads.ts";
 import { boardTaskOf, boardTaskOfMarker, boardTaskThreadMarker } from "./boardThreadMarker.ts";
 import * as BoardThreadRows from "./boardThreadRows.ts";
 import * as DeliveryService from "./DeliveryService.ts";
@@ -282,7 +281,9 @@ function setup({
     Layer.provide(
       Layer.mergeAll(
         Layer.succeed(DeliveryService.DeliveryService, delivery),
-        Layer.succeed(HostProcess.Environment, { [BOARD_THREAD_KEY_VARIABLE]: KEY }),
+        Layer.succeed(HostProcess.Environment, {
+          [DeliveryService.BOARD_THREAD_KEY_VARIABLE]: KEY,
+        }),
         Layer.succeed(ServerEnvironment.ServerEnvironmentIdentity, {
           getEnvironmentId: Effect.succeed(ENVIRONMENT),
         }),

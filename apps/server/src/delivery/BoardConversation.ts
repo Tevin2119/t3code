@@ -408,11 +408,12 @@ export const make = Effect.gen(function* () {
     let modelSelection: ModelSelection | undefined;
     if (detail !== undefined) {
       const read = yield* detail();
-      if (Option.isNone(read)) return;
-      const shell = yield* projections.getThreadShell(threadId).pipe(Effect.result);
-      if (shell._tag === "Failure" || shell.success === null || shell.success.archivedAt !== null)
-        return;
-      modelSelection = yield* turnSelection(read.value, shell.success.modelSelection);
+      if (Option.isSome(read)) {
+        const shell = yield* projections.getThreadShell(threadId).pipe(Effect.result);
+        if (shell._tag === "Failure" || shell.success === null || shell.success.archivedAt !== null)
+          return;
+        modelSelection = yield* turnSelection(read.value, shell.success.modelSelection);
+      }
     }
     yield* threads
       .dispatch({

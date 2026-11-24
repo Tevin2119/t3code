@@ -47,6 +47,7 @@ import * as BoardTaskThreads from "./BoardTaskThreads.ts";
 import * as BoardThreadRows from "./boardThreadRows.ts";
 import { boardTaskOf, boardTaskOfMarker, boardTaskThreadId } from "./boardThreadMarker.ts";
 import * as DeliveryService from "./DeliveryService.ts";
+import * as LimitedSeatSwap from "./LimitedSeatSwap.ts";
 
 const ENGINE_ROOT = process.env.T3_BOARD_THREAD_ENGINE_ROOT ?? "";
 // Scratch values: the engine is seeded with this passphrase and nothing else knows it.
@@ -198,9 +199,15 @@ function service(store: ReturnType<typeof threadStore>, key: string | null = PHR
   return BoardTaskThreads.make.pipe(
     // The conversation mirror is proven against the scratch engine in BoardTaskThreads.test.ts.
     Effect.provideService(BoardConversation.BoardConversation, { sync: () => Effect.void }),
+    Effect.provideService(LimitedSeatSwap.LimitedSeatSwap, {
+      resumeBoardLeadHandoff: () => Effect.die("This fixture has no lead hand-offs"),
+      handOffLimitedLead: () => Effect.succeed(null),
+      status: () => Effect.die("This fixture has no limit notices"),
+      swap: () => Effect.die("This fixture has no seat swaps"),
+    }),
     Effect.provideService(
       HostProcess.Environment,
-      key === null ? {} : { [BoardTaskThreads.BOARD_THREAD_KEY_VARIABLE]: key },
+      key === null ? {} : { [DeliveryService.BOARD_THREAD_KEY_VARIABLE]: key },
     ),
     Effect.provideService(ServerEnvironment.ServerEnvironmentIdentity, {
       getEnvironmentId: Effect.succeed(ENVIRONMENT),

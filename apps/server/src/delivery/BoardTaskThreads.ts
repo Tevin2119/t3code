@@ -39,16 +39,9 @@ import {
   type BoardTask,
 } from "./boardThreadMarker.ts";
 import * as DeliveryService from "./DeliveryService.ts";
+import { BoardThreadLink } from "./DeliveryService.ts";
+import * as LimitedSeatSwap from "./LimitedSeatSwap.ts";
 import { BoardLeadSeat, boardLeadSeat, resolveSeatProvider } from "./seatProvider.ts";
-
-/** The engine's `boardThread` (spec 6a). The field names are the engine's and are not renamed. */
-const BoardThread = Schema.Struct({
-  environmentId: Schema.String,
-  threadId: Schema.String,
-  setBy: Schema.String,
-  setAt: Schema.String,
-});
-type BoardThread = typeof BoardThread.Type;
 
 const Card = Schema.Struct({
   id: Schema.String,
@@ -58,7 +51,7 @@ const Card = Schema.Struct({
   state: Schema.String,
   set: Schema.optional(Schema.NullOr(Schema.String)),
   // Absent on an engine without the link: such an engine is never written to.
-  boardThread: Schema.optional(Schema.NullOr(BoardThread)),
+  boardThread: Schema.optional(Schema.NullOr(BoardThreadLink)),
   // Slice 5's mirror and steer counts; absent on an engine before it.
   conversation: Schema.optional(Schema.NullOr(Schema.Unknown)),
   steers: Schema.optional(Schema.NullOr(Schema.Struct({ pending: Schema.Number }))),
@@ -102,10 +95,10 @@ const Teams = Schema.Array(
 /** What a refusal of the link routes carries: a stable code, and on a conflict the value held. */
 const Refusal = Schema.Struct({
   code: Schema.optional(Schema.String),
-  current: Schema.optional(Schema.NullOr(BoardThread)),
+  current: Schema.optional(Schema.NullOr(BoardThreadLink)),
 });
-const Linked = Schema.Struct({ boardThread: BoardThread });
-const Detail = Schema.Struct({ boardThread: Schema.NullOr(BoardThread) });
+const Linked = Schema.Struct({ boardThread: BoardThreadLink });
+const Detail = Schema.Struct({ boardThread: Schema.NullOr(BoardThreadLink) });
 const Claimed = Schema.Struct({ holder: Schema.String });
 
 const decodeLanes = Schema.decodeUnknownEffect(Lanes);
@@ -181,12 +174,6 @@ export const movedTaskStanding = (detail: unknown, environmentId: string, thread
     : null;
 };
 
-/**
- * The engine's approval key, when the host gives this server one. The link routes are keyed
- * (spec 6a) and a server holds no person's passphrase, so without this the link is not written.
- */
-export const BOARD_THREAD_KEY_VARIABLE = "T3_DELIVERY_BOARD_THREAD_KEY";
-
 /** Why a started task has no conversation of its own yet. Told in the log, never guessed around. */
 export type BoardThreadHold =
   | "no-board"
@@ -241,11 +228,9 @@ export const make = Effect.gen(function* () {
   const instances = yield* ProviderInstanceRegistry.ProviderInstanceRegistry;
   const rows = yield* BoardThreadRows.BoardThreadRows;
   const conversation = yield* BoardConversation.BoardConversation;
+  const swaps = yield* LimitedSeatSwap.LimitedSeatSwap;
   const hostEnvironment = yield* HostProcess.Environment;
   const lock = yield* Semaphore.make(1);
-  // The one queue every `boardThread` write of this server waits in: the engine is sent one link
-  // write at a time, which also bounds the first run, when every open task shows no link.
-  const linkWrites = yield* Semaphore.make(1);
   // The token of each claim this server holds. It is kept in memory only: after a restart the
   // old lease lapses within its window and the task is claimed again, still by the same thread.
   const holders = new Map<string, string>();
@@ -339,29 +324,22 @@ export const make = Effect.gen(function* () {
       .pipe(Effect.ignore);
   });
 
-  const writeLink = (taskId: string, body: unknown) =>
-    linkWrites.withPermits(1)(
-      delivery
-        .boardThreadAct({ method: "PUT", path: `/api/tasks/${taskId}/board-thread`, body })
-        .pipe(Effect.result),
-    );
-
   const linkThread = Effect.fn("BoardTaskThreads.linkThread")(function* (input: {
     readonly task: BoardTask;
     readonly threadId: ThreadId;
     readonly revision: number;
     readonly environmentId: EnvironmentId;
     readonly key: string;
-    readonly expect: Pick<BoardThread, "environmentId" | "threadId"> | null;
   }) {
-    const { task, threadId, revision, environmentId, key, expect } = input;
-    const put = yield* writeLink(task.id, {
-      environmentId,
-      threadId,
-      setBy: environmentId,
-      expect,
-      key,
-    });
+    const { task, threadId, revision, environmentId, key } = input;
+    const put = yield* delivery
+      .boardThreadAct({
+        method: "PUT",
+        path: `/api/tasks/${task.id}/board-thread`,
+        // No link was set when the lanes were read. A writer in between is answered 409.
+        body: { environmentId, threadId, setBy: environmentId, expect: null, key },
+      })
+      .pipe(Effect.result);
     if (put._tag === "Success") {
       const { boardThread } = yield* engine(decodeLinked(put.success.body));
       return { boardThread, hold: null };
@@ -437,8 +415,6 @@ export const make = Effect.gen(function* () {
       threadId,
       revision,
       environmentId: context.environmentId,
-      // No link was set when the lanes were read. A writer in between is answered 409.
-      expect: null,
       key: context.key,
     });
     if (boardThread?.environmentId === context.environmentId && boardThread.threadId === threadId)
@@ -455,39 +431,46 @@ export const make = Effect.gen(function* () {
   const settleEnded = Effect.fn("BoardTaskThreads.settleEnded")(function* (
     cards: Map<string, Card>,
     environmentId: EnvironmentId,
-    key: string | undefined,
   ) {
     const openThreads = yield* local(rows.list({ archived: false }));
-    const handledSuccessors = new Set<ThreadId>();
-    // Resolve pending link moves before deciding which threads were displaced.
-    for (const row of openThreads) {
-      const card = cards.get(row.task.id);
+    const byThread = new Map(openThreads.map((row) => [row.threadId, row]));
+    const pending = new Set<ThreadId>();
+    // Both rows must remain open until the continuation and link move finish.
+    for (const [taskId, taskRows] of Map.groupBy(openThreads, (row) => row.task.id)) {
+      const card = cards.get(taskId);
       const link = card?.boardThread;
       if (
+        taskRows.length < 2 ||
         card === undefined ||
         link?.environmentId !== environmentId ||
-        link.threadId === row.threadId ||
-        row.threadId === boardTaskThreadId(row.task) ||
         MOVED.has(card.state)
       )
         continue;
-      const linked = yield* local(projections.getThreadShell(link.threadId as ThreadId));
-      if (!linked?.latestRunId || limitedLeadHandoffThreadId(linked.latestRunId) !== row.threadId)
-        continue;
-      handledSuccessors.add(row.threadId);
-      if (key === undefined) continue;
-      const { boardThread } = yield* linkThread({
-        task: row.task,
-        threadId: row.threadId,
-        revision: row.revision,
-        environmentId,
-        key,
-        expect: { environmentId: link.environmentId, threadId: link.threadId },
-      });
-      if (boardThread !== undefined) cards.set(card.id, { ...card, boardThread });
+      for (const row of taskRows) {
+        const shell = yield* local(projections.getThreadShell(row.threadId));
+        if (!shell?.latestRunId) continue;
+        const target = limitedLeadHandoffThreadId(shell.latestRunId);
+        const successor = byThread.get(target);
+        if (
+          successor?.task.id !== taskId ||
+          successor.task.board !== row.task.board ||
+          (link.threadId !== row.threadId && link.threadId !== target)
+        )
+          continue;
+        const boardThread = yield* engine(
+          swaps.resumeBoardLeadHandoff(row.task, shell, shell.latestRunId),
+        );
+        if (boardThread === null) {
+          pending.add(row.threadId);
+          pending.add(target);
+        } else {
+          cards.set(taskId, { ...card, boardThread });
+        }
+        break;
+      }
     }
     for (const row of openThreads) {
-      if (handledSuccessors.has(row.threadId)) continue;
+      if (pending.has(row.threadId)) continue;
       const card = cards.get(row.task.id);
       if (card === undefined) {
         const read = yield* delivery
@@ -509,7 +492,11 @@ export const make = Effect.gen(function* () {
       }
       const standing = boardThreadStanding(card, environmentId, row.threadId);
       if (standing === "linked" || standing === "free") continue;
-      yield* releaseClaim(row.task.id);
+      const link = card.boardThread;
+      const owner =
+        link?.environmentId === environmentId ? byThread.get(link.threadId as ThreadId) : undefined;
+      if (owner?.task.id !== row.task.id || owner.task.board !== row.task.board)
+        yield* releaseClaim(row.task.id);
       yield* archive(row.task, row.threadId, standing, row.revision);
     }
   });
@@ -529,7 +516,7 @@ export const make = Effect.gen(function* () {
       // An engine that serves no `boardThread` has no link to write to. Nothing is made for it.
       if ([...cards.values()].some((card) => card.boardThread === undefined)) return holds;
       const starting = [...cards.values()].filter(awaitsThread);
-      const key = hostEnvironment[BOARD_THREAD_KEY_VARIABLE] || undefined;
+      const key = hostEnvironment[DeliveryService.BOARD_THREAD_KEY_VARIABLE] || undefined;
       if (starting.length > 0) {
         const revisions = new Map(
           (yield* local(rows.list({ archived: false }))).map((row) => [row.threadId, row.revision]),
@@ -558,7 +545,7 @@ export const make = Effect.gen(function* () {
         steering.add(card.id);
         yield* holdClaim(card, environmentId, link.threadId);
       }
-      yield* settleEnded(cards, environmentId, key);
+      yield* settleEnded(cards, environmentId);
       // Moved tasks are worked on another machine: their conversation is not told from here.
       const mirrored = [...cards.values()].filter((card) => !MOVED.has(card.state));
       if (key !== undefined)

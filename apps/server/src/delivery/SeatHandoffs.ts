@@ -29,7 +29,6 @@ import {
 } from "../mcp/McpInvocationContext.ts";
 import * as OrchestratorMcpService from "../mcp/OrchestratorMcpService.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
-import { BOARD_THREAD_KEY_VARIABLE } from "./BoardTaskThreads.ts";
 import { boardTaskOfMarker } from "./boardThreadMarker.ts";
 import * as DeliveryService from "./DeliveryService.ts";
 import { resolveSeatProvider } from "./seatProvider.ts";
@@ -209,7 +208,7 @@ const make = Effect.gen(function* () {
     model: string,
     harness?: string,
   ) {
-    const key = hostEnvironment[BOARD_THREAD_KEY_VARIABLE];
+    const key = hostEnvironment[DeliveryService.BOARD_THREAD_KEY_VARIABLE];
     if (!key) return yield* missingKey();
     const response = yield* delivery
       .boardThreadAct({
@@ -349,7 +348,7 @@ const make = Effect.gen(function* () {
         const lead = yield* findThread(threadId);
         const task = boardTaskOfMarker(lead?.lineage.engineIntake);
         if (!task) return yield* notLead();
-        const key = hostEnvironment[BOARD_THREAD_KEY_VARIABLE];
+        const key = hostEnvironment[DeliveryService.BOARD_THREAD_KEY_VARIABLE];
         if (!key) return yield* missingKey();
 
         const path = `/api/tasks/${task.id}`;
@@ -541,7 +540,7 @@ const make = Effect.gen(function* () {
     fileQaReceipt: Effect.fn("SeatHandoffs.fileQaReceipt")(function* (scope, input) {
       const caller = yield* requireThreadScope(scope, "Filing a QA receipt");
       const environmentId = caller.environmentId;
-      const key = hostEnvironment[BOARD_THREAD_KEY_VARIABLE];
+      const key = hostEnvironment[DeliveryService.BOARD_THREAD_KEY_VARIABLE];
       if (!key) return yield* missingKey();
 
       const thread = yield* findThread(caller.thread.threadId);

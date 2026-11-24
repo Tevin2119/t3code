@@ -370,6 +370,8 @@ export function scratchEngine(
             status: 200,
             body: {
               ...cardOf(task),
+              body: "Complete the task.",
+              acceptance: [],
               ...(task.seatModels === undefined
                 ? {}
                 : {

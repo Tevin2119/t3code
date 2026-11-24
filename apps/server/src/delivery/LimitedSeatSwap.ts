@@ -45,7 +45,6 @@ import * as ProviderAdapterRegistry from "../orchestration-v2/ProviderAdapterReg
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
 import { forkParked } from "../serverActivation.ts";
-import { BOARD_THREAD_KEY_VARIABLE } from "./BoardTaskThreads.ts";
 import { createBoardTaskThread, type BoardTask } from "./boardThreadMarker.ts";
 import * as BoardThreadRows from "./boardThreadRows.ts";
 import * as DeliveryService from "./DeliveryService.ts";
@@ -124,6 +123,11 @@ export class LimitedSeatSwap extends Context.Service<
      * nothing to hand on: no limit, another setting, or no free favorite.
      */
     readonly handOffLimitedLead: (threadId: ThreadId) => Effect.Effect<ThreadId | null>;
+    readonly resumeBoardLeadHandoff: (
+      task: BoardTask,
+      shell: OrchestrationV2ThreadShell,
+      runId: RunId,
+    ) => Effect.Effect<typeof DeliveryService.BoardThreadLink.Type | null, DeliveryError>;
   }
 >()("t3/delivery/LimitedSeatSwap") {}
 
@@ -158,16 +162,7 @@ const selectionOf = (model: SeatModel): ModelSelection =>
 
 const decodeBoardTaskDetail = Schema.decodeUnknownEffect(
   Schema.Struct({
-    boardThread: Schema.optional(
-      Schema.NullOr(
-        Schema.Struct({
-          environmentId: Schema.String,
-          threadId: Schema.String,
-          setBy: Schema.String,
-          setAt: Schema.String,
-        }),
-      ),
-    ),
+    boardThread: Schema.optional(Schema.NullOr(DeliveryService.BoardThreadLink)),
     title: Schema.String,
     body: Schema.String,
     acceptance: Schema.Array(Schema.String),
@@ -179,6 +174,9 @@ const decodeBoardTaskDetail = Schema.decodeUnknownEffect(
       }),
     ),
   }),
+);
+const decodeBoardThreadLink = Schema.decodeUnknownEffect(
+  Schema.Struct({ boardThread: DeliveryService.BoardThreadLink }),
 );
 const decodeLeadPick = Schema.decodeUnknownEffect(DeliveryLeadPickResult);
 const decodePickRefusal = Schema.decodeUnknownOption(Schema.Struct({ code: Schema.String }));
@@ -391,21 +389,25 @@ const make = Effect.gen(function* () {
   const handOffBoardLead = Effect.fn("LimitedSeatSwap.handOffBoardLead")(function* (
     task: BoardTask,
     shell: OrchestrationV2ThreadShell,
+    runId: RunId,
+    resetAt: string | null,
+    resuming: boolean,
   ) {
-    const key = hostEnvironment[BOARD_THREAD_KEY_VARIABLE];
-    if (!key || Option.isNone(deliveryOption) || Option.isNone(identityOption)) return null;
-    const lead = leadLimit(shell, (yield* DateTime.now).epochMilliseconds);
-    if (lead === null) return null;
+    const key = hostEnvironment[DeliveryService.BOARD_THREAD_KEY_VARIABLE];
+    if ((!key && !resuming) || Option.isNone(deliveryOption) || Option.isNone(identityOption))
+      return null;
     const delivery = deliveryOption.value;
     const environmentId = yield* identityOption.value.getEnvironmentId;
+    const target = leadHandoffThreadId(runId);
     const path = `/api/tasks/${task.id}`;
     const response = yield* delivery.read({ path });
     const detail = yield* decodeBoardTaskDetail(response.body);
     const previous = detail.boardThread;
-    if (previous?.environmentId !== environmentId || previous.threadId !== shell.id) return null;
+    if (previous?.environmentId !== environmentId) return null;
+    const alreadyLinked = previous.threadId === target;
+    if (alreadyLinked ? !resuming : !key || previous.threadId !== shell.id) return null;
 
-    const target = leadHandoffThreadId(lead.runId);
-    const identity = handoffIdentity(shell.id, lead.runId);
+    const identity = handoffIdentity(shell.id, runId);
     const existing = yield* projections.findThread(target);
     let modelSelection: ModelSelection;
     if (existing !== null) {
@@ -414,8 +416,9 @@ const make = Effect.gen(function* () {
       if (row?.task.id !== task.id || row.task.board !== task.board) return null;
       modelSelection = existing.modelSelection;
     } else {
+      if (resuming) return null;
       const { runs } = yield* projections.getThreadRecords(shell.id, ["runs"], {
-        runIds: [lead.runId],
+        runIds: [runId],
       });
       const failed = runs[0]?.modelSelection;
       if (failed === undefined) return null;
@@ -464,16 +467,26 @@ const make = Effect.gen(function* () {
       );
     }
 
-    if (
-      lead.limited.resetAt !== null &&
-      !(shell.limitRecovery?.runId === lead.runId && shell.limitRecovery.autoResume === false)
-    )
-      yield* threads.dispatch(disarmLead(shell.id, lead.runId, lead.limited.resetAt));
     const messageId = MessageId.make(`${identity}:continue`);
+    const continuation =
+      existing === null
+        ? undefined
+        : (yield* projections.getMessagesById(target, [messageId])).get(messageId);
+    if (!alreadyLinked && continuation !== undefined) {
+      const current = yield* projections.getThreadShell(shell.id);
+      const newerUserTurn = current?.latestUserAuthoredMessageAt;
+      if (
+        current?.latestRunId !== runId ||
+        (newerUserTurn != null && DateTime.isGreaterThan(newerUserTurn, continuation.createdAt))
+      )
+        return previous;
+    }
     if (
-      existing === null ||
-      !(yield* projections.getMessagesById(target, [messageId])).has(messageId)
-    ) {
+      resetAt !== null &&
+      !(shell.limitRecovery?.runId === runId && shell.limitRecovery.autoResume === false)
+    )
+      yield* threads.dispatch(disarmLead(shell.id, runId, resetAt));
+    if (continuation === undefined) {
       const run = detail.card?.run;
       const summary = [
         "Continue this board task. The previous lead hit a usage limit.",
@@ -497,13 +510,22 @@ const make = Effect.gen(function* () {
         creationSource: "server",
       });
     }
-    yield* delivery.boardThreadAct({
+    if (alreadyLinked) return previous;
+    const linked = yield* delivery.boardThreadAct({
       method: "PUT",
       path: `${path}/board-thread`,
       body: { environmentId, threadId: target, setBy: environmentId, expect: previous, key },
     });
-    return target;
+    return (yield* decodeBoardThreadLink(linked.body)).boardThread;
   });
+
+  const resumeBoardLeadHandoff: LimitedSeatSwap["Service"]["resumeBoardLeadHandoff"] = Effect.fn(
+    "LimitedSeatSwap.resumeBoardLeadHandoff",
+  )(
+    (task, shell, runId) =>
+      handOffBoardLead(task, shell, runId, shell.usageLimitResetAt ?? null, true),
+    Effect.mapError((cause) => (cause instanceof DeliveryError ? cause : storage(cause))),
+  );
 
   const swap: LimitedSeatSwap["Service"]["swap"] = Effect.fn("LimitedSeatSwap.swap")(
     function* (input) {
@@ -552,7 +574,19 @@ const make = Effect.gen(function* () {
       const shell = yield* projections.getThreadShell(threadId);
       if (shell === null) return null;
       const row = (yield* rows.list({ archived: false })).find((row) => row.threadId === shell.id);
-      if (row !== undefined) return yield* handOffBoardLead(row.task, shell);
+      if (row !== undefined) {
+        const lead = leadLimit(shell, (yield* DateTime.now).epochMilliseconds);
+        if (lead === null) return null;
+        const link = yield* handOffBoardLead(
+          row.task,
+          shell,
+          lead.runId,
+          lead.limited.resetAt,
+          false,
+        );
+        const target = leadHandoffThreadId(lead.runId);
+        return link?.threadId === target ? target : null;
+      }
       const conversation = yield* governed(threadId, shell);
       if (
         conversation === null ||
@@ -573,7 +607,7 @@ const make = Effect.gen(function* () {
       ),
   );
 
-  return LimitedSeatSwap.of({ status, swap, handOffLimitedLead });
+  return LimitedSeatSwap.of({ status, swap, handOffLimitedLead, resumeBoardLeadHandoff });
 });
 
 export const layer = Layer.effect(LimitedSeatSwap, make);

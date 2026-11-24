@@ -24,6 +24,7 @@ import * as EventStore from "../orchestration-v2/EventStore.ts";
 import { OrchestratorCommandRejectedError } from "../orchestration-v2/Orchestrator.ts";
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
+import * as ProviderAdapterRegistry from "../orchestration-v2/ProviderAdapterRegistry.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
 import { deriveProviderInstanceConfigMap } from "../provider/ProviderInstanceRegistryHydration.ts";
@@ -44,6 +45,8 @@ import {
   boardTaskThreadId,
 } from "./boardThreadMarker.ts";
 import * as DeliveryService from "./DeliveryService.ts";
+import * as LimitedSeats from "./LimitedSeats.ts";
+import * as LimitedSeatSwap from "./LimitedSeatSwap.ts";
 
 // Every case here runs against the scratch engine of boardThreadEngine.testkit.ts, through the
 // delivery service's real request path. BoardTaskThreads.engine.test.ts runs the real engine.
@@ -212,6 +215,11 @@ function service(
     const conversation = yield* BoardConversation.make;
     return yield* BoardTaskThreads.make.pipe(
       Effect.provideService(BoardConversation.BoardConversation, conversation),
+      Effect.provide(LimitedSeatSwap.layer.pipe(Layer.provide(LimitedSeats.layer))),
+      Effect.provideService(ProviderAdapterRegistry.ProviderAdapterRegistryV2, {
+        get: () => Effect.die("A resumed hand-off keeps the successor's model"),
+        list: () => Effect.succeed([]),
+      }),
     );
   }).pipe(
     Effect.provideService(EventStore.EventStoreV2, {
@@ -229,7 +237,7 @@ function service(
       options.key === null
         ? {}
         : {
-            [BoardTaskThreads.BOARD_THREAD_KEY_VARIABLE]:
+            [DeliveryService.BOARD_THREAD_KEY_VARIABLE]:
               options.key ?? "scratch approval passphrase",
           },
     ),
@@ -240,13 +248,25 @@ function service(
       dispatch: store.dispatch,
     } as unknown as ThreadManagementService.ThreadManagementService["Service"]),
     Effect.provideService(ProjectionStore.ProjectionStoreV2, {
+      findThread: (threadId: string) => {
+        const thread = store.threads.get(threadId);
+        return Effect.succeed(thread === undefined ? null : { ...thread, deletedAt: null });
+      },
       getThreadShell: (threadId: string) => {
         const thread = store.threads.get(threadId);
         return Effect.succeed(
           thread === undefined
             ? null
             : {
+                id: threadId,
                 latestRunId: store.latestRuns.get(threadId) ?? null,
+                latestUserAuthoredMessageAt:
+                  store.events.findLast(
+                    ({ event }) =>
+                      event.threadId === threadId &&
+                      event.type === "message.updated" &&
+                      event.payload.createdBy === "user",
+                  )?.event.occurredAt ?? null,
                 modelSelection: thread.modelSelection,
                 archivedAt: thread.archivedAt,
               },
@@ -264,7 +284,13 @@ function service(
       getMessagesById: (threadId: string, ids: ReadonlyArray<string>) =>
         Effect.succeed(
           new Map(
-            ids.filter((id) => store.messages.get(threadId)?.has(id)).map((id) => [id, { id }]),
+            store.events.flatMap(({ event }) =>
+              event.threadId === threadId &&
+              event.type === "message.updated" &&
+              ids.includes(event.payload.id)
+                ? [[event.payload.id, { id: event.payload.id, createdAt: event.occurredAt }]]
+                : [],
+            ),
           ),
         ),
     } as unknown as ProjectionStore.ProjectionStoreV2["Service"]),
@@ -334,6 +360,44 @@ const puts = (engine: ScratchEngine) =>
   engine.requests.filter((request) => request.method === "PUT");
 const linkWrites = (engine: ScratchEngine) =>
   engine.events.filter((event) => event.kind === "task.board-thread-set");
+
+it.effect("keeps a relink to the old board lead with a newer user turn", () => {
+  const engine = board();
+  engine.addTask({ id: "task-7" });
+  const store = threadStore();
+  const failedRun = RunId.make("failed-board-lead");
+  const successor = limitedLeadHandoffThreadId(failedRun);
+  return Effect.gen(function* () {
+    const threads = yield* service(store);
+    yield* threads.reconcile();
+    const [create] = creates(store);
+    if (create?.type !== "thread.create") throw new Error("Expected the board lead to open");
+    store.latestRuns.set(THREAD, failedRun);
+    yield* store.dispatch({
+      ...create,
+      commandId: CommandId.make("create-successor"),
+      threadId: successor,
+    });
+    store.say(successor, `limited-lead:${THREAD}:${failedRun}:continue`, "Continue", "agent");
+    engine.writeLink("task-7", {
+      environmentId: ENVIRONMENT,
+      threadId: successor,
+      setBy: ENVIRONMENT,
+    });
+    engine.writeLink("task-7", {
+      environmentId: ENVIRONMENT,
+      threadId: THREAD,
+      setBy: ENVIRONMENT,
+    });
+    // A queued turn can leave the usage-limited run as the latest run in the shell.
+    store.say(THREAD, "m-newer", "Continue here");
+    const before = puts(engine).length;
+    yield* threads.reconcile();
+    assert.equal(engine.linkOf("task-7")?.threadId, THREAD);
+    assert.lengthOf(puts(engine), before);
+    assert.isNull(store.threads.get(THREAD)!.archivedAt);
+  }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-swap-relink-")));
+});
 
 it.effect.each(["picked", "legacy"] as const)(
   "binds and links a started task on the %s lead model",
@@ -422,7 +486,12 @@ it.effect(
         expect: previous,
       });
       assert.equal(moved?.status, 200);
+      engine.advance(120_001);
       yield* threads.reconcile();
+      assert.equal(engine.leaseOf("task-7")?.origin, `thread:${ENVIRONMENT}/${successor}`);
+      assert.isTrue(
+        store.messages.get(successor)?.has(`limited-lead:${THREAD}:${failedRun}:continue`),
+      );
       assert.deepInclude(store.commands.at(-1), {
         type: "thread.archive",
         threadId: THREAD,
@@ -471,7 +540,7 @@ it.effect("retries a dropped board lead link move during reconciliation", () => 
       threadId: successor,
     });
     const path = "/api/tasks/task-7/board-thread";
-    const previous = { environmentId: ENVIRONMENT, threadId: THREAD };
+    const previous = engine.linkOf("task-7");
     const body = {
       environmentId: ENVIRONMENT,
       threadId: successor,
@@ -487,10 +556,16 @@ it.effect("retries a dropped board lead link move during reconciliation", () => 
     assert.equal(engine.linkOf("task-7")?.threadId, THREAD);
     assert.isNull(store.threads.get(THREAD)!.archivedAt);
 
+    const holder = engine.leaseOf("task-7")?.holder;
     yield* threads.reconcile();
 
     assert.deepEqual(puts(engine).at(-1), { method: "PUT", path, body });
     assert.equal(engine.linkOf("task-7")?.threadId, successor);
+    assert.isDefined(holder);
+    assert.equal(engine.leaseOf("task-7")?.holder, holder);
+    assert.isTrue(
+      store.messages.get(successor)?.has(`limited-lead:${THREAD}:${failedRun}:continue`),
+    );
     assert.deepInclude(store.commands.at(-1), {
       type: "thread.archive",
       threadId: THREAD,
@@ -499,6 +574,37 @@ it.effect("retries a dropped board lead link move during reconciliation", () => 
     assert.isNotNull(store.threads.get(THREAD)!.archivedAt);
     assert.isNull(store.threads.get(successor)!.archivedAt);
   }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-swap-retry-")));
+});
+
+it.effect("starts the successor once after a restart between its create and first turn", () => {
+  const engine = board();
+  engine.addTask({ id: "task-7" });
+  const store = threadStore();
+  const failedRun = RunId.make("failed-board-lead");
+  const successor = limitedLeadHandoffThreadId(failedRun);
+  const messageId = `limited-lead:${THREAD}:${failedRun}:continue`;
+  return Effect.gen(function* () {
+    yield* (yield* service(store)).reconcile();
+    const [create] = creates(store);
+    if (create?.type !== "thread.create") throw new Error("Expected the board lead to open");
+    store.latestRuns.set(THREAD, failedRun);
+    yield* store.dispatch({
+      ...create,
+      commandId: CommandId.make("create-successor"),
+      threadId: successor,
+    });
+    assert.isFalse(store.messages.has(successor));
+    const restarted = yield* service(store);
+    yield* restarted.reconcile();
+    assert.equal(engine.linkOf("task-7")?.threadId, successor);
+    assert.isTrue(store.messages.get(successor)?.has(messageId));
+    yield* restarted.reconcile();
+    const turns = store.commands.filter(
+      (command) => command.type === "message.dispatch" && command.threadId === successor,
+    );
+    assert.lengthOf(turns, 1);
+    assert.deepInclude(turns[0], { commandId: messageId, messageId });
+  }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-swap-restart-")));
 });
 
 it.effect("finishes the link after a restart between the create and the engine write", () => {
@@ -972,6 +1078,22 @@ it.effect("tells the lead once per QA entry when its hand-off is awaited", () =>
     assert.match(String(first?.text), /delivery_seat_handoff/);
     assert.notEqual(first?.messageId, rework?.messageId);
     assert.notEqual(first?.commandId, rework?.commandId);
+    task.seatModels = { lead: { harness: "codex", model: "gpt-6-sol", source: "picked" } };
+    task.hold = { stage: "qa", deadline: "2026-11-22T11:30:00.000Z", handoff: null };
+    yield* threads.reconcile();
+    assert.lengthOf(steerSends(store), 3);
+    assert.deepEqual(steerSends(store)[2]?.modelSelection, {
+      instanceId: ProviderInstanceId.make("codex"),
+      model: "gpt-6-sol",
+    });
+    task.hold = { stage: "qa", deadline: "2026-11-22T12:00:00.000Z", handoff: null };
+    engine.dropNext(/^\/api\/tasks\/task-7$/);
+    yield* threads.reconcile();
+    assert.lengthOf(steerSends(store), 4);
+    assert.include(steerSends(store)[3]?.text, task.hold.deadline);
+    assert.isUndefined(steerSends(store)[3]?.modelSelection);
+    yield* threads.reconcile();
+    assert.lengthOf(steerSends(store), 4);
   }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-handoff-notice-")));
 });
 
