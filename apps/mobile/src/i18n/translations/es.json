@@ -5630,5 +5630,15 @@
   "afeb354df4c94446": "Ábrela en el tablero desde la app web o de escritorio",
   "a65acdb87eac322b": "{count, plural, one {{count} conversación archivada iniciada por un tablero se conserva, no se elimina.} other {{count} conversaciones archivadas iniciadas por un tablero se conservan, no se eliminan.}}",
   "99d51127f573296b": "Otra cuenta",
-  "8ec2c57414669b79": "Conecta un segundo espacio de trabajo o usuario de {tracker}."
+  "8ec2c57414669b79": "Conecta un segundo espacio de trabajo o usuario de {tracker}.",
+  "d781e5be7bfe4865": "Tarea n.º {number} registrada en {board}",
+  "4d34bc6da64e12ad": "Registro rechazado",
+  "1ab001a1a9f0bec3": "Registro cancelado",
+  "b693c9af54182348": "No se pudo registrar la tarea",
+  "e96b2911a5d12031": "Registrar",
+  "63505f517af0f8f2": "Rechazar",
+  "6f6fe733fa539b4a": "¿Registrar una tarea en el tablero?",
+  "f1f55521bea76543": "Tablero",
+  "3ac8ed47fe50bd34": "Título",
+  "01a264c40736f6b5": "Contexto citado"
 }

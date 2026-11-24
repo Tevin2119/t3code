@@ -5638,5 +5638,15 @@
   "afeb354df4c94446": "Open it on the board in the web or desktop app",
   "a65acdb87eac322b": "{count, plural, one {{count} archived conversation started by a board is kept, not deleted.} other {{count} archived conversations started by a board are kept, not deleted.}}",
   "99d51127f573296b": "Another account",
-  "8ec2c57414669b79": "Connect a second {tracker} workspace or user."
+  "8ec2c57414669b79": "Connect a second {tracker} workspace or user.",
+  "d781e5be7bfe4865": "Filed #{number} on {board}",
+  "4d34bc6da64e12ad": "Filing declined",
+  "1ab001a1a9f0bec3": "Filing cancelled",
+  "b693c9af54182348": "Filing failed",
+  "e96b2911a5d12031": "File",
+  "63505f517af0f8f2": "Decline",
+  "6f6fe733fa539b4a": "File a board task?",
+  "f1f55521bea76543": "Board",
+  "3ac8ed47fe50bd34": "Title",
+  "01a264c40736f6b5": "Quoted context"
 }

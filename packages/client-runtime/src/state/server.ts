@@ -2016,6 +2016,15 @@ export function createServerEnvironmentAtoms<R, E>(
           JSON.stringify([environmentId, input.threadId, input.turnItemId]),
       },
     }),
+    answerBoardTask: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:delivery:answer-board-task",
+      tag: WS_METHODS.deliveryAnswerBoardTask,
+      concurrency: {
+        mode: "singleFlight",
+        key: ({ environmentId, input }) =>
+          JSON.stringify([environmentId, input.threadId, input.turnItemId]),
+      },
+    }),
     answerFeedbackRequest: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:agent-feedback:answer-request",
       tag: WS_METHODS.agentFeedbackAnswerRequest,

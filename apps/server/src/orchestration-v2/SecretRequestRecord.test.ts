@@ -14,6 +14,7 @@ import {
   RunId,
   ThreadId,
   TurnItemId,
+  type BoardTaskResolution,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -63,6 +64,127 @@ const cardId = TurnItemId.make("turn-item:secret-request:secret-request-record")
 const staleCardId = TurnItemId.make("turn-item:secret-request:secret-request-record:stale");
 const now = DateTime.makeUnsafe("2026-11-11T20:00:00.000Z");
 
+const seedRunningAttempt = Effect.fn("RecordTest.seedRunningAttempt")(function* () {
+  const orchestrator = yield* Orchestrator.OrchestratorV2;
+  const projections = yield* ProjectionStore.ProjectionStoreV2;
+  yield* orchestrator.dispatch({
+    type: "thread.create",
+    commandId: CommandId.make("create-secret-request-record"),
+    threadId,
+    projectId,
+    title: "Secret request record",
+    modelSelection,
+    runtimeMode: "full-access",
+    interactionMode: "default",
+    branch: null,
+    worktreePath: null,
+    createdBy: "user",
+    creationSource: "web",
+  });
+  yield* projections.apply({
+    id: EventId.make("secret-request-record:session"),
+    type: "provider-session.attached",
+    threadId,
+    occurredAt: now,
+    payload: {
+      id: sessionId,
+      driver: adapter.driver,
+      providerInstanceId: instanceId,
+      status: "ready",
+      cwd: "/repo",
+      model: modelSelection.model,
+      capabilities: CodexProviderCapabilitiesV2,
+      createdAt: now,
+      updatedAt: now,
+      lastError: null,
+    },
+  });
+  yield* projections.apply({
+    id: EventId.make("secret-request-record:provider-thread"),
+    type: "provider-thread.updated",
+    threadId,
+    occurredAt: now,
+    payload: {
+      id: providerThreadId,
+      driver: adapter.driver,
+      providerInstanceId: instanceId,
+      providerSessionId: sessionId,
+      appThreadId: threadId,
+      ownerNodeId: null,
+      nativeThreadRef: { driver: adapter.driver, nativeId: "native-thread", strength: "strong" },
+      nativeConversationHeadRef: null,
+      status: "idle",
+      firstRunOrdinal: 1,
+      lastRunOrdinal: 1,
+      handoffIds: [],
+      forkedFrom: null,
+      createdAt: now,
+      updatedAt: now,
+    },
+  });
+  yield* projections.apply({
+    id: EventId.make("secret-request-record:run"),
+    type: "run.created",
+    threadId,
+    occurredAt: now,
+    payload: {
+      id: runId,
+      threadId,
+      ordinal: 1,
+      providerInstanceId: instanceId,
+      modelSelection,
+      providerThreadId,
+      userMessageId: messageId,
+      rootNodeId: originalRoot,
+      activeAttemptId: firstAttemptId,
+      status: "running",
+      requestedAt: now,
+      startedAt: now,
+      completedAt: null,
+      checkpointId: null,
+      contextHandoffId: null,
+    },
+  });
+  yield* projections.apply({
+    id: EventId.make("secret-request-record:attempt-1"),
+    type: "run-attempt.created",
+    threadId,
+    occurredAt: now,
+    payload: {
+      id: firstAttemptId,
+      runId,
+      attemptOrdinal: 1,
+      rootNodeId: originalRoot,
+      providerInstanceId: instanceId,
+      providerThreadId,
+      providerTurnId: null,
+      reason: "initial",
+      status: "running",
+      startedAt: now,
+      completedAt: null,
+    },
+  });
+
+  // The first attempt reached the provider; the card is asked on that turn.
+  yield* projections.apply({
+    id: EventId.make("secret-request-record:turn"),
+    type: "provider-turn.updated",
+    threadId,
+    occurredAt: now,
+    payload: {
+      id: originalTurnId,
+      providerThreadId,
+      nodeId: originalRoot,
+      runAttemptId: firstAttemptId,
+      nativeTurnRef: null,
+      ordinal: 1,
+      status: "running",
+      startedAt: now,
+      completedAt: null,
+    },
+  });
+});
+
 /**
  * A pending secret card must stay closable after a steering restart replaces the
  * run's root node: the call that opened it only ever carries the card's own node,
@@ -72,122 +194,7 @@ it.effect("closes a secret card recorded under an earlier root after a steering 
   Effect.gen(function* () {
     const orchestrator = yield* Orchestrator.OrchestratorV2;
     const projections = yield* ProjectionStore.ProjectionStoreV2;
-    yield* orchestrator.dispatch({
-      type: "thread.create",
-      commandId: CommandId.make("create-secret-request-record"),
-      threadId,
-      projectId,
-      title: "Secret request record",
-      modelSelection,
-      runtimeMode: "full-access",
-      interactionMode: "default",
-      branch: null,
-      worktreePath: null,
-      createdBy: "user",
-      creationSource: "web",
-    });
-    yield* projections.apply({
-      id: EventId.make("secret-request-record:session"),
-      type: "provider-session.attached",
-      threadId,
-      occurredAt: now,
-      payload: {
-        id: sessionId,
-        driver: adapter.driver,
-        providerInstanceId: instanceId,
-        status: "ready",
-        cwd: "/repo",
-        model: modelSelection.model,
-        capabilities: CodexProviderCapabilitiesV2,
-        createdAt: now,
-        updatedAt: now,
-        lastError: null,
-      },
-    });
-    yield* projections.apply({
-      id: EventId.make("secret-request-record:provider-thread"),
-      type: "provider-thread.updated",
-      threadId,
-      occurredAt: now,
-      payload: {
-        id: providerThreadId,
-        driver: adapter.driver,
-        providerInstanceId: instanceId,
-        providerSessionId: sessionId,
-        appThreadId: threadId,
-        ownerNodeId: null,
-        nativeThreadRef: { driver: adapter.driver, nativeId: "native-thread", strength: "strong" },
-        nativeConversationHeadRef: null,
-        status: "idle",
-        firstRunOrdinal: 1,
-        lastRunOrdinal: 1,
-        handoffIds: [],
-        forkedFrom: null,
-        createdAt: now,
-        updatedAt: now,
-      },
-    });
-    yield* projections.apply({
-      id: EventId.make("secret-request-record:run"),
-      type: "run.created",
-      threadId,
-      occurredAt: now,
-      payload: {
-        id: runId,
-        threadId,
-        ordinal: 1,
-        providerInstanceId: instanceId,
-        modelSelection,
-        providerThreadId,
-        userMessageId: messageId,
-        rootNodeId: originalRoot,
-        activeAttemptId: firstAttemptId,
-        status: "running",
-        requestedAt: now,
-        startedAt: now,
-        completedAt: null,
-        checkpointId: null,
-        contextHandoffId: null,
-      },
-    });
-    yield* projections.apply({
-      id: EventId.make("secret-request-record:attempt-1"),
-      type: "run-attempt.created",
-      threadId,
-      occurredAt: now,
-      payload: {
-        id: firstAttemptId,
-        runId,
-        attemptOrdinal: 1,
-        rootNodeId: originalRoot,
-        providerInstanceId: instanceId,
-        providerThreadId,
-        providerTurnId: null,
-        reason: "initial",
-        status: "running",
-        startedAt: now,
-        completedAt: null,
-      },
-    });
-
-    // The first attempt reached the provider; the card is asked on that turn.
-    yield* projections.apply({
-      id: EventId.make("secret-request-record:turn"),
-      type: "provider-turn.updated",
-      threadId,
-      occurredAt: now,
-      payload: {
-        id: originalTurnId,
-        providerThreadId,
-        nodeId: originalRoot,
-        runAttemptId: firstAttemptId,
-        nativeTurnRef: null,
-        ordinal: 1,
-        status: "running",
-        startedAt: now,
-        completedAt: null,
-      },
-    });
+    yield* seedRunningAttempt();
 
     const record = (commandId: string, nodeId: NodeId, turnItemId: TurnItemId) =>
       orchestrator.dispatch({
@@ -289,4 +296,78 @@ it.effect("closes a secret card recorded under an earlier root after a steering 
     );
     assert.match(String((stale as { cause?: unknown }).cause ?? ""), /is not the root of run/);
   }).pipe(Effect.provide(layerTest)),
+);
+
+it.effect(
+  "requires the current root, ignores repeated pending, and projects board filing outcomes",
+  () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const projections = yield* ProjectionStore.ProjectionStoreV2;
+      yield* seedRunningAttempt();
+      const draft = { board: "work", title: "New task", body: "The brief" };
+      const filedId = TurnItemId.make("turn-item:board-task-request:filed");
+      const failedId = TurnItemId.make("turn-item:board-task-request:failed");
+      const record = (
+        command: string,
+        turnItemId: TurnItemId,
+        resolution: BoardTaskResolution,
+        nodeId = originalRoot,
+      ) =>
+        orchestrator.dispatch({
+          type: "board_task_request.record",
+          commandId: CommandId.make(command),
+          threadId,
+          runId,
+          nodeId,
+          turnItemId,
+          draft,
+          resolution,
+        });
+      const refused = yield* Effect.flip(
+        record("filing-non-root", filedId, { status: "pending" }, steeredRoot),
+      );
+      assert.match(String((refused as { cause?: unknown }).cause ?? ""), /is not the root of run/);
+
+      yield* record("filing-open", filedId, { status: "pending" });
+      const repeated = yield* record("filing-repeat", filedId, { status: "pending" });
+      assert.lengthOf(repeated.storedEvents, 0);
+      const filed = {
+        status: "filed",
+        filing: {
+          created: true,
+          task: {
+            id: "task-17",
+            number: 17,
+            board: "work",
+            team: "development",
+            state: "draft",
+            origin: `thread:environment/${threadId}`,
+          },
+        },
+      } as const;
+      const failed = { status: "failed", message: "Engine refused the filing" } as const;
+      yield* record("filing-filed", filedId, filed);
+      yield* record("filing-second-open", failedId, { status: "pending" });
+      yield* record("filing-failed", failedId, failed);
+
+      const { turnItems } = yield* projections.getThreadRecords(threadId, ["turnItems"], {
+        turnItemTypes: ["board_task_request"],
+        messageRoles: [],
+      });
+      assert.deepInclude(
+        turnItems.find((item) => item.id === filedId),
+        {
+          status: "completed",
+          resolution: filed,
+        },
+      );
+      assert.deepInclude(
+        turnItems.find((item) => item.id === failedId),
+        {
+          status: "failed",
+          resolution: failed,
+        },
+      );
+    }).pipe(Effect.provide(layerTest)),
 );

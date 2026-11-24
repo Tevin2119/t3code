@@ -393,6 +393,89 @@ const aliasDiscoveryEngine = () => {
 };
 
 describe("DeliveryService", () => {
+  it.effect("pulls only 24 cards from the named set and marks the caller's origin", () => {
+    const fake = discoveryEngine();
+    const boardThread = {
+      environmentId: "remote",
+      threadId: "thread:board-lead/path",
+      setBy: "remote",
+      setAt: "2026-11-24T00:00:00Z",
+    };
+    const cards = Array.from({ length: 25 }, (_, index) => ({
+      id: `task-${index}`,
+      number: index,
+      title: `Draft ${index}`,
+      lane: "inbox",
+      state: "draft",
+      boardThread: index === 0 ? boardThread : null,
+      origin:
+        index === 0
+          ? `thread:${ordinaryCaller.environmentId}/${ordinaryCaller.threadId}`
+          : `thread:other/${ordinaryCaller.threadId}`,
+      body: "private-body-fixture",
+    }));
+    fake.replies = {
+      ...fake.replies,
+      "/api/lanes?set=work": {
+        set: "work",
+        sets: [{ id: "private-set-fixture" }],
+        teams: ["private-team-fixture"],
+        lanes: [{ lane: "inbox", cards }],
+      },
+    };
+    return Effect.gen(function* () {
+      const service = yield* DeliveryService.DeliveryService;
+      const input = { folder: REPO, board: "work" };
+      expect((yield* service.discover(input, ordinaryCaller)).cards).toBeNull();
+      const skipped = yield* service.discover({ folder: REPO, cards: false }, ordinaryCaller);
+      expect(skipped.cards).toBeNull();
+      expect(skipped.diagnostics).not.toContain("invalid-request");
+      const result = yield* service.discover({ ...input, cards: true }, ordinaryCaller);
+      expect(result.cards).toHaveLength(24);
+      expect(result.truncated).toBe(true);
+      expect(result.cards?.[0]).toEqual({
+        id: "task-0",
+        number: 0,
+        title: "Draft 0",
+        lane: "inbox",
+        state: "draft",
+        boardThread,
+        fromThisThread: true,
+      });
+      expect(result.cards?.slice(1).every((card) => !card.fromThisThread)).toBe(true);
+      expect(JSON.stringify(result)).not.toMatch(/private-(body|set|team)-fixture/);
+      expect(fake.requests.filter(({ path }) => path === "/api/lanes")).toEqual([
+        { method: "GET", path: "/api/lanes", search: "?set=work", body: undefined },
+      ]);
+    }).pipe(
+      Effect.provide(layer(fake, { prefix: "discovery-cards-", environment: discoveryProfile })),
+    );
+  });
+
+  it.effect("rejects missing or reserved board card reads and generic filing writes", () => {
+    const fake = discoveryEngine();
+    return Effect.gen(function* () {
+      const service = yield* DeliveryService.DeliveryService;
+      for (const board of [undefined, "unsorted", "all", "pilot", "qualification"]) {
+        const result = yield* service.discover(
+          { folder: REPO, cards: true, ...(board === undefined ? {} : { board }) },
+          ordinaryCaller,
+        );
+        expect(result.diagnostics).toEqual(["invalid-request"]);
+      }
+      for (const board of ["work", "w%6Frk"]) {
+        const refused = yield* Effect.flip(
+          service.act({
+            path: `/api/boards/${board}/tasks`,
+            body: { title: "Bypass confirmation" },
+          }),
+        );
+        expect(refused.reason).toBe("refused");
+      }
+      expect(fake.requests).toEqual([]);
+    }).pipe(Effect.provide(layer(fake, { prefix: "discovery-cards-refused-" })));
+  });
+
   it.effect("keeps endpoint provenance when repository 409 competes with scoped 404", () => {
     const fake = discoveryEngine();
     fake.replies = { ...fake.replies, "/api/delivery?board=work": { error: "Missing board" } };

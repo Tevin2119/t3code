@@ -165,13 +165,21 @@ const cancelledItem = (
 ): OrchestrationV2ThreadProjection["turnItems"][number] =>
   item.type === "secret_request" && item.secretStatus === "pending"
     ? { ...item, status: "cancelled", secretStatus: "cancelled", completedAt: now, updatedAt: now }
-    : {
-        ...item,
-        ...("streaming" in item ? { streaming: false } : {}),
-        status: "cancelled",
-        completedAt: now,
-        updatedAt: now,
-      };
+    : item.type === "board_task_request" && item.resolution.status === "pending"
+      ? {
+          ...item,
+          status: "cancelled",
+          resolution: { status: "cancelled" },
+          completedAt: now,
+          updatedAt: now,
+        }
+      : {
+          ...item,
+          ...("streaming" in item ? { streaming: false } : {}),
+          status: "cancelled",
+          completedAt: now,
+          updatedAt: now,
+        };
 
 export const make = Effect.gen(function* () {
   const settings = yield* ServerSettings.ServerSettingsService;

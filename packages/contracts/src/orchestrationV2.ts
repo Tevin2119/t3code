@@ -47,6 +47,7 @@ import {
   TrimmedNonEmptyString,
   TurnItemId,
 } from "./baseSchemas.ts";
+import { BoardTaskDraft, BoardTaskResolution } from "./boardThreadTasks.ts";
 import { AuthMcpClientAccess } from "./auth.ts";
 import { ChatAttachment } from "./chatAttachment.ts";
 import { ThreadGuestShare } from "./guestShare.ts";
@@ -1915,6 +1916,12 @@ const OrchestrationV2FeedbackRequestFields = {
   feedbackStatus: AgentFeedbackRequestStatus,
 } as const;
 
+const OrchestrationV2BoardTaskRequestFields = {
+  type: Schema.Literal("board_task_request"),
+  draft: BoardTaskDraft,
+  resolution: BoardTaskResolution,
+} as const;
+
 export const OrchestrationV2TurnItem = Schema.Union([
   Schema.Struct({
     ...OrchestrationV2TurnItemBaseFields,
@@ -2122,6 +2129,10 @@ export const OrchestrationV2TurnItem = Schema.Union([
   Schema.Struct({
     ...OrchestrationV2TurnItemBaseFields,
     ...OrchestrationV2FeedbackRequestFields,
+  }),
+  Schema.Struct({
+    ...OrchestrationV2TurnItemBaseFields,
+    ...OrchestrationV2BoardTaskRequestFields,
   }),
   Schema.Struct({
     ...OrchestrationV2TurnItemBaseFields,
@@ -3023,6 +3034,10 @@ export const OrchestrationV2TurnItemJson = Schema.Union([
   Schema.Struct({
     ...OrchestrationV2TurnItemJsonBaseFields,
     ...OrchestrationV2FeedbackRequestFields,
+  }),
+  Schema.Struct({
+    ...OrchestrationV2TurnItemJsonBaseFields,
+    ...OrchestrationV2BoardTaskRequestFields,
   }),
   Schema.Struct({
     ...OrchestrationV2TurnItemJsonBaseFields,
@@ -4071,6 +4086,16 @@ const OrchestrationV2InternalCommand = Schema.Union([
     preview: AgentFeedbackPreview,
     conversationTrace: Schema.optionalKey(AgentFeedbackTrace),
     feedbackStatus: AgentFeedbackRequestStatus,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("board_task_request.record"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    runId: RunId,
+    nodeId: NodeId,
+    turnItemId: TurnItemId,
+    draft: BoardTaskDraft,
+    resolution: BoardTaskResolution,
   }),
   /**
    * Records or updates a link an agent asked the user to make. Internal so no

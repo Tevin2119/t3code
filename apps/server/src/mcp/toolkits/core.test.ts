@@ -1,3 +1,4 @@
+import * as BoardThreadTasks from "../../delivery/BoardThreadTasks.ts";
 import * as AssetSigner from "../../assets/AssetSigner.ts";
 import * as DocumentText from "../../provider/DocumentText.ts";
 import * as DeliveryService from "../../delivery/DeliveryService.ts";
@@ -71,6 +72,7 @@ import * as PeerLinkRequests from "../../peer/PeerLinkRequests.ts";
 import * as PeerLinks from "../../peer/PeerLinks.ts";
 
 const layerOrchestratorToolkit = McpHttpServer.layerOrchestratorToolkit.pipe(
+  Layer.provide(Layer.mock(BoardThreadTasks.BoardThreadTasks)({})),
   Layer.provide(DeliveryService.layerTest),
   Layer.provide(Layer.mock(ThreadLaunchService.ThreadLaunchService)({})),
   Layer.provide(Layer.mock(GitVcsDriver.GitVcsDriver)({})),

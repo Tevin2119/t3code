@@ -13,6 +13,7 @@ type WsRpcMethod = RpcGroup.Rpcs<typeof WsRpcGroup>["_tag"];
 // Trace queries and dashboards depend on these labels, including deviations from method prefixes.
 const RPC_AGGREGATES = {
   [WS_METHODS.deliveryRead]: "delivery",
+  [WS_METHODS.deliveryAnswerBoardTask]: "delivery",
   [WS_METHODS.deliveryAct]: "delivery",
   [WS_METHODS.deliveryBindThread]: "delivery",
   [WS_METHODS.deliveryThreadBinding]: "delivery",

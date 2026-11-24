@@ -745,6 +745,7 @@ function commandThreadId(command: OrchestrationV2ServerCommand): ThreadId {
     case "secret_request.record":
     case "link_request.record":
     case "feedback_request.record":
+    case "board_task_request.record":
       return command.threadId;
     case "thread.fork":
     case "thread.merge_back":
@@ -11373,6 +11374,94 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     },
   );
 
+  const dispatchBoardTaskRequestRecord = Effect.fn(
+    "orchestrationV2.dispatch.boardTaskRequestRecord",
+  )(function* (
+    command: Extract<
+      OrchestrationV2InternalCommand,
+      { readonly type: "board_task_request.record" }
+    >,
+    events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
+  ) {
+    const projection = yield* projectionStore
+      .getThreadRecords(
+        command.threadId,
+        ["runs", "nodes", "turnItems", "attempts", "providerTurns"],
+        { turnItemTypes: ["board_task_request"], messageRoles: [] },
+      )
+      .pipe(
+        Effect.mapError(
+          (cause) => new OrchestratorProjectionError({ threadId: command.threadId, cause }),
+        ),
+      );
+    const fail = (cause: string) =>
+      new OrchestratorDispatchError({
+        commandId: command.commandId,
+        commandType: command.type,
+        cause,
+      });
+    const run = projection.runs.find((candidate) => candidate.id === command.runId);
+    const existing = projection.turnItems.find((item) => item.id === command.turnItemId);
+    if (
+      existing !== undefined &&
+      (existing.type !== "board_task_request" || existing.runId !== command.runId)
+    ) {
+      return yield* fail(
+        `Turn item ${command.turnItemId} is not a board task request of run ${command.runId}.`,
+      );
+    }
+    const pending = command.resolution.status === "pending";
+    if (existing !== undefined && (existing.resolution.status !== "pending" || pending)) return;
+    if (existing === undefined && !pending) return;
+    if (run === undefined) return yield* fail(`Run ${command.runId} does not exist.`);
+    // Only a new card must sit on the run's current root. A steering restart can replace the
+    // root before the user answers, and the answer must still close the card.
+    if (existing === undefined && (run.rootNodeId !== command.nodeId || !isActiveRun(run))) {
+      return yield* fail(`Node ${command.nodeId} is not the root of run ${command.runId}.`);
+    }
+    const nodeId = existing?.nodeId ?? command.nodeId;
+    const now = yield* DateTime.now;
+    yield* emit(
+      events,
+      command,
+    )({
+      type: "turn-item.updated",
+      threadId: command.threadId,
+      runId: command.runId,
+      ...(nodeId === null ? {} : { nodeId }),
+      providerInstanceId: run.providerInstanceId,
+      occurredAt: now,
+      payload: {
+        id: command.turnItemId,
+        threadId: command.threadId,
+        runId: command.runId,
+        nodeId,
+        providerThreadId: existing?.providerThreadId ?? run.providerThreadId,
+        providerTurnId:
+          existing === undefined
+            ? (providerTurnForRun(projection, run)?.id ?? null)
+            : existing.providerTurnId,
+        nativeItemRef: null,
+        parentItemId: null,
+        ordinal: existing?.ordinal ?? (yield* nextTurnItemOrdinal(projection)),
+        status: pending
+          ? "waiting"
+          : command.resolution.status === "filed"
+            ? "completed"
+            : command.resolution.status === "failed"
+              ? "failed"
+              : "cancelled",
+        title: "File a board task",
+        startedAt: existing?.startedAt ?? now,
+        completedAt: pending ? null : now,
+        updatedAt: now,
+        type: "board_task_request",
+        draft: existing?.draft ?? command.draft,
+        resolution: command.resolution,
+      },
+    });
+  });
+
   /**
    * Records or updates the card for a link an agent asked the user to make.
    * The pairing code goes straight to the link and never through orchestration.
@@ -16466,6 +16555,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       case "feedback_request.record":
         yield* dispatchFeedbackRequestRecord(command, events);
         break;
+      case "board_task_request.record":
+        yield* dispatchBoardTaskRequestRecord(command, events);
+        break;
       case "link_request.record":
         yield* dispatchLinkRequestRecord(command, events, effects);
         break;
@@ -16594,6 +16686,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           planned.events.length > 0 ||
           isUnobservedAcknowledgement(command) ||
           command.type === "thread.background-work.settle" ||
+          // Repeated pending records and late answers leave the filing card as it stands.
+          command.type === "board_task_request.record" ||
           // A stale visit changes no read state.
           command.type === "thread.visit" ||
           // A read can answer a watch again before a push's reopen lands; nothing is left to clear.

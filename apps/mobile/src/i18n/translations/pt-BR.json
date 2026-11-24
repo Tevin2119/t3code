@@ -5630,5 +5630,15 @@
   "afeb354df4c94446": "Abra-a no quadro pelo app web ou desktop",
   "a65acdb87eac322b": "{count, plural, one {{count} conversa arquivada iniciada por um quadro é mantida, não excluída.} other {{count} conversas arquivadas iniciadas por um quadro são mantidas, não excluídas.}}",
   "99d51127f573296b": "Outra conta",
-  "8ec2c57414669b79": "Conecte um segundo espaço de trabalho ou usuário do {tracker}."
+  "8ec2c57414669b79": "Conecte um segundo espaço de trabalho ou usuário do {tracker}.",
+  "d781e5be7bfe4865": "Tarefa nº {number} registrada em {board}",
+  "4d34bc6da64e12ad": "Registro recusado",
+  "1ab001a1a9f0bec3": "Registro cancelado",
+  "b693c9af54182348": "Falha ao registrar a tarefa",
+  "e96b2911a5d12031": "Registrar",
+  "63505f517af0f8f2": "Recusar",
+  "6f6fe733fa539b4a": "Registrar uma tarefa no quadro?",
+  "f1f55521bea76543": "Quadro",
+  "3ac8ed47fe50bd34": "Título",
+  "01a264c40736f6b5": "Contexto citado"
 }

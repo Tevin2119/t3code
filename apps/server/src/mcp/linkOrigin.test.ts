@@ -1,3 +1,4 @@
+import * as BoardThreadTasks from "../delivery/BoardThreadTasks.ts";
 import * as DeliveryService from "../delivery/DeliveryService.ts";
 import * as DocumentText from "../provider/DocumentText.ts";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
@@ -116,7 +117,10 @@ const layerLaunches = Layer.effect(
 );
 
 const layerTools = Layer.mergeAll(
-  McpHttpServer.layerOrchestratorToolkit.pipe(Layer.provide(DeliveryService.layerTest)),
+  McpHttpServer.layerOrchestratorToolkit.pipe(
+    Layer.provide(Layer.mock(BoardThreadTasks.BoardThreadTasks)({})),
+    Layer.provide(DeliveryService.layerTest),
+  ),
   McpHttpServer.layerThreadToolkit,
   McpHttpServer.layerProjectRegistration,
 ).pipe(

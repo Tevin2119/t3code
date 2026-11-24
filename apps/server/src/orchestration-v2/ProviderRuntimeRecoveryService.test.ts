@@ -420,7 +420,7 @@ it.effect("cancels a stale waiting run when no checkpoint capture can finish it"
 });
 
 it.effect(
-  "recovery closes a secret card but leaves link and feedback cards and an unread steer open",
+  "recovery closes secret and board filing cards but leaves link and feedback cards and an unread steer open",
   () => {
     const threadId = ThreadId.make("thread_secret_recovery");
     const runId = RunId.make("run_secret_recovery");
@@ -457,6 +457,16 @@ it.effect(
           secretStatus: "pending",
           label: "GitHub token",
           reason: "Used as GH_TOKEN.",
+        },
+        {
+          id: "turn-item:board-task-request:recovery",
+          threadId,
+          runId,
+          nodeId: null,
+          type: "board_task_request",
+          status: "waiting",
+          draft: { board: "work", title: "New task", body: "The brief" },
+          resolution: { status: "pending" },
         },
         {
           id: "turn-item:link-request:recovery",
@@ -524,6 +534,9 @@ it.effect(
       const secret = cards.find((card) => card.type === "secret_request");
       assert.equal(secret?.status, "cancelled");
       assert.equal(secret?.type === "secret_request" ? secret.secretStatus : null, "cancelled");
+      const filing = cards.find((card) => card.type === "board_task_request");
+      assert.equal(filing?.status, "cancelled");
+      assert.deepEqual(filing?.resolution, { status: "cancelled" });
       // Nothing in memory waits on a link or feedback card; the user can still answer it.
       // Claude never reported reading the steer, so the orchestrator queues it.
       assert.deepEqual(
