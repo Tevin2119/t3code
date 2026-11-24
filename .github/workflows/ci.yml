@@ -187,7 +187,9 @@ jobs:
           (
             set +e
             vpr typecheck
-            echo "$?" > "$RUNNER_TEMP/typecheck-status"
+            status="$?"
+            if [ "$status" != 0 ]; then vp run --last-details; fi
+            echo "$status" > "$RUNNER_TEMP/typecheck-status"
           ) > "$RUNNER_TEMP/typecheck.log" 2>&1 < /dev/null &
 
       - name: Finish installing browser secret helper build libraries
