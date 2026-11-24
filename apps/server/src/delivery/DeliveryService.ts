@@ -129,12 +129,20 @@ const decodeDeliveryRequest = Schema.decodeUnknownEffect(
 
 /** The engine writes for a board task's conversation; only the server makes them. */
 const BOARD_THREAD_LINK = /^\/api\/tasks\/[\w-]+\/board-thread$/;
+/** The engine's approval key for server-owned board writes. */
+export const BOARD_THREAD_KEY_VARIABLE = "T3_DELIVERY_BOARD_THREAD_KEY";
+export const BoardThreadLink = Schema.Struct({
+  environmentId: Schema.String,
+  threadId: Schema.String,
+  setBy: Schema.String,
+  setAt: Schema.String,
+});
 const BOARD_THREAD_CLAIM = /^\/api\/orchestration\/tasks\/[\w-]+\/(claim|ack|release)$/;
 // The conversation's mirror and the steer handshake (spec 6a, slice 5).
 const BOARD_THREAD_CONVERSATION =
   /^\/api\/tasks\/[\w-]+\/(activity|steers\/\d+\/(delivered|failed))$/;
 const BOARD_SEAT_POST =
-  /^\/api\/(?:tasks\/[\w-]+\/qa-receipts|runs\/[\w-]+\/(?:seat-attestations|handoffs(?:\/qa\/(?:delivered|fallback))?))$/;
+  /^\/api\/(?:tasks\/[\w-]+\/(?:qa-receipts|lead-pick)|runs\/[\w-]+\/(?:seat-attestations|handoffs(?:\/qa\/(?:delivered|fallback))?))$/;
 const BOARD_THREAD_POST = new RegExp(
   `${BOARD_THREAD_CLAIM.source}|${BOARD_THREAD_CONVERSATION.source}|${BOARD_SEAT_POST.source}`,
 );
@@ -270,6 +278,7 @@ const make = Effect.fn("DeliveryService.make")(function* (
   const rememberedLineups = new Map<string, DeliveryRememberedLineup>();
   const writeLock = yield* Semaphore.make(1);
   const boardSeatWrites = yield* Semaphore.make(1);
+  const boardLinkWrites = yield* Semaphore.make(1);
 
   // Only a file that is not there means that no thread is bound. A file that
   // is there and cannot be read or understood holds bindings this service
@@ -1612,6 +1621,7 @@ const make = Effect.fn("DeliveryService.make")(function* (
           detail: "Invalid board thread mutation path.",
         });
       const write = request(input.method, input.path, input.body);
+      if (input.method !== "POST") return yield* boardLinkWrites.withPermit(write);
       // The engine's approval throttle expects one seat write at a time.
       return yield* BOARD_SEAT_POST.test(input.path) ? boardSeatWrites.withPermit(write) : write;
     }),

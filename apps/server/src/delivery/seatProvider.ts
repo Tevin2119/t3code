@@ -4,6 +4,18 @@ import {
   type ProviderDriverKind,
   type ProviderInstanceId,
 } from "@t3tools/contracts";
+import * as Schema from "effect/Schema";
+
+export const BoardLeadSeat = Schema.Struct({
+  seat: Schema.String,
+  role: Schema.optional(Schema.NullOr(Schema.String)),
+});
+
+export function boardLeadSeat<T extends typeof BoardLeadSeat.Type>(seats: ReadonlyArray<T>) {
+  return (
+    seats.find((seat) => seat.role === "team-lead") ?? seats.find((seat) => seat.seat === "lead")
+  );
+}
 
 export function resolveSeatProvider<T extends { readonly driverKind: ProviderDriverKind }>(
   providers: ReadonlyArray<T>,
