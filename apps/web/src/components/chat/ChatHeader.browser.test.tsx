@@ -18,7 +18,7 @@ vi.mock(import("../../state/use-orchestration-command"), async (importOriginal) 
     }) as never,
 }));
 vi.mock(import("~/hooks/useThreadActionMenu"), () => ({
-  useThreadActionMenu: () => ({ openMenu, closeMenu: () => {} }),
+  useThreadActionMenu: () => ({ openMenu, closeMenu: () => {}, readMenu: () => null }),
 }));
 
 import type { ReactNode } from "react";

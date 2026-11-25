@@ -120,6 +120,9 @@ import {
   TaskFolder,
   TaskFolderError,
   WorkspaceAddTaskFolderRepositoryInput,
+  WorkspaceApproveLayoutCommandsInput,
+  WorkspaceLayoutCommandsInput,
+  WorkspaceLayoutCommandsResult,
   WorkspaceListFoldersInput,
   WorkspaceListFoldersResult,
   WorkspaceScanFoldersInput,
@@ -450,7 +453,7 @@ import {
   WorkflowRunGetInput,
   WorkflowRunResumeInput,
   WorkflowCounts,
-  WorkflowRunsSnapshot,
+  WorkflowRunsUpdate,
   WorkflowRunsSubscribeInput,
 } from "./workflow.ts";
 import {
@@ -521,6 +524,8 @@ export const WS_METHODS = {
   workspaceScanFolders: "workspace.scanFolders",
   workspaceTaskFolder: "workspace.taskFolder",
   workspaceAddTaskFolderRepository: "workspace.addTaskFolderRepository",
+  workspaceLayoutCommands: "workspace.layoutCommands",
+  workspaceApproveLayoutCommands: "workspace.approveLayoutCommands",
   filesystemGetMetadata: "filesystem.getMetadata",
   agentSessionsScan: "agentSessions.scan",
   agentSessionsImport: "agentSessions.import",
@@ -1847,6 +1852,18 @@ const WsWorkspaceAddTaskFolderRepositoryRpc = Rpc.make(
   },
 );
 
+const WsWorkspaceLayoutCommandsRpc = Rpc.make(WS_METHODS.workspaceLayoutCommands, {
+  payload: WorkspaceLayoutCommandsInput,
+  success: WorkspaceLayoutCommandsResult,
+  error: Schema.Union([TaskFolderError, EnvironmentAuthorizationError]),
+});
+
+const WsWorkspaceApproveLayoutCommandsRpc = Rpc.make(WS_METHODS.workspaceApproveLayoutCommands, {
+  payload: WorkspaceApproveLayoutCommandsInput,
+  success: WorkspaceLayoutCommandsResult,
+  error: Schema.Union([TaskFolderError, EnvironmentAuthorizationError]),
+});
+
 const WsAgentSessionsScanRpc = Rpc.make(WS_METHODS.agentSessionsScan, {
   payload: AgentSessionScanInput,
   success: AgentSessionScanResult,
@@ -2434,7 +2451,7 @@ const WsSubscribeServerLifecycleRpc = Rpc.make(WS_METHODS.subscribeServerLifecyc
 
 const WsWorkflowsSubscribeRpc = Rpc.make(WS_METHODS.workflowsSubscribe, {
   payload: WorkflowRunsSubscribeInput,
-  success: WorkflowRunsSnapshot,
+  success: WorkflowRunsUpdate,
   error: EnvironmentAuthorizationError,
   stream: true,
 });
@@ -2747,6 +2764,8 @@ export const CoreWsRpcGroup = RpcGroup.make(
   WsWorkspaceScanFoldersRpc,
   WsWorkspaceTaskFolderRpc,
   WsWorkspaceAddTaskFolderRepositoryRpc,
+  WsWorkspaceLayoutCommandsRpc,
+  WsWorkspaceApproveLayoutCommandsRpc,
   WsFilesystemGetMetadataRpc,
   WsAgentSessionsScanRpc,
   WsAgentSessionsImportRpc,

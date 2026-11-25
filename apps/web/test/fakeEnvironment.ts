@@ -253,6 +253,7 @@ export interface FakeThread {
   /** The first is the thread's active provider thread. */
   readonly providerThreads?: ReadonlyArray<OrchestrationV2ProviderThread>;
   readonly issues?: OrchestrationV2ThreadShell["issues"];
+  readonly pullRequests?: OrchestrationV2ThreadShell["pullRequests"];
   readonly runs: ReadonlyArray<OrchestrationV2Run>;
   readonly items: ReadonlyArray<OrchestrationV2TurnItem>;
   readonly runtimeRequests?: OrchestrationV2ThreadProjection["runtimeRequests"];
@@ -344,6 +345,7 @@ function shellOf(thread: FakeThread): OrchestrationV2ThreadShell {
     activeProviderThreadId: thread.providerThreads?.[0]?.id ?? null,
     ...(thread.issues === undefined ? {} : { issues: thread.issues }),
     ...(thread.tags === undefined ? {} : { tags: thread.tags }),
+    ...(thread.pullRequests === undefined ? {} : { pullRequests: thread.pullRequests }),
     lineage: {
       rootThreadId: parentOf(thread) ?? thread.id,
       parentThreadId: parentOf(thread) ?? null,

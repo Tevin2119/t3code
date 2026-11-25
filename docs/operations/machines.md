@@ -8,7 +8,7 @@ here is a secret: pairing links, tokens and sign-ins stay on the machine that is
 Related: the engine's own setup notes live in the Operation-PaperClip repository,
 `docs/context/delivery-system/SETUP-WALKTHROUGH.md` (bringing a new machine up) and
 `OPERATING.md` (the Windows host). The fork's own development procedures are in
-[development.md](./development.md). Keep this page to what runs in production on each machine.
+[00_development.md](./00_development.md). Keep this page to what runs in production on each machine.
 
 ## The pieces, on every machine
 
