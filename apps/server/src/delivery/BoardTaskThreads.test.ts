@@ -1247,7 +1247,9 @@ it.effect.each([
       });
       assert.deepEqual(
         steerSends(store)[0]?.modelSelection,
-        follows ? { instanceId: ProviderInstanceId.make("codex"), model } : undefined,
+        follows && model !== null
+          ? { instanceId: ProviderInstanceId.make("codex"), model }
+          : undefined,
       );
       assert.equal(engine.steer(steer).state, "pending");
       // A restarted server confirms it from the conversation and never sends it twice.
