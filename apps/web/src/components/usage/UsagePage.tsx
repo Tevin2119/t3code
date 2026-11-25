@@ -752,8 +752,11 @@ function UsageOverview({
                   {merged.sessionsUnfiltered
                     ? `${formatCount(merged.sessions, locale)} ${sessionsWord}`
                     : gt(
-                        "{count, plural, one {{formatted} sessions} other {{formatted} sessions}}",
-                        { count: merged.sessions, formatted: formatCount(merged.sessions, locale) },
+                        "{count, plural, one {{formatted} session} other {{formatted} sessions}}",
+                        {
+                          count: merged.sessions,
+                          formatted: formatCount(merged.sessions, locale),
+                        },
                       )}
                 </span>
                 {metric === "cost" && ` · ${gt("API estimate")}`}
