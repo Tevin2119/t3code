@@ -27,6 +27,8 @@ export interface ScratchTask {
   submitted: boolean;
   held: boolean;
   seatModels?: Record<string, { model: string | null; harness: string; source: string }>;
+  /** Served on the card as given, over the fields above: an engine shape T3 may not read. */
+  served?: Record<string, unknown>;
   run?: { readonly id: string } | null;
   hold?: {
     readonly stage: string;
@@ -135,6 +137,7 @@ export function scratchEngine(
     ...(task.seatModels === undefined ? {} : { seatModels: task.seatModels }),
     ...(options.servesLink === false ? {} : { boardThread: links.get(task.id) ?? null }),
     ...(conversing ? { conversation: mirrorOf(task.id), steers: steerCounts(task.id) } : {}),
+    ...task.served,
   });
   /** Each source's highest seq; a row below its source's floor is superseded. */
   const floorsOf = (rows: ReadonlyArray<Activity>) => {

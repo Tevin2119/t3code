@@ -414,6 +414,9 @@ it.effect.each(["picked", "legacy"] as const)(
     engine.addTask({ id: "draft-1", lane: "draft", state: "draft", submitted: false });
     engine.addTask({ id: "queued-1", lane: "queue", state: "ready" });
     engine.addTask({ id: "done-1", lane: "completed", state: "completed" });
+    // A split parent stands where its parts stand, and its parts are the work.
+    engine.addTask({ id: "whole-1", lane: "child-work", state: "split" });
+    engine.addTask({ id: "whole-2", lane: "in-work", state: "split" });
     const store = threadStore();
     return Effect.gen(function* () {
       const threads = yield* service(store);
@@ -469,17 +472,19 @@ it.effect("links every task when a seat has no model yet or one card cannot be r
   // A lead with no model yet runs on its roster model, as when the engine serves no picks.
   engine.addTask({ id: "task-8", seatModels: { lead: unpicked } });
   engine.addTask({ id: "task-9" });
+  // A pick this build cannot read is no pick.
   engine.addTask({
-    id: "task-bad",
+    id: "task-10",
     seatModels: { lead: { harness: "claude", model: "m", source: "unheard-of" } },
   });
+  engine.addTask({ id: "task-bad", served: { set: 7 } });
   const store = threadStore();
   const threadOf = (id: string) => boardTaskThreadId(boardTaskOf("work", id)!);
   return Effect.gen(function* () {
     const threads = yield* service(store);
     assert.deepEqual([...(yield* threads.reconcile())], []);
     assert.deepEqual(
-      ["task-7", "task-8", "task-9", "task-bad"].map((id) => ({
+      ["task-7", "task-8", "task-9", "task-10", "task-bad"].map((id) => ({
         id,
         linked: engine.linkOf(id)?.threadId ?? null,
         model: store.threads.get(threadOf(id))?.modelSelection ?? null,
@@ -500,10 +505,50 @@ it.effect("links every task when a seat has no model yet or one card cannot be r
           linked: threadOf("task-9"),
           model: { instanceId: "codex", model: "gpt-6-astra" },
         },
+        {
+          id: "task-10",
+          linked: threadOf("task-10"),
+          model: { instanceId: "codex", model: "gpt-6-astra" },
+        },
         { id: "task-bad", linked: null, model: null },
       ],
     );
   }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-unpicked-seat-")));
+});
+
+it.effect("keeps holding a linked task over fields it cannot read, until it leaves work", () => {
+  const engine = board();
+  const unread = engine.addTask({ id: "task-7" });
+  const unlisted = engine.addTask({ id: "task-8" });
+  const whole = engine.addTask({ id: "task-9" });
+  const store = threadStore();
+  const threadOf = (id: string) => boardTaskThreadId(boardTaskOf("work", id)!);
+  return Effect.gen(function* () {
+    const threads = yield* service(store);
+    yield* threads.reconcile();
+    unread.seatModels = { lead: { harness: "codex", model: "m", source: "future-source" } };
+    unread.served = { hold: { stage: "qa", deadline: "later", handoff: "declined" } };
+    store.say(THREAD, "m-1", "Build it", "system");
+    store.reply(THREAD, "Done");
+    engine.queueSteer("task-7", "Please continue");
+    // A split parent holds no claim: its parts are the work.
+    whole.state = "split";
+    for (let pass = 0; pass < 5; pass++) {
+      engine.advance(30_000);
+      yield* threads.reconcile();
+    }
+    assert.isNotNull(engine.leaseOf("task-7"));
+    assert.isAbove(engine.activityOf("task-7").length, 0);
+    assert.isTrue(steerSends(store).some((send) => send.threadId === THREAD));
+    assert.isNull(engine.leaseOf("task-9"));
+    assert.isNull(store.threads.get(threadOf("task-9"))!.archivedAt);
+    // A card it cannot read is judged from the task's detail: another conversation holds it.
+    unlisted.served = { set: 7 };
+    engine.writeLink("task-8", { environmentId: OTHER, threadId: "successor", setBy: OTHER });
+    yield* threads.reconcile();
+    assert.isNotNull(store.threads.get(threadOf("task-8"))!.archivedAt);
+    assert.isNull(store.threads.get(THREAD)!.archivedAt);
+  }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-unread-linked-")));
 });
 
 it.effect(

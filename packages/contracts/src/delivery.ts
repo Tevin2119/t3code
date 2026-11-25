@@ -1,4 +1,5 @@
 // Relay engine-owned payloads as JSON; type only the state T3 stores or acts on.
+import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
 import { IsoDateTime, ProjectId, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
@@ -439,17 +440,23 @@ export class DeliveryError extends Schema.TaggedError<DeliveryError>()("Delivery
   }
 }
 
+// Picks are advisory: a seat this build cannot read, such as one with a newer `source`, is read
+// as `null`, and a map it cannot read as absent, so a task is never unreadable over its picks.
 export const DeliverySeatModels = Schema.optional(
-  Schema.Record(
-    Schema.String,
-    Schema.Struct({
-      // `null` is a seat whose model is picked when it runs.
-      model: Schema.NullOr(Schema.String),
-      harness: Schema.String,
-      source: Schema.Literals(["profile", "fallback", "picked", "attested"]),
-      waiting: Schema.optional(Schema.Boolean),
-    }),
-  ),
+  Schema.UndefinedOr(
+    Schema.Record(
+      Schema.String,
+      Schema.NullOr(
+        Schema.Struct({
+          // `null` is a seat whose model is picked when it runs.
+          model: Schema.NullOr(Schema.String),
+          harness: Schema.String,
+          source: Schema.Literals(["profile", "fallback", "picked", "attested"]),
+          waiting: Schema.optional(Schema.Boolean),
+        }),
+      ).pipe(Schema.catchDecoding(() => Effect.succeedSome(null))),
+    ),
+  ).pipe(Schema.catchDecoding(() => Effect.succeedSome(undefined))),
 );
 
 export const DeliveryLeadPickResult = Schema.Struct({

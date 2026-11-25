@@ -43,34 +43,37 @@ import { BoardThreadLink } from "./DeliveryService.ts";
 import * as LimitedSeatSwap from "./LimitedSeatSwap.ts";
 import { BoardLeadSeat, boardLeadSeat, resolveSeatProvider } from "./seatProvider.ts";
 
+/** A field this build cannot read is read as `null`, so the card it is on is still held. */
+const orNull = <S extends Schema.Top>(schema: S) =>
+  Schema.optional(Schema.NullOr(schema).pipe(Schema.catchDecoding(() => Effect.succeedSome(null))));
+
 const Card = Schema.Struct({
+  // What a card is and where its link stands. A card these cannot be read from is skipped.
   id: Schema.String,
-  title: Schema.String,
-  team: Schema.String,
   lane: Schema.String,
   state: Schema.String,
   set: Schema.optional(Schema.NullOr(Schema.String)),
   // Absent on an engine without the link: such an engine is never written to.
   boardThread: Schema.optional(Schema.NullOr(BoardThreadLink)),
+  // Read only to make a thread: without them a task is held as `unreadable-card`.
+  title: orNull(Schema.String),
+  team: orNull(Schema.String),
   // Slice 5's mirror and steer counts; absent on an engine before it.
   conversation: Schema.optional(Schema.NullOr(Schema.Unknown)),
-  steers: Schema.optional(Schema.NullOr(Schema.Struct({ pending: Schema.Number }))),
-  run: Schema.optional(Schema.NullOr(Schema.Struct({ id: Schema.String }))),
+  steers: orNull(Schema.Struct({ pending: Schema.Number })),
+  run: orNull(Schema.Struct({ id: Schema.String })),
   seatModels: DeliverySeatModels,
-  hold: Schema.optional(
-    Schema.NullOr(
-      Schema.Struct({
-        stage: Schema.String,
-        deadline: Schema.String,
-        handoff: Schema.NullOr(Schema.Literal("handed")),
-      }),
-    ),
+  hold: orNull(
+    Schema.Struct({
+      stage: Schema.String,
+      deadline: Schema.String,
+      handoff: Schema.NullOr(Schema.Literal("handed")),
+    }),
   ),
 });
 type Card = typeof Card.Type;
 
-// Cards are decoded one at a time: one in a shape this server does not know is skipped, and the
-// others are still linked.
+// Cards are decoded one at a time, so one this build cannot read never stops the others.
 const Lanes = Schema.Struct({
   lanes: Schema.Array(Schema.Struct({ lane: Schema.String, cards: Schema.Array(Schema.Unknown) })),
   sets: Schema.Array(
@@ -132,12 +135,15 @@ const FINISHED = new Set(["completed", "closed-not-done"]);
 // A task that moved is worked on another machine; the engine refuses its link here (`moved`).
 const MOVED = new Set(["moved", "moving"]);
 
-/** A task in work with no conversation: this pass links it to its thread. */
-const awaitsThread = (card: Card) =>
-  card.boardThread === null &&
+/** A task in work: it holds a conversation and a claim. A split parent's parts are its work. */
+const inWork = (card: Card) =>
   !NOT_STARTED.has(card.lane) &&
   !FINISHED.has(card.lane) &&
-  !MOVED.has(card.state);
+  !MOVED.has(card.state) &&
+  card.state !== "split";
+
+/** A task in work with no conversation: this pass links it to its thread. */
+const awaitsThread = (card: Card) => card.boardThread === null && inWork(card);
 
 /**
  * How a thread this server made stands with its task, as the engine's lanes show it: `linked` is
@@ -166,16 +172,16 @@ export const boardThreadStanding = (
 };
 
 /**
- * The standing of a thread whose task the lanes do not list, from the task's own detail. The
- * engine gives a task that moved to another machine no lane, and still answers for it with its
- * state: that answer is the only place that says so. Any other task the lanes leave out is not
- * judged here (`null`).
+ * The standing of a thread whose task the lanes do not list, or list on a card this build cannot
+ * read, from the task's own detail. The engine gives a task that moved to another machine no
+ * lane, and still answers for it with its state. Any other task is judged only when another
+ * conversation holds it (`displaced`); otherwise `null`, not judged here.
  */
-export const movedTaskStanding = (detail: unknown, environmentId: string, threadId: string) => {
+export const unlistedTaskStanding = (detail: unknown, environmentId: string, threadId: string) => {
   const task = decodeStanding(detail);
-  return Option.isSome(task) && MOVED.has(task.value.state)
-    ? boardThreadStanding(task.value, environmentId, threadId)
-    : null;
+  if (Option.isNone(task)) return null;
+  const standing = boardThreadStanding(task.value, environmentId, threadId);
+  return MOVED.has(task.value.state) || standing === "displaced" ? standing : null;
 };
 
 /** Why a started task has no conversation of its own yet. Told in the log, never guessed around. */
@@ -191,6 +197,7 @@ export type BoardThreadHold =
   | "archived-thread"
   | "no-key"
   | "refused"
+  | "unreadable-card"
   | "moved";
 
 export class BoardTaskThreadsError extends Schema.TaggedError<BoardTaskThreadsError>()(
@@ -253,8 +260,12 @@ export const make = Effect.gen(function* () {
     const lead = boardLeadSeat(team?.seats ?? []);
     if (lead === undefined) return "no-lead" as const;
     const published = seatModels?.[lead.seat];
-    // A lead whose model is picked when it runs starts on its roster model, as with no picks.
-    const selection = seatModels === undefined || published?.model === null ? lead : published;
+    // A lead picked only when it runs, or whose pick this build cannot read, starts on its roster
+    // model, as with no picks.
+    const selection =
+      seatModels === undefined || published === null || published?.model === null
+        ? lead
+        : published;
     if (!selection?.model) return "no-lead-model" as const;
     const instance = resolveSeatProvider(
       (yield* instances.listInstances).filter((instance) => instance.enabled),
@@ -381,6 +392,8 @@ export const make = Effect.gen(function* () {
     },
   ) {
     if (!card.set) return "no-board" as const;
+    const { title, team } = card;
+    if (title == null || team == null) return "unreadable-card" as const;
     const task = boardTaskOf(card.set, card.id);
     if (task === null) return "unmarkable-id" as const;
     const threadId = boardTaskThreadId(task);
@@ -392,7 +405,7 @@ export const make = Effect.gen(function* () {
         : yield* local(projects.findActiveByWorkspaceRoot(folder));
     if (Option.isNone(project)) return "no-project" as const;
     const modelSelection = yield* leadSelection(
-      context.teams.find((team) => team.team === card.team),
+      context.teams.find((entry) => entry.team === team),
       card.seatModels,
     );
     if (typeof modelSelection === "string") return modelSelection;
@@ -405,7 +418,7 @@ export const make = Effect.gen(function* () {
           commandId: boardTaskThreadCommandId(task),
           threadId,
           projectId: project.value.projectId,
-          title: card.title,
+          title,
           modelSelection,
         }),
       ),
@@ -487,7 +500,7 @@ export const make = Effect.gen(function* () {
         // answers for as moved is on another machine. Anything else is left for the next pass.
         const ended =
           read._tag === "Success"
-            ? movedTaskStanding(read.success.body, environmentId, row.threadId)
+            ? unlistedTaskStanding(read.success.body, environmentId, row.threadId)
             : read.failure.status === 404
               ? ("deleted" as const)
               : null;
@@ -562,7 +575,7 @@ export const make = Effect.gen(function* () {
       for (const card of cards.values()) {
         const link = card.boardThread;
         if (link === null || link === undefined || link.environmentId !== environmentId) continue;
-        if (NOT_STARTED.has(card.lane) || FINISHED.has(card.lane) || MOVED.has(card.state)) {
+        if (!inWork(card)) {
           yield* releaseClaim(card.id);
           continue;
         }

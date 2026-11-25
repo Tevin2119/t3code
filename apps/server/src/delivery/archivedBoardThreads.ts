@@ -7,7 +7,7 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
-import { boardThreadStanding, LANES_PATH, movedTaskStanding } from "./BoardTaskThreads.ts";
+import { boardThreadStanding, LANES_PATH, unlistedTaskStanding } from "./BoardTaskThreads.ts";
 import { listBoardThreadRows } from "./boardThreadRows.ts";
 
 const decodeCards = Schema.decodeUnknownOption(
@@ -37,10 +37,10 @@ const ENGINE_WAIT = "1500 millis";
 type ArchivedThread = DeliveryArchivedBoardThreads["threads"][number];
 
 /**
- * The archived conversations of board tasks, each with how its task stands in the engine. A
- * restore only helps a thread whose task can still take it: `open`. A task the lanes do not list
- * is `deleted` on the engine's 404, judged by its own detail when that says it moved away, and
- * `unknown` otherwise: a slow or absent engine never offers a restore or calls a task deleted.
+ * Archived board conversations and how each task stands. Only an `open` task can take a restore.
+ * A task the lanes do not list is `deleted` on a 404, judged by its detail when it moved away or
+ * another conversation holds it, and `unknown` otherwise, so a slow or absent engine never offers
+ * a restore or calls a task deleted.
  */
 export const archivedBoardThreads = Effect.fn("archivedBoardThreads")(function* (
   environmentId: string,
@@ -68,7 +68,7 @@ export const archivedBoardThreads = Effect.fn("archivedBoardThreads")(function* 
       }
       return ask(`/api/tasks/${row.task.id}`).pipe(
         Effect.map((response) => {
-          const standing = movedTaskStanding(response.body, environmentId, row.threadId);
+          const standing = unlistedTaskStanding(response.body, environmentId, row.threadId);
           return standing === null ? ("unknown" as const) : told(standing);
         }),
         Effect.catch((error) =>
