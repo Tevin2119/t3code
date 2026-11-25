@@ -443,7 +443,8 @@ export const DeliverySeatModels = Schema.optional(
   Schema.Record(
     Schema.String,
     Schema.Struct({
-      model: Schema.String,
+      // `null` is a seat whose model is picked when it runs.
+      model: Schema.NullOr(Schema.String),
       harness: Schema.String,
       source: Schema.Literals(["profile", "fallback", "picked", "attested"]),
       waiting: Schema.optional(Schema.Boolean),

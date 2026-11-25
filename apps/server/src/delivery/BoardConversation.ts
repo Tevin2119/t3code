@@ -235,7 +235,8 @@ export const make = Effect.gen(function* () {
   ) {
     const lead = boardLeadSeat(detail.roster ?? []);
     const published = lead === undefined ? undefined : detail.seatModels?.[lead.seat];
-    if (published === undefined) return undefined;
+    // No pick, or a lead picked only when it runs: the thread keeps the model it has.
+    if (published === undefined || published.model === null) return undefined;
     const providers = yield* instances.listInstances;
     const existing = providers.find((provider) => provider.instanceId === current.instanceId);
     const next = resolveSeatProvider(

@@ -69,8 +69,10 @@ const Card = Schema.Struct({
 });
 type Card = typeof Card.Type;
 
+// Cards are decoded one at a time: one in a shape this server does not know is skipped, and the
+// others are still linked.
 const Lanes = Schema.Struct({
-  lanes: Schema.Array(Schema.Struct({ lane: Schema.String, cards: Schema.Array(Card) })),
+  lanes: Schema.Array(Schema.Struct({ lane: Schema.String, cards: Schema.Array(Schema.Unknown) })),
   sets: Schema.Array(
     Schema.Struct({
       id: Schema.String,
@@ -102,6 +104,8 @@ const Detail = Schema.Struct({ boardThread: Schema.NullOr(BoardThreadLink) });
 const Claimed = Schema.Struct({ holder: Schema.String });
 
 const decodeLanes = Schema.decodeUnknownEffect(Lanes);
+const decodeCard = Schema.decodeUnknownResult(Card);
+const decodeCardId = Schema.decodeUnknownOption(Schema.Struct({ id: Schema.String }));
 const decodeTeams = Schema.decodeUnknownEffect(Teams);
 const decodeRefusal = Schema.decodeUnknownOption(Refusal);
 const decodeLinked = Schema.decodeUnknownEffect(Linked);
@@ -235,6 +239,7 @@ export const make = Effect.gen(function* () {
   // old lease lapses within its window and the task is claimed again, still by the same thread.
   const holders = new Map<string, string>();
   const told = new Map<string, BoardThreadHold>();
+  const toldUnread = new Map<string, string>();
 
   const engine = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
     effect.pipe(Effect.mapError((cause) => new BoardTaskThreadsError({ reason: "engine", cause })));
@@ -247,7 +252,9 @@ export const make = Effect.gen(function* () {
   ) {
     const lead = boardLeadSeat(team?.seats ?? []);
     if (lead === undefined) return "no-lead" as const;
-    const selection = seatModels === undefined ? lead : seatModels[lead.seat];
+    const published = seatModels?.[lead.seat];
+    // A lead whose model is picked when it runs starts on its roster model, as with no picks.
+    const selection = seatModels === undefined || published?.model === null ? lead : published;
     if (!selection?.model) return "no-lead-model" as const;
     const instance = resolveSeatProvider(
       (yield* instances.listInstances).filter((instance) => instance.enabled),
@@ -510,9 +517,26 @@ export const make = Effect.gen(function* () {
       const lanes = yield* engine(delivery.read({ path: LANES_PATH })).pipe(
         Effect.flatMap((response) => engine(decodeLanes(response.body))),
       );
-      const cards = new Map(
-        lanes.lanes.flatMap((lane) => lane.cards.map((card) => [card.id, card] as const)),
-      );
+      const cards = new Map<string, Card>();
+      const unread = new Map<string, string>();
+      for (const lane of lanes.lanes) {
+        for (const [index, raw] of lane.cards.entries()) {
+          const card = decodeCard(raw);
+          if (card._tag === "Success") cards.set(card.success.id, card.success);
+          else {
+            const id = decodeCardId(raw).pipe(
+              Option.match({ onNone: () => `${lane.lane}[${index}]`, onSome: ({ id }) => id }),
+            );
+            unread.set(id, card.failure.message);
+          }
+        }
+      }
+      for (const [card, why] of unread) {
+        if (toldUnread.get(card) === why) continue;
+        yield* Effect.logWarning("A board card could not be read; it is skipped.", { card, why });
+      }
+      toldUnread.clear();
+      for (const [card, why] of unread) toldUnread.set(card, why);
       // An engine that serves no `boardThread` has no link to write to. Nothing is made for it.
       if ([...cards.values()].some((card) => card.boardThread === undefined)) return holds;
       const starting = [...cards.values()].filter(awaitsThread);

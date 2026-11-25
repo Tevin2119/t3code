@@ -26,7 +26,7 @@ export interface ScratchTask {
   state: string;
   submitted: boolean;
   held: boolean;
-  seatModels?: Record<string, { model: string; harness: string; source: string }>;
+  seatModels?: Record<string, { model: string | null; harness: string; source: string }>;
   run?: { readonly id: string } | null;
   hold?: {
     readonly stage: string;

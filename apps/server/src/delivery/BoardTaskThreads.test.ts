@@ -456,6 +456,56 @@ it.effect.each(["picked", "legacy"] as const)(
   },
 );
 
+it.effect("links every task when a seat has no model yet or one card cannot be read", () => {
+  const engine = board();
+  const unpicked = { harness: "codex", model: null, source: "profile" };
+  engine.addTask({
+    id: "task-7",
+    seatModels: {
+      lead: { harness: "claude", model: "claude-sonnet", source: "picked" },
+      "qa-validate": unpicked,
+    },
+  });
+  // A lead with no model yet runs on its roster model, as when the engine serves no picks.
+  engine.addTask({ id: "task-8", seatModels: { lead: unpicked } });
+  engine.addTask({ id: "task-9" });
+  engine.addTask({
+    id: "task-bad",
+    seatModels: { lead: { harness: "claude", model: "m", source: "unheard-of" } },
+  });
+  const store = threadStore();
+  const threadOf = (id: string) => boardTaskThreadId(boardTaskOf("work", id)!);
+  return Effect.gen(function* () {
+    const threads = yield* service(store);
+    assert.deepEqual([...(yield* threads.reconcile())], []);
+    assert.deepEqual(
+      ["task-7", "task-8", "task-9", "task-bad"].map((id) => ({
+        id,
+        linked: engine.linkOf(id)?.threadId ?? null,
+        model: store.threads.get(threadOf(id))?.modelSelection ?? null,
+      })),
+      [
+        {
+          id: "task-7",
+          linked: threadOf("task-7"),
+          model: { instanceId: "claudeAgent", model: "claude-sonnet" },
+        },
+        {
+          id: "task-8",
+          linked: threadOf("task-8"),
+          model: { instanceId: "codex", model: "gpt-6-astra" },
+        },
+        {
+          id: "task-9",
+          linked: threadOf("task-9"),
+          model: { instanceId: "codex", model: "gpt-6-astra" },
+        },
+        { id: "task-bad", linked: null, model: null },
+      ],
+    );
+  }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-unpicked-seat-")));
+});
+
 it.effect(
   "archives the old board lead as displaced only after its successor takes the link",
   () => {
@@ -1167,6 +1217,7 @@ it.effect("stays paused beside another source on an older engine, then resumes",
 it.effect.each([
   { harness: "codex", model: "gpt-6-sol", follows: true },
   { harness: "claude", model: "claude-sonnet", follows: false },
+  { harness: "codex", model: null, follows: false },
 ])(
   "delivers and confirms a queued steer when the published model is $model",
   ({ harness, model, follows }) => {
