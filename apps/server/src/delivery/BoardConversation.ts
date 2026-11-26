@@ -59,7 +59,8 @@ const STEER_MESSAGE_PREFIX = "message:board-steer:";
 const HANDOFF_NOTICE_PREFIX = "message:board-handoff:";
 const UNDELIVERED_NOTICE_PREFIX = "message:board-steer-undelivered:";
 /** How long a thread steer the engine cannot take is tried: the board's default hand-off wait. */
-const STEER_RETRY_MS = 30 * 60 * 1000;
+const STEER_RETRY_MINUTES = 30;
+const STEER_RETRY_MS = STEER_RETRY_MINUTES * 60 * 1000;
 
 /** The message a queued steer is delivered as: one per steer, on every attempt. */
 export const steerMessageId = (task: BoardTask, steerId: number) =>
@@ -215,7 +216,22 @@ const codeOf = (error: DeliveryError) => {
 
 /** Thread steers this server has told, kept across restarts; the oldest are forgotten past it. */
 const STEERED_KEPT = 2000;
-const SteeredFile = Schema.fromJsonString(Schema.Struct({ steered: Schema.Array(Schema.String) }));
+/** A notice owed to the thread for a person's words that never reached the team. */
+const OwedNotice = Schema.Struct({
+  board: Schema.String,
+  task: Schema.String,
+  threadId: Schema.String,
+  messageId: Schema.String,
+  quoted: Schema.String,
+  reason: Schema.String,
+});
+type OwedNotice = typeof OwedNotice.Type;
+const SteeredFile = Schema.fromJsonString(
+  Schema.Struct({
+    steered: Schema.Array(Schema.String),
+    owed: Schema.optional(Schema.Record(Schema.String, OwedNotice)),
+  }),
+);
 const decodeSteered = Schema.decodeUnknownOption(SteeredFile);
 const encodeSteered = Schema.encodeEffect(SteeredFile);
 
@@ -258,22 +274,19 @@ export const make = Effect.gen(function* () {
   // The engine's steer route takes no key to dedupe on, so which person's words were told is
   // kept here: a mirror lost after its steer, then a restart, must not tell them twice.
   const steeredPath = path.join(config.stateDir, "delivery-thread-steers.json");
-  const steered = new Set(
-    yield* fileSystem.readFileString(steeredPath).pipe(
-      Effect.map((text) => {
-        const decoded = decodeSteered(text);
-        return Option.isSome(decoded) ? decoded.value.steered : [];
-      }),
-      Effect.orElseSucceed((): ReadonlyArray<string> => []),
-    ),
+  const saved = yield* fileSystem.readFileString(steeredPath).pipe(
+    Effect.map((text) => decodeSteered(text)),
+    Effect.orElseSucceed(() => Option.none()),
   );
-  const rememberSteer = Effect.fn("BoardConversation.rememberSteer")(function* (key: string) {
-    steered.add(key);
+  const steered = new Set(Option.isSome(saved) ? saved.value.steered : []);
+  // Kept until posted: the steer is settled first, so a notice never sends the steer again.
+  const owed = new Map(Object.entries(Option.isSome(saved) ? (saved.value.owed ?? {}) : {}));
+  const saveSteers = Effect.fn("BoardConversation.saveSteers")(function* () {
     for (const old of steered) {
       if (steered.size <= STEERED_KEPT) break;
       steered.delete(old);
     }
-    yield* encodeSteered({ steered: [...steered] }).pipe(
+    yield* encodeSteered({ steered: [...steered], owed: Object.fromEntries(owed) }).pipe(
       Effect.flatMap((contents) => writeFileStringAtomically({ filePath: steeredPath, contents })),
       Effect.provideService(FileSystem.FileSystem, fileSystem),
       Effect.provideService(Path.Path, path),
@@ -325,28 +338,43 @@ export const make = Effect.gen(function* () {
   });
 
   /**
-   * A person's words in the thread, told to the run as a thread steer (never queued back here).
-   * `false` on no answer or a 5xx within the hand-off wait: told again with the same `ref`. A
-   * refusal, or giving up, is told in the thread; settled steers are remembered across restarts.
+   * Posts the notices owed to one thread. One that cannot be posted now stays owed and is tried
+   * on the next pass; only a refusal that never passes drops it, which is logged.
    */
-  const noticeUndelivered = Effect.fn("BoardConversation.noticeUndelivered")(function* (
-    task: BoardTask,
+  const postOwedNotices = Effect.fn("BoardConversation.postOwedNotices")(function* (
     threadId: ThreadId,
-    steer: { readonly messageId: string; readonly text: string },
-    reason: string,
   ) {
+    for (const [key, notice] of owed) {
+      if (notice.threadId !== threadId) continue;
+      const posted = yield* noticeUndelivered(notice);
+      if (posted === "later") continue;
+      if (posted === "refused")
+        yield* Effect.logWarning("A notice of an undelivered message could not be posted.", {
+          task: notice.task,
+          message: notice.messageId,
+        });
+      owed.delete(key);
+      yield* saveSteers();
+    }
+  });
+
+  const noticeUndelivered = Effect.fn("BoardConversation.noticeUndelivered")(function* (
+    notice: OwedNotice,
+  ) {
+    const task = boardTaskOf(notice.board, notice.task);
+    if (task === null) return "refused" as const;
+    const threadId = notice.threadId as ThreadId;
     const messageId = MessageId.make(
-      `${UNDELIVERED_NOTICE_PREFIX}${task.board}:${task.id}:${steer.messageId}`,
+      `${UNDELIVERED_NOTICE_PREFIX}${task.board}:${task.id}:${notice.messageId}`,
     );
     const present = yield* projections.getMessagesById(threadId, [messageId]).pipe(Effect.result);
-    if (present._tag === "Failure") return false;
-    if (present.success.has(messageId)) return true;
-    const quoted = excerptOf(steer.text)?.slice(0, 80) ?? "";
-    const text = `This message didn't reach the team: ${reason}. Send it again when the task is running.\n\n> ${quoted}`;
+    if (present._tag === "Failure") return "later" as const;
+    if (present.success.has(messageId)) return "posted" as const;
+    const text = `This message didn't reach the team: ${notice.reason}. Send it again when the task is running.\n\n> ${notice.quoted}`;
     const sent = yield* threads
       .dispatch({
         type: "message.dispatch",
-        commandId: CommandId.make(`${boardTaskThreadMarker(task)}:undelivered:${steer.messageId}`),
+        commandId: CommandId.make(`${boardTaskThreadMarker(task)}:undelivered:${notice.messageId}`),
         threadId,
         messageId,
         text,
@@ -357,17 +385,49 @@ export const make = Effect.gen(function* () {
         creationSource: "server",
       })
       .pipe(Effect.result);
-    return sent._tag === "Success" || FINAL_REFUSALS.has(sent.failure._tag);
+    if (sent._tag === "Success") return "posted" as const;
+    return FINAL_REFUSALS.has(sent.failure._tag) ? ("refused" as const) : ("later" as const);
   });
 
+  /** Settles a steer that never reached the team, and owes the thread a notice of it. */
+  const giveUp = Effect.fn("BoardConversation.giveUp")(function* (
+    task: BoardTask,
+    threadId: ThreadId,
+    key: string,
+    steer: { readonly messageId: string; readonly text: string },
+    reason: string,
+  ) {
+    steered.add(key);
+    owed.set(key, {
+      board: task.board,
+      task: task.id,
+      threadId,
+      messageId: steer.messageId,
+      quoted: excerptOf(steer.text)?.slice(0, 80) ?? "",
+      reason,
+    });
+    yield* saveSteers();
+    yield* postOwedNotices(threadId);
+    return true;
+  });
+
+  /**
+   * A person's words in the thread, told to the run as a thread steer (never queued back here).
+   * `false` on no answer or a 5xx within the hand-off wait: told again with the same `ref`. A
+   * refusal, giving up, or a task no longer in work owes the thread a notice. Settled steers are
+   * remembered across restarts.
+   */
   const tellSteer = Effect.fn("BoardConversation.tellSteer")(function* (
     task: BoardTask,
     threadId: ThreadId,
     steer: { readonly messageId: string; readonly text: string },
     typedAt: string,
+    steering: boolean,
   ) {
     const key = `${threadId}\u0000${steer.messageId}`;
     if (steered.has(key)) return true;
+    if (!steering)
+      return yield* giveUp(task, threadId, key, steer, "the task is no longer in work");
     const taskId = task.id;
     const told = yield* post(`/api/tasks/${taskId}/steer`, {
       text: steer.text,
@@ -377,20 +437,18 @@ export const make = Effect.gen(function* () {
       ref: `thread:${threadId}:${steer.messageId}`,
     });
     if (told._tag === "Success") {
-      yield* rememberSteer(key);
+      steered.add(key);
+      yield* saveSteers();
       return true;
     }
     const status = told.failure.status;
     const retried = status === undefined || status >= 500;
     const now = DateTime.toEpochMillis(yield* DateTime.now);
     if (retried && now - Date.parse(typedAt) < STEER_RETRY_MS) return false;
-    // Given up or refused: the person is told in the thread, once per message across restarts.
     const reason = retried
-      ? "the engine could not take it for 30 minutes"
+      ? `the engine could not take it for ${STEER_RETRY_MINUTES} minutes`
       : told.failure.detail.replace(/\s+/g, " ").slice(0, 200);
-    if (!(yield* noticeUndelivered(task, threadId, steer, reason))) return false;
-    yield* rememberSteer(key);
-    return true;
+    return yield* giveUp(task, threadId, key, steer, reason);
   });
 
   const mirror = Effect.fn("BoardConversation.mirror")(function* (
@@ -432,14 +490,15 @@ export const make = Effect.gen(function* () {
       ...(pending.get(scanKey) ?? []),
       ...scanActivity(scan, read.success).filter((item) => item.seq > known),
     ];
+    yield* postOwedNotices(threadId);
+    const task = card.set ? boardTaskOf(card.set, card.id) : null;
     let sent = 0;
     for (const [index, item] of queued.entries()) {
       if (sent >= INGESTS_PER_PASS) break;
-      // Told before the item is mirrored, and told once: a later retry of the ingest sends only
-      // the ingest. Only a task in work has a run to steer.
+      // Settled before the item is mirrored, and once: a later retry of the ingest sends only
+      // the ingest. Words a task out of work can no longer take are given up and told.
       if (item.steer !== null) {
-        const task = card.set ? boardTaskOf(card.set, card.id) : null;
-        if (steering && task && !(yield* tellSteer(task, threadId, item.steer, item.at))) break;
+        if (task && !(yield* tellSteer(task, threadId, item.steer, item.at, steering))) break;
         queued[index] = { ...item, steer: null };
       }
       const answer = yield* post(`/api/tasks/${card.id}/activity`, {

@@ -100,6 +100,8 @@ function threadStore() {
   const active = new Map<string, string>();
   const latestRuns = new Map<string, RunId>();
   const rejects = new Set<string>();
+  /** Messages whose dispatch fails for now, by id prefix, as a busy or disabled thread does. */
+  const unavailable = new Set<string>();
   const commit = (threadId: string, type: string, payload: Record<string, unknown>) =>
     events.push({
       sequence: events.length + 1,
@@ -143,6 +145,8 @@ function threadStore() {
         // A command already answered is answered again with what it did the first time.
         if (receipts.has(command.commandId)) return Effect.succeed({ storedEvents: [] });
         if (command.type === "message.dispatch") {
+          if ([...unavailable].some((prefix) => command.messageId.startsWith(prefix)))
+            return Effect.fail(new BoardTaskThreads.BoardTaskThreadsError({ reason: "thread" }));
           if (rejects.has(command.messageId))
             return Effect.fail(
               new OrchestratorCommandRejectedError({
@@ -203,6 +207,7 @@ function threadStore() {
     active,
     latestRuns,
     rejects,
+    unavailable,
     say,
     reply,
   };
@@ -1363,6 +1368,13 @@ it.effect("keeps the link and claim routes for the server: a client's act is ref
 
 const ingests = (engine: ScratchEngine) =>
   engine.requests.filter((request) => request.path.endsWith("/activity")).length;
+const undelivered = (store: ThreadStore) =>
+  store.commands.flatMap((command) =>
+    command.type === "message.dispatch" &&
+    command.messageId.startsWith("message:board-steer-undelivered:")
+      ? [command]
+      : [],
+  );
 const steerSends = (store: ThreadStore) =>
   store.commands.filter((command) => command.type === "message.dispatch");
 
@@ -2374,6 +2386,8 @@ it.effect("tells the engine a person's words in a task thread as a thread steer,
       ["message", "summary", "steer", "summary", "steer", "summary", "steer"],
     );
 
+    // Words the run took are told in no notice.
+    assert.equal(undelivered(store).length, 0);
     // With no run under way the engine refuses the steer; the words stay mirrored and are not
     // tried again.
     task.run = null;
@@ -2445,14 +2459,6 @@ it.effect("tells a thread steer again with its ref after an engine error, applie
   }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-steer-error-")));
 });
 
-const undelivered = (store: ThreadStore) =>
-  store.commands.flatMap((command) =>
-    command.type === "message.dispatch" &&
-    command.messageId.startsWith("message:board-steer-undelivered:")
-      ? [command]
-      : [],
-  );
-
 it.effect("gives up on a thread steer the engine keeps failing, and says so once", () => {
   const engine = board();
   engine.addTask({ id: "task-7", run: { id: "run-1" } });
@@ -2517,4 +2523,71 @@ it.effect("says once in the thread when the engine refuses a person's words", ()
     assert.equal(undelivered(store).length, 1);
     assert.equal(engine.requests.filter((r) => r.path.endsWith("/steer")).length, 1);
   }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-steer-refused-")));
+});
+
+it.effect("tells words still being retried as undelivered once their task leaves work", () => {
+  const engine = board();
+  const task = engine.addTask({ id: "task-7", run: { id: "run-1" } });
+  const store = threadStore();
+  return Effect.gen(function* () {
+    const threads = yield* service(store);
+    yield* threads.reconcile();
+    store.say(THREAD, "m-1", "Use the other API", "user");
+    engine.answerNext(/\/steer$/, 500, { error: "the run could not be told" });
+    yield* threads.reconcile();
+    assert.equal(undelivered(store).length, 0);
+    // Approved: out of work, so the words can no longer reach a run.
+    task.state = "approved";
+    yield* threads.reconcile();
+    yield* threads.reconcile();
+    assert.equal(undelivered(store).length, 1);
+    assert.include(undelivered(store)[0]?.text, "the task is no longer in work");
+    assert.equal(engine.requests.filter((r) => r.path.endsWith("/steer")).length, 1);
+    assert.equal(engine.activityOf("task-7")[0]?.kind, "steer");
+  }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-steer-left-work-")));
+});
+
+it.effect("gives up on a lost steer answer past the hand-off wait", () => {
+  const engine = board();
+  engine.addTask({ id: "task-7", run: { id: "run-1" } });
+  const store = threadStore();
+  return Effect.gen(function* () {
+    yield* TestClock.setTime(Date.parse("2026-11-22T10:00:00.000Z"));
+    const threads = yield* service(store);
+    yield* threads.reconcile();
+    store.say(THREAD, "m-1", "Use the other API", "user");
+    yield* TestClock.adjust("31 minutes");
+    engine.dropNext(/\/steer$/);
+    yield* threads.reconcile();
+    assert.equal(undelivered(store).length, 1);
+    assert.include(undelivered(store)[0]?.text, "could not take it for 30 minutes");
+    assert.equal(engine.activityOf("task-7")[0]?.kind, "steer");
+  }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-steer-lost-answer-")));
+});
+
+it.effect("posts a notice the thread could not take later, never steering again", () => {
+  const engine = board();
+  engine.addTask({ id: "task-7" });
+  const store = threadStore();
+  return Effect.gen(function* () {
+    yield* (yield* service(store)).reconcile();
+    store.say(THREAD, "m-1", "Use the other API", "user");
+    store.unavailable.add("message:board-steer-undelivered:");
+    yield* (yield* service(store)).reconcile();
+    // Refused 409 and settled; the notice is owed, and the mirror is not held for it.
+    assert.equal(undelivered(store).length, 1);
+    assert.isFalse(store.messages.get(THREAD)?.has(undelivered(store)[0]!.messageId) ?? false);
+    assert.equal(engine.activityOf("task-7")[0]?.kind, "steer");
+    // A restart keeps the notice owed, and the steer is never sent again.
+    const restarted = yield* service(store);
+    yield* restarted.reconcile();
+    store.unavailable.clear();
+    yield* restarted.reconcile();
+    yield* restarted.reconcile();
+    const posted = undelivered(store).filter((command) =>
+      store.messages.get(THREAD)?.has(command.messageId),
+    );
+    assert.equal(new Set(posted.map((command) => command.messageId)).size, 1);
+    assert.equal(engine.requests.filter((r) => r.path.endsWith("/steer")).length, 1);
+  }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-steer-notice-later-")));
 });
