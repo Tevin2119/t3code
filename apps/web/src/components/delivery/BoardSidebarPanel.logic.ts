@@ -1,3 +1,4 @@
+import { boardTaskIsDone } from "@t3tools/client-runtime/board-task-in-play";
 import type { ScopedThreadRef } from "@t3tools/contracts";
 
 import { waitKindsOf } from "../../lib/boardLaneCards";
@@ -27,6 +28,7 @@ const groupOf = (card: DeliveryCard): PanelGroup => {
   if (card.lane === "draft") return "drafts";
   if (card.lane === "chat") return "chats";
   if (card.waitingOn === "person") return "waiting";
+  if (boardTaskIsDone(card)) return "done";
   // Being worked on: a seat is at work. A card whose seats are all held waits with the rest.
   return seatsAtWork(card).length > 0 ? "working" : "open";
 };

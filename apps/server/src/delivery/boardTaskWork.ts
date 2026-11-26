@@ -12,13 +12,17 @@ const FINISHED_STATES = new Set(["approved", "pr-open", "merged", "rejected", "c
 // A task that moved is worked on another machine; the engine refuses its link here (`moved`).
 export const MOVED = new Set(["moved", "moving"]);
 
-/** A task in work: it holds a conversation and a claim. A split parent's parts are its work. */
-export const boardTaskInWork = (task: {
+interface TaskStanding {
   readonly lane?: string | null | undefined;
   readonly state: string;
-}) =>
+}
+
+export const boardTaskFinished = (task: TaskStanding) =>
+  FINISHED.has(task.lane ?? "") || FINISHED_STATES.has(task.state);
+
+/** A task in work: it holds a conversation and a claim. A split parent's parts are its work. */
+export const boardTaskInWork = (task: TaskStanding) =>
   !NOT_STARTED.has(task.lane ?? "") &&
-  !FINISHED.has(task.lane ?? "") &&
-  !FINISHED_STATES.has(task.state) &&
+  !boardTaskFinished(task) &&
   !MOVED.has(task.state) &&
   task.state !== "split";

@@ -1607,6 +1607,29 @@ it.effect(
   },
 );
 
+it.effect.each(["approved", "pr-open", "merged", "rejected", "closed"])(
+  "never delivers a steer to a task that closed as %s after the lanes read",
+  (closed) => {
+    const engine = board();
+    engine.addTask({ id: "task-7" });
+    const store = threadStore();
+    return Effect.gen(function* () {
+      const threads = yield* service(store);
+      yield* threads.reconcile();
+      const steer = engine.queueSteer("task-7", "Use the other API");
+      engine.beforeNextDetail(() => {
+        engine.task("task-7").state = closed;
+      });
+      yield* threads.reconcile();
+      assert.equal(steerSends(store).length, 0);
+      assert.deepInclude(engine.steer(steer), { state: "failed" });
+      assert.include(engine.steer(steer).failure ?? "", closed);
+      yield* threads.reconcile();
+      assert.equal(steerSends(store).length, 0);
+    }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-steer-closed-")));
+  },
+);
+
 const CLAUDE = { instanceId: ProviderInstanceId.make("claudeAgent"), model: "claude-fable-5-1" };
 /** A lineup as plain data, so it compares by value. */
 const plainLineup = (threadId: ThreadId) =>

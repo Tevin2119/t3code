@@ -26,6 +26,7 @@ import * as EventStore from "../orchestration-v2/EventStore.ts";
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
+import { boardTaskFinished } from "./boardTaskWork.ts";
 import { boardTaskOf, boardTaskThreadMarker, type BoardTask } from "./boardThreadMarker.ts";
 import * as DeliveryService from "./DeliveryService.ts";
 import { BoardLeadSeat, boardLeadSeat, resolveSeatProvider } from "./seatProvider.ts";
@@ -167,6 +168,8 @@ export interface ConversationCard {
 }
 
 const Detail = Schema.Struct({
+  state: Schema.optional(Schema.String),
+  lane: Schema.optional(Schema.NullOr(Schema.String)),
   seatModels: DeliverySeatModels,
   roster: Schema.optional(Schema.Array(BoardLeadSeat)),
   conversation: Schema.optional(
@@ -366,6 +369,13 @@ export const make = Effect.gen(function* () {
     const waiting = (read.value.steers ?? [])
       .filter((item) => item.state === "pending")
       .toSorted((a, b) => a.id - b.id);
+    const { state, lane } = read.value;
+    // The pass chose this task from an older lanes read; the task may have closed since.
+    if (state !== undefined && boardTaskFinished({ state, lane })) {
+      for (const item of waiting)
+        yield* settle(task.id, item.id, "failed", context, `The task is ${state}.`);
+      return;
+    }
     for (const item of waiting) {
       const messageId = steerMessageId(task, item.id);
       const present = yield* projections.getMessagesById(threadId, [messageId]).pipe(Effect.result);
