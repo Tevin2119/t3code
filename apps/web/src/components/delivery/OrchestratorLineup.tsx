@@ -145,6 +145,7 @@ export function OrchestratorLineup(props: {
           boardLead?.harness ??
           (props.driver ? (DELIVERY_HARNESS_BY_DRIVER[props.driver] ?? null) : null),
         role: binding?.role ?? boardLead?.role ?? null,
+        ...(boardLead ? { seat: boardLead.seat } : {}),
         ...(boardLead && props.leadModelSelection
           ? { modelSelection: props.leadModelSelection }
           : {}),

@@ -658,3 +658,48 @@ it("shows a board task's team over a person's binding saved on its thread", asyn
   await expect.element(lead.getByText(", orchestrator")).toBeInTheDocument();
   testState.teams = null;
 });
+
+it("crowns a board task's lead by its seat when another seat shares its role and harness", async () => {
+  testState.teams = [
+    {
+      ...TEAMS[0],
+      team: "development",
+      seats: [
+        seat("reviewer-a", "reviewer", "claude", "First reviewer"),
+        seat("lead", "reviewer", "claude", "Lead"),
+        seat("critic", "reviewer", "codex", "Critic"),
+      ],
+      settings: [],
+    },
+  ];
+  testState.threadState = {
+    data: {
+      binding: null,
+      lineup: { team: "development", participants: [LINEUP.participants[1]!] },
+      pending: null,
+    },
+  };
+  await using _screen = await render(
+    <OrchestratorLineup
+      environmentId={"env-a" as never}
+      threadId={"t1" as never}
+      driver={ProviderDriverKind.make("codex")}
+      entries={ENTRIES}
+      models={MODELS}
+      boardOwned
+      leadModelSelection={{
+        instanceId: ProviderInstanceId.make("codex"),
+        model: "codex-successor",
+      }}
+    />,
+  );
+
+  const lead = page.getByRole("group", { name: "Settings for Lead" });
+  await expect.element(lead.getByText(", orchestrator")).toBeInTheDocument();
+  await expect
+    .element(lead.getByRole("button", { name: "Choose provider and model for Lead" }))
+    .toHaveTextContent("Codex · codex-successor");
+  const other = page.getByRole("group", { name: "Settings for First reviewer" });
+  await expect.element(other.getByText(", orchestrator")).not.toBeInTheDocument();
+  testState.teams = null;
+});

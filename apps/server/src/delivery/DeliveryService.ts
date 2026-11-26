@@ -380,6 +380,13 @@ const make = Effect.fn("DeliveryService.make")(function* (
   /** A board task's thread: one the board gave a lineup, or one with a board task's own id. */
   const boardOwned = (threadId: string) =>
     boardLineups.has(threadId) || boardTaskOfMarker(threadId) !== null;
+  /**
+   * The team a conversation's own sessions start with. A board task's thread has none: a binding
+   * a person saved on it is left in the store, for a build that predates board lineups, and is
+   * neither shown nor enforced.
+   */
+  const teamBindingOf = (threadId: string) =>
+    boardOwned(threadId) ? undefined : bindings.get(threadId);
 
   const storeReadable = Effect.suspend(() =>
     storeProblem
@@ -1566,14 +1573,14 @@ const make = Effect.fn("DeliveryService.make")(function* (
       return false;
     }
     yield* storeReadable;
-    const intent = pending.get(threadId);
+    const intent = boardOwned(threadId) ? undefined : pending.get(threadId);
     if (intent && !bindings.has(threadId)) {
       return yield* new DeliveryError({
         reason: "pending",
         detail: `Team ${intent.team} was chosen for this thread and its setup did not complete${intent.why ? `: ${intent.why}` : "."} Send again to retry, or choose "No team" to start it as an ordinary thread.`,
       });
     }
-    const binding = bindings.get(threadId);
+    const binding = teamBindingOf(threadId);
     if (!binding) return false;
 
     if (actual.driver !== binding.driver) {
@@ -1653,7 +1660,7 @@ const make = Effect.fn("DeliveryService.make")(function* (
   // The record is kept by the engine. A report it does not take is logged and
   // does not stop the thread, which runs on what it was given either way.
   const reportEffective = (threadId: ThreadId, report: DeliveryEffective.EffectiveReport) => {
-    const binding = bindings.get(threadId);
+    const binding = teamBindingOf(threadId);
     if (!binding) return Effect.void;
     return request("POST", `/api/sessions/${binding.session}/effective`, {
       by: "T3 Code",
@@ -1686,7 +1693,7 @@ const make = Effect.fn("DeliveryService.make")(function* (
 
   DeliveryThreadSession.registerDeliveryPreparer(prepareThread);
   DeliveryThreadSession.registerDeliveryReporter(reportEffective);
-  DeliveryThreadSession.registerDeliveryTeamLookup((threadId) => bindings.get(threadId)?.team);
+  DeliveryThreadSession.registerDeliveryTeamLookup((threadId) => teamBindingOf(threadId)?.team);
   yield* Effect.addFinalizer(() =>
     Effect.sync(() => {
       DeliveryThreadSession.registerDeliveryPreparer(undefined);

@@ -2031,3 +2031,23 @@ it.live("saves board lineups again once a save that failed can go through", () =
     assert.include(yield* fileSystem.readFileString(file), "developer");
   }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-save-retry-")));
 });
+
+it.effect(
+  "starts a board task's sessions on the board's team, never a person's old binding",
+  () => {
+    const engine = board();
+    engine.addTask({ id: "task-7" });
+    const legacy = legacyStoreOn(THREAD);
+    // A person bound the thread to research on Claude before the upgrade.
+    Object.assign(legacy.threads[THREAD]!, { driver: "claudeAgent", harness: "claude" });
+    return Effect.gen(function* () {
+      yield* (yield* service(threadStore())).reconcile();
+      const delivery = yield* DeliveryService.DeliveryService;
+      const shown = yield* delivery.threadState(THREAD);
+      assert.isNull(shown.binding);
+      assert.equal(shown.lineup?.team, "development");
+      // The board's lead runs on Codex: its session starts as an ordinary one, as the panel says.
+      assert.isFalse(yield* delivery.prepareThread(THREAD, { driver: "codex", cwd: REPO }));
+    }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-legacy-binding-", legacy)));
+  },
+);
