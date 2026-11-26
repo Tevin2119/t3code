@@ -1620,6 +1620,12 @@ export function createServerEnvironmentAtoms<R, E>(
       label: "environment-data:provider:install-remove",
       tag: WS_METHODS.providerInstallRemove,
     }),
+    // Short-lived so opening a mode picker shows a setting changed a moment ago.
+    providerRuntimeModeLimits: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:server:provider-runtime-mode-limits",
+      tag: WS_METHODS.serverGetProviderRuntimeModeLimits,
+      staleTimeMs: 5_000,
+    }),
     checkoutUpdateState: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
       label: "environment-data:server:checkout-update-state",
       tag: WS_METHODS.serverSubscribeCheckoutUpdate,
