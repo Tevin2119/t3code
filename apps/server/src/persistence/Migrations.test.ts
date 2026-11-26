@@ -83,15 +83,16 @@ describe("runMigrations", () => {
     Effect.gen(function* () {
       yield* runMigrations({ toMigrationInclusive: 119 });
 
-      const throughLinkedBoards = { toMigrationInclusive: 122 };
+      const throughLinkedBoards = { toMigrationInclusive: 123 };
       assert.deepStrictEqual(yield* runMigrations(throughLinkedBoards), [
         [120, "ScheduledTaskAncestry"],
         [121, "PeerArrivalKey"],
         [122, "WorkflowLaunchOrigin"],
+        [123, "ScheduledTaskProvenance"],
       ]);
       assert.deepStrictEqual(
         yield* history,
-        migrationManifest.filter(([id]) => id <= 122),
+        migrationManifest.filter(([id]) => id <= throughLinkedBoards.toMigrationInclusive),
       );
       assert.deepStrictEqual(yield* runMigrations(throughLinkedBoards), []);
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),

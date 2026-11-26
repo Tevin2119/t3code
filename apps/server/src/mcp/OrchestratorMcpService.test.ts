@@ -4261,6 +4261,7 @@ describe("OrchestratorMcpService provider resolution", () => {
             Layer.mock(SecretRequests.SecretRequests)({}),
             Layer.mock(RemoteDelegation.RemoteDelegation)({}),
             Layer.mock(ScheduledTaskService.ScheduledTaskService)({
+              getLinkOrigin: () => Effect.succeed(caller?.linkOrigin),
               list: () =>
                 created === undefined
                   ? Effect.succeed({ tasks })
@@ -4427,6 +4428,7 @@ describe("OrchestratorMcpService provider resolution", () => {
         } satisfies McpInvocationScope;
         const shell = {
           ...liveThreadShell(caller, { runtimeMode: "approval-required" }),
+          linkOrigin: scope.thread.linkOrigin,
           projectId,
         };
         const mcp = yield* OrchestratorMcpService.OrchestratorMcpService.pipe(

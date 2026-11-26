@@ -3,9 +3,8 @@ import {
   assertPeerScheduledTask,
   assertPeerThreadTargets,
   filterPeerThreadRows,
-  isSameLinkSchedule,
+  filterPeerScheduledTasks,
   linkedScheduleNotFound,
-  scheduledTaskThreadTargets,
 } from "../delivery/linkedThreadAccess.ts";
 import {
   CommandId,
@@ -2498,7 +2497,7 @@ const make = Effect.gen(function* () {
         ? linkedScheduleNotFound()
         : failure("task_not_found", `Scheduled task ${scheduledTaskId} was not found.`);
     }
-    yield* assertPeerScheduledTask(scope, task, threadManagement, delivery);
+    yield* assertPeerScheduledTask(scope, task, scheduledTasks, threadManagement, delivery);
     yield* requireScheduledTaskWithinLimits(task, limits);
     return task;
   });
@@ -2576,7 +2575,13 @@ const make = Effect.gen(function* () {
           );
         const replayed = tasks.find((candidate) => candidate.id === replayedId);
         if (replayed !== undefined) {
-          yield* assertPeerScheduledTask(scope, replayed, threadManagement, delivery);
+          yield* assertPeerScheduledTask(
+            scope,
+            replayed,
+            scheduledTasks,
+            threadManagement,
+            delivery,
+          );
           yield* requireScheduledTaskWithinLimits(replayed, limits);
         }
       }
@@ -2608,24 +2613,14 @@ const make = Effect.gen(function* () {
         if (!isLinkedDeliveryCaller(scope)) {
           return { tasks: matching.map((task) => scheduledTaskSummary(task, false)) };
         }
-        const owned = yield* Effect.filter(matching, (task) =>
-          isSameLinkSchedule(scope, task, threadManagement),
+        const owned = yield* filterPeerScheduledTasks(
+          scope,
+          matching,
+          scheduledTasks,
+          threadManagement,
+          delivery,
         );
-        const targets = [...new Set(owned.flatMap(scheduledTaskThreadTargets))];
-        const allowed = new Set(
-          yield* filterPeerThreadRows(
-            scope,
-            targets,
-            (threadId) => threadId,
-            threadManagement,
-            delivery,
-          ),
-        );
-        return {
-          tasks: owned
-            .filter((task) => scheduledTaskThreadTargets(task).every((id) => allowed.has(id)))
-            .map((task) => scheduledTaskSummary(task, false)),
-        };
+        return { tasks: owned.map((task) => scheduledTaskSummary(task, false)) };
       },
     ),
     updateScheduledTask: Effect.fn("OrchestratorMcpService.updateScheduledTask")(

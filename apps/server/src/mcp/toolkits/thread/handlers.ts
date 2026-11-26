@@ -139,7 +139,7 @@ export const layer = McpToolAccess.toLayer(ThreadToolkit, {
         const delivery = Option.getOrUndefined(
           yield* Effect.serviceOption(DeliveryService.DeliveryService),
         );
-        yield* assertPeerScheduledTask(scope, scheduled, threads, delivery);
+        yield* assertPeerScheduledTask(scope, scheduled, scheduler, threads, delivery);
       }
       const { task, threadId } = yield* scheduler
         .runNow({ id: input.taskId })

@@ -1407,6 +1407,10 @@ it.effect.each(["bound", "created", "owner-origin", "legacy"] as const)(
           Layer.provide(
             Layer.mock(ScheduledTaskService.ScheduledTaskService)({
               list: () => Effect.succeed({ tasks: [task] }),
+              getLinkOrigin: () =>
+                Effect.succeed(
+                  relationship === "bound" || relationship === "created" ? linkOrigin : undefined,
+                ),
               runNow: () => Effect.succeed({ task, threadId: privateThreadId }),
             }),
           ),
@@ -1416,18 +1420,19 @@ it.effect.each(["bound", "created", "owner-origin", "legacy"] as const)(
   },
 );
 
-it.effect("a full-access link only lists, edits, deletes and runs schedules from that link", () =>
+it.effect("a full-access link can manage its schedules after the creator is deleted", () =>
   Effect.gen(function* () {
     const owner = ThreadId.make("owner-schedule-thread");
     const peer = ThreadId.make("peer-schedule-thread");
     const other = ThreadId.make("other-schedule-thread");
+    const launched = ThreadId.make("schedule-run-thread");
     const linkedClient = clientScope("full-access");
     const credentials = { ...linkedClient.client!, linked: true } as const;
     const task = (id: string, ancestor?: ThreadId) => ({
       ...decodeScheduledTask(scheduledTask(id, "full-access")),
       ...(ancestor === undefined ? {} : { launchedFromThreadId: ancestor }),
     });
-    const ownTask = task("same-link", peer);
+    const ownTask = { ...task("same-link", peer), threadId: launched };
     const tasks = [
       ownTask,
       task("other-link", other),
@@ -1437,22 +1442,53 @@ it.effect("a full-access link only lists, edits, deletes and runs schedules from
     const writes: string[] = [];
     const services = Layer.mergeAll(
       Layer.mock(ThreadManagement.ThreadManagementService)({
-        getThreadShell: (id) =>
-          Effect.succeed({
-            ...McpToolAccessTestkit.liveThreadShell(id),
-            ...(id === owner
-              ? {}
+        getThreadShell: (id, options) =>
+          Effect.succeed(
+            id === peer && !options?.includeDeleted
+              ? null
               : {
-                  linkOrigin: {
-                    sessionId: id === peer ? credentials.sessionId : "other-session",
-                    label: credentials.label,
-                    access: credentials.access,
-                  },
-                }),
-          }),
+                  ...McpToolAccessTestkit.liveThreadShell(id),
+                  ...(id === peer
+                    ? { deletedAt: DateTime.makeUnsafe("2026-11-26T00:00:00Z") }
+                    : {}),
+                  ...(id === launched
+                    ? {
+                        lineage: {
+                          ...McpToolAccessTestkit.liveThreadShell(id).lineage,
+                          launchedFromThreadId: peer,
+                        },
+                        runtimeMode: "full-access" as const,
+                      }
+                    : {}),
+                  ...(id === owner
+                    ? {}
+                    : {
+                        linkOrigin: {
+                          sessionId:
+                            id === peer || id === launched
+                              ? credentials.sessionId
+                              : "other-session",
+                          label: credentials.label,
+                          access: credentials.access,
+                        },
+                      }),
+                },
+          ),
       }),
       Layer.mock(ScheduledTaskService.ScheduledTaskService)({
         list: () => Effect.succeed({ tasks }),
+        getLinkOrigin: ({ id }) =>
+          Effect.succeed(
+            id === ownTask.id
+              ? {
+                  sessionId: credentials.sessionId,
+                  label: credentials.label,
+                  access: credentials.access,
+                }
+              : id === "other-link"
+                ? { sessionId: "other-session", label: "Other link", access: credentials.access }
+                : undefined,
+          ),
         upsert: (input, origin) =>
           Effect.sync(() => {
             expect(origin).toBeUndefined();
@@ -1467,7 +1503,7 @@ it.effect("a full-access link only lists, edits, deletes and runs schedules from
         runNow: ({ id }) =>
           Effect.sync(() => {
             writes.push(`run:${id}`);
-            return { task: ownTask, threadId: peer };
+            return { task: ownTask, threadId: launched };
           }),
       }),
       DeliveryService.layerTest,
@@ -1485,16 +1521,24 @@ it.effect("a full-access link only lists, edits, deletes and runs schedules from
     );
     yield* Effect.gen(function* () {
       const server = yield* McpServer.McpServer;
-      const call = (name: string, args: Record<string, unknown>) =>
+      const call = (
+        name: string,
+        args: Record<string, unknown>,
+        sessionId = credentials.sessionId,
+      ) =>
         server.callTool({ name, arguments: args }).pipe(
           Effect.provideService(McpInvocationContext.McpInvocationContext, {
             ...linkedClient,
-            client: credentials,
+            client: { ...credentials, sessionId },
           }),
           Effect.provideService(McpSchema.McpServerClient, client),
         );
       const listed = yield* call("list_scheduled_tasks", {});
       expect(listed.structuredContent).toMatchObject({ tasks: [{ scheduledTaskId: ownTask.id }] });
+      const otherList = yield* call("list_scheduled_tasks", {}, "other-session");
+      expect(otherList.structuredContent).toMatchObject({
+        tasks: [{ scheduledTaskId: "other-link" }],
+      });
       for (const [tool, key] of [
         ["schedule_task", "scheduledTaskId"],
         ["delete_scheduled_task", "scheduledTaskId"],
@@ -1508,6 +1552,9 @@ it.effect("a full-access link only lists, edits, deletes and runs schedules from
         for (const { id } of tasks.slice(1)) {
           expect(declaredFailure(yield* call(tool, { [key]: id }))).toEqual(absent);
         }
+        expect(declaredFailure(yield* call(tool, { [key]: ownTask.id }, "other-session"))).toEqual(
+          absent,
+        );
         expect((yield* call(tool, { [key]: ownTask.id })).isError).toBe(false);
       }
       expect(writes).toEqual(["update:same-link", "delete:same-link", "run:same-link"]);

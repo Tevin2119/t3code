@@ -127,6 +127,10 @@ export class AuthSessionRepository extends Context.Service<
       sessionId: AuthSessionId,
       now: DateTime.Utc,
     ) => Effect.Effect<Option.Option<string>, AuthSessionRepositoryError>;
+    readonly isActive: (
+      sessionId: AuthSessionId,
+      now: DateTime.Utc,
+    ) => Effect.Effect<boolean, AuthSessionRepositoryError>;
     readonly rememberPeerArrivalKey: (
       sessionId: AuthSessionId,
       key: string,
@@ -603,6 +607,12 @@ export const make = Effect.gen(function* () {
       Effect.map((rows) => rows.map((row) => row.sessionId)),
     );
 
+  const activeSession = (sessionId: AuthSessionId, now: DateTime.Utc) => sql`
+    FROM auth_sessions
+    WHERE session_id = ${sessionId} AND revoked_at IS NULL
+      AND expires_at > ${DateTime.formatIso(now)}
+  `;
+
   return {
     create,
     createReplacingActive,
@@ -610,9 +620,7 @@ export const make = Effect.gen(function* () {
     getPeerArrivalKey: Effect.fn("AuthSessionRepository.getPeerArrivalKey")(
       function* (sessionId, now) {
         const [session] = yield* sql<{ peer_arrival_key: string }>`
-          SELECT peer_arrival_key FROM auth_sessions
-          WHERE session_id = ${sessionId} AND revoked_at IS NULL
-            AND expires_at > ${DateTime.formatIso(now)} AND peer_arrival_key IS NOT NULL
+          SELECT peer_arrival_key ${activeSession(sessionId, now)} AND peer_arrival_key IS NOT NULL
         `.pipe(
           NodeSqliteClient.readOnly,
           Effect.mapError(
@@ -627,6 +635,20 @@ export const make = Effect.gen(function* () {
         return Option.fromNullishOr(session?.peer_arrival_key);
       },
     ),
+    isActive: Effect.fn("AuthSessionRepository.isActive")(function* (sessionId, now) {
+      const rows = yield* sql`SELECT 1 ${activeSession(sessionId, now)}`.pipe(
+        NodeSqliteClient.readOnly,
+        Effect.mapError(
+          (cause) =>
+            new PersistenceSqlError({
+              operation: "AuthSessionRepository.isActive",
+              correlation: { sessionId },
+              cause,
+            }),
+        ),
+      );
+      return rows.length > 0;
+    }),
     rememberPeerArrivalKey: Effect.fn("AuthSessionRepository.rememberPeerArrivalKey")(
       function* (sessionId, key) {
         yield* sql`UPDATE auth_sessions SET peer_arrival_key = ${key}

@@ -4,6 +4,7 @@ import * as NodeUtil from "node:util";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, it, vi } from "@effect/vitest";
 import {
+  AuthSessionId,
   CommandId,
   ProjectId,
   ProviderInstanceId,
@@ -34,6 +35,7 @@ import { OrchestratorDispatchError } from "../orchestration-v2/Orchestrator.ts";
 import * as SecretRequests from "../secrets/SecretRequests.ts";
 import * as ManagedProjectFolders from "../project/ManagedProjectFolders.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
+import * as AuthSessions from "../persistence/AuthSessions.ts";
 import * as ScheduledTaskService from "./ScheduledTaskService.ts";
 import * as ManagedPolicy from "../policy/ManagedPolicy.ts";
 
@@ -728,6 +730,8 @@ it.effect("a bound run follows its thread when promotion moves it mid-send", () 
 
 it.effect("a fresh-session task launches one thread, then starts each later run fresh in it", () =>
   Effect.gen(function* () {
+    const sessions = yield* AuthSessions.AuthSessionRepository;
+    const sql = yield* SqlClient.SqlClient;
     const launches = yield* Ref.make<
       Array<{
         launchedFromThreadId: ThreadId | undefined;
@@ -738,11 +742,43 @@ it.effect("a fresh-session task launches one thread, then starts each later run 
     const linkOrigin = {
       sessionId: "scheduler-link",
       label: "Scheduler link",
-      access: "full-access",
+      access: "auto",
     } as const;
+    const expiringOrigin = { ...linkOrigin, sessionId: "expiring-link" };
+    const expiringCreator = ThreadId.make("thread:expiring");
+    const now = yield* DateTime.now;
+    const peerSession = {
+      subject: "peer",
+      method: "bearer-access-token",
+      scopes: [],
+      client: {
+        label: linkOrigin.label,
+        ipAddress: null,
+        userAgent: null,
+        deviceType: "unknown",
+        os: null,
+        browser: null,
+      },
+      issuedAt: now,
+      peerArrivalKey: "fixture-key",
+    } as const;
+    yield* sessions.create({
+      ...peerSession,
+      sessionId: AuthSessionId.make(linkOrigin.sessionId),
+      expiresAt: DateTime.add(now, { minutes: 60 }),
+    });
+    yield* sessions.create({
+      ...peerSession,
+      sessionId: AuthSessionId.make(expiringOrigin.sessionId),
+      expiresAt: DateTime.add(now, { seconds: 1 }),
+    });
     const creator = ThreadId.make("thread:scheduler");
+    const ownerCreator = ThreadId.make("thread:owner");
+    const missingCreator = ThreadId.make("thread:missing");
+    const ownerReads = yield* Ref.make(0);
     const sends = yield* Ref.make<Array<{ threadId: ThreadId; freshContext?: boolean }>>([]);
     const launched = ThreadId.make("thread:fresh-session-task");
+    const due = yield* Deferred.make<Effect.Effect<void>>();
     const layer = ScheduledTaskService.layer.pipe(
       Layer.provide(
         Layer.mergeAll(
@@ -755,22 +791,35 @@ it.effect("a fresh-session task launches one thread, then starts each later run 
               ]).pipe(Effect.as({ threadId: launched, resumed: false } as never)),
           }),
           Layer.mock(ThreadManagementService.ThreadManagementService)({
-            getThreadShell: (id) =>
-              Ref.get(originDeleted).pipe(
-                Effect.map(
-                  (deleted) =>
-                    ({
-                      id,
-                      deletedAt: id === creator && deleted ? "2026-01-01T00:00:00.000Z" : null,
-                      archivedAt: null,
-                      projectId: ProjectId.make("project:test"),
-                      lineage: {
-                        rootThreadId: id,
-                        parentThreadId: null,
-                        relationshipToParent: null,
-                      },
-                      ...(id === creator || id === launched ? { linkOrigin } : {}),
-                    }) as never,
+            getThreadShell: (id, options) =>
+              (id === ownerCreator
+                ? Ref.update(ownerReads, (reads) => reads + 1)
+                : Effect.void
+              ).pipe(
+                Effect.andThen(Ref.get(originDeleted)),
+                Effect.map((deleted) =>
+                  id === missingCreator ||
+                  (deleted && (id === creator || id === ownerCreator) && !options?.includeDeleted)
+                    ? null
+                    : ({
+                        id,
+                        deletedAt:
+                          (id === creator || id === ownerCreator) && deleted
+                            ? "2026-01-01T00:00:00.000Z"
+                            : null,
+                        archivedAt: null,
+                        projectId: ProjectId.make("project:test"),
+                        lineage: {
+                          rootThreadId: id,
+                          parentThreadId: null,
+                          relationshipToParent: null,
+                        },
+                        ...(id === creator || id === launched
+                          ? { linkOrigin }
+                          : id === expiringCreator
+                            ? { linkOrigin: expiringOrigin }
+                            : {}),
+                      } as never),
                 ),
               ),
             sendToThread: (input) =>
@@ -788,7 +837,17 @@ it.effect("a fresh-session task launches one thread, then starts each later run 
             isScratchProject: () => Effect.succeed(false),
           }),
           NodeCrypto.layer,
-          Layer.succeed(Scheduler.Scheduler, { register: () => Effect.void }),
+          Layer.succeed(Scheduler.Scheduler, {
+            register: <E, R>(name: string, run: Effect.Effect<void, E, R>) =>
+              name !== "scheduled-tasks"
+                ? Effect.void
+                : Effect.context<R>().pipe(
+                    Effect.flatMap((context) =>
+                      Deferred.succeed(due, run.pipe(Effect.provideContext(context), Effect.orDie)),
+                    ),
+                    Effect.asVoid,
+                  ),
+          }),
         ),
       ),
     );
@@ -803,13 +862,25 @@ it.effect("a fresh-session task launches one thread, then starts each later run 
         projectId: ProjectId.make("project:test"),
         workspaceStrategy: { type: "root" },
         modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
-        runtimeMode: "full-access",
+        runtimeMode: "auto",
         interactionMode: "default",
       } as const;
       const ownerInput = { ...input, id: ScheduledTaskId.make("task:owner-fresh-session") };
       yield* service.upsert(ownerInput);
       const ownerEdit = yield* service.upsert(ownerInput, creator);
       assert.equal(ownerEdit.task.launchedFromThreadId, undefined);
+      const ownerAgentInput = { ...input, id: ScheduledTaskId.make("task:owner-agent") };
+      yield* service.upsert(ownerAgentInput, ownerCreator);
+      const olderOwner = { ...input, id: ScheduledTaskId.make("task:older-owner") };
+      yield* service.upsert(olderOwner, ownerCreator);
+      yield* sql`UPDATE scheduled_tasks SET provenance_json = NULL WHERE task_id = ${olderOwner.id}`;
+      const olderLink = { ...input, id: ScheduledTaskId.make("task:older-link") };
+      yield* service.upsert(olderLink, creator);
+      yield* sql`UPDATE scheduled_tasks SET provenance_json = NULL WHERE task_id = ${olderLink.id}`;
+      const missing = { ...input, id: ScheduledTaskId.make("task:missing-creator") };
+      yield* service.upsert(missing);
+      yield* sql`UPDATE scheduled_tasks SET launched_from_thread_id = ${missingCreator},
+        provenance_json = NULL WHERE task_id = ${missing.id}`;
       yield* service.upsert({ ...input, threadMode: "fresh_session" }, creator);
 
       assert.equal((yield* service.runNow({ id: input.id })).threadId, launched);
@@ -851,11 +922,76 @@ it.effect("a fresh-session task launches one thread, then starts each later run 
       assert.equal(cleared.task.threadId, null);
       assert.equal(cleared.task.threadMode, "continue");
       yield* Ref.set(originDeleted, true);
+      assert.equal((yield* service.runNow({ id: input.id })).threadId, launched);
+      assert.deepEqual((yield* Ref.get(launches)).at(-1), {
+        launchedFromThreadId: creator,
+        linkOrigin,
+      });
+      assert.isTrue((yield* service.list()).tasks.find(({ id }) => id === input.id)?.enabled);
+      assert.deepEqual(
+        yield* service.getLinkOrigin((yield* service.upsert(olderLink)).task),
+        linkOrigin,
+      );
+      yield* service.runNow({ id: olderLink.id });
+      assert.deepEqual((yield* Ref.get(launches)).at(-1), {
+        launchedFromThreadId: creator,
+        linkOrigin,
+      });
+      yield* service.runNow({ id: olderOwner.id });
+      assert.deepEqual((yield* Ref.get(launches)).at(-1), {
+        launchedFromThreadId: ownerCreator,
+        linkOrigin: undefined,
+      });
+      const reads = yield* Ref.get(ownerReads);
+      yield* service.runNow({ id: ownerAgentInput.id });
+      assert.deepEqual((yield* Ref.get(launches)).at(-1), {
+        launchedFromThreadId: ownerCreator,
+        linkOrigin: undefined,
+      });
+      yield* service.runNow({ id: ownerInput.id });
+      assert.deepEqual((yield* Ref.get(launches)).at(-1), {
+        launchedFromThreadId: undefined,
+        linkOrigin: undefined,
+      });
+      assert.isTrue(
+        (yield* service.list()).tasks.find(({ id }) => id === ownerAgentInput.id)?.enabled,
+      );
+      assert.isTrue((yield* service.list()).tasks.find(({ id }) => id === ownerInput.id)?.enabled);
+      assert.equal(yield* Ref.get(ownerReads), reads);
+
+      const expiresInput = { ...input, id: ScheduledTaskId.make("task:expires") };
+      yield* service.upsert(expiresInput, expiringCreator);
+      yield* TestClock.adjust("1 second");
+      yield* sessions.revoke({
+        sessionId: AuthSessionId.make(linkOrigin.sessionId),
+        revokedAt: now,
+      });
+      const before = (yield* Ref.get(launches)).length;
       const refused = yield* service.runNow({ id: input.id }).pipe(Effect.flip);
-      assert.include(refused.message, "originating thread");
-      assert.isFalse((yield* service.list()).tasks.find(({ id }) => id === input.id)?.enabled);
+      assert.equal(refused.message, "The schedule's link session was revoked or expired.");
+      const expiredAt = DateTime.formatIso(yield* DateTime.now);
+      yield* sql`UPDATE scheduled_tasks SET next_run_at = ${expiredAt} WHERE task_id = ${expiresInput.id}`;
+      yield* Deferred.await(due).pipe(Effect.flatten);
+      for (const id of [input.id, expiresInput.id]) {
+        const disabled = (yield* service.list()).tasks.find((task) => task.id === id);
+        assert.isFalse(disabled?.enabled);
+        assert.equal(disabled?.lastRunError, refused.message);
+        assert.isNull(disabled?.nextRunAt);
+      }
+      assert.lengthOf(yield* Ref.get(launches), before);
+      const unresolved = yield* service.runNow({ id: missing.id }).pipe(Effect.flip);
+      assert.include(unresolved.message, "missing ancestry");
+      const disabled = (yield* service.list()).tasks.find(({ id }) => id === missing.id);
+      assert.isFalse(disabled?.enabled);
+      assert.equal(disabled?.lastRunError, unresolved.message);
+      yield* service.runNow({ id: ownerAgentInput.id });
+      assert.isTrue(
+        (yield* service.list()).tasks.find(({ id }) => id === ownerAgentInput.id)?.enabled,
+      );
     }).pipe(Effect.provide(layer));
-  }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
+  }).pipe(
+    Effect.provide(AuthSessions.layer.pipe(Layer.provideMerge(SqlitePersistence.layerMemory))),
+  ),
 );
 
 it.effect("a refused dispatch records its refusal, and opaque causes stay generic", () =>
