@@ -8,7 +8,7 @@ import {
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import { expect, it, vi } from "vite-plus/test";
-import { page } from "vite-plus/test/browser";
+import { page, userEvent } from "vite-plus/test/browser";
 vi.mock(import("./CommandOutputPanel"), () => ({
   useCommandOutputStreaming: () => true,
   CommandOutputPanel: () => <div>Command output stream</div>,
@@ -17,6 +17,7 @@ vi.mock(import("./CommandOutputPanel"), () => ({
 import { render } from "../../../test/render";
 import { backgroundWorkNowItem } from "./ThreadActivityBanners";
 import { ThreadNow } from "./ThreadNow";
+import { SharedTooltipProvider } from "../ui/shared-tooltip";
 
 it("opens full command details for short labels and keeps pending tasks current", async () => {
   const command = "python3 audit.py -j 6\n> scratch/audit.log 2>&1";
@@ -135,6 +136,43 @@ it("opens a background subagent from its provider icon beside the details dialog
   await expect
     .element(screen.getByRole("button", { name: "Details", exact: true }))
     .toBeInTheDocument();
+});
+
+it("names a background subagent on hover before its thread exists", async () => {
+  await using screen = await render(
+    <SharedTooltipProvider>
+      <ThreadNow
+        attention={null}
+        syncPhase={null}
+        goal={null}
+        work={backgroundWorkNowItem({
+          environmentId: EnvironmentId.make("test"),
+          threadId: ThreadId.make("thread"),
+          tasks: [
+            {
+              taskId: "sub-1",
+              kind: "subagent",
+              description: "Audit fixtures",
+              providerInstanceId: ProviderInstanceId.make("codex"),
+            },
+          ],
+          turnItems: [],
+          stopDisabled: false,
+          stopping: false,
+          onStop: async () => undefined,
+          onOpenThread: () => undefined,
+        })}
+      />
+    </SharedTooltipProvider>,
+  );
+  const avatar = screen.getByRole("button", { name: "Audit fixtures", exact: true });
+  await expect.element(avatar).toBeDisabled();
+  await userEvent.hover(avatar);
+  await vi.waitFor(() =>
+    expect(document.querySelector('[data-slot="tooltip-popup"]')?.textContent).toBe(
+      "Audit fixtures",
+    ),
+  );
 });
 
 it("gives a subagent the same status as the background work line", async () => {

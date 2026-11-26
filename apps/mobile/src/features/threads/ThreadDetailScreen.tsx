@@ -79,7 +79,7 @@ import {
   type ProviderSubagentStatus,
 } from "@t3tools/client-runtime/state/thread-execution";
 import { formatModelSlugName, resolveSelectableModel } from "@t3tools/shared/model";
-import { isProviderNativeSubagentThread } from "@t3tools/contracts";
+import { AuthOrchestrationOperateScope, isProviderNativeSubagentThread } from "@t3tools/contracts";
 import type { QueuedRunEdit } from "../../state/queued-run-edit";
 import type { FollowUpBehavior } from "../../lib/followUpBehavior";
 import type { ActiveTurnComposerAction } from "@t3tools/client-runtime/state/composer-dispatch";
@@ -150,11 +150,9 @@ import {
 } from "../../lib/layout";
 import { editPendingThreadMessage } from "../../state/edit-pending-thread-message";
 import { environmentCatalog } from "../../connection/catalog";
-import { deviceEnvironment } from "../../state/device";
-import { useEnvironmentQuery } from "../../state/query";
-import { threadDevicePreviews } from "../devices/threadDevicePreviews";
+import { useThreadDevicePreviewCount } from "../../state/device";
 import { ThreadBrowserFloat } from "../browser/ThreadBrowserFloat";
-import { useThreadServerBrowserTabs } from "../../state/preview";
+import { useThreadServerBrowserTabCount } from "../../state/preview";
 import type { QueuedThreadMessage } from "../../state/thread-outbox-model";
 import { scopedThreadKey } from "../../lib/scopedEntities";
 import {
@@ -175,6 +173,7 @@ import { appAtomRegistry } from "../../state/atom-registry";
 import { threadStreamHaptics } from "./threadStreamHaptics";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { orchestrationEnvironment } from "../../state/orchestration";
+import { useEnvironmentScopeDenied } from "../../state/session";
 import type { PendingUserInputDraftAnswer } from "@t3tools/client-runtime/state/pending-user-input";
 import type { RunStopPresentation } from "@t3tools/client-runtime/state/thread-execution";
 import type {
@@ -229,7 +228,6 @@ import type { OrchestrationV2ProviderSession } from "@t3tools/contracts";
 import { voiceInputBlocksSubmission } from "@t3tools/client-runtime/voice-input";
 
 export interface ThreadDetailScreenProps {
-  readonly header?: React.ReactNode;
   readonly draftMode?: {
     /** viewportHeight excludes the composer so draft chrome can resize it without feedback. */
     readonly content: (
@@ -437,10 +435,10 @@ function ThreadDetailBody(
   const openInspector = useOpenThreadInspector();
   const { session: voiceInputSession } = useGlobalVoiceInput();
   const reportedModelSelection = useThreadReportedModelSelection(props.selectedThreadDetailRef);
-  const deviceState = useEnvironmentQuery(
-    deviceEnvironment.state({ environmentId: props.environmentId, input: {} }),
+  const devicePreviewCount = useThreadDevicePreviewCount(
+    props.environmentId,
+    props.selectedThread.id,
   );
-  const devicePreviews = threadDevicePreviews(deviceState.data, props.selectedThread.id);
   const openDevicePreview = () => {
     Keyboard.dismiss();
     if (
@@ -455,11 +453,12 @@ function ThreadDetailBody(
       threadId: props.selectedThread.id,
     });
   };
-  const browserTabs = useThreadServerBrowserTabs({
+  const serverBrowserEnabled =
+    !props.draftMode && props.serverConfig?.environment.capabilities.serverBrowser === true;
+  const browserTabCount = useThreadServerBrowserTabCount({
     environmentId: props.environmentId,
     threadId: props.selectedThread.id,
-    enabled:
-      !props.draftMode && props.serverConfig?.environment.capabilities.serverBrowser === true,
+    enabled: serverBrowserEnabled,
   });
   const openBrowserPreview = (tabId?: string) => {
     Keyboard.dismiss();
@@ -570,6 +569,10 @@ function ThreadDetailBody(
   });
   const unsnoozeThread = useAtomCommand(threadEnvironment.unsnooze, { reportFailure: false });
   const unsettleThread = useAtomCommand(threadEnvironment.unsettle, { reportFailure: false });
+  const canTriageThread = !useEnvironmentScopeDenied(
+    props.environmentId,
+    AuthOrchestrationOperateScope,
+  );
   const updateMetadata = useAtomCommand(threadEnvironment.updateMetadata, { reportFailure: false });
   const visitThread = useAtomCommand(threadEnvironment.visit, { reportFailure: false });
   const anyRunStop = useAtomValue(
@@ -669,7 +672,9 @@ function ThreadDetailBody(
     latestRunCompletedAt: props.selectedThread.latestRun?.completedAt ?? null,
   });
   const runStatusAction = async (action: "stop" | "wake" | "unsettle" | "dismiss") => {
-    if (statusPending || !props.canOperateThread) return;
+    const permitted =
+      action === "wake" || action === "unsettle" ? canTriageThread : props.canOperateThread;
+    if (statusPending || !permitted) return;
     const request: BackgroundWorkStopRequest = {
       threadKey: selectedThreadKey,
       taskIds:
@@ -813,7 +818,9 @@ function ThreadDetailBody(
               : gt("Dismissing...")
           : actionLabel,
         accessibilityLabel: actionLabel,
-        disabled: !props.canOperateThread || statusPending,
+        disabled:
+          !(lifecycleSnoozed || settled ? canTriageThread : props.canOperateThread) ||
+          statusPending,
         onPress: () =>
           void runStatusAction(lifecycleSnoozed ? "wake" : settled ? "unsettle" : "dismiss"),
       },
@@ -931,8 +938,8 @@ function ThreadDetailBody(
     showWorkingControl ||
     queuedCount > 0 ||
     agentsSegment !== null ||
-    devicePreviews.length > 0 ||
-    browserTabs.tabs.length > 0;
+    devicePreviewCount > 0 ||
+    browserTabCount > 0;
   const selectedThreadFeed = props.selectedThreadFeed;
   // A palette message result opens the thread at that message: earlier
   // history loads until the message is in the feed, which then scrolls to it.
@@ -1610,8 +1617,7 @@ function ThreadDetailBody(
           key={selectedThreadKey}
           environmentId={props.environmentId}
           threadId={props.selectedThread.id}
-          tabs={browserTabs.tabs}
-          loaded={browserTabs.loaded}
+          enabled={serverBrowserEnabled}
           top={navigationHeaderHeight + 8}
           onOpen={openBrowserPreview}
         />
@@ -1687,13 +1693,13 @@ function ThreadDetailBody(
                     }
                     lift={floatingControlLift}
                     devicePreview={
-                      devicePreviews.length > 0
-                        ? { count: devicePreviews.length, onPress: openDevicePreview }
+                      devicePreviewCount > 0
+                        ? { count: devicePreviewCount, onPress: openDevicePreview }
                         : null
                     }
                     browserPreview={
-                      browserTabs.tabs.length > 0
-                        ? { count: browserTabs.tabs.length, onPress: () => openBrowserPreview() }
+                      browserTabCount > 0
+                        ? { count: browserTabCount, onPress: () => openBrowserPreview() }
                         : null
                     }
                     showScrollToEnd={showScrollToEndButton}

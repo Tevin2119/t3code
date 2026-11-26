@@ -1,5 +1,5 @@
 import { thrownErrorMessage } from "@t3tools/client-runtime/errors";
-import { Tooltip, TooltipTrigger, TooltipPopup } from "../ui/tooltip";
+import { SharedTooltipTrigger } from "../ui/shared-tooltip";
 import { useAtomValue } from "@effect/atom-react";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { visibleLinkedThreads } from "@t3tools/client-runtime/state/threads";
@@ -157,31 +157,27 @@ function EnabledPullRequestThreadLinks({
   return (
     <>
       {display === "count" && (linkedCount > 0 || relations.error !== null) ? (
-        <Tooltip>
-          <TooltipTrigger
-            render={
-              <Button
-                size="xs"
-                variant="ghost"
-                aria-label={linkedThreadsLabel}
-                onClick={() =>
-                  openCommandPalette({
-                    query: url,
-                    ...((relations.data ?? lastRelations) === null
-                      ? {}
-                      : { linkedThreads: { environmentId, threads: linkedThreads, boardTasks } }),
-                  })
-                }
-              >
-                <MessageSquareIcon aria-hidden className="size-3.5" />
-                <span aria-hidden>{linkedCount || "?"}</span>
-              </Button>
-            }
-          />
-          <TooltipPopup>
-            {gt("{label}. Search in the command palette.", { label: linkedThreadsLabel })}
-          </TooltipPopup>
-        </Tooltip>
+        <SharedTooltipTrigger
+          render={
+            <Button
+              size="xs"
+              variant="ghost"
+              aria-label={linkedThreadsLabel}
+              onClick={() =>
+                openCommandPalette({
+                  query: url,
+                  ...((relations.data ?? lastRelations) === null
+                    ? {}
+                    : { linkedThreads: { environmentId, threads: linkedThreads, boardTasks } }),
+                })
+              }
+            >
+              <MessageSquareIcon aria-hidden className="size-3.5" />
+              <span aria-hidden>{linkedCount || "?"}</span>
+            </Button>
+          }
+          label={gt("{label}. Search in the command palette.", { label: linkedThreadsLabel })}
+        />
       ) : null}
       {display === "menu-item" ? (
         <MenuItem

@@ -322,12 +322,6 @@ it.effect.each(["contribution", "critique"] as const)(
             const turn = projection.providerTurns.find(
               (turn) => turn.runAttemptId === input.attemptId,
             )!;
-            const settled = yield* watch(
-              (event) =>
-                event.type === "run.updated" &&
-                event.payload.id === input.runId &&
-                event.payload.status === "waiting",
-            );
             const finished = yield* watch(
               (event) =>
                 event.type === "run.updated" &&
@@ -392,9 +386,8 @@ it.effect.each(["contribution", "critique"] as const)(
               threadDisposition: "reusable",
             });
 
-            yield* Fiber.join(settled);
-            yield* worker.drain();
             yield* Fiber.join(finished);
+            yield* worker.drain();
             if (next && nextStarting) {
               yield* Fiber.join(nextStarting);
               yield* worker.drain();
