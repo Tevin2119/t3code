@@ -759,13 +759,10 @@ const make = Effect.fn("DeliveryService.make")(function* (
 
   const stateOf = (threadId: ThreadId, boardHint = false): DeliveryThreadState => {
     if (boardHint || boardOwned(threadId)) {
-      // The board's team only: a person's binding or lineup saved here is not the board's.
+      // The board's team only: a person's binding, lineup or held team choice saved here is not
+      // the board's, and stays on disk for a build that predates board lineups.
       const lineup = boardLineups.get(threadId);
-      return {
-        binding: null,
-        pending: pending.get(threadId) ?? null,
-        ...(lineup ? { lineup } : {}),
-      };
+      return { binding: null, pending: null, ...(lineup ? { lineup } : {}) };
     }
     const binding = bindings.get(threadId) ?? null;
     // What the thread was started with stands until a person changes it.

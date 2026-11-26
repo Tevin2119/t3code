@@ -2051,3 +2051,83 @@ it.effect(
     }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-legacy-binding-", legacy)));
   },
 );
+
+it.effect(
+  "hides a person's held team choice on a board task's thread, and keeps it on disk",
+  () => {
+    const engine = board();
+    engine.addTask({ id: "task-7" });
+    const ordinary = ThreadId.make("ordinary");
+    // A person's bind to research that never completed before the upgrade.
+    const legacy = {
+      ...legacyStoreOn(ordinary),
+      pending: {
+        [THREAD]: {
+          threadId: THREAD,
+          team: "research",
+          role: "reviewer",
+          driver: "codex",
+          cwd: REPO,
+          since: "2026-11-20T00:00:00.000Z",
+          why: "the engine was offline",
+        },
+      },
+    };
+    return Effect.gen(function* () {
+      yield* (yield* service(threadStore())).reconcile();
+      const delivery = yield* DeliveryService.DeliveryService;
+      for (const state of [
+        yield* delivery.threadState(THREAD),
+        yield* delivery.threadState(THREAD, { boardOwned: true }),
+      ]) {
+        assert.isNull(state.pending);
+        assert.isNull(state.binding);
+        assert.equal(state.lineup?.team, "development");
+      }
+      assert.isFalse(yield* delivery.prepareThread(THREAD, { driver: "codex", cwd: REPO }));
+      // A person's own conversation keeps what it had.
+      assert.equal((yield* delivery.threadState(ordinary)).binding?.team, "research");
+      const { stateDir } = yield* ServerConfig.ServerConfig;
+      const fileSystem = yield* FileSystem.FileSystem;
+      assert.include(
+        yield* fileSystem.readFileString(`${stateDir}/delivery-threads.json`),
+        "the engine was offline",
+      );
+    }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-held-choice-", legacy)));
+  },
+);
+
+it.effect("starts an old successor as the board's even when the engine cannot be read", () => {
+  const engine = board();
+  engine.addTask({ id: "task-7" });
+  const store = threadStore();
+  const successor = limitedLeadHandoffThreadId(RunId.make("old-failed-run"));
+  return Effect.gen(function* () {
+    yield* store.dispatch(
+      createBoardTaskThread(TASK, {
+        commandId: CommandId.make("create-old-successor"),
+        threadId: successor,
+        projectId: PROJECT,
+        title: "Task task-7",
+        modelSelection: CLAUDE,
+      }),
+    );
+    engine.writeLink("task-7", {
+      environmentId: ENVIRONMENT,
+      threadId: successor,
+      setBy: ENVIRONMENT,
+    });
+    // The first pass cannot read the lanes: it still makes the thread the board's by its marker.
+    engine.dropNext(/^\/api\/lanes$/);
+    const pass = yield* (yield* service(store)).reconcile().pipe(Effect.result);
+    assert.equal(pass._tag, "Failure");
+    const delivery = yield* DeliveryService.DeliveryService;
+    assert.isNull((yield* delivery.threadState(successor)).binding);
+    // Its session starts as the read says: not on the person's old binding.
+    assert.isFalse(yield* delivery.prepareThread(successor, { driver: "claudeAgent", cwd: REPO }));
+  }).pipe(
+    Effect.provide(
+      deliveryLayer(engine, "board-threads-successor-offline-", legacyStoreOn(successor)),
+    ),
+  );
+});

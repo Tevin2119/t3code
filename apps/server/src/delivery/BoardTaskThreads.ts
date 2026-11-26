@@ -645,8 +645,6 @@ export const make = Effect.gen(function* () {
       const card = input.cards.get(row.task.id);
       return card?.team == null ? [] : [{ row, card, team: card.team }];
     });
-    // Each is the board's from its marker, before and whatever the teams say.
-    for (const row of input.openThreads) yield* delivery.ownBoardThread(row.threadId);
     if (shown.length === 0) return;
     const teams = yield* input.teams.pipe(Effect.result);
     if (teams._tag === "Failure")
@@ -661,6 +659,11 @@ export const make = Effect.gen(function* () {
   const reconcile = Effect.fn("BoardTaskThreads.reconcile")(
     function* () {
       const holds = new Map<string, BoardThreadHold>();
+      // Every open thread made for a board task is the board's from its marker, before anything
+      // is asked of the engine: a session starting while the engine is away agrees with what
+      // the thread shows.
+      for (const row of yield* local(rows.list({ archived: false })))
+        yield* delivery.ownBoardThread(row.threadId);
       const config = yield* settings.getSettings.pipe(Effect.orElseSucceed(() => null));
       if (config === null || !config.delivery.enabled) return holds;
       const environmentId = yield* identity.getEnvironmentId;

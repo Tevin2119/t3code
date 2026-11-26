@@ -1180,6 +1180,20 @@ describe("decideTeamForSend", () => {
     ).toEqual({ action: "bind", team: "development", role: "lead-developer" });
   });
 
+  it("never sets up a team for a board task's thread, whatever was held or chosen there", () => {
+    const held = { team: "rnd", role: "scout" };
+    for (const explicit of [false, true])
+      expect(
+        decideTeamForSend({
+          ...sendOf({ team: "development", role: null }, explicit),
+          isServerThread: true,
+          boardOwned: true,
+          held,
+          driver: "kimi",
+        }),
+      ).toEqual({ action: "none" });
+  });
+
   it("binds a new thread to its team before the first turn", () => {
     expect(decideTeamForSend(base)).toEqual({
       action: "bind",

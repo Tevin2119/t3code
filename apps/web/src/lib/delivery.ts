@@ -2257,6 +2257,8 @@ export type TeamSendDecision =
 export function decideTeamForSend(input: {
   readonly enabled: boolean;
   readonly isServerThread: boolean;
+  /** A board task's thread: its team is the board's, so a send never sets one up. */
+  readonly boardOwned?: boolean;
   readonly bound: boolean;
   readonly held: { readonly team: string; readonly role: string | null } | null;
   /** Set when the server could not say whether the thread belongs to a team. */
@@ -2270,7 +2272,7 @@ export function decideTeamForSend(input: {
   readonly teamsPending?: boolean;
   readonly driver: string | null;
 }): TeamSendDecision {
-  if (!input.enabled) return { action: "none" };
+  if (!input.enabled || input.boardOwned) return { action: "none" };
   if (input.stateError) {
     return {
       action: "blocked",
