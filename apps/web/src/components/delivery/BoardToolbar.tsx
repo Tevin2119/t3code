@@ -60,6 +60,8 @@ export interface BoardToolbarProps {
   readonly lanes: ReadonlyArray<LaneChoice>;
   readonly waiting: number;
   readonly shared: boolean;
+  /** A linked machine's board: the same toolbar, without the controls a link answers nothing for. */
+  readonly linked?: boolean;
   readonly enabled: boolean;
   readonly status: string;
   readonly pending: boolean;
@@ -79,9 +81,12 @@ export function BoardToolbar(props: BoardToolbarProps) {
   const searchButton = useRef<HTMLButtonElement>(null);
   const filterButton = useRef<HTMLButtonElement>(null);
   const { filters } = props;
+  const local = !props.shared && !props.linked;
   const filtered = props.shared
     ? props.environmentChanged
-    : boardToolbarFiltered(filters, props.grouping, props.view, props.environmentChanged);
+    : props.linked
+      ? false
+      : boardToolbarFiltered(filters, props.grouping, props.view, props.environmentChanged);
   const closeSearch = () => {
     setSearchOpen(false);
     searchButton.current?.focus();
@@ -108,38 +113,42 @@ export function BoardToolbar(props: BoardToolbarProps) {
         {props.boardPicker}
       </div>
       <div className="order-2 flex w-9 shrink-0 justify-center md:hidden">
-        <Tooltip>
-          <TooltipTrigger
-            render={
-              <Button
-                ref={filterButton}
-                size="icon-sm"
-                variant={filtered ? "secondary" : "ghost"}
-                aria-label={filtered ? "Board filters active" : "Board filters"}
-                aria-description={props.waiting > 0 ? `${props.waiting} waiting on you` : undefined}
-                aria-expanded={sheetOpen}
-                onClick={() => setSheetOpen((open) => !open)}
-              />
-            }
-          >
-            <FilterIcon />
-            {filtered ? (
-              <span className="absolute -top-1 -right-1">
-                <Badge size="sm" aria-label="Active filters">
-                  •
-                </Badge>
-              </span>
-            ) : null}
-            {props.waiting > 0 ? (
-              <span className="absolute -right-2 -bottom-2">
-                <Badge size="sm" variant="warning" aria-label={`${props.waiting} waiting on you`}>
-                  {props.waiting > 99 ? "99+" : props.waiting}
-                </Badge>
-              </span>
-            ) : null}
-          </TooltipTrigger>
-          <TooltipPopup>Board filters</TooltipPopup>
-        </Tooltip>
+        {local ? (
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Button
+                  ref={filterButton}
+                  size="icon-sm"
+                  variant={filtered ? "secondary" : "ghost"}
+                  aria-label={filtered ? "Board filters active" : "Board filters"}
+                  aria-description={
+                    props.waiting > 0 ? `${props.waiting} waiting on you` : undefined
+                  }
+                  aria-expanded={sheetOpen}
+                  onClick={() => setSheetOpen((open) => !open)}
+                />
+              }
+            >
+              <FilterIcon />
+              {filtered ? (
+                <span className="absolute -top-1 -right-1">
+                  <Badge size="sm" aria-label="Active filters">
+                    •
+                  </Badge>
+                </span>
+              ) : null}
+              {props.waiting > 0 ? (
+                <span className="absolute -right-2 -bottom-2">
+                  <Badge size="sm" variant="warning" aria-label={`${props.waiting} waiting on you`}>
+                    {props.waiting > 99 ? "99+" : props.waiting}
+                  </Badge>
+                </span>
+              ) : null}
+            </TooltipTrigger>
+            <TooltipPopup>Board filters</TooltipPopup>
+          </Tooltip>
+        ) : null}
       </div>
       <Sheet open={!desktop && sheetOpen} modal={!desktop} onOpenChange={setSheetOpen}>
         {/* The portal destination and every control ancestor stay fixed across the breakpoint. */}
@@ -160,7 +169,7 @@ export function BoardToolbar(props: BoardToolbarProps) {
           </div>
           <div className="flex max-h-[75dvh] flex-col items-start gap-3 overflow-y-auto p-6 md:contents">
             <div className="md:order-1">{props.environmentPicker}</div>
-            {!props.shared ? (
+            {local ? (
               <>
                 <div className="md:order-4">{props.viewPicker}</div>
                 <div className="md:order-6">
@@ -322,29 +331,31 @@ export function BoardToolbar(props: BoardToolbarProps) {
         </div>
       </div>
       <div className="order-4 ml-auto flex shrink-0 items-center gap-1 md:order-9">
-        {!props.shared ? (
+        {local ? (
           <span className="hidden font-mono text-3xs text-muted-foreground md:inline">
             {props.status}
           </span>
         ) : null}
         <div className="flex w-9 justify-center md:w-auto">
-          <Tooltip>
-            <TooltipTrigger
-              render={
-                <Button
-                  size={desktop ? "xs" : "icon-sm"}
-                  disabled={!props.enabled}
-                  aria-label="New task"
-                  onClick={props.onNew}
-                  data-board-new-task
-                />
-              }
-            >
-              <PlusIcon />
-              <span className="hidden md:inline">New task</span>
-            </TooltipTrigger>
-            <TooltipPopup>New task</TooltipPopup>
-          </Tooltip>
+          {local ? (
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Button
+                    size={desktop ? "xs" : "icon-sm"}
+                    disabled={!props.enabled}
+                    aria-label="New task"
+                    onClick={props.onNew}
+                    data-board-new-task
+                  />
+                }
+              >
+                <PlusIcon />
+                <span className="hidden md:inline">New task</span>
+              </TooltipTrigger>
+              <TooltipPopup>New task</TooltipPopup>
+            </Tooltip>
+          ) : null}
         </div>
         <div className="hidden md:contents">{props.help}</div>
         {!props.shared ? (
@@ -355,7 +366,7 @@ export function BoardToolbar(props: BoardToolbarProps) {
               aria-label="Refresh board"
               onClick={props.onRefresh}
             >
-              <RefreshIcon className="size-3.5" refreshing={props.pending} />
+              <RefreshIcon refreshing={props.pending} />
             </Button>
           </div>
         ) : null}

@@ -27,6 +27,7 @@ import {
   useDeliveryRead,
   useMinuteClock,
   usePersonName,
+  useSetTaskLinkedHidden,
   withSeatChoice,
 } from "../../state/delivery";
 import { ThreadDetailsSection } from "../chat/ThreadDetailsSection";
@@ -34,6 +35,7 @@ import { THREAD_DETAILS_ITEMS } from "../chat/threadDetailsItems";
 import { Badge } from "../ui/badge";
 import { Input } from "../ui/input";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
+import { Switch } from "../ui/switch";
 import { useBoardTask, type BoardTask } from "./BoardTaskContext";
 import { ReworkCount, WaitKinds } from "./BoardLaneCards";
 import { SeatSettingsPanel } from "./SeatSettingsPanel";
@@ -335,6 +337,15 @@ function TaskDetailsBody(props: { readonly board: BoardTask; readonly task: Task
   const name = useBoardStore((state) => state.person);
   const setPerson = useBoardStore((state) => state.setPerson);
   const act = useDeliveryAct(environmentId, "task edit");
+  const { allowed: hiddenAllowed, set: setHiddenTask } = useSetTaskLinkedHidden(environmentId);
+  const [hiddenBusy, setHiddenBusy] = useState(false);
+  const setHidden = async (taskId: string, hidden: boolean) => {
+    setHiddenBusy(true);
+    const outcome = await setHiddenTask(taskId, hidden);
+    setHiddenBusy(false);
+    if (!outcome.ok) setProblem(outcome.why);
+    board.refresh();
+  };
   const stage = useStageWords(task);
   const [showRevisions, setShowRevisions] = useState(false);
   const [tags, setTags] = useState<string | null>(null);
@@ -343,9 +354,9 @@ function TaskDetailsBody(props: { readonly board: BoardTask; readonly task: Task
   const closed = ["approved", "rejected", "closed"].includes(task.state);
   const flow = task.flows.find((item) => item.id === task.workflow) ?? null;
   const rework = reworkOf(card);
-  // The boards of the person's own, to name the one the task is on.
+  // The boards of the person's own, to name the one the task is on, and whether it is shared.
   const boardsRead = useDeliveryRead(environmentId, "/api/boards");
-  const boards: ReadonlyArray<MoveBoard> = (
+  const boards: ReadonlyArray<MoveBoard & { readonly linkedVisibility: "shared" | "private" }> = (
     Array.isArray(boardsRead.body) ? boardsRead.body : []
   ).flatMap((item: unknown) =>
     item && typeof item === "object" && "id" in item && "title" in item
@@ -354,10 +365,16 @@ function TaskDetailsBody(props: { readonly board: BoardTask; readonly task: Task
             id: String(item.id),
             title: String(item.title),
             target: "target" in item ? parseTarget(item.target) : null,
+            linkedVisibility:
+              "linkedVisibility" in item && item.linkedVisibility === "shared"
+                ? "shared"
+                : "private",
           },
         ]
       : [],
   );
+  // Only a task on a shared board can be hidden from the machines linked to this one.
+  const boardShared = boards.find((item) => item.id === card.set)?.linkedVisibility === "shared";
   // The board triage thinks the task belongs on. Moving it there is in the header's menu.
   const suggested = task.suggestedBoard ?? card.suggestedBoard ?? null;
   // What is set for the task, which the switches change.
@@ -654,6 +671,24 @@ function TaskDetailsBody(props: { readonly board: BoardTask; readonly task: Task
           <span data-task-flow={task.workflow}>{flow?.title ?? task.workflow}</span>
         </Row>
         <Row label="Owner">{task.owner || "nobody"}</Row>
+        {boardShared ? (
+          <Row label="Linked machines">
+            <span className="flex min-w-0 flex-col items-end gap-0.5" data-task-linked-hidden>
+              {/* Bring to this machine and Send back attach here, once moving tasks is built. */}
+              <Switch
+                checked={task.linkedHidden}
+                disabled={hiddenBusy || !hiddenAllowed}
+                onCheckedChange={(hidden) => void setHidden(task.id, hidden)}
+                aria-label="Hidden from linked machines"
+              />
+              <span className="max-w-48 text-2xs text-muted-foreground">
+                {task.linkedHidden
+                  ? "A hidden task is not shown to linked machines."
+                  : "Shown to linked machines."}
+              </span>
+            </span>
+          </Row>
+        ) : null}
         <Row label="Tags">
           {tags === null ? (
             <span className="inline-flex flex-wrap items-center justify-end gap-1">

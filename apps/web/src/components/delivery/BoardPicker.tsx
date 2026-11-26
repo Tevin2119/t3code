@@ -55,6 +55,7 @@ export interface PickerItem {
 /**
  * A choice among many that can be searched: boards, or views of the board. Everything is one
  * press away, a search is cleared in one, and a person's own entries can be edited from here.
+ * A list nothing can be added to (a linked machine's boards) passes no `onCreate`.
  */
 export function BoardPicker(props: {
   readonly label: string;
@@ -62,10 +63,10 @@ export function BoardPicker(props: {
   readonly value: string;
   /** The entry that shows everything, chosen by the icon beside the search. */
   readonly everything?: { readonly id: string; readonly label: string };
-  readonly newLabel: string;
+  readonly newLabel?: string;
   readonly onChoose: (id: string) => void;
-  readonly onCreate: () => void;
-  readonly onEdit: (item: PickerItem) => void;
+  readonly onCreate?: () => void;
+  readonly onEdit?: (item: PickerItem) => void;
   readonly marker: string;
   /** "field" in a form, shaped like the form's other choices; a header button otherwise. */
   readonly look?: "field";
@@ -154,21 +155,23 @@ export function BoardPicker(props: {
           ) : null}
         </div>
         {/* First and pinned: reachable however long the list below grows. */}
-        <div className="border-b border-border p-1">
-          <Button
-            size="xs"
-            variant="ghost"
-            className="w-full justify-start"
-            onClick={() => {
-              setOpen(false);
-              props.onCreate();
-            }}
-            data-board-picker-new={props.marker}
-          >
-            <PlusIcon />
-            {props.newLabel}
-          </Button>
-        </div>
+        {props.onCreate && props.newLabel ? (
+          <div className="border-b border-border p-1">
+            <Button
+              size="xs"
+              variant="ghost"
+              className="w-full justify-start"
+              onClick={() => {
+                setOpen(false);
+                props.onCreate?.();
+              }}
+              data-board-picker-new={props.marker}
+            >
+              <PlusIcon />
+              {props.newLabel}
+            </Button>
+          </div>
+        ) : null}
         <div
           className="flex max-h-72 flex-col overflow-y-auto p-1"
           role="listbox"
@@ -224,7 +227,7 @@ export function BoardPicker(props: {
                   </span>
                 ) : null}
               </button>
-              {item.kind === "own" ? (
+              {item.kind === "own" && props.onEdit ? (
                 <Button
                   size="icon-xs"
                   variant="ghost"
@@ -232,7 +235,7 @@ export function BoardPicker(props: {
                   aria-label={`Edit ${item.title}`}
                   onClick={() => {
                     setOpen(false);
-                    props.onEdit(item);
+                    props.onEdit?.(item);
                   }}
                   data-board-picker-edit={item.id}
                 >

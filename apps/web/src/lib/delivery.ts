@@ -1230,6 +1230,8 @@ export interface DeliveryBoard {
     readonly target: DeliveryTarget | null;
     readonly deployment?: BoardDeploymentLink | null;
     readonly mergePermission?: MergePermissionView | null;
+    /** Whether machines linked to this one can see the board. An engine that does not say: private. */
+    readonly linkedVisibility: "shared" | "private";
   }>;
   /** Cards that wait for a person. */
   readonly waiting: number;
@@ -1412,6 +1414,7 @@ export function parseBoard(body: unknown): DeliveryBoard | null {
       target: parseTarget(item.target),
       deployment: parseBoardDeployment(item.deployment),
       mergePermission: parseMergePermission(item.mergePermission),
+      linkedVisibility: item.linkedVisibility === "shared" ? "shared" : "private",
     })),
     lanes: records(body.lanes).map((lane) => ({
       lane: text(lane.lane),
@@ -1589,7 +1592,7 @@ export function fullAutoAttribution(entry: Pick<TimelineEntry, "by" | "fullAuto"
   return entry.by === "full auto" ? { by: null, since: null } : null;
 }
 
-const parseTimeline = (value: unknown): ReadonlyArray<TimelineEntry> =>
+export const parseTimeline = (value: unknown): ReadonlyArray<TimelineEntry> =>
   records(value).map((entry) => {
     const change = entry.change;
     const auto = entry.fullAuto;
@@ -1828,6 +1831,8 @@ export interface TaskView {
     readonly environmentId: string;
     readonly threadId: string;
   } | null;
+  /** Whether machines linked to this one are kept from seeing the task. An engine that does not say shows it. */
+  readonly linkedHidden: boolean;
 }
 
 export function parseSeatLive(value: unknown): SeatLive | null {
@@ -2138,6 +2143,7 @@ export function parseTask(body: unknown): TaskView | null {
           }
         : null;
     })(),
+    linkedHidden: flag(body.linkedHidden),
   };
 }
 
