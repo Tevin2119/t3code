@@ -155,6 +155,9 @@ export const BoardThreadLink = Schema.Struct({
   setBy: Schema.String,
   setAt: Schema.String,
 });
+/** A board field this build may not read: read as `null`, so the task it is on is still handled. */
+export const readOrNull = <S extends Schema.Top>(schema: S) =>
+  Schema.optional(Schema.NullOr(schema).pipe(Schema.catchDecoding(() => Effect.succeedSome(null))));
 const BOARD_THREAD_CLAIM = /^\/api\/orchestration\/tasks\/[\w-]+\/(claim|ack|release)$/;
 // The conversation's mirror and the steer handshake (spec 6a, slice 5).
 const BOARD_THREAD_CONVERSATION =
