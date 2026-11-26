@@ -64,7 +64,7 @@ import { BoardIcon } from "./BoardIcon";
 import { EnvironmentPicker } from "./EnvironmentPicker";
 import { EngineDownNotice } from "./EnginePanel";
 import { relatedTaskGroups } from "./relatedTaskGroups";
-import { useTaskConversation } from "./useTaskConversation";
+import { useOpenSeatThread, useTaskConversation } from "./useTaskConversation";
 
 /** Each group's name, title and what it says when it is empty, in the order they show. */
 const GROUP_TITLES: Readonly<Record<PanelGroup, string>> = {
@@ -324,7 +324,8 @@ function EnvironmentBoardSidebar({
   );
   const readTask = parseTask(taskRead.body);
   const openTask = readTask?.id === openTaskId ? readTask : null;
-  const conversation = useTaskConversation(environmentId, openTask);
+  const conversation = useTaskConversation(openTask);
+  const openSeatThread = useOpenSeatThread(conversation.ref);
   const family: SwitcherFamily | null = openTask
     ? {
         open: openTask.card,
@@ -380,11 +381,10 @@ function EnvironmentBoardSidebar({
   const switcherList = (rows: ReadonlyArray<SwitcherRow>) => (
     <BoardSwitcherRows
       rows={rows}
-      openSeat={conversation.seats.current}
       onOpenTask={goToTask}
-      onOpenSeat={(thread) => {
+      onOpenSeat={(thread, title, intent) => {
         close();
-        conversation.seats.open(thread);
+        openSeatThread(thread, title, intent);
       }}
     />
   );

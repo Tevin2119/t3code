@@ -1,9 +1,8 @@
-import type { ScopedThreadRef } from "@t3tools/contracts";
-
 import { waitKindsOf } from "../../lib/boardLaneCards";
 import { BOARD_LANE, boardLaneOf } from "../../lib/boardLanes";
 import { seatsAtWork, type DeliveryCard, type TaskBrief } from "../../lib/delivery";
 import { matchesCard, type BoardFilters } from "../../lib/deliveryBoard";
+import type { SeatThread } from "../../lib/taskConversation";
 
 /** The column's groups, in the order they show. */
 export const PANEL_GROUPS = ["waiting", "working", "chats", "drafts", "open", "done"] as const;
@@ -57,7 +56,7 @@ export interface SwitcherFamily {
   readonly seats: ReadonlyArray<{
     readonly seat: string;
     readonly activity: string;
-    readonly thread: ScopedThreadRef;
+    readonly thread: SeatThread;
   }>;
 }
 
@@ -76,7 +75,7 @@ export type SwitcherRow =
       readonly kind: "seat";
       readonly seat: string;
       readonly activity: string;
-      readonly thread: ScopedThreadRef;
+      readonly thread: SeatThread;
       readonly depth: 1 | 2;
     };
 

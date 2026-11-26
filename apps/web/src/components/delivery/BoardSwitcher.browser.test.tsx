@@ -26,12 +26,7 @@ it("draws the board's tasks on the row shell: the open task as the page, its fam
   }).open;
   await using screen = await render(
     <div style={{ width: 256 }}>
-      <BoardSwitcherRows
-        rows={rows}
-        openSeat={null}
-        onOpenTask={onOpenTask}
-        onOpenSeat={onOpenSeat}
-      />
+      <BoardSwitcherRows rows={rows} onOpenTask={onOpenTask} onOpenSeat={onOpenSeat} />
     </div>,
   );
   const current = screen.getByRole("button", { name: /Fix the cursor/ });
@@ -48,9 +43,9 @@ it("draws the board's tasks on the row shell: the open task as the page, its fam
 
   await screen.getByRole("button", { name: /Rework the sync/ }).click();
   expect(onOpenTask).toHaveBeenCalledWith("t1");
-  // A seat opens its conversation in the centre; the open task stays the page.
+  // A seat opens its conversation as its lineage row does; the open task stays the page.
   await screen.getByRole("button", { name: /Seat builder/ }).click();
-  expect(onOpenSeat).toHaveBeenCalledWith(seatThread);
+  expect(onOpenSeat).toHaveBeenCalledWith(seatThread, "Seat builder", "primary");
   await expect.element(current).toHaveAttribute("aria-current", "page");
   // Reachable by keyboard, as a thread row is.
   screen

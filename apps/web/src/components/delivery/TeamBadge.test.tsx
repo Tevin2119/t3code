@@ -3,6 +3,7 @@ import {
   ProviderInstanceId,
   type DeliveryOrchestrationConfig,
 } from "@t3tools/contracts";
+import { GTProvider } from "gt-react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
@@ -51,7 +52,11 @@ let renderer: ReactTestRenderer | undefined;
 
 async function render(props: { boardOwned?: boolean } = {}) {
   await act(async () => {
-    renderer = create(<TeamBadge environmentId={ENV} threadId={"t1" as never} {...props} />);
+    renderer = create(
+      <GTProvider locale="en" translations={{}}>
+        <TeamBadge environmentId={ENV} threadId={"t1" as never} {...props} />
+      </GTProvider>,
+    );
   });
 }
 

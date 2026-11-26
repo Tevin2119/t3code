@@ -1,10 +1,10 @@
-import { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import { useGT, useMessages } from "gt-react";
-import { PencilIcon } from "lucide-react";
+import { ClipboardListIcon, PencilIcon, RocketIcon } from "lucide-react";
 import { useRef, useState } from "react";
 
 import { BOARD_LANE, boardLaneOf, boardLaneTitle } from "../../lib/boardLanes";
 import { reworkOf, waitKindsOf, WORK_STAGE_TITLE, workStageOf } from "../../lib/boardLaneCards";
+import { taskDeploymentStatus } from "../../lib/boardDelivery";
 import {
   parseTarget,
   repeatKeys,
@@ -15,10 +15,11 @@ import {
   type TaskBriefing,
   type TaskPriority,
   type TaskView,
+  waitingWords,
 } from "../../lib/delivery";
 import { LANE_TITLE, PRIORITY_LABEL, tagsFromText } from "../../lib/deliveryBoard";
 import type { MoveBoard } from "../../lib/deliveryMove";
-import { seatsChangedForTask } from "../../lib/deliverySeats";
+import { harnessLabel, seatsChangedForTask } from "../../lib/deliverySeats";
 import { taskConversation } from "../../lib/taskConversation";
 import { cn } from "../../lib/utils";
 import {
@@ -32,6 +33,7 @@ import {
 import { ThreadDetailsSection } from "../chat/ThreadDetailsSection";
 import { THREAD_DETAILS_ITEMS } from "../chat/threadDetailsItems";
 import { Badge } from "../ui/badge";
+import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { useBoardTask, type BoardTask } from "./BoardTaskContext";
@@ -51,7 +53,7 @@ import {
   WaitingOn,
 } from "./taskParts";
 import { TaskAcceptanceReceipts, TaskSeatHandoffs } from "./TaskSeatResults";
-import { TaskPipelineStrip, TaskTeamActivity } from "./TaskTeamActivity";
+import { TaskPipelineStrip } from "./TaskTeamActivity";
 import { ThreadTaskQuestions } from "./ThreadTaskQuestions";
 
 const TASK_ITEM = THREAD_DETAILS_ITEMS.find((item) => item.id === "task")!;
@@ -306,6 +308,42 @@ export function useStageWords(task: TaskView): string {
     .join(", ");
 }
 
+/** Who is doing what, as the engine reports it: the team, its running seats and their workers. */
+function TeamRows(props: { readonly task: TaskView }) {
+  const gt = useGT();
+  const now = useMinuteClock();
+  const { task } = props;
+  const running = (task.council?.seats ?? []).filter((seat) => seat.activity === "active").length;
+  return (
+    <>
+      <Row label={gt("Team")}>
+        <span data-task-team={task.team}>
+          {task.team}
+          {running > 0 ? (
+            <span className="text-muted-foreground">
+              {" "}
+              {gt("{count} running", { count: running })}
+            </span>
+          ) : null}
+        </span>
+      </Row>
+      {task.card.workers.map((worker) => (
+        <Row key={`${worker.seat}:${worker.stage}`} label={worker.waiting ? "Waiting" : "Working"}>
+          <span data-task-worker={worker.seat}>
+            {worker.seat} on {harnessLabel(worker.harness)}, {worker.stage}
+            {worker.waiting ? `, ${waitingWords(worker.waiting)}` : ""}
+            {worker.specialist ? ` as ${worker.specialist}` : ""}{" "}
+            <Age at={worker.since} now={now} label="Since" />
+            {worker.waitingWhy ? (
+              <span className="block text-2xs text-muted-foreground">{worker.waitingWhy}</span>
+            ) : null}
+          </span>
+        </Row>
+      ))}
+    </>
+  );
+}
+
 /**
  * The Task item of the thread details: the task's words, where it stands, who owns it and how its
  * seats are set, all from the board's own read. It renders only where a board task's view hosts the
@@ -318,7 +356,7 @@ export function TaskDetailsItem() {
   return (
     <ThreadDetailsSection
       headingId={`thread-details-task-${board.task.id}`}
-      title={m(TASK_ITEM.label)}
+      title={`${m(TASK_ITEM.label)} #${board.task.number}`}
       data-thread-details-task
     >
       <TaskDetailsBody key={board.task.id} board={board} task={board.task} />
@@ -388,7 +426,7 @@ function TaskDetailsBody(props: { readonly board: BoardTask; readonly task: Task
     if (!result.ok) setProblem(result.why);
     board.refresh();
   };
-  const source = task.source;
+  const deployment = card.deployment ? taskDeploymentStatus(card.deployment.current) : null;
   const container = useRef<HTMLDivElement>(null);
   const [askedOpen, setAskedOpen] = useState(true);
   // The log stands in for the conversation while the task has none, so it starts open then.
@@ -415,6 +453,16 @@ function TaskDetailsBody(props: { readonly board: BoardTask; readonly task: Task
 
   return (
     <div ref={container} className="flex min-w-0 flex-col gap-2 px-2.5" data-task-details>
+      {task.state === "rejected" || task.state === "closed" ? (
+        <p
+          role="status"
+          className="rounded-lg border border-border bg-muted/30 px-3 py-2 text-xs text-muted-foreground"
+          data-task-closed
+        >
+          {gt("This is closed. What was said is kept.")}
+        </p>
+      ) : null}
+      {board.decisions}
       {card.waitingOn === "person" || asks ? (
         <TaskDisclosure title={gt("Needs you")}>
           <WaitKinds card={card} />
@@ -497,19 +545,33 @@ function TaskDetailsBody(props: { readonly board: BoardTask; readonly task: Task
             </span>
           </Row>
         )}
+        <TeamRows task={task} />
+        <Row label={gt("Panels", { $context: "the board task's evidence and deployments tabs" })}>
+          <span className="inline-flex flex-wrap items-center justify-end gap-1">
+            <Button size="xs" variant="ghost" onClick={() => board.openTab("task-evidence")}>
+              <ClipboardListIcon />
+              {gt("Evidence")}
+            </Button>
+            <Button
+              size="xs"
+              variant="ghost"
+              onClick={() => board.openTab("task-deployments")}
+              data-task-deployment={deployment?.state}
+            >
+              <RocketIcon />
+              {gt("Deployments")}
+              {deployment ? (
+                <span
+                  className={cn("font-normal", deployment.problem && "text-warning-foreground")}
+                >
+                  {deployment.state}
+                </span>
+              ) : null}
+            </Button>
+          </span>
+        </Row>
       </TaskDisclosure>
 
-      {task.council?.seats.some(
-        (seat) => seat.threadId || seat.seatThread || seat.attestedModel || seat.actualModel,
-      ) ? (
-        <TaskTeamActivity
-          environmentId={environmentId}
-          task={task}
-          conversations={board.seats}
-          flow={false}
-          conversationLabels={{ title: gt("Seats"), open: gt("Open conversation") }}
-        />
-      ) : null}
       <TaskSeatHandoffs handoffs={task.handoffs} />
 
       <TaskDisclosure
@@ -696,30 +758,6 @@ function TaskDetailsBody(props: { readonly board: BoardTask; readonly task: Task
           <span className="font-mono text-3xs">{task.id}</span>
         </Row>
         {problem ? <p className="text-xs text-warning">{problem}</p> : null}
-      </TaskDisclosure>
-
-      <TaskDisclosure title="Linked conversations" defaultOpen={false}>
-        <p className="text-2xs text-muted-foreground">
-          What is said on this task is its conversation with the team. A thread in the chat list is
-          a conversation of its own; it becomes a task only when you create one from it.
-        </p>
-        {source ? (
-          <Row label="Made from">
-            <button
-              type="button"
-              className="text-primary underline-offset-2 hover:underline"
-              data-task-related-source
-              onClick={() =>
-                board.openThread({
-                  environmentId: EnvironmentId.make(source.environmentId),
-                  threadId: ThreadId.make(source.threadId),
-                })
-              }
-            >
-              the conversation it came from
-            </button>
-          </Row>
-        ) : null}
       </TaskDisclosure>
 
       {closed ? null : (

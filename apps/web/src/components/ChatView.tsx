@@ -500,6 +500,8 @@ export interface ChatViewSlots {
   readonly composer?: boolean;
   /** The host's own tabs, which the right panel's + menu then offers. */
   readonly onAddTaskSurface?: (kind: "task-evidence" | "task-deployments") => void;
+  /** Takes the composer's text in place of a turn; true clears the composer. */
+  readonly sendInstead?: (text: string) => Promise<boolean>;
 }
 
 type ChatViewProps =
@@ -3592,7 +3594,18 @@ export default function ChatView(props: ChatViewProps) {
     });
   };
   const onWorktreeSetupWorkLocallyStable = useStableCallback(onWorktreeSetupWorkLocally);
-  const onComposerSendStable = useStableCallback(onSend);
+  const sendInstead = slots?.sendInstead;
+  const sendToHost = async (text: string, take: (text: string) => Promise<boolean>) => {
+    if (!text || !(await take(text))) return;
+    useComposerDraftStore.getState().clearComposerContent(composerDraftTarget);
+    if (currentRouteThreadKeyRef.current === routeThreadKey) {
+      promptRef.current = "";
+      composerRef.current?.resetCursorState();
+    }
+  };
+  const onComposerSendStable = useStableCallback((...args: Parameters<typeof onSend>) =>
+    sendInstead ? sendToHost(promptRef.current.trim(), sendInstead) : onSend(...args),
+  );
   const sendPreviewAnnotation = (
     annotation: PreviewAnnotationPayload,
     image: ComposerImageAttachment | null,

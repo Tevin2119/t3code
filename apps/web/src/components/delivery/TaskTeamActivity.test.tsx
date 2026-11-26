@@ -3,27 +3,28 @@ import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { parseCard, type CouncilSeat, type TaskView } from "../../lib/delivery";
-import { TaskTeamActivity } from "./TaskTeamActivity";
+import { SeatThreadRow, TaskPipelineStrip } from "./TaskTeamActivity";
 
 const mock = vi.hoisted(() => ({ tooltips: [] as Array<Record<string, unknown>> }));
 vi.mock("gt-react", async (importOriginal) => ({
   ...(await importOriginal<typeof import("gt-react")>()),
   useMessages: () => (text: string) => text,
 }));
-vi.mock("./SeatSettingsPanel", () => ({
-  useSeatCatalog: () => ({
-    entries: [
-      {
-        instanceId: "claudeAgent",
-        driverKind: "claudeAgent",
-        displayName: "Claude",
-        isDefault: true,
-      },
-    ],
-    providers: [],
-    options: {},
-  }),
-  SeatSettingsPanel: () => <p data-seat-settings />,
+const catalog = {
+  entries: [
+    {
+      instanceId: "claudeAgent",
+      driverKind: "claudeAgent",
+      displayName: "Claude",
+      isDefault: true,
+    },
+  ],
+  providers: [],
+  options: {},
+} as unknown as Parameters<typeof SeatThreadRow>[0]["catalog"];
+// The shared open handlers need the translation runtime; the browser test clicks the row.
+vi.mock("../../hooks/useSideThreadTrigger", () => ({
+  useSideThreadTrigger: () => () => ({}),
 }));
 vi.mock("../ui/tooltip", () => ({
   Tooltip: (props: { children: ReactNode }) => <div>{props.children}</div>,
@@ -142,13 +143,22 @@ const text = (node: ReactTestInstance): string =>
 
 async function render(task: TaskView) {
   await act(() => {
-    renderer = create(<TaskTeamActivity environmentId={null} task={task} />);
+    renderer = create(
+      <div>
+        <TaskPipelineStrip task={task} />
+        <ul>
+          {(task.council?.seats ?? []).map((item) => (
+            <SeatThreadRow key={item.seat} seat={item} catalog={catalog} onOpen={() => {}} />
+          ))}
+        </ul>
+      </div>,
+    );
   });
   return renderer.root;
 }
 
-describe("TaskTeamActivity", () => {
-  it("shows each seat as a native agent row with its harness, status and what it does", async () => {
+describe("a seat's conversation row and the task's flow", () => {
+  it("shows each seat as a lineage row with its harness, status and what it does", async () => {
     const root = await render(
       taskWith([
         seat({
@@ -182,9 +192,6 @@ describe("TaskTeamActivity", () => {
 
     // Elapsed time only for the seat at work, from when its live output started.
     expect(root.findAllByType("time").map(text)).toContain("2030-01-01T00:00:00.000Z");
-    expect(text(rows[0]!)).toContain("vp test run");
-    expect(text(rows[0]!)).toContain("Claude, claude-opus, high");
-    expect(text(rows[1]!)).toContain("Waits for the build to finish.");
 
     // The native hover card carries the seat, its model, and its latest progress.
     expect(mock.tooltips.map((props) => [props.title, props.status, props.progress])).toEqual([
@@ -195,16 +202,8 @@ describe("TaskTeamActivity", () => {
     expect(mock.tooltips[1]!.result).toBe("Waits for the build to finish.");
   });
 
-  it("titles the roster with the team and how many seats run", async () => {
-    const root = await render(taskWith([seat({}), seat({ seat: "qa", activity: "queued" })]));
-    expect(root.findAllByType("h3").map(text)).toContain(
-      "Team development, defaults r2 · 1 running",
-    );
-  });
-
-  it("shows the pipeline strip and the seat settings before a run has seats", async () => {
+  it("shows the pipeline strip before a run has seats", async () => {
     const root = await render(taskWith(null));
-    expect(root.findAll((node) => node.props["data-seat-settings"] === true)).toHaveLength(1);
     const strip = root.find((node) => typeof node.props["data-task-pipeline"] === "string");
     expect(strip.props["data-task-pipeline"]).toBe("Building");
     const current = strip.find((node) => node.props["aria-current"] === "step");

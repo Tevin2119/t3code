@@ -1103,8 +1103,10 @@ export function ThreadRelationshipsPanel(props: {
               ? gt("Lineage · {runningCount} running", { runningCount })
               : gt("Lineage", { $context: "thread details section: parent and child agents" })
           }
-          // A lone "Previous agents" row names itself; the heading returns for status or actions.
+          // A lone "Previous agents" row names itself; the heading returns for status or actions,
+          // and for a host's own rows, which name nothing.
           showHeading={
+            props.extraGroup !== undefined ||
             runningCount > 0 ||
             canDetach ||
             related.length > 0 ||

@@ -284,7 +284,7 @@ it("shows a linked pull request in a folder that is not a git repository", async
   await expect.element(page.getByRole("button", { name: "Initialize Git" })).toBeVisible();
 });
 
-it("shows the Task item only where a board task's view hosts the thread, with the item on", async () => {
+it("shows the Task item only where a board task's view hosts the thread, with its number, decisions and lineage", async () => {
   using fixture = setup({ workspaceRoot: "/work/plain", folder: "/work/plain" });
   await using screen = await render(<Panel fixture={fixture} />);
   await expect.element(page.getByRole("region", { name: "Workspace" })).toBeVisible();
@@ -296,6 +296,7 @@ it("shows the Task item only where a board task's view hosts the thread, with th
     body: "Make the sync stop dropping rows.",
     state: "closed",
     lane: "completed",
+    source: { kind: "thread", ref: "env-elsewhere/filed-from" },
     card: { id: "t1", number: 12, title: "Fix the sync", lane: "completed" },
   });
   await screen.rerender(
@@ -307,15 +308,24 @@ it("shows the Task item only where a board task's view hosts the thread, with th
         stale: false,
         refresh: () => {},
         openTask: () => {},
-        openThread: () => {},
-        seats: { thread: () => null, current: null, open: () => {} },
+        openTab: () => {},
+        decisions: <p>Your decision</p>,
+        thread: null,
+        seats: { thread: () => null, rows: [] },
       }}
     >
       <Panel fixture={fixture} />
     </BoardTaskContext>,
   );
-  await expect.element(page.getByRole("region", { name: "Task" })).toBeVisible();
+  // The number is the Task item's, the card's title the thread's.
+  await expect.element(page.getByRole("region", { name: "Task #12" })).toBeVisible();
   await expect.element(page.getByText("Make the sync stop dropping rows.")).toBeVisible();
+  await expect.element(page.getByText("Your decision")).toBeVisible();
+  await expect.element(page.getByText("This is closed. What was said is kept.")).toBeVisible();
+  // The thread it was filed from is a row of the lineage, not a link in the Task item.
+  await expect
+    .element(page.getByRole("button", { name: /The conversation this task came from/ }))
+    .toBeVisible();
 });
 
 it("offers no Initialize Git before the server config says where No project lives", async () => {

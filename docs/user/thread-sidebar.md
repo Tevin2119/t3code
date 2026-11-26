@@ -337,11 +337,10 @@ back the standard rows.
 
 ## Inspect a board task's conversation
 
-A board task opens as its own thread, titled with its number and title. The
-badges in its header show the task's stage, team, evidence and deployment. Select
-the stage to open the **Task** item of the thread details card, the team to see who
-is doing what and open a seat's conversation, and evidence or deployment to open
-its tab. On a narrow window the badges sit in a row under the header.
+A board task opens as its own thread, titled with the task's title, with the task's
+menu in its header. Its facts are in the **Task** item of the thread details card:
+the task's number, the decisions waiting on you, where it stands, its team and its
+deployment. Nothing opens by itself; use the thread details toggle as on any thread.
 
 A task's thread is an Orchestrator conversation: the model picker shows the
 Orchestrator icon, and its **Orchestrator** panel lists the team's seats with the
@@ -351,10 +350,9 @@ write in the thread goes to the task's lead alone, and the seats do not answer i
 A task whose team has no seat besides its lead that this machine's providers can
 run gets an ordinary thread, which shows the team once a seat can run.
 
-**Task evidence** and **Deployments** are tabs on the thread's right panel. Closed,
-they come back from the panel's **+** menu, on a task's thread only. While a
-seat's conversation is open, the panel, the details and the badges stay the
-task's.
+**Task evidence** and **Deployments** are tabs on the thread's right panel. Open
+them from the **Task** item, or from the panel's **+** menu, on a task's thread
+only.
 
 The **Task** item holds what is asked, the plan, who owns the task, its seat
 settings and the engine's log. To change the work, write in the task's thread
@@ -362,16 +360,20 @@ like any other. A steer sent from the board joins the conversation when its
 current turn ends, never in the middle of one; until then **Where it stands**
 shows it waiting, or why it did not arrive. The engine's own questions are
 answered under **Needs you**, and a proposed change is confirmed or declined on
-its entry in the log, which **Needs you** links to while it waits. Under **Linked
-conversations**, **Made from** opens the conversation that created the task in its
-place, and **Back to task** returns to the task. The card's lineage also lists the
-task's parent, parts and follow-ups; select one to open that task. A task with no
-source conversation has no **Made from** row. Forking into new work, opening a
-citation or following an explicit Open link still uses its ordinary destination.
+its entry in the log, which **Needs you** links to while it waits. A closed task
+keeps its composer: what you write goes to the engine, and its refusal shows as a
+notice.
 
-A task with no conversation yet keeps its tabs and details on its own page: a
-saved draft opens there with its editor, a queued task shows its text and its
-place in the queue, and a task already at work links to the engine's log.
+The card's lineage lists the conversation the task was filed from, the seats' own
+conversations, and the task's parent, parts and follow-ups. A seat's conversation
+opens like a subagent's: beside the task's thread or at its own route, as your click
+asks. A seat on another machine opens there when you are connected to it, or
+read-only through the link. Select a task to open it.
+
+A task with no conversation yet has its own page, with the same thread details and
+right panel toggles in its header: a saved draft opens there with its editor, a
+queued task shows its text and its place in the queue, and a task already at work
+links to the engine's log.
 
 While a task is open, the Board's sidebar column switches between tasks. The
 open task is highlighted, with its parent above it and its parts, follow-ups and

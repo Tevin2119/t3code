@@ -8,13 +8,11 @@ import { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import {
   conversationState,
   queueWait,
-  openSeatThread,
   seatChildrenWithAttestations,
   seatConversation,
   seatEnvironmentsNeedingLinks,
   seatLinksRefreshKey,
-  seatOfThread,
-  steadySeatThread,
+  seatThreadRows,
   taskConversation,
 } from "./taskConversation";
 import { parseBoardThread, parseCard, parseTask } from "./delivery";
@@ -242,129 +240,65 @@ describe("a seat's conversation", () => {
     expect(seatConversation(ref, withAttestation, "qa", reach({ connected: true }, true))).toEqual(
       attested,
     );
-    expect(openSeatThread(ref, withAttestation, attested, reach(undefined, true))).toEqual({
+    expect(seatConversation(ref, withAttestation, "qa", reach(undefined, true))).toEqual({
       ...attested,
       linked: { viaEnvironmentId: ref.environmentId, label: remote },
     });
-    expect(seatOfThread(ref, withAttestation, attested)).toBe("qa");
-  });
-
-  it("names the seat a child thread was given, telling two environments' threads apart", () => {
-    expect(seatOfThread(ref, children, { ...ref, threadId: id("child-b") })).toBe("qa");
-    expect(seatOfThread(ref, children, { environmentId: remote, threadId: id("child-b") })).toBe(
-      "remote-qa",
-    );
-    expect(
-      seatOfThread(ref, children, { environmentId: remote, threadId: id("child-a") }),
-    ).toBeNull();
-    expect(seatOfThread(ref, children, { ...ref, threadId: id("plain") })).toBeNull();
-  });
-
-  it("names the seat of a thread the engine names, as it names one T3 spawned", () => {
-    const engineSeats = [
-      { seat: "reviewer", threadId: "engine-thread" },
-      { seat: "builder", threadId: null },
-    ];
-    expect(
-      seatOfThread(ref, children, { ...ref, threadId: id("engine-thread") }, engineSeats),
-    ).toBe("reviewer");
-    // T3's own child keeps its seat, and an engine thread is only ever in the task's environment.
-    expect(seatOfThread(ref, children, { ...ref, threadId: id("child-b") }, engineSeats)).toBe(
-      "qa",
-    );
-    expect(
-      seatOfThread(
-        ref,
-        children,
-        { environmentId: remote, threadId: id("engine-thread") },
-        engineSeats,
-      ),
-    ).toBeNull();
-  });
-
-  it("follows the connection of a seat thread that is already open", () => {
-    const open = { environmentId: remote, threadId: id("child-b") };
-    expect(openSeatThread(ref, children, open, reach(undefined, true))?.linked).toEqual({
-      viaEnvironmentId: ref.environmentId,
-      label: "Desktop",
-    });
-    expect(openSeatThread(ref, children, open, reach({ connected: true }, true))).toEqual(open);
-    // A thread that is no seat's, opened from a lineage link, stays as it was asked for.
-    const other = { ...ref, threadId: id("elsewhere") };
-    expect(openSeatThread(ref, children, other, reach(undefined, false))).toBe(other);
   });
 });
 
-describe("an open seat's view, held steady", () => {
+describe("the seats' conversations as lineage rows", () => {
+  const id = ThreadId.make;
   const remote = EnvironmentId.make("env-remote");
-  const direct = { environmentId: remote, threadId: ThreadId.make("child-b") };
-  const linked = { ...direct, linked: { viaEnvironmentId: ref.environmentId, label: "Desktop" } };
-  const loading = { certain: false, connected: false };
-  const loaded = { certain: true, connected: false };
-  const online = { certain: true, connected: true };
+  const seats = [
+    { seat: "builder", activity: "active" },
+    { seat: "qa", activity: "waiting" },
+    { seat: "reviewer", activity: "waiting" },
+    { seat: "remote-qa", activity: "active" },
+  ];
+  // What the task thread's lineage lists itself: the subagents T3 spawned, here or remote.
+  const listed = [
+    { childThreadId: id("child-b"), teamChat: { seat: "builder" } },
+    {
+      childThreadId: null,
+      remoteChild: { environmentId: remote, threadId: id("remote-child"), label: "Desktop" },
+      teamChat: { seat: "remote-qa" },
+    },
+  ];
+  const engineQa = { environmentId: ref.environmentId, threadId: id("engine-qa") };
+  const linkedReviewer = {
+    environmentId: remote,
+    threadId: id("attested-reviewer"),
+    linked: { viaEnvironmentId: ref.environmentId, label: "Desktop" },
+  };
+  const thread = (seat: string) =>
+    ({
+      builder: { environmentId: ref.environmentId, threadId: id("child-b") },
+      qa: engineQa,
+      reviewer: linkedReviewer,
+      "remote-qa": { environmentId: remote, threadId: id("remote-child") },
+    })[seat] ?? null;
 
-  it("waits to place a newly opened seat until the links have loaded", () => {
-    // Saved but offline reads as direct, and unsaved as linked, before the links say which.
-    expect(steadySeatThread(null, direct, loading)).toEqual({ kind: "resolving" });
-    expect(steadySeatThread(null, linked, loading)).toEqual({ kind: "resolving" });
-    expect(steadySeatThread(null, linked, loaded)).toEqual({ kind: "shown", seat: linked });
-    expect(steadySeatThread(null, direct, loaded)).toEqual({ kind: "shown", seat: direct });
-    // This client's own connection needs no link, so it never waits.
-    expect(steadySeatThread(null, direct, online)).toEqual({ kind: "shown", seat: direct });
-    // Another seat opened over this one is placed afresh, not swapped in under the old view.
-    const other = { ...direct, threadId: ThreadId.make("child-z") };
-    expect(steadySeatThread(other, direct, loading)).toEqual({ kind: "resolving" });
+  it("adds only the seats the thread does not already list as its own subagents", () => {
+    expect(seatThreadRows(ref, listed, seats, thread)).toEqual([
+      { seat: "qa", activity: "waiting", target: engineQa },
+      { seat: "reviewer", activity: "waiting", target: linkedReviewer },
+    ]);
   });
 
-  it("keeps the direct view through a reconnect, and offers the linked view for later", () => {
-    // The connection drops: the links are asked for, and until they answer nothing changes.
-    expect(steadySeatThread(direct, direct, loading)).toEqual({ kind: "shown", seat: direct });
-    // They answer that a link exists. The direct view stays; the linked view waits its turn.
-    expect(steadySeatThread(direct, linked, loaded)).toEqual({
-      kind: "shown",
-      seat: direct,
-      later: linked,
+  it("keeps a seat on another machine reachable, through the link it opens by", () => {
+    const [, reviewer] = seatThreadRows(ref, listed, seats, thread);
+    expect(reviewer?.target.linked).toEqual({
+      viaEnvironmentId: ref.environmentId,
+      label: "Desktop",
     });
-    // The connection is back before that turn comes: nothing was remounted.
-    expect(steadySeatThread(direct, direct, online)).toEqual({ kind: "shown", seat: direct });
   });
 
-  it("leaves the linked view at once for a connection of its own, not for links that reload", () => {
-    expect(steadySeatThread(linked, direct, online)).toEqual({ kind: "shown", seat: direct });
-    expect(steadySeatThread(linked, direct, loading)).toEqual({ kind: "shown", seat: linked });
-    // The link is really gone and the environment is saved: it opens in place, offline.
-    expect(steadySeatThread(linked, direct, loaded)).toEqual({ kind: "shown", seat: direct });
-    // A new name for the linked environment redraws the same view.
-    const renamed = { ...linked, linked: { ...linked.linked, label: "Workstation" } };
-    expect(steadySeatThread(linked, renamed, loaded)).toEqual({ kind: "shown", seat: renamed });
-  });
-
-  it("shows nothing once the seat is closed", () => {
-    expect(steadySeatThread(direct, null, online)).toEqual({ kind: "none" });
-  });
-
-  it("keeps a seat open in place when its saved environment goes offline and nothing links to it", () => {
-    const children = [
-      {
-        childThreadId: null,
-        remoteChild: { environmentId: remote, threadId: direct.threadId, label: "Desktop" },
-        teamChat: { seat: "remote-qa" },
-      },
-    ];
-    // What the connections say at each step, for a saved environment no link reaches.
-    const resolved = (connected: boolean) =>
-      openSeatThread(ref, children, direct, {
-        ownConnection: () => ({ connected }),
-        isLinked: () => false,
-      });
-    const open = steadySeatThread(null, resolved(true), online);
-    expect(open).toEqual({ kind: "shown", seat: direct });
-    // Offline: the same view stays, where the app says it is offline and can reconnect. There
-    // is no linked view to move to, however long it lasts, and coming back changes nothing.
-    for (const reach of [loading, loaded]) {
-      expect(steadySeatThread(direct, resolved(false), reach)).toEqual(open);
-    }
-    expect(steadySeatThread(direct, resolved(true), online)).toEqual(open);
+  it("adds nothing for a seat with no conversation, or a task with none of its own", () => {
+    expect(seatThreadRows(ref, [], [{ seat: "idle", activity: "waiting" }], () => null)).toEqual(
+      [],
+    );
+    expect(seatThreadRows(null, [], seats, thread)).toEqual([]);
   });
 });
 

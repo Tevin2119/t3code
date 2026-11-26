@@ -22,7 +22,7 @@ import ProjectScriptsControl, {
 import { T, useGT } from "gt-react";
 import { lazy, Suspense, useState, type ComponentProps } from "react";
 import { useBoardTask } from "../delivery/BoardTaskContext";
-import { taskHasRelatedWork } from "../delivery/relatedTaskGroups";
+import { taskHasLineage } from "../delivery/relatedTaskGroups";
 import { ThreadDetailsCard } from "./ThreadDetailsCard";
 import { OpenInPicker } from "./OpenInPicker";
 import { ThreadDetailsSection } from "./ThreadDetailsSection";
@@ -55,8 +55,8 @@ import { Menu, MenuPopup } from "../ui/menu";
 const TaskDetailsItem = lazy(() =>
   import("../delivery/TaskDetails").then((module) => ({ default: module.TaskDetailsItem })),
 );
-const TaskRelatedWork = lazy(() =>
-  import("../delivery/TaskRelatedWork").then((module) => ({ default: module.TaskRelatedWork })),
+const TaskLineage = lazy(() =>
+  import("../delivery/TaskLineage").then((module) => ({ default: module.TaskLineage })),
 );
 
 interface ThreadDetailsPanelProps extends Pick<
@@ -110,9 +110,9 @@ interface ThreadDetailsPanelProps extends Pick<
 export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
   const visible = useClientSettings(resolveThreadDetailsVisibility);
   const gt = useGT();
-  // The Task item and the child tasks come from the board task whose view hosts this thread.
-  const boardTask = useBoardTask()?.task ?? null;
-  const taskShown = boardTask !== null && visible.task;
+  // The Task item and the task's lineage come from the board task whose view hosts this thread.
+  const board = useBoardTask();
+  const taskShown = (board?.task ?? null) !== null && visible.task;
   const [menuPosition, setMenuPosition] = useState<{ x: number; y: number } | null>(null);
   const t3File = useT3ProjectFileState(
     props.environmentId,
@@ -344,9 +344,9 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
                   showLineage={visible.lineage}
                   showSideChats={visible.sideChats}
                   extraGroup={
-                    boardTask && taskHasRelatedWork(boardTask) ? (
+                    taskHasLineage(board) ? (
                       <Suspense fallback={null}>
-                        <TaskRelatedWork />
+                        <TaskLineage />
                       </Suspense>
                     ) : undefined
                   }
