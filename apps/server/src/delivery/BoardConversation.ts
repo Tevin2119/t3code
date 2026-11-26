@@ -57,6 +57,9 @@ interface Activity {
 
 const STEER_MESSAGE_PREFIX = "message:board-steer:";
 const HANDOFF_NOTICE_PREFIX = "message:board-handoff:";
+const UNDELIVERED_NOTICE_PREFIX = "message:board-steer-undelivered:";
+/** How long a thread steer the engine cannot take is tried: the board's default hand-off wait. */
+const STEER_RETRY_MS = 30 * 60 * 1000;
 
 /** The message a queued steer is delivered as: one per steer, on every attempt. */
 export const steerMessageId = (task: BoardTask, steerId: number) =>
@@ -128,6 +131,7 @@ function scanActivity(
       const steer =
         message.id.startsWith(STEER_MESSAGE_PREFIX) ||
         message.id.startsWith(HANDOFF_NOTICE_PREFIX) ||
+        message.id.startsWith(UNDELIVERED_NOTICE_PREFIX) ||
         typed;
       found.push({
         seq: stored.sequence,
@@ -322,16 +326,49 @@ export const make = Effect.gen(function* () {
 
   /**
    * A person's words in the thread, told to the run as a thread steer (never queued back here).
-   * `false` on no answer or a 5xx: told again later with the same `ref`, which the engine
-   * dedupes on. An acceptance or a 4xx refusal settles it, remembered across restarts.
+   * `false` on no answer or a 5xx within the hand-off wait: told again with the same `ref`. A
+   * refusal, or giving up, is told in the thread; settled steers are remembered across restarts.
    */
-  const tellSteer = Effect.fn("BoardConversation.tellSteer")(function* (
-    taskId: string,
+  const noticeUndelivered = Effect.fn("BoardConversation.noticeUndelivered")(function* (
+    task: BoardTask,
     threadId: ThreadId,
     steer: { readonly messageId: string; readonly text: string },
+    reason: string,
+  ) {
+    const messageId = MessageId.make(
+      `${UNDELIVERED_NOTICE_PREFIX}${task.board}:${task.id}:${steer.messageId}`,
+    );
+    const present = yield* projections.getMessagesById(threadId, [messageId]).pipe(Effect.result);
+    if (present._tag === "Failure") return false;
+    if (present.success.has(messageId)) return true;
+    const quoted = excerptOf(steer.text)?.slice(0, 80) ?? "";
+    const text = `This message didn't reach the team: ${reason}. Send it again when the task is running.\n\n> ${quoted}`;
+    const sent = yield* threads
+      .dispatch({
+        type: "message.dispatch",
+        commandId: CommandId.make(`${boardTaskThreadMarker(task)}:undelivered:${steer.messageId}`),
+        threadId,
+        messageId,
+        text,
+        notification: engineNotice("A message didn't reach the team", text),
+        attachments: [],
+        dispatchMode: { type: "queue_after_active" },
+        createdBy: "agent",
+        creationSource: "server",
+      })
+      .pipe(Effect.result);
+    return sent._tag === "Success" || FINAL_REFUSALS.has(sent.failure._tag);
+  });
+
+  const tellSteer = Effect.fn("BoardConversation.tellSteer")(function* (
+    task: BoardTask,
+    threadId: ThreadId,
+    steer: { readonly messageId: string; readonly text: string },
+    typedAt: string,
   ) {
     const key = `${threadId}\u0000${steer.messageId}`;
     if (steered.has(key)) return true;
+    const taskId = task.id;
     const told = yield* post(`/api/tasks/${taskId}/steer`, {
       text: steer.text,
       by: "person",
@@ -339,19 +376,20 @@ export const make = Effect.gen(function* () {
       // Stable per message: the engine applies a steer once per `ref`, so a retry is safe.
       ref: `thread:${threadId}:${steer.messageId}`,
     });
-    if (
-      told._tag === "Failure" &&
-      (told.failure.status === undefined || told.failure.status >= 500)
-    )
-      return false;
+    if (told._tag === "Success") {
+      yield* rememberSteer(key);
+      return true;
+    }
+    const status = told.failure.status;
+    const retried = status === undefined || status >= 500;
+    const now = DateTime.toEpochMillis(yield* DateTime.now);
+    if (retried && now - Date.parse(typedAt) < STEER_RETRY_MS) return false;
+    // Given up or refused: the person is told in the thread, once per message across restarts.
+    const reason = retried
+      ? "the engine could not take it for 30 minutes"
+      : told.failure.detail.replace(/\s+/g, " ").slice(0, 200);
+    if (!(yield* noticeUndelivered(task, threadId, steer, reason))) return false;
     yield* rememberSteer(key);
-    // A task with no run under way is refused 409: the lead reads the words in the thread itself.
-    if (told._tag === "Failure")
-      yield* Effect.logDebug("A person's words in a task thread were not taken as a steer.", {
-        task: taskId,
-        status: told.failure.status,
-        code: codeOf(told.failure),
-      });
     return true;
   });
 
@@ -400,7 +438,8 @@ export const make = Effect.gen(function* () {
       // Told before the item is mirrored, and told once: a later retry of the ingest sends only
       // the ingest. Only a task in work has a run to steer.
       if (item.steer !== null) {
-        if (steering && !(yield* tellSteer(card.id, threadId, item.steer))) break;
+        const task = card.set ? boardTaskOf(card.set, card.id) : null;
+        if (steering && task && !(yield* tellSteer(task, threadId, item.steer, item.at))) break;
         queued[index] = { ...item, steer: null };
       }
       const answer = yield* post(`/api/tasks/${card.id}/activity`, {
