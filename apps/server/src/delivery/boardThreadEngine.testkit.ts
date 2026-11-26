@@ -60,7 +60,7 @@ export interface ScratchSteer {
 }
 
 /**
- * A native attempt v2 as Operation-PaperClip #192's native-builds.mjs keeps it: the engine's step
+ * A native attempt v2 as the engine's native-builds.mjs keeps it: the engine's step
  * of a run on a board with "t3" execution, claimed, attached and completed by T3.
  */
 export interface ScratchAttempt {
