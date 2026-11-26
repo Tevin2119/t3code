@@ -553,18 +553,18 @@ it.effect.each([
   "private",
   "shared",
   "offline",
-  "wrong-environment",
+  "binding-unavailable",
   "owner",
   "source",
-  "owner-index-offline",
   "pending",
   "descendant",
+  "shared-descendant",
 ] as const)("checks thread targets before invoking the handler for %s", (visibility) => {
   const id = ThreadId.make("thread:delegated-task:command%3Aexample");
   const parent = ThreadId.make("launching-thread");
   const base = liveThreadShell(id);
   const target =
-    visibility === "descendant"
+    visibility === "descendant" || visibility === "shared-descendant"
       ? {
           ...base,
           lineage: { ...base.lineage, launchedFromThreadId: parent },
@@ -590,12 +590,18 @@ it.effect.each([
     Effect.map(DeliveryService.DeliveryService, (service) => ({
       ...service,
       ownerTiedThreads: Effect.fn("fixture.ownerTiedThreads")(function* () {
-        if (visibility === "owner-index-offline")
+        engineCalls++;
+        if (visibility === "offline")
           return yield* new DeliveryError({
             reason: "unreachable",
             detail: "Fixture engine offline.",
           });
-        return new Set<ThreadId>(visibility === "source" ? [id] : []);
+        const index = new Map<ThreadId, boolean>();
+        if (visibility === "private" || visibility === "source") index.set(id, false);
+        if (visibility === "shared" || visibility === "shared-descendant") index.set(id, true);
+        if (visibility === "descendant" || visibility === "shared-descendant")
+          index.set(parent, false);
+        return index;
       }),
       threadState: (threadId): Effect.Effect<DeliveryThreadState, DeliveryError> =>
         visibility === "pending" && threadId === id
@@ -611,38 +617,11 @@ it.effect.each([
                 why: null,
               },
             })
-          : (
-                visibility === "descendant"
-                  ? threadId === parent
-                  : visibility !== "source" &&
-                    visibility !== "owner-index-offline" &&
-                    threadId === id
-              )
+          : visibility === "binding-unavailable" && threadId === id
             ? Effect.fail(
                 new DeliveryError({ reason: "invalid", detail: "Fixture binding lookup failed." }),
               )
             : service.threadState(threadId),
-      linkedThreads: Effect.suspend(() => {
-        engineCalls++;
-        if (visibility === "offline" || visibility === "pending" || visibility === "descendant")
-          return Effect.fail(
-            new DeliveryError({ reason: "unreachable", detail: "Fixture refusal." }),
-          );
-        return Effect.succeed({
-          threads:
-            visibility === "private" || visibility === "source"
-              ? []
-              : [
-                  {
-                    threadId: id,
-                    environmentId: visible
-                      ? fullAccessLinkedClient.environmentId
-                      : EnvironmentId.make("other"),
-                    tasks: [{ id: "task-demo", number: 1, kind: "board-thread" }],
-                  },
-                ],
-        });
-      }),
     })),
   ).pipe(Layer.provide(DeliveryService.layerTest));
   const server = McpHttpServer.toolkitRegistration(
@@ -670,9 +649,9 @@ it.effect.each([
         targetThreadId: id,
       }),
     ).toBe(expected);
-    expect(engineCalls).toBe(owner || visibility === "owner-index-offline" ? 0 : 2);
+    expect(engineCalls).toBe(owner ? 0 : 2);
     expect(yield* call("test_thread_target", scope, { threadId: fullAccessThreadId })).toBe(
-      visibility === "owner-index-offline" ? "thread_not_found" : "ran",
+      visibility === "offline" ? "thread_not_found" : "ran",
     );
   }).pipe(Effect.provide(server));
 });

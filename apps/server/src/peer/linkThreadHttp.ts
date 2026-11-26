@@ -1,6 +1,6 @@
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as DeliveryService from "../delivery/DeliveryService.ts";
-import { isDeliveryTiedThread } from "../delivery/linkedThreadAccess.ts";
+import { isFencedThread } from "../delivery/linkedThreadAccess.ts";
 import {
   OrchestrationV2GetTurnItemResult,
   OrchestrationV2ThreadHistoryPage,
@@ -80,7 +80,7 @@ const admitLink = Effect.fn("linkThreadHttp.admitLink")(function* (
     const current = yield* threads.getThreadShell(resolvedId).pipe(Effect.option);
     if (current._tag === "None" || current.value === null || current.value.deletedAt !== null)
       return true;
-    return yield* isDeliveryTiedThread(current.value, threads, delivery, ownerTied.value);
+    return yield* isFencedThread(current.value, threads, delivery, ownerTied.value, false);
   });
   if (yield* deliveryTied) return refusal(404, "thread_not_found");
   return {

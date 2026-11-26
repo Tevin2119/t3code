@@ -725,112 +725,83 @@ it.effect(
   },
 );
 
-it.effect("shares the latest decoded thread list across linked access levels", () => {
+it.effect("reads the complete owner thread index and invalidates it after a write", () => {
   const fake = engine();
-  const path = "/api/linked/threads";
-  const thread = {
-    environmentId: linkedEnvironmentId,
-    threadId: "thread:delegated-task:command%3Aexample",
-    tasks: [{ id: sharedTask.id, number: 12, kind: "board-thread" }],
-  };
+  const path = "/api/task-threads";
+  const threads = [
+    { environmentId: linkedEnvironmentId, threadId: "ordinary/filing-thread", linked: false },
+    {
+      environmentId: linkedEnvironmentId,
+      threadId: "thread:delegated-task:command%3Aexample",
+      linked: true,
+    },
+    { environmentId: "other", threadId: "ordinary/filing-thread", linked: true },
+    { environmentId: "other", threadId: "other-thread", linked: false },
+  ];
+  const expected = new Map([
+    [threads[0]!.threadId, false],
+    [threads[1]!.threadId, true],
+  ]);
   fake.replies = {
-    [path]: { threads: [thread] },
+    [path]: { threads },
     "/api/tasks/task-shared/linked-hidden": { task: sharedTask.id, linkedHidden: true },
   };
   return Effect.gen(function* () {
     const delivery = yield* DeliveryService.DeliveryService;
-    const readOnly = delivery.linkedThreads.pipe(
-      Effect.provideService(McpInvocationContext.McpInvocationContext, linkedScope("read-only")),
-    );
-    const acting = delivery.linkedThreads.pipe(
-      Effect.provideService(McpInvocationContext.McpInvocationContext, linkedScope("full-access")),
-    );
-    yield* delivery.linkedThreads.pipe(Effect.flip);
-    expect((yield* readOnly).threads).toEqual([thread]);
-    expect((yield* readOnly).threads).toEqual([thread]);
-    expect(fake.requests.map((request) => request.path)).toEqual([path]);
-    fake.replies = { ...fake.replies, [path]: { threads: [{ ...thread, tasks: [] }] } };
-    expect((yield* acting).threads).toEqual([thread]);
-    yield* TestClock.adjust("3 seconds");
-    yield* readOnly.pipe(Effect.flip);
-    fake.replies = { ...fake.replies, [path]: { threads: [] } };
-    expect((yield* acting).threads).toEqual([]);
-    expect((yield* readOnly).threads).toEqual([]);
+    const index = delivery
+      .ownerTiedThreads(linkedEnvironmentId)
+      .pipe(
+        Effect.provideService(McpInvocationContext.McpInvocationContext, linkedScope("read-only")),
+      );
+    expect(yield* index).toEqual(expected);
+    expect(yield* index).toEqual(expected);
+    expect(fake.requests.map(({ method, path, search }) => [method, path + search])).toEqual([
+      ["GET", path],
+    ]);
     yield* delivery.setTaskLinkedHidden({ taskId: sharedTask.id, hidden: true });
     fake.replies = { ...fake.replies, [path]: { threads: [] } };
-    expect((yield* readOnly).threads).toEqual([]);
-    expect(fake.requests.filter((request) => request.path === path)).toHaveLength(4);
-  }).pipe(Effect.provide(layer(fake, { prefix: "linked-threads-" })));
+    expect(yield* index).toEqual(new Map());
+    expect(fake.requests.filter((request) => request.path === path)).toHaveLength(2);
+
+    yield* TestClock.adjust("3 seconds");
+    fake.down = true;
+    expect((yield* index.pipe(Effect.flip)).reason).toBe("unreachable");
+  }).pipe(Effect.provide(layer(fake, { prefix: "linked-owner-index-" })));
 });
 
-it.effect(
-  "indexes owner task sources and historical board links, and rejects an unavailable index",
-  () => {
-    const fake = engine();
-    const path = "/api/tasks?set=all&limit=500";
-    fake.replies = {
-      [path]: [
-        {
-          id: "task-source",
-          origin: `thread:${linkedEnvironmentId}/ordinary/filing-thread`,
-          boardThread: null,
-        },
-        {
-          id: "task-board",
-          origin: "person",
-          boardThread: { environmentId: linkedEnvironmentId, threadId: "current-board-thread" },
-        },
-        { id: "task-other", origin: "thread:other/private-thread", boardThread: null },
-      ],
-      "/api/events": [
-        {
-          kind: "task.board-thread-set",
-          task: "task-nested",
-          data: {
-            boardThread: { environmentId: linkedEnvironmentId, threadId: "nested-part-thread" },
-          },
-        },
-        { kind: "task.arrived", task: "transferred-task", data: {} },
-      ],
-      "/api/tasks/transferred-task": {
-        id: "transferred-task",
-        origin: `thread:${linkedEnvironmentId}/transferred-origin`,
-        boardThread: null,
-      },
-    };
-    return Effect.gen(function* () {
-      const delivery = yield* DeliveryService.DeliveryService;
-      const index = delivery
-        .ownerTiedThreads(linkedEnvironmentId)
-        .pipe(
-          Effect.provideService(
-            McpInvocationContext.McpInvocationContext,
-            linkedScope("read-only"),
-          ),
-        );
-      const expected = new Set([
-        "ordinary/filing-thread",
-        "current-board-thread",
-        "nested-part-thread",
-        "transferred-origin",
-      ]);
-      expect(yield* index).toEqual(expected);
-      expect(yield* index).toEqual(expected);
-      expect(fake.requests.map(({ path, search }) => path + search).sort()).toEqual(
-        ["/api/events", path, "/api/tasks/transferred-task"].sort(),
-      );
-      yield* TestClock.adjust("3 seconds");
-      fake.replies = {
-        ...fake.replies,
-        [path]: [{ id: "task-invalid", origin: "thread:invalid", boardThread: null }],
-      };
-      expect((yield* index.pipe(Effect.flip)).reason).toBe("invalid");
-      yield* TestClock.adjust("3 seconds");
-      fake.down = true;
-      expect((yield* index.pipe(Effect.flip)).reason).toBe("unreachable");
-    }).pipe(Effect.provide(layer(fake, { prefix: "linked-owner-index-" })));
+it.effect.each([
+  { name: "non-200", status: 201, body: { threads: [] }, code: 201 },
+  { name: "missing flag", body: { threads: [{ environmentId: "other", threadId: "thread" }] } },
+  {
+    name: "non-boolean flag",
+    body: { threads: [{ environmentId: "other", threadId: "thread", linked: "false" }] },
   },
-);
+  {
+    name: "extra field",
+    body: { threads: [{ environmentId: "other", threadId: "thread", linked: true, task: "x" }] },
+  },
+  {
+    name: "padded ID",
+    body: { threads: [{ environmentId: linkedEnvironmentId, threadId: " thread", linked: true }] },
+  },
+  {
+    name: "oversize body",
+    body: { threads: [], extra: "x".repeat(4 * 1_048_576) },
+    code: 413,
+  },
+] as const)("refuses an owner thread index response with $name", (scenario) => {
+  const fake = engine();
+  fake.reply = ({ path }) =>
+    path === "/api/task-threads"
+      ? { body: scenario.body, ...("status" in scenario ? { status: scenario.status } : {}) }
+      : undefined;
+  return Effect.gen(function* () {
+    const delivery = yield* DeliveryService.DeliveryService;
+    const failure = yield* delivery.ownerTiedThreads(linkedEnvironmentId).pipe(Effect.flip);
+    if ("code" in scenario) expect(failure.status).toBe(scenario.code);
+    else expect(failure.reason).toBe("invalid");
+  }).pipe(Effect.provide(layer(fake, { prefix: "linked-owner-invalid-" })));
+});
 
 it.effect("allows large hand-off replies only when preparing a bundle", () => {
   const fake = engine();

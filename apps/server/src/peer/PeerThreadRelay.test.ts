@@ -66,13 +66,14 @@ const archived = (sequence: number): OrchestrationV2StoredEvent => ({
  * completes when B's stream of them is torn down.
  */
 const serveBoxWithTaskThread = Effect.fn("PeerThreadRelay.test.serveBox")(function* (
-  taskThread: boolean,
+  taskThread: "marker" | "shared" | false,
 ) {
   const live = yield* Queue.unbounded<OrchestrationV2StoredEvent, Cause.Done>();
   const closed = yield* Deferred.make<void>();
-  const shell = taskThread
-    ? { ...boxShell, lineage: { ...boxShell.lineage, engineIntake: "board-task:work:task-test" } }
-    : boxShell;
+  const shell =
+    taskThread === "marker"
+      ? { ...boxShell, lineage: { ...boxShell.lineage, engineIntake: "board-task:work:task-test" } }
+      : boxShell;
   const threads = Layer.mock(ThreadManagement.ThreadManagementService)({
     getThreadShell: (threadId) => Effect.succeed(threadId === boxThread ? shell : null),
     ensureLegacyTranscript: () => Effect.void,
@@ -84,11 +85,21 @@ const serveBoxWithTaskThread = Effect.fn("PeerThreadRelay.test.serveBox")(functi
       Effect.succeed({ snapshotSequence: 7, items: [], hasMoreHistory: false, nextCursor: cursor }),
     getTurnItem: () => Effect.succeed({ item: null }),
   });
+  const delivery = Layer.effect(
+    DeliveryService.DeliveryService,
+    Effect.map(DeliveryService.DeliveryService, (service) => ({
+      ...service,
+      ownerTiedThreads: () =>
+        Effect.succeed(
+          new Map<ThreadId, boolean>(taskThread === "shared" ? [[boxThread, true]] : []),
+        ),
+    })),
+  ).pipe(Layer.provide(DeliveryService.layerTest));
   const peer = yield* servePeer(box, Layer.empty, LinkThreadHttp.layer).pipe(
     Effect.provide(
       Layer.mergeAll(
         threads,
-        DeliveryService.layerTest,
+        delivery,
         Layer.mock(OrchestrationEventStore.OrchestrationEventStore)({}),
       ),
     ),
@@ -216,29 +227,31 @@ it.effect("serves a thread only to a link's own session", () =>
   ).pipe(Effect.provide(Layer.merge(NodeHttpServer.layerTest, FetchHttpClient.layer))),
 );
 
-it.effect("keeps delivery-tied threads out of the raw peer transcript routes", () =>
-  Effect.scoped(
-    Effect.gen(function* () {
-      const box = yield* serveBoxWithTaskThread(true);
-      const laptop = yield* makeLaptop;
-      yield* linkTo(laptop.links, box);
-      const resolved = yield* laptop.links.resolve(input.environmentId);
-      const http = yield* HttpClient.HttpClient;
-      for (const route of [
-        PEER_LINK_THREAD_STREAM_ROUTE,
-        PEER_LINK_THREAD_HISTORY_ROUTE,
-        PEER_LINK_THREAD_ITEM_ROUTE,
-      ]) {
-        const response = yield* http.execute(
-          HttpClientRequest.get(`${box.url}${route}?thread=${encodeURIComponent(boxThread)}`).pipe(
-            HttpClientRequest.bearerToken(resolved.token),
-          ),
-        );
-        expect(response.status).toBe(404);
-        expect(yield* response.json).toEqual({ error: "thread_not_found" });
-      }
-    }),
-  ).pipe(Effect.provide(Layer.merge(NodeHttpServer.layerTest, FetchHttpClient.layer))),
+it.effect.each(["marker", "shared"] as const)(
+  "keeps delivery-tied threads out of raw peer transcript routes (%s)",
+  (taskThread) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const box = yield* serveBoxWithTaskThread(taskThread);
+        const laptop = yield* makeLaptop;
+        yield* linkTo(laptop.links, box);
+        const resolved = yield* laptop.links.resolve(input.environmentId);
+        const http = yield* HttpClient.HttpClient;
+        for (const route of [
+          PEER_LINK_THREAD_STREAM_ROUTE,
+          PEER_LINK_THREAD_HISTORY_ROUTE,
+          PEER_LINK_THREAD_ITEM_ROUTE,
+        ]) {
+          const response = yield* http.execute(
+            HttpClientRequest.get(
+              `${box.url}${route}?thread=${encodeURIComponent(boxThread)}`,
+            ).pipe(HttpClientRequest.bearerToken(resolved.token)),
+          );
+          expect(response.status).toBe(404);
+          expect(yield* response.json).toEqual({ error: "thread_not_found" });
+        }
+      }),
+    ).pipe(Effect.provide(Layer.merge(NodeHttpServer.layerTest, FetchHttpClient.layer))),
 );
 
 it.effect("tells a client why a linked environment's thread cannot be read", () =>

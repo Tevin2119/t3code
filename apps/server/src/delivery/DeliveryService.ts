@@ -20,13 +20,11 @@ import {
   type EnvironmentId,
   LinkedDeliveryRead,
   LinkedHandoffPeerId,
-  LinkedDeliveryId,
   LINKED_HANDOFF_BUNDLE_MAX_BYTES,
   LinkedHandoffPeerRequest,
   LinkedHandoffPeerResponses,
   LinkedDeliveryAction,
   LinkedDeliveryResults,
-  LinkedDeliveryThreads,
   DeliverySetBoardLinkedVisibility,
   DeliverySetTaskLinkedHidden,
   DeliveryBoardLinkedVisibility,
@@ -40,11 +38,13 @@ import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import type * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
+import type * as SchemaAST from "effect/SchemaAST";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import { FetchHttpClient, HttpClient, HttpClientRequest, HttpIncomingMessage } from "effect/http";
@@ -200,35 +200,26 @@ const linkedRefusal = (status: 403 | 404) =>
   });
 
 const validPeerId = Schema.is(LinkedHandoffPeerId);
-const validDeliveryId = Schema.is(LinkedDeliveryId);
-const OwnerThreadRef = Schema.Struct({
-  environmentId: Schema.String.check(Schema.isPattern(/^[^\s\p{C}/]{1,256}$/u)),
-  threadId: ThreadId.check(Schema.isPattern(/^[^\s\p{C}]{1,1024}$/u)),
+const OwnerThreadIndex = Schema.Struct({
+  threads: Schema.Array(
+    Schema.Struct({
+      environmentId: Schema.String.check(Schema.isPattern(/^[^\s\p{C}/]{1,256}$/u)),
+      threadId: Schema.String.check(Schema.isPattern(/^[^\s\p{C}]{1,1024}$/u)),
+      linked: Schema.Boolean,
+    }),
+  ),
 });
-const OwnerTask = Schema.Struct({
-  id: LinkedDeliveryId,
-  origin: Schema.String,
-  boardThread: Schema.NullOr(OwnerThreadRef),
-});
-const OwnerTaskCards = Schema.Array(OwnerTask);
-const OwnerTaskEvents = Schema.Array(
-  Schema.Struct({
-    kind: Schema.String,
-    task: Schema.NullOr(Schema.String),
-    data: Schema.Unknown,
-  }),
-);
-const OwnerBoardThreadEvent = Schema.Struct({ boardThread: OwnerThreadRef });
-const OwnerTaskOriginEvent = Schema.Struct({ origin: Schema.String });
-const originPattern = /^thread:([^\s\p{C}/]{1,256})\/([^\s\p{C}]{1,1024})$/u;
 
 const encodeBundleJson = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
 
 const decodeLinkedJson = Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Unknown));
 
-const decodeEngine = <A>(schema: Schema.Decoder<A>) =>
+const decodeEngine = <A>(schema: Schema.Decoder<A>, options?: SchemaAST.ParseOptions) =>
   Effect.fn("DeliveryService.decodeEngine")(function* (body: unknown) {
-    return yield* Schema.decodeUnknownEffect(schema)(body).pipe(
+    return yield* Schema.decodeUnknownEffect(
+      schema,
+      options,
+    )(body).pipe(
       Effect.mapError(
         () =>
           new DeliveryError({
@@ -270,8 +261,7 @@ export class DeliveryService extends Context.Service<
     ) => Effect.Effect<unknown, DeliveryError>;
     readonly ownerTiedThreads: (
       environmentId: EnvironmentId,
-    ) => Effect.Effect<ReadonlySet<ThreadId>, DeliveryError>;
-    readonly linkedThreads: Effect.Effect<typeof LinkedDeliveryThreads.Type, DeliveryError>;
+    ) => Effect.Effect<ReadonlyMap<ThreadId, boolean>, DeliveryError>;
     readonly setBoardLinkedVisibility: (
       input: typeof DeliverySetBoardLinkedVisibility.Type,
     ) => Effect.Effect<typeof DeliveryBoardLinkedVisibility.Type, DeliveryError>;
@@ -344,9 +334,8 @@ export const layerTest = Layer.succeed(
     peerHandoff: disabled,
     ownerHandoffRequest: disabled,
     ownerTiedThreads: Effect.fn("DeliveryService.ownerTiedThreads")(() =>
-      Effect.succeed(new Set<ThreadId>()),
+      Effect.succeed(new Map<ThreadId, boolean>()),
     ),
-    linkedThreads: disabled(),
     setBoardLinkedVisibility: disabled,
     setTaskLinkedHidden: disabled,
     discover: Effect.fn("DeliveryService.discover")(function* (input, caller) {
@@ -496,15 +485,12 @@ const make = Effect.fn("DeliveryService.make")(function* (
   >();
   const discoveryLock = yield* Semaphore.make(1);
   const threadIndexLock = yield* Semaphore.make(1);
-  let linkedThreadCache:
-    | { engineUrl: string; until: number; value: typeof LinkedDeliveryThreads.Type }
-    | undefined;
   let ownerThreadCache:
     | {
         engineUrl: string;
         environmentId: EnvironmentId;
         until: number;
-        value: Effect.Effect<ReadonlySet<ThreadId>, DeliveryError>;
+        value: Exit.Exit<ReadonlyMap<ThreadId, boolean>, DeliveryError>;
       }
     | undefined;
   let discoveryGeneration = 0;
@@ -512,7 +498,6 @@ const make = Effect.fn("DeliveryService.make")(function* (
   const invalidateDiscovery = () => {
     discoveryGeneration++;
     discoveryCache.clear();
-    linkedThreadCache = undefined;
     ownerThreadCache = undefined;
   };
 
@@ -618,6 +603,7 @@ const make = Effect.fn("DeliveryService.make")(function* (
       dispatchDeadline?: number,
       format?: "json" | "binary" | "linked-handoff" | "owner-handoff" | "owner-thread-index",
     ) {
+      const ownerThreadIndex = format === "owner-thread-index";
       const linked = format === "json" || format === "binary" || format === "linked-handoff";
       const handoff = format === "linked-handoff" || format === "owner-handoff";
       const preparesBundle =
@@ -627,13 +613,13 @@ const make = Effect.fn("DeliveryService.make")(function* (
       const limit =
         handoff && preparesBundle
           ? LINKED_HANDOFF_BUNDLE_MAX_BYTES + 1_048_576
-          : format === "owner-thread-index"
-            ? 16 * 1_048_576
+          : ownerThreadIndex
+            ? 3 * 1_048_576
             : 1_048_576;
       if (linked) {
         const scope = yield* Effect.serviceOption(McpInvocationContext.McpInvocationContext);
         if (Option.getOrUndefined(scope)?.client?.linked !== true) return yield* linkedRefusal(403);
-      } else if (format !== "owner-thread-index" && (yield* isPeerInvocation)) {
+      } else if (!ownerThreadIndex && (yield* isPeerInvocation)) {
         return yield* linkedRefusal(403);
       }
       if (expectedConfiguration !== undefined) yield* assertConfiguration(expectedConfiguration);
@@ -833,7 +819,11 @@ const make = Effect.fn("DeliveryService.make")(function* (
                     }),
                 ),
               );
-        if (response.status < 200 || response.status >= 300) {
+        if (
+          ownerThreadIndex
+            ? response.status !== 200
+            : response.status < 200 || response.status >= 300
+        ) {
           const refusal = decodeRefusal(body);
           const key = typeof bodyKey === "string" ? bodyKey : undefined;
           const message = refusal._tag === "Some" ? refusal.value.error : `HTTP ${response.status}`;
@@ -2064,13 +2054,10 @@ const make = Effect.fn("DeliveryService.make")(function* (
         )
           return yield* ownerThreadCache.value;
         const generation = discoveryGeneration;
-        const get = Effect.fn("DeliveryService.readOwnerThreadIndex")(function* <A>(
-          path: string,
-          schema: Schema.Decoder<A>,
-        ) {
+        const read = Effect.gen(function* () {
           const { body } = yield* request(
             "GET",
-            path,
+            "/api/task-threads",
             undefined,
             true,
             undefined,
@@ -2078,91 +2065,18 @@ const make = Effect.fn("DeliveryService.make")(function* (
             undefined,
             "owner-thread-index",
           );
-          return yield* decodeEngine(schema)(body);
-        });
-        const read = Effect.gen(function* () {
-          const [cards, events] = yield* Effect.all(
-            [
-              get("/api/tasks?set=all&limit=500", OwnerTaskCards),
-              get("/api/events", OwnerTaskEvents),
-            ],
-            { concurrency: 2 },
-          );
-          const ids = new Set<ThreadId>();
-          const indexedTasks = new Set<string>();
-          const arrivals = new Set<string>();
-          const invalidOrigin = new DeliveryError({
-            reason: "invalid",
-            detail: "The task origin is incompatible.",
-          });
-          const addOrigin = Effect.fn("DeliveryService.indexTaskOrigin")(function* (
-            origin: string,
-          ) {
-            if (!origin.startsWith("thread:")) return;
-            const match = originPattern.exec(origin);
-            if (match === null) return yield* invalidOrigin;
-            if (match[1] === environmentId && match[2] !== undefined)
-              ids.add(ThreadId.make(match[2]));
-          });
-          const addCard = Effect.fn("DeliveryService.indexTaskCard")(function* (
-            card: typeof OwnerTask.Type,
-          ) {
-            yield* addOrigin(card.origin);
-            indexedTasks.add(card.id);
-            if (card.boardThread?.environmentId === environmentId)
-              ids.add(card.boardThread.threadId);
-          });
-          for (const card of cards) yield* addCard(card);
-          // Search caps the cards and omits nested triage parts. The journal covers both.
-          for (const { kind, data, task } of events) {
-            if (kind === "task.board-thread-set") {
-              const { boardThread } = yield* decodeEngine(OwnerBoardThreadEvent)(data);
-              if (boardThread.environmentId === environmentId) ids.add(boardThread.threadId);
-            } else if (kind === "task.drafted" || kind === "task.filed") {
-              const { origin } = yield* decodeEngine(OwnerTaskOriginEvent)(data);
-              yield* addOrigin(origin);
-              if (task !== null) indexedTasks.add(task);
-            } else if (kind === "task.arrived") {
-              if (task === null || !validDeliveryId(task)) return yield* invalidOrigin;
-              arrivals.add(task);
-            }
+          const { threads } = yield* decodeEngine(OwnerThreadIndex, {
+            onExcessProperty: "error",
+          })(body);
+          const index = new Map<ThreadId, boolean>();
+          for (const entry of threads) {
+            if (entry.environmentId !== environmentId) continue;
+            const id = ThreadId.make(entry.threadId);
+            index.set(id, entry.linked && index.get(id) !== false);
           }
-          // A transfer can omit its original filing event.
-          yield* Effect.forEach(
-            [...arrivals].filter((id) => !indexedTasks.has(id)),
-            (id) => get(`/api/tasks/${id}`, OwnerTask).pipe(Effect.flatMap(addCard)),
-            { concurrency: 4, discard: true },
-          );
-          return ids;
+          return index;
         });
-        const value = yield* Effect.cached(read);
-        if (generation === discoveryGeneration) {
-          ownerThreadCache = {
-            engineUrl: settings.engineUrl,
-            environmentId,
-            until: now + 3_000,
-            value,
-          };
-        }
-        const ids = yield* value;
-        if (generation !== discoveryGeneration) return yield* linkedRefusal(404);
-        return ids;
-      },
-      (effect) => threadIndexLock.withPermit(effect),
-    ),
-    linkedThreads: threadIndexLock.withPermit(
-      Effect.gen(function* () {
-        const scope = yield* Effect.serviceOption(McpInvocationContext.McpInvocationContext);
-        if (Option.getOrUndefined(scope)?.client?.linked !== true) return yield* linkedRefusal(403);
-        const settings = yield* delivery;
-        if (!settings.enabled) return yield* linkedRefusal(403);
-        const now = yield* Clock.currentTimeMillis;
-        const cached = linkedThreadCache;
-        if (cached?.engineUrl === settings.engineUrl && now < cached.until) return cached.value;
-        const generation = discoveryGeneration;
-        const value = yield* linkedRequest("GET", "threads").pipe(
-          Effect.flatMap(decodeEngine(LinkedDeliveryThreads)),
-        );
+        const value = yield* Effect.exit(read);
         const current = yield* delivery;
         if (
           generation !== discoveryGeneration ||
@@ -2170,9 +2084,15 @@ const make = Effect.fn("DeliveryService.make")(function* (
           current.engineUrl !== settings.engineUrl
         )
           return yield* linkedRefusal(404);
-        linkedThreadCache = { engineUrl: settings.engineUrl, until: now + 3_000, value };
-        return value;
-      }),
+        ownerThreadCache = {
+          engineUrl: settings.engineUrl,
+          environmentId,
+          until: now + 3_000,
+          value,
+        };
+        return yield* value;
+      },
+      (effect) => threadIndexLock.withPermit(effect),
     ),
     setBoardLinkedVisibility: Effect.fn("DeliveryService.setBoardLinkedVisibility")(
       function* (raw) {

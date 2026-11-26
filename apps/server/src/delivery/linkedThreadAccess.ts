@@ -35,28 +35,29 @@ type LineageReader = {
 };
 type Threads = Pick<ThreadManagement.ThreadManagementService["Service"], keyof LineageReader>;
 
-export const isDeliveryTiedThread = Effect.fn("linkedThreadAccess.isDeliveryTiedThread")(function* (
+export const isFencedThread = Effect.fn("linkedThreadAccess.isFencedThread")(function* (
   thread: Shell,
   threads: LineageReader,
   delivery: Delivery,
-  ownerTied: ReadonlySet<ThreadId>,
+  ownerTied: ReadonlyMap<ThreadId, boolean>,
+  allowShared: boolean,
 ) {
+  const sharedTarget = allowShared && ownerTied.get(thread.id) === true;
   const visited = new Set<ThreadId>();
   const pending = [thread];
   for (const current of pending) {
     if (visited.has(current.id)) continue;
     visited.add(current.id);
     const { lineage } = current;
-    if (
-      isServerOwnedThreadLineage(lineage) ||
-      boardTaskOfMarker(current.id) !== null ||
-      ownerTied.has(current.id)
-    )
-      return true;
-
-    const state = yield* delivery.threadState(current.id).pipe(Effect.option);
-    if (Option.isNone(state) || state.value.binding !== null || state.value.pending !== null)
-      return true;
+    const linked = ownerTied.get(current.id);
+    if (linked === false || (linked === true && !sharedTarget)) return true;
+    if (linked === undefined) {
+      if (isServerOwnedThreadLineage(lineage) || boardTaskOfMarker(current.id) !== null)
+        return true;
+      const state = yield* delivery.threadState(current.id).pipe(Effect.option);
+      if (Option.isNone(state) || state.value.binding !== null || state.value.pending !== null)
+        return true;
+    }
 
     let launchedFrom = lineage.launchedFromThreadId;
     if (
@@ -72,7 +73,6 @@ export const isDeliveryTiedThread = Effect.fn("linkedThreadAccess.isDeliveryTied
     }
     for (const ancestorId of [lineage.rootThreadId, lineage.parentThreadId, launchedFrom]) {
       if (ancestorId == null || visited.has(ancestorId)) continue;
-      if (boardTaskOfMarker(ancestorId) !== null || ownerTied.has(ancestorId)) return true;
       const ancestor = yield* threads.getThreadShell(ancestorId).pipe(Effect.option);
       if (Option.isNone(ancestor) || ancestor.value === null) return true;
       pending.push(ancestor.value);
@@ -95,23 +95,10 @@ const threadVisibility = Effect.fn("linkedThreadAccess.threadVisibility")(functi
   const ownerTied = yield* service.ownerTiedThreads(environmentId).pipe(Effect.option);
   // The first failed owner read can hide a source thread T3 has never seen.
   if (Option.isNone(ownerTied)) return (_shell: Shell) => Effect.succeed(false);
-  const listed = yield* Effect.cached(
-    service.linkedThreads.pipe(
-      Effect.map(
-        ({ threads }) =>
-          new Set(
-            threads
-              .filter((entry) => entry.environmentId === environmentId)
-              .map(({ threadId }) => threadId),
-          ),
-      ),
-      Effect.orElseSucceed(() => new Set<ThreadId>()),
-    ),
-  );
-  return Effect.fn("linkedThreadAccess.canSeeThread")(function* (shell: Shell) {
-    if (!(yield* isDeliveryTiedThread(shell, threads, service, ownerTied.value))) return true;
-    return (yield* listed).has(shell.id);
-  });
+  return (shell: Shell) =>
+    isFencedThread(shell, threads, service, ownerTied.value, true).pipe(
+      Effect.map((fenced) => !fenced),
+    );
 });
 
 export const assertPeerThreadTargets = Effect.fn("linkedThreadAccess.assertPeerThreadTargets")(

@@ -636,11 +636,6 @@ it.effect("uses the owner engine's visibility for linked thread snapshots, lists
       const seen = yield* Ref.make<Seen>(nothingSeen);
       const linkSession = yield* Ref.make("");
       const visibility = yield* Ref.make<"private" | "shared" | "offline">("private");
-      const entry = {
-        environmentId: box.environmentId,
-        threadId: boxThread,
-        tasks: [{ id: "task-demo", number: 1, kind: "board-thread" }],
-      } as const;
       const unavailable = new DeliveryError({
         reason: "unreachable",
         detail: "Fixture engine offline.",
@@ -661,13 +656,14 @@ it.effect("uses the owner engine's visibility for linked thread snapshots, lists
                 },
               ],
             } as never),
-          linkedThreads: Ref.get(visibility).pipe(
-            Effect.flatMap((value) =>
-              value === "offline"
-                ? Effect.fail(unavailable)
-                : Effect.succeed({ threads: value === "shared" ? [entry] : [] }),
+          ownerTiedThreads: () =>
+            Ref.get(visibility).pipe(
+              Effect.flatMap((value) =>
+                value === "offline"
+                  ? Effect.fail(unavailable)
+                  : Effect.succeed(new Map([[boxThread, value === "shared"]])),
+              ),
             ),
-          ),
         })),
       ).pipe(Layer.provide(DeliveryService.layerTest));
       const b = yield* serveBox(seen, linkSession, taskDelivery);

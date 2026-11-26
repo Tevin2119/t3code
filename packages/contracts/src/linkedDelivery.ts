@@ -378,18 +378,6 @@ export const DeliverySetTaskLinkedHidden = Schema.Struct({
 });
 export const DeliveryTaskLinkedHidden = Schema.Struct({ task: Id, linkedHidden: Schema.Boolean });
 
-export const LinkedDeliveryThread = Schema.Struct({
-  ...ThreadRef.fields,
-  tasks: Schema.NonEmptyArray(
-    Schema.Struct({
-      id: Id,
-      number: Count,
-      kind: TaskThread.fields.kind,
-    }),
-  ),
-});
-export const LinkedDeliveryThreads = Schema.Struct({ threads: Schema.Array(LinkedDeliveryThread) });
-
 export const LinkedDeliveryId = Id;
 export const LinkedHandoffPeerId = Schema.String.check(
   Schema.isPattern(/^[A-Za-z0-9][A-Za-z0-9_-]{0,80}$/),
