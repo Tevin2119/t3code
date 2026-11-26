@@ -140,6 +140,9 @@ export class Workflows extends Context.Service<
       },
       WorkflowRunNotFoundError | WorkflowInputError
     >;
+    readonly launchOrigin: (
+      runId: string,
+    ) => Effect.Effect<WorkflowStore.WorkflowLaunchOrigin | undefined>;
     readonly list: (filter?: {
       readonly status?: WorkflowStore.WorkflowRunStatus;
       /** Only runs their workflow tagged with this. */
@@ -214,6 +217,7 @@ const refuse = Effect.fn("Workflows.disabled")(function* () {
 
 /** The service with nothing registered and no engine behind it. */
 export const disabled = Workflows.of({
+  launchOrigin: Effect.fn("Workflows.launchOrigin")(() => Effect.undefined),
   start: refuse,
   signal: refuse,
   answer: refuse,

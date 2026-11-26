@@ -1,7 +1,6 @@
 import { expect, it } from "@effect/vitest";
 import {
   DeliveryError,
-  type DeliveryThreadState,
   EnvironmentId,
   OrchestratorMcpEnvironmentTarget,
   OrchestratorMcpFailure,
@@ -650,25 +649,12 @@ it.effect.each([
         ? { ties: index, uncertainAfter: DateTime.toEpochMillis(base.createdAt) - 1 }
         : { ties: index };
     }),
-    threadState: (threadId): Effect.Effect<DeliveryThreadState, DeliveryError> =>
-      visibility === "pending" && threadId === id
-        ? Effect.succeed({
-            binding: null,
-            pending: {
-              threadId,
-              team: "development",
-              driver: "codex",
-              role: null,
-              cwd: "/tmp",
-              since: "now",
-              why: null,
-            },
-          })
-        : visibility === "binding-unavailable" && threadId === id
-          ? Effect.fail(
-              new DeliveryError({ reason: "invalid", detail: "Fixture binding lookup failed." }),
-            )
-          : Effect.succeed({ binding: null, pending: null }),
+    threadHasDeliveryBinding: (threadId) =>
+      visibility === "binding-unavailable" && threadId === id
+        ? Effect.fail(
+            new DeliveryError({ reason: "invalid", detail: "Fixture binding lookup failed." }),
+          )
+        : Effect.succeed(visibility === "pending" && threadId === id),
   });
   const server = McpHttpServer.toolkitRegistration(
     tools,

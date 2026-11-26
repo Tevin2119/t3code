@@ -581,6 +581,7 @@ export interface OrchestratorV2Shape {
   ) => Effect.Effect<ThreadId | null, OrchestratorV2Error>;
   readonly getThreadShell: (
     threadId: ThreadId,
+    options?: { readonly includeDeleted?: boolean },
   ) => Effect.Effect<OrchestrationV2ThreadShell | null, OrchestratorV2Error>;
   readonly findGuestShareThreadId: (
     shareId: GuestShareId,
@@ -17921,9 +17922,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           .pipe(Effect.mapError((cause) => new OrchestratorProjectionError({ threadId, cause })));
       },
     ),
-    getThreadShell: Effect.fn("OrchestratorV2.getThreadShell")(function (threadId) {
+    getThreadShell: Effect.fn("OrchestratorV2.getThreadShell")(function (threadId, options) {
       return projectionStore
-        .getThreadShell(threadId)
+        .getThreadShell(threadId, options)
         .pipe(Effect.mapError((cause) => new OrchestratorProjectionError({ threadId, cause })));
     }),
     findGuestShareThreadId: Effect.fn("OrchestratorV2.findGuestShareThreadId")(function (shareId) {

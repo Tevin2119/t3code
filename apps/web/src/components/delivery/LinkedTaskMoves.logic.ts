@@ -6,8 +6,15 @@ import * as Schema from "effect/Schema";
 
 const decodeLocalBoards = Schema.decodeUnknownOption(DeliveryLinkedDestinationBoards);
 
+export const LINKED_MOVE_NAME_LIMIT = 60;
+
+export function linkedMoveSavedName(person: string) {
+  const name = person.trim();
+  return name.length > 0 && name.length <= LINKED_MOVE_NAME_LIMIT ? name : null;
+}
+
 export function linkedMoveActor(person: string, enteredName: string) {
-  return person.trim() || enteredName.trim() || null;
+  return linkedMoveSavedName(person) ?? linkedMoveSavedName(enteredName);
 }
 
 export function localMoveBoards(body: unknown) {

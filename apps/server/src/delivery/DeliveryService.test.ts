@@ -550,6 +550,17 @@ it.effect.each(["link", "linked thread"] as const)(
           body: {},
         }),
         delivery.ownerHandoffRequest("GET", "/api/handoffs"),
+        delivery.boardThreadConfiguration,
+        delivery.boardThreadAct({
+          method: "POST",
+          path: "/api/runs/run-1/handoffs/qa/fallback",
+          body: {},
+        }),
+        delivery.threadState(threadId("test")),
+        delivery.releaseThread(threadId("test")),
+        delivery.setThreadLineup({ threadId: threadId("test"), orchestration: null }),
+        delivery.prepareThread(threadId("test"), { driver: "codex", cwd: REPO }),
+        delivery.terminalEntryScript,
         delivery.bindThread({
           threadId: threadId("test"),
           team: "ops",
@@ -563,7 +574,14 @@ it.effect.each(["link", "linked thread"] as const)(
       const refused = yield* Effect.forEach(ownerRequests, (request) =>
         Effect.result(request),
       ).pipe(Effect.provideService(McpInvocationContext.McpInvocationContext, peer));
-      expect(refused.every(({ _tag }) => _tag === "Failure")).toBe(true);
+      expect(refused).toEqual(
+        ownerRequests.map(() =>
+          expect.objectContaining({
+            _tag: "Failure",
+            failure: expect.objectContaining({ status: 403 }),
+          }),
+        ),
+      );
       const discovered = yield* delivery
         .discover(folder, caller)
         .pipe(Effect.provideService(McpInvocationContext.McpInvocationContext, peer));
@@ -837,6 +855,62 @@ it.effect("re-reads an owner index invalidated by an overlapping write", () => {
   }).pipe(Effect.provide(layer(fake, { prefix: "linked-owner-rediscovery-" })));
 });
 
+it.effect(
+  "reads past a write that starts during the first index read and ends during its retry",
+  () => {
+    const fake = engine();
+    const path = "/api/task-threads";
+    const writePath = "/api/tasks/task-shared/linked-hidden";
+    const thread = threadId("newly-hidden-thread");
+    fake.replies = {
+      [path]: { threads: [{ environmentId: linkedEnvironmentId, threadId: thread, linked: true }] },
+      [writePath]: { task: sharedTask.id, linkedHidden: true },
+    };
+    return Effect.gen(function* () {
+      const delivery = yield* DeliveryService.DeliveryService;
+      const firstRead = yield* Deferred.make<void>();
+      const retryRead = yield* Deferred.make<void>();
+      const writeStarted = yield* Deferred.make<void>();
+      const writeDone = yield* Deferred.make<void>();
+      fake.beforeRequest = (url) => {
+        if (url.pathname === writePath) {
+          return Deferred.succeed(writeStarted, undefined).pipe(
+            Effect.andThen(Deferred.await(retryRead)),
+          );
+        }
+        if (fake.requests.filter(({ path: requested }) => requested === path).length === 1) {
+          return Deferred.succeed(firstRead, undefined).pipe(
+            Effect.andThen(Deferred.await(writeStarted)),
+          );
+        }
+        return Deferred.succeed(retryRead, undefined).pipe(
+          Effect.andThen(Deferred.await(writeDone)),
+        );
+      };
+      const read = yield* delivery.ownerTiedThreads(linkedEnvironmentId).pipe(Effect.forkScoped);
+      yield* Deferred.await(firstRead);
+      yield* delivery.setTaskLinkedHidden({ taskId: sharedTask.id, hidden: true });
+      fake.replies = {
+        ...fake.replies,
+        [path]: {
+          threads: [{ environmentId: linkedEnvironmentId, threadId: thread, linked: false }],
+        },
+      };
+      yield* Deferred.succeed(writeDone, undefined);
+      expect((yield* Fiber.join(read)).ties).toEqual(new Map([[thread, false]]));
+      expect(fake.requests.map(({ method }) => method)).toEqual(["GET", "POST", "GET", "GET"]);
+
+      yield* delivery.setTaskLinkedHidden({ taskId: sharedTask.id, hidden: true });
+      fake.down = true;
+      expect(yield* delivery.ownerTiedThreads(linkedEnvironmentId).pipe(Effect.flip)).toMatchObject(
+        {
+          reason: "unreachable",
+        },
+      );
+    }).pipe(Effect.provide(layer(fake, { prefix: "linked-owner-slow-write-" })));
+  },
+);
+
 it.effect.each([{ enabled: false }, { engineUrl: "http://127.0.0.1:4322" }])(
   "forgets the last good index when delivery changes and reverts %o",
   (change) => {
@@ -872,13 +946,15 @@ it.effect("caches a timed-out owner index refresh for callers queued behind it",
   return Effect.gen(function* () {
     const delivery = yield* DeliveryService.DeliveryService;
     const index = delivery.ownerTiedThreads(linkedEnvironmentId);
+    const goodAt = yield* Clock.currentTimeMillis;
+    fake.beforeRequest = (url) =>
+      url.pathname === path ? TestClock.adjust("1 second") : Effect.void;
     expect((yield* index).ties).toEqual(
       new Map([
         [thread, true],
         [other, false],
       ]),
     );
-    const goodAt = yield* Clock.currentTimeMillis;
     yield* TestClock.adjust("3 seconds");
     const started = yield* Deferred.make<void>();
     fake.beforeRequest = (url) =>

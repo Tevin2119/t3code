@@ -806,7 +806,10 @@ it.effect("a fresh-session task launches one thread, then starts each later run 
         runtimeMode: "full-access",
         interactionMode: "default",
       } as const;
-      yield* service.upsert({ ...input, threadMode: "fresh_session" });
+      const ownerInput = { ...input, id: ScheduledTaskId.make("task:owner-fresh-session") };
+      yield* service.upsert(ownerInput);
+      const ownerEdit = yield* service.upsert(ownerInput, creator);
+      assert.equal(ownerEdit.task.launchedFromThreadId, undefined);
       yield* service.upsert({ ...input, threadMode: "fresh_session" }, creator);
 
       assert.equal((yield* service.runNow({ id: input.id })).threadId, launched);

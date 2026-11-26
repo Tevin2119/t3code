@@ -34,7 +34,13 @@ import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../
 import { toastManager } from "../ui/toast";
 import { ApprovalKeyInput } from "./ApprovalKeyInput";
 import { BoardPicker } from "./BoardPicker";
-import { linkedMoveActor, linkedMoveNotice, localMoveBoards } from "./LinkedTaskMoves.logic";
+import {
+  LINKED_MOVE_NAME_LIMIT,
+  linkedMoveActor,
+  linkedMoveNotice,
+  linkedMoveSavedName,
+  localMoveBoards,
+} from "./LinkedTaskMoves.logic";
 
 type Move = {
   readonly environmentId: EnvironmentId;
@@ -74,7 +80,7 @@ function MoveDialog(props: {
 }) {
   const gt = useGT();
   const person = usePersonName();
-  const [enteredName, setEnteredName] = useState("");
+  const [enteredName, setEnteredName] = useState(() => person.trim());
   const by = linkedMoveActor(person, enteredName);
   const [key, setKey] = useState("");
   const [busy, setBusy] = useState(false);
@@ -117,13 +123,13 @@ function MoveDialog(props: {
                 <p>
                   <T>Use the approval passphrase or terminal key for this machine.</T>
                 </p>
-                {!person && (
+                {linkedMoveSavedName(person) === null && (
                   <Input
                     aria-label={gt("Your name")}
                     placeholder={gt("Your name")}
                     autoComplete="name"
                     value={enteredName}
-                    maxLength={60}
+                    maxLength={LINKED_MOVE_NAME_LIMIT}
                     disabled={busy}
                     onChange={(event) => setEnteredName(event.target.value)}
                   />

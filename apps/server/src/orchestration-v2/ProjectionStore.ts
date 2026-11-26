@@ -669,6 +669,7 @@ export interface ProjectionStoreV2Shape {
   ) => Effect.Effect<ThreadId | null, ProjectionStoreV2Error>;
   readonly getThreadShell: (
     threadId: ThreadId,
+    options?: { readonly includeDeleted?: boolean },
   ) => Effect.Effect<OrchestrationV2ThreadShell | null, ProjectionStoreV2Error>;
   /** The thread whose current guest share has this id. Scans thread rows; only redeem uses it. */
   readonly findGuestShareThreadId: (
@@ -9880,7 +9881,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       };
     }, Effect.mapError(shellSnapshotReadError));
 
-    const getThreadShell: ProjectionStoreV2Shape["getThreadShell"] = (threadId) =>
+    const getThreadShell: ProjectionStoreV2Shape["getThreadShell"] = (threadId, options) =>
       sql
         .withTransaction(
           Effect.gen(function* () {
@@ -9892,7 +9893,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                 continue;
               }
               const rows = yield* selectShellThreadRows(nextId, {
-                includeDeleted: nextId !== threadId,
+                includeDeleted: options?.includeDeleted === true || nextId !== threadId,
               });
               const row = rows[0];
               if (row === undefined) {

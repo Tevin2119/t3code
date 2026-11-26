@@ -1353,7 +1353,7 @@ it.effect.each(["bound", "created", "owner-origin", "legacy"] as const)(
     const task = {
       ...decodeScheduledTask(scheduledTask("task-private", "full-access")),
       ...(relationship === "bound"
-        ? { threadId: privateThreadId }
+        ? { threadId: privateThreadId, launchedFromThreadId: threadId }
         : relationship === "legacy"
           ? {}
           : { launchedFromThreadId: privateThreadId }),
@@ -1372,7 +1372,7 @@ it.effect.each(["bound", "created", "owner-origin", "legacy"] as const)(
           }),
           Effect.provideService(McpSchema.McpServerClient, client),
         );
-      expect(declaredFailure(result)).toMatchObject({ code: "thread_not_found" });
+      expect(declaredFailure(result)).toMatchObject({ code: "task_not_found" });
     }).pipe(
       Effect.provide(
         McpHttpServer.layerThreadToolkit.pipe(
@@ -1400,7 +1400,7 @@ it.effect.each(["bound", "created", "owner-origin", "legacy"] as const)(
               getThreadShell: (id) =>
                 Effect.succeed({
                   ...McpToolAccessTestkit.liveThreadShell(id),
-                  ...(id === threadId ? { linkOrigin } : {}),
+                  ...(id === threadId || relationship === "created" ? { linkOrigin } : {}),
                 }),
             }),
           ),
@@ -1414,6 +1414,112 @@ it.effect.each(["bound", "created", "owner-origin", "legacy"] as const)(
       ),
     );
   },
+);
+
+it.effect("a full-access link only lists, edits, deletes and runs schedules from that link", () =>
+  Effect.gen(function* () {
+    const owner = ThreadId.make("owner-schedule-thread");
+    const peer = ThreadId.make("peer-schedule-thread");
+    const other = ThreadId.make("other-schedule-thread");
+    const linkedClient = clientScope("full-access");
+    const credentials = { ...linkedClient.client!, linked: true } as const;
+    const task = (id: string, ancestor?: ThreadId) => ({
+      ...decodeScheduledTask(scheduledTask(id, "full-access")),
+      ...(ancestor === undefined ? {} : { launchedFromThreadId: ancestor }),
+    });
+    const ownTask = task("same-link", peer);
+    const tasks = [
+      ownTask,
+      task("other-link", other),
+      task("owner-thread", owner),
+      task("no-origin"),
+    ];
+    const writes: string[] = [];
+    const services = Layer.mergeAll(
+      Layer.mock(ThreadManagement.ThreadManagementService)({
+        getThreadShell: (id) =>
+          Effect.succeed({
+            ...McpToolAccessTestkit.liveThreadShell(id),
+            ...(id === owner
+              ? {}
+              : {
+                  linkOrigin: {
+                    sessionId: id === peer ? credentials.sessionId : "other-session",
+                    label: credentials.label,
+                    access: credentials.access,
+                  },
+                }),
+          }),
+      }),
+      Layer.mock(ScheduledTaskService.ScheduledTaskService)({
+        list: () => Effect.succeed({ tasks }),
+        upsert: (input, origin) =>
+          Effect.sync(() => {
+            expect(origin).toBeUndefined();
+            writes.push(`update:${input.id}`);
+            return { task: ownTask };
+          }),
+        delete: ({ id }) =>
+          Effect.sync(() => {
+            writes.push(`delete:${id}`);
+            return { id };
+          }),
+        runNow: ({ id }) =>
+          Effect.sync(() => {
+            writes.push(`run:${id}`);
+            return { task: ownTask, threadId: peer };
+          }),
+      }),
+      DeliveryService.layerTest,
+      NodeCrypto.layer,
+      ServerSettings.layerTest(),
+      Layer.mock(ProviderRegistry.ProviderRegistry)({}),
+      Layer.mock(ProviderAdapterRegistry.ProviderAdapterRegistryV2)({}),
+      Layer.mock(PeerForwarding.PeerForwarding)({}),
+      Layer.mock(PeerLinkRequests.PeerLinkRequests)({}),
+      Layer.mock(PeerLinks.PeerLinks)({}),
+      Layer.mock(ProjectService.ProjectService)({}),
+      Layer.mock(SecretRequests.SecretRequests)({}),
+      Layer.mock(RemoteDelegation.RemoteDelegation)({}),
+      Layer.mock(ThreadSearch.ThreadSearch)({}),
+    );
+    yield* Effect.gen(function* () {
+      const server = yield* McpServer.McpServer;
+      const call = (name: string, args: Record<string, unknown>) =>
+        server.callTool({ name, arguments: args }).pipe(
+          Effect.provideService(McpInvocationContext.McpInvocationContext, {
+            ...linkedClient,
+            client: credentials,
+          }),
+          Effect.provideService(McpSchema.McpServerClient, client),
+        );
+      const listed = yield* call("list_scheduled_tasks", {});
+      expect(listed.structuredContent).toMatchObject({ tasks: [{ scheduledTaskId: ownTask.id }] });
+      for (const [tool, key] of [
+        ["schedule_task", "scheduledTaskId"],
+        ["delete_scheduled_task", "scheduledTaskId"],
+        ["run_scheduled_task_now", "taskId"],
+      ] as const) {
+        const absent = declaredFailure(yield* call(tool, { [key]: "missing" }));
+        expect(absent).toMatchObject({
+          code: "task_not_found",
+          message: "The scheduled task was not found.",
+        });
+        for (const { id } of tasks.slice(1)) {
+          expect(declaredFailure(yield* call(tool, { [key]: id }))).toEqual(absent);
+        }
+        expect((yield* call(tool, { [key]: ownTask.id })).isError).toBe(false);
+      }
+      expect(writes).toEqual(["update:same-link", "delete:same-link", "run:same-link"]);
+    }).pipe(
+      Effect.provide(
+        Layer.merge(layerOrchestratorToolkit, McpHttpServer.layerThreadToolkit).pipe(
+          Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
+          Layer.provide(services),
+        ),
+      ),
+    );
+  }),
 );
 
 it.effect("a link-started thread only sees transfers whose endpoints it can read", () => {

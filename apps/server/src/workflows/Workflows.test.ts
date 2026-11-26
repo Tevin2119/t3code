@@ -2062,6 +2062,16 @@ it.effect("two agents run side by side, and one past its time limit is stopped",
           linkOrigin: { sessionId: "workflow-peer", label: "Workflow peer", access: "full-access" },
         } as const;
         const run = yield* workflows.start("pair", {}, { idempotencyKey: "p", launchOrigin });
+        const otherLink = {
+          ...launchOrigin,
+          linkOrigin: { ...launchOrigin.linkOrigin, sessionId: "other-peer" },
+        };
+        const replay = yield* workflows
+          .start("pair", {}, { idempotencyKey: "p", launchOrigin: otherLink })
+          .pipe(Effect.flip);
+        assert.equal(replay.message, "The workflow run was not found.");
+        const sameLink = yield* workflows.start("pair", {}, { idempotencyKey: "p", launchOrigin });
+        assert.equal(sameLink.runId, run.runId);
         // Both have started before either has ended.
         assert.deepEqual((yield* agents.started(run.runId, "left/0")).launchOrigin, launchOrigin);
         assert.deepEqual((yield* agents.started(run.runId, "right/0")).launchOrigin, launchOrigin);

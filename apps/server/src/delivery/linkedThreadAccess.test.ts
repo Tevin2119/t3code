@@ -47,10 +47,10 @@ it.effect("reads each thread in a launch chain once per linked list", () =>
     const service = yield* DeliveryService.DeliveryService;
     const visible = yield* filterPeerThreadRows(scope, ids.toReversed(), (id) => id, threads, {
       ...service,
-      threadState: () =>
+      threadHasDeliveryBinding: () =>
         Effect.sync(() => {
           bindingReads++;
-          return { binding: null, pending: null };
+          return false;
         }),
     });
     expect(visible).toEqual(ids.toReversed());

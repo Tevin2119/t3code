@@ -1665,7 +1665,8 @@ export const layer = Layer.effect(
         isSameSchedule(existingTask.schedule, schedule);
       if (!scheduleUnchanged)
         yield* requireFutureOnce({ enabled: input.enabled, schedule }, now, id);
-      const ancestor = existingTask?.launchedFromThreadId ?? launchedFromThreadId;
+      const ancestor =
+        existingTask === null ? launchedFromThreadId : existingTask.launchedFromThreadId;
       const task: ScheduledTask = {
         id,
         title: input.title,

@@ -153,7 +153,9 @@ const make = Effect.gen(function* () {
         message: "Filing a board task requires an active run owned by this MCP provider session.",
       });
     const nodeId = run.rootNodeId;
-    const configuration = yield* delivery.boardThreadConfiguration;
+    const configuration = yield* delivery.boardThreadConfiguration.pipe(
+      Effect.mapError(engineFailure),
+    );
     const probe = yield* delivery
       .boardThreadAct({
         method: "POST",

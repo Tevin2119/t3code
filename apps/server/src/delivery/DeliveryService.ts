@@ -41,6 +41,7 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
+import * as Latch from "effect/Latch";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
@@ -286,7 +287,7 @@ export class DeliveryService extends Context.Service<
     readonly nativeBuildAct: (
       input: DeliveryActInput,
     ) => Effect.Effect<DeliveryResponse, DeliveryError>;
-    readonly boardThreadConfiguration: Effect.Effect<string>;
+    readonly boardThreadConfiguration: Effect.Effect<string, DeliveryError>;
     /**
      * Server-owned board writes. The generic `act` relay refuses them.
      */
@@ -307,6 +308,9 @@ export class DeliveryService extends Context.Service<
       configuration: string,
     ) => Effect.Effect<DeliveryThreadBinding, DeliveryError>;
     readonly threadState: (threadId: ThreadId) => Effect.Effect<DeliveryThreadState, DeliveryError>;
+    readonly threadHasDeliveryBinding: (
+      threadId: ThreadId,
+    ) => Effect.Effect<boolean, DeliveryError>;
     /** Gives up a team choice whose setup never completed. A bound thread cannot be released. */
     readonly releaseThread: (
       threadId: ThreadId,
@@ -325,14 +329,17 @@ export class DeliveryService extends Context.Service<
       actual: DeliveryActualSession,
     ) => Effect.Effect<boolean, DeliveryError>;
     /** Settings for terminals T3 Code opens, or null when delivery is off. */
-    readonly terminalEntryScript: Effect.Effect<string | null>;
+    readonly terminalEntryScript: Effect.Effect<string | null, DeliveryError>;
   }
 >()("t3/delivery/DeliveryService") {}
 
 const disabled = () =>
   Effect.fail(new DeliveryError({ reason: "disabled", detail: "Delivery is turned off." }));
 
-type TestThreadIndex = Pick<DeliveryService["Service"], "ownerTiedThreads" | "threadState">;
+type TestThreadIndex = Pick<
+  DeliveryService["Service"],
+  "ownerTiedThreads" | "threadHasDeliveryBinding"
+>;
 
 export const layerTestWithThreadIndex = (overrides: Partial<TestThreadIndex>) =>
   Layer.succeed(
@@ -365,8 +372,10 @@ export const layerTestWithThreadIndex = (overrides: Partial<TestThreadIndex>) =>
       boardThreadAct: disabled,
       bindThread: disabled,
       refreshThread: disabled,
-      threadState:
-        overrides.threadState ?? (() => Effect.succeed({ binding: null, pending: null })),
+      threadState: Effect.fn("DeliveryService.threadState")(() =>
+        Effect.succeed({ binding: null, pending: null }),
+      ),
+      threadHasDeliveryBinding: overrides.threadHasDeliveryBinding ?? (() => Effect.succeed(false)),
       releaseThread: Effect.fn("DeliveryService.releaseThread")(() =>
         Effect.succeed({ binding: null, pending: null }),
       ),
@@ -495,6 +504,8 @@ const make = Effect.fn("DeliveryService.make")(function* (
   >();
   const discoveryLock = yield* Semaphore.make(1);
   const threadIndexLock = yield* Semaphore.make(1);
+  const ownerWritesIdle = yield* Latch.make(true);
+  let ownerWrites = 0;
   const ownerThreadCache = new Map<
     EnvironmentId,
     {
@@ -506,7 +517,7 @@ const make = Effect.fn("DeliveryService.make")(function* (
     EnvironmentId,
     {
       readonly ties: ReadonlyMap<ThreadId, boolean>;
-      readonly receivedAt: number;
+      readonly requestedAt: number;
     }
   >();
   let ownerIndexConfiguration:
@@ -677,7 +688,6 @@ const make = Effect.fn("DeliveryService.make")(function* (
       }
       if (expectedConfiguration !== undefined) yield* assertConfiguration(expectedConfiguration);
       const settings = yield* delivery;
-      if (method !== "GET") invalidateDiscovery();
       const hostEnvironment = yield* HostProcess.Environment;
       if (!settings.enabled) {
         return yield* new DeliveryError({
@@ -809,6 +819,21 @@ const make = Effect.fn("DeliveryService.make")(function* (
           reason: "unreachable",
           detail: "Delivery preflight timed out. No work was submitted.",
         });
+      }
+      if (method !== "GET") {
+        yield* Effect.acquireRelease(
+          Effect.sync(() => {
+            ownerWrites++;
+            ownerWritesIdle.closeUnsafe();
+            invalidateDiscovery();
+          }),
+          () =>
+            Effect.sync(() => {
+              invalidateDiscovery();
+              lastGoodOwnerThreadIndex.clear();
+              if (--ownerWrites === 0) ownerWritesIdle.openUnsafe();
+            }),
+        );
       }
       const response = yield* httpClient.execute(prepared).pipe(
         Effect.provideService(FetchHttpClient.RequestInit, { redirect: "manual" }),
@@ -943,8 +968,8 @@ const make = Effect.fn("DeliveryService.make")(function* (
       const readAt = DateTime.formatIso(yield* DateTime.now);
       return { readAt, body: parsed } satisfies DeliveryResponse;
     },
-    (effect, method) =>
-      method === "GET" ? effect : effect.pipe(Effect.ensuring(Effect.sync(invalidateDiscovery))),
+    // The write stays in flight through response decoding.
+    Effect.scoped,
   );
 
   const linkedRequest = Effect.fn("DeliveryService.linkedRequest")(function* (
@@ -1945,6 +1970,7 @@ const make = Effect.fn("DeliveryService.make")(function* (
     threadId: ThreadId,
     actual: DeliveryActualSession,
   ) {
+    yield* requireOwner;
     DeliveryThreadSession.clearDeliveryThreadSession(threadId);
     const settings = yield* delivery;
     // With delivery off nothing was ever bound through this service, and a
@@ -2115,9 +2141,9 @@ const make = Effect.fn("DeliveryService.make")(function* (
         const settings = yield* readOwnerIndexConfiguration();
         if (!settings.enabled || settings.engineUrl.trim() === "")
           return { ties: new Map<ThreadId, boolean>() };
+        const now = yield* Clock.currentTimeMillis;
         const cached = ownerThreadCache.get(environmentId);
-        if (cached !== undefined && (yield* Clock.currentTimeMillis) < cached.until)
-          return yield* cached.value;
+        if (cached !== undefined && now < cached.until) return yield* cached.value;
         const read = Effect.gen(function* () {
           const { body } = yield* request(
             "GET",
@@ -2140,15 +2166,20 @@ const make = Effect.fn("DeliveryService.make")(function* (
           }
           return index;
         });
-        for (let attempt = 0; attempt < 2; attempt++) {
+        for (let attempt = 0; attempt < 3; attempt++) {
+          if (attempt === 2) {
+            const idle = yield* ownerWritesIdle.await.pipe(Effect.timeoutOption("30 seconds"));
+            if (Option.isNone(idle)) return yield* linkedRefusal(404);
+          }
           const generation = ownerIndexGeneration;
+          const requestedAt = yield* Clock.currentTimeMillis;
           const answer = yield* Effect.exit(read);
           const receivedAt = yield* Clock.currentTimeMillis;
           if ((yield* readOwnerIndexConfiguration()) !== settings) return yield* linkedRefusal(404);
-          if (generation !== ownerIndexGeneration) continue;
+          if (ownerWrites !== 0 || generation !== ownerIndexGeneration) continue;
           const previous = lastGoodOwnerThreadIndex.get(environmentId);
           if (Exit.isSuccess(answer)) {
-            lastGoodOwnerThreadIndex.set(environmentId, { ties: answer.value, receivedAt });
+            lastGoodOwnerThreadIndex.set(environmentId, { ties: answer.value, requestedAt });
           }
           const value = Exit.isSuccess(answer)
             ? Exit.succeed({ ties: answer.value })
@@ -2158,7 +2189,7 @@ const make = Effect.fn("DeliveryService.make")(function* (
                   ties: new Map<ThreadId, boolean>(
                     Array.from(previous.ties.keys(), (id) => [id, false]),
                   ),
-                  uncertainAfter: previous.receivedAt,
+                  uncertainAfter: previous.requestedAt,
                 });
           ownerThreadCache.set(environmentId, { until: receivedAt + 3_000, value });
           return yield* value;
@@ -2237,7 +2268,7 @@ const make = Effect.fn("DeliveryService.make")(function* (
             }),
           ),
     ),
-    boardThreadConfiguration: readConfiguration(),
+    boardThreadConfiguration: requireOwner.pipe(Effect.andThen(readConfiguration())),
     boardThreadAct: Effect.fn("DeliveryService.boardThreadAct")(function* (input) {
       if (!(input.method === "POST" ? BOARD_THREAD_POST : BOARD_THREAD_LINK).test(input.path))
         return yield* new DeliveryError({
@@ -2273,12 +2304,18 @@ const make = Effect.fn("DeliveryService.make")(function* (
     bindThread,
     refreshThread,
     threadState: Effect.fn("DeliveryService.threadState")((threadId) =>
-      storeReadable.pipe(Effect.as(stateOf(threadId))),
+      requireOwner.pipe(
+        Effect.andThen(storeReadable),
+        Effect.map(() => stateOf(threadId)),
+      ),
+    ),
+    threadHasDeliveryBinding: Effect.fn("DeliveryService.threadHasDeliveryBinding")((threadId) =>
+      storeReadable.pipe(Effect.map(() => bindings.has(threadId) || pending.has(threadId))),
     ),
     releaseThread,
     setThreadLineup,
     prepareThread,
-    terminalEntryScript: delivery.pipe(Effect.map(entryScriptOf)),
+    terminalEntryScript: requireOwner.pipe(Effect.andThen(delivery), Effect.map(entryScriptOf)),
   });
 });
 

@@ -64,7 +64,7 @@ function makeThreadFence(
       tied === false ||
       (tied === true && !sharedTarget) ||
       (index.uncertainAfter !== undefined &&
-        DateTime.toEpochMillis(shell.createdAt) > index.uncertainAfter)
+        DateTime.toEpochMillis(shell.createdAt) >= index.uncertainAfter)
     ) {
       memo.set(id, true);
       return true;
@@ -74,9 +74,9 @@ function makeThreadFence(
       if (local === undefined) {
         local = isServerOwnedThreadLineage(shell.lineage) || boardTaskOfMarker(id) !== null;
         if (!local) {
-          const state = yield* delivery.threadState(id).pipe(Effect.option);
-          local =
-            Option.isNone(state) || state.value.binding !== null || state.value.pending !== null;
+          local = yield* delivery
+            .threadHasDeliveryBinding(id)
+            .pipe(Effect.orElseSucceed(() => true));
         }
         blocked.set(id, local);
       }
@@ -176,33 +176,38 @@ export const scheduledTaskThreadTargets = (task: ScheduledTask): ThreadId[] => [
   ...new Set([task.threadId, task.launchedFromThreadId].filter((id) => id != null)),
 ];
 
-export const assertPeerScheduledTask = Effect.fn("linkedThreadAccess.assertPeerScheduledTask")(
-  function* (
-    scope: McpInvocationContext.McpInvocationScope,
-    task: ScheduledTask,
-    threads: LineageReader,
-    delivery?: Delivery,
-  ) {
-    const ids = scheduledTaskThreadTargets(task);
-    const allowed = yield* filterPeerThreadRows(scope, ids, (id) => id, threads, delivery);
-    if (allowed.length !== ids.length) return yield* notFound();
-  },
-);
+export const linkedScheduleNotFound = () =>
+  new OrchestratorMcpFailure({
+    code: "task_not_found",
+    message: "The scheduled task was not found.",
+  });
 
-export const assertLinkedScheduleOrigin = Effect.fn(
-  "linkedThreadAccess.assertLinkedScheduleOrigin",
-)(function* (
+export const isSameLinkSchedule = Effect.fn("linkedThreadAccess.isSameLinkSchedule")(function* (
   scope: McpInvocationContext.McpInvocationScope,
   task: ScheduledTask,
   threads: Threads,
 ) {
-  if (!McpInvocationContext.isLinkedDeliveryCaller(scope)) return;
   const caller = callerLinkOrigin({ scope, caller: undefined });
-  if (caller === undefined || task.launchedFromThreadId === undefined) return yield* notFound();
+  if (caller === undefined || task.launchedFromThreadId === undefined) return false;
   const source = yield* threads
-    .getThreadShell(task.launchedFromThreadId)
-    .pipe(Effect.mapError(notFound));
-  if (source === null || source.deletedAt !== null) return yield* notFound();
-  const origin = yield* resolveLinkOrigin(source, threads).pipe(Effect.mapError(notFound));
-  if (origin.linkOrigin?.sessionId !== caller.sessionId) return yield* notFound();
+    .getThreadShell(task.launchedFromThreadId, { includeDeleted: true })
+    .pipe(Effect.orElseSucceed(() => null));
+  if (source === null) return false;
+  const origin = yield* resolveLinkOrigin(source, threads).pipe(Effect.option);
+  return Option.isSome(origin) && origin.value.linkOrigin?.sessionId === caller.sessionId;
 });
+
+export const assertPeerScheduledTask = Effect.fn("linkedThreadAccess.assertPeerScheduledTask")(
+  function* (
+    scope: McpInvocationContext.McpInvocationScope,
+    task: ScheduledTask,
+    threads: Threads,
+    delivery?: Delivery,
+  ) {
+    if (!McpInvocationContext.isLinkedDeliveryCaller(scope)) return;
+    if (!(yield* isSameLinkSchedule(scope, task, threads))) return yield* linkedScheduleNotFound();
+    const ids = scheduledTaskThreadTargets(task);
+    const allowed = yield* filterPeerThreadRows(scope, ids, (id) => id, threads, delivery);
+    if (allowed.length !== ids.length) return yield* linkedScheduleNotFound();
+  },
+);

@@ -280,6 +280,14 @@ const make = Effect.fn("WorkflowEngine.make")(function* (
         });
       }
       const [definition, engine] = found;
+      const link = options.launchOrigin?.linkOrigin;
+      const assertSameOrigin = Effect.fn("Workflows.assertReplayOrigin")(function* (runId: string) {
+        if (
+          link !== undefined &&
+          (yield* store.launchOrigin(runId))?.linkOrigin?.sessionId !== link.sessionId
+        )
+          return yield* new WorkflowInputError({ problem: "The workflow run was not found." });
+      });
       // A key is one run of the workflow: the engine's own id also counts the version, so a
       // start after a new version would otherwise begin the same work again.
       const other = Effect.fnUntraced(function* (earlier: WorkflowStore.RunRow) {
@@ -309,6 +317,7 @@ const make = Effect.fn("WorkflowEngine.make")(function* (
         return { runId: earlier.run_id };
       });
       const earlier = yield* store.runByKey(name, options.idempotencyKey);
+      if (earlier !== undefined) yield* assertSameOrigin(earlier.run_id);
       // An ended run's journal may be pruned, so executing it again would start the work over.
       if (
         earlier !== undefined &&
@@ -346,7 +355,10 @@ const make = Effect.fn("WorkflowEngine.make")(function* (
       });
       // The key is unique, so the row holding it is the run, even one another version started.
       const holder = yield* store.runByKey(name, options.idempotencyKey);
-      if (holder !== undefined && holder.run_id !== runId) return yield* other(holder);
+      if (holder !== undefined) {
+        if (earlier === undefined) yield* assertSameOrigin(holder.run_id);
+        if (holder.run_id !== runId) return yield* other(holder);
+      }
       if (earlier === undefined && options.subject !== undefined) {
         yield* subjectSet(store, runId, options.subject);
       }
@@ -1256,6 +1268,7 @@ const make = Effect.fn("WorkflowEngine.make")(function* (
 
   return Workflows.of({
     start,
+    launchOrigin: store.launchOrigin,
     hooks: Effect.succeed(hooks.map(({ workflow, name, path }) => ({ workflow, name, path }))),
     // A cancelled run whose cleanup has not worked yet still needs its version to run it.
     unfinished: Effect.map(

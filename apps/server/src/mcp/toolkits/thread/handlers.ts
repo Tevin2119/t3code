@@ -24,10 +24,10 @@ import {
 import * as DeliveryService from "../../../delivery/DeliveryService.ts";
 import * as Option from "effect/Option";
 import {
-  assertLinkedScheduleOrigin,
   assertPeerScheduledTask,
   assertPeerThreadTargets,
   filterPeerThreadRows,
+  linkedScheduleNotFound,
 } from "../../../delivery/linkedThreadAccess.ts";
 import * as ThreadFork from "../../../orchestration-v2/ThreadForkService.ts";
 import { providerOptionDescriptors, refuseAgentModePick } from "../../delegatedTaskModes.ts";
@@ -126,19 +126,20 @@ export const layer = McpToolAccess.toLayer(ThreadToolkit, {
       const scheduler = yield* ScheduledTasks.ScheduledTaskService;
       const { tasks } = yield* scheduler.list().pipe(Effect.mapError(unavailable));
       const scheduled = tasks.find((task) => task.id === input.taskId);
-      if (scheduled === undefined)
-        return yield* new OrchestratorMcpFailure({
-          code: "invalid_request",
-          message: "The scheduled task was not found.",
-        });
       const scope = yield* McpInvocationContext.McpInvocationContext;
+      if (scheduled === undefined)
+        return yield* McpInvocationContext.isLinkedDeliveryCaller(scope)
+          ? linkedScheduleNotFound()
+          : new OrchestratorMcpFailure({
+              code: "invalid_request",
+              message: "The scheduled task was not found.",
+            });
       if (McpInvocationContext.isLinkedDeliveryCaller(scope)) {
         const { threads } = yield* readCaller();
         const delivery = Option.getOrUndefined(
           yield* Effect.serviceOption(DeliveryService.DeliveryService),
         );
         yield* assertPeerScheduledTask(scope, scheduled, threads, delivery);
-        yield* assertLinkedScheduleOrigin(scope, scheduled, threads);
       }
       const { task, threadId } = yield* scheduler
         .runNow({ id: input.taskId })

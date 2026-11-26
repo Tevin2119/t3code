@@ -97,8 +97,10 @@ it.effect(
       yield* Effect.gen(function* () {
         const workflows = yield* Workflows.Workflows;
         const definitions = yield* WorkflowRuntime.WorkflowDefinitions;
-        const held = yield* workflows.start("hold", {}, { idempotencyKey: "h" });
+        const launchOrigin = { linkOrigin: { sessionId: "link", label: "Linked server" } };
+        const held = yield* workflows.start("hold", {}, { idempotencyKey: "h", launchOrigin });
         yield* workflows.waitFor(held.runId, (run) => run.status === "waiting");
+        assert.deepEqual(yield* workflows.launchOrigin(held.runId), launchOrigin);
 
         // A file that does not parse is not written, and says where it breaks.
         const broken = yield* definitions.save("greet.ts", "T3.workflow(\n  'x',\n];\n");

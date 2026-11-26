@@ -619,6 +619,9 @@ export const make = Effect.fn("WorkflowRuntime.make")(function* <E, R>(
     get: Effect.fn("Workflows.get")(function* (...input) {
       return yield* (yield* current).get(...input);
     }),
+    launchOrigin: Effect.fn("Workflows.launchOrigin")(function* (runId) {
+      return yield* (yield* current).launchOrigin(runId);
+    }),
     list: Effect.fn("Workflows.list")(function* (...input) {
       return yield* (yield* current).list(...input);
     }),
@@ -886,6 +889,9 @@ export const gate = Effect.fn("WorkflowRuntime.gate")(function* <E, R>(
     }),
     get: Effect.fn("Workflows.get")(function* (...input) {
       return yield* (yield* current).get(...input);
+    }),
+    launchOrigin: Effect.fn("Workflows.launchOrigin")(function* (runId) {
+      return yield* (yield* current).launchOrigin(runId);
     }),
     list: Effect.fn("Workflows.list")(function* (...input) {
       return yield* (yield* current).list(...input);

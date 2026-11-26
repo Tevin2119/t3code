@@ -4458,7 +4458,7 @@ describe("OrchestratorMcpService provider resolution", () => {
           });
         yield* create("Check the build");
         const error = yield* create("Something else").pipe(Effect.flip);
-        assert.equal(error.code, "thread_not_found");
+        assert.equal(error.code, "task_not_found");
         assert.equal(yield* Ref.get(upserted), 1);
       }),
     );

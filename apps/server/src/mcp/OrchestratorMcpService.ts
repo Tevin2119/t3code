@@ -1,9 +1,10 @@
 import * as DeliveryService from "../delivery/DeliveryService.ts";
 import {
-  assertLinkedScheduleOrigin,
   assertPeerScheduledTask,
   assertPeerThreadTargets,
   filterPeerThreadRows,
+  isSameLinkSchedule,
+  linkedScheduleNotFound,
   scheduledTaskThreadTargets,
 } from "../delivery/linkedThreadAccess.ts";
 import {
@@ -2493,7 +2494,9 @@ const make = Effect.gen(function* () {
       );
     const task = tasks.find((candidate) => candidate.id === scheduledTaskId);
     if (task === undefined) {
-      return yield* failure("task_not_found", `Scheduled task ${scheduledTaskId} was not found.`);
+      return yield* isLinkedDeliveryCaller(scope)
+        ? linkedScheduleNotFound()
+        : failure("task_not_found", `Scheduled task ${scheduledTaskId} was not found.`);
     }
     yield* assertPeerScheduledTask(scope, task, threadManagement, delivery);
     yield* requireScheduledTaskWithinLimits(task, limits);
@@ -2574,9 +2577,6 @@ const make = Effect.gen(function* () {
         const replayed = tasks.find((candidate) => candidate.id === replayedId);
         if (replayed !== undefined) {
           yield* assertPeerScheduledTask(scope, replayed, threadManagement, delivery);
-          if (replayed.launchedFromThreadId !== undefined) {
-            yield* assertLinkedScheduleOrigin(scope, replayed, threadManagement);
-          }
           yield* requireScheduledTaskWithinLimits(replayed, limits);
         }
       }
@@ -2608,7 +2608,10 @@ const make = Effect.gen(function* () {
         if (!isLinkedDeliveryCaller(scope)) {
           return { tasks: matching.map((task) => scheduledTaskSummary(task, false)) };
         }
-        const targets = [...new Set(matching.flatMap(scheduledTaskThreadTargets))];
+        const owned = yield* Effect.filter(matching, (task) =>
+          isSameLinkSchedule(scope, task, threadManagement),
+        );
+        const targets = [...new Set(owned.flatMap(scheduledTaskThreadTargets))];
         const allowed = new Set(
           yield* filterPeerThreadRows(
             scope,
@@ -2619,7 +2622,7 @@ const make = Effect.gen(function* () {
           ),
         );
         return {
-          tasks: matching
+          tasks: owned
             .filter((task) => scheduledTaskThreadTargets(task).every((id) => allowed.has(id)))
             .map((task) => scheduledTaskSummary(task, false)),
         };
@@ -2628,16 +2631,7 @@ const make = Effect.gen(function* () {
     updateScheduledTask: Effect.fn("OrchestratorMcpService.updateScheduledTask")(
       function* (scope, input) {
         const { parent, limits } = yield* loadCaller(scope, ["runs"]);
-        if (isLinkedDeliveryCaller(scope) && parent === undefined) {
-          return yield* failure(
-            "capability_denied",
-            "Linked callers must edit scheduled work from a thread.",
-          );
-        }
         const existing = yield* loadScheduledTask(scope, input.scheduledTaskId, limits);
-        if (existing.launchedFromThreadId !== undefined) {
-          yield* assertLinkedScheduleOrigin(scope, existing, threadManagement);
-        }
         yield* assertLiveCallerForOtherProject(scope, parent, existing.projectId);
         if (
           input.bindToCurrentThread === true &&
@@ -2702,7 +2696,7 @@ const make = Effect.gen(function* () {
           creationSource: existing.creationSource,
         };
         const { task } = yield* scheduledTasks
-          .upsert(upsertInput, isLinkedDeliveryCaller(scope) ? parent?.thread.id : undefined)
+          .upsert(upsertInput)
           .pipe(
             Effect.mapError((error) =>
               failure("orchestration_error", `Could not update scheduled task: ${error.message}`),

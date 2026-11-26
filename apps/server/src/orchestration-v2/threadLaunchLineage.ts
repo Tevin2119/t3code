@@ -33,7 +33,10 @@ export const launchAncestors = Effect.fn("threadLaunchLineage.launchAncestors")(
 export const resolveLinkOrigin = Effect.fn("threadLaunchLineage.resolveLinkOrigin")(function* <E>(
   shell: OrchestrationV2ThreadShell,
   threads: LegacyReader<E> & {
-    readonly getThreadShell: (id: ThreadId) => Effect.Effect<OrchestrationV2ThreadShell | null, E>;
+    readonly getThreadShell: (
+      id: ThreadId,
+      options?: { readonly includeDeleted?: boolean },
+    ) => Effect.Effect<OrchestrationV2ThreadShell | null, E>;
   },
 ): Effect.fn.Return<{ linkOrigin?: OrchestrationV2LinkOrigin; unknown?: true }, E> {
   const visited = new Set([shell.id]);
@@ -44,8 +47,8 @@ export const resolveLinkOrigin = Effect.fn("threadLaunchLineage.resolveLinkOrigi
     for (const id of yield* launchAncestors(current, threads)) {
       if (visited.has(id)) continue;
       visited.add(id);
-      const ancestor = yield* threads.getThreadShell(id);
-      if (ancestor === null || ancestor.deletedAt !== null) unknown = true;
+      const ancestor = yield* threads.getThreadShell(id, { includeDeleted: true });
+      if (ancestor === null) unknown = true;
       else pending.push(ancestor);
     }
   }

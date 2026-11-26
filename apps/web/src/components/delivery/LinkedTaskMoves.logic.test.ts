@@ -28,6 +28,10 @@ it.each([
   ["", "  ", null],
   ["", "  Alex  ", "Alex"],
   ["  Taylor  ", "Alex", "Taylor"],
+  ["a".repeat(60), "", "a".repeat(60)],
+  ["a".repeat(61), "", null],
+  ["a".repeat(61), "  Alex  ", "Alex"],
+  ["", "a".repeat(61), null],
 ])("chooses the saved or entered actor for a keyed move (%j, %j)", (person, enteredName, by) => {
   expect(linkedMoveActor(person, enteredName)).toBe(by);
 });
