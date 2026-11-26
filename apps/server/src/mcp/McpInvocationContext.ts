@@ -234,6 +234,12 @@ export const hiddenWhileLinksOff = (): boolean => {
   return scope?.linkedEnvironments !== false;
 };
 
+export const hiddenUnlessLinkedDeliveryPeer = (): boolean => {
+  const fiber = Fiber.getCurrent();
+  const scope = fiber && Context.getOrUndefined(fiber.context, McpInvocationContext);
+  return scope?.client?.linked === true;
+};
+
 /** `McpSchema.EnabledWhen` for agent feedback tools, for every client including `t3 feedback`. */
 export const hiddenWhileFeedbackOff = (): boolean => {
   const fiber = Fiber.getCurrent();

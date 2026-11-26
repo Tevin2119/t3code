@@ -110,6 +110,7 @@ export class PeerLinks extends Context.Service<
       input: PeerLinkCreateInput,
     ) => Effect.Effect<{ readonly link: PeerLink; readonly alreadyLinked: boolean }, PeerLinkError>;
     readonly list: Effect.Effect<ReadonlyArray<PeerLinkSummary>, PeerLinkError>;
+    readonly listStored: Effect.Effect<ReadonlyArray<PeerLink>, PeerLinkError>;
     /** The unexpired links' names, from what is stored, without asking any peer. */
     readonly names: Effect.Effect<ReadonlyArray<PeerLinkName>, PeerLinkError>;
     /** The stored link, without asking the peer whether it answers. */
@@ -639,8 +640,9 @@ const make = Effect.gen(function* () {
     return { ...(yield* withLabel(link, answered.value.label)), status: "reachable" };
   });
 
+  const listStored = readRows.pipe(Effect.flatMap((rows) => Effect.forEach(rows, toLink)));
   const list: PeerLinks["Service"]["list"] = Effect.gen(function* () {
-    const links = yield* Effect.forEach(yield* readRows, toLink);
+    const links = yield* listStored;
     const now = yield* DateTime.now;
     return yield* Effect.forEach(links, (link) => statusOf(link, now), {
       concurrency: "unbounded",
@@ -754,21 +756,35 @@ const make = Effect.gen(function* () {
       // The token goes only to an address that still answers as this peer,
       // so one that now answers as another machine never receives it. The
       // addresses race, so a silent one never delays one that answers.
+      let answeredAs: EnvironmentId | undefined;
       const answered =
         link.urls.length === 0
           ? Option.none()
           : yield* Effect.raceAll(
               link.urls.map((url) =>
-                answersAs(url, environmentId).pipe(
-                  Effect.flatMap(Effect.fromOption),
-                  Effect.map((peer) => ({ url, peer })),
+                probe(url).pipe(
+                  Effect.flatMap((peer) => {
+                    if (peer.environmentId === environmentId) return Effect.succeed({ url, peer });
+                    answeredAs = peer.environmentId;
+                    return Effect.fail(
+                      new PeerLinkError({
+                        reason: "environment_mismatch",
+                        message: "The address answers as a different environment.",
+                        answeredAs,
+                      }),
+                    );
+                  }),
                 ),
               ),
             ).pipe(Effect.option);
       if (Option.isNone(answered)) {
         return yield* new PeerLinkError({
-          reason: "unreachable",
-          message: `${link.label} did not answer at ${link.urls.join(", ")}.`,
+          reason: answeredAs === undefined ? "unreachable" : "environment_mismatch",
+          message:
+            answeredAs === undefined
+              ? `${link.label} did not answer at ${link.urls.join(", ")}.`
+              : `An address for ${link.label} answered as a different environment.`,
+          ...(answeredAs === undefined ? {} : { answeredAs }),
         });
       }
       const { url, peer } = answered.value;
@@ -818,6 +834,7 @@ const make = Effect.gen(function* () {
     link,
     linkUnlessLinked,
     list,
+    listStored,
     names,
     get,
     unlink,

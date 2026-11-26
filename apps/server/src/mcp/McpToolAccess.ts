@@ -5,7 +5,7 @@ import {
   OrchestratorMcpFailure,
   type ProviderInteractionMode,
   type RuntimeMode,
-  type ThreadId,
+  ThreadId,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -22,6 +22,9 @@ import {
   DispatchModeLimit,
   type DispatchModeRefusal,
 } from "../orchestration-v2/DispatchModeLimit.ts";
+import * as DeliveryService from "../delivery/DeliveryService.ts";
+import { assertPeerThreadTargets } from "../delivery/linkedThreadAccess.ts";
+import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import * as PeerForwarding from "../peer/PeerForwarding.ts";
 import {
   assertFullAccessNamingLink,
@@ -434,6 +437,12 @@ const routed = Effect.fn("McpToolAccess.routed")(function* <Tools extends Record
 ) {
   // Optional so toolkits that never leave this environment build without it.
   const forwarding = yield* Effect.serviceOption(PeerForwarding.PeerForwarding);
+  const delivery = Option.getOrUndefined(
+    yield* Effect.serviceOption(DeliveryService.DeliveryService),
+  );
+  const threads = Option.getOrUndefined(
+    yield* Effect.serviceOption(ThreadManagement.ThreadManagementService),
+  );
   const handlers: Record<string, unknown> = { ...checked };
   for (const [name, declaration] of Object.entries<Declaration<unknown>>(declarations)) {
     const tool = toolkit.tools[name];
@@ -444,6 +453,38 @@ const routed = Effect.fn("McpToolAccess.routed")(function* <Tools extends Record
       return yield* Effect.die(
         `${name} acts as its calling thread, so outside clients must not be offered it.`,
       );
+    const handle = handlers[name] as (
+      params: object,
+    ) => Effect.Effect<unknown, Tool.Failure<Tools[keyof Tools]>>;
+    const here = Effect.fn("McpToolAccess.dispatchHere")(function* (params: object) {
+      const scope = Option.getOrUndefined(
+        yield* Effect.serviceOption(McpInvocationContext.McpInvocationContext),
+      );
+      if (scope?.client?.linked !== true) return yield* handle(params);
+      const run =
+        delivery === undefined
+          ? handle(params)
+          : handle(params).pipe(Effect.provideService(DeliveryService.DeliveryService, delivery));
+      const ids = ["threadId", "sourceThreadId", "targetThreadId"].flatMap((key) => {
+        const id: unknown = Reflect.get(params, key);
+        return typeof id === "string" ? [ThreadId.make(id)] : [];
+      });
+      if (ids.length === 0) return yield* run;
+      const threadService =
+        threads ??
+        Option.getOrUndefined(
+          yield* Effect.serviceOption(ThreadManagement.ThreadManagementService),
+        );
+      const deliveryService =
+        delivery ??
+        Option.getOrUndefined(yield* Effect.serviceOption(DeliveryService.DeliveryService));
+      const check = assertPeerThreadTargets(scope, ids, threadService, deliveryService);
+      yield* check;
+      const result = yield* run;
+      if (name === "t3_thread_wait") yield* check;
+      return result;
+    });
+    handlers[name] = here;
     if (!takesLinkedEnvironment(tool)) continue;
     const forwarded = forwardedOf(declaration) as
       | Forwarded<object, unknown, Tool.Failure<Tools[keyof Tools]>, never>
@@ -452,9 +493,6 @@ const routed = Effect.fn("McpToolAccess.routed")(function* <Tools extends Record
       return yield* Effect.die(
         `${name} takes a linked environment, but it acts as its calling thread, which is here.`,
       );
-    const here = handlers[name] as (
-      params: object,
-    ) => Effect.Effect<unknown, Tool.Failure<Tools[keyof Tools]>>;
     handlers[name] = ({ environmentId, ...params }: { readonly environmentId?: EnvironmentId }) =>
       Effect.gen(function* () {
         const scope = yield* McpInvocationContext.McpInvocationContext;

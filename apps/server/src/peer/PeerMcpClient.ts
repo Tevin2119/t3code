@@ -14,10 +14,12 @@ import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
+import * as FetchHttpClient from "effect/http/FetchHttpClient";
 import * as HttpBody from "effect/http/HttpBody";
 import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientRequest from "effect/http/HttpClientRequest";
 
+import { readBoundedBody } from "../delivery/readBoundedBody.ts";
 import * as McpInvocationContext from "../mcp/McpInvocationContext.ts";
 import * as PeerLinks from "./PeerLinks.ts";
 
@@ -50,6 +52,7 @@ export class PeerMcpClient extends Context.Service<
       /** The thread here the call is made for, sent as `T3-Sender-Thread`. */
       readonly sender?: OrchestrationV2LinkedSender;
       readonly success: S;
+      readonly maxResponseBytes?: number;
     }) => Effect.Effect<S["Type"], OrchestratorMcpFailure>;
   }
 >()("t3/peer/PeerMcpClient") {}
@@ -77,11 +80,13 @@ const decodeFailure = Schema.decodeUnknownOption(
 const fromLinkError = (error: PeerLinkError) =>
   new OrchestratorMcpFailure({
     code:
-      error.reason === "unknown_link"
-        ? "invalid_request"
-        : error.reason === "expired" || error.reason === "incompatible"
-          ? "capability_denied"
-          : "orchestration_error",
+      error.reason === "environment_mismatch"
+        ? "environment_mismatch"
+        : error.reason === "unknown_link"
+          ? "invalid_request"
+          : error.reason === "expired" || error.reason === "incompatible"
+            ? "capability_denied"
+            : "orchestration_error",
     message: error.message,
   });
 
@@ -115,16 +120,18 @@ const make = Effect.gen(function* () {
   const sessions = yield* Ref.make<ReadonlyMap<string, string>>(new Map());
 
   const post = (url: string, token: string, body: unknown, headers: Record<string, string>) =>
-    httpClient.execute(
-      HttpClientRequest.post(`${url}/mcp`).pipe(
-        HttpClientRequest.setHeaders({
-          accept: "application/json, text/event-stream",
-          authorization: `Bearer ${token}`,
-          ...headers,
-        }),
-        HttpClientRequest.setBody(HttpBody.text(JSON.stringify(body), "application/json")),
-      ),
-    );
+    httpClient
+      .execute(
+        HttpClientRequest.post(`${url}/mcp`).pipe(
+          HttpClientRequest.setHeaders({
+            accept: "application/json, text/event-stream",
+            authorization: `Bearer ${token}`,
+            ...headers,
+          }),
+          HttpClientRequest.setBody(HttpBody.text(JSON.stringify(body), "application/json")),
+        ),
+      )
+      .pipe(Effect.provideService(FetchHttpClient.RequestInit, { redirect: "manual" }));
 
   // A peer that renews a used link says when it now ends; one that does not sends nothing.
   const recordLinkExpiry = (
@@ -256,8 +263,22 @@ const make = Effect.gen(function* () {
         });
       }
       yield* recordLinkExpiry(resolved.link, response.headers);
+      const responseText = yield* input.maxResponseBytes === undefined
+        ? response.text
+        : readBoundedBody(response, input.maxResponseBytes).pipe(
+            Effect.map((bytes) => bytes.toString("utf8")),
+            Effect.catchTags({
+              BodyTooLarge: () =>
+                Effect.fail(
+                  new OrchestratorMcpFailure({
+                    code: "response_too_large",
+                    message: "The linked environment's answer exceeds its size limit.",
+                  }),
+                ),
+            }),
+          );
       const body = yield* decodeToolCallResponse(
-        responseJson(response.headers["content-type"], yield* response.text),
+        responseJson(response.headers["content-type"], responseText),
       ).pipe(
         Effect.mapError(
           () =>

@@ -1,3 +1,4 @@
+import * as DeliveryService from "../delivery/DeliveryService.ts";
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import {
   EnvironmentId,
@@ -64,11 +65,16 @@ const archived = (sequence: number): OrchestrationV2StoredEvent => ({
  * B, serving one thread to its links: `live` feeds the thread's live events, and `closed`
  * completes when B's stream of them is torn down.
  */
-const serveBox = Effect.gen(function* () {
+const serveBoxWithTaskThread = Effect.fn("PeerThreadRelay.test.serveBox")(function* (
+  taskThread: boolean,
+) {
   const live = yield* Queue.unbounded<OrchestrationV2StoredEvent, Cause.Done>();
   const closed = yield* Deferred.make<void>();
+  const shell = taskThread
+    ? { ...boxShell, lineage: { ...boxShell.lineage, engineIntake: "board-task:work:task-test" } }
+    : boxShell;
   const threads = Layer.mock(ThreadManagement.ThreadManagementService)({
-    getThreadShell: (threadId) => Effect.succeed(threadId === boxThread ? boxShell : null),
+    getThreadShell: (threadId) => Effect.succeed(threadId === boxThread ? shell : null),
     ensureLegacyTranscript: () => Effect.void,
     getThreadSnapshotWindow: () =>
       Effect.succeed({ snapshotSequence: 7, projection: boxProjection } as never),
@@ -80,13 +86,19 @@ const serveBox = Effect.gen(function* () {
   });
   const peer = yield* servePeer(box, Layer.empty, LinkThreadHttp.layer).pipe(
     Effect.provide(
-      Layer.merge(threads, Layer.mock(OrchestrationEventStore.OrchestrationEventStore)({})),
+      Layer.mergeAll(
+        threads,
+        DeliveryService.layerTest,
+        Layer.mock(OrchestrationEventStore.OrchestrationEventStore)({}),
+      ),
     ),
   );
   return { ...peer, live, closed };
 });
 
 /** A, holding the link and relaying B's threads to its own clients. */
+const serveBox = serveBoxWithTaskThread(false);
+
 const makeLaptop = Effect.gen(function* () {
   const linking = yield* layerLinkingEnvironment(laptop).pipe(Layer.build);
   const answered = yield* Queue.unbounded<number>();
@@ -200,6 +212,31 @@ it.effect("serves a thread only to a link's own session", () =>
       );
       yield* b.settings.updateSettings({ linkedEnvironmentsEnabled: false });
       expect(yield* statusOf({ authorization: linkBearer })).toBe(403);
+    }),
+  ).pipe(Effect.provide(Layer.merge(NodeHttpServer.layerTest, FetchHttpClient.layer))),
+);
+
+it.effect("keeps delivery-tied threads out of the raw peer transcript routes", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const box = yield* serveBoxWithTaskThread(true);
+      const laptop = yield* makeLaptop;
+      yield* linkTo(laptop.links, box);
+      const resolved = yield* laptop.links.resolve(input.environmentId);
+      const http = yield* HttpClient.HttpClient;
+      for (const route of [
+        PEER_LINK_THREAD_STREAM_ROUTE,
+        PEER_LINK_THREAD_HISTORY_ROUTE,
+        PEER_LINK_THREAD_ITEM_ROUTE,
+      ]) {
+        const response = yield* http.execute(
+          HttpClientRequest.get(`${box.url}${route}?thread=${encodeURIComponent(boxThread)}`).pipe(
+            HttpClientRequest.bearerToken(resolved.token),
+          ),
+        );
+        expect(response.status).toBe(404);
+        expect(yield* response.json).toEqual({ error: "thread_not_found" });
+      }
     }),
   ).pipe(Effect.provide(Layer.merge(NodeHttpServer.layerTest, FetchHttpClient.layer))),
 );

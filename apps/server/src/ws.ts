@@ -266,6 +266,7 @@ import { commandFeatureUsage, featureUsage } from "./telemetry/FeatureUsage.ts";
 import type { TelemetryOwner } from "./telemetry/Identify.ts";
 import * as UsageService from "./usage/UsageService.ts";
 import * as BoardThreadTasks from "./delivery/BoardThreadTasks.ts";
+import * as PeerForwarding from "./peer/PeerForwarding.ts";
 import * as DeliveryService from "./delivery/DeliveryService.ts";
 import * as LimitedSeatSwap from "./delivery/LimitedSeatSwap.ts";
 import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
@@ -3760,7 +3761,10 @@ export const WS_RPC_SERVER_OPTIONS = {
 } as const;
 
 /** The fork's handlers. See `ForkWsRpcGroup` for why they are a layer of their own. */
-const layerForkWsRpc = (currentSession: EnvironmentAuth.AuthenticatedSession) =>
+const layerForkWsRpc = (
+  currentSession: EnvironmentAuth.AuthenticatedSession,
+  linked: PeerForwarding.PeerForwarding["Service"],
+) =>
   ForkServerWsRpcGroup.toLayer(
     Effect.gen(function* () {
       const checkoutUpdate = yield* CheckoutUpdate.CheckoutUpdate;
@@ -3777,6 +3781,45 @@ const layerForkWsRpc = (currentSession: EnvironmentAuth.AuthenticatedSession) =>
           checkoutUpdate.start.pipe(Effect.as({})),
         [WS_METHODS.deliveryAnswerBoardTask]: (input) => boardThreadTasks.answer(input),
         [WS_METHODS.deliveryRead]: (input) => delivery.read(input),
+        [WS_METHODS.deliveryLinkedBoards]: (input) => linked.listLinkedBoards(input),
+        [WS_METHODS.deliveryLinkedBoard]: ({ peerEnvironmentId, fresh, ...input }) =>
+          linked.linkedDelivery({ peerEnvironmentId, fresh }, { ...input, operation: "board" }),
+        [WS_METHODS.deliveryLinkedSearch]: ({ peerEnvironmentId, fresh, ...input }) =>
+          linked.linkedDelivery({ peerEnvironmentId, fresh }, { ...input, operation: "search" }),
+        [WS_METHODS.deliveryLinkedTask]: ({ peerEnvironmentId, fresh, ...input }) =>
+          linked.linkedDelivery({ peerEnvironmentId, fresh }, { ...input, operation: "task" }),
+        [WS_METHODS.deliveryLinkedMessages]: ({ peerEnvironmentId, fresh, ...input }) =>
+          linked.linkedDelivery({ peerEnvironmentId, fresh }, { ...input, operation: "messages" }),
+        [WS_METHODS.deliveryLinkedTimeline]: ({ peerEnvironmentId, fresh, ...input }) =>
+          linked.linkedDelivery({ peerEnvironmentId, fresh }, { ...input, operation: "timeline" }),
+        [WS_METHODS.deliveryLinkedEvents]: ({ peerEnvironmentId, fresh, ...input }) =>
+          linked.linkedDelivery({ peerEnvironmentId, fresh }, { ...input, operation: "events" }),
+        [WS_METHODS.deliveryLinkedFile]: ({ peerEnvironmentId, fresh, ...input }) =>
+          linked.linkedDelivery({ peerEnvironmentId, fresh }, { ...input, operation: "file" }),
+        [WS_METHODS.deliveryLinkedAttached]: ({ peerEnvironmentId, fresh, ...input }) =>
+          linked.linkedDelivery({ peerEnvironmentId, fresh }, { ...input, operation: "attached" }),
+        [WS_METHODS.deliveryLinkedAttachedFile]: ({ peerEnvironmentId, fresh, ...input }) =>
+          linked.linkedDelivery(
+            { peerEnvironmentId, fresh },
+            { ...input, operation: "attachedFile" },
+          ),
+        [WS_METHODS.deliveryLinkedComment]: ({ peerEnvironmentId, ...input }) =>
+          linked.linkedDelivery({ peerEnvironmentId }, { ...input, operation: "comment" }),
+        [WS_METHODS.deliveryLinkedAnswer]: ({ peerEnvironmentId, ...input }) =>
+          linked.linkedDelivery({ peerEnvironmentId }, { ...input, operation: "answer" }),
+        [WS_METHODS.deliveryLinkedControl]: ({ peerEnvironmentId, ...input }) =>
+          linked.linkedDelivery({ peerEnvironmentId }, { ...input, operation: "control" }),
+        [WS_METHODS.deliveryLinkedSteer]: ({ peerEnvironmentId, ...input }) =>
+          linked.linkedDelivery({ peerEnvironmentId }, { ...input, operation: "steer" }),
+        [WS_METHODS.deliveryLinkedTake]: ({ peerEnvironmentId, ...input }) =>
+          linked.linkedDelivery({ peerEnvironmentId }, { ...input, operation: "take" }),
+        [WS_METHODS.deliveryLinkedRenew]: ({ peerEnvironmentId, ...input }) =>
+          linked.linkedDelivery({ peerEnvironmentId }, { ...input, operation: "renew" }),
+        [WS_METHODS.deliveryLinkedRelease]: ({ peerEnvironmentId, ...input }) =>
+          linked.linkedDelivery({ peerEnvironmentId }, { ...input, operation: "release" }),
+        [WS_METHODS.deliverySetBoardLinkedVisibility]: (input) =>
+          delivery.setBoardLinkedVisibility(input),
+        [WS_METHODS.deliverySetTaskLinkedHidden]: (input) => delivery.setTaskLinkedHidden(input),
         // A request that reaches the workspace needs the file scope the engine would use.
         [WS_METHODS.deliveryAct]: (input) =>
           (input.path.endsWith("/from-chat") ||
@@ -3838,6 +3881,7 @@ export const layer = Layer.unwrap(
     const boardThreadTasks = yield* BoardThreadTasks.BoardThreadTasks;
     const peerThreadRelay = yield* PeerThreadRelay.PeerThreadRelay;
     const peerClientPairing = yield* PeerClientPairing.PeerClientPairing;
+    const linkedDelivery = yield* PeerForwarding.PeerForwarding;
     const sql = yield* SqlClient.SqlClient;
     return HttpRouter.add(
       "GET",
@@ -3915,7 +3959,7 @@ export const layer = Layer.unwrap(
                 reportProfiles,
                 readSettingsClient(url.value),
               ),
-              layerForkWsRpc(session),
+              layerForkWsRpc(session, linkedDelivery),
             ).pipe(
               Layer.provideMerge(RpcSerialization.layerJson),
               // Handler-context reporters see only request defects, not server-wide defects.

@@ -583,21 +583,31 @@ it.effect("requires access management to answer a link request", () =>
   }),
 );
 
-it.effect.each([WS_METHODS.agentFeedbackAnswerRequest, WS_METHODS.deliveryAnswerBoardTask])(
-  "requires thread operation for %s",
-  (method) =>
-    Effect.gen(function* () {
-      const registry = yield* setup;
-      registry.set(sessions(env), AsyncResult.success(grant(false)));
-      const answer = createCommandPermissions(runtime, method);
-      expect(registry.get(answer.permissionAtom(env))).toBe(false);
-      expect((yield* answer.authorize(registry, env).pipe(Effect.flip)).requiredPermission).toBe(
-        AuthOrchestrationOperateScope,
-      );
-      registry.set(sessions(env), AsyncResult.success(grant(true)));
-      expect(registry.get(answer.permissionAtom(env))).toBe(true);
-      yield* answer.authorize(registry, env);
-    }),
+it.effect.each([
+  WS_METHODS.agentFeedbackAnswerRequest,
+  WS_METHODS.deliveryAnswerBoardTask,
+  WS_METHODS.deliveryLinkedComment,
+  WS_METHODS.deliveryLinkedAnswer,
+  WS_METHODS.deliveryLinkedControl,
+  WS_METHODS.deliveryLinkedSteer,
+  WS_METHODS.deliveryLinkedTake,
+  WS_METHODS.deliveryLinkedRenew,
+  WS_METHODS.deliveryLinkedRelease,
+  WS_METHODS.deliverySetBoardLinkedVisibility,
+  WS_METHODS.deliverySetTaskLinkedHidden,
+])("requires thread operation for %s", (method) =>
+  Effect.gen(function* () {
+    const registry = yield* setup;
+    registry.set(sessions(env), AsyncResult.success(grant(false)));
+    const answer = createCommandPermissions(runtime, method);
+    expect(registry.get(answer.permissionAtom(env))).toBe(false);
+    expect((yield* answer.authorize(registry, env).pipe(Effect.flip)).requiredPermission).toBe(
+      AuthOrchestrationOperateScope,
+    );
+    registry.set(sessions(env), AsyncResult.success(grant(true)));
+    expect(registry.get(answer.permissionAtom(env))).toBe(true);
+    yield* answer.authorize(registry, env);
+  }),
 );
 
 it.effect("honors exact empty permissions and preserves legacy parent grants", () =>

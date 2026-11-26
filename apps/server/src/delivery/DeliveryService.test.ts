@@ -1,9 +1,12 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   DeliveryActInput,
+  type DeliveryError,
   DeliveryDiscoveryInput,
   DeliveryReadInput,
   EnvironmentId,
+  type LinkedDeliveryAction,
+  type LinkedDeliveryResults,
   ProviderDriverKind,
   ProviderInstanceId,
   ThreadId,
@@ -21,6 +24,7 @@ import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import { HttpClient, HttpClientResponse } from "effect/http";
 
+import * as McpInvocationContext from "../mcp/McpInvocationContext.ts";
 import * as ServerConfig from "../config.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { deriveProviderInstanceConfigMap } from "../provider/ProviderInstanceRegistryHydration.ts";
@@ -391,6 +395,255 @@ const aliasDiscoveryEngine = () => {
   };
   return fake;
 };
+
+const linkedEnvironmentId = EnvironmentId.make("engine-owner");
+const linkedScope = (
+  access: McpInvocationContext.McpClientCaller["access"],
+): McpInvocationContext.McpInvocationScope => ({
+  environmentId: linkedEnvironmentId,
+  capabilities: new Set(["orchestration"]),
+  issuedAt: 0,
+  requestNamespace: "link-fixture",
+  thread: undefined,
+  client: { sessionId: "peer-session", label: "Linked machine", linked: true, access },
+});
+
+const sharedBoard = { id: "shared", title: "Shared", icon: null, description: "" };
+const sharedCard = {
+  id: "task-shared",
+  number: 1,
+  title: "Shared task",
+  state: "draft",
+  team: "development",
+  flow: "standard",
+  lane: "draft",
+  inWorkStage: null,
+  revision: 1,
+  priority: "medium",
+  owner: "person",
+  deadline: null,
+  created: "now",
+  updated: "now",
+  submitted: null,
+  held: false,
+  first: false,
+  tags: [],
+  board: sharedBoard,
+  questions: 0,
+  findings: { open: 0, all: 0 },
+  unread: 0,
+  unanswered: 0,
+  files: 0,
+  blocker: null,
+  waitingOn: null,
+  waitKind: null,
+  stage: null,
+  run: null,
+  paused: null,
+  partOf: null,
+  parts: [],
+  followUps: [],
+  waitsFor: [],
+  boardThread: null,
+  actions: [],
+};
+const sharedTask = {
+  id: sharedCard.id,
+  number: 1,
+  title: sharedCard.title,
+  state: "draft",
+  body: "Work to do",
+  requirements: [],
+  acceptance: ["Done"],
+  revision: 1,
+  workflow: "standard",
+  team: "development",
+  origin: "person",
+  card: sharedCard,
+  parent: null,
+  parts: [],
+  followUps: [],
+  links: [],
+  questions: [],
+  files: [],
+  runs: [],
+  revisions: [{ revision: 1, created: "now", notes: null, body: "Work to do", acceptance: [] }],
+  threads: [],
+} satisfies (typeof LinkedDeliveryResults.comment.Type)["task"];
+
+it.effect("isolates linked calls from all owner routes and cached discovery", () => {
+  const fake = engine();
+  fake.replies = {
+    "/api/linked/boards": {
+      boards: [{ ...sharedBoard, counts: { tasks: 1, questions: 0, waitingOnYou: 0 } }],
+    },
+    "/api/boards": { boards: [{ id: "private" }] },
+    "/api/health": { ok: true, engine: "delivery", home: "/test", profile: null },
+    "/api/repositories?discovery=1": [{ id: "private", root: REPO }],
+  };
+  return Effect.gen(function* () {
+    const delivery = yield* DeliveryService.DeliveryService;
+    const folder = { folder: REPO };
+    const caller = { environmentId: linkedEnvironmentId, authorized: true };
+    yield* delivery.discover(folder, caller);
+    expect(fake.requests.some(({ path }) => path === "/api/health")).toBe(true);
+    const countBefore = fake.requests.length;
+    const peer = linkedScope("full-access");
+    const ownerRequests: ReadonlyArray<Effect.Effect<unknown, DeliveryError>> = [
+      delivery.read(decodeCaptureReadInput({ path: "/api/boards" })),
+      delivery.read(decodeCaptureReadInput({ path: "/api/linked/boards" })),
+      delivery.act(decodeCaptureActInput({ path: "/api/delivery/requests", body: {} })),
+      delivery.nativeBuildAct(decodeCaptureActInput({ path: "/api/native-builds/att-test/claim" })),
+      delivery.nativeIntakeAct(
+        decodeCaptureActInput({ path: "/api/native-intakes/adm-test/claim" }),
+      ),
+      delivery.boardThreadAct({
+        method: "DELETE",
+        path: "/api/tasks/task-shared/board-thread",
+        body: {},
+      }),
+      delivery.setTaskLinkedHidden({ taskId: "task", hidden: true }),
+      delivery.setBoardLinkedVisibility({ boardId: "shared", visibility: "shared" }),
+    ];
+    const refused = yield* Effect.forEach(ownerRequests, (request) => Effect.result(request)).pipe(
+      Effect.provideService(McpInvocationContext.McpInvocationContext, peer),
+    );
+    expect(refused.every(({ _tag }) => _tag === "Failure")).toBe(true);
+    const discovered = yield* delivery
+      .discover(folder, caller)
+      .pipe(Effect.provideService(McpInvocationContext.McpInvocationContext, peer));
+    expect(discovered).toMatchObject({
+      diagnostics: ["unauthorized"],
+      boards: [],
+      repository: null,
+    });
+    expect(fake.requests).toHaveLength(countBefore);
+    expect(
+      (yield* delivery
+        .readLinked({ operation: "boards" })
+        .pipe(
+          Effect.provideService(
+            McpInvocationContext.McpInvocationContext,
+            linkedScope("read-only"),
+          ),
+        )).boards.map(({ id }) => id),
+    ).toEqual(["shared"]);
+    expect(fake.requests.slice(countBefore).map(({ path, body }) => ({ path, body }))).toEqual([
+      { path: "/api/linked/boards", body: undefined },
+    ]);
+  }).pipe(Effect.provide(layer(fake, { prefix: "t3-delivery-link-fence-" })));
+});
+
+it.effect(
+  "uses the linked engine contract and derives action access from the authenticated session",
+  () => {
+    const fake = engine();
+    const taskPath = "/api/linked/tasks/task-shared";
+    const actions = [
+      [
+        { operation: "comment", taskId: sharedTask.id, text: "Hello" },
+        "messages",
+        { text: "Hello" },
+      ],
+      [
+        { operation: "answer", taskId: sharedTask.id, replyTo: 1, answer: { option: "first" } },
+        "answer",
+        { replyTo: 1, option: "first" },
+      ],
+      [
+        { operation: "control", taskId: sharedTask.id, action: "pause" },
+        "control",
+        { action: "pause" },
+      ],
+      [
+        { operation: "steer", taskId: sharedTask.id, text: "Continue" },
+        "steer",
+        { text: "Continue" },
+      ],
+      [
+        { operation: "take", taskId: sharedTask.id, origin: "thread:link/conversation" },
+        "take",
+        { origin: "thread:link/conversation" },
+      ],
+      [
+        { operation: "renew", taskId: sharedTask.id, holder: "lease" },
+        "take/renew",
+        { holder: "lease" },
+      ],
+      [
+        { operation: "release", taskId: sharedTask.id, holder: "lease" },
+        "take/release",
+        { holder: "lease" },
+      ],
+    ] satisfies ReadonlyArray<readonly [LinkedDeliveryAction, string, object]>;
+    const lease = {
+      task: sharedTask.id,
+      holder: "lease",
+      origin: null,
+      at: null,
+      leaseMs: 1000,
+      done: true,
+    };
+    fake.replies = {
+      ...Object.fromEntries(
+        actions.map(([, path]) => [
+          `${taskPath}/${path}`,
+          { task: sharedTask, ...(path.startsWith("take") ? { take: lease } : {}) },
+        ]),
+      ),
+      [taskPath]: { task: sharedTask },
+      [`${taskPath}/messages`]: { task: sharedTask, messages: [] },
+      [`${taskPath}/timeline`]: {
+        timeline: [{ id: "m1", at: "now", kind: "message", text: "hello", source: "message" }],
+      },
+      "/api/boards/shared/linked-visibility": { id: "shared", linkedVisibility: "private" },
+      "/api/tasks/task-shared/linked-hidden": { task: "task-shared", linkedHidden: true },
+    };
+    return Effect.gen(function* () {
+      const delivery = yield* DeliveryService.DeliveryService;
+      const peer = linkedScope("read-only");
+      const snapshot = yield* delivery
+        .readLinked({ operation: "task", taskId: sharedTask.id })
+        .pipe(Effect.provideService(McpInvocationContext.McpInvocationContext, peer));
+      expect(snapshot).toEqual({
+        task: sharedTask,
+        messages: [],
+        timeline: [{ id: "m1", at: "now", kind: "message", text: "hello", source: "message" }],
+      });
+      for (const [action, endpoint, body] of actions) {
+        const call = delivery.actLinked(action);
+        const refused = yield* call.pipe(
+          Effect.provideService(McpInvocationContext.McpInvocationContext, peer),
+          Effect.flip,
+        );
+        expect(refused.status).toBe(403);
+        const result = yield* call.pipe(
+          Effect.provideService(
+            McpInvocationContext.McpInvocationContext,
+            linkedScope("approval-required"),
+          ),
+        );
+        expect(result).toMatchObject({
+          task: sharedTask,
+          ...(endpoint.startsWith("take") ? { take: lease } : {}),
+        });
+        expect(fake.requests.at(-1)).toMatchObject({
+          method: "POST",
+          path: `${taskPath}/${endpoint}`,
+          body: { ...body, access: "act", by: "Linked machine" },
+        });
+      }
+      expect(fake.requests.filter(({ method }) => method === "POST")).toHaveLength(actions.length);
+      expect(
+        yield* delivery.setBoardLinkedVisibility({ boardId: "shared", visibility: "private" }),
+      ).toEqual({ id: "shared", linkedVisibility: "private" });
+      expect(yield* delivery.setTaskLinkedHidden({ taskId: sharedTask.id, hidden: true })).toEqual({
+        task: sharedTask.id,
+        linkedHidden: true,
+      });
+    }).pipe(Effect.provide(layer(fake, { prefix: "t3-delivery-link-actions-" })));
+  },
+);
 
 describe("DeliveryService", () => {
   it.effect("pulls only 24 cards from the named set and marks the caller's origin", () => {

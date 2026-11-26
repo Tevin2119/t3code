@@ -1,5 +1,6 @@
 import { expect, it } from "@effect/vitest";
 import {
+  DeliveryError,
   EnvironmentId,
   OrchestratorMcpEnvironmentTarget,
   OrchestratorMcpFailure,
@@ -17,6 +18,7 @@ import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
 import { McpSchema, McpServer, Tool, Toolkit } from "effect/ai";
 
+import * as DeliveryService from "../delivery/DeliveryService.ts";
 import { OrchestratorProjectionError } from "../orchestration-v2/Orchestrator.ts";
 import * as PeerForwarding from "../peer/PeerForwarding.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
@@ -213,6 +215,7 @@ export const refusedAtCompileTime = () => {
 const probeServer = (threads: Layer.Layer<ThreadManagement.ThreadManagementService>) =>
   McpHttpServer.toolkitRegistration(ProbeToolkit, layerProbeHandlers).pipe(
     Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
+    Layer.provide(DeliveryService.layerTest),
     Layer.provideMerge(threads),
   );
 
@@ -432,6 +435,7 @@ const linkedProbeServer = McpHttpServer.toolkitRegistration(
   }),
 ).pipe(
   Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
+  Layer.provide(DeliveryService.layerTest),
   Layer.provideMerge(
     Layer.mock(ThreadManagement.ThreadManagementService)({
       getThreadShell: (threadId) => Effect.succeed(shells.get(threadId) ?? null),
@@ -542,4 +546,82 @@ it.effect("refuses to build a thread-bound tool that outside clients would be of
       "reads_as_caller acts as its calling thread",
     );
   }),
+);
+
+it.effect.each(["private", "shared", "offline", "wrong-environment", "owner"] as const)(
+  "checks thread targets before invoking the handler for %s",
+  (visibility) => {
+    const id = ThreadId.make("board-task:work:task-demo");
+    const target = liveThreadShell(id);
+    const tools = Toolkit.make(
+      Tool.make("test_thread_target", {
+        parameters: Schema.Struct({
+          threadId: ThreadId,
+          targetThreadId: Schema.optional(ThreadId),
+        }),
+        success: Schema.Struct({ ran: Schema.String }),
+        failure: OrchestratorMcpFailure,
+        failureMode: "return",
+        dependencies: [McpInvocationContext.McpInvocationContext],
+      }),
+    );
+    const owner = visibility === "owner";
+    const visible = visibility === "shared";
+    const engineCalls: ThreadId[] = [];
+    const delivery = Layer.effect(
+      DeliveryService.DeliveryService,
+      Effect.map(DeliveryService.DeliveryService, (service) => ({
+        ...service,
+        linkedThread: (threadId) =>
+          Effect.suspend(() => {
+            engineCalls.push(threadId);
+            if (visible || visibility === "wrong-environment")
+              return Effect.succeed({
+                threadId,
+                environmentId: visible
+                  ? fullAccessLinkedClient.environmentId
+                  : EnvironmentId.make("other"),
+                tasks: [{ id: "task-demo", number: 1, kind: "board-thread" }],
+              });
+            return Effect.fail(
+              new DeliveryError({
+                reason: visibility === "offline" ? "unreachable" : "refused",
+                ...(visibility === "offline" ? {} : { status: 404 }),
+                detail: "Fixture refusal.",
+              }),
+            );
+          }),
+      })),
+    ).pipe(Layer.provide(DeliveryService.layerTest));
+    const server = McpHttpServer.toolkitRegistration(
+      tools,
+      McpToolAccess.toLayer(tools, {
+        test_thread_target: McpToolAccess.reads(() => Effect.succeed({ ran: "ran" })),
+      }),
+    ).pipe(
+      Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
+      Layer.provide(delivery),
+      Layer.provide(
+        Layer.mock(ThreadManagement.ThreadManagementService)({
+          getThreadShell: (threadId) =>
+            Effect.succeed(threadId === id ? target : liveThreadShell(threadId)),
+        }),
+      ),
+    );
+    const scope = owner ? fullAccessClient : fullAccessLinkedClient;
+    return Effect.gen(function* () {
+      const expected = owner || visible ? "ran" : "thread_not_found";
+      expect(yield* call("test_thread_target", scope, { threadId: id })).toBe(expected);
+      expect(
+        yield* call("test_thread_target", scope, {
+          threadId: fullAccessThreadId,
+          targetThreadId: id,
+        }),
+      ).toBe(expected);
+      expect(engineCalls).toEqual(owner ? [] : [id, id]);
+      expect(yield* call("test_thread_target", scope, { threadId: fullAccessThreadId })).toBe(
+        "ran",
+      );
+    }).pipe(Effect.provide(server));
+  },
 );

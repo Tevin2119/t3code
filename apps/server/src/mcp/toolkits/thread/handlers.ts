@@ -20,6 +20,12 @@ import {
   readThread,
   unavailable,
 } from "../../threadAccess.ts";
+import * as DeliveryService from "../../../delivery/DeliveryService.ts";
+import * as Option from "effect/Option";
+import {
+  assertPeerThreadTargets,
+  filterPeerThreadRows,
+} from "../../../delivery/linkedThreadAccess.ts";
 import type * as ThreadManagement from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as ThreadMessageIntake from "../../../orchestration-v2/ThreadMessageIntake.ts";
 import * as ThreadSearch from "../../../orchestration-v2/ThreadSearch.ts";
@@ -113,11 +119,20 @@ export const layer = McpToolAccess.toLayer(ThreadToolkit, {
     Effect.gen(function* () {
       const scheduler = yield* ScheduledTasks.ScheduledTaskService;
       const { tasks } = yield* scheduler.list().pipe(Effect.mapError(unavailable));
-      if (!tasks.some((task) => task.id === input.taskId))
+      const scheduled = tasks.find((task) => task.id === input.taskId);
+      if (scheduled === undefined)
         return yield* new OrchestratorMcpFailure({
           code: "invalid_request",
           message: "The scheduled task was not found.",
         });
+      const scope = yield* McpInvocationContext.McpInvocationContext;
+      if (scope.client?.linked === true && scheduled.threadId !== null) {
+        const { threads } = yield* readCaller();
+        const delivery = Option.getOrUndefined(
+          yield* Effect.serviceOption(DeliveryService.DeliveryService),
+        );
+        yield* assertPeerThreadTargets(scope, [scheduled.threadId], threads, delivery);
+      }
       const { task, threadId } = yield* scheduler
         .runNow({ id: input.taskId })
         .pipe(
@@ -126,7 +141,6 @@ export const layer = McpToolAccess.toLayer(ThreadToolkit, {
               new OrchestratorMcpFailure({ code: "orchestration_error", message: error.message }),
           ),
         );
-      const scope = yield* McpInvocationContext.McpInvocationContext;
       return {
         taskId: task.id,
         threadId,
@@ -144,15 +158,18 @@ export const layer = McpToolAccess.toLayer(ThreadToolkit, {
   ),
   t3_thread_search: McpToolAccess.reads((input) =>
     Effect.gen(function* () {
-      const { caller } = yield* readCaller();
+      const { caller, threads } = yield* readCaller();
       const scope = yield* McpInvocationContext.McpInvocationContext;
       const threadSearch = yield* ThreadSearch.ThreadSearch;
       const { matches } = yield* threadSearch
         .searchThreads({ ...input, projectId: input.projectId ?? caller?.projectId })
         .pipe(Effect.mapError(unavailable));
+      const visible = yield* filterPeerThreadRows(scope, matches, (match) =>
+        threads.getThreadShell(match.threadId).pipe(Effect.orElseSucceed(() => null)),
+      );
       return {
         currentThreadId: scope.thread?.threadId ?? null,
-        matches: matches.map((match) => ({
+        matches: visible.map((match) => ({
           ...match,
           link: McpInvocationContext.threadLinkFor(scope, match.threadId, match.title),
         })),
@@ -163,16 +180,32 @@ export const layer = McpToolAccess.toLayer(ThreadToolkit, {
     (input) => input.action === "status",
     McpToolAccess.reads((input) =>
       Effect.gen(function* () {
-        const { projection } = yield* readThread(input.threadId, ["contextTransfers"]);
+        const { projection, scope, threads } = yield* readThread(input.threadId, [
+          "contextTransfers",
+        ]);
+        const delivery = Option.getOrUndefined(
+          yield* Effect.serviceOption(DeliveryService.DeliveryService),
+        );
+        const transfers =
+          scope.client?.linked === true
+            ? yield* Effect.filter(
+                projection.contextTransfers,
+                ({ sourceThreadId, targetThreadId }) =>
+                  assertPeerThreadTargets(
+                    scope,
+                    [sourceThreadId, targetThreadId].filter((id) => id !== projection.thread.id),
+                    threads,
+                    delivery,
+                  ).pipe(Effect.isSuccess),
+              )
+            : projection.contextTransfers;
         return {
-          transfers: projection.contextTransfers.map(
-            ({ id, sourceThreadId, targetThreadId, status }) => ({
-              id,
-              sourceThreadId,
-              targetThreadId,
-              status,
-            }),
-          ),
+          transfers: transfers.map(({ id, sourceThreadId, targetThreadId, status }) => ({
+            id,
+            sourceThreadId,
+            targetThreadId,
+            status,
+          })),
         };
       }),
     ),

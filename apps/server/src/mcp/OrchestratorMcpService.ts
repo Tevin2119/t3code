@@ -1,3 +1,5 @@
+import * as DeliveryService from "../delivery/DeliveryService.ts";
+import { assertPeerThreadTargets, filterPeerThreadRows } from "../delivery/linkedThreadAccess.ts";
 import {
   CommandId,
   type RunId,
@@ -1560,6 +1562,10 @@ const make = Effect.gen(function* () {
     },
   );
 
+  const delivery = Option.getOrUndefined(
+    yield* Effect.serviceOption(DeliveryService.DeliveryService),
+  );
+
   const loadReadableThread = Effect.fn("OrchestratorMcpService.loadReadableThread")(function* (
     scope: McpInvocationScope,
     threadId: ThreadId,
@@ -2502,13 +2508,29 @@ const make = Effect.gen(function* () {
               failure("orchestration_error", `Could not list scheduled tasks: ${error.message}`),
             ),
           );
+        const matching = tasks.filter(
+          (task) =>
+            (projectId === undefined || task.projectId === projectId) &&
+            (input.scheduledTaskId === undefined || task.id === input.scheduledTaskId),
+        );
+        if (scope.client?.linked !== true) {
+          return { tasks: matching.map((task) => scheduledTaskSummary(task, false)) };
+        }
+        const bound = matching.flatMap((task) =>
+          task.threadId === null ? [] : [{ taskId: task.id, threadId: task.threadId }],
+        );
+        const allowed = new Set(
+          (yield* filterPeerThreadRows(
+            scope,
+            bound,
+            ({ threadId }) =>
+              threadManagement.getThreadShell(threadId).pipe(Effect.orElseSucceed(() => null)),
+            delivery,
+          )).map(({ taskId }) => taskId),
+        );
         return {
-          tasks: tasks
-            .filter(
-              (task) =>
-                (projectId === undefined || task.projectId === projectId) &&
-                (input.scheduledTaskId === undefined || task.id === input.scheduledTaskId),
-            )
+          tasks: matching
+            .filter((task) => task.threadId === null || allowed.has(task.id))
             .map((task) => scheduledTaskSummary(task, false)),
         };
       },
@@ -2517,6 +2539,9 @@ const make = Effect.gen(function* () {
       function* (scope, input) {
         const { parent, limits } = yield* loadCaller(scope, ["runs"]);
         const existing = yield* loadScheduledTask(input.scheduledTaskId, limits);
+        if (existing.threadId !== null) {
+          yield* assertPeerThreadTargets(scope, [existing.threadId], threadManagement, delivery);
+        }
         yield* assertLiveCallerForOtherProject(scope, parent, existing.projectId);
         if (
           input.bindToCurrentThread === true &&
@@ -2594,6 +2619,9 @@ const make = Effect.gen(function* () {
       function* (scope, input) {
         const { parent, limits } = yield* loadCaller(scope, ["runs"]);
         const existing = yield* loadScheduledTask(input.scheduledTaskId, limits);
+        if (existing.threadId !== null) {
+          yield* assertPeerThreadTargets(scope, [existing.threadId], threadManagement, delivery);
+        }
         yield* assertLiveCallerForOtherProject(scope, parent, existing.projectId);
         yield* scheduledTasks
           .delete({ id: existing.id })
@@ -3515,7 +3543,8 @@ const make = Effect.gen(function* () {
               ),
             )
           : null;
-      const candidates = projectThreads
+      const visible = yield* filterPeerThreadRows(scope, projectThreads, Effect.succeed, delivery);
+      const candidates = visible
         .filter((thread) => mayBeLiveIds === null || mayBeLiveIds.has(thread.id))
         .filter(
           (thread) =>
@@ -3596,6 +3625,16 @@ const make = Effect.gen(function* () {
           ...(input.itemId === undefined ? {} : { itemId: input.itemId }),
         })
         .pipe(Effect.mapError(threadManagementFailure));
+      yield* assertPeerThreadTargets(
+        scope,
+        new Set(
+          timeline.items.flatMap(({ sourceThreadId }) =>
+            sourceThreadId === target.thread.id ? [] : [sourceThreadId],
+          ),
+        ),
+        threadManagement,
+        delivery,
+      );
       const messageIdsByThread = new Map<ThreadId, Array<MessageId>>();
       for (const row of timeline.items) {
         if (row.item.type !== "user_message" && row.item.type !== "assistant_message") continue;

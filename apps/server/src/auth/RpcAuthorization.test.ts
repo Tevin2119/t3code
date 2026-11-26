@@ -59,6 +59,15 @@ describe("RPC authorization scopes", () => {
     for (const method of [
       WS_METHODS.agentFeedbackAnswerRequest,
       WS_METHODS.deliveryAnswerBoardTask,
+      WS_METHODS.deliveryLinkedComment,
+      WS_METHODS.deliveryLinkedAnswer,
+      WS_METHODS.deliveryLinkedControl,
+      WS_METHODS.deliveryLinkedSteer,
+      WS_METHODS.deliveryLinkedTake,
+      WS_METHODS.deliveryLinkedRenew,
+      WS_METHODS.deliveryLinkedRelease,
+      WS_METHODS.deliverySetBoardLinkedVisibility,
+      WS_METHODS.deliverySetTaskLinkedHidden,
     ]) {
       expect(requiredScopeForRpcMethod(method)).toBe(AuthOrchestrationOperateScope);
     }

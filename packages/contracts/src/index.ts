@@ -69,6 +69,7 @@ export * from "./resourceTelemetry.ts";
 export * from "./usage.ts";
 export * from "./delivery.ts";
 export * from "./deliveryDiscovery.ts";
+export * from "./linkedDelivery.ts";
 export * from "./boardThreadTasks.ts";
 export * from "./deployments.ts";
 export * from "./boardDelivery.ts";

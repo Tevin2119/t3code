@@ -17,6 +17,15 @@ import {
   type DeliveryResponse,
   type DeliveryThreadState,
   type ThreadId,
+  LinkedDeliveryRead,
+  LinkedDeliveryAction,
+  LinkedDeliveryResults,
+  LinkedDeliveryThread,
+  LinkedDeliveryThreads,
+  DeliverySetBoardLinkedVisibility,
+  DeliverySetTaskLinkedHidden,
+  DeliveryBoardLinkedVisibility,
+  DeliveryTaskLinkedHidden,
 } from "@t3tools/contracts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import { deliveryFailureDiagnostic } from "@t3tools/shared/deliveryDiagnostics";
@@ -27,20 +36,23 @@ import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
+import * as Option from "effect/Option";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
-import { HttpClient, HttpClientRequest, HttpIncomingMessage } from "effect/http";
+import { FetchHttpClient, HttpClient, HttpClientRequest, HttpIncomingMessage } from "effect/http";
 
 import { writeFileStringAtomically } from "@t3tools/shared/atomicWrite";
+import * as McpInvocationContext from "../mcp/McpInvocationContext.ts";
 import { ServerConfig } from "../config.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import type { deriveProviderInstanceConfigMap } from "../provider/ProviderInstanceRegistryHydration.ts";
 import type * as DeliveryEffective from "./DeliveryEffective.ts";
 import * as DeliveryThreadSession from "./DeliveryThreadSession.ts";
 import * as Discovery from "./deliveryDiscovery.ts";
+import { readBoundedBody } from "./readBoundedBody.ts";
 
 const BindingsFile = Schema.fromJsonString(
   Schema.Struct({
@@ -171,9 +183,58 @@ export interface DeliveryActualSession {
   readonly cwd: string | undefined;
 }
 
+type LinkedOperation = keyof typeof LinkedDeliveryResults;
+type LinkedData<K extends LinkedOperation> = (typeof LinkedDeliveryResults)[K]["Type"];
+
+const linkedRefusal = (status: 403 | 404) =>
+  new DeliveryError({
+    reason: "refused",
+    status,
+    detail: "The delivery operation is unavailable.",
+  });
+
+const decodeLinkedJson = Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Unknown));
+
+const decodeEngine = <A>(schema: Schema.Decoder<A>) =>
+  Effect.fn("DeliveryService.decodeEngine")(function* (body: unknown) {
+    return yield* Schema.decodeUnknownEffect(schema)(body).pipe(
+      Effect.mapError(
+        () =>
+          new DeliveryError({
+            reason: "invalid",
+            detail: "The linked delivery response is incompatible.",
+          }),
+      ),
+    );
+  });
+
+const queryPath = (path: string, query: Record<string, string | number | undefined>) => {
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(query)) {
+    if (value !== undefined) params.set(key, String(value));
+  }
+  return params.size === 0 ? path : `${path}?${params}`;
+};
+
 export class DeliveryService extends Context.Service<
   DeliveryService,
   {
+    readonly readLinked: <K extends LinkedDeliveryRead["operation"]>(
+      input: Extract<LinkedDeliveryRead, { operation: K }>,
+    ) => Effect.Effect<LinkedData<K>, DeliveryError>;
+    readonly actLinked: <K extends LinkedDeliveryAction["operation"]>(
+      input: Extract<LinkedDeliveryAction, { operation: K }>,
+    ) => Effect.Effect<LinkedData<K>, DeliveryError>;
+    readonly linkedThread: (
+      threadId: ThreadId,
+    ) => Effect.Effect<typeof LinkedDeliveryThread.Type, DeliveryError>;
+    readonly linkedThreads: Effect.Effect<typeof LinkedDeliveryThreads.Type, DeliveryError>;
+    readonly setBoardLinkedVisibility: (
+      input: typeof DeliverySetBoardLinkedVisibility.Type,
+    ) => Effect.Effect<typeof DeliveryBoardLinkedVisibility.Type, DeliveryError>;
+    readonly setTaskLinkedHidden: (
+      input: typeof DeliverySetTaskLinkedHidden.Type,
+    ) => Effect.Effect<typeof DeliveryTaskLinkedHidden.Type, DeliveryError>;
     readonly read: (input: DeliveryReadInput) => Effect.Effect<DeliveryResponse, DeliveryError>;
     readonly discover: (
       input: DeliveryDiscoveryInput,
@@ -235,6 +296,12 @@ export const layerTest = Layer.succeed(
   DeliveryService,
   DeliveryService.of({
     read: disabled,
+    readLinked: disabled,
+    actLinked: disabled,
+    linkedThread: disabled,
+    linkedThreads: disabled(),
+    setBoardLinkedVisibility: disabled,
+    setTaskLinkedHidden: disabled,
     discover: Effect.fn("DeliveryService.discover")(function* (input, caller) {
       return {
         ...Discovery.emptyDiscovery(
@@ -471,6 +538,12 @@ const make = Effect.fn("DeliveryService.make")(function* (
         detail: "Delivery launch blocked: configuration-changed. No work was submitted.",
       });
   });
+  const isPeerInvocation = Effect.serviceOption(McpInvocationContext.McpInvocationContext).pipe(
+    Effect.map((scope) => Option.getOrUndefined(scope)?.client?.linked === true),
+  );
+  const requireOwner = isPeerInvocation.pipe(
+    Effect.flatMap((isPeer) => (isPeer ? Effect.fail(linkedRefusal(403)) : Effect.void)),
+  );
   const request = Effect.fn("DeliveryService.request")(
     function* (
       method: "GET" | "POST" | "PUT" | "DELETE",
@@ -480,7 +553,9 @@ const make = Effect.fn("DeliveryService.make")(function* (
       observedHealth?: { engineUrl: string; response: DeliveryResponse },
       expectedConfiguration?: string,
       dispatchDeadline?: number,
+      linked?: "json" | "binary",
     ) {
+      if ((yield* isPeerInvocation) !== (linked !== undefined)) return yield* linkedRefusal(403);
       if (expectedConfiguration !== undefined) yield* assertConfiguration(expectedConfiguration);
       const settings = yield* delivery;
       if (method !== "GET") invalidateDiscovery();
@@ -509,7 +584,12 @@ const make = Effect.fn("DeliveryService.make")(function* (
           if (!["127.0.0.1", "localhost", "[::1]"].includes(base.hostname)) {
             throw new Error("not loopback");
           }
-          return new URL(enginePath, base).toString();
+          const target = new URL(enginePath, base);
+          const isLinkedRoute = /^\/api\/linked(?:\/|$)/.test(target.pathname);
+          if (target.origin !== base.origin || isLinkedRoute !== (linked !== undefined)) {
+            throw new Error("invalid engine route");
+          }
+          return target.toString();
         },
         catch: () =>
           new DeliveryError({
@@ -609,6 +689,7 @@ const make = Effect.fn("DeliveryService.make")(function* (
         });
       }
       const response = yield* httpClient.execute(prepared).pipe(
+        Effect.provideService(FetchHttpClient.RequestInit, { redirect: "manual" }),
         Effect.timeout(bounded ? "4 seconds" : "30 seconds"),
         Effect.mapError(
           () =>
@@ -624,8 +705,50 @@ const make = Effect.fn("DeliveryService.make")(function* (
         return yield* new DeliveryError({
           reason: "invalid",
           status: 413,
-          detail: "Discovery response exceeds its size limit.",
+          detail:
+            linked === undefined
+              ? "Discovery response exceeds its size limit."
+              : "Linked delivery response exceeds its size limit.",
         });
+      }
+      if (linked !== undefined && (response.status < 200 || response.status >= 300)) {
+        return yield* new DeliveryError({
+          reason: "refused",
+          status: response.status,
+          detail: "The linked delivery operation was refused.",
+        });
+      }
+      if (linked !== undefined) {
+        const bytes = yield* readBoundedBody(
+          response,
+          linked === "binary" ? 524_288 : 1_048_576,
+        ).pipe(
+          Effect.timeout("4 seconds"),
+          Effect.mapError(
+            (error) =>
+              new DeliveryError({
+                reason: error._tag === "TimeoutError" ? "unreachable" : "invalid",
+                ...(error._tag === "BodyTooLarge" ? { status: 413 } : {}),
+                detail: "The linked delivery response could not be read.",
+              }),
+          ),
+        );
+        const body: unknown =
+          linked === "binary"
+            ? {
+                mediaType: response.headers["content-type"] ?? "application/octet-stream",
+                data: bytes.toString("base64"),
+              }
+            : yield* decodeLinkedJson(bytes.toString("utf8")).pipe(
+                Effect.mapError(
+                  () =>
+                    new DeliveryError({
+                      reason: "invalid",
+                      detail: "The linked delivery response is incompatible.",
+                    }),
+                ),
+              );
+        return { readAt: DateTime.formatIso(yield* DateTime.now), body } satisfies DeliveryResponse;
       }
       // The engine answers a clear with 204 and no body.
       if (response.status === 204) {
@@ -670,6 +793,122 @@ const make = Effect.fn("DeliveryService.make")(function* (
     (effect, method) =>
       method === "GET" ? effect : effect.pipe(Effect.ensuring(Effect.sync(invalidateDiscovery))),
   );
+
+  const linkedRequest = Effect.fn("DeliveryService.linkedRequest")(function* (
+    method: "GET" | "POST",
+    path: string,
+    body?: unknown,
+    format: "json" | "binary" = "json",
+  ) {
+    return (yield* request(
+      method,
+      `/api/linked/${path}`,
+      body,
+      true,
+      undefined,
+      undefined,
+      undefined,
+      format,
+    )).body;
+  });
+
+  const readLinked = Effect.fn("DeliveryService.readLinked")(function* (input: LinkedDeliveryRead) {
+    const taskPath = "taskId" in input ? `tasks/${encodeURIComponent(input.taskId)}` : "";
+    switch (input.operation) {
+      case "boards":
+        return yield* linkedRequest("GET", "boards").pipe(
+          Effect.flatMap(decodeEngine(LinkedDeliveryResults.boards)),
+        );
+      case "board":
+        return yield* linkedRequest("GET", `boards/${encodeURIComponent(input.boardId)}`).pipe(
+          Effect.flatMap(decodeEngine(LinkedDeliveryResults.board)),
+        );
+      case "search":
+        return yield* linkedRequest(
+          "GET",
+          queryPath("tasks", { q: input.q, board: input.boardId, limit: input.limit }),
+        ).pipe(Effect.flatMap(decodeEngine(LinkedDeliveryResults.search)));
+      case "task": {
+        const task = yield* linkedRequest("GET", taskPath).pipe(
+          Effect.flatMap(decodeEngine(LinkedDeliveryResults.comment)),
+        );
+        const [messages, timeline] = yield* Effect.all(
+          [
+            linkedRequest("GET", `${taskPath}/messages`).pipe(
+              Effect.flatMap(decodeEngine(LinkedDeliveryResults.messages)),
+            ),
+            linkedRequest("GET", `${taskPath}/timeline`).pipe(
+              Effect.flatMap(decodeEngine(LinkedDeliveryResults.timeline)),
+            ),
+          ],
+          { concurrency: "unbounded" },
+        );
+        return yield* decodeEngine(LinkedDeliveryResults.task)({
+          ...task,
+          ...messages,
+          ...timeline,
+        });
+      }
+      case "messages":
+        return yield* linkedRequest("GET", `${taskPath}/messages`).pipe(
+          Effect.flatMap(decodeEngine(LinkedDeliveryResults.messages)),
+        );
+      case "timeline":
+        return yield* linkedRequest("GET", `${taskPath}/timeline`).pipe(
+          Effect.flatMap(decodeEngine(LinkedDeliveryResults.timeline)),
+        );
+      case "events":
+        return yield* linkedRequest(
+          "GET",
+          queryPath(`${taskPath}/events`, { after: input.after }),
+        ).pipe(Effect.flatMap(decodeEngine(LinkedDeliveryResults.events)));
+      case "file":
+        return yield* linkedRequest(
+          "GET",
+          queryPath(`${taskPath}/files/${encodeURIComponent(input.fileId)}`, {
+            from: input.from,
+            length: input.length,
+          }),
+        ).pipe(Effect.flatMap(decodeEngine(LinkedDeliveryResults.file)));
+      case "attached":
+        return yield* linkedRequest(
+          "GET",
+          `${taskPath}/runs/${encodeURIComponent(input.runId)}/attached`,
+        ).pipe(Effect.flatMap(decodeEngine(LinkedDeliveryResults.attached)));
+      case "attachedFile":
+        return yield* linkedRequest(
+          "GET",
+          queryPath(`${taskPath}/runs/${encodeURIComponent(input.runId)}/attached/file`, {
+            seat: input.seat,
+            name: input.name,
+          }),
+          undefined,
+          "binary",
+        ).pipe(Effect.flatMap(decodeEngine(LinkedDeliveryResults.attachedFile)));
+    }
+  });
+
+  const actLinked = Effect.fn("DeliveryService.actLinked")(function* (input: LinkedDeliveryAction) {
+    const scope = yield* Effect.serviceOption(McpInvocationContext.McpInvocationContext);
+    const client = Option.getOrUndefined(scope)?.client;
+    if (client?.linked !== true || client.access === "read-only") return yield* linkedRefusal(403);
+    const { operation, taskId, ...fields } = input;
+    const endpoint = {
+      comment: "messages",
+      answer: "answer",
+      control: "control",
+      steer: "steer",
+      take: "take",
+      renew: "take/renew",
+      release: "take/release",
+    }[operation];
+    const body = "answer" in fields ? { replyTo: fields.replyTo, ...fields.answer } : fields;
+    return yield* linkedRequest("POST", `tasks/${encodeURIComponent(taskId)}/${endpoint}`, {
+      ...body,
+      access: "act",
+      by: client.label,
+    }).pipe(Effect.flatMap(decodeEngine(LinkedDeliveryResults[operation])));
+  });
 
   /** The root of the repository a folder is in, or the folder itself when it is in none. */
   /** The root of the repository a folder is in, or `null` for a folder in none. */
@@ -1020,7 +1259,7 @@ const make = Effect.fn("DeliveryService.make")(function* (
     enginePath: string,
     observedHealth?: { engineUrl: string; response: DeliveryResponse },
   ) {
-    const key = `${configuration}:${enginePath}`;
+    const key = `owner:${configuration}:${enginePath}`;
     const read = yield* discoveryLock.withPermits(1)(
       Effect.gen(function* () {
         const now = yield* Clock.currentTimeMillis;
@@ -1077,6 +1316,19 @@ const make = Effect.fn("DeliveryService.make")(function* (
             ),
             Effect.orElseSucceed(() => undefined),
           );
+    const scope = yield* Effect.serviceOption(McpInvocationContext.McpInvocationContext);
+    if (Option.getOrUndefined(scope)?.client?.linked === true) {
+      return {
+        ...Discovery.emptyDiscovery(
+          input,
+          { environmentId: suppliedCaller.environmentId },
+          "unavailable",
+          DateTime.formatIso(yield* DateTime.now),
+          null,
+        ),
+        diagnostics: ["unauthorized"],
+      };
+    }
     const driver = suppliedCaller.driver ?? providerDriver;
     const caller = { ...suppliedCaller, ...(driver === undefined ? {} : { driver }) };
     const settings = yield* delivery;
@@ -1584,40 +1836,68 @@ const make = Effect.fn("DeliveryService.make")(function* (
   return DeliveryService.of({
     read: Effect.fn("DeliveryService.read")((input) => request("GET", input.path)),
     discover,
+    readLinked: readLinked as DeliveryService["Service"]["readLinked"],
+    actLinked: actLinked as DeliveryService["Service"]["actLinked"],
+    linkedThread: Effect.fn("DeliveryService.linkedThread")((threadId) =>
+      linkedRequest("GET", `threads/${encodeURIComponent(threadId)}`).pipe(
+        Effect.flatMap(decodeEngine(LinkedDeliveryThread)),
+      ),
+    ),
+    linkedThreads: linkedRequest("GET", "threads").pipe(
+      Effect.flatMap(decodeEngine(LinkedDeliveryThreads)),
+    ),
+    setBoardLinkedVisibility: Effect.fn("DeliveryService.setBoardLinkedVisibility")(
+      ({ boardId, ...body }) =>
+        request("POST", `/api/boards/${encodeURIComponent(boardId)}/linked-visibility`, body).pipe(
+          Effect.flatMap((response) => decodeEngine(DeliveryBoardLinkedVisibility)(response.body)),
+        ),
+    ),
+    setTaskLinkedHidden: Effect.fn("DeliveryService.setTaskLinkedHidden")(({ taskId, ...body }) =>
+      request("POST", `/api/tasks/${encodeURIComponent(taskId)}/linked-hidden`, body).pipe(
+        Effect.flatMap((response) => decodeEngine(DeliveryTaskLinkedHidden)(response.body)),
+      ),
+    ),
     act: Effect.fn("DeliveryService.act")((input) =>
-      /^\/api\/native-(builds|intakes)\//.test(
-        new URL(input.path, "http://delivery.invalid").pathname,
-      )
-        ? Effect.fail(
-            new DeliveryError({
-              reason: "refused",
-              detail:
-                "Native build receipts can only be written by the server's native coordinator.",
-            }),
+      requireOwner.pipe(
+        Effect.flatMap(() =>
+          /^\/api\/native-(builds|intakes)\//.test(
+            new URL(input.path, "http://delivery.invalid").pathname,
           )
-        : BOARD_THREAD_WRITE.test(new URL(input.path, "http://delivery.invalid").pathname)
-          ? Effect.fail(
-              new DeliveryError({
-                reason: "refused",
-                detail:
-                  "Board filings, conversation and seat records can only be written by the server.",
-              }),
-            )
-          : new URL(input.path, "http://delivery.invalid").pathname === "/api/delivery/requests"
-            ? preflightDeliveryRequest(input.body).pipe(
-                Effect.flatMap(({ configuration, observedHealth, dispatchDeadline }) =>
-                  request(
-                    "POST",
-                    input.path,
-                    input.body,
-                    false,
-                    observedHealth,
-                    configuration,
-                    dispatchDeadline,
-                  ),
-                ),
+            ? Effect.fail(
+                new DeliveryError({
+                  reason: "refused",
+                  detail:
+                    "Native build receipts can only be written by the server's native coordinator.",
+                }),
               )
-            : request("POST", input.path, input.body),
+            : BOARD_THREAD_WRITE.test(new URL(input.path, "http://delivery.invalid").pathname) ||
+                /\/(?:linked-visibility|linked-hidden)\/?$/.test(
+                  new URL(input.path, "http://delivery.invalid").pathname,
+                )
+              ? Effect.fail(
+                  new DeliveryError({
+                    reason: "refused",
+                    detail:
+                      "Board filings, conversation and seat records can only be written by the server.",
+                  }),
+                )
+              : new URL(input.path, "http://delivery.invalid").pathname === "/api/delivery/requests"
+                ? preflightDeliveryRequest(input.body).pipe(
+                    Effect.flatMap(({ configuration, observedHealth, dispatchDeadline }) =>
+                      request(
+                        "POST",
+                        input.path,
+                        input.body,
+                        false,
+                        observedHealth,
+                        configuration,
+                        dispatchDeadline,
+                      ),
+                    ),
+                  )
+                : request("POST", input.path, input.body),
+        ),
+      ),
     ),
     nativeBuildAct: Effect.fn("DeliveryService.nativeBuildAct")((input) =>
       /^\/api\/native-builds\/att-[A-Za-z0-9-]+\/(claim|attach|complete)$/.test(input.path)
