@@ -1,3 +1,5 @@
+import { boardTaskIsDone } from "@t3tools/client-runtime/board-task-in-play";
+
 import type { TaskView } from "../../lib/delivery";
 import { taskQuestions } from "../../lib/deliveryQuestions";
 import { replyDraftKey, type ReplyDraft } from "../../state/deliveryReplyDrafts";
@@ -80,4 +82,14 @@ export function resolveDismissedQuestionKeys(
   return dismissed.flatMap((key) =>
     loaded.has(key) ? waitingKeys.filter((waiting) => questionTaskKey(waiting) === key) : [key],
   );
+}
+
+/** Only work in play is listed, first what needs the person; finished tasks live on the board. */
+export function listedThreadTasks<T extends { lane: string; state: string }>(
+  tasks: ReadonlyArray<T>,
+  needsAttention: (task: T) => boolean,
+) {
+  return tasks
+    .filter((task) => !boardTaskIsDone(task) || needsAttention(task))
+    .sort((a, b) => Number(needsAttention(b)) - Number(needsAttention(a)));
 }

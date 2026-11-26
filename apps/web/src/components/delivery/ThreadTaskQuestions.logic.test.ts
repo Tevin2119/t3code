@@ -2,6 +2,7 @@ import { expect, it } from "vite-plus/test";
 import { parseTask } from "../../lib/delivery";
 import { replyDraftKey } from "../../state/deliveryReplyDrafts";
 import {
+  listedThreadTasks,
   questionNeedsAttention,
   questionSummaryTasks,
   resolveDismissedQuestionKeys,
@@ -100,4 +101,23 @@ it("reads every task with a waiting question, so a dismissed banner can see a ne
   expect(questionSummaryTasks("env", tasks, {}, {}).map((task) => task.id)).toEqual(
     tasks.filter((task) => task.questions > 0).map((task) => task.id),
   );
+});
+
+it("lists only work in play, hiding approved and pr-open tasks unless one needs the person", () => {
+  const task = (id: string, state: string, questions = 0) => ({
+    id,
+    lane: "review",
+    state,
+    questions,
+  });
+  const tasks = [
+    task("running", "running"),
+    task("approved", "approved"),
+    task("pr-open", "pr-open"),
+    task("asks", "pr-open", 1),
+  ];
+  expect(listedThreadTasks(tasks, (row) => row.questions > 0).map((row) => row.id)).toEqual([
+    "asks",
+    "running",
+  ]);
 });
