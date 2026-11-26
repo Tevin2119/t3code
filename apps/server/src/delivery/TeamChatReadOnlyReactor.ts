@@ -2,6 +2,8 @@ import {
   CommandId,
   deliveryParticipantAccess,
   type OrchestrationV2DomainEvent,
+  type RunId,
+  type ThreadId,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -51,7 +53,9 @@ const make = Effect.gen(function* () {
     const source = messages.get(messageId)?.notification?.source;
     return (
       source?.kind === "engine_stage" &&
-      source.seats.some((seat) => seat.childThreadId === childThreadId && seat.access === "read-only")
+      source.seats.some(
+        (seat) => seat.childThreadId === childThreadId && seat.access === "read-only",
+      )
     );
   });
 

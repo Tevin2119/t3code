@@ -1,8 +1,7 @@
-// The engine's model steps of a board task, run inside the task's T3 thread (board plan slice T4,
-// against the native attempts v2 of Operation-PaperClip #192). The engine stays the referee: it
-// schedules, caps and gates, and queues each step as a v2 attempt. T3 claims the attempts of the
-// tasks whose thread is here, runs each one as a turn or a subagent of that thread, and reports
-// its answer. Nothing here decides a step or switches a board's execution.
+// The engine's model steps of a board task, run inside the task's T3 thread. The engine stays the
+// referee: it schedules, caps and gates, and queues each step as a native attempt v2. T3 runs each
+// one as a turn or a subagent of the thread and reports its answer. Nothing here decides a step or
+// switches a board's execution.
 import {
   DELIVERY_HARNESS_BY_DRIVER,
   type EnvironmentId,
@@ -78,11 +77,10 @@ const terminalTask = (task: OrchestrationV2Subagent) =>
   ["completed", "failed", "cancelled", "interrupted"].includes(task.status);
 /** A terminal run or subagent as the engine's terminal states name it. */
 const attemptState = (status: string) =>
-  status === "completed" || status === "failed" || status === "interrupted"
-    ? status
-    : "cancelled";
+  status === "completed" || status === "failed" || status === "interrupted" ? status : "cancelled";
+/** The engine's name for a driver; a driver it has no name for is told by its own. */
 const harnessOf = (driver: ProviderDriverKind | string | undefined) =>
-  driver === undefined ? null : (DELIVERY_HARNESS_BY_DRIVER[driver] ?? null);
+  driver === undefined ? null : (DELIVERY_HARNESS_BY_DRIVER[driver] ?? driver);
 
 /** How a step runs here: a turn of the task thread, a subagent of it, or not on this server. */
 type Plan =
@@ -94,7 +92,7 @@ type Plan =
  * The brief: the task as filed, then the engine's prompt, which says how to answer. It carries no
  * notification, so `NativeTeamChat.prepareTurn` runs the team round before the lead answers.
  */
-export const briefText = (detail: TaskDetail, prompt: string) =>
+const briefText = (detail: TaskDetail, prompt: string) =>
   [
     `# ${detail.title?.trim() || "Board task"}`,
     detail.body?.trim() ?? "",
@@ -212,10 +210,14 @@ export const make = Effect.gen(function* () {
     const model =
       record.model ??
       lineup.find(
-        (seat) => seat.seat === record.seat && seat.modelSelection.instanceId === provider.instanceId,
+        (seat) =>
+          seat.seat === record.seat && seat.modelSelection.instanceId === provider.instanceId,
       )?.modelSelection.model;
     if (!model) return { mode: "unavailable", why: "no-model" } as Plan;
-    return { mode: "seat", modelSelection: createModelSelection(provider.instanceId, model) } as Plan;
+    return {
+      mode: "seat",
+      modelSelection: createModelSelection(provider.instanceId, model),
+    } as Plan;
   });
 
   const lastReply = Effect.fn("BoardTaskExecution.lastReply")(function* (
@@ -263,15 +265,20 @@ export const make = Effect.gen(function* () {
       latest === undefined || task.childThreadId === null
         ? ""
         : yield* lastReply(task.childThreadId, latest.id);
+    const model =
+      task.executedModel ??
+      latest?.modelSelection.model ??
+      task.modelSelection?.model ??
+      task.model;
+    const harness =
+      (yield* harnessOfInstance(latest?.providerInstanceId)) ?? harnessOf(task.driver);
+    // The engine fails closed on a step with no identity, so one is never left out or guessed.
+    if (model === null || harness === null)
+      return yield* new BoardTaskExecutionError({ reason: "thread" });
     return {
       text: (text.trim() ? text : (task.result ?? "")).slice(0, TEXT_LIMIT),
-      model:
-        task.executedModel ??
-        latest?.modelSelection.model ??
-        task.modelSelection?.model ??
-        task.model,
-      harness:
-        (yield* harnessOfInstance(latest?.providerInstanceId)) ?? harnessOf(task.driver),
+      model,
+      harness,
     };
   });
 
@@ -285,9 +292,9 @@ export const make = Effect.gen(function* () {
     if (found === null) return;
     const { threadId, detail } = found;
     let shell = found.records;
-    const refresh = local(projections.getThreadRecords(threadId, ["runs", "subagents"])).pipe(
-      Effect.tap((records) => Effect.sync(() => (shell = records))),
-    );
+    const refresh = Effect.suspend(() =>
+      local(projections.getThreadRecords(threadId, ["runs", "subagents"])),
+    ).pipe(Effect.tap((records) => Effect.sync(() => (shell = records))));
     // The claim on the task is its heartbeat: renewed on every pass while a step is held, so
     // the engine never sends a step T3 works to needs-decision after the board's hand-off wait.
     const held = yield* boardThreads.holdTask(taskId, threadId);
@@ -337,8 +344,8 @@ export const make = Effect.gen(function* () {
         readonly state: string;
         readonly text: string;
         readonly reason?: string | null;
-        readonly model?: string | null;
-        readonly harness?: string | null;
+        readonly model: string;
+        readonly harness: string;
         readonly contributions?: ReadonlyArray<unknown>;
       },
     ) =>
@@ -348,10 +355,20 @@ export const make = Effect.gen(function* () {
         state: result.state,
         text: result.text.slice(0, TEXT_LIMIT),
         reason: result.reason ?? (result.state === "completed" ? null : `Ended ${result.state}.`),
-        model: result.model ?? null,
-        harness: result.harness ?? null,
+        model: result.model,
+        harness: result.harness,
         ...(result.contributions === undefined ? {} : { contributions: result.contributions }),
       }).pipe(Effect.tap(() => Effect.sync(() => attested.delete(record.id))));
+
+    /**
+     * What a step that never started is told as: the task thread's own model and harness, which
+     * it was attached to. Nothing ran, so no verdict or contribution counts on it.
+     */
+    const unstarted = Effect.fn("BoardTaskExecution.unstarted")(function* () {
+      const harness = yield* harnessOfInstance(shell.thread.modelSelection.instanceId);
+      if (harness === null) return yield* new BoardTaskExecutionError({ reason: "thread" });
+      return { model: shell.thread.modelSelection.model, harness };
+    });
 
     /** The team plan, or a lead step on the thread's account family: a turn of the thread. */
     const stepTurn = Effect.fn("BoardTaskExecution.stepTurn")(function* (
@@ -370,7 +387,11 @@ export const make = Effect.gen(function* () {
         if (current.cancelRequested || current.native !== null) {
           if (current.native === null)
             current = yield* act(current, "attach", { owner, environmentId, threadId });
-          yield* complete(current, { threadId }, { state: "cancelled", text: "" });
+          yield* complete(
+            current,
+            { threadId },
+            { state: "cancelled", text: "", ...(yield* unstarted()) },
+          );
           return;
         }
         const prompt = current.prompt?.trim();
@@ -408,6 +429,7 @@ export const make = Effect.gen(function* () {
         current = yield* act(current, "attach", { owner, environmentId, threadId, runId: run.id });
       // What the turn ran on: its run's provider instance and the model it started.
       const harness = yield* harnessOfInstance(run.providerInstanceId);
+      if (harness === null) return yield* new BoardTaskExecutionError({ reason: "thread" });
       yield* attest(current, threadId, run.modelSelection.model, harness);
       if (!terminalRun(run)) {
         if (current.cancelRequested)
@@ -431,17 +453,22 @@ export const make = Effect.gen(function* () {
         ? children.flatMap((task) => {
             const seat = task.teamChat?.seat;
             const joined = participants.some((entry) => entry.seat === seat);
+            // What the seat's child really ran on, as for any seat.
+            const model = task.executedModel ?? task.modelSelection?.model ?? task.model;
+            const harness = harnessOf(task.driver);
             return task.teamChat?.stage !== "contribution" ||
               seat === undefined ||
               !joined ||
-              task.childThreadId === null
+              task.childThreadId === null ||
+              model === null ||
+              harness === null
               ? []
               : [
                   {
                     seat,
                     childThreadId: task.childThreadId,
-                    model: task.executedModel ?? task.model,
-                    harness: harnessOf(task.driver),
+                    model,
+                    harness,
                     state: attemptState(task.status),
                     text: (task.result ?? "").slice(0, 25_000),
                   },
@@ -500,6 +527,7 @@ export const make = Effect.gen(function* () {
             ...receiptOf(record),
           });
           yield* complete(attached, receiptOf(record), {
+            ...(yield* unstarted()),
             state: record.cancelRequested ? "cancelled" : "failed",
             text: "",
             reason: record.cancelRequested
@@ -518,7 +546,8 @@ export const make = Effect.gen(function* () {
           seat: record.seat,
           childThreadId: childOf(record),
           modelSelection: plan.modelSelection,
-          access: record.access,
+          // Workspace access writes, as full access does.
+          access: record.access === "read-only" ? "read-only" : "full",
           worktreePath: record.worktree,
         }));
         const stage = sorted[0]!.record.stage;
@@ -577,6 +606,7 @@ export const make = Effect.gen(function* () {
             !(yield* local(threads.hasReceipt(seatCommandId(threadId, record.id))))
           ) {
             yield* complete(record, receiptOf(record), {
+              ...(yield* unstarted()),
               state: "cancelled",
               text: "",
               reason: "Stopped before its subagent started.",
@@ -613,7 +643,10 @@ export const make = Effect.gen(function* () {
       if (plan.mode === "turn" || (record.lead && record.native?.threadId === threadId))
         yield* isolated(
           record.id,
-          stepTurn(record, plan.mode === "turn" ? plan : { mode: "turn", modelSelection: undefined }),
+          stepTurn(
+            record,
+            plan.mode === "turn" ? plan : { mode: "turn", modelSelection: undefined },
+          ),
         );
       else seats.push({ record, plan });
     }

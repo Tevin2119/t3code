@@ -1,4 +1,4 @@
-// The engine's native attempts v2 (Operation-PaperClip #192): the model steps of a run on a board
+// The engine's native attempts v2: the model steps of a run on a board
 // with "t3" execution, each run in the task's T3 thread. The engine stays the referee; these are
 // the records T3 claims, attaches, and completes, and the ids that make each step replay-safe.
 import {
@@ -10,7 +10,7 @@ import {
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 
-export const NATIVE_ATTEMPT_KINDS = [
+const NATIVE_ATTEMPT_KINDS = [
   "team-plan",
   "plan",
   "comment",
@@ -39,7 +39,7 @@ export const NativeAttempt = Schema.Struct({
   seat: Schema.String,
   role: Schema.optional(Schema.NullOr(Schema.String)),
   lead: Schema.Boolean,
-  access: Schema.Literals(["full", "read-only"]),
+  access: Schema.Literals(["full", "workspace", "read-only"]),
   participants: Schema.optional(Schema.Array(Participant)),
   worktree: Schema.String,
   harness: Schema.String,
@@ -59,7 +59,7 @@ export const NativeAttempt = Schema.Struct({
 });
 export type NativeAttempt = typeof NativeAttempt.Type;
 
-/** The v2 listing. An engine before #192 ignores `?version=2` and answers version 1. */
+/** The v2 listing. An engine before v2 ignores `?version=2` and answers version 1. */
 export const NativeAttemptList = Schema.Struct({
   version: Schema.Literal(2),
   pending: Schema.Array(Schema.Struct({ id: Schema.String })),

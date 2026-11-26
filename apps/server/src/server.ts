@@ -15,6 +15,7 @@ import * as BoardTaskThreads from "./delivery/BoardTaskThreads.ts";
 import * as BoardThreadRows from "./delivery/boardThreadRows.ts";
 import * as NativeIntake from "./delivery/NativeIntake.ts";
 import * as BoardTaskExecution from "./delivery/BoardTaskExecution.ts";
+import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as MilestoneHub from "./milestones/MilestoneHub.ts";
 import * as OrchestrationMilestones from "./milestones/OrchestrationMilestones.ts";
 // Effect wraps this raw Node HTTP server after its startup and write-error guards attach.
@@ -782,7 +783,7 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
       yield* (yield* BoardTaskExecution.BoardTaskExecution).start();
     }),
   ).pipe(
-    Layer.provide(BoardTaskExecution.layer),
+    Layer.provide(BoardTaskExecution.layer.pipe(Layer.provide(IdAllocator.layer))),
     Layer.provideMerge(BoardTaskThreads.layer),
     Layer.provide(BoardConversation.layer),
     Layer.provide(BoardThreadRows.layer),

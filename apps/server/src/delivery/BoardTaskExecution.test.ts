@@ -29,13 +29,17 @@ import * as ServerSettings from "../serverSettings.ts";
 import { briefMessageId, leadTurnMessageId, seatCommandId } from "./boardTaskAttempts.ts";
 import * as BoardTaskExecution from "./BoardTaskExecution.ts";
 import * as BoardTaskThreads from "./BoardTaskThreads.ts";
-import { scratchEngine, scratchEngineHttp, type ScratchEngine } from "./boardThreadEngine.testkit.ts";
+import {
+  scratchEngine,
+  scratchEngineHttp,
+  type ScratchEngine,
+} from "./boardThreadEngine.testkit.ts";
 import { boardTaskOf, boardTaskThreadId, boardTaskThreadMarker } from "./boardThreadMarker.ts";
 import * as DeliveryService from "./DeliveryService.ts";
 
-// Every case runs against the scratch engine's model of native attempts v2 (Operation-PaperClip
-// #192), through the delivery service's real request path, over a thread store that keeps the
-// committed messages, runs and subagents across a restart of this server.
+// Every case runs against the scratch engine's model of native attempts v2, through the delivery
+// service's real request path, over a thread store that keeps the committed messages, runs and
+// subagents across a restart of this server.
 
 const ENVIRONMENT = EnvironmentId.make("471fea73-5365-4bbb-96eb-8e35be50eaec");
 const OWNER = `t3-board:${ENVIRONMENT}`;
@@ -66,7 +70,11 @@ interface StoredSubagent {
   readonly driver: string;
   readonly model: string;
   executedModel?: string;
-  readonly teamChat?: { readonly sourceRunId: RunId; readonly stage: string; readonly seat: string };
+  readonly teamChat?: {
+    readonly sourceRunId: RunId;
+    readonly stage: string;
+    readonly seat: string;
+  };
   status: string;
   result: string | null;
 }
@@ -256,7 +264,7 @@ function service(store: ThreadStore, claims: ReturnType<typeof boardClaims>) {
         filter?: { readonly messageRunIds?: ReadonlyArray<string> },
       ) => {
         const thread = store.threads.get(threadId);
-        return Effect.succeed({
+        return Effect.sync(() => ({
           thread: {
             lineage: { engineIntake: thread?.marker },
             archivedAt: null,
@@ -270,7 +278,7 @@ function service(store: ThreadStore, claims: ReturnType<typeof boardClaims>) {
               (filter?.messageRunIds === undefined ||
                 (message.runId !== null && filter.messageRunIds.includes(message.runId))),
           ),
-        });
+        }));
       },
       getMessagesById: (threadId: string, ids: ReadonlyArray<string>) =>
         Effect.succeed(
@@ -365,13 +373,24 @@ it.effect("sends the team plan as the brief, then reports the plan with the seat
       threadId: THREAD,
       runId: run.id,
     });
-    assert.deepInclude(engine.attestations, {
-      run: "run-1",
-      seat: "developer",
-      threadId: THREAD,
-      model: "claude-fable-5-1",
-      harness: "claude",
-    });
+    assert.deepEqual(
+      engine.attestations.map(({ run, seat, threadId, model, harness }) => ({
+        run,
+        seat,
+        threadId,
+        model,
+        harness,
+      })),
+      [
+        {
+          run: "run-1",
+          seat: "developer",
+          threadId: THREAD,
+          model: "claude-fable-5-1",
+          harness: "claude",
+        },
+      ],
+    );
     // The team round's seats, and the lead's answer once every seat is terminal.
     for (const [seat, status, result] of [
       ["reviewer", "completed", "Looks right."],
@@ -505,7 +524,9 @@ it.effect("starts a stage's seats under one system turn and reports each child's
     const sent = store.sent();
     assert.lengthOf(sent, 2);
     const qa = sent.find((command) => seatsOf(command)[0]?.seat.startsWith("qa"));
-    assert.isTrue(qa?.type === "message.dispatch" && qa.text === "Engine: qa-claude, qa-codex start qa");
+    assert.isTrue(
+      qa?.type === "message.dispatch" && qa.text === "Engine: qa-claude, qa-codex start qa",
+    );
     assert.deepEqual(seatsOf(qa), [
       {
         attemptId: "att-qa-1",
@@ -573,8 +594,21 @@ it.effect("starts a stage's seats under one system turn and reports each child's
 
 it.effect("replays a step after this server restarts mid-attempt", () => {
   const engine = board();
-  engine.queueAttempt({ id: "att-build", task: "task-7", stage: "build", kind: "build", seat: "developer-2" });
-  engine.queueAttempt({ id: "att-review", task: "task-7", stage: "review", kind: "review", seat: "developer", lead: true });
+  engine.queueAttempt({
+    id: "att-build",
+    task: "task-7",
+    stage: "build",
+    kind: "build",
+    seat: "developer-2",
+  });
+  engine.queueAttempt({
+    id: "att-review",
+    task: "task-7",
+    stage: "review",
+    kind: "review",
+    seat: "developer",
+    lead: true,
+  });
   const store = threadStore();
   const claims = boardClaims(engine);
   return Effect.gen(function* () {
@@ -598,16 +632,44 @@ it.effect("replays a step after this server restarts mid-attempt", () => {
     store.finishSeat("att-build", "Built.");
     store.reply(leadTurnMessageId("att-review"), '{"verdict":"approve"}');
     yield* (yield* service(store, claims)).reconcile();
-    assert.deepEqual(order(engine, "att-build"), ["native.claimed", "native.attached", "native.completed"]);
-    assert.deepEqual(order(engine, "att-review"), ["native.claimed", "native.attached", "native.completed"]);
+    assert.deepEqual(order(engine, "att-build"), [
+      "native.claimed",
+      "native.attached",
+      "native.completed",
+    ]);
+    assert.deepEqual(order(engine, "att-review"), [
+      "native.claimed",
+      "native.attached",
+      "native.completed",
+    ]);
   }).pipe(Effect.provide(deliveryLayer(engine, "board-execution-restart-")));
 });
 
 it.effect("stops a held step the engine cancels after its own restart", () => {
   const engine = board();
-  engine.queueAttempt({ id: "att-review", task: "task-7", stage: "review", kind: "review", seat: "developer", lead: true });
-  engine.queueAttempt({ id: "att-build", task: "task-7", stage: "build", kind: "build", seat: "developer-2" });
-  engine.queueAttempt({ id: "att-qa", task: "task-7", stage: "qa", kind: "qa", seat: "qa", access: "read-only" });
+  engine.queueAttempt({
+    id: "att-review",
+    task: "task-7",
+    stage: "review",
+    kind: "review",
+    seat: "developer",
+    lead: true,
+  });
+  engine.queueAttempt({
+    id: "att-build",
+    task: "task-7",
+    stage: "build",
+    kind: "build",
+    seat: "developer-2",
+  });
+  engine.queueAttempt({
+    id: "att-qa",
+    task: "task-7",
+    stage: "qa",
+    kind: "qa",
+    seat: "qa",
+    access: "read-only",
+  });
   const store = threadStore();
   const claims = boardClaims(engine);
   return Effect.gen(function* () {
@@ -635,7 +697,13 @@ it.effect("stops a held step the engine cancels after its own restart", () => {
 
 it.effect("keeps the task's claim alive while it holds a step", () => {
   const engine = board();
-  engine.queueAttempt({ id: "att-build", task: "task-7", stage: "build", kind: "build", seat: "developer-2" });
+  engine.queueAttempt({
+    id: "att-build",
+    task: "task-7",
+    stage: "build",
+    kind: "build",
+    seat: "developer-2",
+  });
   const store = threadStore();
   const claims = boardClaims(engine);
   return Effect.gen(function* () {
@@ -660,21 +728,40 @@ it.effect("leaves engine boards, foreign threads and unheld tasks to the engine"
   const engine = board();
   // A split parent has no thread; its step is the engine's after the hand-off wait.
   engine.addTask({ id: "parent-1", state: "split" });
-  engine.queueAttempt({ id: "att-split", task: "parent-1", stage: "plan", kind: "team-plan", seat: "developer", lead: true });
+  engine.queueAttempt({
+    id: "att-split",
+    task: "parent-1",
+    stage: "plan",
+    kind: "team-plan",
+    seat: "developer",
+    lead: true,
+  });
   // Another server's step.
-  engine.queueAttempt({ id: "att-theirs", task: "task-7", stage: "build", kind: "build", seat: "developer-2" });
+  engine.queueAttempt({
+    id: "att-theirs",
+    task: "task-7",
+    stage: "build",
+    kind: "build",
+    seat: "developer-2",
+  });
   engine.attempts.get("att-theirs")!.owner = "t3-board:other";
   const store = threadStore();
   return Effect.gen(function* () {
     yield* (yield* service(store, boardClaims(engine))).reconcile();
     assert.lengthOf(native(engine), 0);
     assert.lengthOf(store.commands, 0);
-    // An engine board's run queues no v2 record, and an engine before #192 lists version 1 only.
+    // An engine board's run queues no v2 record, and an engine before v2 lists version 1 only.
     engine.attempts.clear();
     yield* (yield* service(store, boardClaims(engine))).reconcile();
     assert.lengthOf(native(engine), 0);
     // With the task's claim refused (the cap is reached), no step is claimed.
-    engine.queueAttempt({ id: "att-build", task: "task-7", stage: "build", kind: "build", seat: "developer-2" });
+    engine.queueAttempt({
+      id: "att-build",
+      task: "task-7",
+      stage: "build",
+      kind: "build",
+      seat: "developer-2",
+    });
     engine.handle("POST", "/api/orchestration/tasks/task-7/claim", { origin: "thread:else/x" });
     yield* (yield* service(store, boardClaims(engine))).reconcile();
     assert.lengthOf(native(engine), 0);

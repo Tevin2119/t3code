@@ -165,7 +165,7 @@ const checklistChanged = (items: ReadonlyArray<string>) =>
  */
 export const attestSeatWith = Effect.fn("SeatHandoffs.attestSeatAs")(function* (
   delivery: DeliveryService.DeliveryService["Service"],
-  hostEnvironment: HostProcess.Environment["Service"],
+  hostEnvironment: NodeJS.ProcessEnv,
   input: {
     readonly environmentId: EnvironmentId;
     readonly run: string;
