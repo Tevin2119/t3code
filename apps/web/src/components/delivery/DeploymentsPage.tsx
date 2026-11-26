@@ -356,7 +356,7 @@ export function Configuration({
                 if (value === "engine") setReleaseEnvironment("production");
               }}
             />
-            {!engineEligible && selected ? (
+            {!engineEligible && selected && !firebase ? (
               <p className="text-sm text-muted-foreground">
                 The built-in engine adapter releases only the engine's own checkout, when this
                 engine has it configured.
