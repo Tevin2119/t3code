@@ -104,7 +104,13 @@ export function scratchEngine(
   const activity = new Map<string, Array<Activity>>();
   const steers: Array<ScratchSteer & { readonly task: string }> = [];
   /** Every steer the run under way took, as the engine's steer route records it (slice E1). */
-  const steered: Array<{ task: string; text: string; by: string; from: string }> = [];
+  const steered: Array<{
+    task: string;
+    text: string;
+    by: string;
+    from: string;
+    ref: string | null;
+  }> = [];
   /** Requests whose path matches are lost on the way, once each, as a dropped connection. */
   const drops: Array<RegExp> = [];
   /** Requests whose path matches are answered with this instead, once each, before routing. */
@@ -444,7 +450,11 @@ export function scratchEngine(
         return refused(400, "from is board or thread", { code: "invalid-field", field: "from" });
       if (!task.run) return refused(409, "no run is under way on this task");
       const text = String(body.text ?? "").trim();
-      steered.push({ task: task.id, text, by: String(body.by ?? ""), from });
+      // A repeated `ref` is answered as the first steer and never applied again.
+      const ref = typeof body.ref === "string" ? body.ref : null;
+      if (ref !== null && steered.some((entry) => entry.task === task.id && entry.ref === ref))
+        return { status: 200, body: { task: task.id } };
+      steered.push({ task: task.id, text, by: String(body.by ?? ""), from, ref });
       // A steer typed in the thread is already there: it is never queued back to it.
       if (from === "board")
         steers.push({

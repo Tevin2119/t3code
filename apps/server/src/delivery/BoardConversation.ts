@@ -316,10 +316,9 @@ export const make = Effect.gen(function* () {
   });
 
   /**
-   * A person's words typed in the conversation, given to the run as a steer from the thread: the
-   * engine never queues one back, so it is not delivered here a second time. `false` only when
-   * the engine did not answer, to be told on a later pass; any answer, a refusal or a server
-   * error included, settles it and is remembered across restarts.
+   * A person's words in the thread, told to the run as a thread steer (never queued back here).
+   * `false` on no answer or a 5xx: told again later with the same `ref`, which the engine
+   * dedupes on. An acceptance or a 4xx refusal settles it, remembered across restarts.
    */
   const tellSteer = Effect.fn("BoardConversation.tellSteer")(function* (
     taskId: string,
@@ -332,10 +331,14 @@ export const make = Effect.gen(function* () {
       text: steer.text,
       by: "person",
       from: "thread",
-      // Stable per message, for an engine that dedupes on it; today's engine ignores it.
+      // Stable per message: the engine applies a steer once per `ref`, so a retry is safe.
       ref: `thread:${threadId}:${steer.messageId}`,
     });
-    if (told._tag === "Failure" && told.failure.status === undefined) return false;
+    if (
+      told._tag === "Failure" &&
+      (told.failure.status === undefined || told.failure.status >= 500)
+    )
+      return false;
     yield* rememberSteer(key);
     // A task with no run under way is refused 409: the lead reads the words in the thread itself.
     if (told._tag === "Failure")
