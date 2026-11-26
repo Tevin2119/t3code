@@ -183,6 +183,11 @@ export const make = Effect.gen(function* () {
     requestId: string,
     here: EnvironmentId,
   ) {
+    if (input.launchOrigin?.linkOrigin !== undefined) {
+      return yield* new WorkflowAgentError({
+        reason: "A linked workflow can run agent steps only on this machine.",
+      });
+    }
     if (!(yield* links.enabled)) {
       return yield* new WorkflowAgentError({
         reason:

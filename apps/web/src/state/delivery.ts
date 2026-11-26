@@ -303,7 +303,11 @@ export function useLinkedSearch(
 
 /** What became of an action sent over a link: what the link said, or why it could not be asked. */
 export type LinkedActionOutcome =
-  | { readonly ok: true; readonly diagnostic: LinkedDeliveryDiagnostic | null }
+  | {
+      readonly ok: true;
+      readonly diagnostic: LinkedDeliveryDiagnostic | null;
+      readonly message?: string;
+    }
   | { readonly ok: false; readonly why: string };
 
 /**
@@ -348,14 +352,16 @@ export function useLinkedTaskCommands(input: {
       steer: unavailable,
     };
   }
-  const outcome = async <A extends { readonly diagnostic: LinkedDeliveryDiagnostic | null }>(
-    call: () => Promise<AtomCommandResult<A, unknown>>,
+  const outcome = async (
+    call: () => Promise<
+      AtomCommandResult<Omit<Extract<LinkedActionOutcome, { ok: true }>, "ok">, unknown>
+    >,
   ): Promise<LinkedActionOutcome> => {
     const result = await call();
     if (result._tag === "Failure") {
       return { ok: false, why: String(squashAtomCommandFailure(result)) };
     }
-    return { ok: true, diagnostic: result.value.diagnostic };
+    return { ok: true, ...result.value };
   };
   return {
     allowed,

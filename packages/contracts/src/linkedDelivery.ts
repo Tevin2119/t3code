@@ -1,6 +1,6 @@
 import * as Schema from "effect/Schema";
 
-import { EnvironmentId, ThreadId } from "./baseSchemas.ts";
+import { EnvironmentId, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import { PeerLink } from "./peerLink.ts";
 
 const Id = Schema.String.check(Schema.isPattern(/^[\w-]{1,256}$/));
@@ -315,6 +315,7 @@ export const linkedDeliveryResult = <S extends Schema.Top>(schema: S) =>
     environmentId: EnvironmentId,
     data: Schema.NullOr(schema),
     diagnostic: Schema.NullOr(LinkedDeliveryDiagnostic),
+    message: Schema.optionalKey(TrimmedNonEmptyString),
   });
 
 export const LinkedDeliveryReadResult = linkedDeliveryResult(

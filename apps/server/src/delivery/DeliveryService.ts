@@ -830,10 +830,25 @@ const make = Effect.fn("DeliveryService.make")(function* (
         });
       }
       if (linked && !handoff && (response.status < 200 || response.status >= 300)) {
+        const message =
+          method === "POST" && response.status >= 400 && response.status < 500
+            ? yield* readBoundedBody(response, limit).pipe(
+                Effect.flatMap((bytes) => decodeLinkedJson(bytes.toString("utf8"))),
+                Effect.timeout("4 seconds"),
+                Effect.option,
+                Effect.map((body) => Option.flatMap(body, decodeRefusal)),
+                Effect.map((refusal) =>
+                  Option.getOrUndefined(
+                    Option.map(refusal, ({ error }) => error.trim().slice(0, 500)),
+                  ),
+                ),
+              )
+            : undefined;
         return yield* new DeliveryError({
           reason: "refused",
           status: response.status,
-          detail: "The linked delivery operation was refused.",
+          detail: message || "The linked delivery operation was refused.",
+          ...(message ? { linkedRefusalMessage: message } : {}),
         });
       }
       if (format !== undefined) {

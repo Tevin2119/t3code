@@ -62,6 +62,7 @@ type LinkedResult<A> = {
   readonly environmentId: EnvironmentId;
   readonly data: A | null;
   readonly diagnostic: LinkedDeliveryDiagnostic | null;
+  readonly message?: string;
 };
 
 type LinkedRequest = LinkedDeliveryRead | LinkedDeliveryAction;

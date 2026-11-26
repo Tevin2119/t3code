@@ -166,6 +166,39 @@ it.effect("a caller below the broadest mode reads runs but does not start or cha
   }),
 );
 
+it.effect("a workflow started by a full-access linked thread retains the caller and its link", () =>
+  Effect.gen(function* () {
+    const threadId = ThreadId.make("thread:linked-workflow");
+    const linkOrigin = { ...fullAccess, label: "Peer" };
+    let origin: Parameters<Workflows.Workflows["Service"]["start"]>[2]["launchOrigin"];
+    const result = yield* call({ action: "start", workflow: "echo", idempotencyKey: "trial" }).pipe(
+      Effect.provide(
+        handlersWith(
+          {
+            start: (_workflow, _input, options) =>
+              Effect.sync(() => {
+                origin = options.launchOrigin;
+                return { runId: "run-1" };
+              }),
+            get: () => Effect.succeed(emptyRun),
+          },
+          {
+            client: undefined,
+            thread: {
+              threadId,
+              providerInstanceId: ProviderInstanceId.make("codex"),
+              providerSessionId: "peer-provider",
+              linkOrigin,
+            },
+          },
+        ),
+      ),
+    );
+    expect(result).toEqual(emptyRun);
+    expect(origin).toEqual({ launchedFromThreadId: threadId, linkOrigin });
+  }),
+);
+
 it.effect("hook paths go only to a caller at the broadest mode", () =>
   Effect.gen(function* () {
     const hooks = [{ workflow: "release", name: "push", path: "/api/hooks/wf-release.push/token" }];

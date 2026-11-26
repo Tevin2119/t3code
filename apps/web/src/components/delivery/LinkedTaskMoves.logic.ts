@@ -6,6 +6,10 @@ import * as Schema from "effect/Schema";
 
 const decodeLocalBoards = Schema.decodeUnknownOption(DeliveryLinkedDestinationBoards);
 
+export function linkedMoveActor(person: string, enteredName: string) {
+  return person.trim() || enteredName.trim() || null;
+}
+
 export function localMoveBoards(body: unknown) {
   const boards = decodeLocalBoards(body);
   return boards._tag === "Some"

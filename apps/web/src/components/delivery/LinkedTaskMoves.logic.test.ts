@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { localMoveBoards } from "./LinkedTaskMoves.logic";
+import { linkedMoveActor, localMoveBoards } from "./LinkedTaskMoves.logic";
 
 describe("localMoveBoards", () => {
   it("reads the owner board list and defaults to private on older engines", () => {
@@ -21,4 +21,13 @@ describe("localMoveBoards", () => {
     ).toBeNull();
     expect(localMoveBoards([{ id: "work%2Fhome", title: "Work", description: "" }])).toBeNull();
   });
+});
+
+it.each([
+  ["", "", null],
+  ["", "  ", null],
+  ["", "  Alex  ", "Alex"],
+  ["  Taylor  ", "Alex", "Taylor"],
+])("chooses the saved or entered actor for a keyed move (%j, %j)", (person, enteredName, by) => {
+  expect(linkedMoveActor(person, enteredName)).toBe(by);
 });

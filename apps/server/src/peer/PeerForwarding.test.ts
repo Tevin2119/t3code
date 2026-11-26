@@ -518,6 +518,7 @@ const mcpClient = McpSchema.McpServerClient.of({
  */
 const makeLaptop = Effect.gen(function* () {
   const linking = yield* layerLinkingEnvironment(laptop).pipe(Layer.build);
+  const forwarding = PeerForwarding.layer.pipe(Layer.provide(Layer.succeedContext(linking)));
   const layerHere = Layer.mergeAll(
     McpHttpServer.layerLinkedDeliveryToolkit.pipe(Layer.provide(DeliveryService.layerTest)),
     McpHttpServer.layerOrchestratorToolkit.pipe(
@@ -542,7 +543,7 @@ const makeLaptop = Effect.gen(function* () {
       ),
     ),
     Layer.provide(NodeServices.layer),
-    Layer.provide(PeerForwarding.layer),
+    Layer.provideMerge(forwarding),
     Layer.provide(Layer.succeedContext(linking)),
     Layer.provide(NodeCrypto.layer),
     Layer.provideMerge(
@@ -633,6 +634,7 @@ const makeLaptop = Effect.gen(function* () {
     peer: Context.get(linking, PeerMcpClient.PeerMcpClient),
     call,
     callAsClient,
+    forwarding: Context.get(here, PeerForwarding.PeerForwarding),
   };
 });
 
@@ -724,6 +726,41 @@ it.effect("uses the owner engine's visibility for linked thread snapshots, lists
         });
       }
       expect((yield* Ref.get(seen)).sends).toHaveLength(1);
+    }),
+  ).pipe(Effect.provide(NodeHttpServer.layerTest)),
+);
+
+it.effect("carries a neutral engine refusal through the peer MCP result", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const message = "This task has not been submitted. Change the draft, or submit it.";
+      const delivery = Layer.mock(DeliveryService.DeliveryService)({
+        actLinked: () =>
+          Effect.fail(
+            new DeliveryError({
+              reason: "refused",
+              status: 409,
+              detail: message,
+              linkedRefusalMessage: message,
+            }),
+          ),
+      });
+      const seen = yield* Ref.make<Seen>(nothingSeen);
+      const linkSession = yield* Ref.make("");
+      const b = yield* serveBox(seen, linkSession, delivery);
+      const a = yield* makeLaptop;
+      yield* linkTo(a.links, b, "auto");
+
+      const refusal = yield* a.forwarding.linkedDelivery(
+        { peerEnvironmentId: box.environmentId },
+        { operation: "comment", taskId: "task", text: "Hello" },
+      );
+      expect(refusal).toEqual({
+        environmentId: box.environmentId,
+        data: null,
+        diagnostic: "refused",
+        message,
+      });
     }),
   ).pipe(Effect.provide(NodeHttpServer.layerTest)),
 );

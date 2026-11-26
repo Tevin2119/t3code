@@ -29,11 +29,12 @@ import {
   DialogPopup,
   DialogTitle,
 } from "../ui/dialog";
+import { Input } from "../ui/input";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { toastManager } from "../ui/toast";
 import { ApprovalKeyInput } from "./ApprovalKeyInput";
 import { BoardPicker } from "./BoardPicker";
-import { linkedMoveNotice, localMoveBoards } from "./LinkedTaskMoves.logic";
+import { linkedMoveActor, linkedMoveNotice, localMoveBoards } from "./LinkedTaskMoves.logic";
 
 type Move = {
   readonly environmentId: EnvironmentId;
@@ -72,12 +73,14 @@ function MoveDialog(props: {
   }) => Promise<LinkedHandoffOutcome>;
 }) {
   const gt = useGT();
-  const by = usePersonName();
+  const person = usePersonName();
+  const [enteredName, setEnteredName] = useState("");
+  const by = linkedMoveActor(person, enteredName);
   const [key, setKey] = useState("");
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
   const submit = async () => {
-    if (!props.ready || busy || !key) return;
+    if (!props.ready || busy || by === null || !key) return;
     const credentials = { by, key: Redacted.make(key) };
     setKey("");
     setProblem(null);
@@ -114,6 +117,17 @@ function MoveDialog(props: {
                 <p>
                   <T>Use the approval passphrase or terminal key for this machine.</T>
                 </p>
+                {!person && (
+                  <Input
+                    aria-label={gt("Your name")}
+                    placeholder={gt("Your name")}
+                    autoComplete="name"
+                    value={enteredName}
+                    maxLength={60}
+                    disabled={busy}
+                    onChange={(event) => setEnteredName(event.target.value)}
+                  />
+                )}
                 <ApprovalKeyInput value={key} onChange={setKey} />
               </>
             )}
@@ -128,7 +142,10 @@ function MoveDialog(props: {
           <Button variant="outline" disabled={busy} onClick={props.onClose}>
             <T>Close</T>
           </Button>
-          <Button disabled={!props.ready || busy || !key} onClick={() => void submit()}>
+          <Button
+            disabled={!props.ready || busy || by === null || !key}
+            onClick={() => void submit()}
+          >
             {busy ? gt("Working…") : props.title}
           </Button>
         </DialogFooter>

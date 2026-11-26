@@ -74,7 +74,7 @@ export function LinkedTaskPage(props: {
     setBusy(false);
     setProblem(
       outcome.ok
-        ? (outcome.diagnostic && LINKED_DIAGNOSTIC_TEXT[outcome.diagnostic]) || null
+        ? (outcome.message ?? (outcome.diagnostic && LINKED_DIAGNOSTIC_TEXT[outcome.diagnostic]))
         : outcome.why,
     );
     read.refresh();

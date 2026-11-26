@@ -725,6 +725,38 @@ it.effect(
   },
 );
 
+it.effect.each([
+  [
+    { error: "This task has not been submitted. Change the draft, or submit it." },
+    409,
+    "This task has not been submitted. Change the draft, or submit it.",
+  ],
+  [{ error: "  " }, 409, undefined],
+  [{ error: "Internal engine state" }, 500, undefined],
+] as const)(
+  "passes on neutral linked action refusals from the engine (%j, %s)",
+  ([body, status, message]) => {
+    const fake = engine();
+    const path = "/api/linked/tasks/task-shared/messages";
+    fake.replies = { [path]: body };
+    fake.statuses = { [path]: status };
+    return Effect.gen(function* () {
+      const delivery = yield* DeliveryService.DeliveryService;
+      const refusal = yield* delivery
+        .actLinked({ operation: "comment", taskId: sharedTask.id, text: "Hello" })
+        .pipe(
+          Effect.provideService(
+            McpInvocationContext.McpInvocationContext,
+            linkedScope("approval-required"),
+          ),
+          Effect.flip,
+        );
+      expect(refusal.status).toBe(status);
+      expect(refusal.linkedRefusalMessage).toBe(message);
+    }).pipe(Effect.provide(layer(fake, { prefix: "t3-delivery-link-refusal-" })));
+  },
+);
+
 it.effect("reads the complete owner thread index and invalidates it after a write", () => {
   const fake = engine();
   const path = "/api/task-threads";

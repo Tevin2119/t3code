@@ -16,6 +16,7 @@ export function BoardLinkedVisibilityControls(props: {
   readonly onDone: () => void;
 }) {
   const gt = useGT();
+  const labels = { private: gt("Private"), shared: gt("Shared with linked machines") };
   const { allowed, set } = useSetBoardLinkedVisibility(props.environmentId);
   const [problem, setProblem] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -52,11 +53,11 @@ export function BoardLinkedVisibilityControls(props: {
           }}
         >
           <SelectTrigger aria-label={gt("Board visibility for linked machines")} size="sm">
-            <SelectValue />
+            <SelectValue>{labels[props.visibility]}</SelectValue>
           </SelectTrigger>
           <SelectPopup>
-            <SelectItem value="private">{gt("Private")}</SelectItem>
-            <SelectItem value="shared">{gt("Shared with linked machines")}</SelectItem>
+            <SelectItem value="private">{labels.private}</SelectItem>
+            <SelectItem value="shared">{labels.shared}</SelectItem>
           </SelectPopup>
         </Select>
         {!allowed ? (

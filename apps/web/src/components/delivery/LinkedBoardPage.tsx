@@ -111,7 +111,7 @@ export function LinkedBoardPage(props: {
       setBusyAction(false);
       setProblem(
         outcome.ok
-          ? (outcome.diagnostic && LINKED_DIAGNOSTIC_TEXT[outcome.diagnostic]) || null
+          ? (outcome.message ?? (outcome.diagnostic && LINKED_DIAGNOSTIC_TEXT[outcome.diagnostic]))
           : outcome.why,
       );
       boardRead.refresh();

@@ -42,7 +42,14 @@ const linkedResult = Effect.fn("mcp.linkedDeliveryResult")(function* <A>(
     Effect.map((data) => ({ environmentId, data, diagnostic: null })),
     Effect.catchTags({
       DeliveryError: (error) =>
-        Effect.succeed({ environmentId, data: null, diagnostic: linkedDiagnostic(error) }),
+        Effect.succeed({
+          environmentId,
+          data: null,
+          diagnostic: linkedDiagnostic(error),
+          ...(error.linkedRefusalMessage === undefined
+            ? {}
+            : { message: error.linkedRefusalMessage }),
+        }),
     }),
   );
 });

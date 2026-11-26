@@ -2572,7 +2572,13 @@ const make = Effect.gen(function* () {
             ),
           );
         const replayed = tasks.find((candidate) => candidate.id === replayedId);
-        if (replayed !== undefined) yield* requireScheduledTaskWithinLimits(replayed, limits);
+        if (replayed !== undefined) {
+          yield* assertPeerScheduledTask(scope, replayed, threadManagement, delivery);
+          if (replayed.launchedFromThreadId !== undefined) {
+            yield* assertLinkedScheduleOrigin(scope, replayed, threadManagement);
+          }
+          yield* requireScheduledTaskWithinLimits(replayed, limits);
+        }
       }
       const { task } = yield* scheduledTasks
         .upsert(upsertInput, parent?.thread.id)

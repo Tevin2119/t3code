@@ -1376,6 +1376,7 @@ it.effect.each(["bound", "created", "owner-origin", "legacy"] as const)(
     }).pipe(
       Effect.provide(
         McpHttpServer.layerThreadToolkit.pipe(
+          Layer.provide(Layer.mock(ProviderRegistry.ProviderRegistry)({})),
           Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
           Layer.provide(NodeCrypto.layer),
           Layer.provide(Layer.mock(ThreadSearch.ThreadSearch)({})),
@@ -1447,6 +1448,7 @@ it.effect("a link-started thread only sees transfers whose endpoints it can read
   }).pipe(
     Effect.provide(
       McpHttpServer.layerThreadToolkit.pipe(
+        Layer.provide(Layer.mock(ProviderRegistry.ProviderRegistry)({})),
         Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
         Layer.provide(NodeCrypto.layer),
         Layer.provide(Layer.mock(ThreadSearch.ThreadSearch)({})),
