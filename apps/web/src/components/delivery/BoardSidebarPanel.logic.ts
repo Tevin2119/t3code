@@ -1,3 +1,5 @@
+import { boardTaskIsDone, boardTaskOwesPerson } from "@t3tools/client-runtime/board-task-in-play";
+
 import { waitKindsOf } from "../../lib/boardLaneCards";
 import { BOARD_LANE, boardLaneOf } from "../../lib/boardLanes";
 import { seatsAtWork, type DeliveryCard, type TaskBrief } from "../../lib/delivery";
@@ -22,10 +24,11 @@ export function panelCards(
 }
 
 const groupOf = (card: DeliveryCard): PanelGroup => {
-  if (card.lane === "completed") return "done";
   if (card.lane === "draft") return "drafts";
   if (card.lane === "chat") return "chats";
-  if (card.waitingOn === "person") return "waiting";
+  // The person's inbox: an ask on a finished task is never hidden in Done.
+  if (boardTaskOwesPerson(card)) return "waiting";
+  if (boardTaskIsDone(card)) return "done";
   // Being worked on: a seat is at work. A card whose seats are all held waits with the rest.
   return seatsAtWork(card).length > 0 ? "working" : "open";
 };
