@@ -124,6 +124,8 @@ export function scratchEngine(
   const linkWrites = { inFlight: 0, most: 0 };
   /** Runs once, just before the next link write is admitted: another writer getting in first. */
   let beforeNextPut: (() => void) | null = null;
+  /** Runs once, just before the next task detail is answered: the task changing mid-pass. */
+  let beforeNextDetail: (() => void) | null = null;
 
   const live = () => {
     for (const [task, lease] of leases) {
@@ -377,6 +379,9 @@ export function scratchEngine(
     if (method === "GET" && pathname === "/api/teams") return { status: 200, body: teams };
     const detail = /^\/api\/tasks\/([\w-]+)$/.exec(pathname);
     if (method === "GET" && detail) {
+      const run = beforeNextDetail;
+      beforeNextDetail = null;
+      run?.();
       const task = tasks.get(detail[1]!);
       // `thread` keeps meaning the task id; the conversation is only ever `boardThread`. A moved
       // task is still answered for, with its state and no lane.
@@ -524,6 +529,9 @@ export function scratchEngine(
     },
     beforeNextPut: (run: () => void) => {
       beforeNextPut = run;
+    },
+    beforeNextDetail: (run: () => void) => {
+      beforeNextDetail = run;
     },
     setDown: (value: boolean) => {
       down = value;

@@ -3,7 +3,12 @@ import { describe, expect, it } from "vite-plus/test";
 
 import { parseCard, type TaskBrief } from "../../lib/delivery";
 import { NO_FILTERS } from "../../lib/deliveryBoard";
-import { panelCards, switcherGroups, type SwitcherRow } from "./BoardSidebarPanel.logic";
+import {
+  panelCards,
+  panelGroups,
+  switcherGroups,
+  type SwitcherRow,
+} from "./BoardSidebarPanel.logic";
 
 const card = (id: string, number: number, extra: Record<string, unknown> = {}) =>
   parseCard({ id, number, title: `Task ${number}`, lane: "ready", state: "ready", ...extra });
@@ -31,6 +36,33 @@ describe("the board's column", () => {
     const filters = { ...NO_FILTERS, tags: ["sync"], lanes: ["queue"], priority: "low" as const };
     expect(panelCards(cards, filters, false)).toEqual([]);
     expect(panelCards(cards, filters, true)).toEqual(cards);
+  });
+
+  it("counts only work in play with the team, as the thread task panel lists it", () => {
+    // The owner's board: 728 with the team, 723 of them closed.
+    const closed = ["approved", "pr-open", "merged", "rejected", "closed"];
+    const cards = Array.from({ length: 728 }, (_, at) =>
+      card(`t${at}`, at, at < 723 ? { lane: "review", state: closed[at % 5] } : {}),
+    );
+    const groups = panelGroups(cards);
+    expect(groups.open).toHaveLength(5);
+    expect(groups.open.every((task) => task.state === "ready")).toBe(true);
+    expect(groups.done).toHaveLength(20);
+  });
+
+  it("keeps a finished task that waits on the person in Waiting on you, not Done", () => {
+    const waiting = { waitingOn: "person", waitsOnPerson: true };
+    const groups = panelGroups([
+      card("a", 1, { lane: "completed", ...waiting }),
+      card("b", 2, { lane: "review", state: "pr-open", ...waiting }),
+      card("c", 3, waiting),
+      card("d", 4, { lane: "completed" }),
+      card("e", 5, { lane: "review", state: "merged" }),
+      // The engine sets no wait on a closed task, but its open question is still an ask.
+      card("f", 6, { lane: "completed", state: "merged", questions: 1, waitingOn: null }),
+    ]);
+    expect(groups.waiting.map((task) => task.id)).toEqual(["a", "b", "c", "f"]);
+    expect(groups.done.map((task) => task.id)).toEqual(["d", "e"]);
   });
 
   it("nests the open task's current children and seat conversations under its row, each task once", () => {
