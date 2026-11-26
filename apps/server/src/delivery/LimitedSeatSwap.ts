@@ -45,6 +45,7 @@ import * as ProviderAdapterRegistry from "../orchestration-v2/ProviderAdapterReg
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
 import { forkParked } from "../serverActivation.ts";
+import { boardTaskInWork } from "./boardTaskWork.ts";
 import { createBoardTaskThread, type BoardTask } from "./boardThreadMarker.ts";
 import * as BoardThreadRows from "./boardThreadRows.ts";
 import * as DeliveryService from "./DeliveryService.ts";
@@ -161,17 +162,19 @@ function leadLimit(shell: OrchestrationV2ThreadShell, now: number) {
 const selectionOf = (model: SeatModel): ModelSelection =>
   createModelSelection(model.instanceId, model.model);
 
+// Past the link, read as leniently as the board's lanes: a field this build cannot read is left
+// out of the hand-off, never a reason to stop it.
 const decodeBoardTaskDetail = Schema.decodeUnknownEffect(
   Schema.Struct({
     boardThread: Schema.optional(Schema.NullOr(DeliveryService.BoardThreadLink)),
-    title: Schema.String,
-    body: Schema.String,
-    acceptance: Schema.Array(Schema.String),
-    card: Schema.optional(
+    state: DeliveryService.readOrNull(Schema.String),
+    lane: DeliveryService.readOrNull(Schema.String),
+    title: DeliveryService.readOrNull(Schema.String),
+    body: DeliveryService.readOrNull(Schema.String),
+    acceptance: DeliveryService.readOrNull(Schema.Array(Schema.String)),
+    card: DeliveryService.readOrNull(
       Schema.Struct({
-        run: Schema.optional(
-          Schema.NullOr(Schema.Struct({ id: Schema.String, stage: Schema.String })),
-        ),
+        run: DeliveryService.readOrNull(Schema.Struct({ id: Schema.String, stage: Schema.String })),
       }),
     ),
   }),
@@ -403,6 +406,11 @@ const make = Effect.gen(function* () {
     const path = `/api/tasks/${task.id}`;
     const response = yield* delivery.read({ path });
     const detail = yield* decodeBoardTaskDetail(response.body);
+    // This read is the newest word on the task: one no longer in work is handed to no one.
+    if (detail.state != null && !boardTaskInWork({ state: detail.state, lane: detail.lane }))
+      return null;
+    const title = detail.title ?? shell.title;
+    const acceptance = detail.acceptance ?? [];
     const previous = detail.boardThread;
     if (previous?.environmentId !== environmentId) return null;
     const alreadyLinked = previous.threadId === target;
@@ -462,7 +470,7 @@ const make = Effect.gen(function* () {
           commandId: CommandId.make(`${identity}:thread`),
           threadId: target,
           projectId: shell.projectId,
-          title: detail.title,
+          title,
           modelSelection,
         }),
       );
@@ -491,11 +499,11 @@ const make = Effect.gen(function* () {
       const run = detail.card?.run;
       const summary = [
         "Continue this board task. The previous lead hit a usage limit.",
-        `# ${detail.title}`,
-        detail.body,
-        ...(detail.acceptance.length === 0
+        `# ${title}`,
+        ...(detail.body == null ? [] : [detail.body]),
+        ...(acceptance.length === 0
           ? []
-          : ["## Acceptance", detail.acceptance.map((item) => `- ${item}`).join("\n")]),
+          : ["## Acceptance", acceptance.map((item) => `- ${item}`).join("\n")]),
         run ? `Engine run ${run.id}, stage ${run.stage}.` : "No current engine run.",
       ];
       yield* threads.dispatch({

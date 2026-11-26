@@ -414,6 +414,9 @@ it.effect.each(["picked", "legacy"] as const)(
     engine.addTask({ id: "draft-1", lane: "draft", state: "draft", submitted: false });
     engine.addTask({ id: "queued-1", lane: "queue", state: "ready" });
     engine.addTask({ id: "done-1", lane: "completed", state: "completed" });
+    // A split parent stands where its parts stand, and its parts are the work.
+    engine.addTask({ id: "whole-1", lane: "child-work", state: "split" });
+    engine.addTask({ id: "whole-2", lane: "in-work", state: "split" });
     const store = threadStore();
     return Effect.gen(function* () {
       const threads = yield* service(store);
@@ -456,6 +459,98 @@ it.effect.each(["picked", "legacy"] as const)(
   },
 );
 
+it.effect("links every task when a seat has no model yet or one card cannot be read", () => {
+  const engine = board();
+  const unpicked = { harness: "codex", model: null, source: "profile" };
+  engine.addTask({
+    id: "task-7",
+    seatModels: {
+      lead: { harness: "claude", model: "claude-sonnet", source: "picked" },
+      "qa-validate": unpicked,
+    },
+  });
+  // A lead with no model yet runs on its roster model, as when the engine serves no picks.
+  engine.addTask({ id: "task-8", seatModels: { lead: unpicked } });
+  engine.addTask({ id: "task-9" });
+  // A pick this build cannot read is no pick.
+  engine.addTask({
+    id: "task-10",
+    seatModels: { lead: { harness: "claude", model: "m", source: "unheard-of" } },
+  });
+  engine.addTask({ id: "task-bad", served: { set: 7 } });
+  const store = threadStore();
+  const threadOf = (id: string) => boardTaskThreadId(boardTaskOf("work", id)!);
+  return Effect.gen(function* () {
+    const threads = yield* service(store);
+    assert.deepEqual([...(yield* threads.reconcile())], []);
+    assert.deepEqual(
+      ["task-7", "task-8", "task-9", "task-10", "task-bad"].map((id) => ({
+        id,
+        linked: engine.linkOf(id)?.threadId ?? null,
+        model: store.threads.get(threadOf(id))?.modelSelection ?? null,
+      })),
+      [
+        {
+          id: "task-7",
+          linked: threadOf("task-7"),
+          model: { instanceId: "claudeAgent", model: "claude-sonnet" },
+        },
+        {
+          id: "task-8",
+          linked: threadOf("task-8"),
+          model: { instanceId: "codex", model: "gpt-6-astra" },
+        },
+        {
+          id: "task-9",
+          linked: threadOf("task-9"),
+          model: { instanceId: "codex", model: "gpt-6-astra" },
+        },
+        {
+          id: "task-10",
+          linked: threadOf("task-10"),
+          model: { instanceId: "codex", model: "gpt-6-astra" },
+        },
+        { id: "task-bad", linked: null, model: null },
+      ],
+    );
+  }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-unpicked-seat-")));
+});
+
+it.effect("keeps holding a linked task over fields it cannot read, until it leaves work", () => {
+  const engine = board();
+  const unread = engine.addTask({ id: "task-7" });
+  const unlisted = engine.addTask({ id: "task-8" });
+  const whole = engine.addTask({ id: "task-9" });
+  const store = threadStore();
+  const threadOf = (id: string) => boardTaskThreadId(boardTaskOf("work", id)!);
+  return Effect.gen(function* () {
+    const threads = yield* service(store);
+    yield* threads.reconcile();
+    unread.seatModels = { lead: { harness: "codex", model: "m", source: "future-source" } };
+    unread.served = { hold: { stage: "qa", deadline: "later", handoff: "declined" } };
+    store.say(THREAD, "m-1", "Build it", "system");
+    store.reply(THREAD, "Done");
+    engine.queueSteer("task-7", "Please continue");
+    // A split parent holds no claim: its parts are the work.
+    whole.state = "split";
+    for (let pass = 0; pass < 5; pass++) {
+      engine.advance(30_000);
+      yield* threads.reconcile();
+    }
+    assert.isNotNull(engine.leaseOf("task-7"));
+    assert.isAbove(engine.activityOf("task-7").length, 0);
+    assert.isTrue(steerSends(store).some((send) => send.threadId === THREAD));
+    assert.isNull(engine.leaseOf("task-9"));
+    assert.isNull(store.threads.get(threadOf("task-9"))!.archivedAt);
+    // A card it cannot read is judged from the task's detail: another conversation holds it.
+    unlisted.served = { set: 7 };
+    engine.writeLink("task-8", { environmentId: OTHER, threadId: "successor", setBy: OTHER });
+    yield* threads.reconcile();
+    assert.isNotNull(store.threads.get(threadOf("task-8"))!.archivedAt);
+    assert.isNull(store.threads.get(THREAD)!.archivedAt);
+  }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-unread-linked-")));
+});
+
 it.effect(
   "archives the old board lead as displaced only after its successor takes the link",
   () => {
@@ -496,7 +591,7 @@ it.effect(
       assert.deepInclude(store.commands.at(-1), {
         type: "thread.archive",
         threadId: THREAD,
-        commandId: CommandId.make(`${create.engineIntake}:archive:displaced:0`),
+        commandId: CommandId.make(`${create.engineIntake}:archive:${THREAD}:displaced:0`),
       });
       assert.isNotNull(store.threads.get(THREAD)!.archivedAt);
       assert.isNull(store.threads.get(successor)!.archivedAt);
@@ -570,7 +665,7 @@ it.effect("retries a dropped board lead link move during reconciliation", () => 
     assert.deepInclude(store.commands.at(-1), {
       type: "thread.archive",
       threadId: THREAD,
-      commandId: CommandId.make(`${create.engineIntake}:archive:displaced:0`),
+      commandId: CommandId.make(`${create.engineIntake}:archive:${THREAD}:displaced:0`),
     });
     assert.isNotNull(store.threads.get(THREAD)!.archivedAt);
     assert.isNull(store.threads.get(successor)!.archivedAt);
@@ -596,6 +691,11 @@ it.effect("starts the successor once after a restart between its create and firs
     });
     assert.isFalse(store.messages.has(successor));
     const restarted = yield* service(store);
+    // The restarted server holds no claim until the old lease lapses: the hand-off waits for it.
+    yield* restarted.reconcile();
+    assert.equal(engine.linkOf("task-7")?.threadId, THREAD);
+    assert.isFalse(store.messages.has(successor));
+    engine.advance(120_001);
     yield* restarted.reconcile();
     assert.equal(engine.linkOf("task-7")?.threadId, successor);
     assert.isTrue(store.messages.get(successor)?.has(messageId));
@@ -610,6 +710,238 @@ it.effect("starts the successor once after a restart between its create and firs
     });
   }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-swap-restart-")));
 });
+
+/** A board lead whose usage-limit successor exists while the engine still links the lead. */
+function pendingHandoff(engine: ScratchEngine, store: ThreadStore) {
+  const failedRun = RunId.make("failed-board-lead");
+  const successor = limitedLeadHandoffThreadId(failedRun);
+  return Effect.gen(function* () {
+    const threads = yield* service(store);
+    yield* threads.reconcile();
+    const [create] = creates(store);
+    if (create?.type !== "thread.create") throw new Error("Expected the board lead to open");
+    store.latestRuns.set(THREAD, failedRun);
+    yield* store.dispatch({
+      ...create,
+      commandId: CommandId.make("create-successor"),
+      threadId: successor,
+    });
+    return { threads, successor, continuation: `limited-lead:${THREAD}:${failedRun}:continue` };
+  });
+}
+
+it.effect.each([
+  { linked: "lead", why: "names the lead" },
+  { linked: "successor", why: "already names the successor" },
+] as const)(
+  "finishes a lead hand-off from the task's detail when its card cannot be read and the link $why",
+  ({ linked }) => {
+    const engine = board();
+    const task = engine.addTask({ id: "task-7" });
+    const store = threadStore();
+    return Effect.gen(function* () {
+      const { threads, successor } = yield* pendingHandoff(engine, store);
+      if (linked === "successor")
+        engine.writeLink("task-7", {
+          environmentId: ENVIRONMENT,
+          threadId: successor,
+          setBy: ENVIRONMENT,
+        });
+      task.served = { set: 7 };
+      yield* threads.reconcile();
+      assert.equal(engine.linkOf("task-7")?.threadId, successor);
+      assert.isNull(store.threads.get(successor)!.archivedAt);
+      assert.isNotNull(store.threads.get(THREAD)!.archivedAt);
+      // The successor holds the task: archiving the lead keeps the claim, and later passes renew
+      // it while the card still cannot be read.
+      assert.isNotNull(engine.leaseOf("task-7"));
+      for (let pass = 0; pass < 5; pass++) {
+        engine.advance(30_000);
+        yield* threads.reconcile();
+      }
+      assert.equal(engine.linkOf("task-7")?.threadId, successor);
+      assert.isNull(store.threads.get(successor)!.archivedAt);
+      assert.isNotNull(engine.leaseOf("task-7"));
+    }).pipe(Effect.provide(deliveryLayer(engine, `board-threads-swap-unread-${linked}-`)));
+  },
+);
+
+it.effect(
+  "archives both threads of a pending lead hand-off once the engine says the task is gone",
+  () => {
+    const engine = board();
+    const task = engine.addTask({ id: "task-7" });
+    const store = threadStore();
+    return Effect.gen(function* () {
+      const { threads, successor } = yield* pendingHandoff(engine, store);
+      task.served = { set: 7 };
+      // No answer is no verdict: both threads wait for the next pass.
+      engine.dropNext(/^\/api\/tasks\/task-7$/);
+      yield* threads.reconcile();
+      assert.isNull(store.threads.get(THREAD)!.archivedAt);
+      assert.isNull(store.threads.get(successor)!.archivedAt);
+      engine.removeTask("task-7");
+      yield* threads.reconcile();
+      assert.isNotNull(store.threads.get(THREAD)!.archivedAt);
+      assert.isNotNull(store.threads.get(successor)!.archivedAt);
+    }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-swap-deleted-")));
+  },
+);
+
+it.effect.each([
+  { state: "split", lane: "child-work" },
+  { state: "rejected", lane: "implementation" },
+  // The engine claims no closed state, though these still stand in a lane of their own.
+  { state: "approved", lane: "approved" },
+  { state: "pr-open", lane: "pull-request" },
+])(
+  "keeps a lead hand-off pending while its task is $state, and finishes it after",
+  ({ state, lane }) => {
+    const engine = board();
+    const task = engine.addTask({ id: "task-7" });
+    const store = threadStore();
+    return Effect.gen(function* () {
+      const { threads, successor, continuation } = yield* pendingHandoff(engine, store);
+      task.state = state;
+      task.lane = lane;
+      yield* threads.reconcile();
+      assert.equal(engine.linkOf("task-7")?.threadId, THREAD);
+      assert.isNull(store.threads.get(THREAD)!.archivedAt);
+      assert.isNull(store.threads.get(successor)!.archivedAt);
+      assert.isFalse(store.messages.has(successor));
+      assert.isNull(engine.leaseOf("task-7"));
+      task.state = "running";
+      task.lane = "implementation";
+      yield* threads.reconcile();
+      assert.equal(engine.linkOf("task-7")?.threadId, successor);
+      assert.isTrue(store.messages.get(successor)?.has(continuation));
+    }).pipe(Effect.provide(deliveryLayer(engine, `board-threads-swap-${state}-`)));
+  },
+);
+
+it.effect("keeps a lead hand-off pending until this server holds the task claim again", () => {
+  const engine = board({ cap: 1 });
+  const task = engine.addTask({ id: "task-7" });
+  const store = threadStore();
+  return Effect.gen(function* () {
+    const { threads, successor, continuation } = yield* pendingHandoff(engine, store);
+    task.state = "approved";
+    task.lane = "approved";
+    yield* threads.reconcile();
+    assert.isNull(engine.leaseOf("task-7"));
+    engine.addTask({ id: "task-8" });
+    yield* threads.reconcile();
+    assert.isNotNull(engine.leaseOf("task-8"));
+    // Back in work while the cap is reached: the claim is refused, and the hand-off waits for it.
+    task.state = "rework";
+    task.lane = "in-work";
+    yield* threads.reconcile();
+    assert.isNull(engine.leaseOf("task-7"));
+    assert.equal(engine.linkOf("task-7")?.threadId, THREAD);
+    assert.isFalse(store.messages.has(successor));
+    assert.isNull(store.threads.get(THREAD)!.archivedAt);
+    engine.removeTask("task-8");
+    yield* threads.reconcile();
+    assert.isNotNull(engine.leaseOf("task-7"));
+    assert.equal(engine.linkOf("task-7")?.threadId, successor);
+    assert.isTrue(store.messages.get(successor)?.has(continuation));
+  }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-swap-capped-")));
+});
+
+it.effect.each(["lapses during the pass", "is taken before the restart"] as const)(
+  "keeps a lead hand-off pending when its claim %s and another server holds it",
+  (when) => {
+    const engine = board({ cap: 4 });
+    const task = engine.addTask({ id: "task-7" });
+    const store = threadStore();
+    return Effect.gen(function* () {
+      const others = Array.from({ length: 32 }, (_, index) => `other-${index}`);
+      for (const id of others) engine.addTask({ id });
+      const { successor, continuation } = yield* pendingHandoff(engine, store);
+      task.served = { set: 7 };
+      for (const id of others) engine.task(id).served = { set: 7 };
+      // The old lease lapses, as across a restart.
+      engine.advance(120_001);
+      const claimPath = "/api/orchestration/tasks/task-7/claim";
+      const compete = () => engine.handle("POST", claimPath, { origin: "other-server" }).status;
+      if (when === "is taken before the restart") assert.equal(compete(), 200);
+      const restarted = yield* service(store);
+      const handle = engine.handle;
+      let elapsed = 0;
+      // A slow engine: each other claim takes 4 s, so this task's new lease lapses mid-pass.
+      engine.handle = (method, path, body) => {
+        if (
+          when === "lapses during the pass" &&
+          method === "POST" &&
+          /^\/api\/orchestration\/tasks\/other-\d+\/claim$/.test(path)
+        ) {
+          engine.advance(4_000);
+          elapsed += 4_000;
+          if (elapsed === 124_000) assert.equal(compete(), 200);
+        }
+        return handle(method, path, body);
+      };
+      yield* restarted.reconcile();
+      engine.handle = handle;
+      const sent = () =>
+        store.commands.filter(
+          (command) => command.type === "message.dispatch" && command.messageId === continuation,
+        ).length;
+      assert.equal(engine.leaseOf("task-7")?.origin, "other-server");
+      assert.equal(engine.linkOf("task-7")?.threadId, THREAD);
+      assert.equal(sent(), 0);
+      assert.isNull(store.threads.get(THREAD)!.archivedAt);
+      assert.isNull(store.threads.get(successor)!.archivedAt);
+      // The other lease lapses: this server claims the task and the hand-off finishes once.
+      engine.advance(120_001);
+      yield* restarted.reconcile();
+      yield* restarted.reconcile();
+      assert.equal(engine.linkOf("task-7")?.threadId, successor);
+      assert.equal(sent(), 1);
+    }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-swap-competing-")));
+  },
+);
+
+it.effect("stops a lead hand-off when the task it reads before continuing is finished", () => {
+  const engine = board();
+  const task = engine.addTask({ id: "task-7" });
+  const store = threadStore();
+  return Effect.gen(function* () {
+    const { threads, successor } = yield* pendingHandoff(engine, store);
+    const handle = engine.handle;
+    // Rejected after the lanes were read, before the hand-off reads the task itself.
+    engine.handle = (method, path, body) => {
+      if (method === "GET" && path === "/api/tasks/task-7") task.state = "rejected";
+      return handle(method, path, body);
+    };
+    yield* threads.reconcile();
+    assert.equal(task.state, "rejected");
+    assert.equal(engine.linkOf("task-7")?.threadId, THREAD);
+    assert.isFalse(store.messages.has(successor));
+    assert.isNull(store.threads.get(THREAD)!.archivedAt);
+    assert.isNull(store.threads.get(successor)!.archivedAt);
+  }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-swap-fresh-")));
+});
+
+it.effect(
+  "finishes a lead hand-off over a title it cannot read, and still serves other tasks",
+  () => {
+    const engine = board();
+    const task = engine.addTask({ id: "task-7" });
+    engine.addTask({ id: "task-8" });
+    const store = threadStore();
+    return Effect.gen(function* () {
+      const { threads, successor, continuation } = yield* pendingHandoff(engine, store);
+      task.served = { title: null };
+      engine.queueSteer("task-8", "Please continue");
+      yield* threads.reconcile();
+      assert.equal(engine.linkOf("task-7")?.threadId, successor);
+      assert.isTrue(store.messages.get(successor)?.has(continuation));
+      const other = boardTaskThreadId(boardTaskOf("work", "task-8")!);
+      assert.isTrue(steerSends(store).some((send) => send.threadId === other));
+    }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-swap-title-")));
+  },
+);
 
 it.effect("finishes the link after a restart between the create and the engine write", () => {
   const engine = board();
@@ -1167,6 +1499,7 @@ it.effect("stays paused beside another source on an older engine, then resumes",
 it.effect.each([
   { harness: "codex", model: "gpt-6-sol", follows: true },
   { harness: "claude", model: "claude-sonnet", follows: false },
+  { harness: "codex", model: null, follows: false },
 ])(
   "delivers and confirms a queued steer when the published model is $model",
   ({ harness, model, follows }) => {
@@ -1196,7 +1529,9 @@ it.effect.each([
       });
       assert.deepEqual(
         steerSends(store)[0]?.modelSelection,
-        follows ? { instanceId: ProviderInstanceId.make("codex"), model } : undefined,
+        follows && model !== null
+          ? { instanceId: ProviderInstanceId.make("codex"), model }
+          : undefined,
       );
       assert.equal(engine.steer(steer).state, "pending");
       // A restarted server confirms it from the conversation and never sends it twice.
