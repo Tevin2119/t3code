@@ -89,6 +89,11 @@ const BOARD_TASK_READS = [
     file: "apps/server/src/delivery/BoardTaskThreads.ts",
     line: "const stamped = boardTaskOfMarker(created.thread.lineage.engineIntake);",
   },
+  // A board task's conversation starts no team round while the engine does the task's work.
+  {
+    file: "apps/server/src/delivery/NativeTeamChat.ts",
+    line: "if (boardTaskOfMarker(parent.thread.lineage.engineIntake) !== null)",
+  },
   {
     file: "apps/server/src/delivery/SeatHandoffs.ts",
     line: "const task = boardTaskOfMarker(parent?.lineage.engineIntake);",

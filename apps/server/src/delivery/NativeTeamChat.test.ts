@@ -26,6 +26,8 @@ import type { LimitedSeatFacts } from "@t3tools/shared/limitedSeat";
 import { createModelSelection } from "@t3tools/shared/model";
 import { ServerConfig } from "../config.ts";
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
+import { engineNotice } from "./BoardConversation.ts";
+import { boardTaskOf, boardTaskThreadMarker } from "./boardThreadMarker.ts";
 import * as DeliveryService from "./DeliveryService.ts";
 import * as LimitedSeats from "./LimitedSeats.ts";
 import * as EventSink from "../orchestration-v2/EventSink.ts";
@@ -68,6 +70,8 @@ function setup({
   /** What T3 knows about limits and Favorites; absent, no seat is ever treated as limited. */
   limitFacts = undefined as (() => LimitedSeatFacts) | undefined,
   boardOwned = false,
+  /** The server-owned marker the thread was made with, over `boardOwned`'s. */
+  engineIntake = undefined as string | undefined,
 } = {}) {
   const participants = [
     {
@@ -192,7 +196,12 @@ function setup({
           projectId: ProjectId.make("project"),
           runtimeMode: threadAccess,
           modelSelection: createModelSelection(ProviderInstanceId.make("lead-work"), "lead-model"),
-          lineage: boardOwned ? { engineIntake: "task-1" } : {},
+          lineage:
+            engineIntake !== undefined
+              ? { engineIntake }
+              : boardOwned
+                ? { engineIntake: "task-1" }
+                : {},
         },
         runs: missingRun ? [] : [run],
         messages: [message],
@@ -1132,5 +1141,22 @@ it.effect("leaves a board task's conversation to its team's own setting", () =>
     yield* (yield* fixture.service).prepareTurn({ threadId, runId });
     expect(fixture.seatsOn()["contribution:researcher"]).toBe("claude-model");
     expect(fixture.notices).toHaveLength(0);
+  }),
+);
+
+it.effect("starts no team round for an engine notice, nor in a board task's conversation", () =>
+  Effect.gen(function* () {
+    const idle = { ready: true, context: "" };
+    const notice = setup();
+    Object.assign(notice.message, {
+      notification: engineNotice("A steer from the board", "Use the other API"),
+    });
+    expect(yield* (yield* notice.service).prepareTurn({ threadId, runId })).toEqual(idle);
+    expect(notice.admissions.size).toBe(0);
+    // While the engine's runners do a board task's work, a person's message goes to the lead alone.
+    const task = setup({ engineIntake: boardTaskThreadMarker(boardTaskOf("work", "task-7")!) });
+    expect(yield* (yield* task.service).prepareTurn({ threadId, runId })).toEqual(idle);
+    expect(task.admissions.size).toBe(0);
+    expect(task.notices).toHaveLength(0);
   }),
 );

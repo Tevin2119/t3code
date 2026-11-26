@@ -349,6 +349,8 @@ it.effect.each(["picked", "none-free", "moved", "refused", "not-found"] as const
       expect(fixture.calls).toEqual([
         "POST",
         "thread.create",
+        // The successor shows the team its task's conversation showed.
+        `lineup:${target}`,
         "thread.metadata.update",
         "message.dispatch",
         "PUT",
@@ -384,6 +386,10 @@ it.effect.each(["picked", "none-free", "moved", "refused", "not-found"] as const
           type: "message.dispatch",
           threadId: target,
           modelSelection: model("kimi", "kimi-k3"),
+          // An engine notice, so the successor's lineup starts no team round on it.
+          notification: { source: { kind: "system" }, outcome: "updated" },
+          createdBy: "agent",
+          dispatchMode: { type: "queue_after_active" },
           text: expect.stringMatching(
             /usage limit[\s\S]*Ship the migration[\s\S]*Keep the existing data[\s\S]*Existing records remain readable[\s\S]*engine-run[\s\S]*review/,
           ),
@@ -404,11 +410,13 @@ it.effect("retries an uncommitted board link move using the existing successor a
     expect(fixture.calls).toEqual([
       "POST",
       "thread.create",
+      `lineup:${target}`,
       "thread.metadata.update",
       "message.dispatch",
       "PUT",
       "PUT",
     ]);
+    expect(fixture.lineups.get(target)).toEqual(fixture.lineups.get(threadId));
     expect(fixture.writes[2]).toEqual(fixture.writes[1]);
   }).pipe(Effect.provide(fixture.layer));
 });

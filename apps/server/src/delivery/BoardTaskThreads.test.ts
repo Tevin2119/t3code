@@ -44,6 +44,7 @@ import {
   boardTaskOfMarker,
   boardTaskThreadCommandId,
   boardTaskThreadId,
+  createBoardTaskThread,
 } from "./boardThreadMarker.ts";
 import * as DeliveryService from "./DeliveryService.ts";
 import * as LimitedSeats from "./LimitedSeats.ts";
@@ -60,8 +61,15 @@ const TEAMS = [
   {
     team: "development",
     seats: [
-      { seat: "developer", role: "lead-developer", harness: "claude", model: "claude-fable-5-1" },
+      {
+        seat: "developer",
+        role: "lead-developer",
+        harness: "claude",
+        model: "claude-fable-5-1",
+        stages: ["build"],
+      },
       { seat: "lead", role: "team-lead", harness: "codex", model: "gpt-6-astra" },
+      { seat: "reviewer", role: "reviewer", harness: "codex", model: "gpt-6-sol", stages: ["qa"] },
     ],
   },
 ];
@@ -707,7 +715,19 @@ it.effect("starts the successor once after a restart between its create and firs
     assert.deepInclude(turns[0], {
       commandId: CommandId.make(messageId),
       messageId: MessageId.make(messageId),
+      createdBy: "agent",
+      dispatchMode: { type: "queue_after_active" },
     });
+    // The continuation is an engine notice, so the successor's lineup starts no team round on it.
+    assert.deepInclude(turns[0]?.type === "message.dispatch" ? turns[0].notification : undefined, {
+      source: { kind: "system" },
+      outcome: "updated",
+    });
+    const delivery = yield* DeliveryService.DeliveryService;
+    assert.deepEqual(
+      (yield* delivery.threadState(successor)).lineup,
+      (yield* delivery.threadState(THREAD)).lineup,
+    );
   }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-swap-restart-")));
 });
 
@@ -1191,6 +1211,24 @@ it.effect("says why a started task has no thread instead of falling back to a de
       ],
     },
     { hold: "no-project", projects: [] },
+    {
+      // A task's conversation is a team thread: a lead with one other seat makes no team.
+      hold: "no-lineup",
+      teams: [{ team: "development", seats: TEAMS[0]!.seats.slice(0, 2) }],
+    },
+    {
+      // A seat whose harness no provider here runs does not count toward the team.
+      hold: "no-lineup",
+      teams: [
+        {
+          team: "development",
+          seats: [
+            ...TEAMS[0]!.seats.slice(0, 2),
+            { seat: "researcher", role: "researcher", harness: "hermes", model: "m" },
+          ],
+        },
+      ],
+    },
   ] as const;
   return Effect.forEach(cases, (entry) => {
     const engine = board();
@@ -1570,3 +1608,153 @@ it.effect(
     }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-steer-failed-")));
   },
 );
+
+/** A lineup as plain data, so it compares by value. */
+const plainLineup = (threadId: ThreadId) =>
+  Effect.gen(function* () {
+    const { lineup } = yield* (yield* DeliveryService.DeliveryService).threadState(threadId);
+    return lineup === undefined ? undefined : JSON.parse(JSON.stringify(lineup));
+  });
+const teamReads = (engine: ScratchEngine) =>
+  engine.requests.filter((request) => request.path === "/api/teams").length;
+const DEVELOPER = {
+  seat: "developer",
+  role: "lead-developer",
+  modelSelection: { instanceId: "claudeAgent", model: "claude-fable-5-1" },
+  duty: "build",
+};
+
+it.effect(
+  "makes a task's conversation a team thread: every seat but the lead's, on the engine's picks",
+  () => {
+    const engine = board();
+    engine.addTask({
+      id: "task-7",
+      seatModels: {
+        lead: { harness: "codex", model: "gpt-6-astra", source: "profile" },
+        reviewer: { harness: "claude", model: "claude-sonnet", source: "picked" },
+      },
+    });
+    const store = threadStore();
+    return Effect.gen(function* () {
+      const threads = yield* service(store);
+      assert.deepEqual([...(yield* threads.reconcile())], []);
+      const expected = {
+        team: "development",
+        // Read-only seats, and no swap or critique setting: the engine picks.
+        participants: [
+          DEVELOPER,
+          {
+            seat: "reviewer",
+            role: "reviewer",
+            modelSelection: { instanceId: "claudeAgent", model: "claude-sonnet" },
+            duty: "qa",
+          },
+        ],
+      };
+      assert.deepEqual(yield* plainLineup(THREAD), expected);
+      // The lineup only: the lead is bound to no team, so it takes no engine tools.
+      const delivery = yield* DeliveryService.DeliveryService;
+      assert.isNull((yield* delivery.threadState(THREAD)).binding);
+      // Set once: a later pick or roster change does not rewrite it, and nothing reads the teams.
+      engine.task("task-7").seatModels = {
+        lead: { harness: "codex", model: "gpt-6-astra", source: "profile" },
+        reviewer: { harness: "codex", model: "gpt-6-sol", source: "picked" },
+      };
+      const reads = teamReads(engine);
+      yield* threads.reconcile();
+      yield* (yield* service(store)).reconcile();
+      assert.deepEqual(yield* plainLineup(THREAD), expected);
+      assert.equal(teamReads(engine), reads);
+    }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-lineup-")));
+  },
+);
+
+it.effect("gives a linked conversation made before lineups its lineup, once", () => {
+  const engine = board();
+  engine.addTask({ id: "task-7" });
+  engine.addTask({ id: "task-8" });
+  const store = threadStore();
+  return Effect.gen(function* () {
+    // A conversation made and linked by a server from before task threads had a lineup.
+    yield* store.dispatch(
+      createBoardTaskThread(TASK, {
+        commandId: boardTaskThreadCommandId(TASK),
+        threadId: THREAD,
+        projectId: PROJECT,
+        title: "Task task-7",
+        modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-6-astra" },
+      }),
+    );
+    engine.writeLink("task-7", {
+      environmentId: ENVIRONMENT,
+      threadId: THREAD,
+      setBy: ENVIRONMENT,
+    });
+    engine.writeLink("task-8", { environmentId: OTHER, threadId: THEIRS, setBy: OTHER });
+    assert.isUndefined(yield* plainLineup(THREAD));
+    const threads = yield* service(store);
+    assert.deepEqual([...(yield* threads.reconcile())], []);
+    const backfilled = yield* plainLineup(THREAD);
+    assert.deepEqual(
+      backfilled?.participants.map((seat: { seat: string }) => seat.seat),
+      ["developer", "reviewer"],
+    );
+    assert.deepEqual(backfilled?.participants[0], DEVELOPER);
+    // Another environment's conversation is never given one here.
+    assert.isUndefined(yield* plainLineup(ThreadId.make(THEIRS)));
+    // Idempotent: the next passes change nothing, and read no teams to find that out.
+    engine.setTeams([
+      {
+        team: "development",
+        seats: TEAMS[0]!.seats.map((seat) => ({ ...seat, model: "claude-other" })),
+      },
+    ]);
+    const reads = teamReads(engine);
+    yield* threads.reconcile();
+    yield* (yield* service(store)).reconcile();
+    assert.deepEqual(yield* plainLineup(THREAD), backfilled);
+    assert.equal(teamReads(engine), reads);
+    assert.lengthOf(creates(store), 1);
+  }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-backfill-")));
+});
+
+it.effect("sends every engine notice into a task's conversation as a system notice", () => {
+  const engine = board();
+  const task = engine.addTask({ id: "task-7", run: { id: "run-1" } });
+  const store = threadStore();
+  return Effect.gen(function* () {
+    const threads = yield* service(store);
+    yield* threads.reconcile();
+    engine.queueSteer("task-7", "Use the other API");
+    task.hold = { stage: "qa", deadline: "2026-11-22T10:30:00.000Z", handoff: null };
+    yield* threads.reconcile();
+    const sends = steerSends(store);
+    assert.lengthOf(sends, 2);
+    // A notice is what `NativeTeamChat.prepareTurn` answers with no team round, and what the
+    // orchestrator takes only as a server-created, queued agent message.
+    for (const send of sends) {
+      if (send.type !== "message.dispatch") throw new Error("Expected a message");
+      assert.deepInclude(send, {
+        createdBy: "agent",
+        creationSource: "server",
+        dispatchMode: { type: "queue_after_active" },
+      });
+      assert.deepEqual(send.notification, {
+        source: { kind: "system" },
+        outcome: "updated",
+        summary: send.notification?.summary ?? "",
+        detail: send.text,
+      });
+    }
+    assert.deepEqual(
+      sends.map((send) => (send.type === "message.dispatch" ? send.notification?.summary : null)),
+      ["A steer from the board", "The engine is holding QA for your hand-off"],
+    );
+    // A steer is still a person's words to the card: it is mirrored as one, with no excerpt.
+    yield* threads.reconcile();
+    assert.isTrue(
+      engine.activityOf("task-7").some((row) => row.kind === "steer" && row.excerpt === null),
+    );
+  }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-notices-")));
+});

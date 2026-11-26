@@ -524,3 +524,46 @@ it.each([315, 300])(
     }
   },
 );
+
+it("shows a board task's team and models with no way to change them", async () => {
+  testState.threadState = {
+    data: { binding: null, lineup: { ...LINEUP, team: "research" }, pending: null },
+  };
+  testState.setLineup.mockClear();
+  const onFocusChat = vi.fn();
+  await using _screen = await render(
+    <OrchestratorLineup
+      environmentId={"env-a" as never}
+      threadId={"t1" as never}
+      driver={ProviderDriverKind.make("codex")}
+      entries={ENTRIES}
+      models={MODELS}
+      boardOwned
+      onFocusChat={onFocusChat}
+      onLeaveToSingle={() => {}}
+    />,
+  );
+
+  await expect.element(page.getByText("Team research")).toBeVisible();
+  await expect.element(page.getByText(/The board picks this task's team and models/)).toBeVisible();
+  const include = page.getByRole("checkbox", { name: "Include Scout" });
+  await expect.element(include).toBeChecked();
+  await expect.element(include).toBeDisabled();
+  await expect
+    .element(page.getByRole("button", { name: "Choose provider and model for Scout" }))
+    .toBeDisabled();
+  await expect.element(page.getByRole("combobox", { name: "Critique round" })).toBeDisabled();
+  await expect.element(page.getByRole("combobox", { name: "Participants' access" })).toBeDisabled();
+  for (const name of [
+    "Reset to team",
+    "Add participant",
+    "Use ordinary chat",
+    "Chat 1:1 with Scout",
+  ])
+    await expect.element(page.getByRole("button", { name })).not.toBeInTheDocument();
+  await expect
+    .element(page.getByRole("combobox", { name: "Team to bring in" }))
+    .not.toBeInTheDocument();
+  await include.click({ force: true });
+  expect(testState.setLineup).not.toHaveBeenCalled();
+});

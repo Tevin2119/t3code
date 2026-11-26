@@ -8,6 +8,7 @@ import {
   type DeliveryError,
   type EnvironmentId,
   type ModelSelection,
+  type OrchestrationV2Notification,
   type OrchestrationV2StoredEvent,
   type ThreadId,
 } from "@t3tools/contracts";
@@ -55,6 +56,18 @@ export const steerMessageId = (task: BoardTask, steerId: number) =>
   MessageId.make(`${STEER_MESSAGE_PREFIX}${task.board}:${task.id}:${steerId}`);
 const steerCommandId = (task: BoardTask, steerId: number) =>
   CommandId.make(`${boardTaskThreadMarker(task)}:steer:${steerId}`);
+
+/**
+ * What every message the server sends into a board task's conversation carries: a system notice,
+ * which the lead reads and which starts no team round (`NativeTeamChat.prepareTurn`).
+ */
+export const engineNotice = (summary: string, detail: string) =>
+  ({
+    source: { kind: "system" },
+    outcome: "updated",
+    summary,
+    detail,
+  }) satisfies OrchestrationV2Notification;
 
 /** One line of at most the engine's bound, cut at a code point, never refused for its length. */
 const excerptOf = (text: string): string | null => {
@@ -379,10 +392,11 @@ export const make = Effect.gen(function* () {
           threadId,
           messageId,
           text: item.text,
+          notification: engineNotice("A steer from the board", item.text),
           attachments: [],
           modelSelection,
           dispatchMode: { type: "queue_after_active" },
-          createdBy: "user",
+          createdBy: "agent",
           creationSource: "server",
         })
         .pipe(Effect.result);
@@ -417,17 +431,19 @@ export const make = Effect.gen(function* () {
         modelSelection = yield* turnSelection(read.value, shell.success.modelSelection);
       }
     }
+    const text = `Run ${run} reached QA and the engine is holding it for your hand-off until ${deadline}. Call delivery_seat_handoff with stage "qa".`;
     yield* threads
       .dispatch({
         type: "message.dispatch",
         commandId: CommandId.make(`${boardTaskThreadMarker(task)}:handoff:${entry}`),
         threadId,
         messageId,
-        text: `Run ${run} reached QA and the engine is holding it for your hand-off until ${deadline}. Call delivery_seat_handoff with stage "qa".`,
+        text,
+        notification: engineNotice("The engine is holding QA for your hand-off", text),
         attachments: [],
         modelSelection,
         dispatchMode: { type: "queue_after_active" },
-        createdBy: "system",
+        createdBy: "agent",
         creationSource: "server",
       })
       .pipe(Effect.ignore);

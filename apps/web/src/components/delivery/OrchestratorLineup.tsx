@@ -87,7 +87,7 @@ export function OrchestratorLineup(props: {
     readonly role: string;
     readonly modelSelection: ModelSelection;
   }) => void;
-  /** A board task's conversation, where the team's own setting decides for a limited seat. */
+  /** A board task's conversation: the engine picks its team and models, so it is shown only. */
   readonly boardOwned?: boolean | undefined;
   /** Leaves the team for ordinary chat; the composer remembers it server-side. */
   readonly onLeaveToSingle?: () => void;
@@ -166,6 +166,7 @@ export function OrchestratorLineup(props: {
   };
 
   const change = (nextTeam: string | null | undefined, nextValue: OrchestratorLineupValue) => {
+    if (props.boardOwned) return;
     const nextEdit = { team: nextTeam, value: nextValue };
     setEdit(nextEdit);
     const candidateTeam =
@@ -186,18 +187,20 @@ export function OrchestratorLineup(props: {
     <div className="flex max-h-96 flex-col gap-3 overflow-y-auto p-3" data-orchestrator-lineup>
       <div className="flex items-center gap-2">
         <span className="text-sm font-medium">Orchestrator</span>
-        {binding ? (
-          <Badge variant="secondary" data-orchestrator-lineup-team={binding.team}>
-            Team {binding.team}
+        {binding || (props.boardOwned && teamName) ? (
+          <Badge variant="secondary" data-orchestrator-lineup-team={binding?.team ?? teamName}>
+            Team {binding?.team ?? teamName}
           </Badge>
         ) : null}
       </div>
       <p className="text-xs text-muted-foreground">
-        {lineup
-          ? "Changes here join or leave from your next message on."
-          : "Bring participants into this conversation. From your next message they contribute first and this chat's model brings the results together."}
+        {props.boardOwned
+          ? "The board picks this task's team and models. Change them on the board."
+          : lineup
+            ? "Changes here join or leave from your next message on."
+            : "Bring participants into this conversation. From your next message they contribute first and this chat's model brings the results together."}
       </p>
-      {binding ? null : (
+      {binding || props.boardOwned ? null : (
         <Select
           value={team?.team ?? NO_TEAM}
           onValueChange={(next) => {
@@ -237,9 +240,9 @@ export function OrchestratorLineup(props: {
         entries={props.entries}
         models={props.models}
         boardOwned={props.boardOwned}
-        {...(props.onFocusChat ? { onFocus: props.onFocusChat } : {})}
+        {...(props.onFocusChat && !props.boardOwned ? { onFocus: props.onFocusChat } : {})}
         {...(binding ? { about: "A conversation keeps the team it started with." } : {})}
-        {...(lineup && props.onLeaveToSingle
+        {...(lineup && props.onLeaveToSingle && !props.boardOwned
           ? {
               footer: (
                 <Button size="xs" variant="ghost" onClick={props.onLeaveToSingle}>

@@ -34,6 +34,7 @@ import { runtimeModeProblem } from "@t3tools/provider-core/server/runtimeModeSup
 import { resolveAttachmentPath } from "../attachmentStore.ts";
 import { ServerConfig } from "../config.ts";
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
+import { boardTaskOfMarker } from "./boardThreadMarker.ts";
 import * as DeliveryService from "./DeliveryService.ts";
 import * as LimitedSeats from "./LimitedSeats.ts";
 import { teamDiscussionContext } from "./teamDiscussionContext.ts";
@@ -147,6 +148,10 @@ export const make = Effect.gen(function* () {
         "subagents",
         "turnItems",
       ]);
+      // The engine's own runners still do a board task's work, so a message there, a person's
+      // included, goes to the lead alone: a team round would do that work a second time.
+      if (boardTaskOfMarker(parent.thread.lineage.engineIntake) !== null)
+        return { ready: true, context: "" };
       const run = parent.runs.find((candidate) => candidate.id === input.runId);
       if (run === undefined || run.rootNodeId === null || run.activeAttemptId === null) {
         return yield* new NativeTeamChatError({ runId: input.runId, reason: "state" });
