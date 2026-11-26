@@ -1,13 +1,15 @@
-import type { DeploymentProject } from "@t3tools/contracts";
+import type { DeploymentCandidate, DeploymentProject } from "@t3tools/contracts";
 import { GitCommitHorizontalIcon, ServerIcon } from "lucide-react";
 import { deploymentStatus } from "../../lib/deployments";
 
 export function DeploymentRuntime({
   project,
   unavailable,
+  liveRelease = null,
 }: {
   project: DeploymentProject;
   unavailable: boolean;
+  liveRelease?: DeploymentCandidate | null;
 }) {
   const observed = !!project.liveObservedAt && Number.isFinite(Date.parse(project.liveObservedAt));
   const problem = !!project.liveProblem || !!project.problem;
@@ -46,7 +48,7 @@ export function DeploymentRuntime({
         className={`mt-4 break-words border-t border-border pt-3 text-sm ${problem || unavailable ? "text-warning-foreground" : "text-foreground"}`}
         data-deployment-status
       >
-        {deploymentStatus(project, unavailable)}
+        {deploymentStatus(project, unavailable, liveRelease)}
       </p>
       {project.problem && project.liveProblem ? (
         <p className="mt-1 break-words text-sm text-warning-foreground">{project.problem}</p>

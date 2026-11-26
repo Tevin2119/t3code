@@ -951,10 +951,12 @@ function EnvironmentBoardPage({ environmentId }: { readonly environmentId: Envir
                       stale={stale}
                       onDone={board.refresh}
                     />
-                    {settingsOpen ? (
-                      <BoardDeployments environmentId={environmentId} target={chosenBoard.target} />
-                    ) : null}
                   </div>
+                  {settingsOpen ? (
+                    <div className="mt-4 max-h-[60vh] min-w-0 overflow-y-auto border-t border-border pt-4">
+                      <BoardDeployments environmentId={environmentId} target={chosenBoard.target} />
+                    </div>
+                  ) : null}
                 </TaskDisclosure>
               </div>
             ) : chosenBoard?.mergePermission ? (

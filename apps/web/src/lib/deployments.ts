@@ -87,15 +87,18 @@ export function deploymentStatus(
   > &
     Partial<Pick<DeploymentProject, "adapter" | "liveCandidate">>,
   unavailable = false,
+  /** The engine's live candidate, to name it as its card does. */
+  liveRelease: Pick<DeploymentCandidate, "seq" | "commit"> | null = null,
 ): string {
   // The engine derives Firebase live state once; its words are shown as they are.
   if (project.adapter === "firebase-hosting") {
     if (project.liveProblem) return project.liveProblem;
     if (project.problem) return `Deployment problem: ${project.problem}`;
     if (unavailable) return "Runtime status unavailable. Showing last reading.";
-    return project.liveCandidate
-      ? `Live: release ${project.liveCandidate}`
-      : "The engine reports no live release.";
+    if (!project.liveCandidate) return "The engine reports no live release.";
+    if (!liveRelease) return `Live: release ${project.liveCandidate}`;
+    const label = liveRelease.seq !== undefined ? `Release #${liveRelease.seq}` : "Release";
+    return `Live: ${label} · ${liveRelease.commit.slice(0, 10)}`;
   }
   if (project.liveProblem) return `Running revision problem: ${project.liveProblem}`;
   if (project.problem) return `Deployment problem: ${project.problem}`;

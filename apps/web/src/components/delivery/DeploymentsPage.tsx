@@ -370,7 +370,16 @@ export function Configuration({
                   items={
                     targetListed || !target
                       ? targets.items
-                      : [...targets.items, { value: target, label: `${target} (saved)` }]
+                      : [
+                          ...targets.items,
+                          {
+                            value: target,
+                            label:
+                              target === savedTarget
+                                ? `${target} (saved)`
+                                : `${target} (not listed on this branch)`,
+                          },
+                        ]
                   }
                   onChange={setTarget}
                 />
@@ -401,7 +410,8 @@ export function Configuration({
                 ) : null}
                 {listing && target && !targetListed ? (
                   <p role="alert" className="text-sm text-warning-foreground">
-                    The saved target is not listed on {branch}.
+                    The {target === savedTarget ? "saved" : "chosen"} target is not listed on{" "}
+                    {branch}.
                   </p>
                 ) : null}
                 {[

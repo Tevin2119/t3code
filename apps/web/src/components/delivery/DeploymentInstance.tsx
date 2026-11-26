@@ -325,7 +325,13 @@ export function DeploymentInstances({
                 Configure
               </Button>
             </div>
-            <DeploymentRuntime project={project} unavailable={unavailable} />
+            <DeploymentRuntime
+              project={project}
+              unavailable={unavailable}
+              liveRelease={
+                candidates.find((candidate) => candidate.id === project.liveCandidate) ?? null
+              }
+            />
             {project.busy ? (
               <p role="status" className="text-sm text-muted-foreground">
                 A release operation is running. Other releases can only be cancelled until it

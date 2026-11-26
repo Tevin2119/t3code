@@ -241,6 +241,10 @@ describe("deployment contract", () => {
       "Unverified since the branch head moved to bbbbbbbbbb; the site has not been read since.";
     expect(deploymentStatus({ ...base, liveProblem: unverified })).toBe(unverified);
     expect(deploymentStatus({ ...base, liveCandidate: "c7" })).toBe("Live: release c7");
+    // Named as its candidate card is, so the two can be matched.
+    expect(
+      deploymentStatus({ ...base, liveCandidate: "c7" }, false, { seq: 4, commit: "f".repeat(40) }),
+    ).toBe("Live: Release #4 · ffffffffff");
     // A matching commit is not a claim: only the engine's liveCandidate is.
     expect(deploymentStatus(base)).toBe("The engine reports no live release.");
   });

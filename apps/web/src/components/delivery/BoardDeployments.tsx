@@ -39,7 +39,7 @@ export function BoardDeployments(props: {
   const unavailable = stale || !!read.error || !!snapshot?.problem;
   const disabled = !allowed || unavailable || !snapshot;
   return (
-    <section className="min-w-0 space-y-3 md:col-span-2" aria-label="Board deployments">
+    <section className="min-w-0 space-y-3" aria-label="Board deployments">
       <div className="flex flex-wrap items-center gap-2">
         <h3 className="flex flex-1 items-center gap-2 text-sm font-medium">
           <ServerIcon aria-hidden="true" className="size-4" />
