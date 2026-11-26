@@ -24,10 +24,11 @@ export function panelCards(
 }
 
 const groupOf = (card: DeliveryCard): PanelGroup => {
-  if (boardTaskIsDone(card)) return "done";
   if (card.lane === "draft") return "drafts";
   if (card.lane === "chat") return "chats";
+  // The person's inbox: an ask on a finished task is never hidden in Done.
   if (card.waitingOn === "person") return "waiting";
+  if (boardTaskIsDone(card)) return "done";
   // Being worked on: a seat is at work. A card whose seats are all held waits with the rest.
   return seatsAtWork(card).length > 0 ? "working" : "open";
 };
