@@ -198,6 +198,7 @@ export type BoardThreadHold =
   | "no-project"
   | "no-lead"
   | "no-lead-model"
+  | "no-teams"
   | "no-provider"
   | "ambiguous-provider"
   | "foreign-thread"
@@ -273,7 +274,12 @@ export const make = Effect.gen(function* () {
     if (!pick?.model) return "no-model" as const;
     const instance = resolveSeatProvider(providers, pick.harness, (entry) => entry.instanceId);
     if (typeof instance === "string") return instance;
-    return yield* local(decodeSelection({ instanceId: instance.instanceId, model: pick.model }));
+    // A pick this build cannot read, such as a blank model, leaves the seat with no model.
+    const selection = yield* decodeSelection({
+      instanceId: instance.instanceId,
+      model: pick.model,
+    }).pipe(Effect.option);
+    return Option.isSome(selection) ? selection.value : ("no-model" as const);
   });
 
   const leadSelection = Effect.fn("BoardTaskThreads.leadSelection")(function* (
@@ -639,12 +645,15 @@ export const make = Effect.gen(function* () {
       const card = input.cards.get(row.task.id);
       return card?.team == null ? [] : [{ row, card, team: card.team }];
     });
+    // Each is the board's from its marker, before and whatever the teams say.
+    for (const row of input.openThreads) yield* delivery.ownBoardThread(row.threadId);
     if (shown.length === 0) return;
     const teams = yield* input.teams.pipe(Effect.result);
     if (teams._tag === "Failure")
       return yield* Effect.logDebug("Board teams were not read; task threads keep their team.");
     for (const { row, card, team } of shown) {
       const roster = teams.success.find((entry) => entry.team === team);
+      // Showing a team cannot fail: a pick this build cannot read leaves only that seat out.
       if (roster !== undefined) yield* showTeam(card.id, row.threadId, roster, card.seatModels);
     }
   });
@@ -692,14 +701,24 @@ export const make = Effect.gen(function* () {
         const revisions = new Map(
           (yield* local(rows.list({ archived: false }))).map((row) => [row.threadId, row.revision]),
         );
-        const teams = yield* teamsOf;
+        const teams = yield* teamsOf.pipe(Effect.result);
         const folders = new Map(
           lanes.sets.flatMap((set) =>
             set.target?.path ? [[set.id, set.target.path] as const] : [],
           ),
         );
         for (const card of starting) {
-          const hold = yield* bind(card, { environmentId, teams, folders, key, revisions });
+          // Teams that cannot be read hold the tasks that wait for a thread, and only them.
+          const hold =
+            teams._tag === "Failure"
+              ? ("no-teams" as const)
+              : yield* bind(card, {
+                  environmentId,
+                  teams: teams.success,
+                  folders,
+                  key,
+                  revisions,
+                });
           if (hold !== null) holds.set(card.id, hold);
         }
       }

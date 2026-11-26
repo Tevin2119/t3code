@@ -98,6 +98,11 @@ const BOARD_TASK_READS = [
     file: "apps/server/src/delivery/SeatHandoffs.ts",
     line: "const task = boardTaskOfMarker(parent?.lineage.engineIntake);",
   },
+  // A thread made for a board task is the board's from its first read, a successor's included.
+  {
+    file: "apps/server/src/ws.ts",
+    line: "boardOwned: boardTaskOfMarker(shell?.lineage.engineIntake) !== null,",
+  },
   {
     file: "apps/server/src/delivery/SeatHandoffs.ts",
     line: "const task = boardTaskOfMarker(lead?.lineage.engineIntake);",

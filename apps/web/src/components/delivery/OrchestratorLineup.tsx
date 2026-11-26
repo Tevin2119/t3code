@@ -114,7 +114,8 @@ export function OrchestratorLineup(props: {
   }>({ team: undefined, value: undefined });
   const [failure, setFailure] = useState<string | null>(null);
 
-  const binding = state.data?.binding ?? null;
+  // A board task's team is the board's: a person's binding saved on its thread is not shown.
+  const binding = props.boardOwned ? null : (state.data?.binding ?? null);
   const lineup = state.data?.lineup;
   const teamName = binding?.team ?? (edit.team !== undefined ? edit.team : (lineup?.team ?? null));
   const team = teams.find((item) => item.team === teamName) ?? null;

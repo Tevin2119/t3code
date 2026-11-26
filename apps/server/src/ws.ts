@@ -285,6 +285,7 @@ import { listLinkedPullRequestThreads } from "./pullRequest/linkedThreads.ts";
 import { archivedBoardThreads } from "./delivery/archivedBoardThreads.ts";
 import { linkedBoardTasks } from "./delivery/linkedBoardTasks.ts";
 import { refuseServerOwnedTeam } from "./delivery/serverOwnedTeam.ts";
+import { boardTaskOfMarker } from "./delivery/boardThreadMarker.ts";
 import { pullRequestSyncKey } from "./pullRequest/pullRequestSyncKey.ts";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as PullRequestSyncReactor from "./orchestration-v2/PullRequestSyncReactor.ts";
@@ -3866,7 +3867,15 @@ const layerForkWsRpc = (currentSession: EnvironmentAuth.AuthenticatedSession) =>
           refuseServerOwnedTeam(input.threadId, threadManagement.getThreadShell).pipe(
             Effect.andThen(delivery.bindThread(input)),
           ),
-        [WS_METHODS.deliveryThreadBinding]: (input) => delivery.threadState(input.threadId),
+        [WS_METHODS.deliveryThreadBinding]: (input) =>
+          threadManagement.getThreadShell(input.threadId).pipe(
+            Effect.orElseSucceed(() => null),
+            Effect.flatMap((shell) =>
+              delivery.threadState(input.threadId, {
+                boardOwned: boardTaskOfMarker(shell?.lineage.engineIntake) !== null,
+              }),
+            ),
+          ),
         [WS_METHODS.deliveryArchivedBoardThreads]: () =>
           serverEnvironment.getEnvironmentId.pipe(
             Effect.flatMap((environmentId) =>

@@ -1919,3 +1919,115 @@ it.effect.each([
     Effect.provide(deliveryLayer(engine, "board-threads-lead-alone-", legacyStoreOn(THREAD))),
   );
 });
+
+it.effect(
+  "shows the other tasks' teams and keeps their steers going past one unreadable pick",
+  () => {
+    const engine = board();
+    engine.addTask({ id: "task-7" });
+    engine.addTask({ id: "task-8" });
+    const store = threadStore();
+    const other = boardTaskThreadId(boardTaskOf("work", "task-8")!);
+    return Effect.gen(function* () {
+      const threads = yield* service(store);
+      yield* threads.reconcile();
+      const steer = engine.queueSteer("task-8", "Please continue");
+      // A blank model this build cannot read on one task's seat leaves only that seat out.
+      engine.task("task-7").seatModels = {
+        developer: { harness: "claude", model: " ", source: "picked" },
+      };
+      engine.task("task-8").seatModels = {
+        lead: { harness: "codex", model: "gpt-6-astra", source: "profile" },
+        developer: { harness: "claude", model: "claude-sonnet", source: "picked" },
+      };
+      const pass = yield* threads.reconcile().pipe(Effect.result);
+      assert.equal(pass._tag, "Success");
+      assert.equal(engine.steer(steer).state, "delivered");
+      assert.deepEqual(yield* plainLineup(other), {
+        team: "development",
+        participants: [
+          { ...DEVELOPER, modelSelection: { instanceId: "claudeAgent", model: "claude-sonnet" } },
+        ],
+      });
+    }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-bad-pick-")));
+  },
+);
+
+it.effect("holds only the tasks awaiting a thread when the teams cannot be read", () => {
+  const engine = board();
+  engine.addTask({ id: "task-7" });
+  const store = threadStore();
+  return Effect.gen(function* () {
+    const threads = yield* service(store);
+    yield* threads.reconcile();
+    const steer = engine.queueSteer("task-7", "Use the other API");
+    engine.advance(100_000);
+    // A task that waits for its first thread needs the teams; the pass goes on without them.
+    engine.addTask({ id: "task-8" });
+    engine.dropNext(/^\/api\/teams$/);
+    assert.deepEqual([...(yield* threads.reconcile())], [["task-8", "no-teams"]]);
+    assert.equal(engine.steer(steer).state, "delivered");
+    engine.advance(100_000);
+    assert.isNotNull(engine.leaseOf("task-7"));
+    // The next pass reads them and makes the waiting task's thread.
+    assert.deepEqual([...(yield* threads.reconcile())], []);
+    assert.isNotNull(engine.linkOf("task-8"));
+  }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-teams-hold-")));
+});
+
+it.effect("makes a successor made before board lineups the board's from its marker", () => {
+  const engine = board();
+  engine.addTask({ id: "task-7" });
+  const store = threadStore();
+  const successor = limitedLeadHandoffThreadId(RunId.make("old-failed-run"));
+  return Effect.gen(function* () {
+    yield* store.dispatch(
+      createBoardTaskThread(TASK, {
+        commandId: CommandId.make("create-old-successor"),
+        threadId: successor,
+        projectId: PROJECT,
+        title: "Task task-7",
+        modelSelection: CLAUDE,
+      }),
+    );
+    engine.writeLink("task-7", {
+      environmentId: ENVIRONMENT,
+      threadId: successor,
+      setBy: ENVIRONMENT,
+    });
+    const delivery = yield* DeliveryService.DeliveryService;
+    // Read with its marker's word, before any pass: a person's team saved there is not shown.
+    const hinted = yield* delivery.threadState(successor, { boardOwned: true });
+    assert.isNull(hinted.binding);
+    assert.isUndefined(hinted.lineup);
+    // Even when the teams cannot be read, the pass makes it the board's.
+    engine.dropNext(/^\/api\/teams$/);
+    yield* (yield* service(store)).reconcile();
+    assert.isUndefined(yield* plainLineup(successor));
+    assert.isNull((yield* delivery.threadState(successor)).binding);
+  }).pipe(
+    Effect.provide(deliveryLayer(engine, "board-threads-old-successor-", legacyStoreOn(successor))),
+  );
+});
+
+// Live: an atomic save waits on real time before it gives up.
+it.live("saves board lineups again once a save that failed can go through", () => {
+  const engine = board();
+  engine.addTask({ id: "task-7" });
+  return Effect.gen(function* () {
+    const { stateDir } = yield* ServerConfig.ServerConfig;
+    const fileSystem = yield* FileSystem.FileSystem;
+    const file = `${stateDir}/delivery-board-lineups.json`;
+    // Something in the way of the file: the first save fails, and the lineup is shown anyway.
+    yield* fileSystem.makeDirectory(file, { recursive: true });
+    const threads = yield* service(threadStore());
+    yield* threads.reconcile();
+    assert.deepEqual(yield* plainLineup(THREAD), {
+      team: "development",
+      participants: [DEVELOPER],
+    });
+    yield* fileSystem.remove(file, { recursive: true });
+    yield* threads.reconcile();
+    assert.include(yield* fileSystem.readFileString(file), "developer");
+  }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-save-retry-")));
+});

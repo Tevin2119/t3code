@@ -28,7 +28,7 @@ export function TeamBadge(props: {
         })
       : null,
   );
-  const session = state.data?.binding?.session ?? null;
+  const session = props.boardOwned ? null : (state.data?.binding?.session ?? null);
   const sessionRead = useDeliveryRead(
     enabled && session ? props.environmentId : null,
     `/api/sessions/${session ?? ""}`,
@@ -36,7 +36,7 @@ export function TeamBadge(props: {
     { pollMs: 15_000 },
   );
   if (!enabled) return null;
-  const binding = state.data?.binding ?? null;
+  const binding = props.boardOwned ? null : (state.data?.binding ?? null);
   // A thread that was sent with no team says so, where the team would stand.
   if (!binding) {
     if (state.data === undefined || state.data === null) return null;

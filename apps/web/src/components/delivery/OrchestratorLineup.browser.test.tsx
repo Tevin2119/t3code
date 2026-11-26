@@ -615,3 +615,46 @@ it("shows a board task's lead with the crown, on the model the lead runs now", a
   await expect.element(page.getByRole("alert")).not.toBeInTheDocument();
   testState.teams = null;
 });
+
+it("shows a board task's team over a person's binding saved on its thread", async () => {
+  testState.teams = [
+    {
+      ...TEAMS[0],
+      team: "development",
+      seats: [
+        seat("lead", "team-lead", "claude", "Lead"),
+        seat("critic", "reviewer", "codex", "Critic"),
+      ],
+      settings: [],
+    },
+    TEAMS[0],
+  ];
+  testState.threadState = {
+    data: {
+      // Saved by a person before the upgrade: never the board's team.
+      binding: RESEARCH_BINDING,
+      lineup: { team: "development", participants: [LINEUP.participants[1]!] },
+      pending: null,
+    },
+  };
+  await using _screen = await render(
+    <OrchestratorLineup
+      environmentId={"env-a" as never}
+      threadId={"t1" as never}
+      driver={ProviderDriverKind.make("codex")}
+      entries={ENTRIES}
+      models={MODELS}
+      boardOwned
+      leadModelSelection={{
+        instanceId: ProviderInstanceId.make("claudeAgent"),
+        model: "claude-model",
+      }}
+    />,
+  );
+
+  await expect.element(page.getByText("Team development")).toBeVisible();
+  await expect.element(page.getByText("Team research")).not.toBeInTheDocument();
+  const lead = page.getByRole("group", { name: "Settings for Lead" });
+  await expect.element(lead.getByText(", orchestrator")).toBeInTheDocument();
+  testState.teams = null;
+});
