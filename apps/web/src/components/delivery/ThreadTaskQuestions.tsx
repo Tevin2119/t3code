@@ -1,4 +1,5 @@
 import { useAtomValue } from "@effect/atom-react";
+import { boardTaskOwesPerson } from "@t3tools/client-runtime/board-task-in-play";
 import type { EnvironmentId } from "@t3tools/contracts";
 import { ChevronDownIcon, XIcon } from "lucide-react";
 import { Link } from "@tanstack/react-router";
@@ -47,7 +48,7 @@ export function ThreadTaskQuestions({
   const drafts = useDeliveryReplyDrafts((state) => state.drafts);
   const pending = useDeliveryReplyDrafts((state) => state.pending);
   const needsAttention = (task: DeliveryCard) =>
-    task.questions > 0 || taskHasReplyDraft(environmentId, task.id, drafts, pending);
+    boardTaskOwesPerson(task) || taskHasReplyDraft(environmentId, task.id, drafts, pending);
   const listed = listedThreadTasks(tasks, needsAttention);
   return (
     <div className="min-w-0 space-y-1" data-thread-task-questions>

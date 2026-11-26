@@ -384,7 +384,13 @@ export const make = Effect.gen(function* () {
         continue;
       }
       if (finishedBy !== null) {
-        yield* settle(task.id, item.id, "failed", context, `The task is ${finishedBy}.`);
+        yield* settle(
+          task.id,
+          item.id,
+          "failed",
+          context,
+          finishedBy === "closed-not-done" ? "The task was closed." : `The task is ${finishedBy}.`,
+        );
         continue;
       }
       const records = yield* projections

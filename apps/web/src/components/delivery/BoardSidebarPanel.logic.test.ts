@@ -58,8 +58,10 @@ describe("the board's column", () => {
       card("c", 3, waiting),
       card("d", 4, { lane: "completed" }),
       card("e", 5, { lane: "review", state: "merged" }),
+      // The engine sets no wait on a closed task, but its open question is still an ask.
+      card("f", 6, { lane: "completed", state: "merged", questions: 1, waitingOn: null }),
     ]);
-    expect(groups.waiting.map((task) => task.id)).toEqual(["a", "b", "c"]);
+    expect(groups.waiting.map((task) => task.id)).toEqual(["a", "b", "c", "f"]);
     expect(groups.done.map((task) => task.id)).toEqual(["d", "e"]);
   });
 

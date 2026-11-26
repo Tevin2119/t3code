@@ -1669,7 +1669,10 @@ it.effect("tells a lost failed confirmation again once the task is off the steer
   }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-steer-closed-retry-")));
 });
 
-it.effect("names the lane when the lane finished the task", () => {
+it.effect.each([
+  { lane: "completed", reason: "The task is completed." },
+  { lane: "closed-not-done", reason: "The task was closed." },
+])("names the $lane lane when the lane finished the task", ({ lane, reason }) => {
   const engine = board();
   engine.addTask({ id: "task-7" });
   const store = threadStore();
@@ -1678,13 +1681,10 @@ it.effect("names the lane when the lane finished the task", () => {
     yield* threads.reconcile();
     const steer = engine.queueSteer("task-7", "Use the other API");
     engine.beforeNextDetail(() => {
-      engine.task("task-7").lane = "completed";
+      engine.task("task-7").lane = lane;
     });
     yield* threads.reconcile();
-    assert.deepInclude(engine.steer(steer), {
-      state: "failed",
-      failure: "The task is completed.",
-    });
+    assert.deepInclude(engine.steer(steer), { state: "failed", failure: reason });
   }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-steer-closed-lane-")));
 });
 
