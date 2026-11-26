@@ -198,7 +198,6 @@ export type BoardThreadHold =
   | "no-project"
   | "no-lead"
   | "no-lead-model"
-  | "no-lineup"
   | "no-provider"
   | "ambiguous-provider"
   | "foreign-thread"
@@ -254,6 +253,7 @@ export const make = Effect.gen(function* () {
   // old lease lapses within its window and the task is claimed again, still by the same thread.
   const holders = new Map<string, string>();
   const told = new Map<string, BoardThreadHold>();
+  const toldTeamless = new Set<string>();
   const toldUnread = new Map<string, string>();
 
   const engine = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
@@ -289,7 +289,7 @@ export const make = Effect.gen(function* () {
   /**
    * The team a task's conversation shows, as a hand-started Orchestrator thread would: every seat
    * but the lead's, on the engine's picks. Seats stay read-only, and nothing here swaps a seat:
-   * the engine picks. A seat that cannot run here is left out; fewer than two is no lineup.
+   * the engine picks. A seat that cannot run here is left out; with none left there is no lineup.
    */
   const lineupOf = Effect.fn("BoardTaskThreads.lineupOf")(function* (
     team: Team,
@@ -312,21 +312,36 @@ export const make = Effect.gen(function* () {
         ...(duty === undefined ? {} : { duty }),
       });
     }
-    if (participants.length < 2) return "no-lineup" as const;
+    if (participants.length === 0) return null;
     return {
       team: team.team,
       participants: participants.slice(0, MAX_PARTICIPANTS),
     } satisfies DeliveryOrchestrationConfig;
   });
 
-  /** Gives a board thread its lineup once; one a later pass finds in place is left as it is. */
+  /**
+   * Gives a task's conversation its team's lineup once; one a later pass finds in place is left as
+   * it is. A team with no seat but its lead's that runs here keeps an ordinary thread, said once.
+   */
   const ensureLineup = Effect.fn("BoardTaskThreads.ensureLineup")(function* (
+    taskId: string,
     threadId: ThreadId,
-    orchestration: DeliveryOrchestrationConfig,
+    team: Team,
+    seatModels: Card["seatModels"],
   ) {
     const state = yield* local(delivery.threadState(threadId));
     if (state.lineup !== undefined) return;
-    yield* local(delivery.setThreadLineup({ threadId, orchestration }));
+    const orchestration = yield* lineupOf(team, seatModels);
+    if (orchestration === null) {
+      if (toldTeamless.has(taskId)) return;
+      toldTeamless.add(taskId);
+      return yield* Effect.logInfo(
+        "A board task's conversation has no team to show: no seat but its lead's runs here.",
+        { task: taskId, team: team.team },
+      );
+    }
+    toldTeamless.delete(taskId);
+    yield* local(delivery.setThreadLineup({ threadId, orchestration }, { boardOwned: true }));
   });
 
   /**
@@ -469,9 +484,7 @@ export const make = Effect.gen(function* () {
     const roster = context.teams.find((entry) => entry.team === team);
     const modelSelection = yield* leadSelection(roster, card.seatModels);
     if (typeof modelSelection === "string") return modelSelection;
-    // A task's conversation is an Orchestrator team thread, so one with no team to show is held.
-    const lineup = roster === undefined ? "no-lineup" : yield* lineupOf(roster, card.seatModels);
-    if (typeof lineup === "string") return lineup;
+    if (roster === undefined) return "no-lead" as const;
     // The command id is the task's, so a second start, a second server pass and a restart between
     // this create and the link below all answer with the one thread. The marker is stamped here
     // and by nothing later.
@@ -490,7 +503,7 @@ export const make = Effect.gen(function* () {
     const stamped = boardTaskOfMarker(created.thread.lineage.engineIntake);
     if (stamped?.board !== task.board || stamped.id !== task.id) return "foreign-thread" as const;
     // Before any message, and the lineup only: the lead needs no engine tools, so no binding.
-    yield* ensureLineup(threadId, lineup);
+    yield* ensureLineup(card.id, threadId, roster, card.seatModels);
     // An archived thread is never linked: it was displaced, its task was refused for good, or a
     // person archived it. Restoring it from the board's archive is what lets it be linked.
     if (created.thread.archivedAt !== null) return "archived-thread" as const;
@@ -631,9 +644,7 @@ export const make = Effect.gen(function* () {
       const threadId = link.threadId as ThreadId;
       if ((yield* local(delivery.threadState(threadId))).lineup !== undefined) continue;
       const roster = (yield* input.teams).find((entry) => entry.team === card.team);
-      if (roster === undefined) continue;
-      const lineup = yield* lineupOf(roster, card.seatModels);
-      if (typeof lineup !== "string") yield* ensureLineup(threadId, lineup);
+      if (roster !== undefined) yield* ensureLineup(card.id, threadId, roster, card.seatModels);
     }
   });
 

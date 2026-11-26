@@ -25,7 +25,8 @@ export const DeliveryOrchestrationConfig = Schema.Struct({
       /** What a person agreed the seat runs on while its own model is limited. */
       substitute: Schema.optional(ModelSelection),
     }),
-  ).check(Schema.isMinLength(2), Schema.isMaxLength(12)),
+    // A board task's team may be its lead and one seat; a lineup a person sets needs two.
+  ).check(Schema.isMinLength(1), Schema.isMaxLength(12)),
   /** When participants critique each other. Absent means the conversation's first message only. */
   critique: Schema.optional(Schema.Literals(["first", "always", "never"])),
   /** When a seat is limited. Absent means swap automatically. Read at the start of each turn. */

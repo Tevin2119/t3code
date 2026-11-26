@@ -61,15 +61,8 @@ const TEAMS = [
   {
     team: "development",
     seats: [
-      {
-        seat: "developer",
-        role: "lead-developer",
-        harness: "claude",
-        model: "claude-fable-5-1",
-        stages: ["build"],
-      },
+      { seat: "developer", role: "lead-developer", harness: "claude", model: "claude-fable-5-1" },
       { seat: "lead", role: "team-lead", harness: "codex", model: "gpt-6-astra" },
-      { seat: "reviewer", role: "reviewer", harness: "codex", model: "gpt-6-sol", stages: ["qa"] },
     ],
   },
 ];
@@ -1211,24 +1204,6 @@ it.effect("says why a started task has no thread instead of falling back to a de
       ],
     },
     { hold: "no-project", projects: [] },
-    {
-      // A task's conversation is a team thread: a lead with one other seat makes no team.
-      hold: "no-lineup",
-      teams: [{ team: "development", seats: TEAMS[0]!.seats.slice(0, 2) }],
-    },
-    {
-      // A seat whose harness no provider here runs does not count toward the team.
-      hold: "no-lineup",
-      teams: [
-        {
-          team: "development",
-          seats: [
-            ...TEAMS[0]!.seats.slice(0, 2),
-            { seat: "researcher", role: "researcher", harness: "hermes", model: "m" },
-          ],
-        },
-      ],
-    },
   ] as const;
   return Effect.forEach(cases, (entry) => {
     const engine = board();
@@ -1609,6 +1584,7 @@ it.effect(
   },
 );
 
+const CLAUDE = { instanceId: ProviderInstanceId.make("claudeAgent"), model: "claude-fable-5-1" };
 /** A lineup as plain data, so it compares by value. */
 const plainLineup = (threadId: ThreadId) =>
   Effect.gen(function* () {
@@ -1621,13 +1597,24 @@ const DEVELOPER = {
   seat: "developer",
   role: "lead-developer",
   modelSelection: { instanceId: "claudeAgent", model: "claude-fable-5-1" },
-  duty: "build",
 };
+/** A lead and two seats, each with its duty. */
+const TEAM_OF_THREE = [
+  {
+    team: "development",
+    seats: [
+      { ...TEAMS[0]!.seats[0]!, stages: ["build"] },
+      TEAMS[0]!.seats[1]!,
+      { seat: "reviewer", role: "reviewer", harness: "codex", model: "gpt-6-sol", stages: ["qa"] },
+    ],
+  },
+];
 
 it.effect(
   "makes a task's conversation a team thread: every seat but the lead's, on the engine's picks",
   () => {
     const engine = board();
+    engine.setTeams(TEAM_OF_THREE);
     engine.addTask({
       id: "task-7",
       seatModels: {
@@ -1643,7 +1630,7 @@ it.effect(
         team: "development",
         // Read-only seats, and no swap or critique setting: the engine picks.
         participants: [
-          DEVELOPER,
+          { ...DEVELOPER, duty: "build" },
           {
             seat: "reviewer",
             role: "reviewer",
@@ -1696,11 +1683,7 @@ it.effect("gives a linked conversation made before lineups its lineup, once", ()
     const threads = yield* service(store);
     assert.deepEqual([...(yield* threads.reconcile())], []);
     const backfilled = yield* plainLineup(THREAD);
-    assert.deepEqual(
-      backfilled?.participants.map((seat: { seat: string }) => seat.seat),
-      ["developer", "reviewer"],
-    );
-    assert.deepEqual(backfilled?.participants[0], DEVELOPER);
+    assert.deepEqual(backfilled, { team: "development", participants: [DEVELOPER] });
     // Another environment's conversation is never given one here.
     assert.isUndefined(yield* plainLineup(ThreadId.make(THEIRS)));
     // Idempotent: the next passes change nothing, and read no teams to find that out.
@@ -1757,4 +1740,58 @@ it.effect("sends every engine notice into a task's conversation as a system noti
       engine.activityOf("task-7").some((row) => row.kind === "steer" && row.excerpt === null),
     );
   }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-notices-")));
+});
+
+it.effect("gives a lead and one seat a one-participant lineup, still a team thread", () => {
+  const engine = board();
+  engine.addTask({ id: "task-7" });
+  const store = threadStore();
+  return Effect.gen(function* () {
+    const threads = yield* service(store);
+    assert.deepEqual([...(yield* threads.reconcile())], []);
+    assert.equal(engine.linkOf("task-7")?.threadId, THREAD);
+    assert.deepEqual(yield* plainLineup(THREAD), {
+      team: "development",
+      participants: [DEVELOPER],
+    });
+    // A person still cannot set a one-participant lineup: only a board task's team may be one.
+    const delivery = yield* DeliveryService.DeliveryService;
+    const set = yield* delivery
+      .setThreadLineup({
+        threadId: ThreadId.make("a-person's-thread"),
+        orchestration: { participants: [{ ...DEVELOPER, modelSelection: CLAUDE }] },
+      })
+      .pipe(Effect.flip);
+    assert.equal(set.reason, "invalid");
+  }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-one-seat-")));
+});
+
+it.effect.each([
+  { name: "its lead alone", extra: [] },
+  // A seat whose harness no provider here runs does not count toward the team.
+  {
+    name: "its lead and a seat no provider here runs",
+    extra: [{ seat: "researcher", role: "researcher", harness: "hermes", model: "m" }],
+  },
+])("gives a task whose team is $name a thread with no lineup", ({ extra }) => {
+  const engine = board();
+  engine.setTeams([{ team: "development", seats: [TEAMS[0]!.seats[1]!, ...extra] }]);
+  engine.addTask({ id: "task-7" });
+  const store = threadStore();
+  return Effect.gen(function* () {
+    const threads = yield* service(store);
+    // Every task in work gets its conversation: nothing is held for want of a team.
+    assert.deepEqual([...(yield* threads.reconcile())], []);
+    assert.equal(engine.linkOf("task-7")?.threadId, THREAD);
+    assert.isUndefined(yield* plainLineup(THREAD));
+    yield* threads.reconcile();
+    assert.isUndefined(yield* plainLineup(THREAD));
+    // Once the team has a seat that runs here, the next pass gives the thread its lineup.
+    engine.setTeams(TEAMS);
+    yield* threads.reconcile();
+    assert.deepEqual(yield* plainLineup(THREAD), {
+      team: "development",
+      participants: [DEVELOPER],
+    });
+  }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-lead-alone-")));
 });

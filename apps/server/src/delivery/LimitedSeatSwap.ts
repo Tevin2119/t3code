@@ -480,7 +480,10 @@ const make = Effect.gen(function* () {
     // The successor shows the team its task's conversation showed.
     const lineup = (yield* delivery.threadState(shell.id)).lineup;
     if (lineup !== undefined && (yield* delivery.threadState(target)).lineup === undefined)
-      yield* delivery.setThreadLineup({ threadId: target, orchestration: lineup });
+      yield* delivery.setThreadLineup(
+        { threadId: target, orchestration: lineup },
+        { boardOwned: true },
+      );
     const messageId = MessageId.make(`${identity}:continue`);
     const continuation =
       existing === null

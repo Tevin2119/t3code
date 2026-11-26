@@ -348,8 +348,8 @@ Orchestrator icon, and its **Orchestrator** panel lists the team's seats with th
 models the board picked for them. The board picks them, so the panel only shows
 them; change them on the board. While the engine does the task's work, what you
 write in the thread goes to the task's lead alone, and the seats do not answer it.
-A task whose team has fewer than two seats besides its lead that can run on this
-machine's providers gets no thread until it does.
+A task whose team has no seat besides its lead that this machine's providers can
+run gets an ordinary thread, which shows the team once a seat can run.
 
 **Task evidence** and **Deployments** are tabs on the thread's right panel. Closed,
 they come back from the panel's **+** menu, on a task's thread only. While a

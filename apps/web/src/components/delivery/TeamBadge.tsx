@@ -61,7 +61,7 @@ export function TeamBadge(props: {
                 className="min-w-0"
                 aria-label={
                   props.boardOwned
-                    ? `${lineup.participants.length} seats in this task's team`
+                    ? `${lineup.participants.length === 1 ? "1 seat" : `${lineup.participants.length} seats`} in this task's team`
                     : `${lineup.participants.length} participants receive the next message`
                 }
                 data-delivery-team-badge="participants"

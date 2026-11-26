@@ -284,6 +284,7 @@ import * as PullRequestReviewGuideService from "./pullRequest/PullRequestReviewG
 import { listLinkedPullRequestThreads } from "./pullRequest/linkedThreads.ts";
 import { archivedBoardThreads } from "./delivery/archivedBoardThreads.ts";
 import { linkedBoardTasks } from "./delivery/linkedBoardTasks.ts";
+import { setPersonLineup } from "./delivery/personLineup.ts";
 import { pullRequestSyncKey } from "./pullRequest/pullRequestSyncKey.ts";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as PullRequestSyncReactor from "./orchestration-v2/PullRequestSyncReactor.ts";
@@ -3843,6 +3844,7 @@ const layerForkWsRpc = (currentSession: EnvironmentAuth.AuthenticatedSession) =>
       const delivery = yield* DeliveryService.DeliveryService;
       const boardThreadTasks = yield* BoardThreadTasks.BoardThreadTasks;
       const limitedSeatSwap = yield* Effect.serviceOption(LimitedSeatSwap.LimitedSeatSwap);
+      const threadManagement = yield* ThreadManagementService.ThreadManagementService;
       const sql = yield* SqlClient.SqlClient;
       const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
       return ForkServerWsRpcGroup.of({
@@ -3877,7 +3879,8 @@ const layerForkWsRpc = (currentSession: EnvironmentAuth.AuthenticatedSession) =>
             ),
           ),
         [WS_METHODS.deliveryReleaseThread]: (input) => delivery.releaseThread(input.threadId),
-        [WS_METHODS.deliverySetThreadLineup]: (input) => delivery.setThreadLineup(input),
+        [WS_METHODS.deliverySetThreadLineup]: (input) =>
+          setPersonLineup(input, { shellOf: threadManagement.getThreadShell, delivery }),
         [WS_METHODS.deliveryLimitedSeats]: (input) =>
           Option.match(limitedSeatSwap, {
             onNone: () => Effect.succeed({ policy: null, notices: [] }),

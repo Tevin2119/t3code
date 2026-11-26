@@ -549,7 +549,7 @@ export function OrchestratorParticipants(props: {
         )}
         {props.footer ? <span className="ml-auto flex shrink-0">{props.footer}</span> : null}
       </div>
-      {roster.problem ? (
+      {roster.problem && !readOnly ? (
         <p role="alert" className="text-xs text-warning">
           {roster.problem}
         </p>

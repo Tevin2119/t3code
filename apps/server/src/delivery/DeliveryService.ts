@@ -212,9 +212,13 @@ export class DeliveryService extends Context.Service<
     readonly releaseThread: (
       threadId: ThreadId,
     ) => Effect.Effect<DeliveryThreadState, DeliveryError>;
-    /** Replaces who joins a conversation from its next message on; null makes it an ordinary one. */
+    /**
+     * Replaces who joins a conversation from its next message on; null makes it an ordinary one.
+     * `boardOwned` is a board task's team, which may be its lead and one seat.
+     */
     readonly setThreadLineup: (
       input: DeliverySetThreadLineupInput,
+      options?: { readonly boardOwned?: boolean },
     ) => Effect.Effect<DeliveryThreadState, DeliveryError>;
     /**
      * Fetches a bound thread's team setup and makes it readable by adapters.
@@ -709,8 +713,11 @@ const make = Effect.fn("DeliveryService.make")(function* (
     };
   };
 
-  const checkParticipants = (participants: DeliveryOrchestrationConfig["participants"]) =>
-    participants.length < 2 ||
+  const checkParticipants = (
+    participants: DeliveryOrchestrationConfig["participants"],
+    minimum = 2,
+  ) =>
+    participants.length < minimum ||
     participants.length > 12 ||
     // Two seats may run the same model: a team's roles differ, not only its models.
     new Set(participants.map((seat) => seat.seat)).size !== participants.length
@@ -724,9 +731,11 @@ const make = Effect.fn("DeliveryService.make")(function* (
 
   const setThreadLineup = Effect.fn("DeliveryService.setThreadLineup")(function* (
     input: DeliverySetThreadLineupInput,
+    options?: { readonly boardOwned?: boolean },
   ) {
     yield* storeReadable;
-    if (input.orchestration !== null) yield* checkParticipants(input.orchestration.participants);
+    if (input.orchestration !== null)
+      yield* checkParticipants(input.orchestration.participants, options?.boardOwned ? 1 : 2);
     const had = lineups.has(input.threadId);
     const previous = lineups.get(input.threadId);
     const hadRemembered = rememberedLineups.has(input.threadId);
