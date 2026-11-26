@@ -45,6 +45,7 @@ import * as ProviderAdapterRegistry from "../orchestration-v2/ProviderAdapterReg
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
 import { forkParked } from "../serverActivation.ts";
+import { boardTaskInWork } from "./boardTaskWork.ts";
 import { createBoardTaskThread, type BoardTask } from "./boardThreadMarker.ts";
 import * as BoardThreadRows from "./boardThreadRows.ts";
 import * as DeliveryService from "./DeliveryService.ts";
@@ -166,6 +167,8 @@ const selectionOf = (model: SeatModel): ModelSelection =>
 const decodeBoardTaskDetail = Schema.decodeUnknownEffect(
   Schema.Struct({
     boardThread: Schema.optional(Schema.NullOr(DeliveryService.BoardThreadLink)),
+    state: DeliveryService.readOrNull(Schema.String),
+    lane: DeliveryService.readOrNull(Schema.String),
     title: DeliveryService.readOrNull(Schema.String),
     body: DeliveryService.readOrNull(Schema.String),
     acceptance: DeliveryService.readOrNull(Schema.Array(Schema.String)),
@@ -403,6 +406,9 @@ const make = Effect.gen(function* () {
     const path = `/api/tasks/${task.id}`;
     const response = yield* delivery.read({ path });
     const detail = yield* decodeBoardTaskDetail(response.body);
+    // This read is the newest word on the task: one no longer in work is handed to no one.
+    if (detail.state != null && !boardTaskInWork({ state: detail.state, lane: detail.lane }))
+      return null;
     const title = detail.title ?? shell.title;
     const acceptance = detail.acceptance ?? [];
     const previous = detail.boardThread;

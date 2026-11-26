@@ -28,6 +28,7 @@ import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.
 import * as ServerSettings from "../serverSettings.ts";
 import { forkParked } from "../serverActivation.ts";
 import * as BoardConversation from "./BoardConversation.ts";
+import { boardTaskInWork, MOVED } from "./boardTaskWork.ts";
 import * as BoardThreadRows from "./boardThreadRows.ts";
 import {
   boardTaskOf,
@@ -125,26 +126,8 @@ const decodeSelection = Schema.decodeUnknownEffect(ModelSelection);
 /** Every task of every board, with each card's link joined once by the engine. */
 export const LANES_PATH = "/api/lanes?view=development&set=all";
 
-// A task in one of these lanes has not started or is not a task run: it has no conversation yet.
-// `intake` and `ready` are what an engine before the queue lane calls the same wait.
-const NOT_STARTED = new Set(["draft", "chat", "queue", "intake", "ready"]);
-// Finished work keeps the conversation it had and is given none anew.
-const FINISHED = new Set(["completed", "closed-not-done"]);
-// The states those lanes come from, and a rejected task, which the engine gives no lane.
-const FINISHED_STATES = new Set(["closed", "merged", "rejected"]);
-// A task that moved is worked on another machine; the engine refuses its link here (`moved`).
-const MOVED = new Set(["moved", "moving"]);
-
-/** A task in work: it holds a conversation and a claim. A split parent's parts are its work. */
-const inWork = (card: TaskStanding) =>
-  !NOT_STARTED.has(card.lane ?? "") &&
-  !FINISHED.has(card.lane ?? "") &&
-  !FINISHED_STATES.has(card.state) &&
-  !MOVED.has(card.state) &&
-  card.state !== "split";
-
 /** A task in work with no conversation: this pass links it to its thread. */
-const awaitsThread = (card: Card) => card.boardThread === null && inWork(card);
+const awaitsThread = (card: Card) => card.boardThread === null && boardTaskInWork(card);
 
 /**
  * How a thread this server made stands with its task, as the engine's lanes show it: `linked` is
@@ -502,7 +485,7 @@ export const make = Effect.gen(function* () {
         pending.add(target);
         // The successor continues the lead's work: a task out of work, such as a split parent,
         // keeps both threads until it is back in work.
-        if (!inWork(task)) break;
+        if (!boardTaskInWork(task)) break;
         const resumed = yield* swaps
           .resumeBoardLeadHandoff(row.task, shell, shell.latestRunId)
           .pipe(Effect.result);
@@ -606,7 +589,7 @@ export const make = Effect.gen(function* () {
         if (task === "deleted") continue;
         const link = task.boardThread;
         if (link === null || link === undefined || link.environmentId !== environmentId) continue;
-        if (!inWork(task)) {
+        if (!boardTaskInWork(task)) {
           yield* releaseClaim(taskId);
           continue;
         }

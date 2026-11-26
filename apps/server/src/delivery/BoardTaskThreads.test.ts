@@ -783,27 +783,57 @@ it.effect(
   },
 );
 
-it.effect.each(["split", "rejected"])(
-  "keeps a lead hand-off pending while its task is %s, and finishes it after",
-  (state) => {
+it.effect.each([
+  { state: "split", lane: "child-work" },
+  { state: "rejected", lane: "implementation" },
+  // The engine claims no closed state, though these still stand in a lane of their own.
+  { state: "approved", lane: "approved" },
+  { state: "pr-open", lane: "pull-request" },
+])(
+  "keeps a lead hand-off pending while its task is $state, and finishes it after",
+  ({ state, lane }) => {
     const engine = board();
     const task = engine.addTask({ id: "task-7" });
     const store = threadStore();
     return Effect.gen(function* () {
       const { threads, successor, continuation } = yield* pendingHandoff(engine, store);
       task.state = state;
+      task.lane = lane;
       yield* threads.reconcile();
       assert.equal(engine.linkOf("task-7")?.threadId, THREAD);
       assert.isNull(store.threads.get(THREAD)!.archivedAt);
       assert.isNull(store.threads.get(successor)!.archivedAt);
       assert.isFalse(store.messages.has(successor));
+      assert.isNull(engine.leaseOf("task-7"));
       task.state = "running";
+      task.lane = "implementation";
       yield* threads.reconcile();
       assert.equal(engine.linkOf("task-7")?.threadId, successor);
       assert.isTrue(store.messages.get(successor)?.has(continuation));
     }).pipe(Effect.provide(deliveryLayer(engine, `board-threads-swap-${state}-`)));
   },
 );
+
+it.effect("stops a lead hand-off when the task it reads before continuing is finished", () => {
+  const engine = board();
+  const task = engine.addTask({ id: "task-7" });
+  const store = threadStore();
+  return Effect.gen(function* () {
+    const { threads, successor } = yield* pendingHandoff(engine, store);
+    const handle = engine.handle;
+    // Rejected after the lanes were read, before the hand-off reads the task itself.
+    engine.handle = (method, path, body) => {
+      if (method === "GET" && path === "/api/tasks/task-7") task.state = "rejected";
+      return handle(method, path, body);
+    };
+    yield* threads.reconcile();
+    assert.equal(task.state, "rejected");
+    assert.equal(engine.linkOf("task-7")?.threadId, THREAD);
+    assert.isFalse(store.messages.has(successor));
+    assert.isNull(store.threads.get(THREAD)!.archivedAt);
+    assert.isNull(store.threads.get(successor)!.archivedAt);
+  }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-swap-fresh-")));
+});
 
 it.effect(
   "finishes a lead hand-off over a title it cannot read, and still serves other tasks",
