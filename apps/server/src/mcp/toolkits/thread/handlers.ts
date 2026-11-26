@@ -23,6 +23,7 @@ import {
 import * as DeliveryService from "../../../delivery/DeliveryService.ts";
 import * as Option from "effect/Option";
 import {
+  assertPeerScheduledTask,
   assertPeerThreadTargets,
   filterPeerThreadRows,
 } from "../../../delivery/linkedThreadAccess.ts";
@@ -126,12 +127,12 @@ export const layer = McpToolAccess.toLayer(ThreadToolkit, {
           message: "The scheduled task was not found.",
         });
       const scope = yield* McpInvocationContext.McpInvocationContext;
-      if (scope.client?.linked === true && scheduled.threadId !== null) {
+      if (McpInvocationContext.isLinkedDeliveryCaller(scope)) {
         const { threads } = yield* readCaller();
         const delivery = Option.getOrUndefined(
           yield* Effect.serviceOption(DeliveryService.DeliveryService),
         );
-        yield* assertPeerThreadTargets(scope, [scheduled.threadId], threads, delivery);
+        yield* assertPeerScheduledTask(scope, scheduled, threads, delivery);
       }
       const { task, threadId } = yield* scheduler
         .runNow({ id: input.taskId })
@@ -189,19 +190,18 @@ export const layer = McpToolAccess.toLayer(ThreadToolkit, {
         const delivery = Option.getOrUndefined(
           yield* Effect.serviceOption(DeliveryService.DeliveryService),
         );
-        const transfers =
-          scope.client?.linked === true
-            ? yield* Effect.filter(
-                projection.contextTransfers,
-                ({ sourceThreadId, targetThreadId }) =>
-                  assertPeerThreadTargets(
-                    scope,
-                    [sourceThreadId, targetThreadId].filter((id) => id !== projection.thread.id),
-                    threads,
-                    delivery,
-                  ).pipe(Effect.isSuccess),
-              )
-            : projection.contextTransfers;
+        const transfers = McpInvocationContext.isLinkedDeliveryCaller(scope)
+          ? yield* Effect.filter(
+              projection.contextTransfers,
+              ({ sourceThreadId, targetThreadId }) =>
+                assertPeerThreadTargets(
+                  scope,
+                  [sourceThreadId, targetThreadId].filter((id) => id !== projection.thread.id),
+                  threads,
+                  delivery,
+                ).pipe(Effect.isSuccess),
+            )
+          : projection.contextTransfers;
         return {
           transfers: transfers.map(({ id, sourceThreadId, targetThreadId, status }) => ({
             id,

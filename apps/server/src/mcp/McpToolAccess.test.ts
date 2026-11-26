@@ -553,7 +553,11 @@ it.effect.each([
   "private",
   "shared",
   "offline",
+  "offline-known",
+  "offline-descendant",
   "binding-unavailable",
+  "legacy-launch",
+  "legacy-source",
   "owner",
   "source",
   "pending",
@@ -564,12 +568,16 @@ it.effect.each([
   const parent = ThreadId.make("launching-thread");
   const base = liveThreadShell(id);
   const target =
-    visibility === "descendant" || visibility === "shared-descendant"
+    visibility === "descendant" ||
+    visibility === "shared-descendant" ||
+    visibility === "offline-descendant"
       ? {
           ...base,
           lineage: { ...base.lineage, launchedFromThreadId: parent },
         }
-      : base;
+      : visibility === "legacy-launch" || visibility === "legacy-source"
+        ? { ...base, creationSource: "mcp" as const }
+        : base;
   const tools = Toolkit.make(
     Tool.make("test_thread_target", {
       parameters: Schema.Struct({
@@ -583,47 +591,53 @@ it.effect.each([
     }),
   );
   const owner = visibility === "owner";
-  const visible = visibility === "shared";
+  const visible = visibility === "shared" || visibility === "legacy-launch";
   let engineCalls = 0;
-  const delivery = Layer.effect(
-    DeliveryService.DeliveryService,
-    Effect.map(DeliveryService.DeliveryService, (service) => ({
-      ...service,
-      ownerTiedThreads: Effect.fn("fixture.ownerTiedThreads")(function* () {
-        engineCalls++;
-        if (visibility === "offline")
-          return yield* new DeliveryError({
-            reason: "unreachable",
-            detail: "Fixture engine offline.",
-          });
-        const index = new Map<ThreadId, boolean>();
-        if (visibility === "private" || visibility === "source") index.set(id, false);
-        if (visibility === "shared" || visibility === "shared-descendant") index.set(id, true);
-        if (visibility === "descendant" || visibility === "shared-descendant")
-          index.set(parent, false);
-        return index;
-      }),
-      threadState: (threadId): Effect.Effect<DeliveryThreadState, DeliveryError> =>
-        visibility === "pending" && threadId === id
-          ? Effect.succeed({
-              binding: null,
-              pending: {
-                threadId,
-                team: "development",
-                driver: "codex",
-                role: null,
-                cwd: "/tmp",
-                since: "now",
-                why: null,
-              },
-            })
-          : visibility === "binding-unavailable" && threadId === id
-            ? Effect.fail(
-                new DeliveryError({ reason: "invalid", detail: "Fixture binding lookup failed." }),
-              )
-            : service.threadState(threadId),
-    })),
-  ).pipe(Layer.provide(DeliveryService.layerTest));
+  const delivery = DeliveryService.layerTestWithThreadIndex({
+    ownerTiedThreads: Effect.fn("fixture.ownerTiedThreads")(function* () {
+      engineCalls++;
+      if (visibility === "offline")
+        return yield* new DeliveryError({
+          reason: "unreachable",
+          detail: "Fixture engine offline.",
+        });
+      const index = new Map<ThreadId, boolean>();
+      if (
+        visibility === "private" ||
+        visibility === "source" ||
+        visibility === "legacy-source" ||
+        visibility === "offline-known"
+      )
+        index.set(id, false);
+      if (visibility === "shared" || visibility === "shared-descendant") index.set(id, true);
+      if (
+        visibility === "descendant" ||
+        visibility === "shared-descendant" ||
+        visibility === "offline-descendant"
+      )
+        index.set(parent, false);
+      return index;
+    }),
+    threadState: (threadId): Effect.Effect<DeliveryThreadState, DeliveryError> =>
+      visibility === "pending" && threadId === id
+        ? Effect.succeed({
+            binding: null,
+            pending: {
+              threadId,
+              team: "development",
+              driver: "codex",
+              role: null,
+              cwd: "/tmp",
+              since: "now",
+              why: null,
+            },
+          })
+        : visibility === "binding-unavailable" && threadId === id
+          ? Effect.fail(
+              new DeliveryError({ reason: "invalid", detail: "Fixture binding lookup failed." }),
+            )
+          : Effect.succeed({ binding: null, pending: null }),
+  });
   const server = McpHttpServer.toolkitRegistration(
     tools,
     McpToolAccess.toLayer(tools, {

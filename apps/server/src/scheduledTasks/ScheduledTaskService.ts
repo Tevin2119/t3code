@@ -227,6 +227,7 @@ interface ScheduledTaskRow {
   readonly project_id: string;
   readonly thread_id: string | null;
   readonly thread_mode: string;
+  readonly launched_from_thread_id: string | null;
   readonly workspace_strategy_json: string;
   readonly model_selection_json: string;
   readonly runtime_mode: string;
@@ -269,6 +270,7 @@ export class ScheduledTaskService extends Context.Service<
     readonly subscribeList: () => Stream.Stream<ScheduledTaskListResult, ScheduledTaskError>;
     readonly upsert: (
       input: ScheduledTaskUpsertInput,
+      launchedFromThreadId?: ThreadId,
     ) => Effect.Effect<ScheduledTaskMutationResult, ScheduledTaskError>;
     readonly setEnabled: (
       input: ScheduledTaskSetEnabledInput,
@@ -417,6 +419,9 @@ const decodeRow = Effect.fnUntraced(
       schedule,
       projectId: row.project_id,
       threadId: row.thread_id,
+      ...(row.launched_from_thread_id === null
+        ? {}
+        : { launchedFromThreadId: row.launched_from_thread_id }),
       threadMode: row.thread_mode,
       workspaceStrategy,
       modelSelection,
@@ -542,6 +547,7 @@ export const layer = Layer.effect(
         project_id,
         thread_id,
         thread_mode,
+        launched_from_thread_id,
         workspace_strategy_json,
         model_selection_json,
         runtime_mode,
@@ -584,6 +590,7 @@ export const layer = Layer.effect(
         project_id,
         thread_id,
         thread_mode,
+        launched_from_thread_id,
         workspace_strategy_json,
         model_selection_json,
         runtime_mode,
@@ -664,6 +671,7 @@ export const layer = Layer.effect(
           project_id,
           thread_id,
           thread_mode,
+        launched_from_thread_id,
           workspace_strategy_json,
           model_selection_json,
           runtime_mode,
@@ -689,6 +697,7 @@ export const layer = Layer.effect(
           ${task.projectId},
           ${task.threadId},
           ${scheduledTaskThreadMode(task)},
+          ${task.launchedFromThreadId ?? null},
           ${JSON.stringify(task.workspaceStrategy)},
           ${JSON.stringify(task.modelSelection)},
           ${task.runtimeMode},
@@ -1134,6 +1143,9 @@ export const layer = Layer.effect(
                       text: prompt,
                       attachments: [],
                     },
+                    ...(active.launchedFromThreadId === undefined
+                      ? {}
+                      : { launchedFromThreadId: active.launchedFromThreadId }),
                     createdBy: active.createdBy,
                     creationSource: active.creationSource,
                   })
@@ -1459,7 +1471,7 @@ export const layer = Layer.effect(
 
     const upsert: ScheduledTaskService["Service"]["upsert"] = Effect.fn(
       "ScheduledTaskService.upsert",
-    )(function* (input) {
+    )(function* (input, launchedFromThreadId) {
       // A webhook task the policy blocks can still be edited while it is off.
       if (input.enabled && input.schedule.type === "webhook" && webhookPolicyBlock !== undefined) {
         return yield* taskError(
@@ -1592,6 +1604,9 @@ export const layer = Layer.effect(
         isSameSchedule(existingTask.schedule, schedule);
       if (!scheduleUnchanged)
         yield* requireFutureOnce({ enabled: input.enabled, schedule }, now, id);
+      const ancestor =
+        existingTask?.launchedFromThreadId ??
+        (existingTask === null ? launchedFromThreadId : undefined);
       const task: ScheduledTask = {
         id,
         title: input.title,
@@ -1601,6 +1616,7 @@ export const layer = Layer.effect(
         projectId: input.projectId,
         threadId,
         threadMode,
+        ...(ancestor === undefined ? {} : { launchedFromThreadId: ancestor }),
         workspaceStrategy,
         modelSelection: input.modelSelection,
         runtimeMode: input.runtimeMode,

@@ -46,7 +46,11 @@ const boxThread = ThreadId.make("thread:box");
 const boxItem = TurnItemId.make("item:box");
 const input = { environmentId: box.environmentId, threadId: boxThread };
 
-const boxShell = { ...liveThreadShell(boxThread, { activeRunId: null }), title: "On the box" };
+const boxShell = {
+  ...liveThreadShell(boxThread, { activeRunId: null }),
+  title: "On the box",
+  linkOrigin: { sessionId: "unrelated-peer-session", label: "Other peer" },
+};
 const boxProjection = idleThreadProjection(boxShell);
 
 const archived = (sequence: number): OrchestrationV2StoredEvent => ({
@@ -151,13 +155,17 @@ it.effect("relays a linked thread's snapshot and live items, and stops when the 
         Stream.runForEach((item) => Queue.offer(received, item)),
         Effect.forkScoped,
       );
-      expect(yield* Queue.take(received)).toMatchObject({
+      const snapshot = yield* Queue.take(received);
+      expect(snapshot).toMatchObject({
         kind: "snapshot",
         snapshotSequence: 7,
         projection: { thread: { id: boxThread, title: "On the box" } },
       });
+      expect(JSON.stringify(snapshot)).not.toContain("unrelated-peer-session");
       yield* Queue.offer(b.live, archived(8));
-      expect(yield* Queue.take(received)).toMatchObject({
+      const event = yield* Queue.take(received);
+      expect(JSON.stringify(event)).not.toContain("unrelated-peer-session");
+      expect(event).toMatchObject({
         kind: "event",
         sequence: 8,
         event: { type: "thread.archived", threadId: boxThread },

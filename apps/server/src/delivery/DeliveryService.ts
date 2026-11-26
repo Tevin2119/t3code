@@ -38,7 +38,7 @@ import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
-import type * as Exit from "effect/Exit";
+import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Layer from "effect/Layer";
@@ -324,50 +324,52 @@ export class DeliveryService extends Context.Service<
 const disabled = () =>
   Effect.fail(new DeliveryError({ reason: "disabled", detail: "Delivery is turned off." }));
 
-/** Inert service, for suites that only need the RPC surface to resolve. */
-export const layerTest = Layer.succeed(
-  DeliveryService,
-  DeliveryService.of({
-    read: disabled,
-    readLinked: disabled,
-    actLinked: disabled,
-    peerHandoff: disabled,
-    ownerHandoffRequest: disabled,
-    ownerTiedThreads: Effect.fn("DeliveryService.ownerTiedThreads")(() =>
-      Effect.succeed(new Map<ThreadId, boolean>()),
-    ),
-    setBoardLinkedVisibility: disabled,
-    setTaskLinkedHidden: disabled,
-    discover: Effect.fn("DeliveryService.discover")(function* (input, caller) {
-      return {
-        ...Discovery.emptyDiscovery(
-          input,
-          caller,
-          "disabled",
-          DateTime.formatIso(yield* DateTime.now),
-          null,
-        ),
-        diagnostics: ["disabled" as const],
-      };
+type TestThreadIndex = Pick<DeliveryService["Service"], "ownerTiedThreads" | "threadState">;
+
+export const layerTestWithThreadIndex = (overrides: Partial<TestThreadIndex>) =>
+  Layer.succeed(
+    DeliveryService,
+    DeliveryService.of({
+      read: disabled,
+      readLinked: disabled,
+      actLinked: disabled,
+      peerHandoff: disabled,
+      ownerHandoffRequest: disabled,
+      ownerTiedThreads: overrides.ownerTiedThreads ?? (() => Effect.succeed(new Map())),
+      setBoardLinkedVisibility: disabled,
+      setTaskLinkedHidden: disabled,
+      discover: Effect.fn("DeliveryService.discover")(function* (input, caller) {
+        return {
+          ...Discovery.emptyDiscovery(
+            input,
+            caller,
+            "disabled",
+            DateTime.formatIso(yield* DateTime.now),
+            null,
+          ),
+          diagnostics: ["disabled" as const],
+        };
+      }),
+      act: disabled,
+      nativeBuildAct: disabled,
+      nativeIntakeAct: disabled,
+      boardThreadConfiguration: Effect.succeed("test"),
+      boardThreadAct: disabled,
+      bindThread: disabled,
+      refreshThread: disabled,
+      threadState:
+        overrides.threadState ?? (() => Effect.succeed({ binding: null, pending: null })),
+      releaseThread: Effect.fn("DeliveryService.releaseThread")(() =>
+        Effect.succeed({ binding: null, pending: null }),
+      ),
+      setThreadLineup: disabled,
+      prepareThread: Effect.fn("DeliveryService.prepareThread")(() => Effect.succeed(false)),
+      terminalEntryScript: Effect.succeed(null),
     }),
-    act: disabled,
-    nativeBuildAct: disabled,
-    nativeIntakeAct: disabled,
-    boardThreadConfiguration: Effect.succeed("test"),
-    boardThreadAct: disabled,
-    bindThread: disabled,
-    refreshThread: disabled,
-    threadState: Effect.fn("DeliveryService.threadState")(() =>
-      Effect.succeed({ binding: null, pending: null }),
-    ),
-    releaseThread: Effect.fn("DeliveryService.releaseThread")(() =>
-      Effect.succeed({ binding: null, pending: null }),
-    ),
-    setThreadLineup: disabled,
-    prepareThread: Effect.fn("DeliveryService.prepareThread")(() => Effect.succeed(false)),
-    terminalEntryScript: Effect.succeed(null),
-  }),
-);
+  );
+
+/** Inert service with Delivery disabled. */
+export const layerTest = layerTestWithThreadIndex({});
 
 const make = Effect.fn("DeliveryService.make")(function* (
   deriveConfigMap: typeof deriveProviderInstanceConfigMap,
@@ -485,20 +487,20 @@ const make = Effect.fn("DeliveryService.make")(function* (
   >();
   const discoveryLock = yield* Semaphore.make(1);
   const threadIndexLock = yield* Semaphore.make(1);
-  let ownerThreadCache:
-    | {
-        engineUrl: string;
-        environmentId: EnvironmentId;
-        until: number;
-        value: Exit.Exit<ReadonlyMap<ThreadId, boolean>, DeliveryError>;
-      }
-    | undefined;
+  const ownerThreadCache = new Map<
+    string,
+    {
+      until: number;
+      value: Exit.Exit<ReadonlyMap<ThreadId, boolean>, DeliveryError>;
+    }
+  >();
+  const lastGoodOwnerThreadIndex = new Map<string, ReadonlyMap<ThreadId, boolean>>();
   let discoveryGeneration = 0;
   let discoveryConfiguration = "";
   const invalidateDiscovery = () => {
     discoveryGeneration++;
     discoveryCache.clear();
-    ownerThreadCache = undefined;
+    ownerThreadCache.clear();
   };
 
   const readHealth = Effect.fn("DeliveryService.readHealth")(
@@ -2045,14 +2047,12 @@ const make = Effect.fn("DeliveryService.make")(function* (
     ownerTiedThreads: Effect.fn("DeliveryService.ownerTiedThreads")(
       function* (environmentId) {
         const settings = yield* delivery;
-        if (!settings.enabled) return yield* linkedRefusal(403);
-        const now = yield* Clock.currentTimeMillis;
-        if (
-          ownerThreadCache?.engineUrl === settings.engineUrl &&
-          ownerThreadCache.environmentId === environmentId &&
-          now < ownerThreadCache.until
-        )
-          return yield* ownerThreadCache.value;
+        if (!settings.enabled || settings.engineUrl.trim() === "")
+          return new Map<ThreadId, boolean>();
+        const key = `${environmentId.length}:${environmentId}${settings.engineUrl}`;
+        const cached = ownerThreadCache.get(key);
+        if (cached !== undefined && (yield* Clock.currentTimeMillis) < cached.until)
+          return yield* cached.value;
         const generation = discoveryGeneration;
         const read = Effect.gen(function* () {
           const { body } = yield* request(
@@ -2076,7 +2076,8 @@ const make = Effect.fn("DeliveryService.make")(function* (
           }
           return index;
         });
-        const value = yield* Effect.exit(read);
+        const answer = yield* Effect.exit(read);
+        const receivedAt = yield* Clock.currentTimeMillis;
         const current = yield* delivery;
         if (
           generation !== discoveryGeneration ||
@@ -2084,12 +2085,15 @@ const make = Effect.fn("DeliveryService.make")(function* (
           current.engineUrl !== settings.engineUrl
         )
           return yield* linkedRefusal(404);
-        ownerThreadCache = {
-          engineUrl: settings.engineUrl,
-          environmentId,
-          until: now + 3_000,
-          value,
-        };
+        const previous = lastGoodOwnerThreadIndex.get(key);
+        if (Exit.isSuccess(answer)) lastGoodOwnerThreadIndex.set(key, answer.value);
+        const value =
+          Exit.isFailure(answer) && previous !== undefined
+            ? Exit.succeed(
+                new Map<ThreadId, boolean>(Array.from(previous.keys(), (id) => [id, false])),
+              )
+            : answer;
+        ownerThreadCache.set(key, { until: receivedAt + 3_000, value });
         return yield* value;
       },
       (effect) => threadIndexLock.withPermit(effect),

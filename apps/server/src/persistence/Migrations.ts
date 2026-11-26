@@ -118,6 +118,8 @@ import Migration0107 from "./Migrations/107_DeferredSlashCommandIndex.ts";
 import Migration0108 from "./Migrations/108_AgentFeedback.ts";
 import Migration0109 from "./Migrations/109_IssueTrackerAccounts.ts";
 import Migration0110 from "./Migrations/110_Workflows.ts";
+import Migration0114 from "./Migrations/114_ScheduledTaskAncestry.ts";
+import Migration0115 from "./Migrations/115_PeerArrivalKey.ts";
 
 const migrationEntries = [
   [1, "OrchestrationEvents", Migration0001],
@@ -231,6 +233,8 @@ const migrationEntries = [
   [108, "AgentFeedback", Migration0108],
   [109, "IssueTrackerAccounts", Migration0109],
   [110, "Workflows", Migration0110],
+  [114, "ScheduledTaskAncestry", Migration0114],
+  [115, "PeerArrivalKey", Migration0115],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);

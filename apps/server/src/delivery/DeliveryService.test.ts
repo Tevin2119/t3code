@@ -31,7 +31,6 @@ import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as DateTime from "effect/DateTime";
 import * as Option from "effect/Option";
 import * as Logger from "effect/Logger";
-import * as Digest from "effect/crypto/Digest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -765,8 +764,72 @@ it.effect("reads the complete owner thread index and invalidates it after a writ
 
     yield* TestClock.adjust("3 seconds");
     fake.down = true;
-    expect((yield* index.pipe(Effect.flip)).reason).toBe("unreachable");
+    expect(yield* index).toEqual(new Map());
   }).pipe(Effect.provide(layer(fake, { prefix: "linked-owner-index-" })));
+});
+
+it.effect.each([
+  { enabled: false, engineUrl: "http://127.0.0.1:4320" },
+  { enabled: true, engineUrl: "" },
+])("uses the local fence with delivery configured as %o", (settings) => {
+  const fake = engine();
+  return Effect.gen(function* () {
+    const delivery = yield* DeliveryService.DeliveryService;
+    expect(yield* delivery.ownerTiedThreads(linkedEnvironmentId)).toEqual(new Map());
+    expect(fake.requests).toEqual([]);
+  }).pipe(Effect.provide(layer(fake, { ...settings, prefix: "linked-owner-disabled-" })));
+});
+
+it.effect("caches a timed-out owner index refresh for callers queued behind it", () => {
+  const fake = engine();
+  const path = "/api/task-threads";
+  const thread = threadId("filing-thread");
+  const other = threadId("private-filing-thread");
+  fake.replies = {
+    [path]: {
+      threads: [
+        { environmentId: linkedEnvironmentId, threadId: thread, linked: true },
+        { environmentId: linkedEnvironmentId, threadId: other, linked: false },
+      ],
+    },
+  };
+  return Effect.gen(function* () {
+    const delivery = yield* DeliveryService.DeliveryService;
+    const index = delivery.ownerTiedThreads(linkedEnvironmentId);
+    expect(yield* index).toEqual(
+      new Map([
+        [thread, true],
+        [other, false],
+      ]),
+    );
+    yield* TestClock.adjust("3 seconds");
+    const started = yield* Deferred.make<void>();
+    fake.beforeRequest = (url) =>
+      url.pathname === path
+        ? Deferred.succeed(started, undefined).pipe(Effect.andThen(Effect.never))
+        : Effect.void;
+    const first = yield* index.pipe(Effect.result, Effect.forkScoped);
+    yield* Deferred.await(started);
+    const second = yield* index.pipe(Effect.result, Effect.forkScoped);
+    yield* TestClock.adjust("4 seconds");
+    expect(yield* Fiber.join(first)).toMatchObject({
+      _tag: "Success",
+      success: new Map([
+        [thread, false],
+        [other, false],
+      ]),
+    });
+    expect(yield* Fiber.join(second)).toEqual(yield* Fiber.join(first));
+    expect(fake.requests.filter((request) => request.path === path)).toHaveLength(2);
+
+    fake.down = true;
+    expect(
+      yield* delivery.ownerTiedThreads(EnvironmentId.make("other")).pipe(Effect.flip),
+    ).toMatchObject({ reason: "unreachable" });
+    const settings = yield* ServerSettings.ServerSettingsService;
+    yield* settings.updateSettings({ delivery: { engineUrl: "http://127.0.0.1:4322" } });
+    expect(yield* index.pipe(Effect.flip)).toMatchObject({ reason: "unreachable" });
+  }).pipe(Effect.provide(layer(fake, { prefix: "linked-owner-timeout-" })));
 });
 
 it.effect.each([
@@ -1226,80 +1289,66 @@ it.effect.each([
     code: "orchestration_error",
     message: "Link disconnected",
   });
-  const mockPeers =
-    (crypto: Digest.Digest["Service"]): PeerMcpClient.PeerMcpClient["Service"]["call"] =>
-    (input) =>
-      Effect.gen(function* () {
-        const decode = Schema.decodeUnknownEffect(Schema.fromJsonString(input.success));
-        expect(JSON.stringify(input.arguments)).not.toContain(keyFixture);
-        if (input.tool === "delivery_linked_origin") {
-          const { environmentId, challenge, claim } = input.arguments;
-          expect(environmentId).toBe(localFixture);
-          const validClaim = yield* PeerLinks.hashArrivalProof(
-            crypto,
-            String(challenge),
-            "remote-session",
-            "claim",
-            peerFixture,
-            "caller-session",
-          );
-          if (claim !== validClaim)
-            return yield* decode(JSON.stringify({ environmentId: peerFixture, proof: null }));
-          const proof = yield* PeerLinks.hashArrivalProof(
-            crypto,
-            String(challenge),
-            "remote-session",
-            "proof",
-            "relay" in scenario ? EnvironmentId.make("real-origin") : peerFixture,
-            "caller-session",
-          );
-          return yield* decode(JSON.stringify({ environmentId: peerFixture, proof }));
-        }
-        const request = decodePeerRequest(input.arguments.request);
-        peerRequests.push(request);
-        const count = peerRequests.filter((entry) => entry.operation === request.operation).length;
-        if (
-          (drop === request.operation && count === 1) ||
-          (!recovered &&
-            ((drop === "before-commit" && request.operation === "commit") ||
-              (drop === "before-settle" &&
-                (request.operation === "import" || request.operation === "settle"))))
-        ) {
-          return yield* disconnected;
-        }
-        const data = {
-          prepare: prepared("peer-session"),
-          import: receipt("accepted"),
-          settle: receipt(answer),
-          commit: { handoff: sourceId, outcome: "done" },
-          cancel: { handoff: sourceId, outcome: "restored" },
-          list: { handoffs: [linkedRow, { ...linkedRow, id: "closed-move", state: "done" }] },
-          get: linkedRow,
-        }[request.operation];
-        if ("large" in scenario && request.operation === "prepare") {
-          const answer = { environmentId: peerFixture, data, error: null };
-          const wire = JSON.stringify({
-            structuredContent: answer,
-            content: [{ text: JSON.stringify(answer) }],
-          });
-          expect(prepared("peer-session").bytes).toBeGreaterThan(16_000_000);
-          expect(Buffer.byteLength(wire)).toBeLessThan(LINKED_HANDOFF_MCP_MAX_BYTES);
-          expect(input.maxResponseBytes).toBe(LINKED_HANDOFF_MCP_MAX_BYTES);
-        }
-        if ("handoff" in request && request.operation !== "prepare")
-          expect(request.handoff).toBe(sourceId);
-        const result =
-          "oversize" in scenario
-            ? {
-                environmentId: peerFixture,
-                data: null,
-                error: { refused: true, status: 413, message: "Nothing was frozen." },
-              }
-            : { environmentId: peerFixture, data, error: null };
-        if (request.operation === "import")
-          expect(JSON.stringify(request.bundle)).toBe(JSON.stringify(sourceBundle));
-        return yield* decode(JSON.stringify(result));
-      }).pipe(Effect.mapError(() => disconnected));
+  const fixtureClaim = "a".repeat(64);
+  const fixtureProof = "b".repeat(64);
+  const mockPeers: PeerMcpClient.PeerMcpClient["Service"]["call"] = (input) =>
+    Effect.gen(function* () {
+      const decode = Schema.decodeUnknownEffect(Schema.fromJsonString(input.success));
+      expect(JSON.stringify(input.arguments)).not.toContain(keyFixture);
+      if (input.tool === "delivery_linked_origin") {
+        expect(input.arguments).toMatchObject({ environmentId: localFixture, claim: fixtureClaim });
+        return yield* decode(
+          JSON.stringify({
+            environmentId: peerFixture,
+            proof: "relay" in scenario ? "c".repeat(64) : fixtureProof,
+          }),
+        );
+      }
+      const request = decodePeerRequest(input.arguments.request);
+      peerRequests.push(request);
+      const count = peerRequests.filter((entry) => entry.operation === request.operation).length;
+      if (
+        (drop === request.operation && count === 1) ||
+        (!recovered &&
+          ((drop === "before-commit" && request.operation === "commit") ||
+            (drop === "before-settle" &&
+              (request.operation === "import" || request.operation === "settle"))))
+      ) {
+        return yield* disconnected;
+      }
+      const data = {
+        prepare: prepared("peer-session"),
+        import: receipt("accepted"),
+        settle: receipt(answer),
+        commit: { handoff: sourceId, outcome: "done" },
+        cancel: { handoff: sourceId, outcome: "restored" },
+        list: { handoffs: [linkedRow, { ...linkedRow, id: "closed-move", state: "done" }] },
+        get: linkedRow,
+      }[request.operation];
+      if ("large" in scenario && request.operation === "prepare") {
+        const answer = { environmentId: peerFixture, data, error: null };
+        const wire = JSON.stringify({
+          structuredContent: answer,
+          content: [{ text: JSON.stringify(answer) }],
+        });
+        expect(prepared("peer-session").bytes).toBeGreaterThan(16_000_000);
+        expect(Buffer.byteLength(wire)).toBeLessThan(LINKED_HANDOFF_MCP_MAX_BYTES);
+        expect(input.maxResponseBytes).toBe(LINKED_HANDOFF_MCP_MAX_BYTES);
+      }
+      if ("handoff" in request && request.operation !== "prepare")
+        expect(request.handoff).toBe(sourceId);
+      const result =
+        "oversize" in scenario
+          ? {
+              environmentId: peerFixture,
+              data: null,
+              error: { refused: true, status: 413, message: "Nothing was frozen." },
+            }
+          : { environmentId: peerFixture, data, error: null };
+      if (request.operation === "import")
+        expect(JSON.stringify(request.bundle)).toBe(JSON.stringify(sourceBundle));
+      return yield* decode(JSON.stringify(result));
+    }).pipe(Effect.mapError(() => disconnected));
 
   return Effect.gen(function* () {
     const forwarding = yield* PeerForwarding.PeerForwarding;
@@ -1448,15 +1497,19 @@ it.effect.each([
         Layer.provide([
           NodeCrypto.layer,
           Layer.mock(ThreadManagement.ThreadManagementService)({}),
-          Layer.effect(
-            PeerMcpClient.PeerMcpClient,
-            Effect.map(Digest.Digest, (crypto) =>
-              PeerMcpClient.PeerMcpClient.of({ call: mockPeers(crypto) }),
-            ),
-          ).pipe(Layer.provide(NodeCrypto.layer)),
+          Layer.succeed(PeerMcpClient.PeerMcpClient, { call: mockPeers }),
           Layer.mock(PeerLinks.PeerLinks)({
             enabled: Effect.succeed(true),
             actingSessionId: () => Effect.succeed("caller-session"),
+            challengeArrival: (sessionId) =>
+              Effect.succeed(
+                sessionId === "remote-session"
+                  ? {
+                      claim: fixtureClaim,
+                      verify: (proof) => Effect.succeed(proof === fixtureProof),
+                    }
+                  : null,
+              ),
             get: () =>
               DateTime.now.pipe(
                 Effect.map((now) =>

@@ -82,7 +82,7 @@ export const threadNotFound = Effect.fn("OrchestratorMcpService.threadNotFound")
   threadId: ThreadId,
   message: string,
 ) {
-  if (scope.client?.linked === true) {
+  if (McpInvocationContext.isLinkedDeliveryCaller(scope)) {
     return yield* new OrchestratorMcpFailure({
       code: "thread_not_found",
       message: "The thread was not found.",

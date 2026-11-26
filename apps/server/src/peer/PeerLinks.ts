@@ -2,6 +2,7 @@ import {
   AuthMcpClientAccess,
   AuthMcpRegistrationError,
   AuthMcpTokenError,
+  AuthSessionId,
   EnvironmentHttpApi,
   EnvironmentId,
   type ExecutionEnvironmentCapabilities,
@@ -16,6 +17,7 @@ import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Digest from "effect/crypto/Digest";
+import * as Mac from "effect/crypto/Mac";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
@@ -37,9 +39,12 @@ import * as HttpApi from "effect/http-api/HttpApi";
 import * as HttpApiClient from "effect/http-api/HttpApiClient";
 import { isLocalLoopbackHost, isTailnetHost } from "@t3tools/shared/hostClassification";
 
+import * as PayloadSigner from "../auth/PayloadSigner.ts";
+import { derivePeerArrivalKey } from "../auth/peerArrivalKey.ts";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import * as AuthSessions from "../persistence/AuthSessions.ts";
 
 const PeerHttpApi = HttpApi.make(EnvironmentHttpApi.identifier)
   .add(EnvironmentHttpApi.groups.metadata)
@@ -124,6 +129,15 @@ export class PeerLinks extends Context.Service<
     readonly actingSessionId: (
       environmentId: EnvironmentId,
     ) => Effect.Effect<string | null, PeerLinkError>;
+    readonly challengeArrival: (
+      sessionId: string,
+      challenge: string,
+      answeringEnvironmentId: EnvironmentId,
+      callerSessionId: string,
+    ) => Effect.Effect<
+      { claim: string; verify: (proof: string) => Effect.Effect<boolean> } | null,
+      PeerLinkError
+    >;
     readonly arrivalProof: (
       environmentId: EnvironmentId,
       challenge: string,
@@ -157,27 +171,21 @@ const decodeLinkClaims = Schema.decodeUnknownEffect(
   ),
 );
 
-export const hashArrivalProof = (
-  crypto: Digest.Digest["Service"],
+const arrivalMessage = (
   challenge: string,
   sessionId: string,
   side: "claim" | "proof",
   answeringEnvironmentId: EnvironmentId,
   callerSessionId: string,
 ) =>
-  crypto.digestHex(
-    Digest.sha256,
-    new TextEncoder().encode(
-      JSON.stringify([
-        "delivery-arrival",
-        side,
-        challenge,
-        sessionId,
-        answeringEnvironmentId,
-        callerSessionId,
-      ]),
-    ),
-  );
+  JSON.stringify([
+    "t3:peer-arrival:v1",
+    side,
+    challenge,
+    sessionId,
+    answeringEnvironmentId,
+    callerSessionId,
+  ]);
 
 interface PeerLinkRow {
   readonly environment_id: string;
@@ -286,9 +294,11 @@ const linkLimitsHold = (peer: { readonly capabilities: ExecutionEnvironmentCapab
 
 const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
+  const authSessions = yield* AuthSessions.AuthSessionRepository;
   const secrets = yield* ServerSecretStore.ServerSecretStore;
   const random = yield* SecureRandom.SecureRandom;
   const digest = yield* Digest.Digest;
+  const mac = yield* Mac.Mac;
   const httpClient = yield* HttpClient.HttpClient;
   const environment = yield* ServerEnvironment.ServerEnvironment;
   const serverSettings = yield* ServerSettings.ServerSettingsService;
@@ -846,8 +856,7 @@ const make = Effect.gen(function* () {
     },
   );
 
-  // The signed token's public claims provide the session id without contacting the peer.
-  const actingSessionId = Effect.fn("PeerLinks.actingSessionId")(function* (
+  const actingCredential = Effect.fn("PeerLinks.actingCredential")(function* (
     environmentId: EnvironmentId,
   ) {
     if (!(yield* enabled)) return null;
@@ -861,13 +870,60 @@ const make = Effect.gen(function* () {
       return null;
     const stored = yield* secrets.get(row.value.secret_name).pipe(Effect.catch(failStorage));
     if (Option.isNone(stored)) return null;
-    const [payload, signature] = new TextDecoder().decode(stored.value).split(".");
+    const token = new TextDecoder().decode(stored.value);
+    const [payload, signature] = token.split(".");
     if (!payload || !signature) return null;
     return yield* Effect.fromResult(Base64Url.decodeString(payload)).pipe(
       Effect.flatMap(decodeLinkClaims),
-      Effect.map(({ sid }) => sid),
+      Effect.map(({ sid }) => ({ sid, token })),
       Effect.orElseSucceed(() => null),
     );
+  });
+
+  const actingSessionId = Effect.fn("PeerLinks.actingSessionId")(function* (
+    environmentId: EnvironmentId,
+  ) {
+    return (yield* actingCredential(environmentId))?.sid ?? null;
+  });
+
+  const arrivalSigner = Effect.fn("PeerLinks.arrivalSigner")(function* (key: string) {
+    const signer = yield* PayloadSigner.fromSecret(new TextEncoder().encode(key)).pipe(
+      Effect.provideService(Mac.Mac, mac),
+    );
+    return {
+      sign: (message: string) =>
+        signer
+          .sign(message)
+          .pipe(Effect.map((tag) => Buffer.from(tag, "base64url").toString("hex"))),
+      verify: (message: string, tag: string) =>
+        /^[a-f0-9]{64}$/.test(tag)
+          ? signer.verify(message, Buffer.from(tag, "hex").toString("base64url"))
+          : Effect.succeed(false),
+    };
+  });
+
+  const challengeArrival = Effect.fn("PeerLinks.challengeArrival")(function* (
+    sessionId: string,
+    challenge: string,
+    answeringEnvironmentId: EnvironmentId,
+    callerSessionId: string,
+  ) {
+    const key = yield* authSessions
+      .getPeerArrivalKey(AuthSessionId.make(sessionId), yield* DateTime.now)
+      .pipe(Effect.catch(failStorage));
+    if (Option.isNone(key)) return null;
+    const signer = yield* arrivalSigner(key.value);
+    const claim = yield* signer.sign(
+      arrivalMessage(challenge, sessionId, "claim", answeringEnvironmentId, callerSessionId),
+    );
+    return {
+      claim,
+      verify: (proof: string) =>
+        signer.verify(
+          arrivalMessage(challenge, sessionId, "proof", answeringEnvironmentId, callerSessionId),
+          proof,
+        ),
+    };
   });
 
   const arrivalProof = Effect.fn("PeerLinks.arrivalProof")(function* (
@@ -876,20 +932,20 @@ const make = Effect.gen(function* () {
     claim: string,
     callerSessionId: string,
   ) {
-    const sid = yield* actingSessionId(environmentId);
-    if (sid === null) return null;
+    const credential = yield* actingCredential(environmentId);
+    if (credential === null) return null;
     const answeringId = yield* environment.getEnvironmentId;
-    // The supplied environment only selects a reciprocal credential. Both authenticated sessions must match.
-    const actual = yield* hashArrivalProof(
-      digest,
-      challenge,
-      sid,
-      "claim",
-      answeringId,
-      callerSessionId,
+    const key = yield* derivePeerArrivalKey(credential.token).pipe(
+      Effect.provideService(Mac.Mac, mac),
     );
-    return actual === claim
-      ? yield* hashArrivalProof(digest, challenge, sid, "proof", answeringId, callerSessionId)
+    const signer = yield* arrivalSigner(key);
+    return (yield* signer.verify(
+      arrivalMessage(challenge, credential.sid, "claim", answeringId, callerSessionId),
+      claim,
+    ))
+      ? yield* signer.sign(
+          arrivalMessage(challenge, credential.sid, "proof", answeringId, callerSessionId),
+        )
       : null;
   });
 
@@ -928,10 +984,11 @@ const make = Effect.gen(function* () {
     unlink,
     resolve,
     actingSessionId,
+    challengeArrival,
     arrivalProof,
     recordOutcome,
     recordExpiry,
   });
 });
 
-export const layer = Layer.effect(PeerLinks, make);
+export const layer = Layer.effect(PeerLinks, make).pipe(Layer.provide(AuthSessions.layer));

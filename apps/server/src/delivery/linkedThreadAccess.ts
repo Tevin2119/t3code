@@ -2,8 +2,8 @@ import {
   isServerOwnedThreadLineage,
   OrchestratorMcpFailure,
   type EnvironmentId,
+  type ScheduledTask,
   type ThreadId,
-  type OrchestrationV2ThreadProjection,
   type OrchestrationV2ThreadShell,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
@@ -17,19 +17,13 @@ import type * as ThreadManagement from "../orchestration-v2/ThreadManagementServ
 import { boardTaskOfMarker } from "./boardThreadMarker.ts";
 import * as DeliveryService from "./DeliveryService.ts";
 
-type Shell = Pick<OrchestrationV2ThreadShell, "id" | "lineage" | "creationSource">;
+type Shell = Pick<OrchestrationV2ThreadShell, "id" | "lineage">;
 type Delivery = DeliveryService.DeliveryService["Service"];
 type LineageReader = {
   readonly getThreadShell: (
     id: ThreadId,
   ) => Effect.Effect<
     OrchestrationV2ThreadShell | null,
-    OrchestratorV2Error | ProjectionStoreV2Error
-  >;
-  readonly getThreadProjection: (
-    id: ThreadId,
-  ) => Effect.Effect<
-    OrchestrationV2ThreadProjection | null,
     OrchestratorV2Error | ProjectionStoreV2Error
   >;
 };
@@ -59,19 +53,11 @@ export const isFencedThread = Effect.fn("linkedThreadAccess.isFencedThread")(fun
         return true;
     }
 
-    let launchedFrom = lineage.launchedFromThreadId;
-    if (
-      launchedFrom === undefined &&
-      current.creationSource === "mcp" &&
-      lineage.parentThreadId === null
-    ) {
-      // Launches recorded before lineage carried their creator used the first message's sender.
-      const projection = yield* threads.getThreadProjection(current.id).pipe(Effect.option);
-      if (Option.isNone(projection) || projection.value === null) return true;
-      launchedFrom = projection.value.messages[0]?.senderThreadId;
-      if (launchedFrom === undefined) return true;
-    }
-    for (const ancestorId of [lineage.rootThreadId, lineage.parentThreadId, launchedFrom]) {
+    for (const ancestorId of [
+      lineage.rootThreadId,
+      lineage.parentThreadId,
+      lineage.launchedFromThreadId,
+    ]) {
       if (ancestorId == null || visited.has(ancestorId)) continue;
       const ancestor = yield* threads.getThreadShell(ancestorId).pipe(Effect.option);
       if (Option.isNone(ancestor) || ancestor.value === null) return true;
@@ -144,3 +130,30 @@ export const filterPeerThreadRows = Effect.fn("linkedThreadAccess.filterPeerThre
     { concurrency: 8 },
   );
 });
+
+export const scheduledTaskThreadTargets = (task: ScheduledTask): ThreadId[] => [
+  ...new Set([task.threadId, task.launchedFromThreadId].filter((id) => id != null)),
+];
+
+export const assertPeerScheduledTask = Effect.fn("linkedThreadAccess.assertPeerScheduledTask")(
+  function* (
+    scope: McpInvocationContext.McpInvocationScope,
+    task: ScheduledTask,
+    threads: LineageReader,
+    delivery?: Delivery,
+  ) {
+    const ids = scheduledTaskThreadTargets(task);
+    const allowed = yield* filterPeerThreadRows(
+      scope,
+      ids,
+      (id) =>
+        threads.getThreadShell(id).pipe(
+          Effect.map((shell) => (shell?.deletedAt === null ? shell : null)),
+          Effect.orElseSucceed(() => null),
+        ),
+      threads,
+      delivery,
+    );
+    if (allowed.length !== ids.length) return yield* notFound();
+  },
+);

@@ -1,5 +1,10 @@
 import * as DeliveryService from "../delivery/DeliveryService.ts";
-import { assertPeerThreadTargets, filterPeerThreadRows } from "../delivery/linkedThreadAccess.ts";
+import {
+  assertPeerScheduledTask,
+  assertPeerThreadTargets,
+  filterPeerThreadRows,
+  scheduledTaskThreadTargets,
+} from "../delivery/linkedThreadAccess.ts";
 import {
   CommandId,
   type RunId,
@@ -2411,6 +2416,7 @@ const make = Effect.gen(function* () {
    * the caller's limits.
    */
   const loadScheduledTask = Effect.fn("OrchestratorMcpService.loadScheduledTask")(function* (
+    scope: McpInvocationScope,
     scheduledTaskId: ScheduledTask["id"],
     limits: {
       readonly runtimeMode: RuntimeMode;
@@ -2428,6 +2434,7 @@ const make = Effect.gen(function* () {
     if (task === undefined) {
       return yield* failure("task_not_found", `Scheduled task ${scheduledTaskId} was not found.`);
     }
+    yield* assertPeerScheduledTask(scope, task, threadManagement, delivery);
     for (const modes of yield* scheduledTaskRunModes(task)) {
       yield* resolveRuntimeMode(limits.runtimeMode, modes.runtimeMode);
       yield* resolveInteractionMode(limits.interactionMode, modes.interactionMode);
@@ -2490,7 +2497,7 @@ const make = Effect.gen(function* () {
             }),
       };
       const { task } = yield* scheduledTasks
-        .upsert(upsertInput)
+        .upsert(upsertInput, parent?.thread.id)
         .pipe(
           Effect.mapError((error) =>
             failure("orchestration_error", `Could not schedule task: ${error.message}`),
@@ -2517,22 +2524,23 @@ const make = Effect.gen(function* () {
         if (!isLinkedDeliveryCaller(scope)) {
           return { tasks: matching.map((task) => scheduledTaskSummary(task, false)) };
         }
-        const bound = matching.flatMap((task) =>
-          task.threadId === null ? [] : [{ taskId: task.id, threadId: task.threadId }],
-        );
+        const targets = [...new Set(matching.flatMap(scheduledTaskThreadTargets))];
         const allowed = new Set(
-          (yield* filterPeerThreadRows(
+          yield* filterPeerThreadRows(
             scope,
-            bound,
-            ({ threadId }) =>
-              threadManagement.getThreadShell(threadId).pipe(Effect.orElseSucceed(() => null)),
+            targets,
+            (threadId) =>
+              threadManagement.getThreadShell(threadId).pipe(
+                Effect.map((shell) => (shell?.deletedAt === null ? shell : null)),
+                Effect.orElseSucceed(() => null),
+              ),
             threadManagement,
             delivery,
-          )).map(({ taskId }) => taskId),
+          ),
         );
         return {
           tasks: matching
-            .filter((task) => task.threadId === null || allowed.has(task.id))
+            .filter((task) => scheduledTaskThreadTargets(task).every((id) => allowed.has(id)))
             .map((task) => scheduledTaskSummary(task, false)),
         };
       },
@@ -2540,10 +2548,7 @@ const make = Effect.gen(function* () {
     updateScheduledTask: Effect.fn("OrchestratorMcpService.updateScheduledTask")(
       function* (scope, input) {
         const { parent, limits } = yield* loadCaller(scope, ["runs"]);
-        const existing = yield* loadScheduledTask(input.scheduledTaskId, limits);
-        if (existing.threadId !== null) {
-          yield* assertPeerThreadTargets(scope, [existing.threadId], threadManagement, delivery);
-        }
+        const existing = yield* loadScheduledTask(scope, input.scheduledTaskId, limits);
         yield* assertLiveCallerForOtherProject(scope, parent, existing.projectId);
         if (
           input.bindToCurrentThread === true &&
@@ -2620,10 +2625,7 @@ const make = Effect.gen(function* () {
     deleteScheduledTask: Effect.fn("OrchestratorMcpService.deleteScheduledTask")(
       function* (scope, input) {
         const { parent, limits } = yield* loadCaller(scope, ["runs"]);
-        const existing = yield* loadScheduledTask(input.scheduledTaskId, limits);
-        if (existing.threadId !== null) {
-          yield* assertPeerThreadTargets(scope, [existing.threadId], threadManagement, delivery);
-        }
+        const existing = yield* loadScheduledTask(scope, input.scheduledTaskId, limits);
         yield* assertLiveCallerForOtherProject(scope, parent, existing.projectId);
         yield* scheduledTasks
           .delete({ id: existing.id })

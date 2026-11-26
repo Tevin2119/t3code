@@ -329,22 +329,26 @@ const makeMcpAuthMiddleware = Effect.gen(function* () {
       ),
     );
   };
-  // Every request reads it, and a remote added mid-thread shows the tools within a minute.
-  const forgeOfThread = yield* Cache.make({
-    capacity: 1_000,
-    timeToLive: Duration.minutes(1),
-    lookup: (threadId: ThreadId): Effect.Effect<boolean | undefined> =>
-      Option.isNone(pullRequests) || Option.isNone(projections)
-        ? Effect.undefined
-        : projections.value.getThreadShell(threadId).pipe(
-            Effect.flatMap((thread) =>
-              thread === null
-                ? Effect.undefined
-                : pullRequests.value.servesProject(thread.projectId),
-            ),
-            Effect.orElseSucceed(() => undefined),
-          ),
-  });
+  const threadMetadata = yield* Cache.makeWith(
+    Effect.fn("McpHttpServer.threadMetadata")(function* (threadId: ThreadId) {
+      if (Option.isNone(projections)) return null;
+      const shell = yield* projections.value
+        .getThreadShell(threadId)
+        .pipe(Effect.orElseSucceed(() => null));
+      if (shell === null) return null;
+      const forge = Option.isNone(pullRequests)
+        ? undefined
+        : yield* pullRequests.value
+            .servesProject(shell.projectId)
+            .pipe(Effect.orElseSucceed(() => undefined));
+      return { linkOrigin: shell.linkOrigin, forge };
+    }),
+    {
+      capacity: 1_000,
+      timeToLive: (exit) =>
+        exit._tag === "Success" && exit.value !== null ? Duration.minutes(1) : Duration.zero,
+    },
+  );
   const authenticateRequest = Effect.fn("McpHttpServer.authenticateRequest")(function* (
     request: HttpServerRequest.HttpServerRequest,
   ) {
@@ -378,20 +382,16 @@ const makeMcpAuthMiddleware = Effect.gen(function* () {
     const { linkedEnvironments, agentFeedback, workflows, delivery } = yield* settingsFlags;
     if (limited.client?.linked === true && !linkedEnvironments) return linkedEnvironmentsOff;
     const origin = Option.getOrUndefined(Option.map(requestUrl(request), (url) => url.origin));
-    const forge =
-      limited.thread === undefined
-        ? undefined
-        : yield* Cache.get(forgeOfThread, limited.thread.threadId);
     let thread = limited.thread;
-    if (delivery && thread !== undefined) {
-      const shell = Option.isNone(projections)
-        ? null
-        : yield* projections.value
-            .getThreadShell(thread.threadId)
-            .pipe(Effect.orElseSucceed(() => null));
-      if (shell === null) thread = { ...thread, deliveryOriginUnknown: true };
-      else if (shell.linkOrigin !== undefined) thread = { ...thread, linkOrigin: shell.linkOrigin };
+    const metadata =
+      thread === undefined ? null : yield* Cache.get(threadMetadata, thread.threadId);
+    if (thread !== undefined) {
+      if (metadata === null && (delivery || Option.isSome(projections)))
+        thread = { ...thread, deliveryOriginUnknown: true };
+      else if (metadata?.linkOrigin !== undefined)
+        thread = { ...thread, linkOrigin: metadata.linkOrigin };
     }
+    const forge = metadata?.forge;
     return {
       ...limited,
       thread,

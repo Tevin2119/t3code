@@ -9,6 +9,7 @@ import {
   DEFAULT_SERVER_SETTINGS,
   ChatImageAttachment,
   CommandId,
+  ContextTransferId,
   EnvironmentId,
   NodeId,
   OrchestratorMcpThreadReadResult,
@@ -84,6 +85,7 @@ const declaredFailure = (result: McpSchema.CallToolResult) => {
 };
 import { htmlRenderFromToolItem } from "@t3tools/shared/toolOutput";
 
+const decodeScheduledTask = Schema.decodeSync(ScheduledTask);
 const decodeMcpAttachmentInput = Schema.decodeUnknownEffect(McpAttachmentInput);
 const decodeThreadReadResult = Schema.decodeUnknownEffect(OrchestratorMcpThreadReadResult);
 const decodeThreadSearchResult = Schema.decodeUnknownEffect(
@@ -1165,7 +1167,7 @@ it.effect.each([
     scenario: "explains why a webhook task cannot run manually",
     tasks: [
       {
-        ...Schema.decodeSync(ScheduledTask)(scheduledTask("task-webhook", "full-access")),
+        ...decodeScheduledTask(scheduledTask("task-webhook", "full-access")),
         schedule: { type: "webhook" as const, signature: null },
       },
     ],
@@ -1219,6 +1221,140 @@ it.effect.each([
     ),
   ),
 );
+
+it.effect.each(["bound", "created"] as const)(
+  "a link-started thread cannot run a scheduled task %s by a fenced thread",
+  (relationship) => {
+    const privateThreadId = ThreadId.make("scheduled-private-thread");
+    const linkOrigin = { sessionId: "peer-session", label: "Peer", access: "full-access" } as const;
+    const task = {
+      ...decodeScheduledTask(scheduledTask("task-private", "full-access")),
+      ...(relationship === "bound"
+        ? { threadId: privateThreadId }
+        : { launchedFromThreadId: privateThreadId }),
+    };
+    return Effect.gen(function* () {
+      const server = yield* McpServer.McpServer;
+      const result = yield* server
+        .callTool({
+          name: "run_scheduled_task_now",
+          arguments: { taskId: task.id },
+        })
+        .pipe(
+          Effect.provideService(McpInvocationContext.McpInvocationContext, {
+            ...scope,
+            thread: { ...scope.thread!, linkOrigin },
+          }),
+          Effect.provideService(McpSchema.McpServerClient, client),
+        );
+      expect(declaredFailure(result)).toMatchObject({ code: "thread_not_found" });
+    }).pipe(
+      Effect.provide(
+        McpHttpServer.layerThreadToolkit.pipe(
+          Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
+          Layer.provide(NodeCrypto.layer),
+          Layer.provide(Layer.mock(ThreadSearch.ThreadSearch)({})),
+          Layer.provide(Layer.mock(PeerForwarding.PeerForwarding)({})),
+          Layer.provide(Layer.mock(PeerLinkRequests.PeerLinkRequests)({})),
+          Layer.provide(Layer.mock(PeerLinks.PeerLinks)({})),
+          Layer.provide(
+            DeliveryService.layerTestWithThreadIndex({
+              ownerTiedThreads: () => Effect.succeed(new Map([[privateThreadId, false]])),
+            }),
+          ),
+          Layer.provide(
+            Layer.mock(ThreadManagement.ThreadManagementService)({
+              getThreadShell: (id) =>
+                Effect.succeed({
+                  ...McpToolAccessTestkit.liveThreadShell(id),
+                  ...(id === threadId ? { linkOrigin } : {}),
+                }),
+            }),
+          ),
+          Layer.provide(
+            Layer.mock(ScheduledTaskService.ScheduledTaskService)({
+              list: () => Effect.succeed({ tasks: [task] }),
+              runNow: () => Effect.succeed({ task, threadId: privateThreadId }),
+            }),
+          ),
+        ),
+      ),
+    );
+  },
+);
+
+it.effect("a link-started thread only sees transfers whose endpoints it can read", () => {
+  const linkOrigin = { sessionId: "peer-session", label: "Peer", access: "full-access" } as const;
+  const own = { ...McpToolAccessTestkit.liveThreadShell(threadId), linkOrigin };
+  const privateThreadId = ThreadId.make("transfer-private-thread");
+  const ordinaryThreadId = ThreadId.make("transfer-ordinary-thread");
+  return Effect.gen(function* () {
+    const server = yield* McpServer.McpServer;
+    const result = yield* server
+      .callTool({
+        name: "t3_thread_transfer",
+        arguments: { action: "status", threadId },
+      })
+      .pipe(
+        Effect.provideService(McpInvocationContext.McpInvocationContext, {
+          ...scope,
+          thread: { ...scope.thread!, linkOrigin },
+        }),
+        Effect.provideService(McpSchema.McpServerClient, client),
+      );
+    expect(result.structuredContent).toEqual({
+      transfers: [
+        {
+          id: ContextTransferId.make("transfer-visible"),
+          sourceThreadId: ordinaryThreadId,
+          targetThreadId: threadId,
+          status: "consumed",
+        },
+      ],
+    });
+  }).pipe(
+    Effect.provide(
+      McpHttpServer.layerThreadToolkit.pipe(
+        Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
+        Layer.provide(NodeCrypto.layer),
+        Layer.provide(Layer.mock(ThreadSearch.ThreadSearch)({})),
+        Layer.provide(Layer.mock(PeerForwarding.PeerForwarding)({})),
+        Layer.provide(Layer.mock(PeerLinkRequests.PeerLinkRequests)({})),
+        Layer.provide(Layer.mock(PeerLinks.PeerLinks)({})),
+        Layer.provide(Layer.mock(ScheduledTaskService.ScheduledTaskService)({})),
+        Layer.provide(
+          DeliveryService.layerTestWithThreadIndex({
+            ownerTiedThreads: () => Effect.succeed(new Map([[privateThreadId, false]])),
+          }),
+        ),
+        Layer.provide(
+          Layer.mock(ThreadManagement.ThreadManagementService)({
+            getThreadShell: (id) =>
+              Effect.succeed(id === threadId ? own : McpToolAccessTestkit.liveThreadShell(id)),
+            getProjectThreadRecords: () =>
+              Effect.succeed({
+                ...McpToolAccessTestkit.idleThreadProjection(own),
+                contextTransfers: [
+                  {
+                    id: ContextTransferId.make("transfer-private"),
+                    sourceThreadId: privateThreadId,
+                    targetThreadId: threadId,
+                    status: "consumed",
+                  },
+                  {
+                    id: ContextTransferId.make("transfer-visible"),
+                    sourceThreadId: ordinaryThreadId,
+                    targetThreadId: threadId,
+                    status: "consumed",
+                  },
+                ],
+              } as never),
+          }),
+        ),
+      ),
+    ),
+  );
+});
 
 it.effect("run_scheduled_task_now reports why a started run failed to dispatch", () =>
   Effect.gen(function* () {

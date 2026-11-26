@@ -104,6 +104,25 @@ it.effect("tells a caller with linked environments that the thread may be on one
   }),
 );
 
+it.effect("does not hint at a live thread id from a link-started thread", () =>
+  Effect.gen(function* () {
+    const error = yield* readBare(
+      [ThreadId.make(`mcp:${bareId}`), ThreadId.make("linked-launch")],
+      {
+        ...client,
+        client: undefined,
+        thread: {
+          threadId: ThreadId.make("linked-launch"),
+          providerSessionId: "provider-session",
+          providerInstanceId: ProviderInstanceId.make("codex"),
+          linkOrigin: { sessionId: "peer-session", label: "Laptop", access: "auto" },
+        },
+      },
+    );
+    expect(error.message).toBe("The thread was not found.");
+  }),
+);
+
 it.effect("points an unencoded delegated-task id at the encoded thread it belongs to", () =>
   Effect.gen(function* () {
     const commandId = `command:mcp:${bareId}:delegate-task:0e7d2c41-6b9a-4f3e-8d15-a2c4b6e8f019`;

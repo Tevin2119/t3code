@@ -414,7 +414,7 @@ const make = Effect.gen(function* () {
     acting: boolean,
   ) {
     const scope = yield* Effect.serviceOption(McpInvocationContext.McpInvocationContext);
-    if (Option.getOrUndefined(scope)?.client?.linked === true) {
+    if (McpInvocationContext.isLinkedDeliveryCaller(Option.getOrUndefined(scope))) {
       return yield* new DeliveryError({
         reason: "refused",
         detail: "A peer cannot forward a hand-off.",
@@ -529,33 +529,26 @@ const make = Effect.gen(function* () {
         Effect.gen(function* () {
           const callerSessionId = yield* links.actingSessionId(link.environmentId);
           if (callerSessionId === null) return null;
-          const claim = yield* PeerLinks.hashArrivalProof(
-            crypto,
-            challenge,
+          const proof = yield* links.challengeArrival(
             sessionId,
-            "claim",
+            challenge,
             link.environmentId,
             callerSessionId,
           );
-          const expected = yield* PeerLinks.hashArrivalProof(
-            crypto,
-            challenge,
-            sessionId,
-            "proof",
-            link.environmentId,
-            callerSessionId,
-          );
+          if (proof === null) return null;
           const answer = yield* peers
             .call({
               environmentId: link.environmentId,
               tool: "delivery_linked_origin",
-              arguments: { environmentId, challenge, claim },
+              arguments: { environmentId, challenge, claim: proof.claim },
               limits: { runtimeMode: "full-access", interactionMode: "default" },
               success: LinkedArrivalProofResult,
               maxResponseBytes: 4096,
             })
             .pipe(Effect.timeout("15 seconds"));
-          return answer.environmentId === link.environmentId && answer.proof === expected
+          return answer.environmentId === link.environmentId &&
+            answer.proof !== null &&
+            (yield* proof.verify(answer.proof))
             ? link.environmentId
             : null;
         }).pipe(Effect.orElseSucceed(() => null)),
@@ -591,7 +584,10 @@ const make = Effect.gen(function* () {
     expectedPeer?: EnvironmentId,
   ) {
     const scope = yield* Effect.serviceOption(McpInvocationContext.McpInvocationContext);
-    if (Option.getOrUndefined(scope)?.client?.linked === true || !(yield* links.enabled))
+    if (
+      McpInvocationContext.isLinkedDeliveryCaller(Option.getOrUndefined(scope)) ||
+      !(yield* links.enabled)
+    )
       return null;
     return yield* provePeer(peer, expectedPeer);
   });
@@ -649,7 +645,10 @@ const make = Effect.gen(function* () {
     request: LinkedDeliveryRead,
   ) {
     const { peerEnvironmentId } = target;
-    if (!scope.capabilities.has("orchestration") || scope.client?.linked === true) {
+    if (
+      !scope.capabilities.has("orchestration") ||
+      McpInvocationContext.isLinkedDeliveryCaller(scope)
+    ) {
       return noLinkedResult(peerEnvironmentId, "unauthorized");
     }
     if (scope.linkedEnvironments === false) return noLinkedResult(peerEnvironmentId, "not-linked");
@@ -666,7 +665,7 @@ const make = Effect.gen(function* () {
     environmentId?: EnvironmentId,
   ): Effect.fn.Return<DeliveryDiscoverySnapshot, never, DeliveryService.DeliveryService> {
     const target = remoteTarget(scope, environmentId);
-    if (scope.client?.linked === true) {
+    if (McpInvocationContext.isLinkedDeliveryCaller(scope)) {
       return {
         ...emptyDiscovery(
           input,

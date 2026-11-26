@@ -728,7 +728,8 @@ it.effect("a bound run follows its thread when promotion moves it mid-send", () 
 
 it.effect("a fresh-session task launches one thread, then starts each later run fresh in it", () =>
   Effect.gen(function* () {
-    const launches = yield* Ref.make(0);
+    const launches = yield* Ref.make<Array<ThreadId | null>>([]);
+    const creator = ThreadId.make("thread:scheduler");
     const sends = yield* Ref.make<Array<{ threadId: ThreadId; freshContext?: boolean }>>([]);
     const launched = ThreadId.make("thread:fresh-session-task");
     const layer = ScheduledTaskService.layer.pipe(
@@ -736,8 +737,8 @@ it.effect("a fresh-session task launches one thread, then starts each later run 
         Layer.mergeAll(
           ManagedPolicy.layerTest(),
           Layer.mock(ThreadLaunchService.ThreadLaunchService)({
-            launch: () =>
-              Ref.update(launches, (n) => n + 1).pipe(
+            launch: (input) =>
+              Ref.update(launches, (all) => [...all, input.launchedFromThreadId ?? null]).pipe(
                 Effect.as({ threadId: launched, resumed: false } as never),
               ),
           }),
@@ -781,7 +782,7 @@ it.effect("a fresh-session task launches one thread, then starts each later run 
         runtimeMode: "full-access",
         interactionMode: "default",
       } as const;
-      yield* service.upsert({ ...input, threadMode: "fresh_session" });
+      yield* service.upsert({ ...input, threadMode: "fresh_session" }, creator);
 
       assert.equal((yield* service.runNow({ id: input.id })).threadId, launched);
       // A form opened before the first run saves no thread; the binding stays.
@@ -798,7 +799,8 @@ it.effect("a fresh-session task launches one thread, then starts each later run 
       assert.equal(legacy.task.threadMode, "fresh_session");
       yield* service.runNow({ id: input.id });
 
-      assert.equal(yield* Ref.get(launches), 1);
+      assert.deepEqual(yield* Ref.get(launches), [creator]);
+      assert.equal(legacy.task.launchedFromThreadId, creator);
       assert.deepEqual(yield* Ref.get(sends), [{ threadId: launched, freshContext: true }]);
       // Its thread stays in the old project, so moving the task leaves it for a new one.
       const moved = yield* service.upsert({

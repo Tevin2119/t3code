@@ -39,6 +39,31 @@ const encodeStreamItem = Schema.encodeEffect(
 const encodeHistoryPage = Schema.encodeEffect(Schema.toCodecJson(OrchestrationV2ThreadHistoryPage));
 const encodeItem = Schema.encodeEffect(Schema.toCodecJson(OrchestrationV2GetTurnItemResult));
 
+const omitLinkOrigin = <T extends { readonly linkOrigin?: unknown }>({
+  linkOrigin: _,
+  ...rest
+}: T) => rest;
+
+const redactEventOrigin = <T extends { readonly payload: object }>(event: T): T => {
+  if (!("linkOrigin" in event.payload)) return event;
+  const payload = { ...event.payload };
+  Reflect.deleteProperty(payload, "linkOrigin");
+  return { ...event, payload };
+};
+
+const redactStreamItem = (
+  item: OrchestrationV2ThreadStreamItem,
+): OrchestrationV2ThreadStreamItem => {
+  if (item.kind === "snapshot") {
+    return {
+      ...item,
+      projection: { ...item.projection, thread: omitLinkOrigin(item.projection.thread) },
+    };
+  }
+  if (item.kind === "event") return { ...item, event: redactEventOrigin(item.event) };
+  return item;
+};
+
 const refusal = (status: number, error: string) =>
   HttpServerResponse.jsonUnsafe({ error }, { status, headers: NO_STORE });
 
@@ -133,6 +158,7 @@ const streamRoute = (
             // A failed read closes the response; the linking environment reports it and reconnects.
             Stream.catchCause(() => Stream.empty),
             Stream.interruptWhen(admitted.revoked),
+            Stream.map(redactStreamItem),
           ),
           encodeStreamItem,
         ),
