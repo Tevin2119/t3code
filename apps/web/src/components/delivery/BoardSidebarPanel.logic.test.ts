@@ -50,6 +50,17 @@ describe("the board's column", () => {
     expect(groups.done).toHaveLength(20);
   });
 
+  it("puts a finished task in Done ahead of every other group", () => {
+    const waiting = { waitingOn: "person", waitsOnPerson: true };
+    const groups = panelGroups([
+      card("a", 1, { lane: "completed", ...waiting }),
+      card("b", 2, { lane: "review", state: "pr-open", ...waiting }),
+      card("c", 3, waiting),
+    ]);
+    expect(groups.done.map((task) => task.id)).toEqual(["a", "b"]);
+    expect(groups.waiting.map((task) => task.id)).toEqual(["c"]);
+  });
+
   it("nests the open task's current children and seat conversations under its row, each task once", () => {
     const cards = [card("t1", 1), card("t2", 2), card("t3", 3)];
     const rows = switcherGroups(cards, {

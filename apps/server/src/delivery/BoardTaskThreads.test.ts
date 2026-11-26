@@ -1630,6 +1630,64 @@ it.effect.each(["approved", "pr-open", "merged", "rejected", "closed"])(
   },
 );
 
+it.effect("confirms a delivered steer delivered after its task closes", () => {
+  const engine = board();
+  engine.addTask({ id: "task-7" });
+  const store = threadStore();
+  return Effect.gen(function* () {
+    const threads = yield* service(store);
+    yield* threads.reconcile();
+    const steer = engine.queueSteer("task-7", "Use the other API");
+    engine.dropNext(/\/steers\/\d+\/delivered$/);
+    yield* threads.reconcile();
+    assert.equal(steerSends(store).length, 1);
+    assert.equal(engine.steer(steer).state, "pending");
+    engine.task("task-7").state = "merged";
+    yield* threads.reconcile();
+    assert.equal(engine.steer(steer).state, "delivered");
+    assert.equal(steerSends(store).length, 1);
+  }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-steer-closed-delivered-")));
+});
+
+it.effect("tells a lost failed confirmation again once the task is off the steered set", () => {
+  const engine = board();
+  engine.addTask({ id: "task-7" });
+  const store = threadStore();
+  return Effect.gen(function* () {
+    const threads = yield* service(store);
+    yield* threads.reconcile();
+    const steer = engine.queueSteer("task-7", "Use the other API");
+    engine.beforeNextDetail(() => {
+      engine.task("task-7").state = "approved";
+    });
+    engine.dropNext(/\/steers\/\d+\/failed$/);
+    yield* threads.reconcile();
+    assert.equal(engine.steer(steer).state, "pending");
+    yield* threads.reconcile();
+    assert.equal(engine.steer(steer).state, "failed");
+    assert.equal(steerSends(store).length, 0);
+  }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-steer-closed-retry-")));
+});
+
+it.effect("names the lane when the lane finished the task", () => {
+  const engine = board();
+  engine.addTask({ id: "task-7" });
+  const store = threadStore();
+  return Effect.gen(function* () {
+    const threads = yield* service(store);
+    yield* threads.reconcile();
+    const steer = engine.queueSteer("task-7", "Use the other API");
+    engine.beforeNextDetail(() => {
+      engine.task("task-7").lane = "completed";
+    });
+    yield* threads.reconcile();
+    assert.deepInclude(engine.steer(steer), {
+      state: "failed",
+      failure: "The task is completed.",
+    });
+  }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-steer-closed-lane-")));
+});
+
 const CLAUDE = { instanceId: ProviderInstanceId.make("claudeAgent"), model: "claude-fable-5-1" };
 /** A lineup as plain data, so it compares by value. */
 const plainLineup = (threadId: ThreadId) =>

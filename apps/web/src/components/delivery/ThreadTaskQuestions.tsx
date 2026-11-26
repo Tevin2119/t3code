@@ -1,5 +1,4 @@
 import { useAtomValue } from "@effect/atom-react";
-import { boardTaskIsDone } from "@t3tools/client-runtime/board-task-in-play";
 import type { EnvironmentId } from "@t3tools/contracts";
 import { ChevronDownIcon, XIcon } from "lucide-react";
 import { Link } from "@tanstack/react-router";
@@ -29,7 +28,11 @@ import { Button } from "../ui/button";
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collapsible";
 import { Textarea } from "../ui/textarea";
 import { taskStandsIn } from "./ThreadTaskLinks";
-import { questionNeedsAttention, taskHasReplyDraft } from "./ThreadTaskQuestions.logic";
+import {
+  listedThreadTasks,
+  questionNeedsAttention,
+  taskHasReplyDraft,
+} from "./ThreadTaskQuestions.logic";
 
 export function ThreadTaskQuestions({
   environmentId,
@@ -45,10 +48,7 @@ export function ThreadTaskQuestions({
   const pending = useDeliveryReplyDrafts((state) => state.pending);
   const needsAttention = (task: DeliveryCard) =>
     task.questions > 0 || taskHasReplyDraft(environmentId, task.id, drafts, pending);
-  // Only work in play is listed here; finished tasks live on the board.
-  const listed = tasks
-    .filter((task) => !boardTaskIsDone(task) || needsAttention(task))
-    .sort((a, b) => Number(needsAttention(b)) - Number(needsAttention(a)));
+  const listed = listedThreadTasks(tasks, needsAttention);
   return (
     <div className="min-w-0 space-y-1" data-thread-task-questions>
       {listed.slice(0, visible).map((task) => (
