@@ -848,6 +848,60 @@ it.effect("keeps a lead hand-off pending until this server holds the task claim 
   }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-swap-capped-")));
 });
 
+it.effect.each(["lapses during the pass", "is taken before the restart"] as const)(
+  "keeps a lead hand-off pending when its claim %s and another server holds it",
+  (when) => {
+    const engine = board({ cap: 4 });
+    const task = engine.addTask({ id: "task-7" });
+    const store = threadStore();
+    return Effect.gen(function* () {
+      const others = Array.from({ length: 32 }, (_, index) => `other-${index}`);
+      for (const id of others) engine.addTask({ id });
+      const { successor, continuation } = yield* pendingHandoff(engine, store);
+      task.served = { set: 7 };
+      for (const id of others) engine.task(id).served = { set: 7 };
+      // The old lease lapses, as across a restart.
+      engine.advance(120_001);
+      const claimPath = "/api/orchestration/tasks/task-7/claim";
+      const compete = () => engine.handle("POST", claimPath, { origin: "other-server" }).status;
+      if (when === "is taken before the restart") assert.equal(compete(), 200);
+      const restarted = yield* service(store);
+      const handle = engine.handle;
+      let elapsed = 0;
+      // A slow engine: each other claim takes 4 s, so this task's new lease lapses mid-pass.
+      engine.handle = (method, path, body) => {
+        if (
+          when === "lapses during the pass" &&
+          method === "POST" &&
+          /^\/api\/orchestration\/tasks\/other-\d+\/claim$/.test(path)
+        ) {
+          engine.advance(4_000);
+          elapsed += 4_000;
+          if (elapsed === 124_000) assert.equal(compete(), 200);
+        }
+        return handle(method, path, body);
+      };
+      yield* restarted.reconcile();
+      engine.handle = handle;
+      const sent = () =>
+        store.commands.filter(
+          (command) => command.type === "message.dispatch" && command.messageId === continuation,
+        ).length;
+      assert.equal(engine.leaseOf("task-7")?.origin, "other-server");
+      assert.equal(engine.linkOf("task-7")?.threadId, THREAD);
+      assert.equal(sent(), 0);
+      assert.isNull(store.threads.get(THREAD)!.archivedAt);
+      assert.isNull(store.threads.get(successor)!.archivedAt);
+      // The other lease lapses: this server claims the task and the hand-off finishes once.
+      engine.advance(120_001);
+      yield* restarted.reconcile();
+      yield* restarted.reconcile();
+      assert.equal(engine.linkOf("task-7")?.threadId, successor);
+      assert.equal(sent(), 1);
+    }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-swap-competing-")));
+  },
+);
+
 it.effect("stops a lead hand-off when the task it reads before continuing is finished", () => {
   const engine = board();
   const task = engine.addTask({ id: "task-7" });
