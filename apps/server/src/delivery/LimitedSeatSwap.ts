@@ -45,6 +45,7 @@ import * as ProviderAdapterRegistry from "../orchestration-v2/ProviderAdapterReg
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
 import { forkParked } from "../serverActivation.ts";
+import { engineNotice } from "./BoardConversation.ts";
 import { boardTaskInWork } from "./boardTaskWork.ts";
 import { createBoardTaskThread, type BoardTask } from "./boardThreadMarker.ts";
 import * as BoardThreadRows from "./boardThreadRows.ts";
@@ -476,6 +477,10 @@ const make = Effect.gen(function* () {
       );
     }
 
+    // The successor is the board's from its start, showing the team the board gave the lead: never
+    // a lineup a person set.
+    if ((yield* delivery.boardLineupOf(target)) === undefined)
+      yield* delivery.setBoardLineup(target, (yield* delivery.boardLineupOf(shell.id)) ?? null);
     const messageId = MessageId.make(`${identity}:continue`);
     const continuation =
       existing === null
@@ -506,15 +511,18 @@ const make = Effect.gen(function* () {
           : ["## Acceptance", acceptance.map((item) => `- ${item}`).join("\n")]),
         run ? `Engine run ${run.id}, stage ${run.stage}.` : "No current engine run.",
       ];
+      const text = summary.join("\n\n");
       yield* threads.dispatch({
         type: "message.dispatch",
         commandId: CommandId.make(`${identity}:continue`),
         messageId,
         threadId: target,
-        text: summary.join("\n\n"),
+        text,
+        notification: engineNotice("This board task continues after a usage limit", text),
         attachments: [],
         modelSelection,
-        dispatchMode: { type: "start_immediately" },
+        // A notice is queued; the new thread runs nothing else, so it starts at once.
+        dispatchMode: { type: "queue_after_active" },
         createdBy: "agent",
         creationSource: "server",
       });

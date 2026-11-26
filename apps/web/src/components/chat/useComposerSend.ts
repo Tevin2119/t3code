@@ -52,6 +52,7 @@ import {
   type ScopedThreadRef,
   type ThreadContextRecord,
   type ThreadId,
+  isServerOwnedThreadLineage,
   ProviderInteractionMode,
   RuntimeMode,
 } from "@t3tools/contracts";
@@ -1089,6 +1090,7 @@ export function useComposerSend(input: ComposerSendInput) {
     const teamForSend = decideTeamForSend({
       enabled: deliveryForSend.enabled,
       isServerThread,
+      boardOwned: isServerOwnedThreadLineage(activeThread.lineage),
       bound: boundForSend !== null,
       held: heldTeamForSend,
       stateError: deliveryStateForSend.error,

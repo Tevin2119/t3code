@@ -343,6 +343,14 @@ the stage to open the **Task** item of the thread details card, the team to see 
 is doing what and open a seat's conversation, and evidence or deployment to open
 its tab. On a narrow window the badges sit in a row under the header.
 
+A task's thread is an Orchestrator conversation: the model picker shows the
+Orchestrator icon, and its **Orchestrator** panel lists the team's seats with the
+models the board picked for them. The board picks them, so the panel only shows
+them; change them on the board. While the engine does the task's work, what you
+write in the thread goes to the task's lead alone, and the seats do not answer it.
+A task whose team has no seat besides its lead that this machine's providers can
+run gets an ordinary thread, which shows the team once a seat can run.
+
 **Task evidence** and **Deployments** are tabs on the thread's right panel. Closed,
 they come back from the panel's **+** menu, on a task's thread only. While a
 seat's conversation is open, the panel, the details and the badges stay the

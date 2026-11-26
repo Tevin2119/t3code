@@ -84,7 +84,7 @@ export function OrchestratorParticipants(props: {
   readonly onFocus?:
     | ((row: { readonly role: string; readonly modelSelection: ModelSelection }) => void)
     | undefined;
-  /** A board task's conversation: its team's own setting decides what a limited seat does. */
+  /** A board task's conversation: the engine picks its seats, so they are shown, never changed. */
   readonly boardOwned?: boolean | undefined;
   /** What the owning panel adds to the explanation behind the info button. */
   readonly about?: ReactNode;
@@ -93,6 +93,7 @@ export function OrchestratorParticipants(props: {
 }) {
   const gt = useGT();
   const { team, value, roster } = props;
+  const readOnly = props.boardOwned === true;
   const limitedSeatOptions: ReadonlyArray<{
     readonly value: OrchestratorLimitedSeat;
     readonly label: string;
@@ -134,7 +135,7 @@ export function OrchestratorParticipants(props: {
     <div className="@container/lineup flex flex-col gap-2">
       <div className="flex items-center gap-1">
         <span className="min-w-0 flex-1 text-xs font-medium">Participants</span>
-        {team ? (
+        {team && !readOnly ? (
           <GlyphButton
             label="Reset to team"
             render={
@@ -151,11 +152,13 @@ export function OrchestratorParticipants(props: {
         ) : null}
         <InfoPopover label="About participants">
           {props.about ? <span className="mb-1.5 block">{props.about}</span> : null}
-          <span className="block">
-            <span className="font-medium text-foreground">Add participant: </span>
-            any provider and model, for this conversation only.
-            {team ? " Nothing is saved to the team." : ""}
-          </span>
+          {readOnly ? null : (
+            <span className="block">
+              <span className="font-medium text-foreground">Add participant: </span>
+              any provider and model, for this conversation only.
+              {team ? " Nothing is saved to the team." : ""}
+            </span>
+          )}
           <span className="mt-1.5 block">
             <span className="font-medium text-foreground">Critique round: </span>
             each round is one turn for every participant. Follow-up messages always get fresh
@@ -168,7 +171,7 @@ export function OrchestratorParticipants(props: {
             edit, commit, push and post. A participant's own access, set beside it, comes first, and
             a seat the team keeps read-only stays read-only unless you change it here.
           </span>
-          {props.boardOwned ? null : (
+          {readOnly ? null : (
             <span className="mt-1.5 block">
               <span className="font-medium text-foreground">{limitedSeatLabel}: </span>
               {gt(
@@ -241,12 +244,13 @@ export function OrchestratorParticipants(props: {
               aria-label={`Settings for ${row.title}`}
             >
               <div className="flex items-center gap-2">
-                {row.extra ? (
+                {row.extra || (readOnly && row.orchestrator) ? (
                   <span aria-hidden className="size-4.5 shrink-0 sm:size-4" />
                 ) : (
                   <Checkbox
                     aria-label={`Include ${row.title}`}
                     checked={row.included}
+                    disabled={readOnly}
                     onCheckedChange={(included) =>
                       props.onChange({
                         participantChoices: {
@@ -257,14 +261,19 @@ export function OrchestratorParticipants(props: {
                     }
                   />
                 )}
-                <span className={cn("flex shrink-0", !row.included && "opacity-50")}>
+                <span
+                  className={cn(
+                    "flex shrink-0",
+                    !row.included && !(readOnly && row.orchestrator) && "opacity-50",
+                  )}
+                >
                   <HarnessTile entry={entry} model={model} />
                 </span>
                 <div className="flex min-w-0 flex-1 flex-col">
                   <span
                     className={cn(
                       "flex min-w-0 items-center gap-1 text-xs font-medium",
-                      !row.included && "opacity-50",
+                      !row.included && !(readOnly && row.orchestrator) && "opacity-50",
                     )}
                   >
                     <span className="truncate">{row.title}</span>
@@ -285,7 +294,7 @@ export function OrchestratorParticipants(props: {
                       lockedProvider={null}
                       instanceEntries={entries}
                       modelOptionsByInstance={models}
-                      disabled={!row.included && !lead}
+                      disabled={readOnly || (!row.included && !lead)}
                       size="xs"
                       triggerClassName="-ml-1.75 max-w-full sm:max-w-full"
                       triggerAriaLabel={`Choose provider and model for ${row.title}`}
@@ -318,7 +327,7 @@ export function OrchestratorParticipants(props: {
                         model={selection.model}
                         modelOptions={selection.options}
                         allowPromptInjectedEffort={false}
-                        disabled={!row.included || !entry.isAvailable}
+                        disabled={readOnly || !row.included || !entry.isAvailable}
                         size="xs"
                         onModelOptionsChange={(options) =>
                           setModel(
@@ -329,6 +338,7 @@ export function OrchestratorParticipants(props: {
                     ) : null}
                     {row.extra && team ? (
                       <Select
+                        disabled={readOnly}
                         items={team.roles.map((role) => ({ value: role.role, label: role.title }))}
                         value={row.role}
                         onValueChange={(next) => {
@@ -363,6 +373,7 @@ export function OrchestratorParticipants(props: {
                     label={`Access of ${row.title}`}
                     value={row.access}
                     onChange={setAccess}
+                    disabled={readOnly}
                   />
                 ) : null}
                 {onLead ? (
@@ -413,7 +424,7 @@ export function OrchestratorParticipants(props: {
                     noAction
                   )
                 ) : null}
-                {row.extra ? (
+                {row.extra && !readOnly ? (
                   <GlyphButton
                     label={`Remove ${row.title}`}
                     render={
@@ -446,7 +457,7 @@ export function OrchestratorParticipants(props: {
         })}
       </div>
       <div className="flex flex-wrap items-center gap-1 border-t border-border/60 pt-2">
-        {extraRole ? (
+        {extraRole && !readOnly ? (
           <Button
             size="xs"
             variant="outline"
@@ -459,6 +470,7 @@ export function OrchestratorParticipants(props: {
           </Button>
         ) : null}
         <Select
+          disabled={readOnly}
           items={CRITIQUE_ROUNDS}
           value={value.critique ?? "first"}
           onValueChange={(next) => {
@@ -484,6 +496,7 @@ export function OrchestratorParticipants(props: {
           </SelectPopup>
         </Select>
         <Select
+          disabled={readOnly}
           items={ACCESS_LEVELS}
           value={defaultAccess.value}
           onValueChange={(next) => {
@@ -512,7 +525,7 @@ export function OrchestratorParticipants(props: {
             ))}
           </SelectPopup>
         </Select>
-        {props.boardOwned ? null : (
+        {readOnly ? null : (
           <Select
             items={limitedSeatOptions}
             value={roster.limitedSeat}
@@ -541,7 +554,7 @@ export function OrchestratorParticipants(props: {
         )}
         {props.footer ? <span className="ml-auto flex shrink-0">{props.footer}</span> : null}
       </div>
-      {roster.problem ? (
+      {roster.problem && !readOnly ? (
         <p role="alert" className="text-xs text-warning">
           {roster.problem}
         </p>

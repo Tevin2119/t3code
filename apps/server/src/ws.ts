@@ -284,6 +284,8 @@ import * as PullRequestReviewGuideService from "./pullRequest/PullRequestReviewG
 import { listLinkedPullRequestThreads } from "./pullRequest/linkedThreads.ts";
 import { archivedBoardThreads } from "./delivery/archivedBoardThreads.ts";
 import { linkedBoardTasks } from "./delivery/linkedBoardTasks.ts";
+import { refuseServerOwnedTeam } from "./delivery/serverOwnedTeam.ts";
+import { boardTaskOfMarker } from "./delivery/boardThreadMarker.ts";
 import { pullRequestSyncKey } from "./pullRequest/pullRequestSyncKey.ts";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as PullRequestSyncReactor from "./orchestration-v2/PullRequestSyncReactor.ts";
@@ -3843,6 +3845,7 @@ const layerForkWsRpc = (currentSession: EnvironmentAuth.AuthenticatedSession) =>
       const delivery = yield* DeliveryService.DeliveryService;
       const boardThreadTasks = yield* BoardThreadTasks.BoardThreadTasks;
       const limitedSeatSwap = yield* Effect.serviceOption(LimitedSeatSwap.LimitedSeatSwap);
+      const threadManagement = yield* ThreadManagementService.ThreadManagementService;
       const sql = yield* SqlClient.SqlClient;
       const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
       return ForkServerWsRpcGroup.of({
@@ -3860,8 +3863,19 @@ const layerForkWsRpc = (currentSession: EnvironmentAuth.AuthenticatedSession) =>
           !currentSession.scopes.includes("filesystem:read")
             ? Effect.fail(rpcAuthorizationError("filesystem:read"))
             : delivery.act(input),
-        [WS_METHODS.deliveryBindThread]: (input) => delivery.bindThread(input),
-        [WS_METHODS.deliveryThreadBinding]: (input) => delivery.threadState(input.threadId),
+        [WS_METHODS.deliveryBindThread]: (input) =>
+          refuseServerOwnedTeam(input.threadId, threadManagement.getThreadShell).pipe(
+            Effect.andThen(delivery.bindThread(input)),
+          ),
+        [WS_METHODS.deliveryThreadBinding]: (input) =>
+          threadManagement.getThreadShell(input.threadId).pipe(
+            Effect.orElseSucceed(() => null),
+            Effect.flatMap((shell) =>
+              delivery.threadState(input.threadId, {
+                boardOwned: boardTaskOfMarker(shell?.lineage.engineIntake) !== null,
+              }),
+            ),
+          ),
         [WS_METHODS.deliveryArchivedBoardThreads]: () =>
           serverEnvironment.getEnvironmentId.pipe(
             Effect.flatMap((environmentId) =>
@@ -3877,7 +3891,10 @@ const layerForkWsRpc = (currentSession: EnvironmentAuth.AuthenticatedSession) =>
             ),
           ),
         [WS_METHODS.deliveryReleaseThread]: (input) => delivery.releaseThread(input.threadId),
-        [WS_METHODS.deliverySetThreadLineup]: (input) => delivery.setThreadLineup(input),
+        [WS_METHODS.deliverySetThreadLineup]: (input) =>
+          refuseServerOwnedTeam(input.threadId, threadManagement.getThreadShell).pipe(
+            Effect.andThen(delivery.setThreadLineup(input)),
+          ),
         [WS_METHODS.deliveryLimitedSeats]: (input) =>
           Option.match(limitedSeatSwap, {
             onNone: () => Effect.succeed({ policy: null, notices: [] }),

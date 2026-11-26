@@ -89,9 +89,19 @@ const BOARD_TASK_READS = [
     file: "apps/server/src/delivery/BoardTaskThreads.ts",
     line: "const stamped = boardTaskOfMarker(created.thread.lineage.engineIntake);",
   },
+  // A board task's conversation starts no team round while the engine does the task's work.
+  {
+    file: "apps/server/src/delivery/NativeTeamChat.ts",
+    line: "if (boardTaskOfMarker(parent.thread.lineage.engineIntake) !== null)",
+  },
   {
     file: "apps/server/src/delivery/SeatHandoffs.ts",
     line: "const task = boardTaskOfMarker(parent?.lineage.engineIntake);",
+  },
+  // A thread made for a board task is the board's from its first read, a successor's included.
+  {
+    file: "apps/server/src/ws.ts",
+    line: "boardOwned: boardTaskOfMarker(shell?.lineage.engineIntake) !== null,",
   },
   {
     file: "apps/server/src/delivery/SeatHandoffs.ts",
