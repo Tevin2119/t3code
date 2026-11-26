@@ -40,7 +40,6 @@ import type { ComposerBannerStackItem } from "./ComposerBannerStack";
 import type { ThreadNowItem } from "./ThreadNow";
 import { EnvironmentSubagentAvatar } from "./V2LifecycleRow";
 import { SharedTooltipTrigger } from "../ui/shared-tooltip";
-import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 
 export function extensionStatusBannerItem(
   statuses: NonNullable<OrchestrationV2ProviderSession["extensionStatuses"]>,
@@ -218,17 +217,14 @@ function BackgroundSubagentButton(props: {
   const model = child?.modelSelection.model;
   const name = model ? `${props.label} · ${formatModelSlugName(model)}` : props.label;
   return (
-    <Tooltip>
-      <TooltipTrigger
-        render={
-          <button
-            type="button"
-            aria-label={childThreadId ? `Open subagent: ${name}` : name}
-            disabled={childThreadId === undefined}
-            onClick={() => childThreadId && onOpenThread(childThreadId)}
-            className="-my-1 self-center rounded-full outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring enabled:cursor-pointer"
-          />
-        }
+    // The span keeps the tooltip, and its name, on the button while it waits for the child thread.
+    <SharedTooltipTrigger render={<span className="-my-1 flex self-center" />} label={name}>
+      <button
+        type="button"
+        aria-label={childThreadId ? `Open subagent: ${name}` : name}
+        disabled={childThreadId === undefined}
+        onClick={() => childThreadId && onOpenThread(childThreadId)}
+        className="rounded-full outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring enabled:cursor-pointer"
       >
         <EnvironmentSubagentAvatar
           environmentId={props.environmentId}
@@ -237,9 +233,8 @@ function BackgroundSubagentButton(props: {
           remote={props.subagent?.remoteChild}
           className="size-5"
         />
-      </TooltipTrigger>
-      <TooltipPopup side="top">{name}</TooltipPopup>
-    </Tooltip>
+      </button>
+    </SharedTooltipTrigger>
   );
 }
 

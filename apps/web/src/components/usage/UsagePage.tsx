@@ -668,7 +668,6 @@ function UsageOverview({
   const [editingAccounts, setEditingAccounts] = useState(false);
   const [breakdown, setBreakdown] = useState<"model" | "provider" | "time">("model");
   const shownHourly = shownWindow.resolution === "hour";
-  const sessionsWord = merged.sessionsUnfiltered ? "sessions of these harnesses" : "sessions";
   const loading = usageLoading(showingKept, selectedEnvironments, refreshingUsage, hiddenProviders);
   // Copy the primitive; JSX reads of loading.partial would merge all derivations into one compiler cache
   // scope.
@@ -750,7 +749,13 @@ function UsageOverview({
               <span>
                 <span className={figureClass(loadingPartial)}>
                   {merged.sessionsUnfiltered
-                    ? `${formatCount(merged.sessions, locale)} ${sessionsWord}`
+                    ? gt(
+                        "{count, plural, one {{formatted} session of these harnesses} other {{formatted} sessions of these harnesses}}",
+                        {
+                          count: merged.sessions,
+                          formatted: formatCount(merged.sessions, locale),
+                        },
+                      )
                     : gt(
                         "{count, plural, one {{formatted} session} other {{formatted} sessions}}",
                         {

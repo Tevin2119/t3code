@@ -11,6 +11,7 @@ import {
   openSeatThread,
   seatChildrenWithAttestations,
   seatConversation,
+  seatEnvironmentsNeedingLinks,
   seatOfThread,
   steadySeatThread,
   taskConversation,
@@ -142,6 +143,31 @@ describe("a seat's conversation", () => {
   const reach = (own: { readonly connected: boolean } | undefined, linked: boolean) => ({
     ownConnection: () => own,
     isLinked: () => linked,
+  });
+
+  it("asks for the links of each machine a seat runs on that this client is not connected to", () => {
+    const other = EnvironmentId.make("env-other");
+    const seats = [
+      ...children,
+      {
+        childThreadId: null,
+        remoteChild: { environmentId: remote, threadId: id("again"), label: "Desktop" },
+      },
+      {
+        childThreadId: null,
+        remoteChild: { environmentId: other, threadId: id("child-o"), label: "Laptop" },
+      },
+    ];
+    // A saved but offline connection still needs the link, so an offline machine is wanted too.
+    const offline = (environmentId: EnvironmentId) =>
+      environmentId === remote ? { connected: false } : undefined;
+    expect(seatEnvironmentsNeedingLinks(seats, offline)).toEqual([remote, other]);
+    expect(
+      seatEnvironmentsNeedingLinks(seats, (environmentId) =>
+        environmentId === remote ? { connected: true } : undefined,
+      ),
+    ).toEqual([other]);
+    expect(seatEnvironmentsNeedingLinks(children.slice(0, 5), offline)).toEqual([]);
   });
 
   it("is the seat's newest delegated child in the same environment", () => {

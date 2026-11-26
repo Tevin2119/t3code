@@ -134,6 +134,23 @@ export interface SeatReach {
 const LOCAL_ONLY: SeatReach = { ownConnection: () => undefined, isLinked: () => false };
 
 /**
+ * The environments of seats that run where this client is not connected, so they open only
+ * through a link. The link names are read while there is one, and reread when they lack one.
+ */
+export function seatEnvironmentsNeedingLinks(
+  children: ReadonlyArray<SeatChild>,
+  ownConnection: SeatReach["ownConnection"],
+): ReadonlyArray<EnvironmentId> {
+  const wanted = new Set<EnvironmentId>();
+  for (const child of children) {
+    if (child.childThreadId !== null || child.remoteChild === undefined) continue;
+    if (ownConnection(child.remoteChild.environmentId)?.connected === true) continue;
+    wanted.add(child.remoteChild.environmentId);
+  }
+  return [...wanted];
+}
+
+/**
  * The child conversation of a seat. In an orchestrator team chat the lead hands each seat a
  * delegated child thread named by the seat (`teamChat.seat`), the model this slice copies. Without
  * one, the engine's thread for the seat in the task's environment; a seat with neither opens none.

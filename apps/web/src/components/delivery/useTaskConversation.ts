@@ -1,5 +1,7 @@
-import type { EnvironmentId, ScopedThreadRef } from "@t3tools/contracts";
-import { useEffect, useState } from "react";
+import { RegistryContext, useAtomValue } from "@effect/atom-react";
+import { EnvironmentId, type ScopedThreadRef } from "@t3tools/contracts";
+import { Atom } from "effect/reactivity";
+import { useContext, useEffect, useState } from "react";
 import { create } from "zustand";
 
 import type { TaskView } from "../../lib/delivery";
@@ -10,6 +12,7 @@ import {
   sameThread,
   seatChildrenWithAttestations,
   seatConversation,
+  seatEnvironmentsNeedingLinks,
   seatOfThread,
   steadySeatThread,
   taskConversation,
@@ -19,9 +22,14 @@ import {
 } from "../../lib/taskConversation";
 import { useEnvironment, useEnvironments } from "../../state/environments";
 import { useQuietThreadProjection } from "../../state/entities";
-import { useLinkedEnvironmentsRead } from "../../state/peerLinks";
+import {
+  offersLinkedEnvironmentsAtom,
+  peerLinkEnvironment,
+  useLinkedEnvironmentsRead,
+} from "../../state/peerLinks";
 
 const NO_CHILDREN: ReadonlyArray<never> = [];
+const offersNoLinksAtom = Atom.make(false).pipe(Atom.withLabel("delivery:seat-links:none"));
 
 /**
  * How long this client's connection to a seat's environment may stay down before the open seat
@@ -100,17 +108,24 @@ export function useTaskConversation(environmentId: EnvironmentId | null, task: T
     return own && { connected: own.connection.phase === "connected" };
   };
   // Links are read only while a seat runs somewhere this client is not connected to.
-  const links = useLinkedEnvironmentsRead(
-    ref !== null &&
-      children.some(
-        (child) =>
-          child.childThreadId === null &&
-          child.remoteChild !== undefined &&
-          ownConnection(child.remoteChild.environmentId)?.connected !== true,
-      )
-      ? ref.environmentId
-      : null,
+  const wanted = seatEnvironmentsNeedingLinks(children, ownConnection);
+  const linksHost = ref !== null && wanted.length > 0 ? ref.environmentId : null;
+  const links = useLinkedEnvironmentsRead(linksHost);
+  const offered = useAtomValue(
+    linksHost === null ? offersNoLinksAtom : offersLinkedEnvironmentsAtom(linksHost),
   );
+  const registry = useContext(RegistryContext);
+  const queried = offered ? linksHost : null;
+  const wantedKey = wanted.join(",");
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- links made outside this client are not pushed, so a seat on a machine the names lack asks the server again
+  useEffect(() => {
+    if (queried === null || wantedKey === "") return;
+    peerLinkEnvironment.refreshNamesLacking(
+      registry,
+      queried,
+      wantedKey.split(",").map((id) => EnvironmentId.make(id)),
+    );
+  }, [registry, queried, wantedKey]);
   const reach: SeatReach = { ownConnection, isLinked: (id) => links.names.has(id) };
   const seatKey = task ? openSeatKey(environmentId, task.id) : null;
   const opened = useOpenSeats((state) => (seatKey ? (state.byTask[seatKey] ?? null) : null));
