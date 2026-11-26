@@ -111,6 +111,8 @@ import {
 } from "../Sidebar.logic";
 import { resolveLocalCheckoutBranchMismatch } from "../BranchToolbar.logic";
 import {
+  LINKED_ITEMS_PREVIEW_LIMIT,
+  LinkedItemsOverflow,
   ThreadLinkBadge,
   ThreadPullRequestBadgeControl,
   ThreadPullRequestsMiniList,
@@ -1235,6 +1237,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
         status={prStatus}
         onOpenList={openLinkedItems}
         onOpenPullRequest={handlePrClick}
+        side="right"
       />
     ) : null;
   const firstIssue = thread.issues?.[0];
@@ -1271,15 +1274,20 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
       Icon={issueStatus?.Icon ?? IssueGlyph.issue}
       toneClassName={issueStatus?.toneClassName ?? "text-muted-foreground"}
       text={issueCount === 1 ? firstIssue.displayKey.replace(/^#/, "") : issueCount}
+      side="right"
     >
       <ThreadDetailsIssueRows
-        links={thread.issues ?? []}
+        links={(thread.issues ?? []).slice(0, LINKED_ITEMS_PREVIEW_LIMIT)}
         threadRef={threadRef}
         compact={false}
         mountScope="sidebar-tooltip"
         onOpen={() => {
           if (!props.isRouteThread) onThreadActivate(threadRef);
         }}
+      />
+      <LinkedItemsOverflow
+        hidden={issueCount - LINKED_ITEMS_PREVIEW_LIMIT}
+        onShowAll={openLinkedItems}
       />
     </ThreadLinkBadge>
   ) : null;
@@ -1549,6 +1557,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                 )
               ) : !props.settlementSupported ? null : variantAction === "unsettle" ? (
                 <SharedTooltipTrigger
+                  side="right"
                   render={
                     <button
                       type="button"
@@ -1571,6 +1580,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                 </SharedTooltipTrigger>
               ) : (
                 <SharedTooltipTrigger
+                  side="right"
                   render={
                     <button
                       type="button"
@@ -1778,6 +1788,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                     ) : null}
                     {props.settlementSupported ? (
                       <SharedTooltipTrigger
+                        side="right"
                         render={
                           <button
                             type="button"
