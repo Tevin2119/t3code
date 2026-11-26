@@ -220,6 +220,30 @@ describe("deployment contract", () => {
       ),
     ).toEqual(["verify"]);
   });
+  it("offers adopt only for a qualified Firebase Hosting candidate, never while busy", () => {
+    const qualified = candidate({ state: "ready", evidence: { passed: true, site: "app" } });
+    expect(deploymentActions(qualified, false, "firebase-hosting")).toContain("adopt");
+    expect(deploymentActions(qualified, true, "firebase-hosting")).not.toContain("adopt");
+    expect(deploymentActions(qualified, false, "command")).not.toContain("adopt");
+    expect(
+      deploymentActions(candidate({ state: "merged" }), false, "firebase-hosting"),
+    ).not.toContain("adopt");
+  });
+  it("shows Firebase live state as the engine reports it and derives none", () => {
+    const latest = "a".repeat(40);
+    const base = {
+      adapter: "firebase-hosting" as const,
+      latestCommit: latest,
+      liveCommit: latest,
+      liveObservedAt: "2026-11-26T00:00:00Z",
+    };
+    const unverified =
+      "Unverified since the branch head moved to bbbbbbbbbb; the site has not been read since.";
+    expect(deploymentStatus({ ...base, liveProblem: unverified })).toBe(unverified);
+    expect(deploymentStatus({ ...base, liveCandidate: "c7" })).toBe("Live: release c7");
+    // A matching commit is not a claim: only the engine's liveCandidate is.
+    expect(deploymentStatus(base)).toBe("The engine reports no live release.");
+  });
   it("reports whether the running revision matches without calling it healthy", () => {
     const latest = "a".repeat(40);
     const hotfix = "b".repeat(40);

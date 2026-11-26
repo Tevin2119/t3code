@@ -49,14 +49,30 @@ function canRetry(candidate: DeploymentCandidate): boolean {
   return attempts.deploy < MAX_ATTEMPTS && evidence?.passed === true;
 }
 
+// The engine adopts only from a qualified candidate, for the site its qualification resolved.
+function canAdopt(candidate: DeploymentCandidate): boolean {
+  const evidence = candidate.evidence as { site?: unknown } | null;
+  return (
+    (candidate.state === "ready" || candidate.state === "blocked") &&
+    typeof evidence?.site === "string"
+  );
+}
+
 /** Actions to offer; while another release for the environment runs, only stopping is offered. */
 export function deploymentActions(
   candidate: DeploymentCandidate,
   projectBusy = false,
+  adapter: DeploymentProject["adapter"] = "command",
 ): readonly DeploymentAction[] {
-  return stateActions(candidate).filter((action) => {
+  const actions = stateActions(candidate);
+  const offered =
+    adapter === "firebase-hosting" && canAdopt(candidate)
+      ? [...actions, "adopt" as const]
+      : actions;
+  return offered.filter((action) => {
     if (action === "cancel") return !candidate.cancelRequested;
     if (action === "retry" && !canRetry(candidate)) return false;
+    if (action === "adopt") return !projectBusy;
     if (!projectBusy) return true;
     // A restart being waited on is this candidate's own work, and verifying it is how it ends.
     return action === "verify" && candidate.state === "verifying" && !!candidate.awaitingRestart;
@@ -68,9 +84,19 @@ export function deploymentStatus(
   project: Pick<
     DeploymentProject,
     "latestCommit" | "liveCommit" | "liveProblem" | "liveObservedAt" | "problem"
-  >,
+  > &
+    Partial<Pick<DeploymentProject, "adapter" | "liveCandidate">>,
   unavailable = false,
 ): string {
+  // The engine derives Firebase live state once; its words are shown as they are.
+  if (project.adapter === "firebase-hosting") {
+    if (project.liveProblem) return project.liveProblem;
+    if (project.problem) return `Deployment problem: ${project.problem}`;
+    if (unavailable) return "Runtime status unavailable. Showing last reading.";
+    return project.liveCandidate
+      ? `Live: release ${project.liveCandidate}`
+      : "The engine reports no live release.";
+  }
   if (project.liveProblem) return `Running revision problem: ${project.liveProblem}`;
   if (project.problem) return `Deployment problem: ${project.problem}`;
   if (unavailable) return "Runtime status unavailable. Showing last reading.";

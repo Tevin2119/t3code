@@ -9,6 +9,7 @@ const mock = vi.hoisted(() => ({
   action: vi.fn(),
   refresh: vi.fn(),
   snapshot: {} as unknown,
+  listing: null as unknown,
   projects: [] as unknown[],
   stale: false,
   error: null as string | null,
@@ -19,6 +20,7 @@ vi.mock("./EnginePanel", () => ({ EnginePanel: "engine-panel" }));
 vi.mock("./BoardDelivery", () => ({ BoardDelivery: "board-delivery" }));
 vi.mock("./BoardToolbar", () => ({ useBoardDesktop: () => true }));
 vi.mock("./BoardPicker.browse", () => ({ RepositoryBrowse: "repository-browse" }));
+vi.mock("./BoardPicker.branches", () => ({ BaseBranchPicker: "base-branch-picker" }));
 vi.mock("@effect/atom-react", () => ({ useAtomValue: () => mock.allowed }));
 vi.mock("../../env", () => ({ isElectron: false }));
 vi.mock("../../state/delivery", () => ({
@@ -26,7 +28,7 @@ vi.mock("../../state/delivery", () => ({
   useDeliveryEnvironmentId: () => "host",
   useDeliveryEnabled: () => true,
   useDeliveryAct: () => mock.action,
-  useDeliveryRead: (env: string, path: string, options: unknown) => {
+  useDeliveryRead: (env: string, path: string | null, options: unknown) => {
     mock.reads(env, path, options);
     return {
       body:
@@ -37,7 +39,9 @@ vi.mock("../../state/delivery", () => ({
                 windows: [{ by: "Sam", expiresAt: "2026-10-28T10:10:00Z" }],
               },
             }
-          : mock.snapshot,
+          : path?.includes("/firebase?")
+            ? mock.listing
+            : mock.snapshot,
       error: mock.error,
       isPending: false,
       readAt: "2026-10-28T10:00:00Z",
@@ -90,6 +94,7 @@ async function setup() {
   mock.stale = false;
   mock.error = null;
   mock.reads.mockReset();
+  mock.listing = null;
   mock.snapshot = {
     version: 1,
     projects: [],
@@ -138,6 +143,9 @@ it("reads without discovering automatically and disables mutation controls witho
   expect(view.button("Discover commits").props.disabled).toBe(true);
 });
 
+const branchPicker = (view: { renderer: ReactTestRenderer }) =>
+  view.renderer.root.findByType("base-branch-picker" as never);
+
 async function confirmWithKey(view: Awaited<ReturnType<typeof setup>>) {
   // The mocked health reports an open approval window for Sam; it must not replace the key.
   expect(view.button("Confirm").props.disabled).toBe(true);
@@ -156,8 +164,8 @@ it("requires full-auto consent, uses listed repository and branch, and submits t
   await act(() => view.button("Add deployment").props.onClick());
   const selects = () => view.renderer.root.findAllByType("select");
   await act(() => view.renderer.root.findByType(RepositoryPicker).props.onChoose("repo"));
-  await act(() => selects()[3]!.props.onValueChange("engine"));
-  await act(() => selects()[2]!.props.onValueChange("full-auto"));
+  await act(() => selects()[2]!.props.onValueChange("engine"));
+  await act(() => selects()[1]!.props.onValueChange("full-auto"));
   expect(view.button("Review settings").props.disabled).toBe(true);
   await act(() => view.renderer.root.findByType("checkbox" as never).props.onCheckedChange(true));
   expect(view.button("Review settings").props.disabled).toBe(false);
@@ -216,7 +224,7 @@ it("preserves a saved environment, mode and command arrays when editing", async 
   };
   await act(() => view.renderer.update(<DeploymentsPage />));
   await act(() => view.button("Configure").props.onClick());
-  const environment = view.renderer.root.findAllByType("select")[1]!;
+  const environment = view.renderer.root.findAllByType("select")[0]!;
   expect(environment.props.value).toBe("staging");
   // Saved release environments stay offered independently of the watched branch.
   expect(environment.props.items.map((item: { value: string }) => item.value)).toEqual([
@@ -285,7 +293,7 @@ const projectRow = (changes: object = {}) => ({
 });
 const adapterChoices = (view: Awaited<ReturnType<typeof setup>>) =>
   view.renderer.root
-    .findAllByType("select")[3]!
+    .findAllByType("select")[2]!
     .props.items.map((item: { value: string }) => item.value);
 
 it("starts new deployments on repository commands and offers the engine only where it can release", async () => {
@@ -295,12 +303,12 @@ it("starts new deployments on repository commands and offers the engine only whe
   await act(() => view.button("Add deployment").props.onClick());
   await act(() => view.renderer.root.findByType(RepositoryPicker).props.onChoose("repo"));
   const selects = () => view.renderer.root.findAllByType("select");
-  expect(selects()[3]!.props.value).toBe("command");
-  expect(selects()[2]!.props.value).toBe("manual");
-  expect(selects()[1]!.props.value).toBe("production");
-  await act(() => selects()[1]!.props.onValueChange("staging"));
-  await act(() => selects()[0]!.props.onValueChange("main"));
-  expect(selects()[1]!.props.value).toBe("staging");
+  expect(selects()[2]!.props.value).toBe("command");
+  expect(selects()[1]!.props.value).toBe("manual");
+  expect(selects()[0]!.props.value).toBe("production");
+  await act(() => selects()[0]!.props.onValueChange("staging"));
+  await act(() => branchPicker(view).props.onChange("main"));
+  expect(selects()[0]!.props.value).toBe("staging");
   expect(adapterChoices(view)).toEqual(["command"]);
   // Repository commands need their arrays before they can be saved.
   expect(view.button("Review settings").props.disabled).toBe(true);
@@ -359,7 +367,7 @@ it("registers a T3 project with the engine from the repository list, without a b
   });
   expect(repository().props.value).toBe("app");
   expect(repository().props.shown).toBe("App");
-  expect(view.renderer.root.findAllByType("select")[0]!.props.value).toBe("main");
+  expect(branchPicker(view).props.value).toBe("main");
   expect(mock.refresh).toHaveBeenCalled();
   // Once added, the project is the engine's row and is not offered to add again.
   const again = await rows();
@@ -377,7 +385,7 @@ it("switching a command deployment to the engine sends no commands", async () =>
   };
   await act(() => view.renderer.update(<DeploymentsPage />));
   await act(() => view.button("Configure").props.onClick());
-  await act(() => view.renderer.root.findAllByType("select")[3]!.props.onValueChange("engine"));
+  await act(() => view.renderer.root.findAllByType("select")[2]!.props.onValueChange("engine"));
   await act(() => view.button("Review settings").props.onClick());
   await confirmWithKey(view);
   expect(mock.action).toHaveBeenCalledWith("/api/deployments/projects", {
@@ -512,4 +520,163 @@ it("asks for delivery permission without declaring the connection read-only", as
   const text = JSON.stringify(view.renderer.toJSON());
   expect(text).toContain("Deployment changes require delivery permission.");
   expect(text).not.toContain("Read-only");
+});
+
+const hostingListing = {
+  repository: "repo",
+  branch: "main",
+  commit: "a".repeat(40),
+  aliases: { default: "trade-journal-fc3ba" },
+  targets: [
+    {
+      firebaseProject: "trade-journal-fc3ba",
+      target: "app-payoutlab",
+      sites: ["app-payoutlab"],
+      site: "app-payoutlab",
+      servedFolder: "app",
+      hooks: [],
+      problem: null,
+    },
+    {
+      firebaseProject: "trade-journal-fc3ba",
+      target: "payoutlab-sandbox",
+      sites: ["payoutlab-sandbox"],
+      site: null,
+      servedFolder: null,
+      hooks: ["predeploy"],
+      problem: "firebase.json has a predeploy hook on a hosting entry.",
+    },
+  ],
+  problems: [],
+};
+
+it("sets up Firebase Hosting from listed repository, branch and target, with nothing typed", async () => {
+  await using view = await setup();
+  mock.snapshot = {
+    ...(mock.snapshot as object),
+    repositories: [repositoryRow()],
+    capabilities: { engine: false, command: true, "firebase-hosting": true },
+  };
+  mock.listing = hostingListing;
+  await act(() => view.renderer.update(<DeploymentsPage />));
+  await act(() => view.button("Add deployment").props.onClick());
+  await act(() => view.renderer.root.findByType(RepositoryPicker).props.onChoose("repo"));
+  expect(branchPicker(view).props.cwd).toBe("/repo");
+  expect(branchPicker(view).props.localNames).toBe(true);
+  const selects = () => view.renderer.root.findAllByType("select");
+  expect(adapterChoices(view)).toEqual(["command", "firebase-hosting"]);
+  await act(() => selects()[2]!.props.onValueChange("firebase-hosting"));
+  expect(mock.reads).toHaveBeenCalledWith(
+    "host",
+    "/api/repositories/repo/firebase?branch=main",
+    undefined,
+  );
+  expect(view.renderer.root.findAllByType("textarea")).toHaveLength(0);
+  const target = selects()[3]!;
+  expect(target.props.items.map((item: { value: string }) => item.value)).toEqual([
+    "trade-journal-fc3ba:app-payoutlab",
+  ]);
+  // The refused target stays visible with the engine's own reason.
+  expect(JSON.stringify(view.renderer.toJSON())).toContain(
+    "payoutlab-sandbox · trade-journal-fc3ba: firebase.json has a predeploy hook on a hosting entry.",
+  );
+  expect(view.button("Review settings").props.disabled).toBe(true);
+  await act(() => target.props.onValueChange("trade-journal-fc3ba:app-payoutlab"));
+  await act(() => view.button("Review settings").props.onClick());
+  await confirmWithKey(view);
+  expect(mock.action).toHaveBeenCalledWith("/api/deployments/projects", {
+    repository: "repo",
+    branch: "main",
+    environment: "production",
+    mode: "manual",
+    adapter: "firebase-hosting",
+    firebase: { firebaseProject: "trade-journal-fc3ba", target: "app-payoutlab" },
+    by: "Sam",
+    key: "passphrase",
+  });
+});
+
+it("shows Firebase live state verbatim and adopts what runs through approval", async () => {
+  await using view = await setup();
+  const unverified =
+    "Unverified: No release stamp has been read. A named person adopts what runs before the first deploy.";
+  mock.snapshot = {
+    ...(mock.snapshot as object),
+    repositories: [repositoryRow()],
+    capabilities: { engine: false, command: true, "firebase-hosting": true },
+    projects: [
+      projectRow({
+        adapter: "firebase-hosting",
+        commands: { qualify: ["npm", "test"] },
+        firebase: { firebaseProject: "trade-journal-fc3ba", target: "app-payoutlab" },
+        liveProblem: unverified,
+        configuredSite: "app-payoutlab",
+      }),
+    ],
+    candidates: [
+      {
+        id: "release-2",
+        projectId: "project",
+        commit: "c".repeat(40),
+        baseCommit: "b".repeat(40),
+        state: "ready",
+        seq: 2,
+        createdAt: "2026-11-26T00:00:00Z",
+        updatedAt: "2026-11-26T00:00:00Z",
+        evidence: { passed: true, site: "app-payoutlab", servedFolder: "app" },
+        events: [],
+      },
+    ],
+  };
+  await act(() => view.renderer.update(<DeploymentsPage />));
+  const status = view.renderer.root.findByProps({ "data-deployment-status": true });
+  expect(status.children.join("")).toBe(unverified);
+  const text = JSON.stringify(view.renderer.toJSON());
+  expect(text).toContain("Firebase Hosting · app-payoutlab · trade-journal-fc3ba");
+  expect(text).not.toContain("Running revision");
+  await act(() => view.button("Adopt").props.onClick());
+  const what = view.renderer.root.findAllByType("select").at(-1)!;
+  expect(what.props.items.map((item: { value: string }) => item.value)).toEqual([
+    "unknown",
+    "b".repeat(40),
+  ]);
+  await act(() => view.button("Review adoption").props.onClick());
+  await confirmWithKey(view);
+  expect(mock.action).toHaveBeenCalledWith("/api/deployments/candidates/release-2/action", {
+    action: "adopt",
+    by: "Sam",
+    key: "passphrase",
+  });
+});
+
+it("keeps a Firebase instance's saved checks when its settings are saved again", async () => {
+  await using view = await setup();
+  mock.snapshot = {
+    ...(mock.snapshot as object),
+    repositories: [repositoryRow()],
+    capabilities: { engine: false, command: true, "firebase-hosting": true },
+    projects: [
+      projectRow({
+        adapter: "firebase-hosting",
+        commands: { qualify: ["npm", "test"] },
+        firebase: { firebaseProject: "trade-journal-fc3ba", target: "app-payoutlab" },
+      }),
+    ],
+  };
+  mock.listing = hostingListing;
+  await act(() => view.renderer.update(<DeploymentsPage />));
+  await act(() => view.button("Configure").props.onClick());
+  expect(view.renderer.root.findAllByType("select")[3]!.props.value).toBe(
+    "trade-journal-fc3ba:app-payoutlab",
+  );
+  await act(() => view.button("Review settings").props.onClick());
+  await confirmWithKey(view);
+  expect(mock.action).toHaveBeenCalledWith(
+    "/api/deployments/projects",
+    expect.objectContaining({
+      adapter: "firebase-hosting",
+      commands: { qualify: ["npm", "test"] },
+      firebase: { firebaseProject: "trade-journal-fc3ba", target: "app-payoutlab" },
+    }),
+  );
 });

@@ -22,6 +22,7 @@ import { SelectButton } from "../ui/select";
  * repository's folder, as the toolbar's branch picker reads them. The engine's default base is
  * listed first and marked; a ref is chosen exactly as listed, a remote one with its prefix.
  * Key it by environment and repository, so another one starts with no search and at the top.
+ * With `localNames`, a remote ref is offered by its branch name, as the engine fetches it.
  */
 export function BaseBranchPicker({
   ref,
@@ -35,6 +36,9 @@ export function BaseBranchPicker({
   readonly onChange: (base: string) => void;
   readonly disabled: boolean;
   readonly ref: Ref<HTMLButtonElement>;
+  readonly label?: string;
+  readonly placeholder?: string;
+  readonly localNames?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -48,15 +52,22 @@ export function BaseBranchPicker({
   const isInitialLoadPending = branches.isPending && branches.data === null;
   // Filtered by what is typed now, so a reply for an older search shows nothing it would not.
   const words = query.trim().toLowerCase();
-  const byName = useMemo(
-    () => new Map(branches.refs.map((ref) => [ref.name, ref] as const)),
-    [branches.refs],
-  );
+  const localNames = props.localNames === true;
+  const byName = useMemo(() => {
+    const map = new Map<string, (typeof branches.refs)[number]>();
+    for (const ref of branches.refs) {
+      const prefix = localNames && ref.isRemote && ref.remoteName ? `${ref.remoteName}/` : null;
+      const name = prefix && ref.name.startsWith(prefix) ? ref.name.slice(prefix.length) : ref.name;
+      // A local branch of the same name wins, so its badge is the one shown.
+      if (!map.has(name) || !ref.isRemote) map.set(name, ref);
+    }
+    return map;
+  }, [branches.refs, localNames]);
   const items = useMemo(() => {
-    const names = branches.refs.map((ref) => ref.name).filter((name) => name !== props.defaultBase);
+    const names = [...byName.keys()].filter((name) => name !== props.defaultBase);
     const all = props.defaultBase ? [props.defaultBase, ...names] : names;
     return words ? all.filter((name) => name.toLowerCase().includes(words)) : all;
-  }, [branches.refs, props.defaultBase, words]);
+  }, [byName, props.defaultBase, words]);
   const problem = branches.error
     ? branches.error
     : branches.data && !branches.data.isRepo
@@ -160,14 +171,16 @@ export function BaseBranchPicker({
     >
       <ComboboxTrigger
         ref={ref}
-        aria-label="Base branch"
+        aria-label={props.label ?? "Base branch"}
         render={<SelectButton size="compact" />}
         disabled={props.disabled}
         data-board-dialog-base
       >
         <span className={`flex-1 truncate text-left ${props.value ? "" : "text-muted-foreground"}`}>
           {props.value ||
-            (props.cwd ? "Choose the branch work starts from" : "Choose a repository first")}
+            (props.cwd
+              ? (props.placeholder ?? "Choose the branch work starts from")
+              : "Choose a repository first")}
         </span>
       </ComboboxTrigger>
       <ComboboxPopup align="start" className="flex w-80 flex-col">

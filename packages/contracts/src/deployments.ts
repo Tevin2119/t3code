@@ -14,8 +14,16 @@ const DEPLOYMENT_STATES = [
 ] as const;
 export const DeploymentState = Schema.Literals(DEPLOYMENT_STATES);
 export const DeploymentMode = Schema.Literals(["manual", "auto-qualify", "full-auto"]);
-export const DeploymentAdapter = Schema.Literals(["engine", "command"]);
-export const DeploymentAction = Schema.Literals(["qualify", "deploy", "retry", "cancel", "verify"]);
+export const DeploymentAdapter = Schema.Literals(["engine", "command", "firebase-hosting"]);
+export type DeploymentAdapter = typeof DeploymentAdapter.Type;
+export const DeploymentAction = Schema.Literals([
+  "qualify",
+  "deploy",
+  "retry",
+  "cancel",
+  "verify",
+  "adopt",
+]);
 export type DeploymentAction = typeof DeploymentAction.Type;
 const Revision = Schema.String.check(Schema.isPattern(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/));
 const Identifier = Schema.String.check(Schema.isPattern(/^[A-Za-z0-9_-]+$/));
@@ -33,6 +41,47 @@ export const DeploymentCommands = Schema.Struct({
   deploy: CommandArgv,
   verify: CommandArgv,
 });
+/** The firebase-hosting preset runs its own deploy and verify; only these checks are its own. */
+export const FirebaseHostingCommands = Schema.Struct({
+  setup: Schema.optional(CommandArgv),
+  qualify: Schema.optional(CommandArgv),
+});
+// The saved steps as the engine reports them, for any adapter.
+const SavedCommands = Schema.Struct({
+  setup: Schema.optional(CommandArgv),
+  qualify: Schema.optional(CommandArgv),
+  deploy: Schema.optional(CommandArgv),
+  verify: Schema.optional(CommandArgv),
+});
+
+// The engine's own patterns for the two saved Firebase fields; it checks them again.
+export const FirebaseHosting = Schema.Struct({
+  firebaseProject: Schema.String.check(Schema.isPattern(/^[a-z][a-z0-9-]{4,28}[a-z0-9]$/)),
+  target: Schema.String.check(Schema.isPattern(/^[a-z0-9][a-z0-9_-]{0,62}$/)),
+});
+export type FirebaseHosting = typeof FirebaseHosting.Type;
+
+/** A branch's Firebase Hosting targets, read by the engine at the fetched tip. */
+export const FirebaseHostingListing = Schema.Struct({
+  repository: Schema.String,
+  branch: Schema.String,
+  commit: Schema.String,
+  aliases: Schema.Record(Schema.String, Schema.String),
+  targets: Schema.Array(
+    Schema.Struct({
+      firebaseProject: Schema.String,
+      target: Schema.String,
+      sites: Schema.Array(Schema.String),
+      site: Schema.NullOr(Schema.String),
+      servedFolder: Schema.NullOr(Schema.String),
+      hooks: Schema.Array(Schema.String),
+      problem: Schema.NullOr(Schema.String),
+    }),
+  ),
+  problems: Schema.Array(Schema.String),
+});
+export type FirebaseHostingListing = typeof FirebaseHostingListing.Type;
+const OptionalText = Schema.optional(Schema.NullOr(Schema.String));
 
 export const DeploymentProject = Schema.Struct({
   id: Identifier,
@@ -47,7 +96,16 @@ export const DeploymentProject = Schema.Struct({
   problem: Problem,
   liveProblem: Problem,
   liveObservedAt: Schema.optional(Schema.NullOr(Schema.String)),
-  commands: Schema.optional(Schema.NullOr(DeploymentCommands)),
+  commands: Schema.optional(Schema.NullOr(SavedCommands)),
+  firebase: Schema.optional(Schema.NullOr(FirebaseHosting)),
+  // Live facts as the engine derived them; T3 shows them and derives none.
+  liveCandidate: Schema.optional(Schema.NullOr(Schema.String)),
+  liveSite: OptionalText,
+  configuredSite: OptionalText,
+  liveAdoptedBy: OptionalText,
+  liveAdoptedAt: OptionalText,
+  liveAdoptedCommit: OptionalText,
+  liveAdoptedSite: OptionalText,
   busy: Schema.optional(Schema.Boolean),
 });
 export type DeploymentProject = typeof DeploymentProject.Type;
@@ -95,7 +153,11 @@ export const DeploymentsSnapshot = Schema.Struct({
       engineAdapter: Schema.optional(Schema.Boolean),
     }),
   ),
-  capabilities: Schema.Struct({ engine: Schema.Boolean, command: Schema.Boolean }),
+  capabilities: Schema.Struct({
+    engine: Schema.Boolean,
+    command: Schema.Boolean,
+    "firebase-hosting": Schema.optional(Schema.Boolean),
+  }),
 });
 export type DeploymentsSnapshot = typeof DeploymentsSnapshot.Type;
 // Deployment mutations need the direct approval key; an open approval window is not enough.
@@ -108,7 +170,8 @@ export const DeploymentProjectInput = Schema.Struct({
   adapter: DeploymentAdapter,
   ...Approval,
   confirmed: Schema.optional(Schema.Boolean),
-  commands: Schema.optional(DeploymentCommands),
+  commands: Schema.optional(Schema.Union([DeploymentCommands, FirebaseHostingCommands])),
+  firebase: Schema.optional(FirebaseHosting),
 }).check(
   Schema.makeFilter((input) => input.adapter !== "engine" || input.environment === "production", {
     expected: "production for the built-in engine adapter",
@@ -116,12 +179,38 @@ export const DeploymentProjectInput = Schema.Struct({
   Schema.makeFilter((input) => input.mode !== "full-auto" || input.confirmed === true, {
     expected: "explicit consent for full-auto mode",
   }),
+  Schema.makeFilter((input) => (input.adapter === "firebase-hosting") === !!input.firebase, {
+    expected: "a Firebase project and hosting target exactly for the firebase-hosting adapter",
+  }),
+  Schema.makeFilter(
+    (input) =>
+      input.adapter !== "firebase-hosting" ||
+      !input.commands ||
+      (!("deploy" in input.commands) && !("verify" in input.commands)),
+    { expected: "no deploy or verify step for the firebase-hosting adapter" },
+  ),
+  Schema.makeFilter(
+    (input) =>
+      input.adapter !== "command" ||
+      !input.commands ||
+      ("qualify" in input.commands && "deploy" in input.commands && "verify" in input.commands),
+    { expected: "qualify, deploy and verify steps for the command adapter" },
+  ),
 );
 export const DeploymentDiscoverInput = Schema.Struct({
   projectId: Schema.optional(TrimmedNonEmptyString),
   ...Approval,
 });
-export const DeploymentActionInput = Schema.Struct({ action: DeploymentAction, ...Approval });
+export const DeploymentActionInput = Schema.Struct({
+  action: DeploymentAction,
+  // adopt only: the exact commit a person says runs, or none for "unknown, accept once".
+  commit: Schema.optional(Schema.NullOr(Revision)),
+  ...Approval,
+}).check(
+  Schema.makeFilter((input) => input.action === "adopt" || input.commit === undefined, {
+    expected: "a commit only when adopting",
+  }),
+);
 
 export const DeploymentDependenciesInput = Schema.Struct({
   dependencies: Schema.Array(Identifier),
