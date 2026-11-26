@@ -1130,76 +1130,83 @@ const boardTask = () => ({
   seats: { thread: () => null, rows: [] },
 });
 
-/** A board task's thread on its own route, with a source thread and one seat conversation. */
+/**
+ * A board task's thread on its own route, with a source thread and one seat conversation. It only
+ * mounts: a case asserts after `await using`, so a failed wait never leaves the app mounted.
+ */
 async function renderBoardTaskLineage() {
   await page.viewport(1400, 900);
   const lead = threadWithHistory("task-lineage-lead", 1);
   const seat = threadWithHistory("task-lineage-seat", 1);
   const filedFrom = threadWithHistory("task-lineage-source", 1);
   const environment = installFakeEnvironment([lead, seat, filedFrom]);
-  // A plain click opens a side thread on the main screen, at its own route.
-  __setClientSettingsForTests({
-    ...DEFAULT_CLIENT_SETTINGS,
-    onboardingCompletedAt: "2026-01-01T00:00:00.000Z",
-    sideThreadOpenTarget: "main",
-  });
-  const leadRef = scopeThreadRef(ENVIRONMENT_ID, lead.id);
-  const seatRef = scopeThreadRef(ENVIRONMENT_ID, seat.id);
-  const task = parseTask({
-    id: "t7",
-    number: 7,
-    title: "Fix the sync",
-    body: "Make the sync stop dropping rows.",
-    state: "in-work",
-    lane: "implementation",
-    source: { kind: "thread", ref: `${ENVIRONMENT_ID}/${filedFrom.id}` },
-    council: {
-      seats: [{ seat: "qa", harness: "codex", activity: "waiting", blockedBy: "builder" }],
-    },
-    card: { id: "t7", number: 7, title: "Fix the sync", lane: "implementation" },
-  });
-  const router = getRouter(
-    createMemoryHistory({ initialEntries: [`/${ENVIRONMENT_ID}/${lead.id}`] }),
-  );
-  await router.load();
-  const screen = await render(
-    <BoardTaskContext
-      value={{
-        ...boardTask(),
-        task,
-        thread: leadRef,
-        seats: {
-          thread: () => seatRef,
-          rows: [{ seat: "qa", activity: "waiting", target: seatRef }],
-        },
-      }}
-    >
-      <ThreadPanelHostContext value={leadRef}>
-        <AppRoot router={router} />
-      </ThreadPanelHostContext>
-    </BoardTaskContext>,
-    {
-      // AppRoot brings its own router.
-      router: false,
-    },
-  );
-  useRightPanelStore.getState().setThreadPanelOpen(leadRef, "inline", true);
-  const lineage = page.getByRole("region", { name: "Lineage" });
-  await expect.element(lineage.getByText(filedFrom.title)).toBeVisible();
-  return {
-    router,
-    lineage,
-    seat,
-    filedFrom,
-    [Symbol.asyncDispose]: async () => {
-      await screen[Symbol.asyncDispose]();
-      environment[Symbol.dispose]();
-    },
-  };
+  try {
+    // A plain click opens a side thread on the main screen, at its own route.
+    __setClientSettingsForTests({
+      ...DEFAULT_CLIENT_SETTINGS,
+      onboardingCompletedAt: "2026-01-01T00:00:00.000Z",
+      sideThreadOpenTarget: "main",
+    });
+    const leadRef = scopeThreadRef(ENVIRONMENT_ID, lead.id);
+    const seatRef = scopeThreadRef(ENVIRONMENT_ID, seat.id);
+    const task = parseTask({
+      id: "t7",
+      number: 7,
+      title: "Fix the sync",
+      body: "Make the sync stop dropping rows.",
+      state: "in-work",
+      lane: "implementation",
+      source: { kind: "thread", ref: `${ENVIRONMENT_ID}/${filedFrom.id}` },
+      council: {
+        seats: [{ seat: "qa", harness: "codex", activity: "waiting", blockedBy: "builder" }],
+      },
+      card: { id: "t7", number: 7, title: "Fix the sync", lane: "implementation" },
+    });
+    const router = getRouter(
+      createMemoryHistory({ initialEntries: [`/${ENVIRONMENT_ID}/${lead.id}`] }),
+    );
+    await router.load();
+    const screen = await render(
+      <BoardTaskContext
+        value={{
+          ...boardTask(),
+          task,
+          thread: leadRef,
+          seats: {
+            thread: () => seatRef,
+            rows: [{ seat: "qa", activity: "waiting", target: seatRef }],
+          },
+        }}
+      >
+        <ThreadPanelHostContext value={leadRef}>
+          <AppRoot router={router} />
+        </ThreadPanelHostContext>
+      </BoardTaskContext>,
+      {
+        // AppRoot brings its own router.
+        router: false,
+      },
+    );
+    useRightPanelStore.getState().setThreadPanelOpen(leadRef, "inline", true);
+    return {
+      router,
+      lineage: page.getByRole("region", { name: "Lineage" }),
+      seat,
+      filedFrom,
+      [Symbol.asyncDispose]: async () => {
+        await screen[Symbol.asyncDispose]();
+        environment[Symbol.dispose]();
+      },
+    };
+  } catch (error) {
+    environment[Symbol.dispose]();
+    throw error;
+  }
 }
 
 it("a board task's seat conversation is a lineage row that opens at its own route", async () => {
   await using view = await renderBoardTaskLineage();
+  await expect.element(view.lineage.getByText(view.filedFrom.title)).toBeVisible();
   await view.lineage.getByRole("button", { name: /qa/ }).click();
   await expect
     .poll(() => view.router.state.location.pathname)
@@ -1208,6 +1215,7 @@ it("a board task's seat conversation is a lineage row that opens at its own rout
 
 it("the thread a board task was filed from is a lineage row that opens at its own route", async () => {
   await using view = await renderBoardTaskLineage();
+  await expect.element(view.lineage.getByText(view.filedFrom.title)).toBeVisible();
   await view.lineage.getByText(view.filedFrom.title).click();
   await expect
     .poll(() => view.router.state.location.pathname)

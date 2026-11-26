@@ -113,6 +113,7 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
   // The Task item and the task's lineage come from the board task whose view hosts this thread.
   const board = useBoardTask();
   const taskShown = (board?.task ?? null) !== null && visible.task;
+  const boardLineage = taskHasLineage(board);
   const [menuPosition, setMenuPosition] = useState<{ x: number; y: number } | null>(null);
   const t3File = useT3ProjectFileState(
     props.environmentId,
@@ -337,14 +338,18 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
                 />
               ) : null}
 
-              {density === "full" && !props.draftId && (visible.lineage || visible.sideChats) ? (
+              {/* A board task's seats and source open only from here, so its lineage stays at
+                  every density. */}
+              {(density === "full" || boardLineage) &&
+              !props.draftId &&
+              (visible.lineage || visible.sideChats) ? (
                 <ThreadRelationshipsPanel
                   environmentId={props.environmentId}
                   threadId={props.threadId}
                   showLineage={visible.lineage}
                   showSideChats={visible.sideChats}
                   extraGroup={
-                    taskHasLineage(board) ? (
+                    boardLineage ? (
                       <Suspense fallback={null}>
                         <TaskLineage />
                       </Suspense>
