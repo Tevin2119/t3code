@@ -2,7 +2,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, it } from "@effect/vitest";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
-import { ProjectId } from "@t3tools/contracts";
+import { ProjectId, ThreadId } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -25,6 +25,7 @@ import { cancel, runs, signal, signalAll, start, store } from "./stepServices.ts
 import { type InRun, invoke, skip, sleep, step, stop, title, wait, workflow } from "./workflow.ts";
 import { type AgentResult, WorkflowAgentError, WorkflowAgents } from "./WorkflowAgents.ts";
 import WorkflowsMigration from "../persistence/Migrations/110_Workflows.ts";
+import WorkflowLaunchOriginMigration from "../persistence/Migrations/116_WorkflowLaunchOrigin.ts";
 import * as WorkflowEngine from "./WorkflowEngine.ts";
 import {
   Issue,
@@ -770,7 +771,10 @@ const harness = Effect.fnUntraced(function* (store?: typeof WorkflowStore.layer)
   const path = yield* Path.Path;
   const directory = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-workflows-" });
   const database = NodeSqliteClient.layer({ filename: path.join(directory, "state.sqlite") });
-  yield* Effect.provide(WorkflowsMigration, database);
+  yield* Effect.provide(
+    WorkflowsMigration.pipe(Effect.andThen(WorkflowLaunchOriginMigration)),
+    database,
+  );
   const counts = yield* Ref.make<Record<string, number>>({});
   const failures = yield* Ref.make(0);
   const latch: Latch = {
@@ -1833,10 +1837,14 @@ it.effect("two agents run side by side, and one past its time limit is stopped",
     yield* boot(
       Effect.gen(function* () {
         const workflows = yield* Workflows.Workflows;
-        const run = yield* workflows.start("pair", {}, { idempotencyKey: "p" });
+        const launchOrigin = {
+          launchedFromThreadId: ThreadId.make("thread:workflow-origin"),
+          linkOrigin: { sessionId: "workflow-peer", label: "Workflow peer", access: "full-access" },
+        } as const;
+        const run = yield* workflows.start("pair", {}, { idempotencyKey: "p", launchOrigin });
         // Both have started before either has ended.
-        yield* agents.started(run.runId, "left/0");
-        yield* agents.started(run.runId, "right/0");
+        assert.deepEqual((yield* agents.started(run.runId, "left/0")).launchOrigin, launchOrigin);
+        assert.deepEqual((yield* agents.started(run.runId, "right/0")).launchOrigin, launchOrigin);
         yield* agents.end(run.runId, "left/0", { reply: "done" });
         // The right one never answers. Its minute passes, and a stop that cannot get through
         // pauses the run without giving the turn up, so the next try stops it.

@@ -661,7 +661,7 @@ it.effect("uses the owner engine's visibility for linked thread snapshots, lists
               Effect.flatMap((value) =>
                 value === "offline"
                   ? Effect.fail(unavailable)
-                  : Effect.succeed(new Map([[boxThread, value === "shared"]])),
+                  : Effect.succeed({ ties: new Map([[boxThread, value === "shared"]]) }),
               ),
             ),
         })),

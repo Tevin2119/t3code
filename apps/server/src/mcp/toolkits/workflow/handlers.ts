@@ -3,6 +3,8 @@ import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 
 import * as Workflows from "../../../workflows/Workflows.ts";
+import * as McpInvocationContext from "../../McpInvocationContext.ts";
+import { callerLinkOrigin } from "../../linkOrigin.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
 import { WORKFLOW_READ_ACTIONS, WorkflowToolkit } from "./tools.ts";
 
@@ -51,8 +53,24 @@ export const layer = McpToolAccess.toLayer(WorkflowToolkit, {
         if (input.action === "start") {
           const name = yield* required(input.workflow, "workflow");
           const idempotencyKey = yield* required(input.idempotencyKey, "idempotencyKey");
+          const scope = yield* McpInvocationContext.McpInvocationContext;
+          const linkOrigin = callerLinkOrigin({ scope, caller: undefined });
+          if (scope.thread?.deliveryOriginUnknown === true && linkOrigin === undefined) {
+            return yield* invalid("Could not verify the originating thread for this workflow.");
+          }
+          const launchedFromThreadId = scope.thread?.threadId;
+          const launchOrigin =
+            linkOrigin === undefined && launchedFromThreadId === undefined
+              ? undefined
+              : {
+                  ...(linkOrigin === undefined ? {} : { linkOrigin }),
+                  ...(launchedFromThreadId === undefined ? {} : { launchedFromThreadId }),
+                };
           const { runId } = yield* workflows
-            .start(name, input.input === undefined ? {} : input.input, { idempotencyKey })
+            .start(name, input.input === undefined ? {} : input.input, {
+              idempotencyKey,
+              ...(launchOrigin === undefined ? {} : { launchOrigin }),
+            })
             .pipe(Effect.mapError(refused));
           return yield* workflows.get(runId).pipe(Effect.mapError(refused));
         }

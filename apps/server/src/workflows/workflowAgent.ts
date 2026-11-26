@@ -137,9 +137,15 @@ const attempt = Effect.fn("workflow.agent")(function* <A, I>(
         };
   // What the agent's thread touches, its issue and the pull requests it links, is this step's.
   const touches = stepReferences(run.store, run.runId, name);
-  const start = (key: string, prompt: string, thread: AgentThread | undefined) =>
-    agents
+  const start = Effect.fn("workflow.agent.start")(function* (
+    key: string,
+    prompt: string,
+    thread: AgentThread | undefined,
+  ) {
+    const launchOrigin = yield* run.store.launchOrigin(run.runId);
+    return yield* agents
       .start({
+        ...(launchOrigin === undefined ? {} : { launchOrigin }),
         key: `${run.runId}/${name}/${key}`,
         origin: { runId: run.runId, workflow: run.workflow, step: name },
         title: options.title ?? `${run.workflow}: ${name}`,
@@ -174,6 +180,7 @@ const attempt = Effect.fn("workflow.agent")(function* <A, I>(
               Effect.succeed<AgentTurn>({ threadId: "", turnId: "", failed: text(error) }),
             ),
       );
+  });
   const resultOf = (turn: AgentTurn, wait = { quiet }) =>
     agents
       .result(turn, wait)

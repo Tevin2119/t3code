@@ -344,6 +344,33 @@ it.layer(Layer.provideMerge(layerTools, layerOrchestration))("work a link starts
       const plain = yield* launch(claudeCode, "Started by Claude Code");
       assert.equal((yield* projections.getThreadShell(plain))?.linkOrigin, undefined);
 
+      const ownerThread = (yield* ThreadManagement.ThreadManagementService.pipe(
+        Effect.flatMap((threads) => threads.getThreadProjection(plain)),
+      )).thread;
+      const linkedFork = yield* ThreadForkService.ThreadForkServiceV2.pipe(
+        Effect.flatMap((forks) =>
+          forks.plan({
+            sourceProjection: { thread: ownerThread },
+            sourceRun: { id: RunId.make("run:source"), status: "completed" } as OrchestrationV2Run,
+            sourceProviderThread: undefined,
+            canonicalSourcePoint: { threadId: plain },
+            transferId: ContextTransferId.make("transfer:owner-fork"),
+            targetThreadId: ThreadId.make("thread:owner-fork"),
+            createdBy: "agent",
+            creationSource: "mcp",
+            createdAt: ownerThread.createdAt,
+          }),
+        ),
+        Effect.provideService(ThreadForkService.ForkOrigin, {
+          launchedFromThreadId: launched,
+          linkOrigin: { sessionId: "laptop", label: "Laptop", access: "full-access" },
+        }),
+        Effect.provide(ThreadForkService.layer),
+      );
+      assert.equal(linkedFork.targetThread.linkOrigin?.sessionId, "laptop");
+      assert.equal(linkedFork.targetThread.lineage.parentThreadId, plain);
+      assert.equal(linkedFork.targetThread.lineage.launchedFromThreadId, launched);
+
       // A link's delegated task names its parent there; only a link's launch may.
       const delegatedFrom = {
         environmentId: "environment-laptop",

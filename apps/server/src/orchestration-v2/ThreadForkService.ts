@@ -5,6 +5,7 @@ import {
   OrchestrationV2ContextSourcePoint,
   OrchestrationV2ContextTransfer,
   OrchestrationV2CreationSource,
+  type OrchestrationV2LinkOrigin,
   OrchestrationV2ProviderThread,
   OrchestrationV2ProviderTurnTokenUsage,
   OrchestrationV2Run,
@@ -16,6 +17,16 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
+
+export const ForkOrigin = Context.Reference<
+  | {
+      readonly linkOrigin?: OrchestrationV2LinkOrigin;
+      readonly launchedFromThreadId?: ThreadId;
+    }
+  | undefined
+>("t3/orchestration-v2/ThreadForkService/ForkOrigin", {
+  defaultValue: () => undefined,
+});
 
 export interface ThreadForkPlanV2 {
   readonly targetThread: OrchestrationV2AppThread;
@@ -76,6 +87,7 @@ export const layer: Layer.Layer<ThreadForkServiceV2> = Layer.succeed(
   ThreadForkServiceV2.of({
     plan: Effect.fn("ThreadForkService.plan")(function* (input) {
       const { sourceRun } = input;
+      const origin = yield* ForkOrigin;
       const sourceLineage = input.sourceProjection.thread.lineage;
       // A task a linked environment delegated here is a subagent of a remote thread.
       if (
@@ -108,6 +120,7 @@ export const layer: Layer.Layer<ThreadForkServiceV2> = Layer.succeed(
       } = input.sourceProjection.thread;
       const targetThread: OrchestrationV2AppThread = {
         ...inherited,
+        ...(origin?.linkOrigin === undefined ? {} : { linkOrigin: origin.linkOrigin }),
         // PR context follows the conversation; watching remains the source thread's responsibility.
         pullRequests: input.sourceProjection.thread.pullRequests?.map(
           ({ watch: _watch, ...link }) => link,
@@ -124,6 +137,9 @@ export const layer: Layer.Layer<ThreadForkServiceV2> = Layer.succeed(
           parentThreadId: input.sourceProjection.thread.id,
           relationshipToParent: "fork",
           rootThreadId: input.sourceProjection.thread.lineage.rootThreadId,
+          ...(origin?.launchedFromThreadId === undefined
+            ? {}
+            : { launchedFromThreadId: origin.launchedFromThreadId }),
           ...(input.sideChat ? { sideChat: true } : {}),
         },
         forkedFrom:

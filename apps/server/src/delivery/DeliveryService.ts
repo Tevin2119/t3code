@@ -238,6 +238,11 @@ const queryPath = (path: string, query: Record<string, string | number | undefin
   return params.size === 0 ? path : `${path}?${params}`;
 };
 
+export type OwnerThreadIndexSnapshot = {
+  readonly ties: ReadonlyMap<ThreadId, boolean>;
+  readonly uncertainAfter?: number;
+};
+
 export class DeliveryService extends Context.Service<
   DeliveryService,
   {
@@ -261,7 +266,7 @@ export class DeliveryService extends Context.Service<
     ) => Effect.Effect<unknown, DeliveryError>;
     readonly ownerTiedThreads: (
       environmentId: EnvironmentId,
-    ) => Effect.Effect<ReadonlyMap<ThreadId, boolean>, DeliveryError>;
+    ) => Effect.Effect<OwnerThreadIndexSnapshot, DeliveryError>;
     readonly setBoardLinkedVisibility: (
       input: typeof DeliverySetBoardLinkedVisibility.Type,
     ) => Effect.Effect<typeof DeliveryBoardLinkedVisibility.Type, DeliveryError>;
@@ -335,7 +340,7 @@ export const layerTestWithThreadIndex = (overrides: Partial<TestThreadIndex>) =>
       actLinked: disabled,
       peerHandoff: disabled,
       ownerHandoffRequest: disabled,
-      ownerTiedThreads: overrides.ownerTiedThreads ?? (() => Effect.succeed(new Map())),
+      ownerTiedThreads: overrides.ownerTiedThreads ?? (() => Effect.succeed({ ties: new Map() })),
       setBoardLinkedVisibility: disabled,
       setTaskLinkedHidden: disabled,
       discover: Effect.fn("DeliveryService.discover")(function* (input, caller) {
@@ -488,20 +493,63 @@ const make = Effect.fn("DeliveryService.make")(function* (
   const discoveryLock = yield* Semaphore.make(1);
   const threadIndexLock = yield* Semaphore.make(1);
   const ownerThreadCache = new Map<
-    string,
+    EnvironmentId,
     {
       until: number;
-      value: Exit.Exit<ReadonlyMap<ThreadId, boolean>, DeliveryError>;
+      value: Exit.Exit<OwnerThreadIndexSnapshot, DeliveryError>;
     }
   >();
-  const lastGoodOwnerThreadIndex = new Map<string, ReadonlyMap<ThreadId, boolean>>();
+  const lastGoodOwnerThreadIndex = new Map<
+    EnvironmentId,
+    {
+      readonly ties: ReadonlyMap<ThreadId, boolean>;
+      readonly receivedAt: number;
+    }
+  >();
+  let ownerIndexConfiguration:
+    | { readonly revision: number; readonly enabled: boolean; readonly engineUrl: string }
+    | undefined;
+  let ownerIndexGeneration = 0;
   let discoveryGeneration = 0;
   let discoveryConfiguration = "";
-  const invalidateDiscovery = () => {
+  const invalidateDiscovery = (includeOwnerIndex = true) => {
     discoveryGeneration++;
     discoveryCache.clear();
-    ownerThreadCache.clear();
+    if (includeOwnerIndex) {
+      ownerIndexGeneration++;
+      ownerThreadCache.clear();
+    }
   };
+
+  const readOwnerIndexConfiguration = Effect.fn("DeliveryService.readOwnerIndexConfiguration")(
+    function* () {
+      const { revision, enabled, engineUrl } = yield* settingsService
+        .withSettingsSnapshot((settings) =>
+          settingsService.deliveryConfigurationRevision.pipe(
+            Effect.map((revision) => ({ revision, ...settings.delivery })),
+          ),
+        )
+        .pipe(
+          Effect.mapError(
+            () =>
+              new DeliveryError({
+                reason: "unreachable",
+                detail: "Delivery settings could not be read.",
+              }),
+          ),
+        );
+      if (
+        ownerIndexConfiguration?.revision !== revision ||
+        ownerIndexConfiguration.enabled !== enabled ||
+        ownerIndexConfiguration.engineUrl !== engineUrl
+      ) {
+        ownerIndexConfiguration = { revision, enabled, engineUrl };
+        ownerThreadCache.clear();
+        lastGoodOwnerThreadIndex.clear();
+      }
+      return ownerIndexConfiguration;
+    },
+  );
 
   const readHealth = Effect.fn("DeliveryService.readHealth")(
     function* (engineUrl: string, bounded: boolean) {
@@ -1998,7 +2046,7 @@ const make = Effect.fn("DeliveryService.make")(function* (
   yield* settingsService.streamChanges.pipe(
     Stream.runForEach((settings) =>
       Effect.sync(() => {
-        invalidateDiscovery();
+        invalidateDiscovery(false);
         DeliveryThreadSession.setDeliveryTerminalEntryScript(entryScriptOf(settings.delivery));
       }),
     ),
@@ -2046,14 +2094,12 @@ const make = Effect.fn("DeliveryService.make")(function* (
     ),
     ownerTiedThreads: Effect.fn("DeliveryService.ownerTiedThreads")(
       function* (environmentId) {
-        const settings = yield* delivery;
+        const settings = yield* readOwnerIndexConfiguration();
         if (!settings.enabled || settings.engineUrl.trim() === "")
-          return new Map<ThreadId, boolean>();
-        const key = `${environmentId.length}:${environmentId}${settings.engineUrl}`;
-        const cached = ownerThreadCache.get(key);
+          return { ties: new Map<ThreadId, boolean>() };
+        const cached = ownerThreadCache.get(environmentId);
         if (cached !== undefined && (yield* Clock.currentTimeMillis) < cached.until)
           return yield* cached.value;
-        const generation = discoveryGeneration;
         const read = Effect.gen(function* () {
           const { body } = yield* request(
             "GET",
@@ -2076,25 +2122,30 @@ const make = Effect.fn("DeliveryService.make")(function* (
           }
           return index;
         });
-        const answer = yield* Effect.exit(read);
-        const receivedAt = yield* Clock.currentTimeMillis;
-        const current = yield* delivery;
-        if (
-          generation !== discoveryGeneration ||
-          !current.enabled ||
-          current.engineUrl !== settings.engineUrl
-        )
-          return yield* linkedRefusal(404);
-        const previous = lastGoodOwnerThreadIndex.get(key);
-        if (Exit.isSuccess(answer)) lastGoodOwnerThreadIndex.set(key, answer.value);
-        const value =
-          Exit.isFailure(answer) && previous !== undefined
-            ? Exit.succeed(
-                new Map<ThreadId, boolean>(Array.from(previous.keys(), (id) => [id, false])),
-              )
-            : answer;
-        ownerThreadCache.set(key, { until: receivedAt + 3_000, value });
-        return yield* value;
+        for (let attempt = 0; attempt < 2; attempt++) {
+          const generation = ownerIndexGeneration;
+          const answer = yield* Effect.exit(read);
+          const receivedAt = yield* Clock.currentTimeMillis;
+          if ((yield* readOwnerIndexConfiguration()) !== settings) return yield* linkedRefusal(404);
+          if (generation !== ownerIndexGeneration) continue;
+          const previous = lastGoodOwnerThreadIndex.get(environmentId);
+          if (Exit.isSuccess(answer)) {
+            lastGoodOwnerThreadIndex.set(environmentId, { ties: answer.value, receivedAt });
+          }
+          const value = Exit.isSuccess(answer)
+            ? Exit.succeed({ ties: answer.value })
+            : previous === undefined
+              ? Exit.failCause(answer.cause)
+              : Exit.succeed({
+                  ties: new Map<ThreadId, boolean>(
+                    Array.from(previous.ties.keys(), (id) => [id, false]),
+                  ),
+                  uncertainAfter: previous.receivedAt,
+                });
+          ownerThreadCache.set(environmentId, { until: receivedAt + 3_000, value });
+          return yield* value;
+        }
+        return yield* linkedRefusal(404);
       },
       (effect) => threadIndexLock.withPermit(effect),
     ),

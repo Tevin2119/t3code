@@ -3870,6 +3870,43 @@ it.effect("lists every thread in the shell snapshot past SQLite's bound variable
 );
 
 it.layer(layerTest)("ProjectionStoreV2", (it) => {
+  it.effect("remembers the sender of only the first legacy launch message", () =>
+    Effect.gen(function* () {
+      const store = yield* ProjectionStore.ProjectionStoreV2;
+      const sql = yield* SqlClient.SqlClient;
+      const fromThread = ThreadId.make("legacy-launch:from-thread");
+      const fromLink = ThreadId.make("legacy-launch:from-link");
+      const sender = ThreadId.make("legacy-launch:parent");
+      const first = "2026-01-01T00:00:00.000Z";
+      const later = "2026-01-02T00:00:00.000Z";
+      const withSender = encodeUnknownJsonString({ senderThreadId: sender });
+      const insert = (id: ThreadId, at: string, payload: string) => sql`
+        INSERT INTO orchestration_v2_projection_messages
+          (message_id, thread_id, role, streaming, created_at, updated_at, payload_json)
+        VALUES (${`${id}:${at}`}, ${id}, 'user', 0, ${at}, ${at}, ${payload})
+      `;
+      yield* insert(fromThread, later, "{}");
+      yield* insert(fromThread, first, withSender);
+      yield* insert(fromLink, first, "{}");
+      yield* insert(fromLink, later, withSender);
+
+      const trace = traceSqlStatements();
+      yield* Effect.gen(function* () {
+        for (const [id, ancestor] of [
+          [fromThread, sender],
+          [fromLink, null],
+        ] as const) {
+          assert.equal(yield* store.getLegacyLaunchAncestor(id), ancestor);
+          assert.equal(yield* store.getLegacyLaunchAncestor(id), ancestor);
+        }
+      }).pipe(Effect.withTracer(trace.tracer));
+      assert.lengthOf(
+        trace.statements.filter((sql) => sql.includes("projection_messages")),
+        2,
+      );
+    }),
+  );
+
   // regression: #21969 keep corrupt plan JSON in the typed read error
   it.effect("returns a typed read error for malformed stored plan JSON", () =>
     Effect.gen(function* () {

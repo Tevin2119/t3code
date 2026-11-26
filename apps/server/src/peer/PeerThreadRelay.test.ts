@@ -94,9 +94,9 @@ const serveBoxWithTaskThread = Effect.fn("PeerThreadRelay.test.serveBox")(functi
     Effect.map(DeliveryService.DeliveryService, (service) => ({
       ...service,
       ownerTiedThreads: () =>
-        Effect.succeed(
-          new Map<ThreadId, boolean>(taskThread === "shared" ? [[boxThread, true]] : []),
-        ),
+        Effect.succeed({
+          ties: new Map<ThreadId, boolean>(taskThread === "shared" ? [[boxThread, true]] : []),
+        }),
     })),
   ).pipe(Layer.provide(DeliveryService.layerTest));
   const peer = yield* servePeer(box, Layer.empty, LinkThreadHttp.layer).pipe(

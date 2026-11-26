@@ -728,7 +728,18 @@ it.effect("a bound run follows its thread when promotion moves it mid-send", () 
 
 it.effect("a fresh-session task launches one thread, then starts each later run fresh in it", () =>
   Effect.gen(function* () {
-    const launches = yield* Ref.make<Array<ThreadId | null>>([]);
+    const launches = yield* Ref.make<
+      Array<{
+        launchedFromThreadId: ThreadId | undefined;
+        linkOrigin: ThreadLaunchService.ThreadLaunchInput["linkOrigin"];
+      }>
+    >([]);
+    const originDeleted = yield* Ref.make(false);
+    const linkOrigin = {
+      sessionId: "scheduler-link",
+      label: "Scheduler link",
+      access: "full-access",
+    } as const;
     const creator = ThreadId.make("thread:scheduler");
     const sends = yield* Ref.make<Array<{ threadId: ThreadId; freshContext?: boolean }>>([]);
     const launched = ThreadId.make("thread:fresh-session-task");
@@ -738,17 +749,30 @@ it.effect("a fresh-session task launches one thread, then starts each later run 
           ManagedPolicy.layerTest(),
           Layer.mock(ThreadLaunchService.ThreadLaunchService)({
             launch: (input) =>
-              Ref.update(launches, (all) => [...all, input.launchedFromThreadId ?? null]).pipe(
-                Effect.as({ threadId: launched, resumed: false } as never),
-              ),
+              Ref.update(launches, (all) => [
+                ...all,
+                { launchedFromThreadId: input.launchedFromThreadId, linkOrigin: input.linkOrigin },
+              ]).pipe(Effect.as({ threadId: launched, resumed: false } as never)),
           }),
           Layer.mock(ThreadManagementService.ThreadManagementService)({
-            getThreadShell: () =>
-              Effect.succeed({
-                deletedAt: null,
-                archivedAt: null,
-                projectId: ProjectId.make("project:test"),
-              } as never),
+            getThreadShell: (id) =>
+              Ref.get(originDeleted).pipe(
+                Effect.map(
+                  (deleted) =>
+                    ({
+                      id,
+                      deletedAt: id === creator && deleted ? "2026-01-01T00:00:00.000Z" : null,
+                      archivedAt: null,
+                      projectId: ProjectId.make("project:test"),
+                      lineage: {
+                        rootThreadId: id,
+                        parentThreadId: null,
+                        relationshipToParent: null,
+                      },
+                      ...(id === creator || id === launched ? { linkOrigin } : {}),
+                    }) as never,
+                ),
+              ),
             sendToThread: (input) =>
               Ref.update(sends, (all) => [
                 ...all,
@@ -782,6 +806,7 @@ it.effect("a fresh-session task launches one thread, then starts each later run 
         runtimeMode: "full-access",
         interactionMode: "default",
       } as const;
+      yield* service.upsert({ ...input, threadMode: "fresh_session" });
       yield* service.upsert({ ...input, threadMode: "fresh_session" }, creator);
 
       assert.equal((yield* service.runNow({ id: input.id })).threadId, launched);
@@ -799,7 +824,7 @@ it.effect("a fresh-session task launches one thread, then starts each later run 
       assert.equal(legacy.task.threadMode, "fresh_session");
       yield* service.runNow({ id: input.id });
 
-      assert.deepEqual(yield* Ref.get(launches), [creator]);
+      assert.deepEqual(yield* Ref.get(launches), [{ launchedFromThreadId: creator, linkOrigin }]);
       assert.equal(legacy.task.launchedFromThreadId, creator);
       assert.deepEqual(yield* Ref.get(sends), [{ threadId: launched, freshContext: true }]);
       // Its thread stays in the old project, so moving the task leaves it for a new one.
@@ -822,6 +847,10 @@ it.effect("a fresh-session task launches one thread, then starts each later run 
       });
       assert.equal(cleared.task.threadId, null);
       assert.equal(cleared.task.threadMode, "continue");
+      yield* Ref.set(originDeleted, true);
+      const refused = yield* service.runNow({ id: input.id }).pipe(Effect.flip);
+      assert.include(refused.message, "originating thread");
+      assert.isFalse((yield* service.list()).tasks.find(({ id }) => id === input.id)?.enabled);
     }).pipe(Effect.provide(layer));
   }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
 );

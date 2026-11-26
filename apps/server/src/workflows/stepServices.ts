@@ -221,7 +221,11 @@ export const forStep = (
       Runs.of({
         start: Effect.fn("Runs.start")(function* (workflow, input, options) {
           const engine = yield* engineOf(link);
-          return yield* engine.start(workflow, input, options);
+          const launchOrigin = yield* store.launchOrigin(runId);
+          return yield* engine.start(workflow, input, {
+            ...options,
+            ...(launchOrigin === undefined ? {} : { launchOrigin }),
+          });
         }),
         cancel: Effect.fn("Runs.cancel")(function* (target, reason) {
           // Cancelling interrupts the run, and this step is the run: it would cut itself off

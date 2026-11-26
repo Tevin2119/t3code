@@ -389,6 +389,7 @@ const fixture = Effect.fn("fixture")(function* (
         withSettingsSnapshot: (use) => Effect.flatMap(Ref.get(settings), use),
         start: Effect.void,
         ready: Effect.void,
+        deliveryConfigurationRevision: Effect.succeed(0),
         getSettings: Ref.get(settings),
         updateSettings: (patch) =>
           Ref.updateAndGet(settings, (current) => ({

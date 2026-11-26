@@ -69,6 +69,26 @@ describe("runMigrations", () => {
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
 
+  it.effect("refuses upstream migration IDs reused by the linked-boards QA build", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* runMigrations({ toMigrationInclusive: 110 });
+      yield* sql`
+        INSERT INTO effect_sql_migrations (migration_id, name) VALUES
+          (111, 'SupersededRunAttemptIndex'), (112, 'LayoutCommandApprovals'),
+          (113, 'WorkflowSkippedRuns'), (114, 'WorkflowRunIndexes'),
+          (115, 'WorkflowRunTags'), (116, 'ForkHistoryMembership')
+      `;
+      const before = yield* history;
+      const exit = yield* Effect.exit(runMigrations());
+      assert.isTrue(Exit.isFailure(exit));
+      assert.include(String(exit), "114_ScheduledTaskAncestry (recorded: WorkflowRunIndexes)");
+      assert.include(String(exit), "115_PeerArrivalKey (recorded: WorkflowRunTags)");
+      assert.include(String(exit), "116_WorkflowLaunchOrigin (recorded: ForkHistoryMembership)");
+      assert.deepStrictEqual(yield* history, before);
+    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+  );
+
   it.effect("upgrades a database at exactly 54, then rechecks it without a write lock", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;

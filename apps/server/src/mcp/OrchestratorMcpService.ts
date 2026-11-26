@@ -1,5 +1,6 @@
 import * as DeliveryService from "../delivery/DeliveryService.ts";
 import {
+  assertLinkedScheduleOrigin,
   assertPeerScheduledTask,
   assertPeerThreadTargets,
   filterPeerThreadRows,
@@ -129,6 +130,7 @@ import * as ProjectService from "../project/ProjectService.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as ScheduledTaskService from "../scheduledTasks/ScheduledTaskService.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import { callerLinkOrigin } from "./linkOrigin.ts";
 import {
   clientModeCeiling,
   isLinkedDeliveryCaller,
@@ -2445,6 +2447,12 @@ const make = Effect.gen(function* () {
   return OrchestratorMcpService.of({
     scheduleTask: Effect.fn("OrchestratorMcpService.scheduleTask")(function* (scope, input) {
       const { parent, limits } = yield* loadCaller(scope, ["runs"]);
+      if (isLinkedDeliveryCaller(scope) && parent === undefined) {
+        return yield* failure(
+          "capability_denied",
+          "Linked callers must schedule work from a thread.",
+        );
+      }
       const projectId = yield* resolveProjectTarget(parent, input.projectId);
       yield* assertLiveCallerForOtherProject(scope, parent, projectId);
       const project = yield* requireProject(projectId);
@@ -2529,11 +2537,7 @@ const make = Effect.gen(function* () {
           yield* filterPeerThreadRows(
             scope,
             targets,
-            (threadId) =>
-              threadManagement.getThreadShell(threadId).pipe(
-                Effect.map((shell) => (shell?.deletedAt === null ? shell : null)),
-                Effect.orElseSucceed(() => null),
-              ),
+            (threadId) => threadId,
             threadManagement,
             delivery,
           ),
@@ -2548,7 +2552,16 @@ const make = Effect.gen(function* () {
     updateScheduledTask: Effect.fn("OrchestratorMcpService.updateScheduledTask")(
       function* (scope, input) {
         const { parent, limits } = yield* loadCaller(scope, ["runs"]);
+        if (isLinkedDeliveryCaller(scope) && parent === undefined) {
+          return yield* failure(
+            "capability_denied",
+            "Linked callers must edit scheduled work from a thread.",
+          );
+        }
         const existing = yield* loadScheduledTask(scope, input.scheduledTaskId, limits);
+        if (existing.launchedFromThreadId !== undefined) {
+          yield* assertLinkedScheduleOrigin(scope, existing, threadManagement);
+        }
         yield* assertLiveCallerForOtherProject(scope, parent, existing.projectId);
         if (
           input.bindToCurrentThread === true &&
@@ -2613,7 +2626,7 @@ const make = Effect.gen(function* () {
           creationSource: existing.creationSource,
         };
         const { task } = yield* scheduledTasks
-          .upsert(upsertInput)
+          .upsert(upsertInput, isLinkedDeliveryCaller(scope) ? parent?.thread.id : undefined)
           .pipe(
             Effect.mapError((error) =>
               failure("orchestration_error", `Could not update scheduled task: ${error.message}`),
@@ -3377,6 +3390,7 @@ const make = Effect.gen(function* () {
                       text: request.prompt,
                       attachments: [],
                     };
+              const linkOrigin = callerLinkOrigin({ scope, caller: parent.thread });
               const created = yield* threadManagement
                 .dispatch({
                   type: "thread.create",
@@ -3393,9 +3407,7 @@ const make = Effect.gen(function* () {
                   branch: parent.thread.branch,
                   worktreePath: parent.thread.worktreePath,
                   launchedFromThreadId: parent.thread.id,
-                  ...(parent.thread.linkOrigin === undefined
-                    ? {}
-                    : { linkOrigin: parent.thread.linkOrigin }),
+                  ...(linkOrigin === undefined ? {} : { linkOrigin }),
                   ...(initialMessage === undefined ? {} : { initialMessage }),
                 })
                 .pipe(
@@ -3551,7 +3563,7 @@ const make = Effect.gen(function* () {
       const visible = yield* filterPeerThreadRows(
         scope,
         projectThreads,
-        ({ id }) => threadManagement.getThreadShell(id).pipe(Effect.orElseSucceed(() => null)),
+        ({ id }) => id,
         threadManagement,
         delivery,
       );

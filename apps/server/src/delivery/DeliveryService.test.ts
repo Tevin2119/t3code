@@ -32,6 +32,7 @@ import * as DateTime from "effect/DateTime";
 import * as Option from "effect/Option";
 import * as Logger from "effect/Logger";
 import * as Deferred from "effect/Deferred";
+import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as TestClock from "effect/testing/TestClock";
@@ -752,19 +753,19 @@ it.effect("reads the complete owner thread index and invalidates it after a writ
       .pipe(
         Effect.provideService(McpInvocationContext.McpInvocationContext, linkedScope("read-only")),
       );
-    expect(yield* index).toEqual(expected);
-    expect(yield* index).toEqual(expected);
+    expect((yield* index).ties).toEqual(expected);
+    expect((yield* index).ties).toEqual(expected);
     expect(fake.requests.map(({ method, path, search }) => [method, path + search])).toEqual([
       ["GET", path],
     ]);
     yield* delivery.setTaskLinkedHidden({ taskId: sharedTask.id, hidden: true });
     fake.replies = { ...fake.replies, [path]: { threads: [] } };
-    expect(yield* index).toEqual(new Map());
+    expect((yield* index).ties).toEqual(new Map());
     expect(fake.requests.filter((request) => request.path === path)).toHaveLength(2);
 
     yield* TestClock.adjust("3 seconds");
     fake.down = true;
-    expect(yield* index).toEqual(new Map());
+    expect((yield* index).ties).toEqual(new Map());
   }).pipe(Effect.provide(layer(fake, { prefix: "linked-owner-index-" })));
 });
 
@@ -775,10 +776,53 @@ it.effect.each([
   const fake = engine();
   return Effect.gen(function* () {
     const delivery = yield* DeliveryService.DeliveryService;
-    expect(yield* delivery.ownerTiedThreads(linkedEnvironmentId)).toEqual(new Map());
+    expect((yield* delivery.ownerTiedThreads(linkedEnvironmentId)).ties).toEqual(new Map());
     expect(fake.requests).toEqual([]);
   }).pipe(Effect.provide(layer(fake, { ...settings, prefix: "linked-owner-disabled-" })));
 });
+
+it.effect("re-reads an owner index invalidated by an overlapping write", () => {
+  const fake = engine();
+  const path = "/api/task-threads";
+  fake.replies = {
+    [path]: { threads: [] },
+    "/api/tasks/task-shared/linked-hidden": { task: sharedTask.id, linkedHidden: true },
+  };
+  return Effect.gen(function* () {
+    const delivery = yield* DeliveryService.DeliveryService;
+    const started = yield* Deferred.make<void>();
+    const resume = yield* Deferred.make<void>();
+    fake.beforeRequest = (url) =>
+      url.pathname === path
+        ? Deferred.succeed(started, undefined).pipe(Effect.andThen(Deferred.await(resume)))
+        : Effect.void;
+    const read = yield* delivery.ownerTiedThreads(linkedEnvironmentId).pipe(Effect.forkScoped);
+    yield* Deferred.await(started);
+    yield* delivery.setTaskLinkedHidden({ taskId: sharedTask.id, hidden: true });
+    yield* Deferred.succeed(resume, undefined);
+    yield* Fiber.join(read);
+    expect(fake.requests.map(({ method }) => method)).toEqual(["GET", "POST", "GET"]);
+  }).pipe(Effect.provide(layer(fake, { prefix: "linked-owner-rediscovery-" })));
+});
+
+it.effect.each([{ enabled: false }, { engineUrl: "http://127.0.0.1:4322" }])(
+  "forgets the last good index when delivery changes and reverts %o",
+  (change) => {
+    const fake = engine();
+    fake.replies = { "/api/task-threads": { threads: [] } };
+    return Effect.gen(function* () {
+      const delivery = yield* DeliveryService.DeliveryService;
+      const settings = yield* ServerSettings.ServerSettingsService;
+      const { delivery: original } = yield* settings.getSettings;
+      const index = delivery.ownerTiedThreads(linkedEnvironmentId);
+      yield* index;
+      yield* settings.updateSettings({ delivery: change });
+      yield* settings.updateSettings({ delivery: original });
+      fake.down = true;
+      expect(yield* index.pipe(Effect.flip)).toMatchObject({ reason: "unreachable" });
+    }).pipe(Effect.provide(layer(fake, { prefix: "linked-owner-settings-" })));
+  },
+);
 
 it.effect("caches a timed-out owner index refresh for callers queued behind it", () => {
   const fake = engine();
@@ -796,12 +840,13 @@ it.effect("caches a timed-out owner index refresh for callers queued behind it",
   return Effect.gen(function* () {
     const delivery = yield* DeliveryService.DeliveryService;
     const index = delivery.ownerTiedThreads(linkedEnvironmentId);
-    expect(yield* index).toEqual(
+    expect((yield* index).ties).toEqual(
       new Map([
         [thread, true],
         [other, false],
       ]),
     );
+    const goodAt = yield* Clock.currentTimeMillis;
     yield* TestClock.adjust("3 seconds");
     const started = yield* Deferred.make<void>();
     fake.beforeRequest = (url) =>
@@ -814,10 +859,13 @@ it.effect("caches a timed-out owner index refresh for callers queued behind it",
     yield* TestClock.adjust("4 seconds");
     expect(yield* Fiber.join(first)).toMatchObject({
       _tag: "Success",
-      success: new Map([
-        [thread, false],
-        [other, false],
-      ]),
+      success: {
+        ties: new Map([
+          [thread, false],
+          [other, false],
+        ]),
+        uncertainAfter: goodAt,
+      },
     });
     expect(yield* Fiber.join(second)).toEqual(yield* Fiber.join(first));
     expect(fake.requests.filter((request) => request.path === path)).toHaveLength(2);

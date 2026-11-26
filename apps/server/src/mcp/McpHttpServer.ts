@@ -39,6 +39,7 @@ import * as HtmlRender from "../htmlRender/HtmlRender.ts";
 import * as MilestoneEvents from "../milestones/MilestoneEvents.ts";
 import * as ThreadCommandExecutor from "../orchestration-v2/ThreadCommandExecutor.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
+import { resolveLinkOrigin } from "../orchestration-v2/threadLaunchLineage.ts";
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import * as PullRequestService from "../pullRequest/PullRequestService.ts";
 import * as PullRequestWatchService from "../pullRequest/PullRequestWatchService.ts";
@@ -335,18 +336,23 @@ const makeMcpAuthMiddleware = Effect.gen(function* () {
       const shell = yield* projections.value
         .getThreadShell(threadId)
         .pipe(Effect.orElseSucceed(() => null));
-      if (shell === null) return null;
+      if (shell === null || shell.deletedAt !== null) return null;
       const forge = Option.isNone(pullRequests)
         ? undefined
         : yield* pullRequests.value
             .servesProject(shell.projectId)
             .pipe(Effect.orElseSucceed(() => undefined));
-      return { linkOrigin: shell.linkOrigin, forge };
+      const origin = yield* resolveLinkOrigin(shell, projections.value).pipe(
+        Effect.orElseSucceed(() => ({ unknown: true as const })),
+      );
+      return { ...origin, forge };
     }),
     {
       capacity: 1_000,
       timeToLive: (exit) =>
-        exit._tag === "Success" && exit.value !== null ? Duration.minutes(1) : Duration.zero,
+        exit._tag === "Success" && exit.value !== null && !exit.value.unknown
+          ? Duration.minutes(1)
+          : Duration.zero,
     },
   );
   const authenticateRequest = Effect.fn("McpHttpServer.authenticateRequest")(function* (
@@ -386,7 +392,10 @@ const makeMcpAuthMiddleware = Effect.gen(function* () {
     const metadata =
       thread === undefined ? null : yield* Cache.get(threadMetadata, thread.threadId);
     if (thread !== undefined) {
-      if (metadata === null && (delivery || Option.isSome(projections)))
+      if (
+        metadata?.unknown === true ||
+        (metadata === null && (delivery || Option.isSome(projections)))
+      )
         thread = { ...thread, deliveryOriginUnknown: true };
       else if (metadata?.linkOrigin !== undefined)
         thread = { ...thread, linkOrigin: metadata.linkOrigin };

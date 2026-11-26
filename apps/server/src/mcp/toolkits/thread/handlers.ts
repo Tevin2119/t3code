@@ -11,6 +11,7 @@ import * as Effect from "effect/Effect";
 import { modelSelectionCommandType } from "@t3tools/shared/model";
 import { topOfPinnedRunOrderKey } from "@t3tools/shared/pinOrderKey";
 
+import { callerLinkOrigin } from "../../linkOrigin.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
 import {
@@ -23,10 +24,12 @@ import {
 import * as DeliveryService from "../../../delivery/DeliveryService.ts";
 import * as Option from "effect/Option";
 import {
+  assertLinkedScheduleOrigin,
   assertPeerScheduledTask,
   assertPeerThreadTargets,
   filterPeerThreadRows,
 } from "../../../delivery/linkedThreadAccess.ts";
+import * as ThreadFork from "../../../orchestration-v2/ThreadForkService.ts";
 import type * as ThreadManagement from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as ThreadMessageIntake from "../../../orchestration-v2/ThreadMessageIntake.ts";
 import * as ThreadSearch from "../../../orchestration-v2/ThreadSearch.ts";
@@ -133,6 +136,7 @@ export const layer = McpToolAccess.toLayer(ThreadToolkit, {
           yield* Effect.serviceOption(DeliveryService.DeliveryService),
         );
         yield* assertPeerScheduledTask(scope, scheduled, threads, delivery);
+        yield* assertLinkedScheduleOrigin(scope, scheduled, threads);
       }
       const { task, threadId } = yield* scheduler
         .runNow({ id: input.taskId })
@@ -168,7 +172,7 @@ export const layer = McpToolAccess.toLayer(ThreadToolkit, {
       const visible = yield* filterPeerThreadRows(
         scope,
         matches,
-        (match) => threads.getThreadShell(match.threadId).pipe(Effect.orElseSucceed(() => null)),
+        (match) => match.threadId,
         threads,
       );
       return {
@@ -217,7 +221,7 @@ export const layer = McpToolAccess.toLayer(ThreadToolkit, {
       (input) =>
         Effect.gen(function* () {
           const sourcePoint = input.sourcePoint ?? { type: "latest_stable" as const };
-          const { threads, projection } = yield* readThread(input.threadId);
+          const { threads, projection, scope } = yield* readThread(input.threadId);
           const commandId = yield* newCommandId();
           if (input.action === "merge_back") {
             const targetThreadId = yield* required(input.targetThreadId, "targetThreadId");
@@ -236,6 +240,8 @@ export const layer = McpToolAccess.toLayer(ThreadToolkit, {
             return { sequence: result.sequence, targetThreadId };
           }
           const targetThreadId = ThreadId.make(`${commandId}:fork`);
+          const linkOrigin = callerLinkOrigin({ scope, caller: undefined });
+          const launchedFromThreadId = scope.thread?.threadId;
           const result = yield* threads
             .dispatch({
               type: "thread.fork",
@@ -247,7 +253,13 @@ export const layer = McpToolAccess.toLayer(ThreadToolkit, {
               createdBy: "agent",
               creationSource: "mcp",
             })
-            .pipe(Effect.mapError(dispatchFailure));
+            .pipe(
+              Effect.provideService(ThreadFork.ForkOrigin, {
+                ...(linkOrigin === undefined ? {} : { linkOrigin }),
+                ...(launchedFromThreadId === undefined ? {} : { launchedFromThreadId }),
+              }),
+              Effect.mapError(dispatchFailure),
+            );
           return { sequence: result.sequence, targetThreadId };
         }),
     ),

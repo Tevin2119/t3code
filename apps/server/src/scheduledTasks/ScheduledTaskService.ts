@@ -50,6 +50,7 @@ import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import * as SqlClient from "effect/sql/SqlClient";
 
+import { resolveLinkOrigin } from "../orchestration-v2/threadLaunchLineage.ts";
 import * as ThreadLaunchService from "../orchestration-v2/ThreadLaunchService.ts";
 import * as ManagedProjectFolders from "../project/ManagedProjectFolders.ts";
 import * as Metrics from "../observability/Metrics.ts";
@@ -547,7 +548,7 @@ export const layer = Layer.effect(
         project_id,
         thread_id,
         thread_mode,
-        launched_from_thread_id,
+          launched_from_thread_id,
         workspace_strategy_json,
         model_selection_json,
         runtime_mode,
@@ -590,7 +591,7 @@ export const layer = Layer.effect(
         project_id,
         thread_id,
         thread_mode,
-        launched_from_thread_id,
+          launched_from_thread_id,
         workspace_strategy_json,
         model_selection_json,
         runtime_mode,
@@ -671,7 +672,7 @@ export const layer = Layer.effect(
           project_id,
           thread_id,
           thread_mode,
-        launched_from_thread_id,
+          launched_from_thread_id,
           workspace_strategy_json,
           model_selection_json,
           runtime_mode,
@@ -730,6 +731,7 @@ export const layer = Layer.effect(
             ELSE COALESCE(excluded.thread_id, NULLIF(scheduled_tasks.thread_id, ${unboundThreadId}))
           END,
           thread_mode = excluded.thread_mode,
+          launched_from_thread_id = COALESCE(scheduled_tasks.launched_from_thread_id, excluded.launched_from_thread_id),
           workspace_strategy_json = excluded.workspace_strategy_json,
           model_selection_json = excluded.model_selection_json,
           runtime_mode = excluded.runtime_mode,
@@ -1060,6 +1062,59 @@ export const layer = Layer.effect(
           if (reason !== null) return yield* new WebhookDeliverySkipped({ reason });
         }
 
+        let linkOrigin;
+        if (active.launchedFromThreadId !== undefined) {
+          const sourceId = active.launchedFromThreadId;
+          const source = yield* threadManagement.getThreadShell(sourceId).pipe(
+            Effect.mapError((cause) =>
+              taskError("Could not read the schedule's originating thread.", {
+                taskId: active.id,
+                cause,
+              }),
+            ),
+          );
+          if (source === null || source.deletedAt !== null) {
+            const reason = "The schedule's originating thread was deleted.";
+            yield* sql`
+              UPDATE scheduled_tasks SET enabled = 0, next_run_at = NULL, updated_at = ${startedAtIso}
+              WHERE task_id = ${active.id} AND launched_from_thread_id = ${sourceId}
+                AND created_at = ${active.createdAt}
+            `.pipe(
+              Effect.mapError((cause) =>
+                taskError("Could not pause the schedule.", { taskId: active.id, cause }),
+              ),
+            );
+            yield* notifyChanged;
+            if (webhook !== undefined) return yield* new WebhookDeliverySkipped({ reason });
+            return yield* taskError(reason, { taskId: active.id });
+          }
+          const origin = yield* resolveLinkOrigin(source, threadManagement).pipe(
+            Effect.mapError((cause) =>
+              taskError("Could not resolve the schedule's originating thread.", {
+                taskId: active.id,
+                cause,
+              }),
+            ),
+          );
+          if (origin.unknown === true) {
+            const reason = "The schedule's originating thread has missing ancestry.";
+            if (webhook !== undefined) return yield* new WebhookDeliverySkipped({ reason });
+            return yield* taskError(reason, { taskId: active.id });
+          }
+          linkOrigin = origin.linkOrigin;
+          if (linkOrigin !== undefined && active.threadId !== null) {
+            const target = yield* threadManagement
+              .getThreadShell(active.threadId)
+              .pipe(Effect.orElseSucceed(() => null));
+            if (target?.linkOrigin?.sessionId !== linkOrigin.sessionId) {
+              const reason =
+                "A linked schedule cannot continue a thread that its link did not start.";
+              if (webhook !== undefined) return yield* new WebhookDeliverySkipped({ reason });
+              return yield* taskError(reason, { taskId: active.id });
+            }
+          }
+        }
+
         if (webhook === undefined) yield* markRunning(active.id, startedAtIso);
         else
           yield* sql
@@ -1146,6 +1201,7 @@ export const layer = Layer.effect(
                     ...(active.launchedFromThreadId === undefined
                       ? {}
                       : { launchedFromThreadId: active.launchedFromThreadId }),
+                    ...(linkOrigin === undefined ? {} : { linkOrigin }),
                     createdBy: active.createdBy,
                     creationSource: active.creationSource,
                   })
@@ -1604,9 +1660,7 @@ export const layer = Layer.effect(
         isSameSchedule(existingTask.schedule, schedule);
       if (!scheduleUnchanged)
         yield* requireFutureOnce({ enabled: input.enabled, schedule }, now, id);
-      const ancestor =
-        existingTask?.launchedFromThreadId ??
-        (existingTask === null ? launchedFromThreadId : undefined);
+      const ancestor = existingTask?.launchedFromThreadId ?? launchedFromThreadId;
       const task: ScheduledTask = {
         id,
         title: input.title,

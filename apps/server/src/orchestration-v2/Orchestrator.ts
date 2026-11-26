@@ -571,6 +571,9 @@ export interface OrchestratorV2Shape {
     Effect.Effect<OrchestrationV2ThreadShellSnapshot, OrchestratorV2Error>,
     OrchestratorV2Error
   >;
+  readonly getLegacyLaunchAncestor: (
+    threadId: ThreadId,
+  ) => Effect.Effect<ThreadId | null, OrchestratorV2Error>;
   readonly getThreadShell: (
     threadId: ThreadId,
   ) => Effect.Effect<OrchestrationV2ThreadShell | null, OrchestratorV2Error>;
@@ -4183,7 +4186,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         parentThreadId: null,
         relationshipToParent: null,
         rootThreadId: command.threadId,
-        ...(command.creationSource === "mcp"
+        ...(command.creationSource === "mcp" || command.launchedFromThreadId !== undefined
           ? { launchedFromThreadId: command.launchedFromThreadId ?? null }
           : {}),
         ...(command.engineIntake === undefined ? {} : { engineIntake: command.engineIntake }),
@@ -17686,6 +17689,13 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           Effect.map(Effect.mapError(shellProjectionError)),
         );
     }),
+    getLegacyLaunchAncestor: Effect.fn("OrchestratorV2.getLegacyLaunchAncestor")(
+      function (threadId) {
+        return projectionStore
+          .getLegacyLaunchAncestor(threadId)
+          .pipe(Effect.mapError((cause) => new OrchestratorProjectionError({ threadId, cause })));
+      },
+    ),
     getThreadShell: Effect.fn("OrchestratorV2.getThreadShell")(function (threadId) {
       return projectionStore
         .getThreadShell(threadId)

@@ -616,7 +616,7 @@ export const layer = McpToolAccess.toLayer(ProjectToolkit, {
         },
         McpInvocationContext.isLinkedDeliveryCaller(scope) && input.force === true
           ? (threads, projections) =>
-              filterPeerThreadRows(scope, threads, Effect.succeed, projections, delivery).pipe(
+              filterPeerThreadRows(scope, threads, (thread) => thread, projections, delivery).pipe(
                 Effect.map((visible) => visible.length === threads.length),
               )
           : undefined,

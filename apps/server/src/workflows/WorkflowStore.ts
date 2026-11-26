@@ -1,6 +1,8 @@
 import {
   type MilestoneEvent,
   MilestoneId,
+  OrchestrationV2LinkOrigin,
+  ThreadId,
   type WorkflowCounts,
   WorkflowRun,
   type WorkflowRunReference,
@@ -31,6 +33,15 @@ export interface RunParent {
   readonly runId: string;
   readonly wait: string;
 }
+
+const WorkflowLaunchOrigin = Schema.Struct({
+  launchedFromThreadId: Schema.optionalKey(ThreadId),
+  linkOrigin: Schema.optionalKey(OrchestrationV2LinkOrigin),
+});
+export type WorkflowLaunchOrigin = typeof WorkflowLaunchOrigin.Type;
+const LaunchOriginJson = Schema.fromJsonString(WorkflowLaunchOrigin);
+const decodeLaunchOrigin = Schema.decodeEffect(LaunchOriginJson);
+const encodeLaunchOrigin = Schema.encodeEffect(LaunchOriginJson);
 
 export interface RunRow {
   readonly run_id: string;
@@ -155,7 +166,9 @@ export class WorkflowStore extends Context.Service<
       readonly idempotencyKey: string;
       readonly input: Schema.Json;
       readonly parent?: RunParent | undefined;
+      readonly launchOrigin?: WorkflowLaunchOrigin | undefined;
     }) => Effect.Effect<void>;
+    readonly launchOrigin: (runId: string) => Effect.Effect<WorkflowLaunchOrigin | undefined>;
     readonly runStatus: (
       runId: string,
       status: "running" | "waiting",
@@ -441,16 +454,20 @@ export const make = Effect.gen(function* () {
     changes,
     runStarted: Effect.fn("WorkflowStore.runStarted")(function* (run) {
       const at = yield* now;
+      const launchOrigin =
+        run.launchOrigin === undefined
+          ? null
+          : yield* encodeLaunchOrigin(run.launchOrigin).pipe(Effect.orDie);
       // A start under a key that already has its run changes nothing, and tells nobody.
       const inserted = yield* sql`
           INSERT INTO workflow_runs (
             run_id, workflow, version, engine_tag, idempotency_key, title, status, input_json,
-            parent_run_id, parent_wait, started_at, updated_at
+            parent_run_id, parent_wait, started_at, updated_at, launch_origin_json
           ) VALUES (
             ${run.runId}, ${run.workflow}, ${run.version}, ${run.engineTag},
             ${run.idempotencyKey}, ${`${run.workflow} ${run.idempotencyKey}`}, 'running',
             ${jsonText(run.input)}, ${run.parent?.runId ?? null}, ${run.parent?.wait ?? null},
-            ${at}, ${at}
+            ${at}, ${at}, ${launchOrigin}
           )
           ON CONFLICT DO NOTHING
           RETURNING run_id
@@ -459,6 +476,13 @@ export const make = Effect.gen(function* () {
       yield* PubSub.publish(changes, run.runId);
       yield* tell(run.runId, run.runId, at, { type: "workflow.run_started" });
     }),
+    launchOrigin: Effect.fn("WorkflowStore.launchOrigin")(function* (runId) {
+      const [row] = yield* sql<{ readonly launch_origin_json: string | null }>`
+        SELECT launch_origin_json FROM workflow_runs WHERE run_id = ${runId}
+      `;
+      if (row?.launch_origin_json == null) return undefined;
+      return yield* decodeLaunchOrigin(row.launch_origin_json);
+    }, Effect.orDie),
     runStatus: Effect.fn("WorkflowStore.runStatus")(function* (runId, status, detail) {
       const at = yield* now;
       yield* write(

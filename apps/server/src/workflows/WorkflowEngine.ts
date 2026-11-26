@@ -267,6 +267,11 @@ const make = Effect.fn("WorkflowEngine.make")(function* (
         idempotencyKey: options.idempotencyKey,
         input: payload.input,
         parent: options.parent,
+        launchOrigin:
+          options.launchOrigin ??
+          (options.parent === undefined
+            ? undefined
+            : yield* store.launchOrigin(options.parent.runId)),
       });
       // The key is unique, so the row holding it is the run, even one another version started.
       const holder = yield* store.runByKey(name, options.idempotencyKey);

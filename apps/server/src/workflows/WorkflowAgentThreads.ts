@@ -20,6 +20,7 @@ import * as Hex from "effect/encoding/Hex";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 
+import { resolveLinkOrigin } from "../orchestration-v2/threadLaunchLineage.ts";
 import * as ThreadIssueService from "../orchestration-v2/ThreadIssueService.ts";
 import * as ThreadLaunch from "../orchestration-v2/ThreadLaunchService.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
@@ -160,6 +161,16 @@ const make = Effect.gen(function* () {
             reason: `Thread ${input.thread} no longer exists, so it cannot be continued.`,
           });
         }
+        if (input.launchOrigin?.linkOrigin !== undefined) {
+          const targetOrigin = yield* resolveLinkOrigin(shell, threads).pipe(
+            Effect.mapError(failed("Could not verify the thread's link origin")),
+          );
+          if (targetOrigin.linkOrigin?.sessionId !== input.launchOrigin.linkOrigin.sessionId) {
+            return yield* new WorkflowAgentError({
+              reason: "A linked workflow can continue only a thread started by the same link.",
+            });
+          }
+        }
         const sent = yield* threads
           .sendToThread({
             projectId: shell.projectId,
@@ -219,6 +230,7 @@ const make = Effect.gen(function* () {
           createdBy: "system",
           creationSource: "server",
           workflowRun: { environmentId: here, ...input.origin },
+          ...input.launchOrigin,
         })
         .pipe(Effect.mapError(failed("Could not start the thread")));
       const run = launched.projection.runs.find(

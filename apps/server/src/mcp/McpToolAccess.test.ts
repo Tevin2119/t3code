@@ -11,6 +11,7 @@ import {
   ThreadId,
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
@@ -557,6 +558,8 @@ it.effect.each([
   "offline-descendant",
   "binding-unavailable",
   "legacy-launch",
+  "legacy-descendant",
+  "offline-new",
   "legacy-source",
   "owner",
   "source",
@@ -575,7 +578,9 @@ it.effect.each([
           ...base,
           lineage: { ...base.lineage, launchedFromThreadId: parent },
         }
-      : visibility === "legacy-launch" || visibility === "legacy-source"
+      : visibility === "legacy-launch" ||
+          visibility === "legacy-source" ||
+          visibility === "legacy-descendant"
         ? { ...base, creationSource: "mcp" as const }
         : base;
   const tools = Toolkit.make(
@@ -613,10 +618,13 @@ it.effect.each([
       if (
         visibility === "descendant" ||
         visibility === "shared-descendant" ||
-        visibility === "offline-descendant"
+        visibility === "offline-descendant" ||
+        visibility === "legacy-descendant"
       )
         index.set(parent, false);
-      return index;
+      return visibility === "offline-new"
+        ? { ties: index, uncertainAfter: DateTime.toEpochMillis(base.createdAt) - 1 }
+        : { ties: index };
     }),
     threadState: (threadId): Effect.Effect<DeliveryThreadState, DeliveryError> =>
       visibility === "pending" && threadId === id
@@ -649,7 +657,16 @@ it.effect.each([
     Layer.provide(
       Layer.mock(ThreadManagement.ThreadManagementService)({
         getThreadShell: (threadId) =>
-          Effect.succeed(threadId === id ? target : liveThreadShell(threadId)),
+          Effect.succeed(
+            threadId === id
+              ? target
+              : {
+                  ...liveThreadShell(threadId),
+                  createdAt: DateTime.makeUnsafe("2025-01-01T00:00:00.000Z"),
+                },
+          ),
+        getLegacyLaunchAncestor: () =>
+          Effect.succeed(visibility === "legacy-descendant" ? parent : null),
       }),
     ),
   );

@@ -1222,8 +1222,8 @@ it.effect.each([
   ),
 );
 
-it.effect.each(["bound", "created"] as const)(
-  "a link-started thread cannot run a scheduled task %s by a fenced thread",
+it.effect.each(["bound", "created", "owner-origin", "legacy"] as const)(
+  "a link-started thread cannot run a scheduled task with %s provenance",
   (relationship) => {
     const privateThreadId = ThreadId.make("scheduled-private-thread");
     const linkOrigin = { sessionId: "peer-session", label: "Peer", access: "full-access" } as const;
@@ -1231,7 +1231,9 @@ it.effect.each(["bound", "created"] as const)(
       ...decodeScheduledTask(scheduledTask("task-private", "full-access")),
       ...(relationship === "bound"
         ? { threadId: privateThreadId }
-        : { launchedFromThreadId: privateThreadId }),
+        : relationship === "legacy"
+          ? {}
+          : { launchedFromThreadId: privateThreadId }),
     };
     return Effect.gen(function* () {
       const server = yield* McpServer.McpServer;
@@ -1259,7 +1261,14 @@ it.effect.each(["bound", "created"] as const)(
           Layer.provide(Layer.mock(PeerLinks.PeerLinks)({})),
           Layer.provide(
             DeliveryService.layerTestWithThreadIndex({
-              ownerTiedThreads: () => Effect.succeed(new Map([[privateThreadId, false]])),
+              ownerTiedThreads: () =>
+                Effect.succeed({
+                  ties: new Map(
+                    relationship === "bound" || relationship === "created"
+                      ? [[privateThreadId, false]]
+                      : [],
+                  ),
+                }),
             }),
           ),
           Layer.provide(
@@ -1324,7 +1333,7 @@ it.effect("a link-started thread only sees transfers whose endpoints it can read
         Layer.provide(Layer.mock(ScheduledTaskService.ScheduledTaskService)({})),
         Layer.provide(
           DeliveryService.layerTestWithThreadIndex({
-            ownerTiedThreads: () => Effect.succeed(new Map([[privateThreadId, false]])),
+            ownerTiedThreads: () => Effect.succeed({ ties: new Map([[privateThreadId, false]]) }),
           }),
         ),
         Layer.provide(

@@ -70,6 +70,7 @@ export class Workflows extends Context.Service<
       input: unknown,
       options: {
         readonly idempotencyKey: string;
+        readonly launchOrigin?: WorkflowStore.WorkflowLaunchOrigin;
         /** The run that waits for this one. A run started with a key has one parent or none. */
         readonly parent?: WorkflowStore.RunParent;
         /** The version to run, when the caller holds a definition. Without it, the newest. */

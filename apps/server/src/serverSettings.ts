@@ -264,6 +264,8 @@ export class ServerSettingsService extends Context.Service<
 
     readonly getSettings: Effect.Effect<ServerSettings, ServerSettingsError>;
 
+    readonly deliveryConfigurationRevision: Effect.Effect<number>;
+
     readonly updateSettings: (
       patch: ServerSettingsPatch,
     ) => Effect.Effect<ServerSettings, ServerSettingsError>;
@@ -305,6 +307,8 @@ const makeTest = Effect.fn("serverSettings.makeTest")(function* (
       ? { providerHealthRefreshInterval: providerHealthRefreshInterval as Duration.Duration }
       : {}),
   });
+  const deliveryConfiguration = trackDeliveryConfiguration();
+  deliveryConfiguration.update(initialSettings.delivery);
   const currentSettingsRef = yield* Ref.make<ServerSettings>(initialSettings);
   const writeSemaphore = yield* Semaphore.make(1);
   const getSettings = Ref.get(currentSettingsRef).pipe(Effect.map(resolveTextGenerationProvider));
@@ -316,7 +320,11 @@ const makeTest = Effect.fn("serverSettings.makeTest")(function* (
       Ref.get(currentSettingsRef).pipe(
         Effect.flatMap(update),
         Effect.flatMap(normalizeServerSettings),
-        Effect.tap((nextSettings) => Ref.set(currentSettingsRef, nextSettings)),
+        Effect.tap((nextSettings) =>
+          Ref.set(currentSettingsRef, nextSettings).pipe(
+            Effect.andThen(Effect.sync(() => deliveryConfiguration.update(nextSettings.delivery))),
+          ),
+        ),
         Effect.map(resolveTextGenerationProvider),
       ),
     );
@@ -326,6 +334,7 @@ const makeTest = Effect.fn("serverSettings.makeTest")(function* (
     start: Effect.void,
     ready: Effect.void,
     getSettings,
+    deliveryConfigurationRevision: deliveryConfiguration.revision,
     updateSettings: (patch) =>
       updateTestSettings((currentSettings) =>
         Effect.succeed(applyServerSettingsPatch(currentSettings, patch)),
@@ -713,6 +722,22 @@ function foldLegacyProjectSettings(
   };
 }
 
+const trackDeliveryConfiguration = () => {
+  let revision = 0;
+  let current: ServerSettings["delivery"] | undefined;
+  return {
+    revision: Effect.sync(() => revision),
+    update: (next: ServerSettings["delivery"]) => {
+      if (
+        current !== undefined &&
+        (current.enabled !== next.enabled || current.engineUrl !== next.engineUrl)
+      )
+        revision++;
+      current = next;
+    },
+  };
+};
+
 const make = Effect.gen(function* () {
   const { settingsPath } = yield* ServerConfig.ServerConfig;
   const fs = yield* FileSystem.FileSystem;
@@ -738,8 +763,12 @@ const make = Effect.gen(function* () {
   const watcherScope = yield* Scope.make("sequential");
   yield* Effect.addFinalizer(() => Scope.close(watcherScope, Exit.void));
 
+  const deliveryConfiguration = trackDeliveryConfiguration();
   const emitChange = (settings: ServerSettings) =>
-    PubSub.publish(changesPubSub, settings).pipe(Effect.asVoid);
+    Effect.sync(() => deliveryConfiguration.update(toEffective(settings).delivery)).pipe(
+      Effect.andThen(PubSub.publish(changesPubSub, settings)),
+      Effect.asVoid,
+    );
 
   const readConfigExists = fs.exists(settingsPath).pipe(
     Effect.mapError(
@@ -1456,6 +1485,7 @@ const make = Effect.gen(function* () {
         }),
       ),
     withSettingsSnapshot,
+    deliveryConfigurationRevision: deliveryConfiguration.revision,
     get streamChanges() {
       return materializeChanges(Stream.fromPubSub(changesPubSub));
     },
