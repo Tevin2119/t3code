@@ -646,7 +646,10 @@ function EnvironmentBoardSidebar({
                   title={GROUP_TITLES[group]}
                   rows={switcherRows?.[group] ?? []}
                   {...(group === "waiting" ? { empty: unread ?? "Nothing waits for you." } : {})}
-                  {...(group === "done" ? { defaultFolded: true } : {})}
+                  {...(group === "done" &&
+                  !switcherRows?.done.some((row) => row.kind === "task" && row.current)
+                    ? { defaultFolded: true }
+                    : {})}
                   list={switcherList}
                 />
               ))

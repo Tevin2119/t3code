@@ -24,6 +24,7 @@ import * as EventStore from "../orchestration-v2/EventStore.ts";
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
+import { boardTaskFinishedBy } from "./boardTaskWork.ts";
 import { boardTaskOf, boardTaskThreadMarker, type BoardTask } from "./boardThreadMarker.ts";
 import * as DeliveryService from "./DeliveryService.ts";
 import { BoardLeadSeat, boardLeadSeat, turnSelection as pickSelection } from "./seatProvider.ts";
@@ -148,6 +149,8 @@ function scanActivity(
 /** The card fields this reads, as the engine's lanes carry them since slice 5. */
 export interface ConversationCard {
   readonly id: string;
+  readonly state?: string | undefined;
+  readonly lane?: string | null | undefined;
   readonly set?: string | null | undefined;
   readonly boardThread?:
     | { readonly environmentId: string; readonly threadId: string }
@@ -165,6 +168,8 @@ export interface ConversationCard {
 }
 
 const Detail = Schema.Struct({
+  state: Schema.optional(Schema.String),
+  lane: Schema.optional(Schema.NullOr(Schema.String)),
   seatModels: DeliverySeatModels,
   roster: Schema.optional(Schema.Array(BoardLeadSeat)),
   conversation: Schema.optional(
@@ -351,6 +356,9 @@ export const make = Effect.gen(function* () {
     const waiting = (read.value.steers ?? [])
       .filter((item) => item.state === "pending")
       .toSorted((a, b) => a.id - b.id);
+    const { state, lane } = read.value;
+    // The pass chose this task from an older lanes read; the task may have closed since.
+    const finishedBy = state === undefined ? null : boardTaskFinishedBy({ state, lane });
     for (const item of waiting) {
       const messageId = steerMessageId(task, item.id);
       const present = yield* projections.getMessagesById(threadId, [messageId]).pipe(Effect.result);
@@ -358,6 +366,16 @@ export const make = Effect.gen(function* () {
       // Delivered before, its confirmation lost: confirm it again, never send it twice.
       if (present.success.has(messageId)) {
         yield* settle(task.id, item.id, "delivered", context);
+        continue;
+      }
+      if (finishedBy !== null) {
+        yield* settle(
+          task.id,
+          item.id,
+          "failed",
+          context,
+          finishedBy === "closed-not-done" ? "The task was closed." : `The task is ${finishedBy}.`,
+        );
         continue;
       }
       const records = yield* projections
@@ -460,7 +478,11 @@ export const make = Effect.gen(function* () {
         // A finished task's conversation is followed only if this server already followed it.
         if (steering || floors.has(`${card.id}\u0000${threadId}`))
           yield* mirror(card, threadId, context, detail);
-        if (steering && (card.steers?.pending ?? 0) > 0)
+        // A finished task is no longer steered, but a steer left pending on it is still settled.
+        const finished =
+          card.state !== undefined &&
+          boardTaskFinishedBy({ state: card.state, lane: card.lane }) !== null;
+        if ((steering || finished) && (card.steers?.pending ?? 0) > 0)
           yield* steer(task, threadId, context, detail);
         if (steering && card.hold?.stage === "qa" && card.hold.handoff === null && card.run?.id)
           yield* noticeHandoff(
