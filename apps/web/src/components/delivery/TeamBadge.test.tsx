@@ -49,9 +49,9 @@ const LINEUP: DeliveryOrchestrationConfig = {
 
 let renderer: ReactTestRenderer | undefined;
 
-async function render() {
+async function render(props: { boardOwned?: boolean } = {}) {
   await act(async () => {
-    renderer = create(<TeamBadge environmentId={ENV} threadId={"t1" as never} />);
+    renderer = create(<TeamBadge environmentId={ENV} threadId={"t1" as never} {...props} />);
   });
 }
 
@@ -78,6 +78,15 @@ describe("the badge of a started conversation", () => {
     expect(participants.length).toBeGreaterThan(0);
     expect(participants[0]!.props["aria-label"]).toBe("2 participants receive the next message");
     expect(badge("none")).toEqual([]);
+  });
+
+  it("names a board task's seats as its team, not as who receives the next message", async () => {
+    testState.threadState = {
+      data: { binding: null, lineup: { ...LINEUP, team: "development" }, pending: null },
+    };
+    await render({ boardOwned: true });
+
+    expect(badge("participants")[0]!.props["aria-label"]).toBe("2 seats in this task's team");
   });
 
   it("still says No team for an ordinary conversation", async () => {

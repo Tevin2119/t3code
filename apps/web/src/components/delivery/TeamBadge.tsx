@@ -16,6 +16,8 @@ import { TeamProfilePanel } from "./TeamProfilePanel";
 export function TeamBadge(props: {
   readonly environmentId: EnvironmentId | null;
   readonly threadId: ThreadId;
+  /** A board task's conversation: the board picks its seats, and the engine still does the work. */
+  readonly boardOwned?: boolean | undefined;
 }) {
   const enabled = useDeliveryEnabled(props.environmentId);
   const state = useEnvironmentQuery(
@@ -57,7 +59,11 @@ export function TeamBadge(props: {
                 size="xs"
                 variant="ghost"
                 className="min-w-0"
-                aria-label={`${lineup.participants.length} participants receive the next message`}
+                aria-label={
+                  props.boardOwned
+                    ? `${lineup.participants.length} seats in this task's team`
+                    : `${lineup.participants.length} participants receive the next message`
+                }
                 data-delivery-team-badge="participants"
               />
             }
@@ -72,11 +78,23 @@ export function TeamBadge(props: {
             </span>
           </PopoverTrigger>
           <PopoverPopup align="start" className="w-[min(36rem,calc(100vw-2rem))]">
-            <PopoverTitle>Who receives the next message</PopoverTitle>
-            <p className="mt-1 text-xs text-muted-foreground">
-              They join from your next message. Change the lineup in the model picker&apos;s{" "}
-              Orchestrator panel.
-            </p>
+            {props.boardOwned ? (
+              <>
+                <PopoverTitle>This task&apos;s team</PopoverTitle>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  The board picks these seats and their models. While the engine does the
+                  task&apos;s work, your messages here go to the task&apos;s lead alone.
+                </p>
+              </>
+            ) : (
+              <>
+                <PopoverTitle>Who receives the next message</PopoverTitle>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  They join from your next message. Change the lineup in the model picker&apos;s{" "}
+                  Orchestrator panel.
+                </p>
+              </>
+            )}
             <dl
               className="mt-3 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs"
               data-delivery-team-badge-details
