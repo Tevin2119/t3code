@@ -14,6 +14,7 @@ import * as BoardConversation from "./delivery/BoardConversation.ts";
 import * as BoardTaskThreads from "./delivery/BoardTaskThreads.ts";
 import * as BoardThreadRows from "./delivery/boardThreadRows.ts";
 import * as NativeIntake from "./delivery/NativeIntake.ts";
+import * as BoardTaskExecution from "./delivery/BoardTaskExecution.ts";
 import * as MilestoneHub from "./milestones/MilestoneHub.ts";
 import * as OrchestrationMilestones from "./milestones/OrchestrationMilestones.ts";
 // Effect wraps this raw Node HTTP server after its startup and write-error guards attach.
@@ -777,9 +778,12 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
     Effect.gen(function* () {
       const service = yield* BoardTaskThreads.BoardTaskThreads;
       yield* service.start();
+      // Shares the board pass's claims, which keep each held step's task alive.
+      yield* (yield* BoardTaskExecution.BoardTaskExecution).start();
     }),
   ).pipe(
-    Layer.provide(BoardTaskThreads.layer),
+    Layer.provide(BoardTaskExecution.layer),
+    Layer.provideMerge(BoardTaskThreads.layer),
     Layer.provide(BoardConversation.layer),
     Layer.provide(BoardThreadRows.layer),
     Layer.provide(EventStoreV2.layer),

@@ -107,6 +107,11 @@ const BOARD_TASK_READS = [
     file: "apps/server/src/delivery/SeatHandoffs.ts",
     line: "const task = boardTaskOfMarker(lead?.lineage.engineIntake);",
   },
+  // A step the engine queued runs only in the thread made for its task.
+  {
+    file: "apps/server/src/delivery/BoardTaskExecution.ts",
+    line: "const marked = boardTaskOfMarker(records.value.thread.lineage.engineIntake);",
+  },
 ];
 
 it("only the engine intake and the named board task readers read the marker's value", () => {

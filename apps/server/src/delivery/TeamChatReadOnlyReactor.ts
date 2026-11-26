@@ -35,6 +35,26 @@ const make = Effect.gen(function* () {
   const projections = yield* ProjectionStore.ProjectionStoreV2;
   const delivery = yield* DeliveryService.DeliveryService;
 
+  /** Whether a child is a read-only seat of an engine stage, as its parent's system turn says. */
+  const engineReadOnlySeat = Effect.fnUntraced(function* (
+    parentThreadId: ThreadId,
+    runId: RunId | null,
+    childThreadId: ThreadId,
+  ) {
+    if (runId === null) return false;
+    const records = yield* projections.getThreadRecords(parentThreadId, ["runs"], {
+      runIds: [runId],
+    });
+    const messageId = records.runs.find((run) => run.id === runId)?.userMessageId ?? null;
+    if (messageId === null) return false;
+    const messages = yield* projections.getMessagesById(parentThreadId, [messageId]);
+    const source = messages.get(messageId)?.notification?.source;
+    return (
+      source?.kind === "engine_stage" &&
+      source.seats.some((seat) => seat.childThreadId === childThreadId && seat.access === "read-only")
+    );
+  });
+
   // Runs for every domain event; most events return before any work is needed.
   const handle: TeamChatReadOnlyReactor["Service"]["handle"] = Effect.fnUntraced(
     function* (event) {
@@ -53,10 +73,13 @@ const make = Effect.gen(function* () {
       const parentThreadId = child.lineage.parentThreadId;
       if (parentThreadId === null) return;
       const parent = yield* projections.getThreadRecords(parentThreadId, ["subagents"]);
-      const seat = parent.subagents.find((task) => task.childThreadId === child.id)?.teamChat?.seat;
-      if (seat === undefined) return;
-      const { lineup } = yield* delivery.threadState(parentThreadId);
-      if (lineup === undefined || deliveryParticipantAccess(lineup, seat) !== "read-only") return;
+      const task = parent.subagents.find((candidate) => candidate.childThreadId === child.id);
+      if (task === undefined) return;
+      const seat = task.teamChat?.seat;
+      if (seat !== undefined) {
+        const { lineup } = yield* delivery.threadState(parentThreadId);
+        if (lineup === undefined || deliveryParticipantAccess(lineup, seat) !== "read-only") return;
+      } else if (!(yield* engineReadOnlySeat(parentThreadId, task.runId, child.id))) return;
       yield* engine.dispatch({
         type: "runtime-request.respond",
         commandId: CommandId.make(`server:team-chat-read-only:${child.id}:${event.payload.id}`),

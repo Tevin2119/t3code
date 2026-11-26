@@ -27,6 +27,12 @@ import { createModelSelection } from "@t3tools/shared/model";
 import { ServerConfig } from "../config.ts";
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import { engineNotice } from "./BoardConversation.ts";
+import {
+  briefMessageId,
+  engineStageNotice,
+  seatCommandId,
+  stageMessageId,
+} from "./boardTaskAttempts.ts";
 import { boardTaskOf, boardTaskThreadMarker } from "./boardThreadMarker.ts";
 import * as DeliveryService from "./DeliveryService.ts";
 import * as LimitedSeats from "./LimitedSeats.ts";
@@ -148,6 +154,8 @@ function setup({
   };
   const tasks: Array<{
     teamChat: Delegation["teamChat"];
+    title?: string;
+    childThreadId?: ThreadId;
     status: string;
     result: string | null;
     providerInstanceId: ProviderInstanceId;
@@ -157,7 +165,11 @@ function setup({
   const admissions = new Map<string, Delegation>();
   const bindings: Array<{ threadId: ThreadId; team: string; role?: string; driver: string }> = [];
   const refreshed: string[] = [];
+  /** The engine's native attempts, by id, as `GET /api/native-builds/:att` serves them. */
+  const attempts = new Map<string, unknown>();
   const delivery = {
+    read: ({ path }: { readonly path: string }) =>
+      Effect.succeed({ readAt: "", body: attempts.get(path.split("/").at(-1)!) }),
     refreshThread: (_id: ThreadId, configuration: string) =>
       Effect.sync(() => {
         refreshed.push(configuration);
@@ -208,6 +220,8 @@ function setup({
         subagents: tasks,
         turnItems: notices,
       }),
+    getMessagesById: (_threadId: ThreadId, ids: ReadonlyArray<MessageId>) =>
+      Effect.succeed(new Map(ids.includes(message.id) ? [[message.id, message]] : [])),
   } as unknown as ProjectionStore.ProjectionStoreV2["Service"];
   const threads = {
     isProviderInstanceEnabledForProject: () => Effect.succeed(true),
@@ -220,6 +234,7 @@ function setup({
         }
         tasks.push({
           teamChat: command.teamChat,
+          ...(command.title === undefined ? {} : { title: command.title }),
           status: "running",
           result: null,
           providerInstanceId: command.modelSelection!.instanceId,
@@ -258,6 +273,7 @@ function setup({
   return {
     run,
     message,
+    attempts,
     tasks,
     admissions,
     notices,
@@ -1158,5 +1174,80 @@ it.effect("starts no team round for an engine notice, nor in a board task's conv
     expect(yield* (yield* task.service).prepareTurn({ threadId, runId })).toEqual(idle);
     expect(task.admissions.size).toBe(0);
     expect(task.notices).toHaveLength(0);
+  }),
+);
+
+it.effect("runs the team round for the engine's brief in a board task's conversation", () =>
+  Effect.gen(function* () {
+    const brief = setup({ engineIntake: boardTaskThreadMarker(boardTaskOf("work", "task-7")!) });
+    Object.assign(brief.message, { id: briefMessageId("att-plan") });
+    brief.run.userMessageId = brief.message.id;
+    expect((yield* (yield* brief.service).prepareTurn({ threadId, runId })).ready).toBe(false);
+    expect([...brief.admissions.values()].map((command) => command.teamChat?.seat)).toEqual([
+      "researcher",
+      "critic",
+    ]);
+  }),
+);
+
+it.effect("starts an engine stage's seats as children of its turn, and waits for them", () =>
+  Effect.gen(function* () {
+    const fixture = setup({ engineIntake: boardTaskThreadMarker(boardTaskOf("work", "task-7")!) });
+    const seat = {
+      attemptId: "att-qa",
+      seat: "qa",
+      childThreadId: ThreadId.make("child-qa"),
+      modelSelection: createModelSelection(ProviderInstanceId.make("codex-work"), "codex-model"),
+      access: "read-only" as const,
+      worktreePath: "/work/qa-1",
+    };
+    Object.assign(fixture.message, {
+      id: stageMessageId("att-qa"),
+      notification: engineStageNotice("qa", [seat]),
+    });
+    fixture.run.userMessageId = fixture.message.id;
+    fixture.attempts.set("att-qa", {
+      version: 2,
+      id: "att-qa",
+      run: "run-1",
+      task: "task-7",
+      stage: "qa",
+      kind: "qa",
+      seat: "qa",
+      lead: false,
+      access: "read-only",
+      worktree: "/work/qa-1",
+      harness: "codex",
+      model: "codex-model",
+      prompt: "Test the candidate.",
+      state: "claimed",
+      owner: "t3-board:here",
+      native: null,
+      cancelRequested: false,
+    });
+    const service = yield* fixture.service;
+    expect(yield* service.prepareTurn({ threadId, runId })).toEqual({ ready: false, context: "" });
+    const [started] = [...fixture.admissions.values()];
+    expect(started).toMatchObject({
+      commandId: seatCommandId(threadId, "att-qa"),
+      parentRunId: runId,
+      title: "qa · qa",
+      task: "Test the candidate.",
+      modelSelection: seat.modelSelection,
+      runtimeMode: "approval-required",
+      workspaceStrategy: { type: "existing_worktree", worktreePath: "/work/qa-1" },
+      completionWake: "settled_only",
+    });
+    // Not a team discussion: no critique round, and no follow-up for a later one.
+    expect(started?.teamChat).toBeUndefined();
+    fixture.tasks[0]!.childThreadId = seat.childThreadId;
+    expect((yield* service.prepareTurn({ threadId, runId })).ready).toBe(false);
+    expect(fixture.admissions.size).toBe(1);
+    Object.assign(fixture.tasks[0]!, { status: "completed", result: "All items pass." });
+    const done = yield* service.prepareTurn({ threadId, runId });
+    expect(done.ready).toBe(true);
+    expect(done.context).toContain("qa · qa (codex-work/codex-model, completed");
+    expect(done.context).toContain("All items pass.");
+    expect(fixture.admissions.size).toBe(1);
   }),
 );

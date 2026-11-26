@@ -579,6 +579,7 @@ function itemIcon(item: OrchestrationV2TurnItem): ThreadFeedActivity["icon"] {
         return "eye";
       case "background_task":
       case "system":
+      case "engine_stage":
         return "zap";
       default:
         source satisfies never;

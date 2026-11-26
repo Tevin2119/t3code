@@ -12,8 +12,6 @@ import {
   type OrchestrationV2StoredEvent,
   type ThreadId,
 } from "@t3tools/contracts";
-import { modelAccountFamily } from "@t3tools/shared/limitedSeat";
-import { createModelSelection } from "@t3tools/shared/model";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -28,7 +26,7 @@ import * as ThreadManagementService from "../orchestration-v2/ThreadManagementSe
 import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
 import { boardTaskOf, boardTaskThreadMarker, type BoardTask } from "./boardThreadMarker.ts";
 import * as DeliveryService from "./DeliveryService.ts";
-import { BoardLeadSeat, boardLeadSeat, resolveSeatProvider } from "./seatProvider.ts";
+import { BoardLeadSeat, boardLeadSeat, turnSelection as pickSelection } from "./seatProvider.ts";
 
 /** The engine's bound on an excerpt. Over it an ingest is refused whole. */
 const EXCERPT_LIMIT = 200;
@@ -251,23 +249,10 @@ export const make = Effect.gen(function* () {
     // No pick, one this build cannot read, or a lead picked only when it runs: the thread keeps
     // the model it has.
     if (!published || published.model === null) return undefined;
-    const providers = yield* instances.listInstances;
-    const existing = providers.find((provider) => provider.instanceId === current.instanceId);
-    const next = resolveSeatProvider(
-      providers.filter((provider) => provider.enabled),
-      published.harness,
-      (provider) => provider.instanceId,
-      current.instanceId,
-    );
-    if (
-      typeof next === "string" ||
-      modelAccountFamily(existing?.driverKind, current.model) !==
-        modelAccountFamily(next.driverKind, published.model)
-    )
-      return undefined;
-    return next.instanceId === current.instanceId && published.model === current.model
-      ? current
-      : createModelSelection(next.instanceId, published.model);
+    return pickSelection(yield* instances.listInstances, current, {
+      harness: published.harness,
+      model: published.model,
+    });
   });
 
   const mirror = Effect.fn("BoardConversation.mirror")(function* (
