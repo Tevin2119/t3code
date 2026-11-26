@@ -130,6 +130,8 @@ export const LANES_PATH = "/api/lanes?view=development&set=all";
 const NOT_STARTED = new Set(["draft", "chat", "queue", "intake", "ready"]);
 // Finished work keeps the conversation it had and is given none anew.
 const FINISHED = new Set(["completed", "closed-not-done"]);
+// The states those lanes come from, and a rejected task, which the engine gives no lane.
+const FINISHED_STATES = new Set(["closed", "merged", "rejected"]);
 // A task that moved is worked on another machine; the engine refuses its link here (`moved`).
 const MOVED = new Set(["moved", "moving"]);
 
@@ -137,6 +139,7 @@ const MOVED = new Set(["moved", "moving"]);
 const inWork = (card: TaskStanding) =>
   !NOT_STARTED.has(card.lane ?? "") &&
   !FINISHED.has(card.lane ?? "") &&
+  !FINISHED_STATES.has(card.state) &&
   !MOVED.has(card.state) &&
   card.state !== "split";
 
@@ -286,7 +289,9 @@ export const make = Effect.gen(function* () {
     local(
       threads.dispatch({
         type: "thread.archive",
-        commandId: CommandId.make(`${boardTaskThreadMarker(task)}:archive:${why}:${revision}`),
+        commandId: CommandId.make(
+          `${boardTaskThreadMarker(task)}:archive:${threadId}:${why}:${revision}`,
+        ),
         threadId,
       }),
     ).pipe(Effect.asVoid);
@@ -297,18 +302,18 @@ export const make = Effect.gen(function* () {
    * and changes nothing here: the next pass asks again.
    */
   const holdClaim = Effect.fn("BoardTaskThreads.holdClaim")(function* (
-    card: Card,
+    taskId: string,
     environmentId: EnvironmentId,
     threadId: string,
   ) {
-    const path = `/api/orchestration/tasks/${card.id}`;
-    const held = holders.get(card.id);
+    const path = `/api/orchestration/tasks/${taskId}`;
+    const held = holders.get(taskId);
     if (held !== undefined) {
       const renewed = yield* delivery
         .boardThreadAct({ method: "POST", path: `${path}/ack`, body: { holder: held } })
         .pipe(Effect.result);
       if (renewed._tag === "Success") return;
-      holders.delete(card.id);
+      holders.delete(taskId);
     }
     const claimed = yield* delivery
       .boardThreadAct({
@@ -324,7 +329,7 @@ export const make = Effect.gen(function* () {
       .pipe(Effect.result);
     if (claimed._tag !== "Success") return;
     const decoded = decodeClaimed(claimed.success.body);
-    if (Option.isSome(decoded)) holders.set(card.id, decoded.value.holder);
+    if (Option.isSome(decoded)) holders.set(taskId, decoded.value.holder);
   });
 
   const releaseClaim = Effect.fn("BoardTaskThreads.releaseClaim")(function* (taskId: string) {
@@ -436,7 +441,7 @@ export const make = Effect.gen(function* () {
       key: context.key,
     });
     if (boardThread?.environmentId === context.environmentId && boardThread.threadId === threadId)
-      yield* holdClaim(card, context.environmentId, threadId);
+      yield* holdClaim(card.id, context.environmentId, threadId);
     return hold;
   });
 
@@ -446,15 +451,15 @@ export const make = Effect.gen(function* () {
    * archived, never deleted, and the board lists them. A thread a person restored is judged like
    * any other, so one whose task is still gone goes back to the archive on the next pass.
    */
-  const settleEnded = Effect.fn("BoardTaskThreads.settleEnded")(function* (
-    cards: Map<string, Card>,
-    environmentId: EnvironmentId,
+  /**
+   * Where each task stands: its card, or, for a task with an open thread here that the lanes
+   * leave out or list on a card this build cannot read, its own detail, judged by the same rules.
+   * Only the engine's 404 says a task was deleted; no answer leaves it for the next pass.
+   */
+  const standingsOf = Effect.fn("BoardTaskThreads.standingsOf")(function* (
+    cards: ReadonlyMap<string, Card>,
+    openThreads: ReadonlyArray<BoardThreadRows.BoardThreadRow>,
   ) {
-    const openThreads = yield* local(rows.list({ archived: false }));
-    const byThread = new Map(openThreads.map((row) => [row.threadId, row]));
-    // A task the lanes leave out, or list on a card this build cannot read, is judged from its
-    // own detail by the same rules. Only the engine's 404 says it was deleted; no answer at all
-    // leaves its threads for the next pass.
     const standings = new Map<string, TaskStanding | "deleted">(cards);
     for (const taskId of new Set(openThreads.map((row) => row.task.id))) {
       if (standings.has(taskId)) continue;
@@ -464,6 +469,17 @@ export const make = Effect.gen(function* () {
       else if (read._tag === "Failure" && read.failure.status === 404)
         standings.set(taskId, "deleted");
     }
+    return standings;
+  });
+
+  const settleEnded = Effect.fn("BoardTaskThreads.settleEnded")(function* (input: {
+    readonly cards: Map<string, Card>;
+    readonly standings: Map<string, TaskStanding | "deleted">;
+    readonly openThreads: ReadonlyArray<BoardThreadRows.BoardThreadRow>;
+    readonly environmentId: EnvironmentId;
+  }) {
+    const { cards, standings, openThreads, environmentId } = input;
+    const byThread = new Map(openThreads.map((row) => [row.threadId, row]));
     const pending = new Set<ThreadId>();
     // Both rows must remain open until the continuation and link move finish.
     for (const [taskId, taskRows] of Map.groupBy(openThreads, (row) => row.task.id)) {
@@ -583,18 +599,21 @@ export const make = Effect.gen(function* () {
           if (hold !== null) holds.set(card.id, hold);
         }
       }
+      const openThreads = yield* local(rows.list({ archived: false }));
+      const standings = yield* standingsOf(cards, openThreads);
       const steering = new Set<string>();
-      for (const card of cards.values()) {
-        const link = card.boardThread;
+      for (const [taskId, task] of standings) {
+        if (task === "deleted") continue;
+        const link = task.boardThread;
         if (link === null || link === undefined || link.environmentId !== environmentId) continue;
-        if (!inWork(card)) {
-          yield* releaseClaim(card.id);
+        if (!inWork(task)) {
+          yield* releaseClaim(taskId);
           continue;
         }
-        steering.add(card.id);
-        yield* holdClaim(card, environmentId, link.threadId);
+        steering.add(taskId);
+        yield* holdClaim(taskId, environmentId, link.threadId);
       }
-      yield* settleEnded(cards, environmentId);
+      yield* settleEnded({ cards, standings, openThreads, environmentId });
       // Moved tasks are worked on another machine: their conversation is not told from here.
       const mirrored = [...cards.values()].filter((card) => !MOVED.has(card.state));
       if (key !== undefined)

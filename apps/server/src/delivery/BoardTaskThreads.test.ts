@@ -591,7 +591,7 @@ it.effect(
       assert.deepInclude(store.commands.at(-1), {
         type: "thread.archive",
         threadId: THREAD,
-        commandId: CommandId.make(`${create.engineIntake}:archive:displaced:0`),
+        commandId: CommandId.make(`${create.engineIntake}:archive:${THREAD}:displaced:0`),
       });
       assert.isNotNull(store.threads.get(THREAD)!.archivedAt);
       assert.isNull(store.threads.get(successor)!.archivedAt);
@@ -665,7 +665,7 @@ it.effect("retries a dropped board lead link move during reconciliation", () => 
     assert.deepInclude(store.commands.at(-1), {
       type: "thread.archive",
       threadId: THREAD,
-      commandId: CommandId.make(`${create.engineIntake}:archive:displaced:0`),
+      commandId: CommandId.make(`${create.engineIntake}:archive:${THREAD}:displaced:0`),
     });
     assert.isNotNull(store.threads.get(THREAD)!.archivedAt);
     assert.isNull(store.threads.get(successor)!.archivedAt);
@@ -747,30 +747,63 @@ it.effect.each([
       assert.equal(engine.linkOf("task-7")?.threadId, successor);
       assert.isNull(store.threads.get(successor)!.archivedAt);
       assert.isNotNull(store.threads.get(THREAD)!.archivedAt);
-      // The successor holds the task: archiving the lead keeps the claim.
+      // The successor holds the task: archiving the lead keeps the claim, and later passes renew
+      // it while the card still cannot be read.
+      assert.isNotNull(engine.leaseOf("task-7"));
+      for (let pass = 0; pass < 5; pass++) {
+        engine.advance(30_000);
+        yield* threads.reconcile();
+      }
+      assert.equal(engine.linkOf("task-7")?.threadId, successor);
+      assert.isNull(store.threads.get(successor)!.archivedAt);
       assert.isNotNull(engine.leaseOf("task-7"));
     }).pipe(Effect.provide(deliveryLayer(engine, `board-threads-swap-unread-${linked}-`)));
   },
 );
 
-it.effect("keeps a lead hand-off pending while its task is split, and finishes it after", () => {
-  const engine = board();
-  const task = engine.addTask({ id: "task-7" });
-  const store = threadStore();
-  return Effect.gen(function* () {
-    const { threads, successor, continuation } = yield* pendingHandoff(engine, store);
-    task.state = "split";
-    yield* threads.reconcile();
-    assert.equal(engine.linkOf("task-7")?.threadId, THREAD);
-    assert.isNull(store.threads.get(THREAD)!.archivedAt);
-    assert.isNull(store.threads.get(successor)!.archivedAt);
-    assert.isFalse(store.messages.has(successor));
-    task.state = "running";
-    yield* threads.reconcile();
-    assert.equal(engine.linkOf("task-7")?.threadId, successor);
-    assert.isTrue(store.messages.get(successor)?.has(continuation));
-  }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-swap-split-")));
-});
+it.effect(
+  "archives both threads of a pending lead hand-off once the engine says the task is gone",
+  () => {
+    const engine = board();
+    const task = engine.addTask({ id: "task-7" });
+    const store = threadStore();
+    return Effect.gen(function* () {
+      const { threads, successor } = yield* pendingHandoff(engine, store);
+      task.served = { set: 7 };
+      // No answer is no verdict: both threads wait for the next pass.
+      engine.dropNext(/^\/api\/tasks\/task-7$/);
+      yield* threads.reconcile();
+      assert.isNull(store.threads.get(THREAD)!.archivedAt);
+      assert.isNull(store.threads.get(successor)!.archivedAt);
+      engine.removeTask("task-7");
+      yield* threads.reconcile();
+      assert.isNotNull(store.threads.get(THREAD)!.archivedAt);
+      assert.isNotNull(store.threads.get(successor)!.archivedAt);
+    }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-swap-deleted-")));
+  },
+);
+
+it.effect.each(["split", "rejected"])(
+  "keeps a lead hand-off pending while its task is %s, and finishes it after",
+  (state) => {
+    const engine = board();
+    const task = engine.addTask({ id: "task-7" });
+    const store = threadStore();
+    return Effect.gen(function* () {
+      const { threads, successor, continuation } = yield* pendingHandoff(engine, store);
+      task.state = state;
+      yield* threads.reconcile();
+      assert.equal(engine.linkOf("task-7")?.threadId, THREAD);
+      assert.isNull(store.threads.get(THREAD)!.archivedAt);
+      assert.isNull(store.threads.get(successor)!.archivedAt);
+      assert.isFalse(store.messages.has(successor));
+      task.state = "running";
+      yield* threads.reconcile();
+      assert.equal(engine.linkOf("task-7")?.threadId, successor);
+      assert.isTrue(store.messages.get(successor)?.has(continuation));
+    }).pipe(Effect.provide(deliveryLayer(engine, `board-threads-swap-${state}-`)));
+  },
+);
 
 it.effect(
   "finishes a lead hand-off over a title it cannot read, and still serves other tasks",
