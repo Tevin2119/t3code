@@ -15,6 +15,8 @@ import { modelFamily } from "./OrchestratorSeatGlyphs";
 
 const testState = vi.hoisted(() => ({
   threadState: { data: null } as { data: unknown },
+  /** The teams the engine serves; null serves `TEAMS`. */
+  teams: null as unknown,
   // Like the server: a saved lineup is what the next render reads.
   setLineup: vi.fn(async (input: { input: { orchestration: unknown } }) => {
     testState.threadState.data = {
@@ -29,7 +31,7 @@ vi.mock("../../state/delivery", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../state/delivery")>()),
   useDeliveryEnabled: () => true,
   useDeliveryRead: (_environmentId: string | null, path: string) => ({
-    body: path === "/api/teams" ? TEAMS : null,
+    body: path === "/api/teams" ? (testState.teams ?? TEAMS) : null,
     readAt: null,
     isPending: false,
     error: null,
@@ -566,4 +568,50 @@ it("shows a board task's team and models with no way to change them", async () =
     .not.toBeInTheDocument();
   await include.click({ force: true });
   expect(testState.setLineup).not.toHaveBeenCalled();
+});
+
+it("shows a board task's lead with the crown, on the model the lead runs now", async () => {
+  testState.teams = [
+    {
+      ...TEAMS[0],
+      team: "development",
+      seats: [
+        seat("lead", "team-lead", "claude", "Lead"),
+        seat("critic", "reviewer", "codex", "Critic"),
+      ],
+      settings: [],
+    },
+  ];
+  testState.threadState = {
+    data: {
+      binding: null,
+      lineup: { team: "development", participants: [LINEUP.participants[1]!] },
+      pending: null,
+    },
+  };
+  await using _screen = await render(
+    <OrchestratorLineup
+      environmentId={"env-a" as never}
+      threadId={"t1" as never}
+      driver={ProviderDriverKind.make("codex")}
+      entries={ENTRIES}
+      models={MODELS}
+      boardOwned
+      // A hand-off moved the lead off its roster model.
+      leadModelSelection={{
+        instanceId: ProviderInstanceId.make("codex"),
+        model: "codex-successor",
+      }}
+    />,
+  );
+
+  const lead = page.getByRole("group", { name: "Settings for Lead" });
+  await expect.element(lead.getByText(", orchestrator")).toBeInTheDocument();
+  await expect.element(lead.getByRole("checkbox")).not.toBeInTheDocument();
+  await expect
+    .element(lead.getByRole("button", { name: "Choose provider and model for Lead" }))
+    .toHaveTextContent("Codex · codex-successor");
+  // One seat besides the lead is still a team here: no "choose two" warning.
+  await expect.element(page.getByRole("alert")).not.toBeInTheDocument();
+  testState.teams = null;
 });

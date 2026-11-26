@@ -320,28 +320,26 @@ export const make = Effect.gen(function* () {
   });
 
   /**
-   * Gives a task's conversation its team's lineup once; one a later pass finds in place is left as
-   * it is. A team with no seat but its lead's that runs here keeps an ordinary thread, said once.
+   * Shows a task's conversation its team as the board picks it now, on every pass, so a new pick
+   * or a seat that can now run reaches it. The board's lineup is the only one such a thread has.
+   * A team with no seat but its lead's that runs here shows none, which is said once.
    */
-  const ensureLineup = Effect.fn("BoardTaskThreads.ensureLineup")(function* (
+  const showTeam = Effect.fn("BoardTaskThreads.showTeam")(function* (
     taskId: string,
     threadId: ThreadId,
     team: Team,
     seatModels: Card["seatModels"],
   ) {
-    const state = yield* local(delivery.threadState(threadId));
-    if (state.lineup !== undefined) return;
-    const orchestration = yield* lineupOf(team, seatModels);
-    if (orchestration === null) {
-      if (toldTeamless.has(taskId)) return;
+    const lineup = yield* lineupOf(team, seatModels);
+    if (lineup !== null) toldTeamless.delete(taskId);
+    else if (!toldTeamless.has(taskId)) {
       toldTeamless.add(taskId);
-      return yield* Effect.logInfo(
+      yield* Effect.logInfo(
         "A board task's conversation has no team to show: no seat but its lead's runs here.",
         { task: taskId, team: team.team },
       );
     }
-    toldTeamless.delete(taskId);
-    yield* local(delivery.setThreadLineup({ threadId, orchestration }, { boardOwned: true }));
+    yield* delivery.setBoardLineup(threadId, lineup);
   });
 
   /**
@@ -503,7 +501,7 @@ export const make = Effect.gen(function* () {
     const stamped = boardTaskOfMarker(created.thread.lineage.engineIntake);
     if (stamped?.board !== task.board || stamped.id !== task.id) return "foreign-thread" as const;
     // Before any message, and the lineup only: the lead needs no engine tools, so no binding.
-    yield* ensureLineup(card.id, threadId, roster, card.seatModels);
+    yield* showTeam(card.id, threadId, roster, card.seatModels);
     // An archived thread is never linked: it was displaced, its task was refused for good, or a
     // person archived it. Restoring it from the board's archive is what lets it be linked.
     if (created.thread.archivedAt !== null) return "archived-thread" as const;
@@ -628,23 +626,26 @@ export const make = Effect.gen(function* () {
   });
 
   /**
-   * The lineup of every linked conversation here that has none, such as one made before task
-   * threads had one. One whose team cannot make a lineup is left as it is, and asked about again.
+   * Every open conversation of a task the lanes list shows its team as the board picks it now,
+   * those made before task threads had a team included. Teams that cannot be read leave each
+   * thread with the team it shows, until a later pass.
    */
-  const backfillLineups = Effect.fn("BoardTaskThreads.backfillLineups")(function* (input: {
+  const refreshTeams = Effect.fn("BoardTaskThreads.refreshTeams")(function* (input: {
     readonly cards: ReadonlyMap<string, Card>;
     readonly openThreads: ReadonlyArray<BoardThreadRows.BoardThreadRow>;
-    readonly environmentId: EnvironmentId;
     readonly teams: Effect.Effect<typeof Teams.Type, BoardTaskThreadsError>;
   }) {
-    const open = new Set<string>(input.openThreads.map((row) => row.threadId));
-    for (const card of input.cards.values()) {
-      const link = card.boardThread;
-      if (link?.environmentId !== input.environmentId || !open.has(link.threadId)) continue;
-      const threadId = link.threadId as ThreadId;
-      if ((yield* local(delivery.threadState(threadId))).lineup !== undefined) continue;
-      const roster = (yield* input.teams).find((entry) => entry.team === card.team);
-      if (roster !== undefined) yield* ensureLineup(card.id, threadId, roster, card.seatModels);
+    const shown = input.openThreads.flatMap((row) => {
+      const card = input.cards.get(row.task.id);
+      return card?.team == null ? [] : [{ row, card, team: card.team }];
+    });
+    if (shown.length === 0) return;
+    const teams = yield* input.teams.pipe(Effect.result);
+    if (teams._tag === "Failure")
+      return yield* Effect.logDebug("Board teams were not read; task threads keep their team.");
+    for (const { row, card, team } of shown) {
+      const roster = teams.success.find((entry) => entry.team === team);
+      if (roster !== undefined) yield* showTeam(card.id, row.threadId, roster, card.seatModels);
     }
   });
 
@@ -717,7 +718,7 @@ export const make = Effect.gen(function* () {
         yield* holdClaim(taskId, environmentId, link.threadId);
       }
       yield* settleEnded({ cards, standings, openThreads, environmentId });
-      yield* backfillLineups({ cards, openThreads, environmentId, teams: teamsOf });
+      yield* refreshTeams({ cards, openThreads, teams: teamsOf });
       // Moved tasks are worked on another machine: their conversation is not told from here.
       const mirrored = [...cards.values()].filter((card) => !MOVED.has(card.state));
       if (key !== undefined)

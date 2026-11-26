@@ -89,6 +89,8 @@ export function OrchestratorLineup(props: {
   }) => void;
   /** A board task's conversation: the engine picks its team and models, so it is shown only. */
   readonly boardOwned?: boolean | undefined;
+  /** What the conversation's lead runs on now, shown on a board task's lead seat. */
+  readonly leadModelSelection?: ModelSelection | null | undefined;
   /** Leaves the team for ordinary chat; the composer remembers it server-side. */
   readonly onLeaveToSingle?: () => void;
 }) {
@@ -116,6 +118,13 @@ export function OrchestratorLineup(props: {
   const lineup = state.data?.lineup;
   const teamName = binding?.team ?? (edit.team !== undefined ? edit.team : (lineup?.team ?? null));
   const team = teams.find((item) => item.team === teamName) ?? null;
+  // A board task's thread is bound to no team: its lead holds the team's lead seat, as the board
+  // reads it, on whatever model it runs now, a hand-off's included.
+  const boardLead =
+    props.boardOwned && !binding
+      ? (team?.seats.find((seat) => seat.role === "team-lead") ??
+        team?.seats.find((seat) => seat.seat === "lead"))
+      : undefined;
   const value = edit.value ?? valueOfLineup(lineup, team);
   const resolveFor = (forTeam: DeliveryTeam | null, forValue: OrchestratorLineupValue) =>
     resolveOrchestratorRoster({
@@ -132,8 +141,12 @@ export function OrchestratorLineup(props: {
       orchestrator: {
         harness:
           binding?.harness ??
+          boardLead?.harness ??
           (props.driver ? (DELIVERY_HARNESS_BY_DRIVER[props.driver] ?? null) : null),
-        role: binding?.role ?? null,
+        role: binding?.role ?? boardLead?.role ?? null,
+        ...(boardLead && props.leadModelSelection
+          ? { modelSelection: props.leadModelSelection }
+          : {}),
       },
     });
   const roster = resolveFor(team, value);

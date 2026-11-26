@@ -6,6 +6,7 @@ import {
   DeliveryOrchestrationConfig,
   DeliveryRememberedLineup,
   DeliveryThreadBinding,
+  DeliveryThreadLineup,
   DeliveryThreadPending,
   DeliveryDiscoveryInput,
   type DeliveryDiscoverySnapshot,
@@ -39,6 +40,7 @@ import { ServerConfig } from "../config.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import type { deriveProviderInstanceConfigMap } from "../provider/ProviderInstanceRegistryHydration.ts";
 import type * as DeliveryEffective from "./DeliveryEffective.ts";
+import { boardTaskOfMarker } from "./boardThreadMarker.ts";
 import * as DeliveryThreadSession from "./DeliveryThreadSession.ts";
 import * as Discovery from "./deliveryDiscovery.ts";
 
@@ -56,6 +58,15 @@ const BindingsFile = Schema.fromJsonString(
 );
 const decodeBindings = Schema.decodeUnknownEffect(BindingsFile);
 const encodeBindings = Schema.encodeEffect(BindingsFile);
+
+// Board tasks' lineups, in a file of their own: a build that predates them never reads it, and
+// the board can always give them again. Null is a board task's thread with no team to show.
+const BoardLineupsFile = Schema.fromJsonString(
+  Schema.Record(Schema.String, Schema.NullOr(DeliveryThreadLineup)),
+);
+const decodeBoardLineups = Schema.decodeUnknownEffect(BoardLineupsFile);
+const sameBoardLineup = Schema.toEquivalence(Schema.NullOr(DeliveryThreadLineup));
+const encodeBoardLineups = Schema.encodeEffect(BoardLineupsFile);
 
 const Identity = Schema.Struct({
   session: Schema.String,
@@ -214,12 +225,24 @@ export class DeliveryService extends Context.Service<
     ) => Effect.Effect<DeliveryThreadState, DeliveryError>;
     /**
      * Replaces who joins a conversation from its next message on; null makes it an ordinary one.
-     * `boardOwned` is a board task's team, which may be its lead and one seat.
+     * A board task's thread is refused: its team is the board's.
      */
     readonly setThreadLineup: (
       input: DeliverySetThreadLineupInput,
-      options?: { readonly boardOwned?: boolean },
     ) => Effect.Effect<DeliveryThreadState, DeliveryError>;
+    /**
+     * The team a board task's thread shows, as the board picks it; null is none. The only lineup
+     * such a thread has: what a person set on it is ignored. Never fails, as the board gives it
+     * again on the next pass.
+     */
+    readonly setBoardLineup: (
+      threadId: ThreadId,
+      lineup: DeliveryThreadLineup | null,
+    ) => Effect.Effect<void>;
+    /** The team the board gave a thread: undefined for one the board never gave one, even none. */
+    readonly boardLineupOf: (
+      threadId: ThreadId,
+    ) => Effect.Effect<DeliveryThreadLineup | null | undefined>;
     /**
      * Fetches a bound thread's team setup and makes it readable by adapters.
      * Succeeds with `false` for a thread with no team, which starts as it
@@ -268,6 +291,8 @@ export const layerTest = Layer.succeed(
       Effect.succeed({ binding: null, pending: null }),
     ),
     setThreadLineup: disabled,
+    setBoardLineup: Effect.fn("DeliveryService.setBoardLineup")(() => Effect.void),
+    boardLineupOf: Effect.fn("DeliveryService.boardLineupOf")(() => Effect.undefined),
     prepareThread: Effect.fn("DeliveryService.prepareThread")(() => Effect.succeed(false)),
     terminalEntryScript: Effect.succeed(null),
   }),
@@ -287,7 +312,10 @@ const make = Effect.fn("DeliveryService.make")(function* (
   const pending = new Map<string, DeliveryThreadPending>();
   const lineups = new Map<string, DeliveryOrchestrationConfig | null>();
   const rememberedLineups = new Map<string, DeliveryRememberedLineup>();
+  const boardLineupsPath = path.join(config.stateDir, "delivery-board-lineups.json");
+  const boardLineups = new Map<string, DeliveryThreadLineup | null>();
   const writeLock = yield* Semaphore.make(1);
+  const boardLineupWrites = yield* Semaphore.make(1);
   const boardSeatWrites = yield* Semaphore.make(1);
   const boardLinkWrites = yield* Semaphore.make(1);
 
@@ -330,6 +358,17 @@ const make = Effect.fn("DeliveryService.make")(function* (
     }
   }
   if (storeProblem) yield* Effect.logError(storeProblem);
+  // A board lineup file that is not there or not understood is an empty one.
+  const loadedBoardLineups = yield* fileSystem
+    .readFileString(boardLineupsPath)
+    .pipe(Effect.flatMap(decodeBoardLineups), Effect.result);
+  if (loadedBoardLineups._tag === "Success") {
+    for (const [threadId, lineup] of Object.entries(loadedBoardLineups.success))
+      boardLineups.set(threadId, lineup);
+  }
+  /** A board task's thread: one the board gave a lineup, or one with a board task's own id. */
+  const boardOwned = (threadId: string) =>
+    boardLineups.has(threadId) || boardTaskOfMarker(threadId) !== null;
 
   const storeReadable = Effect.suspend(() =>
     storeProblem
@@ -702,6 +741,10 @@ const make = Effect.fn("DeliveryService.make")(function* (
 
   const stateOf = (threadId: ThreadId): DeliveryThreadState => {
     const binding = bindings.get(threadId) ?? null;
+    if (boardOwned(threadId)) {
+      const lineup = boardLineups.get(threadId);
+      return { binding, pending: pending.get(threadId) ?? null, ...(lineup ? { lineup } : {}) };
+    }
     // What the thread was started with stands until a person changes it.
     const lineup = lineups.has(threadId) ? lineups.get(threadId) : binding?.orchestration;
     const rememberedLineup = rememberedLineups.get(threadId);
@@ -713,11 +756,8 @@ const make = Effect.fn("DeliveryService.make")(function* (
     };
   };
 
-  const checkParticipants = (
-    participants: DeliveryOrchestrationConfig["participants"],
-    minimum = 2,
-  ) =>
-    participants.length < minimum ||
+  const checkParticipants = (participants: DeliveryOrchestrationConfig["participants"]) =>
+    participants.length < 2 ||
     participants.length > 12 ||
     // Two seats may run the same model: a team's roles differ, not only its models.
     new Set(participants.map((seat) => seat.seat)).size !== participants.length
@@ -729,13 +769,22 @@ const make = Effect.fn("DeliveryService.make")(function* (
         )
       : Effect.void;
 
+  const refuseBoardOwned = (threadId: ThreadId) =>
+    boardOwned(threadId)
+      ? Effect.fail(
+          new DeliveryError({
+            reason: "refused",
+            detail: "The board picks this task's team and models. Change them on the board.",
+          }),
+        )
+      : Effect.void;
+
   const setThreadLineup = Effect.fn("DeliveryService.setThreadLineup")(function* (
     input: DeliverySetThreadLineupInput,
-    options?: { readonly boardOwned?: boolean },
   ) {
     yield* storeReadable;
-    if (input.orchestration !== null)
-      yield* checkParticipants(input.orchestration.participants, options?.boardOwned ? 1 : 2);
+    yield* refuseBoardOwned(input.threadId);
+    if (input.orchestration !== null) yield* checkParticipants(input.orchestration.participants);
     const had = lineups.has(input.threadId);
     const previous = lineups.get(input.threadId);
     const hadRemembered = rememberedLineups.has(input.threadId);
@@ -774,11 +823,37 @@ const make = Effect.fn("DeliveryService.make")(function* (
     return stateOf(input.threadId);
   });
 
+  const setBoardLineup = Effect.fn("DeliveryService.setBoardLineup")(function* (
+    threadId: ThreadId,
+    lineup: DeliveryThreadLineup | null,
+  ) {
+    const current = boardLineups.get(threadId);
+    if (current !== undefined && sameBoardLineup(current, lineup)) return;
+    boardLineups.set(threadId, lineup);
+    yield* boardLineupWrites
+      .withPermits(1)(
+        Effect.suspend(() => encodeBoardLineups(Object.fromEntries(boardLineups))).pipe(
+          Effect.flatMap((contents) =>
+            writeFileStringAtomically({ filePath: boardLineupsPath, contents }).pipe(
+              Effect.provideService(FileSystem.FileSystem, fileSystem),
+              Effect.provideService(Path.Path, path),
+            ),
+          ),
+        ),
+      )
+      .pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning("A board lineup was not saved; the board gives it again.", { cause }),
+        ),
+      );
+  });
+
   const bindThread = Effect.fn("DeliveryService.bindThread")(function* (
     input: DeliveryBindThreadInput,
     configuration?: string,
   ) {
     yield* storeReadable;
+    yield* refuseBoardOwned(input.threadId);
     if (input.orchestration !== undefined) {
       yield* checkParticipants(input.orchestration.participants);
     }
@@ -1681,6 +1756,10 @@ const make = Effect.fn("DeliveryService.make")(function* (
     ),
     releaseThread,
     setThreadLineup,
+    setBoardLineup,
+    boardLineupOf: Effect.fn("DeliveryService.boardLineupOf")((threadId: ThreadId) =>
+      Effect.sync(() => boardLineups.get(threadId)),
+    ),
     prepareThread,
     terminalEntryScript: delivery.pipe(Effect.map(entryScriptOf)),
   });

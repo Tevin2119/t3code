@@ -244,7 +244,7 @@ export function OrchestratorParticipants(props: {
               aria-label={`Settings for ${row.title}`}
             >
               <div className="flex items-center gap-2">
-                {row.extra ? (
+                {row.extra || (readOnly && row.orchestrator) ? (
                   <span aria-hidden className="size-4.5 shrink-0 sm:size-4" />
                 ) : (
                   <Checkbox
@@ -261,14 +261,19 @@ export function OrchestratorParticipants(props: {
                     }
                   />
                 )}
-                <span className={cn("flex shrink-0", !row.included && "opacity-50")}>
+                <span
+                  className={cn(
+                    "flex shrink-0",
+                    !row.included && !(readOnly && row.orchestrator) && "opacity-50",
+                  )}
+                >
                   <HarnessTile entry={entry} model={model} />
                 </span>
                 <div className="flex min-w-0 flex-1 flex-col">
                   <span
                     className={cn(
                       "flex min-w-0 items-center gap-1 text-xs font-medium",
-                      !row.included && "opacity-50",
+                      !row.included && !(readOnly && row.orchestrator) && "opacity-50",
                     )}
                   >
                     <span className="truncate">{row.title}</span>

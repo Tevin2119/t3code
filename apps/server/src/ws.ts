@@ -284,7 +284,7 @@ import * as PullRequestReviewGuideService from "./pullRequest/PullRequestReviewG
 import { listLinkedPullRequestThreads } from "./pullRequest/linkedThreads.ts";
 import { archivedBoardThreads } from "./delivery/archivedBoardThreads.ts";
 import { linkedBoardTasks } from "./delivery/linkedBoardTasks.ts";
-import { setPersonLineup } from "./delivery/personLineup.ts";
+import { refuseServerOwnedTeam } from "./delivery/serverOwnedTeam.ts";
 import { pullRequestSyncKey } from "./pullRequest/pullRequestSyncKey.ts";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as PullRequestSyncReactor from "./orchestration-v2/PullRequestSyncReactor.ts";
@@ -3862,7 +3862,10 @@ const layerForkWsRpc = (currentSession: EnvironmentAuth.AuthenticatedSession) =>
           !currentSession.scopes.includes("filesystem:read")
             ? Effect.fail(rpcAuthorizationError("filesystem:read"))
             : delivery.act(input),
-        [WS_METHODS.deliveryBindThread]: (input) => delivery.bindThread(input),
+        [WS_METHODS.deliveryBindThread]: (input) =>
+          refuseServerOwnedTeam(input.threadId, threadManagement.getThreadShell).pipe(
+            Effect.andThen(delivery.bindThread(input)),
+          ),
         [WS_METHODS.deliveryThreadBinding]: (input) => delivery.threadState(input.threadId),
         [WS_METHODS.deliveryArchivedBoardThreads]: () =>
           serverEnvironment.getEnvironmentId.pipe(
@@ -3880,7 +3883,9 @@ const layerForkWsRpc = (currentSession: EnvironmentAuth.AuthenticatedSession) =>
           ),
         [WS_METHODS.deliveryReleaseThread]: (input) => delivery.releaseThread(input.threadId),
         [WS_METHODS.deliverySetThreadLineup]: (input) =>
-          setPersonLineup(input, { shellOf: threadManagement.getThreadShell, delivery }),
+          refuseServerOwnedTeam(input.threadId, threadManagement.getThreadShell).pipe(
+            Effect.andThen(delivery.setThreadLineup(input)),
+          ),
         [WS_METHODS.deliveryLimitedSeats]: (input) =>
           Option.match(limitedSeatSwap, {
             onNone: () => Effect.succeed({ policy: null, notices: [] }),

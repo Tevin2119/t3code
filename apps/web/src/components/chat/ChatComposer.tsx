@@ -2950,6 +2950,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     models={modelOptionsByInstance}
                     onFocusChat={startSingleChatForSeat}
                     boardOwned={boardOwned}
+                    leadModelSelection={activeThread?.modelSelection ?? null}
                     onLeaveToSingle={() => void switchStartedThreadToSingle()}
                   />
                 ),

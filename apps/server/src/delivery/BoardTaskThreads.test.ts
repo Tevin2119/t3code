@@ -15,6 +15,7 @@ import * as HostProcess from "@t3tools/shared/HostProcess";
 import { limitedLeadHandoffThreadId } from "@t3tools/shared/limitedSeat";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
@@ -333,8 +334,23 @@ function service(
 }
 
 /** The delivery service as the server runs it, with the scratch engine behind its HTTP client. */
-const deliveryLayer = (engine: ScratchEngine, prefix: string) =>
+const deliveryLayer = (engine: ScratchEngine, prefix: string, legacyStore?: unknown) =>
   Layer.fresh(DeliveryService.layer(deriveProviderInstanceConfigMap)).pipe(
+    Layer.provideMerge(
+      legacyStore === undefined
+        ? Layer.empty
+        : Layer.effectDiscard(
+            Effect.gen(function* () {
+              const { stateDir } = yield* ServerConfig.ServerConfig;
+              const fileSystem = yield* FileSystem.FileSystem;
+              yield* fileSystem.makeDirectory(stateDir, { recursive: true });
+              yield* fileSystem.writeFileString(
+                `${stateDir}/delivery-threads.json`,
+                JSON.stringify(legacyStore),
+              );
+            }).pipe(Effect.orDie),
+          ),
+    ),
     Layer.provideMerge(Layer.succeed(HostProcess.Environment, {})),
     Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix })),
     Layer.provideMerge(NodeServices.layer),
@@ -1591,8 +1607,6 @@ const plainLineup = (threadId: ThreadId) =>
     const { lineup } = yield* (yield* DeliveryService.DeliveryService).threadState(threadId);
     return lineup === undefined ? undefined : JSON.parse(JSON.stringify(lineup));
   });
-const teamReads = (engine: ScratchEngine) =>
-  engine.requests.filter((request) => request.path === "/api/teams").length;
 const DEVELOPER = {
   seat: "developer",
   role: "lead-developer",
@@ -1610,6 +1624,36 @@ const TEAM_OF_THREE = [
   },
 ];
 
+/** A person's own lineup and team, as a build before board lineups could have saved them. */
+const PERSONAL = {
+  participants: [
+    { seat: "scout", role: "researcher", modelSelection: CLAUDE },
+    { seat: "critic", role: "reviewer", modelSelection: CLAUDE },
+  ],
+};
+const legacyStoreOn = (threadId: ThreadId) => ({
+  threads: {
+    [threadId]: {
+      threadId,
+      orchestration: PERSONAL,
+      session: "session-1",
+      team: "research",
+      role: "reviewer",
+      seat: "critic",
+      harness: "codex",
+      driver: "codex",
+      workspace: REPO,
+      configuration: "research@1#digest",
+      requestedModel: null,
+      memoryScope: "conversation",
+      tools: [],
+      project: PROJECT,
+      boundAt: "2026-11-20T00:00:00.000Z",
+    },
+  },
+  lineups: { [threadId]: PERSONAL },
+});
+
 it.effect(
   "makes a task's conversation a team thread: every seat but the lead's, on the engine's picks",
   () => {
@@ -1626,44 +1670,52 @@ it.effect(
     return Effect.gen(function* () {
       const threads = yield* service(store);
       assert.deepEqual([...(yield* threads.reconcile())], []);
-      const expected = {
-        team: "development",
-        // Read-only seats, and no swap or critique setting: the engine picks.
-        participants: [
-          { ...DEVELOPER, duty: "build" },
-          {
-            seat: "reviewer",
-            role: "reviewer",
-            modelSelection: { instanceId: "claudeAgent", model: "claude-sonnet" },
-            duty: "qa",
-          },
-        ],
+      const reviewer = {
+        seat: "reviewer",
+        role: "reviewer",
+        modelSelection: { instanceId: "claudeAgent", model: "claude-sonnet" },
+        duty: "qa",
       };
-      assert.deepEqual(yield* plainLineup(THREAD), expected);
+      // Read-only seats, and no swap or critique setting: the engine picks.
+      assert.deepEqual(yield* plainLineup(THREAD), {
+        team: "development",
+        participants: [{ ...DEVELOPER, duty: "build" }, reviewer],
+      });
       // The lineup only: the lead is bound to no team, so it takes no engine tools.
       const delivery = yield* DeliveryService.DeliveryService;
       assert.isNull((yield* delivery.threadState(THREAD)).binding);
-      // Set once: a later pick or roster change does not rewrite it, and nothing reads the teams.
+      // Not a snapshot: the engine's next pick reaches the thread on the next pass.
       engine.task("task-7").seatModels = {
         lead: { harness: "codex", model: "gpt-6-astra", source: "profile" },
         reviewer: { harness: "codex", model: "gpt-6-sol", source: "picked" },
       };
-      const reads = teamReads(engine);
       yield* threads.reconcile();
-      yield* (yield* service(store)).reconcile();
-      assert.deepEqual(yield* plainLineup(THREAD), expected);
-      assert.equal(teamReads(engine), reads);
+      assert.deepEqual(yield* plainLineup(THREAD), {
+        team: "development",
+        participants: [
+          { ...DEVELOPER, duty: "build" },
+          { ...reviewer, modelSelection: { instanceId: "codex", model: "gpt-6-sol" } },
+        ],
+      });
+      // A seat that can no longer run here leaves it, and a restarted server keeps what it shows.
+      const restarted = yield* service(store, { instances: [INSTANCES[1]!] });
+      yield* restarted.reconcile();
+      assert.deepEqual(yield* plainLineup(THREAD), {
+        team: "development",
+        participants: [{ ...DEVELOPER, duty: "build" }],
+      });
     }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-lineup-")));
   },
 );
 
-it.effect("gives a linked conversation made before lineups its lineup, once", () => {
+it.effect("shows the board's lineup on a linked conversation over a person's old one", () => {
   const engine = board();
   engine.addTask({ id: "task-7" });
   engine.addTask({ id: "task-8" });
   const store = threadStore();
   return Effect.gen(function* () {
-    // A conversation made and linked by a server from before task threads had a lineup.
+    // A conversation linked by a server from before task threads had a lineup, on which a
+    // person's lineup and team were saved.
     yield* store.dispatch(
       createBoardTaskThread(TASK, {
         commandId: boardTaskThreadCommandId(TASK),
@@ -1679,27 +1731,97 @@ it.effect("gives a linked conversation made before lineups its lineup, once", ()
       setBy: ENVIRONMENT,
     });
     engine.writeLink("task-8", { environmentId: OTHER, threadId: THEIRS, setBy: OTHER });
+    // By its id alone the thread is the board's: nothing a person saved on it is shown.
     assert.isUndefined(yield* plainLineup(THREAD));
     const threads = yield* service(store);
     assert.deepEqual([...(yield* threads.reconcile())], []);
-    const backfilled = yield* plainLineup(THREAD);
-    assert.deepEqual(backfilled, { team: "development", participants: [DEVELOPER] });
+    const shown = yield* plainLineup(THREAD);
+    assert.deepEqual(shown, { team: "development", participants: [DEVELOPER] });
     // Another environment's conversation is never given one here.
     assert.isUndefined(yield* plainLineup(ThreadId.make(THEIRS)));
-    // Idempotent: the next passes change nothing, and read no teams to find that out.
-    engine.setTeams([
-      {
-        team: "development",
-        seats: TEAMS[0]!.seats.map((seat) => ({ ...seat, model: "claude-other" })),
-      },
-    ]);
-    const reads = teamReads(engine);
     yield* threads.reconcile();
     yield* (yield* service(store)).reconcile();
-    assert.deepEqual(yield* plainLineup(THREAD), backfilled);
-    assert.equal(teamReads(engine), reads);
+    assert.deepEqual(yield* plainLineup(THREAD), shown);
     assert.lengthOf(creates(store), 1);
-  }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-backfill-")));
+  }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-backfill-", legacyStoreOn(THREAD))));
+});
+
+it.effect(
+  "keeps board lineups out of the store an older build reads, so a rollback keeps working",
+  () => {
+    const engine = board();
+    engine.addTask({ id: "task-7" });
+    const store = threadStore();
+    return Effect.gen(function* () {
+      yield* (yield* service(store)).reconcile();
+      assert.deepEqual(yield* plainLineup(THREAD), {
+        team: "development",
+        participants: [DEVELOPER],
+      });
+      const { stateDir } = yield* ServerConfig.ServerConfig;
+      const fileSystem = yield* FileSystem.FileSystem;
+      const legacy = yield* fileSystem
+        .readFileString(`${stateDir}/delivery-threads.json`)
+        .pipe(Effect.orElseSucceed(() => "{}"));
+      assert.notInclude(legacy, "developer");
+      assert.include(
+        yield* fileSystem.readFileString(`${stateDir}/delivery-board-lineups.json`),
+        "developer",
+      );
+    }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-rollback-")));
+  },
+);
+
+it.effect(
+  "refuses a person's lineup or team on a board task's thread, with or without a shell",
+  () => {
+    const engine = board();
+    const store = threadStore();
+    return Effect.gen(function* () {
+      const delivery = yield* DeliveryService.DeliveryService;
+      // No thread exists for this id yet: its form alone says it is a board task's.
+      const lineup = yield* delivery
+        .setThreadLineup({ threadId: THREAD, orchestration: PERSONAL })
+        .pipe(Effect.flip);
+      assert.equal(lineup.reason, "refused");
+      const cleared = yield* delivery
+        .setThreadLineup({ threadId: THREAD, orchestration: null })
+        .pipe(Effect.flip);
+      assert.equal(cleared.reason, "refused");
+      const bound = yield* delivery
+        .bindThread({ threadId: THREAD, team: "research", driver: "codex", cwd: REPO })
+        .pipe(Effect.flip);
+      assert.equal(bound.reason, "refused");
+      // A successor's id has no such form: the board's lineup makes it the board's.
+      const successor = limitedLeadHandoffThreadId(RunId.make("failed-board-lead"));
+      yield* delivery.setBoardLineup(successor, null);
+      const onSuccessor = yield* delivery
+        .setThreadLineup({ threadId: successor, orchestration: PERSONAL })
+        .pipe(Effect.flip);
+      assert.equal(onSuccessor.reason, "refused");
+      assert.lengthOf(store.commands, 0);
+    }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-refuse-")));
+  },
+);
+
+it.effect("keeps claims and steers going when the teams cannot be read", () => {
+  const engine = board();
+  // A lead alone: its thread has no lineup, so every pass asks for the teams.
+  engine.setTeams([{ team: "development", seats: [TEAMS[0]!.seats[1]!] }]);
+  engine.addTask({ id: "task-7" });
+  const store = threadStore();
+  return Effect.gen(function* () {
+    const threads = yield* service(store);
+    yield* threads.reconcile();
+    assert.equal(engine.linkOf("task-7")?.threadId, THREAD);
+    const steer = engine.queueSteer("task-7", "Use the other API");
+    engine.advance(100_000);
+    engine.dropNext(/^\/api\/teams$/);
+    yield* threads.reconcile();
+    assert.equal(engine.steer(steer).state, "delivered");
+    engine.advance(100_000);
+    assert.isNotNull(engine.leaseOf("task-7"));
+  }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-teams-down-")));
 });
 
 it.effect("sends every engine notice into a task's conversation as a system notice", () => {
@@ -1773,7 +1895,7 @@ it.effect.each([
     name: "its lead and a seat no provider here runs",
     extra: [{ seat: "researcher", role: "researcher", harness: "hermes", model: "m" }],
   },
-])("gives a task whose team is $name a thread with no lineup", ({ extra }) => {
+])("gives a task whose team is $name a thread with no lineup, nor a person's", ({ extra }) => {
   const engine = board();
   engine.setTeams([{ team: "development", seats: [TEAMS[0]!.seats[1]!, ...extra] }]);
   engine.addTask({ id: "task-7" });
@@ -1793,5 +1915,7 @@ it.effect.each([
       team: "development",
       participants: [DEVELOPER],
     });
-  }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-lead-alone-")));
+  }).pipe(
+    Effect.provide(deliveryLayer(engine, "board-threads-lead-alone-", legacyStoreOn(THREAD))),
+  );
 });
