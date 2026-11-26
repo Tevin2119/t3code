@@ -13,7 +13,7 @@ import {
   Settings2Icon,
 } from "lucide-react";
 import { useState } from "react";
-import { deploymentActions, deploymentRequestBody } from "../../lib/deployments";
+import { deploymentActions, deploymentRequestBody, parkedBranch } from "../../lib/deployments";
 import {
   deliveryEnvironment,
   useBoardStore,
@@ -105,6 +105,7 @@ const actionLabel = (action: string) => `${action[0]!.toUpperCase()}${action.sli
 function Candidate({
   candidate,
   adapter,
+  watchedBranch,
   unavailable,
   disabled,
   projectBusy,
@@ -114,6 +115,7 @@ function Candidate({
 }: {
   candidate: DeploymentCandidate;
   adapter: DeploymentProject["adapter"];
+  watchedBranch: string;
   unavailable: boolean;
   disabled: boolean;
   projectBusy: boolean;
@@ -122,6 +124,7 @@ function Candidate({
   onDependencies: () => void;
 }) {
   const attempts = candidate.attempts;
+  const parkedOn = parkedBranch(candidate, watchedBranch);
   const evidence = candidate.evidence as { site?: unknown; servedFolder?: unknown } | null;
   return (
     <article className="flex min-w-0 flex-col gap-3 rounded-lg border border-border bg-background p-4">
@@ -171,6 +174,12 @@ function Candidate({
           </>
         ) : null}
       </p>
+      {parkedOn ? (
+        <p className="text-xs text-muted-foreground">
+          Parked: made from {parkedOn}, which this instance no longer watches. It is current work
+          again once {parkedOn} is watched.
+        </p>
+      ) : null}
       {candidate.phase ? (
         <p className="text-xs text-muted-foreground">Phase: {candidate.phase}</p>
       ) : null}
@@ -216,7 +225,7 @@ function Candidate({
         </TaskDisclosure>
       </div>
       <div className="mt-auto flex flex-wrap gap-2">
-        {deploymentActions(candidate, projectBusy, adapter).map((action) => (
+        {deploymentActions(candidate, projectBusy, adapter, watchedBranch).map((action) => (
           <Button
             key={action}
             size="sm"
@@ -279,6 +288,7 @@ export function DeploymentInstances({
             key={candidate.id}
             candidate={candidate}
             adapter={project.adapter}
+            watchedBranch={project.branch}
             unavailable={unavailable}
             disabled={disabled}
             projectBusy={!!project.busy}

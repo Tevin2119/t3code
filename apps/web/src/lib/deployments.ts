@@ -41,13 +41,37 @@ function stateActions(candidate: DeploymentCandidate): readonly DeploymentAction
   }
 }
 
+// The engine's retry rule: resume, else qualify again a never-deployed candidate with no passing
+// evidence (a save clears it), else deploy again on its passing evidence.
 function canRetry(candidate: DeploymentCandidate): boolean {
-  if (candidate.resumeState && !candidate.needsVerify) return true;
+  const passed = (candidate.evidence as { passed?: unknown } | null)?.passed === true;
+  if (
+    candidate.resumeState &&
+    !candidate.needsVerify &&
+    (candidate.resumeState !== "ready" || passed)
+  )
+    return true;
   const attempts = candidate.attempts ?? { qualify: 0, deploy: 0 };
-  if (candidate.failedPhase === "qualify") return attempts.qualify < MAX_ATTEMPTS;
-  const evidence = candidate.evidence as { passed?: unknown } | null;
-  return attempts.deploy < MAX_ATTEMPTS && evidence?.passed === true;
+  const deployed = Array.isArray(candidate.deployedTo) && candidate.deployedTo.length > 0;
+  const requalify =
+    candidate.failedPhase === "qualify" || (!deployed && !candidate.needsVerify && !passed);
+  if (requalify) return attempts.qualify < MAX_ATTEMPTS;
+  return attempts.deploy < MAX_ATTEMPTS && passed;
 }
+
+/**
+ * Work of a branch the instance no longer watches is parked: the engine takes it as current work
+ * again only once that branch is watched, so it offers no qualify, deploy or retry until then.
+ */
+export function parkedBranch(
+  candidate: Pick<DeploymentCandidate, "branch">,
+  watchedBranch: string | null,
+): string | null {
+  return candidate.branch && watchedBranch && candidate.branch !== watchedBranch
+    ? candidate.branch
+    : null;
+}
+const CURRENT_WORK: ReadonlyArray<DeploymentAction> = ["qualify", "deploy", "retry"];
 
 // The engine adopts only from a qualified candidate, for the site its qualification resolved.
 function canAdopt(candidate: DeploymentCandidate): boolean {
@@ -63,13 +87,16 @@ export function deploymentActions(
   candidate: DeploymentCandidate,
   projectBusy = false,
   adapter: DeploymentProject["adapter"] = "command",
+  watchedBranch: string | null = null,
 ): readonly DeploymentAction[] {
+  const parked = parkedBranch(candidate, watchedBranch) !== null;
   const actions = stateActions(candidate);
   const offered =
     adapter === "firebase-hosting" && canAdopt(candidate)
       ? [...actions, "adopt" as const]
       : actions;
   return offered.filter((action) => {
+    if (parked && CURRENT_WORK.includes(action)) return false;
     if (action === "cancel") return !candidate.cancelRequested;
     if (action === "retry" && !canRetry(candidate)) return false;
     if (action === "adopt") return !projectBusy;

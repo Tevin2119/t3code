@@ -126,6 +126,10 @@ export const DeploymentCandidate = Schema.Struct({
   liveAt: Schema.optional(Schema.NullOr(Schema.String)),
   liveUntil: Schema.optional(Schema.NullOr(Schema.String)),
   needsVerify: Schema.optional(Schema.Boolean),
+  // The branch it was made from; work of a branch no longer watched is parked.
+  branch: Schema.optional(Schema.String),
+  // Where the engine recorded it deployed or adopted; any entry means it was deployed.
+  deployedTo: Schema.optional(Schema.Array(Schema.Unknown)),
   awaitingRestart: Schema.optional(Schema.Boolean),
   createdAt: Schema.String,
   updatedAt: Schema.String,

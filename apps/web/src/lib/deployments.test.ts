@@ -157,6 +157,34 @@ describe("deployment contract", () => {
     events: [],
     ...changes,
   });
+  it("offers retry as engine 190 takes it: a never-deployed candidate a save cleared re-qualifies", () => {
+    const attempts = { qualify: 1, deploy: 1 };
+    const cleared = { state: "blocked" as const, failedPhase: "deploy", attempts, evidence: null };
+    expect(deploymentActions(candidate(cleared))).toContain("retry");
+    expect(deploymentActions(candidate({ ...cleared, resumeState: "ready" }))).toContain("retry");
+    // Deployed work with no passing evidence has nothing to deploy again on.
+    expect(
+      deploymentActions(candidate({ ...cleared, deployedTo: [{ destination: "x" }] })),
+    ).not.toContain("retry");
+    expect(
+      deploymentActions(candidate({ ...cleared, attempts: { qualify: 5, deploy: 0 } })),
+    ).not.toContain("retry");
+  });
+  it("parks another branch's work: no qualify, deploy or retry until its branch is watched", () => {
+    const parked = candidate({ state: "merged", branch: "qa" });
+    expect(deploymentActions(parked, false, "firebase-hosting", "main")).toEqual(["cancel"]);
+    expect(deploymentActions(parked, false, "firebase-hosting", "qa")).toContain("qualify");
+    const blocked = candidate({
+      state: "blocked",
+      branch: "qa",
+      needsVerify: true,
+      evidence: { passed: true, site: "app" },
+    });
+    expect(deploymentActions(blocked, false, "firebase-hosting", "main")).toEqual([
+      "verify",
+      "adopt",
+    ]);
+  });
   it("only offers deploying after qualification and keeps superseded releases inert", () => {
     expect(deploymentActions(candidate({ state: "merged" }))).not.toContain("deploy");
     expect(deploymentActions(candidate({ state: "qualifying" }))).not.toContain("deploy");
@@ -190,8 +218,14 @@ describe("deployment contract", () => {
     expect(deploymentActions(candidate({ ...failedDeploy, evidence: { passed: true } }))).toContain(
       "retry",
     );
+    // Never deployed, its retry qualifies again; deployed, it has nothing passing to deploy.
     expect(
       deploymentActions(candidate({ ...failedDeploy, evidence: { passed: false } })),
+    ).toContain("retry");
+    expect(
+      deploymentActions(
+        candidate({ ...failedDeploy, evidence: { passed: false }, deployedTo: [{}] }),
+      ),
     ).not.toContain("retry");
     expect(
       deploymentActions(
