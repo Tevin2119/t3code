@@ -10,22 +10,19 @@ import * as Schema from "effect/Schema";
 import { boardThreadStanding, LANES_PATH, unlistedTaskStanding } from "./BoardTaskThreads.ts";
 import { listBoardThreadRows } from "./boardThreadRows.ts";
 
-const decodeCards = Schema.decodeUnknownOption(
+// Cards are decoded one at a time: a task whose card this build cannot read is judged from its
+// own detail, like a task the lanes leave out.
+const decodeLanes = Schema.decodeUnknownOption(
   Schema.Struct({
-    lanes: Schema.Array(
-      Schema.Struct({
-        cards: Schema.Array(
-          Schema.Struct({
-            id: Schema.String,
-            state: Schema.String,
-            boardThread: Schema.optional(
-              Schema.NullOr(
-                Schema.Struct({ environmentId: Schema.String, threadId: Schema.String }),
-              ),
-            ),
-          }),
-        ),
-      }),
+    lanes: Schema.Array(Schema.Struct({ cards: Schema.Array(Schema.Unknown) })),
+  }),
+);
+const decodeCard = Schema.decodeUnknownOption(
+  Schema.Struct({
+    id: Schema.String,
+    state: Schema.String,
+    boardThread: Schema.optional(
+      Schema.NullOr(Schema.Struct({ environmentId: Schema.String, threadId: Schema.String })),
     ),
   }),
 );
@@ -52,12 +49,19 @@ export const archivedBoardThreads = Effect.fn("archivedBoardThreads")(function* 
     ask: (path: string) => Effect.Effect<DeliveryResponse, DeliveryError>,
   ) {
     const lanes = yield* ask(LANES_PATH).pipe(
-      Effect.map((response) => decodeCards(response.body)),
+      Effect.map((response) => decodeLanes(response.body)),
       Effect.orElseSucceed(() => Option.none()),
     );
     if (Option.isNone(lanes)) return new Map<Row, ArchivedThread["task"]>();
     const cards = new Map(
-      lanes.value.lanes.flatMap((lane) => lane.cards.map((card) => [card.id, card] as const)),
+      lanes.value.lanes.flatMap((lane) =>
+        lane.cards.flatMap((raw) =>
+          Option.match(decodeCard(raw), {
+            onNone: () => [],
+            onSome: (card) => [[card.id, card] as const],
+          }),
+        ),
+      ),
     );
     const taskOf = (row: Row): Effect.Effect<ArchivedThread["task"]> => {
       const told = (standing: ReturnType<typeof boardThreadStanding>) =>

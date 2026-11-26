@@ -697,6 +697,11 @@ it.effect("keeps a board task's thread out of both lists, however often it is cr
     assert.deepEqual(yield* standing({}), ["deleted"]);
     assert.deepEqual(yield* standing({}, { state: "closed" }), ["unknown"]);
     assert.deepEqual(yield* standing({}, {}), ["unknown"]);
+    // Another conversation holds a task the lanes leave out, or list on a card this build cannot
+    // read: held.
+    const elsewhere = { state: "running", boardThread: { environmentId: "other", threadId } };
+    assert.deepEqual(yield* standing({}, elsewhere), ["held"]);
+    assert.deepEqual(yield* standing({ id: "task-7", state: 7 }, elsewhere), ["held"]);
     // A task that moved away is in no lane, and the engine still answers for it: held, unless
     // it kept this thread as its conversation.
     assert.deepEqual(yield* standing({}, { state: "moved", boardThread: null }), ["held"]);

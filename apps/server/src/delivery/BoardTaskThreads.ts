@@ -39,13 +39,9 @@ import {
   type BoardTask,
 } from "./boardThreadMarker.ts";
 import * as DeliveryService from "./DeliveryService.ts";
-import { BoardThreadLink } from "./DeliveryService.ts";
+import { BoardThreadLink, readOrNull } from "./DeliveryService.ts";
 import * as LimitedSeatSwap from "./LimitedSeatSwap.ts";
 import { BoardLeadSeat, boardLeadSeat, resolveSeatProvider } from "./seatProvider.ts";
-
-/** A field this build cannot read is read as `null`, so the card it is on is still held. */
-const orNull = <S extends Schema.Top>(schema: S) =>
-  Schema.optional(Schema.NullOr(schema).pipe(Schema.catchDecoding(() => Effect.succeedSome(null))));
 
 const Card = Schema.Struct({
   // What a card is and where its link stands. A card these cannot be read from is skipped.
@@ -56,14 +52,14 @@ const Card = Schema.Struct({
   // Absent on an engine without the link: such an engine is never written to.
   boardThread: Schema.optional(Schema.NullOr(BoardThreadLink)),
   // Read only to make a thread: without them a task is held as `unreadable-card`.
-  title: orNull(Schema.String),
-  team: orNull(Schema.String),
+  title: readOrNull(Schema.String),
+  team: readOrNull(Schema.String),
   // Slice 5's mirror and steer counts; absent on an engine before it.
   conversation: Schema.optional(Schema.NullOr(Schema.Unknown)),
-  steers: orNull(Schema.Struct({ pending: Schema.Number })),
-  run: orNull(Schema.Struct({ id: Schema.String })),
+  steers: readOrNull(Schema.Struct({ pending: Schema.Number })),
+  run: readOrNull(Schema.Struct({ id: Schema.String })),
   seatModels: DeliverySeatModels,
-  hold: orNull(
+  hold: readOrNull(
     Schema.Struct({
       stage: Schema.String,
       deadline: Schema.String,
@@ -114,14 +110,16 @@ const decodeRefusal = Schema.decodeUnknownOption(Refusal);
 const decodeLinked = Schema.decodeUnknownEffect(Linked);
 const decodeDetail = Schema.decodeUnknownOption(Detail);
 const decodeClaimed = Schema.decodeUnknownOption(Claimed);
-const decodeStanding = Schema.decodeUnknownOption(
-  Schema.Struct({
-    state: Schema.String,
-    boardThread: Schema.optional(
-      Schema.NullOr(Schema.Struct({ environmentId: Schema.String, threadId: Schema.String })),
-    ),
-  }),
-);
+/** What a task's own detail says of where it stands: all a card is judged by when it can't be read. */
+const TaskStanding = Schema.Struct({
+  state: Schema.String,
+  lane: Schema.optional(Schema.NullOr(Schema.String)),
+  boardThread: Schema.optional(
+    Schema.NullOr(Schema.Struct({ environmentId: Schema.String, threadId: Schema.String })),
+  ),
+});
+type TaskStanding = typeof TaskStanding.Type;
+const decodeStanding = Schema.decodeUnknownOption(TaskStanding);
 const decodeSelection = Schema.decodeUnknownEffect(ModelSelection);
 
 /** Every task of every board, with each card's link joined once by the engine. */
@@ -136,9 +134,9 @@ const FINISHED = new Set(["completed", "closed-not-done"]);
 const MOVED = new Set(["moved", "moving"]);
 
 /** A task in work: it holds a conversation and a claim. A split parent's parts are its work. */
-const inWork = (card: Card) =>
-  !NOT_STARTED.has(card.lane) &&
-  !FINISHED.has(card.lane) &&
+const inWork = (card: TaskStanding) =>
+  !NOT_STARTED.has(card.lane ?? "") &&
+  !FINISHED.has(card.lane ?? "") &&
   !MOVED.has(card.state) &&
   card.state !== "split";
 
@@ -445,8 +443,8 @@ export const make = Effect.gen(function* () {
   /**
    * The open threads this server made whose task ended here: deleted in the engine, held by
    * another conversation, or moved to another machine without keeping this one. They are
-   * archived, never deleted, and the board lists them. A thread a person restored is judged like any other, so one whose task is
-   * still gone goes back to the archive on the next pass.
+   * archived, never deleted, and the board lists them. A thread a person restored is judged like
+   * any other, so one whose task is still gone goes back to the archive on the next pass.
    */
   const settleEnded = Effect.fn("BoardTaskThreads.settleEnded")(function* (
     cards: Map<string, Card>,
@@ -454,18 +452,25 @@ export const make = Effect.gen(function* () {
   ) {
     const openThreads = yield* local(rows.list({ archived: false }));
     const byThread = new Map(openThreads.map((row) => [row.threadId, row]));
+    // A task the lanes leave out, or list on a card this build cannot read, is judged from its
+    // own detail by the same rules. Only the engine's 404 says it was deleted; no answer at all
+    // leaves its threads for the next pass.
+    const standings = new Map<string, TaskStanding | "deleted">(cards);
+    for (const taskId of new Set(openThreads.map((row) => row.task.id))) {
+      if (standings.has(taskId)) continue;
+      const read = yield* delivery.read({ path: `/api/tasks/${taskId}` }).pipe(Effect.result);
+      const task = read._tag === "Success" ? decodeStanding(read.success.body) : Option.none();
+      if (Option.isSome(task)) standings.set(taskId, task.value);
+      else if (read._tag === "Failure" && read.failure.status === 404)
+        standings.set(taskId, "deleted");
+    }
     const pending = new Set<ThreadId>();
     // Both rows must remain open until the continuation and link move finish.
     for (const [taskId, taskRows] of Map.groupBy(openThreads, (row) => row.task.id)) {
-      const card = cards.get(taskId);
-      const link = card?.boardThread;
-      if (
-        taskRows.length < 2 ||
-        card === undefined ||
-        link?.environmentId !== environmentId ||
-        MOVED.has(card.state)
-      )
-        continue;
+      const task = standings.get(taskId);
+      if (taskRows.length < 2 || task === undefined || task === "deleted") continue;
+      const link = task.boardThread;
+      if (link?.environmentId !== environmentId || MOVED.has(task.state)) continue;
       for (const row of taskRows) {
         const shell = yield* local(projections.getThreadShell(row.threadId));
         if (!shell?.latestRunId) continue;
@@ -477,42 +482,49 @@ export const make = Effect.gen(function* () {
           (link.threadId !== row.threadId && link.threadId !== target)
         )
           continue;
-        const boardThread = yield* engine(
-          swaps.resumeBoardLeadHandoff(row.task, shell, shell.latestRunId),
-        );
-        if (boardThread === null) {
-          pending.add(row.threadId);
-          pending.add(target);
-        } else {
-          cards.set(taskId, { ...card, boardThread });
+        pending.add(row.threadId);
+        pending.add(target);
+        // The successor continues the lead's work: a task out of work, such as a split parent,
+        // keeps both threads until it is back in work.
+        if (!inWork(task)) break;
+        const resumed = yield* swaps
+          .resumeBoardLeadHandoff(row.task, shell, shell.latestRunId)
+          .pipe(Effect.result);
+        // One task's hand-off never stops the pass: it is tried again on the next one.
+        if (resumed._tag === "Failure") {
+          yield* Effect.logWarning("A board lead hand-off did not finish.", {
+            task: taskId,
+            cause: resumed.failure.message,
+          });
+          break;
         }
+        const boardThread = resumed.success;
+        if (boardThread === null) break;
+        pending.delete(row.threadId);
+        pending.delete(target);
+        standings.set(taskId, { ...task, boardThread });
+        const card = cards.get(taskId);
+        if (card !== undefined) cards.set(taskId, { ...card, boardThread });
         break;
       }
     }
     for (const row of openThreads) {
       if (pending.has(row.threadId)) continue;
-      const card = cards.get(row.task.id);
-      if (card === undefined) {
-        const read = yield* delivery
-          .read({ path: `/api/tasks/${row.task.id}` })
-          .pipe(Effect.result);
-        // Only the engine's own answer ends a thread: 404 is a deleted task, and a task it still
-        // answers for as moved is on another machine. Anything else is left for the next pass.
-        const ended =
-          read._tag === "Success"
-            ? unlistedTaskStanding(read.success.body, environmentId, row.threadId)
-            : read.failure.status === 404
-              ? ("deleted" as const)
-              : null;
-        if (ended === null || ended === "free") continue;
-        // A moved task takes no work here, whether or not it kept this thread as its conversation.
+      const task = standings.get(row.task.id);
+      if (task === undefined) continue;
+      if (task === "deleted") {
         yield* releaseClaim(row.task.id);
-        if (ended !== "linked") yield* archive(row.task, row.threadId, ended, row.revision);
+        yield* archive(row.task, row.threadId, "deleted", row.revision);
         continue;
       }
-      const standing = boardThreadStanding(card, environmentId, row.threadId);
-      if (standing === "linked" || standing === "free") continue;
-      const link = card.boardThread;
+      const standing = boardThreadStanding(task, environmentId, row.threadId);
+      if (standing === "free") continue;
+      if (standing === "linked") {
+        // A moved task takes no work here, even where it kept this thread as its conversation.
+        if (MOVED.has(task.state)) yield* releaseClaim(row.task.id);
+        continue;
+      }
+      const link = task.boardThread;
       const owner =
         link?.environmentId === environmentId ? byThread.get(link.threadId as ThreadId) : undefined;
       if (owner?.task.id !== row.task.id || owner.task.board !== row.task.board)

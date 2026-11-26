@@ -706,6 +706,92 @@ it.effect("starts the successor once after a restart between its create and firs
   }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-swap-restart-")));
 });
 
+/** A board lead whose usage-limit successor exists while the engine still links the lead. */
+function pendingHandoff(engine: ScratchEngine, store: ThreadStore) {
+  const failedRun = RunId.make("failed-board-lead");
+  const successor = limitedLeadHandoffThreadId(failedRun);
+  return Effect.gen(function* () {
+    const threads = yield* service(store);
+    yield* threads.reconcile();
+    const [create] = creates(store);
+    if (create?.type !== "thread.create") throw new Error("Expected the board lead to open");
+    store.latestRuns.set(THREAD, failedRun);
+    yield* store.dispatch({
+      ...create,
+      commandId: CommandId.make("create-successor"),
+      threadId: successor,
+    });
+    return { threads, successor, continuation: `limited-lead:${THREAD}:${failedRun}:continue` };
+  });
+}
+
+it.effect.each([
+  { linked: "lead", why: "names the lead" },
+  { linked: "successor", why: "already names the successor" },
+] as const)(
+  "finishes a lead hand-off from the task's detail when its card cannot be read and the link $why",
+  ({ linked }) => {
+    const engine = board();
+    const task = engine.addTask({ id: "task-7" });
+    const store = threadStore();
+    return Effect.gen(function* () {
+      const { threads, successor } = yield* pendingHandoff(engine, store);
+      if (linked === "successor")
+        engine.writeLink("task-7", {
+          environmentId: ENVIRONMENT,
+          threadId: successor,
+          setBy: ENVIRONMENT,
+        });
+      task.served = { set: 7 };
+      yield* threads.reconcile();
+      assert.equal(engine.linkOf("task-7")?.threadId, successor);
+      assert.isNull(store.threads.get(successor)!.archivedAt);
+      assert.isNotNull(store.threads.get(THREAD)!.archivedAt);
+      // The successor holds the task: archiving the lead keeps the claim.
+      assert.isNotNull(engine.leaseOf("task-7"));
+    }).pipe(Effect.provide(deliveryLayer(engine, `board-threads-swap-unread-${linked}-`)));
+  },
+);
+
+it.effect("keeps a lead hand-off pending while its task is split, and finishes it after", () => {
+  const engine = board();
+  const task = engine.addTask({ id: "task-7" });
+  const store = threadStore();
+  return Effect.gen(function* () {
+    const { threads, successor, continuation } = yield* pendingHandoff(engine, store);
+    task.state = "split";
+    yield* threads.reconcile();
+    assert.equal(engine.linkOf("task-7")?.threadId, THREAD);
+    assert.isNull(store.threads.get(THREAD)!.archivedAt);
+    assert.isNull(store.threads.get(successor)!.archivedAt);
+    assert.isFalse(store.messages.has(successor));
+    task.state = "running";
+    yield* threads.reconcile();
+    assert.equal(engine.linkOf("task-7")?.threadId, successor);
+    assert.isTrue(store.messages.get(successor)?.has(continuation));
+  }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-swap-split-")));
+});
+
+it.effect(
+  "finishes a lead hand-off over a title it cannot read, and still serves other tasks",
+  () => {
+    const engine = board();
+    const task = engine.addTask({ id: "task-7" });
+    engine.addTask({ id: "task-8" });
+    const store = threadStore();
+    return Effect.gen(function* () {
+      const { threads, successor, continuation } = yield* pendingHandoff(engine, store);
+      task.served = { title: null };
+      engine.queueSteer("task-8", "Please continue");
+      yield* threads.reconcile();
+      assert.equal(engine.linkOf("task-7")?.threadId, successor);
+      assert.isTrue(store.messages.get(successor)?.has(continuation));
+      const other = boardTaskThreadId(boardTaskOf("work", "task-8")!);
+      assert.isTrue(steerSends(store).some((send) => send.threadId === other));
+    }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-swap-title-")));
+  },
+);
+
 it.effect("finishes the link after a restart between the create and the engine write", () => {
   const engine = board();
   engine.addTask({ id: "task-7" });
