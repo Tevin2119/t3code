@@ -1,7 +1,7 @@
 import { RegistryContext, useAtomValue } from "@effect/atom-react";
-import { EnvironmentId, type ScopedThreadRef } from "@t3tools/contracts";
+import type { EnvironmentId, ScopedThreadRef } from "@t3tools/contracts";
 import { Atom } from "effect/reactivity";
-import { useContext, useEffect, useState } from "react";
+import { useContext, useEffect, useEffectEvent, useState } from "react";
 import { create } from "zustand";
 
 import type { TaskView } from "../../lib/delivery";
@@ -13,6 +13,7 @@ import {
   seatChildrenWithAttestations,
   seatConversation,
   seatEnvironmentsNeedingLinks,
+  seatLinksRefreshKey,
   seatOfThread,
   steadySeatThread,
   taskConversation,
@@ -116,16 +117,14 @@ export function useTaskConversation(environmentId: EnvironmentId | null, task: T
   );
   const registry = useContext(RegistryContext);
   const queried = offered ? linksHost : null;
-  const wantedKey = wanted.join(",");
+  const refreshKey = seatLinksRefreshKey(queried, wanted);
+  const refreshLacking = useEffectEvent(() => {
+    if (queried !== null) peerLinkEnvironment.refreshNamesLacking(registry, queried, wanted);
+  });
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- links made outside this client are not pushed, so a seat on a machine the names lack asks the server again
   useEffect(() => {
-    if (queried === null || wantedKey === "") return;
-    peerLinkEnvironment.refreshNamesLacking(
-      registry,
-      queried,
-      wantedKey.split(",").map((id) => EnvironmentId.make(id)),
-    );
-  }, [registry, queried, wantedKey]);
+    if (refreshKey !== "") refreshLacking();
+  }, [refreshKey]);
   const reach: SeatReach = { ownConnection, isLinked: (id) => links.names.has(id) };
   const seatKey = task ? openSeatKey(environmentId, task.id) : null;
   const opened = useOpenSeats((state) => (seatKey ? (state.byTask[seatKey] ?? null) : null));

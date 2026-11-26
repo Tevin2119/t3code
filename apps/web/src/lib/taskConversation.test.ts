@@ -12,6 +12,7 @@ import {
   seatChildrenWithAttestations,
   seatConversation,
   seatEnvironmentsNeedingLinks,
+  seatLinksRefreshKey,
   seatOfThread,
   steadySeatThread,
   taskConversation,
@@ -168,6 +169,24 @@ describe("a seat's conversation", () => {
       ),
     ).toEqual([other]);
     expect(seatEnvironmentsNeedingLinks(children.slice(0, 5), offline)).toEqual([]);
+  });
+
+  it("keeps a machine whose id has a comma whole, and asks again only when the machines change", () => {
+    const comma = EnvironmentId.make("env-a,env-b");
+    const [a, b] = [EnvironmentId.make("env-a"), EnvironmentId.make("env-b")];
+    const seat = (environmentId: EnvironmentId) => ({
+      childThreadId: null,
+      remoteChild: { environmentId, threadId: id(`on-${environmentId}`), label: "Desktop" },
+    });
+    expect(seatEnvironmentsNeedingLinks([seat(comma)], () => undefined)).toEqual([comma]);
+    expect(seatLinksRefreshKey(ref.environmentId, [comma])).not.toBe(
+      seatLinksRefreshKey(ref.environmentId, [a, b]),
+    );
+    expect(seatLinksRefreshKey(ref.environmentId, [b, a])).toBe(
+      seatLinksRefreshKey(ref.environmentId, [a, b]),
+    );
+    expect(seatLinksRefreshKey(ref.environmentId, [])).toBe("");
+    expect(seatLinksRefreshKey(null, [a])).toBe("");
   });
 
   it("is the seat's newest delegated child in the same environment", () => {
