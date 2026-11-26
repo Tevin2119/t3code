@@ -34,7 +34,9 @@ const Card = Schema.Struct({
   team: NullableString,
   flow: NullableString,
   lane: NullableString,
-  inWorkStage: NullableString,
+  inWorkStage: Schema.NullOr(
+    Schema.Literals(["triage", "plan", "build", "checks", "review", "qa"]),
+  ),
   revision: Count,
   priority: Schema.Union([NullableString, Schema.Number]),
   owner: NullableString,
@@ -88,8 +90,12 @@ const TimelineStep = Schema.StructWithRest(
     id: Schema.String,
     at: Schema.String,
     kind: Schema.String,
-    by: Schema.optional(NullableString),
-    text: Schema.optional(NullableString),
+    source: Schema.Literals(["message", "event"]),
+    order: Count,
+    by: NullableString,
+    text: Schema.String,
+    icon: Schema.String,
+    detail: Schema.Boolean,
   }),
   [Schema.Record(Schema.String, Schema.Json)],
 );
@@ -348,6 +354,14 @@ export const LinkedDeliveryBoardsResult = Schema.Struct({
 });
 
 const Visibility = Schema.Literals(["shared", "private"]);
+export const DeliveryLinkedDestinationBoards = Schema.Array(
+  Schema.Struct({
+    id: Id,
+    title: Schema.String,
+    description: Schema.String,
+    linkedVisibility: Schema.optional(Visibility),
+  }),
+);
 export const DeliverySetBoardLinkedVisibility = Schema.Struct({
   boardId: Id,
   visibility: Visibility,
@@ -377,9 +391,9 @@ export const LinkedDeliveryThread = Schema.Struct({
 export const LinkedDeliveryThreads = Schema.Struct({ threads: Schema.Array(LinkedDeliveryThread) });
 
 export const LinkedDeliveryId = Id;
-export const LINKED_HANDOFF_MCP_MAX_BYTES = 10 * 1024 * 1024;
-// MCP returns the object and a JSON-escaped text copy. Leave room for both envelopes.
-export const LINKED_HANDOFF_BUNDLE_MAX_BYTES = 2 * 1024 * 1024;
+export const LINKED_HANDOFF_BUNDLE_MAX_BYTES = 16 * 1024 * 1024;
+// Prepare returns structured content plus a JSON string whose escaping can double its size.
+export const LINKED_HANDOFF_MCP_MAX_BYTES = 52 * 1024 * 1024;
 const Digest = Schema.String.check(Schema.isPattern(/^[a-f0-9]{64}$/));
 const HandoffState = Schema.Literals(["moving", "done", "restored"]);
 const Transfer = {

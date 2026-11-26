@@ -15,6 +15,13 @@ const card = (extra: Record<string, unknown> = {}) =>
   parseCard({ id: "t", number: 1, title: "t", lane: "implementation", ...extra });
 
 describe("the stage of a card in work", () => {
+  it("uses the engine's in-work section for linked cards", () => {
+    expect(workStageOf(card({ lane: "in-work", inWorkStage: "triage", run: null }))).toBe("triage");
+    expect(
+      workStageOf(card({ lane: "in-work", inWorkStage: "review", run: { stage: "build" } })),
+    ).toBe("review");
+  });
+
   it("reads run.stage, with the engine's other stage names in the section that does their work", () => {
     expect(workStageOf(card({ run: { stage: "checks" } }))).toBe("checks");
     expect(workStageOf(card({ run: { stage: "qa" } }))).toBe("qa");

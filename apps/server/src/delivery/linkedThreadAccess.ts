@@ -45,6 +45,23 @@ const notFound = () =>
     message: "The thread was not found.",
   });
 
+const listedThreads = Effect.fn("linkedThreadAccess.listedThreads")(function* (
+  service: Delivery,
+  environmentId: McpInvocationContext.McpInvocationScope["environmentId"],
+) {
+  return yield* service.linkedThreads.pipe(
+    Effect.map(
+      ({ threads }) =>
+        new Set(
+          threads
+            .filter((entry) => entry.environmentId === environmentId)
+            .map(({ threadId }) => threadId),
+        ),
+    ),
+    Effect.orElseSucceed(() => new Set<ThreadId>()),
+  );
+});
+
 export const assertPeerThreadTargets = Effect.fn("linkedThreadAccess.assertPeerThreadTargets")(
   function* (
     scope: McpInvocationContext.McpInvocationScope,
@@ -53,19 +70,15 @@ export const assertPeerThreadTargets = Effect.fn("linkedThreadAccess.assertPeerT
     delivery: Delivery | undefined,
   ) {
     if (scope.client?.linked !== true) return;
+    let listed: ReadonlySet<ThreadId> | undefined;
     for (const id of ids) {
       if (threads === undefined) return yield* notFound();
       const { shell } = yield* resolveThreadReference(threads, id).pipe(Effect.mapError(notFound));
       if (shell === null || shell.deletedAt !== null) continue;
       if (!(yield* isDeliveryTiedThread(shell, delivery))) continue;
       if (delivery === undefined) return yield* notFound();
-      const listed = yield* delivery.linkedThread(shell.id).pipe(
-        Effect.map(
-          (entry) => entry.threadId === shell.id && entry.environmentId === scope.environmentId,
-        ),
-        Effect.orElseSucceed(() => false),
-      );
-      if (!listed) return yield* notFound();
+      listed ??= yield* listedThreads(delivery, scope.environmentId);
+      if (!listed.has(shell.id)) return yield* notFound();
     }
   },
 );
@@ -95,17 +108,7 @@ export const filterPeerThreadRows = Effect.fn("linkedThreadAccess.filterPeerThre
   if (!shells.some(({ tied, shell }) => tied && shell !== null)) {
     return shells.filter(({ tied }) => !tied).map(({ row }) => row);
   }
-  const allowed = yield* service.linkedThreads.pipe(
-    Effect.map(
-      ({ threads }) =>
-        new Set(
-          threads
-            .filter((entry) => entry.environmentId === scope.environmentId)
-            .map(({ threadId }) => threadId),
-        ),
-    ),
-    Effect.orElseSucceed(() => new Set<ThreadId>()),
-  );
+  const allowed = yield* listedThreads(service, scope.environmentId);
   return shells
     .filter(({ tied, shell }) => !tied || (shell !== null && allowed.has(shell.id)))
     .map(({ row }) => row);

@@ -49,6 +49,7 @@ import * as PeerLinks from "./PeerLinks.ts";
 import * as PeerMcpClient from "./PeerMcpClient.ts";
 import * as DeliveryService from "../delivery/DeliveryService.ts";
 import { makeLinkedHandoffs, type LinkedHandoffs } from "../delivery/linkedHandoffs.ts";
+import { linkedReturnPeer } from "../delivery/linkedReturn.ts";
 import { emptyDiscovery, invalidDiscoveryCards } from "../delivery/deliveryDiscovery.ts";
 
 // Match local waits: return before MCP client timeouts and T3 Connect's ~100 s idle drop.
@@ -129,6 +130,15 @@ export class PeerForwarding extends Context.Service<
     readonly sendLinkedTask: LinkedHandoffs["send"];
     readonly listLinkedHandoffs: LinkedHandoffs["list"];
     readonly retryLinkedHandoff: LinkedHandoffs["retry"];
+    readonly receiveLinkedHandoff: (
+      request: LinkedHandoffPeerRequest,
+    ) => Effect.Effect<
+      (typeof LinkedHandoffPeerResponses)[LinkedHandoffPeerRequest["operation"]]["Type"],
+      DeliveryError,
+      | DeliveryService.DeliveryService
+      | McpInvocationContext.McpInvocationContext
+      | ServerEnvironment.ServerEnvironment
+    >;
     readonly linkedSendDestination: LinkedHandoffs["sendDestination"];
     readonly readLinkedAsAgent: (
       scope: Scope,
@@ -450,6 +460,7 @@ const make = Effect.gen(function* () {
     DeliveryError
   > {
     const acting = request.operation !== "get" && request.operation !== "list";
+    const carriesBundle = request.operation === "prepare" || request.operation === "import";
     yield* handoffLink(environmentId, acting);
     const success = LinkedHandoffPeerResponses[request.operation] as Schema.Decoder<
       (typeof LinkedHandoffPeerResponses)[Request["operation"]]["Type"]
@@ -462,10 +473,11 @@ const make = Effect.gen(function* () {
         arguments: { request },
         limits: { runtimeMode: "full-access", interactionMode: "default" },
         success: linkedHandoffPeerResult(success),
-        maxResponseBytes: LINKED_HANDOFF_MCP_MAX_BYTES,
+        maxResponseBytes:
+          request.operation === "prepare" ? LINKED_HANDOFF_MCP_MAX_BYTES : 10 * 1024 * 1024,
       })
       .pipe(
-        Effect.timeout("15 seconds"),
+        Effect.timeout(carriesBundle ? "60 seconds" : "15 seconds"),
         Effect.mapError(
           () =>
             new DeliveryError({
@@ -495,12 +507,11 @@ const make = Effect.gen(function* () {
     return result.data;
   });
 
-  const resolveArrivalPeer = Effect.fn("PeerForwarding.resolveArrivalPeer")(function* (
+  const provePeer = Effect.fn("PeerForwarding.provePeer")(function* (
     sessionId: string,
+    expectedPeer?: EnvironmentId,
   ) {
-    const scope = yield* Effect.serviceOption(McpInvocationContext.McpInvocationContext);
-    if (Option.getOrUndefined(scope)?.client?.linked === true || !(yield* links.enabled))
-      return null;
+    if (!(yield* links.enabled)) return null;
     const environment = yield* ServerEnvironment.ServerEnvironment;
     const environmentId = yield* environment.getEnvironmentId;
     const challenge = yield* newId;
@@ -509,7 +520,10 @@ const make = Effect.gen(function* () {
     const stored = yield* links.listStored.pipe(Effect.orElseSucceed(() => []));
     const now = yield* DateTime.now;
     const eligible = stored.filter(
-      (link) => link.access !== "read-only" && DateTime.isGreaterThan(link.expiresAt, now),
+      (link) =>
+        (expectedPeer === undefined || link.environmentId === expectedPeer) &&
+        link.access !== "read-only" &&
+        DateTime.isGreaterThan(link.expiresAt, now),
     );
     const matching = yield* Effect.forEach(
       eligible,
@@ -538,6 +552,47 @@ const make = Effect.gen(function* () {
     return matches.length === 1 ? (matches[0] ?? null) : null;
   });
 
+  const receiveLinkedHandoff = Effect.fn("PeerForwarding.receiveLinkedHandoff")(function* (
+    request: LinkedHandoffPeerRequest,
+  ) {
+    const { client, capabilities } = yield* McpInvocationContext.McpInvocationContext;
+    const delivery = yield* DeliveryService.DeliveryService;
+    const peer =
+      request.operation === "import"
+        ? linkedReturnPeer(request.bundle.handoff)
+        : request.operation === "settle"
+          ? linkedReturnPeer(request.handoff)
+          : null;
+    const verified =
+      peer !== null &&
+      client?.linked === true &&
+      client.access !== "read-only" &&
+      capabilities.has("orchestration")
+        ? yield* provePeer(client.sessionId, peer)
+        : null;
+    return yield* delivery.peerHandoff(request, verified ?? undefined);
+  });
+
+  const resolveArrivalPeer = Effect.fn("PeerForwarding.resolveArrivalPeer")(function* (
+    peer: string,
+    expectedPeer?: EnvironmentId,
+  ) {
+    const scope = yield* Effect.serviceOption(McpInvocationContext.McpInvocationContext);
+    if (Option.getOrUndefined(scope)?.client?.linked === true || !(yield* links.enabled))
+      return null;
+    const known = (yield* links.listStored.pipe(Effect.orElseSucceed(() => []))).find(
+      (link) => link.environmentId === peer,
+    );
+    return known ? known.environmentId : yield* provePeer(peer, expectedPeer);
+  });
+
+  const returnId = Effect.fn("PeerForwarding.returnId")(function* (handoff: string) {
+    const environment = yield* ServerEnvironment.ServerEnvironment;
+    const id = yield* environment.getEnvironmentId;
+    const suffix = yield* crypto.digestHex(Digest.sha256, new TextEncoder().encode(handoff));
+    return `back-${id}-${suffix.slice(0, 32)}`;
+  });
+
   const handoffs = makeLinkedHandoffs(
     handoffPhase,
     (environmentId) => handoffLink(environmentId, true),
@@ -549,6 +604,7 @@ const make = Effect.gen(function* () {
       ),
     ),
     newId,
+    returnId,
     resolveArrivalPeer,
   );
 
@@ -780,6 +836,7 @@ const make = Effect.gen(function* () {
     listLinkedHandoffs: handoffs.list,
     retryLinkedHandoff: handoffs.retry,
     linkedSendDestination: handoffs.sendDestination,
+    receiveLinkedHandoff,
     linkedDelivery: linkedDelivery as PeerForwarding["Service"]["linkedDelivery"],
     readLinkedAsAgent: readLinkedAsAgent as PeerForwarding["Service"]["readLinkedAsAgent"],
     readThread,

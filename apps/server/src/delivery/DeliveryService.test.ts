@@ -9,6 +9,7 @@ import {
   type LinkedDeliveryAction,
   type LinkedDeliveryRead,
   LINKED_HANDOFF_BUNDLE_MAX_BYTES,
+  LINKED_HANDOFF_MCP_MAX_BYTES,
   LinkedBringInput,
   LinkedHandoffPeerRequest,
   LinkedHandoffRetryInput,
@@ -619,7 +620,19 @@ it.effect(
       [taskPath]: { task: sharedTask },
       [`${taskPath}/messages`]: { task: sharedTask, messages: [] },
       [`${taskPath}/timeline`]: {
-        timeline: [{ id: "m1", at: "now", kind: "message", text: "hello", source: "message" }],
+        timeline: [
+          {
+            id: "m1",
+            at: "now",
+            kind: "message",
+            text: "hello",
+            source: "message",
+            order: 1,
+            by: "Person",
+            icon: "message",
+            detail: false,
+          },
+        ],
       },
       "/api/boards/shared/linked-visibility": { id: "shared", linkedVisibility: "private" },
       "/api/tasks/task-shared/linked-hidden": { task: "task-shared", linkedHidden: true },
@@ -633,7 +646,19 @@ it.effect(
       expect(snapshot).toEqual({
         task: sharedTask,
         messages: [],
-        timeline: [{ id: "m1", at: "now", kind: "message", text: "hello", source: "message" }],
+        timeline: [
+          {
+            id: "m1",
+            at: "now",
+            kind: "message",
+            text: "hello",
+            source: "message",
+            order: 1,
+            by: "Person",
+            icon: "message",
+            detail: false,
+          },
+        ],
       });
       for (const [action, endpoint, body] of actions) {
         const call = delivery.actLinked(action);
@@ -667,6 +692,49 @@ it.effect(
         linkedHidden: true,
       });
     }).pipe(Effect.provide(layer(fake, { prefix: "t3-delivery-link-actions-" })));
+  },
+);
+
+it.effect(
+  "caches decoded thread lists per linked access and discards stale or invalid lists",
+  () => {
+    const fake = engine();
+    const path = "/api/linked/threads";
+    const thread = {
+      environmentId: linkedEnvironmentId,
+      threadId: "thread:delegated-task:command%3Aexample",
+      tasks: [{ id: sharedTask.id, number: 12, kind: "board-thread" }],
+    };
+    fake.replies = {
+      [path]: { threads: [thread] },
+      "/api/tasks/task-shared/linked-hidden": { task: sharedTask.id, linkedHidden: true },
+    };
+    return Effect.gen(function* () {
+      const delivery = yield* DeliveryService.DeliveryService;
+      const readOnly = delivery.linkedThreads.pipe(
+        Effect.provideService(McpInvocationContext.McpInvocationContext, linkedScope("read-only")),
+      );
+      const acting = delivery.linkedThreads.pipe(
+        Effect.provideService(
+          McpInvocationContext.McpInvocationContext,
+          linkedScope("full-access"),
+        ),
+      );
+      yield* delivery.linkedThreads.pipe(Effect.flip);
+      expect((yield* readOnly).threads).toEqual([thread]);
+      expect((yield* readOnly).threads).toEqual([thread]);
+      expect(fake.requests.map((request) => request.path)).toEqual([path]);
+      fake.replies = { ...fake.replies, [path]: { threads: [{ ...thread, tasks: [] }] } };
+      yield* acting.pipe(Effect.flip);
+      yield* TestClock.adjust("3 seconds");
+      yield* readOnly.pipe(Effect.flip);
+      fake.replies = { ...fake.replies, [path]: { threads: [thread] } };
+      expect((yield* readOnly).threads).toEqual([thread]);
+      yield* delivery.setTaskLinkedHidden({ taskId: sharedTask.id, hidden: true });
+      fake.replies = { ...fake.replies, [path]: { threads: [] } };
+      expect((yield* readOnly).threads).toEqual([]);
+      expect(fake.requests.filter((request) => request.path === path)).toHaveLength(5);
+    }).pipe(Effect.provide(layer(fake, { prefix: "linked-threads-" })));
   },
 );
 
@@ -724,11 +792,6 @@ it.effect(
       "/api/linked/handoffs/move-fixture/cancel": { handoff: handoffFixture, outcome: "restored" },
       "/api/linked/handoffs?peer=peer-session": { handoffs: [handoffRow] },
       "/api/linked/handoffs/move-fixture?peer=peer-session": handoffRow,
-      "/api/linked/threads/board-task%3Awork%3Atask-shared": {
-        environmentId: linkedEnvironmentId,
-        threadId: "board-task:work:task-shared",
-        tasks: [{ id: sharedTask.id, number: 1, kind: "board-thread" }],
-      },
     };
     return Effect.gen(function* () {
       const service = yield* DeliveryService.DeliveryService;
@@ -770,7 +833,6 @@ it.effect(
             );
         const calls: ReadonlyArray<Effect.Effect<unknown, DeliveryError>> = [
           service.actLinked({ operation: "control", taskId: id, action: "pause" }),
-          service.linkedThread(ThreadId.make(id)),
           service.peerHandoff({ ...prepare, handoff: id }),
           service.peerHandoff({
             operation: "settle",
@@ -852,12 +914,48 @@ it.effect(
       expect(JSON.stringify(fake.requests)).not.toContain("forged");
       for (const { body } of fake.requests.slice(1, 5))
         expect(body).toMatchObject({ access: "act", peer: "peer-session" });
+      const back = "back-local-machine-da9a027c30b534c693558510be0c1ca7";
+      fake.replies = {
+        ...fake.replies,
+        "/api/linked/imports": { ...receiptFixture("accepted"), handoff: back },
+        [`/api/linked/transfers/${back}/settle`]: { ...receiptFixture("accepted"), handoff: back },
+      };
+      const returning = [
+        { operation: "import", boardId: boardFixture, bundle: { ...bundleFixture, handoff: back } },
+        {
+          operation: "settle",
+          handoff: back,
+          root: sharedTask.id,
+          tasks: [sharedTask.id],
+          digest: digestFixture,
+        },
+      ] as const;
+      const calls = fake.requests.length;
+      for (const phase of returning) {
+        yield* service
+          .peerHandoff(phase)
+          .pipe(Effect.provideService(McpInvocationContext.McpInvocationContext, act), Effect.flip);
+      }
+      expect(fake.requests).toHaveLength(calls);
+      for (const phase of returning) {
+        yield* service
+          .peerHandoff(phase, localFixture)
+          .pipe(Effect.provideService(McpInvocationContext.McpInvocationContext, act));
+      }
+      expect(fake.requests.slice(calls).map(({ body }) => body)).toEqual([
+        expect.objectContaining({
+          peer: localFixture,
+          bundle: expect.objectContaining({ handoff: back }),
+        }),
+        expect.objectContaining({ peer: localFixture, digest: digestFixture }),
+      ]);
     }).pipe(Effect.provide(layer(fake, { prefix: "handoff-peer-" })));
   },
 );
 
 it.effect.each([
   { name: "pull", direction: "bring", outcome: "done" },
+  { name: "large pull", direction: "bring", outcome: "done", large: true },
   { name: "push", direction: "send", outcome: "done" },
   { name: "send back", direction: "send", outcome: "done", arrival: "owner" },
   {
@@ -865,6 +963,13 @@ it.effect.each([
     direction: "send",
     outcome: "done",
     arrival: "linked",
+  },
+  {
+    name: "send an unboarded linked arrival to a chosen board on its origin machine",
+    direction: "send",
+    outcome: "done",
+    arrival: "linked",
+    explicit: true,
   },
   { name: "denied on this link", direction: "send", outcome: "refused", readOnly: true },
   { name: "prepare answer lost", direction: "bring", outcome: "done", drop: "prepare" },
@@ -915,52 +1020,76 @@ it.effect.each([
   const drop = "drop" in scenario ? scenario.drop : undefined;
   const answer = "receipt" in scenario ? scenario.receipt : "accepted";
   let recovered = false;
-  const ownerRow = { ...handoffRow, via: "owner", peer: peerFixture, to_board: boardFixture };
+  const linkedReturn = "arrival" in scenario && scenario.arrival === "linked";
+  const sourceId =
+    scenario.direction === "bring"
+      ? "lk-fixture"
+      : linkedReturn
+        ? `back-${localFixture}-da9a027c30b534c693558510be0c1ca7`
+        : "source-fixture";
+  const sourceBundle = {
+    ...bundleFixture,
+    handoff: sourceId,
+    ...("large" in scenario ? { extra: "\\".repeat(8 * 1024 * 1024 - 1024) } : {}),
+  };
+  const prepared = (peer: string) => ({
+    ...prepareFixture(peer),
+    handoff: sourceId,
+    bundle: sourceBundle,
+    bytes: Buffer.byteLength(JSON.stringify(sourceBundle)),
+  });
+  const receipt = (outcome: Parameters<typeof receiptFixture>[0]) => ({
+    ...receiptFixture(outcome),
+    handoff: sourceId,
+  });
+  const linkedRow = { ...handoffRow, id: sourceId };
+  const ownerRow = { ...linkedRow, via: "owner", peer: peerFixture, to_board: boardFixture };
   fake.reply = ({ path, body }) => {
     switch (path) {
       case "/api/handoffs/prepare":
         expect(body).toMatchObject({
           by: "Person",
           key: keyFixture,
-          handoff: handoffFixture,
+          handoff: recovered || linkedReturn ? sourceId : handoffFixture,
           maxBytes: LINKED_HANDOFF_BUNDLE_MAX_BYTES,
           to: { peer: peerFixture, board: boardFixture },
         });
-        return { body: prepareFixture(peerFixture) };
+        return { body: prepared(peerFixture) };
       case "/api/handoffs/import":
         expect(body).toMatchObject({ key: keyFixture, peer: peerFixture, board: boardFixture });
         expect(JSON.stringify((body as { bundle: unknown }).bundle)).toBe(
-          JSON.stringify(bundleFixture),
+          JSON.stringify(sourceBundle),
         );
         if ("wrongKey" in scenario)
           return { status: 403, body: { error: `Wrong key ${keyFixture}` } };
-        return drop === "local-import" ? "disconnect" : { body: receiptFixture("accepted") };
-      case "/api/transfers/move-fixture/settle":
+        return drop === "local-import" ? "disconnect" : { body: receipt("accepted") };
+      case `/api/transfers/${sourceId}/settle`:
         expect(body).toEqual({
           root: sharedTask.id,
           tasks: [sharedTask.id],
           digest: digestFixture,
         });
-        return { body: receiptFixture(answer) };
-      case "/api/handoffs/move-fixture/commit":
-        expect(body).toMatchObject({ key: keyFixture, receipt: receiptFixture("accepted") });
-        return { body: { handoff: handoffFixture, outcome: "done" } };
-      case "/api/handoffs/move-fixture/resolve":
+        return { body: receipt(answer) };
+      case `/api/handoffs/${sourceId}/commit`:
+        expect(body).toMatchObject({ key: keyFixture, receipt: receipt("accepted") });
+        return { body: { handoff: sourceId, outcome: "done" } };
+      case `/api/handoffs/${sourceId}/resolve`:
         expect(body).toMatchObject({
           key: keyFixture,
           outcome: "restore",
-          answer: receiptFixture("cancelled"),
+          answer: receipt("cancelled"),
         });
-        return { body: { handoff: handoffFixture, outcome: "restored" } };
+        return { body: { handoff: sourceId, outcome: "restored" } };
       case "/api/tasks/task-shared": {
-        const via = "arrival" in scenario ? scenario.arrival : "owner";
+        if (!("arrival" in scenario)) return { body: { linkedArrival: null } };
+        const via = scenario.arrival;
         return {
           body: {
             linkedArrival: {
               handoff: "old-handoff",
               peer: via === "owner" ? peerFixture : "remote-session",
               via,
-              fromBoard: boardFixture,
+              fromBoard: "explicit" in scenario ? null : boardFixture,
               fromTask: sharedTask.id,
               fromNumber: 1,
               board: "here",
@@ -986,9 +1115,14 @@ it.effect.each([
         if (input.tool === "delivery_linked_origin") {
           const { environmentId, challenge, claim } = input.arguments;
           expect(environmentId).toBe(localFixture);
-          expect(claim).toBe(
-            yield* PeerLinks.hashArrivalProof(crypto, String(challenge), "remote-session", "claim"),
+          const validClaim = yield* PeerLinks.hashArrivalProof(
+            crypto,
+            String(challenge),
+            "remote-session",
+            "claim",
           );
+          if (claim !== validClaim)
+            return yield* decode(JSON.stringify({ environmentId: peerFixture, proof: null }));
           const proof = yield* PeerLinks.hashArrivalProof(
             crypto,
             String(challenge),
@@ -1010,14 +1144,26 @@ it.effect.each([
           return yield* disconnected;
         }
         const data = {
-          prepare: prepareFixture("peer-session"),
-          import: receiptFixture("accepted"),
-          settle: receiptFixture(answer),
-          commit: { handoff: handoffFixture, outcome: "done" },
-          cancel: { handoff: handoffFixture, outcome: "restored" },
-          list: { handoffs: [handoffRow, { ...handoffRow, id: "closed-move", state: "done" }] },
-          get: handoffRow,
+          prepare: prepared("peer-session"),
+          import: receipt("accepted"),
+          settle: receipt(answer),
+          commit: { handoff: sourceId, outcome: "done" },
+          cancel: { handoff: sourceId, outcome: "restored" },
+          list: { handoffs: [linkedRow, { ...linkedRow, id: "closed-move", state: "done" }] },
+          get: linkedRow,
         }[request.operation];
+        if ("large" in scenario && request.operation === "prepare") {
+          const answer = { environmentId: peerFixture, data, error: null };
+          const wire = JSON.stringify({
+            structuredContent: answer,
+            content: [{ text: JSON.stringify(answer) }],
+          });
+          expect(prepared("peer-session").bytes).toBeGreaterThan(16_000_000);
+          expect(Buffer.byteLength(wire)).toBeLessThan(LINKED_HANDOFF_MCP_MAX_BYTES);
+          expect(input.maxResponseBytes).toBe(LINKED_HANDOFF_MCP_MAX_BYTES);
+        }
+        if ("handoff" in request && request.operation !== "prepare")
+          expect(request.handoff).toBe(sourceId);
         const result =
           "oversize" in scenario
             ? {
@@ -1027,27 +1173,56 @@ it.effect.each([
               }
             : { environmentId: peerFixture, data, error: null };
         if (request.operation === "import")
-          expect(JSON.stringify(request.bundle)).toBe(JSON.stringify(bundleFixture));
+          expect(JSON.stringify(request.bundle)).toBe(JSON.stringify(sourceBundle));
         return yield* decode(JSON.stringify(result));
       }).pipe(Effect.mapError(() => disconnected));
 
   return Effect.gen(function* () {
     const forwarding = yield* PeerForwarding.PeerForwarding;
+    if (linkedReturn) {
+      const back = `back-${peerFixture}-da9a027c30b534c693558510be0c1ca7`;
+      const incoming = {
+        operation: "import",
+        boardId: boardFixture,
+        bundle: { ...sourceBundle, handoff: back },
+      } as const;
+      const scope = linkedScope("full-access");
+      const unverified = forwarding
+        .receiveLinkedHandoff(incoming)
+        .pipe(Effect.provideService(McpInvocationContext.McpInvocationContext, scope));
+      expect((yield* unverified.pipe(Effect.flip)).reason).toBe("unreachable");
+      fake.replies = { "/api/linked/imports": { ...receipt("accepted"), handoff: back } };
+      yield* forwarding.receiveLinkedHandoff(incoming).pipe(
+        Effect.provideService(McpInvocationContext.McpInvocationContext, {
+          ...scope,
+          client: { ...scope.client!, sessionId: "remote-session" },
+        }),
+      );
+      expect(fake.requests.at(-1)?.body).toMatchObject({ peer: peerFixture });
+    }
     const input = { by: "Person", key: keyFixture, handoff: handoffFixture, taskId: sharedTask.id };
     const target = { peerEnvironmentId: peerFixture, boardId: boardFixture };
     if ("arrival" in scenario) {
-      expect((yield* forwarding.linkedSendDestination(sharedTask.id)).destination).toEqual(target);
+      expect((yield* forwarding.linkedSendDestination(sharedTask.id)).destination).toEqual(
+        "explicit" in scenario ? null : target,
+      );
     }
     const moved = yield* scenario.direction === "bring"
       ? forwarding.bringLinkedTask(decodeBring({ ...input, ...target }))
       : forwarding.sendLinkedTask(
           decodeSend({
             ...input,
-            ...("arrival" in scenario ? {} : { destination: target }),
+            ...("arrival" in scenario && !("explicit" in scenario) ? {} : { destination: target }),
           }),
         );
-    expect(moved).toMatchObject({ handoff: handoffFixture, outcome: scenario.outcome });
-    if ("oversize" in scenario) expect(moved).toMatchObject({ message: "Nothing was frozen." });
+    expect(moved).toMatchObject({
+      handoff: scenario.outcome === "refused" ? handoffFixture : sourceId,
+      outcome: scenario.outcome,
+    });
+    if ("oversize" in scenario)
+      expect(moved).toMatchObject({
+        message: "This task is too large to move. Nothing was frozen.",
+      });
     if ("wrongKey" in scenario) expect(moved).toMatchObject({ message: "Wrong key [redacted]" });
     if ("readOnly" in scenario || "oversize" in scenario) expect(fake.requests).toEqual([]);
     if ("readOnly" in scenario) expect(peerRequests).toEqual([]);
@@ -1078,7 +1253,7 @@ it.effect.each([
     if (drop === "local-import" || "wrongKey" in scenario) {
       expect(fake.requests.map(({ path }) => path)).toEqual([
         "/api/handoffs/import",
-        "/api/transfers/move-fixture/settle",
+        `/api/transfers/${sourceId}/settle`,
       ]);
       expect(peerRequests.map(({ operation }) => operation)).toEqual(
         answer === "occupied"
@@ -1092,23 +1267,23 @@ it.effect.each([
       const listed = yield* forwarding.listLinkedHandoffs({ peerEnvironmentId: peerFixture });
       expect(listed.handoffs.every((row) => row.state === "moving")).toBe(true);
       expect(listed.handoffs).toContainEqual(
-        expect.objectContaining({ direction: scenario.direction, id: handoffFixture }),
+        expect.objectContaining({ direction: scenario.direction, id: sourceId }),
       );
       const recoveredMove = yield* forwarding.retryLinkedHandoff(
         decodeRetry({
           direction: scenario.direction,
-          handoff: handoffFixture,
+          handoff: sourceId,
           peerEnvironmentId: peerFixture,
           mode: drop === "before-settle" ? "retry" : "settle",
           key: keyFixture,
           by: "Person",
         }),
       );
-      expect(recoveredMove).toEqual({ handoff: handoffFixture, outcome: "done" });
+      expect(recoveredMove).toEqual({ handoff: sourceId, outcome: "done" });
       if (drop === "before-settle") {
         const prepares = fake.requests.filter(({ path }) => path === "/api/handoffs/prepare");
         expect(prepares).toHaveLength(2);
-        expect(prepares[1]?.body).toEqual(prepares[0]?.body);
+        expect(prepares[1]?.body).toMatchObject({ handoff: sourceId });
         expect(peerRequests.filter(({ operation }) => operation === "import")).toHaveLength(2);
       }
     }

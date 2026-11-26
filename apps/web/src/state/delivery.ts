@@ -1,6 +1,14 @@
 import { createDeliveryEnvironmentAtoms } from "@t3tools/client-runtime/state/delivery";
-import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
-import { DELIVERY_DEFAULT_TEAM, type EnvironmentId } from "@t3tools/contracts";
+import {
+  squashAtomCommandFailure,
+  type AtomCommandResult,
+} from "@t3tools/client-runtime/state/runtime";
+import {
+  DELIVERY_DEFAULT_TEAM,
+  type EnvironmentId,
+  type LinkedDeliveryDiagnostic,
+} from "@t3tools/contracts";
+import { useAtomValue } from "@effect/atom-react";
 import { useEffect, useMemo, useState } from "react";
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
@@ -15,6 +23,7 @@ import {
   readsRefreshedBy,
   type SeatChoice,
 } from "../lib/delivery";
+import { linkedBoardsLinks } from "../lib/linkedBoards";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { NO_FILTERS, type BoardFilters, type BoardGrouping } from "../lib/deliveryBoard";
 import { deliveryEnvironmentChoice } from "../lib/delivery";
@@ -177,6 +186,243 @@ export function useDeliveryFetch(environmentId: EnvironmentId | null) {
       };
     }
     return { ok: true, body: result.value.body };
+  };
+}
+
+/** The machines this environment links to, each with its shared boards, or null while they read. */
+export function useLinkedBoards(environmentId: EnvironmentId | null) {
+  const { fresh, refresh } = useLinkedFreshToggle();
+  const query = useEnvironmentQuery(
+    environmentId
+      ? deliveryEnvironment.linkedBoards({
+          environmentId,
+          input: fresh ? { fresh: true } : {},
+        })
+      : null,
+  );
+  const links = query.data ? linkedBoardsLinks(query.data) : null;
+  return {
+    data: links,
+    diagnostic: query.data?.diagnostic ?? null,
+    error: query.error,
+    isPending: query.isPending,
+    links,
+    refresh: () => refresh(query.refresh),
+  };
+}
+
+/**
+ * A linked read refreshed on demand: the first refresh asks with `fresh: true`, which is its
+ * own query and so runs at once, and later refreshes re-run that one. Without it the server
+ * serves what it read of the same request within its cache's window.
+ */
+function useLinkedFreshToggle() {
+  const [fresh, setFresh] = useState(false);
+  return {
+    fresh,
+    refresh: (rerun: () => void) => (fresh ? rerun() : setFresh(true)),
+  };
+}
+
+/** A linked machine's shared board: its lanes and cards, read through the link. */
+export function useLinkedBoard(
+  environmentId: EnvironmentId | null,
+  peerEnvironmentId: EnvironmentId | null,
+  boardId: string | null,
+) {
+  const { fresh, refresh } = useLinkedFreshToggle();
+  const query = useEnvironmentQuery(
+    environmentId && peerEnvironmentId && boardId
+      ? deliveryEnvironment.linkedBoard({
+          environmentId,
+          input: fresh
+            ? { peerEnvironmentId, boardId, fresh: true }
+            : { peerEnvironmentId, boardId },
+        })
+      : null,
+  );
+  return {
+    board: query.data?.data ?? null,
+    diagnostic: query.data?.diagnostic ?? null,
+    error: query.error,
+    isPending: query.isPending,
+    refresh: () => refresh(query.refresh),
+  };
+}
+
+/** A linked machine's task: its facts, the messages said on it, and its timeline. */
+export function useLinkedTask(
+  environmentId: EnvironmentId | null,
+  peerEnvironmentId: EnvironmentId | null,
+  taskId: string | null,
+) {
+  const { fresh, refresh } = useLinkedFreshToggle();
+  const query = useEnvironmentQuery(
+    environmentId && peerEnvironmentId && taskId
+      ? deliveryEnvironment.linkedTask({
+          environmentId,
+          input: fresh ? { peerEnvironmentId, taskId, fresh: true } : { peerEnvironmentId, taskId },
+        })
+      : null,
+  );
+  return {
+    task: query.data?.data ?? null,
+    diagnostic: query.data?.diagnostic ?? null,
+    error: query.error,
+    isPending: query.isPending,
+    refresh: () => refresh(query.refresh),
+  };
+}
+
+/** What a linked machine's search answered: cards, newest first. */
+export function useLinkedSearch(
+  environmentId: EnvironmentId | null,
+  peerEnvironmentId: EnvironmentId | null,
+  q: string,
+  boardId: string | null,
+) {
+  const query = useEnvironmentQuery(
+    environmentId && peerEnvironmentId && q
+      ? deliveryEnvironment.linkedSearch({
+          environmentId,
+          input: {
+            peerEnvironmentId,
+            q,
+            ...(boardId ? { boardId } : {}),
+          },
+        })
+      : null,
+  );
+  return {
+    cards: query.data?.data?.tasks ?? null,
+    diagnostic: query.data?.diagnostic ?? null,
+    error: query.error,
+    isPending: query.isPending,
+  };
+}
+
+/** What became of an action sent over a link: what the link said, or why it could not be asked. */
+export type LinkedActionOutcome =
+  | { readonly ok: true; readonly diagnostic: LinkedDeliveryDiagnostic | null }
+  | { readonly ok: false; readonly why: string };
+
+/**
+ * The commands a linked task takes: comment, answer, pause or resume, and steer. Each is sent
+ * for one task of the machine; each answers what the link said, and a read-only link answers
+ * with its diagnostic rather than refusing loudly.
+ */
+export function useLinkedTaskCommands(input: {
+  readonly environmentId: EnvironmentId | null;
+  readonly peerEnvironmentId: EnvironmentId;
+}) {
+  const { environmentId, peerEnvironmentId } = input;
+  const comment = useAtomCommand(deliveryEnvironment.linkedComment, {
+    label: "linked task comment",
+    reportFailure: false,
+  });
+  const answer = useAtomCommand(deliveryEnvironment.linkedAnswer, {
+    label: "linked task answer",
+    reportFailure: false,
+  });
+  const control = useAtomCommand(deliveryEnvironment.linkedControl, {
+    label: "linked task control",
+    reportFailure: false,
+  });
+  const steer = useAtomCommand(deliveryEnvironment.linkedSteer, {
+    label: "linked task steer",
+    reportFailure: false,
+  });
+  const allowed = useAtomValue(deliveryEnvironment.linkedComment.permissionAtom(environmentId));
+  const controlAllowed = useAtomValue(
+    deliveryEnvironment.linkedControl.permissionAtom(environmentId),
+  );
+  const unavailable = () =>
+    Promise.resolve({ ok: false, why: "No environment is connected." } as const);
+  if (environmentId === null) {
+    return {
+      allowed: false,
+      controlAllowed: false,
+      comment: unavailable,
+      answer: unavailable,
+      control: unavailable,
+      steer: unavailable,
+    };
+  }
+  const outcome = async <A extends { readonly diagnostic: LinkedDeliveryDiagnostic | null }>(
+    call: () => Promise<AtomCommandResult<A, unknown>>,
+  ): Promise<LinkedActionOutcome> => {
+    const result = await call();
+    if (result._tag === "Failure") {
+      return { ok: false, why: String(squashAtomCommandFailure(result)) };
+    }
+    return { ok: true, diagnostic: result.value.diagnostic };
+  };
+  return {
+    allowed,
+    controlAllowed,
+    comment: (taskId: string, text: string) =>
+      outcome(() => comment({ environmentId, input: { peerEnvironmentId, taskId, text } })),
+    answer: (
+      taskId: string,
+      replyTo: number,
+      answerBody: { readonly text: string } | { readonly option: string },
+    ) =>
+      outcome(() =>
+        answer({
+          environmentId,
+          input: { peerEnvironmentId, taskId, replyTo, answer: answerBody },
+        }),
+      ),
+    control: (taskId: string, action: "pause" | "resume") =>
+      outcome(() => control({ environmentId, input: { peerEnvironmentId, taskId, action } })),
+    steer: (taskId: string, text: string) =>
+      outcome(() => steer({ environmentId, input: { peerEnvironmentId, taskId, text } })),
+  };
+}
+
+/** What became of a setting only the owning machine changes: its new value, or why not. */
+type OwnerSettingOutcome = { readonly ok: true } | { readonly ok: false; readonly why: string };
+
+const ownerOutcome = <A>(result: AtomCommandResult<A, unknown>): OwnerSettingOutcome =>
+  result._tag === "Failure"
+    ? { ok: false, why: String(squashAtomCommandFailure(result)) }
+    : { ok: true };
+
+/** Sets whether a board of this environment is shared with the machines linked to it. */
+export function useSetBoardLinkedVisibility(environmentId: EnvironmentId | null) {
+  const set = useAtomCommand(deliveryEnvironment.setBoardLinkedVisibility, {
+    label: "board linked visibility",
+    reportFailure: false,
+  });
+  const person = usePersonName();
+  const allowed = useAtomValue(
+    deliveryEnvironment.setBoardLinkedVisibility.permissionAtom(environmentId ?? null),
+  );
+  return {
+    allowed,
+    set: (boardId: string, visibility: "shared" | "private"): Promise<OwnerSettingOutcome> =>
+      environmentId === null
+        ? Promise.resolve({ ok: false, why: "No environment is connected." })
+        : set({ environmentId, input: { boardId, visibility, by: person } }).then(ownerOutcome),
+  };
+}
+
+/** Sets whether a task of this environment is hidden from the machines linked to it. */
+export function useSetTaskLinkedHidden(environmentId: EnvironmentId | null) {
+  const set = useAtomCommand(deliveryEnvironment.setTaskLinkedHidden, {
+    label: "task linked hidden",
+    reportFailure: false,
+  });
+  const person = usePersonName();
+  const allowed = useAtomValue(
+    deliveryEnvironment.setTaskLinkedHidden.permissionAtom(environmentId ?? null),
+  );
+  return {
+    allowed,
+    set: (taskId: string, hidden: boolean): Promise<OwnerSettingOutcome> =>
+      environmentId === null
+        ? Promise.resolve({ ok: false, why: "No environment is connected." })
+        : set({ environmentId, input: { taskId, hidden, by: person } }).then(ownerOutcome),
   };
 }
 

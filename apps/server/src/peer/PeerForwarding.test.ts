@@ -8,6 +8,8 @@ import {
   DeliveryError,
   EnvironmentId,
   type LinkedDeliveryAction,
+  LINKED_HANDOFF_BUNDLE_MAX_BYTES,
+  LINKED_HANDOFF_MCP_MAX_BYTES,
   LinkedHandoffPeerResponses,
   linkedHandoffPeerResult,
   type PeerLink,
@@ -446,6 +448,9 @@ const serveBox = (
       McpHttpServer.layerThreadToolkit,
     ).pipe(
       Layer.provide(DocumentText.layer.pipe(Layer.provideMerge(NodeServices.layer))),
+      Layer.provide(
+        PeerForwarding.layer.pipe(Layer.provide(Layer.mock(PeerMcpClient.PeerMcpClient)({}))),
+      ),
       Layer.provide(NodeCrypto.layer),
       Layer.provide(
         Layer.merge(
@@ -488,7 +493,6 @@ const serveBox = (
       Layer.provide(Layer.mock(ProjectCloneTracker.ProjectCloneTracker)({})),
       Layer.provide(Layer.mock(SecretRequests.SecretRequests)({})),
       Layer.provide(ServerSettings.layerTest()),
-      Layer.provide(Layer.mock(PeerForwarding.PeerForwarding)({})),
       Layer.provide(Layer.mock(RemoteDelegation.RemoteDelegation)({})),
       Layer.provide(Layer.mock(PeerLinkRequests.PeerLinkRequests)({})),
       Layer.provide(Layer.mock(PeerLinks.PeerLinks)({})),
@@ -641,11 +645,6 @@ it.effect("uses the owner engine's visibility for linked thread snapshots, lists
         reason: "unreachable",
         detail: "Fixture engine offline.",
       });
-      const notFound = new DeliveryError({
-        reason: "refused",
-        status: 404,
-        detail: "Fixture task missing.",
-      });
       const taskDelivery = Layer.effect(
         DeliveryService.DeliveryService,
         Effect.map(DeliveryService.DeliveryService, (service) => ({
@@ -662,14 +661,6 @@ it.effect("uses the owner engine's visibility for linked thread snapshots, lists
                 },
               ],
             } as never),
-          linkedThread: () =>
-            Ref.get(visibility).pipe(
-              Effect.flatMap((value) =>
-                value === "shared"
-                  ? Effect.succeed(entry)
-                  : Effect.fail(value === "offline" ? unavailable : notFound),
-              ),
-            ),
           linkedThreads: Ref.get(visibility).pipe(
             Effect.flatMap((value) =>
               value === "offline"
@@ -730,63 +721,65 @@ it.effect("uses the owner engine's visibility for linked thread snapshots, lists
   ).pipe(Effect.provide(NodeHttpServer.layerTest)),
 );
 
-it.effect(
-  "only a linked MCP client reaches hand-off phases and preserves the bundle digest input",
-  () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const seen = yield* Ref.make<Seen>(nothingSeen);
-        const linkSession = yield* Ref.make("");
-        const bundle = {
-          version: 1,
-          root: "task",
-          tasks: [{ title: "Move me", id: "task" }],
-          handoff: "move",
-          linked: { board: "shared" },
-        };
-        const taskDelivery = Layer.effect(
-          DeliveryService.DeliveryService,
-          Effect.map(DeliveryService.DeliveryService, (service) => ({
-            ...service,
-            peerHandoff: () =>
-              Effect.succeed({
-                handoff: "move",
-                state: "moving",
-                digest: "0".repeat(64),
-                bytes: 512,
-                to: { peer: "linked", board: "shared" },
-                tasks: 1,
-                bundle,
-              } as const),
-          })),
-        ).pipe(Layer.provide(DeliveryService.layerTest));
-        const b = yield* serveBox(seen, linkSession, taskDelivery);
-        const a = yield* makeLaptop;
-        yield* linkTo(a.links, b, "auto");
-        yield* Ref.set(linkSession, (yield* b.linkedSessions)[0]!.sessionId);
-        const request = {
-          operation: "prepare",
-          taskId: "task",
-          handoff: "move",
-          boardId: "shared",
-        };
-        const result = yield* a.peer.call({
-          environmentId: box.environmentId,
-          tool: "delivery_linked_handoff",
-          arguments: { request },
-          limits: { runtimeMode: "auto", interactionMode: "default" },
-          success: linkedHandoffPeerResult(LinkedHandoffPeerResponses.prepare),
-          maxResponseBytes: 10 * 1024 * 1024,
-        });
-        expect(result.error).toBeNull();
-        expect(JSON.stringify(result.data?.bundle)).toBe(JSON.stringify(bundle));
+it.effect("only a linked MCP client can read a hand-off bundle near the size limit", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const seen = yield* Ref.make<Seen>(nothingSeen);
+      const linkSession = yield* Ref.make("");
+      const bundle = {
+        version: 1,
+        root: "task",
+        tasks: [{ title: "Move me", id: "task" }],
+        handoff: "move",
+        linked: { board: "shared" },
+        extra: "\\".repeat(LINKED_HANDOFF_BUNDLE_MAX_BYTES / 2 - 1024),
+      };
+      const encoded = JSON.stringify(bundle);
+      const bytes = Buffer.byteLength(encoded);
+      expect(bytes).toBeGreaterThan(16_000_000);
+      const taskDelivery = Layer.effect(
+        DeliveryService.DeliveryService,
+        Effect.map(DeliveryService.DeliveryService, (service) => ({
+          ...service,
+          peerHandoff: () =>
+            Effect.succeed({
+              handoff: "move",
+              state: "moving",
+              digest: "0".repeat(64),
+              bytes,
+              to: { peer: "linked", board: "shared" },
+              tasks: 1,
+              bundle,
+            } as const),
+        })),
+      ).pipe(Layer.provide(DeliveryService.layerTest));
+      const b = yield* serveBox(seen, linkSession, taskDelivery);
+      const a = yield* makeLaptop;
+      yield* linkTo(a.links, b, "auto");
+      yield* Ref.set(linkSession, (yield* b.linkedSessions)[0]!.sessionId);
+      const request = {
+        operation: "prepare",
+        taskId: "task",
+        handoff: "move",
+        boardId: "shared",
+      };
+      const result = yield* a.peer.call({
+        environmentId: box.environmentId,
+        tool: "delivery_linked_handoff",
+        arguments: { request },
+        limits: { runtimeMode: "auto", interactionMode: "default" },
+        success: linkedHandoffPeerResult(LinkedHandoffPeerResponses.prepare),
+        maxResponseBytes: LINKED_HANDOFF_MCP_MAX_BYTES,
+      });
+      expect(result.error).toBeNull();
+      expect(JSON.stringify(result.data?.bundle)).toBe(encoded);
 
-        const local = yield* a
-          .call("thread:laptop-full", "delivery_linked_handoff", { request })
-          .pipe(Effect.result);
-        expect(local).not.toMatchObject({ _tag: "Success", success: { isError: false } });
-      }),
-    ).pipe(Effect.provide(NodeHttpServer.layerTest)),
+      const local = yield* a
+        .call("thread:laptop-full", "delivery_linked_handoff", { request })
+        .pipe(Effect.result);
+      expect(local).not.toMatchObject({ _tag: "Success", success: { isError: false } });
+    }),
+  ).pipe(Effect.provide(NodeHttpServer.layerTest)),
 );
 
 it.effect("an agent here works on a linked environment's threads within its own modes", () =>

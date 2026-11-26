@@ -551,7 +551,7 @@ it.effect("refuses to build a thread-bound tool that outside clients would be of
 it.effect.each(["private", "shared", "offline", "wrong-environment", "owner"] as const)(
   "checks thread targets before invoking the handler for %s",
   (visibility) => {
-    const id = ThreadId.make("board-task:work:task-demo");
+    const id = ThreadId.make("thread:delegated-task:command%3Aexample");
     const target = liveThreadShell(id);
     const tools = Toolkit.make(
       Tool.make("test_thread_target", {
@@ -567,30 +567,38 @@ it.effect.each(["private", "shared", "offline", "wrong-environment", "owner"] as
     );
     const owner = visibility === "owner";
     const visible = visibility === "shared";
-    const engineCalls: ThreadId[] = [];
+    let engineCalls = 0;
     const delivery = Layer.effect(
       DeliveryService.DeliveryService,
       Effect.map(DeliveryService.DeliveryService, (service) => ({
         ...service,
-        linkedThread: (threadId) =>
-          Effect.suspend(() => {
-            engineCalls.push(threadId);
-            if (visible || visibility === "wrong-environment")
-              return Effect.succeed({
-                threadId,
-                environmentId: visible
-                  ? fullAccessLinkedClient.environmentId
-                  : EnvironmentId.make("other"),
-                tasks: [{ id: "task-demo", number: 1, kind: "board-thread" }],
-              });
+        threadState: (threadId) =>
+          threadId === id
+            ? Effect.fail(
+                new DeliveryError({ reason: "invalid", detail: "Fixture binding lookup failed." }),
+              )
+            : service.threadState(threadId),
+        linkedThreads: Effect.suspend(() => {
+          engineCalls++;
+          if (visibility === "offline")
             return Effect.fail(
-              new DeliveryError({
-                reason: visibility === "offline" ? "unreachable" : "refused",
-                ...(visibility === "offline" ? {} : { status: 404 }),
-                detail: "Fixture refusal.",
-              }),
+              new DeliveryError({ reason: "unreachable", detail: "Fixture refusal." }),
             );
-          }),
+          return Effect.succeed({
+            threads:
+              visibility === "private"
+                ? []
+                : [
+                    {
+                      threadId: id,
+                      environmentId: visible
+                        ? fullAccessLinkedClient.environmentId
+                        : EnvironmentId.make("other"),
+                      tasks: [{ id: "task-demo", number: 1, kind: "board-thread" }],
+                    },
+                  ],
+          });
+        }),
       })),
     ).pipe(Layer.provide(DeliveryService.layerTest));
     const server = McpHttpServer.toolkitRegistration(
@@ -618,7 +626,7 @@ it.effect.each(["private", "shared", "offline", "wrong-environment", "owner"] as
           targetThreadId: id,
         }),
       ).toBe(expected);
-      expect(engineCalls).toEqual(owner ? [] : [id, id]);
+      expect(engineCalls).toBe(owner ? 0 : 2);
       expect(yield* call("test_thread_target", scope, { threadId: fullAccessThreadId })).toBe(
         "ran",
       );

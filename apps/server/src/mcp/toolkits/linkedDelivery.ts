@@ -11,6 +11,8 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { McpSchema, Tool, Toolkit } from "effect/ai";
 
+import * as ServerEnvironment from "../../environment/ServerEnvironment.ts";
+import * as PeerForwarding from "../../peer/PeerForwarding.ts";
 import * as DeliveryService from "../../delivery/DeliveryService.ts";
 import * as ThreadManagementService from "../../orchestration-v2/ThreadManagementService.ts";
 import * as PeerLinks from "../../peer/PeerLinks.ts";
@@ -27,6 +29,8 @@ const DeliveryLinkedHandoffTool = Tool.make("delivery_linked_handoff", {
     McpInvocationContext.McpInvocationContext,
     ThreadManagementService.ThreadManagementService,
     DeliveryService.DeliveryService,
+    PeerForwarding.PeerForwarding,
+    ServerEnvironment.ServerEnvironment,
   ],
 })
   .annotate(Tool.Readonly, false)
@@ -38,7 +42,12 @@ const DeliveryLinkedHandoffReadTool = Tool.make("delivery_linked_handoff_read", 
   success: LinkedHandoffPeerResult,
   failure: OrchestratorMcpFailure,
   failureMode: "return",
-  dependencies: [McpInvocationContext.McpInvocationContext, DeliveryService.DeliveryService],
+  dependencies: [
+    McpInvocationContext.McpInvocationContext,
+    DeliveryService.DeliveryService,
+    PeerForwarding.PeerForwarding,
+    ServerEnvironment.ServerEnvironment,
+  ],
 })
   .annotate(Tool.Readonly, true)
   .annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenUnlessLinkedDeliveryPeer);
@@ -66,8 +75,8 @@ const linkedHandoff = Effect.fn("mcp.deliveryLinkedHandoff")(function* ({
   readonly request: LinkedHandoffPeerRequest;
 }) {
   const { environmentId } = yield* McpInvocationContext.McpInvocationContext;
-  const delivery = yield* DeliveryService.DeliveryService;
-  return yield* delivery.peerHandoff(request).pipe(
+  const forwarding = yield* PeerForwarding.PeerForwarding;
+  return yield* forwarding.receiveLinkedHandoff(request).pipe(
     Effect.map((data) => ({ environmentId, data, error: null })),
     Effect.catchTags({
       DeliveryError: (error) =>

@@ -17,6 +17,7 @@ import { NO_FILTERS } from "../../lib/deliveryBoard";
 vi.mock("./BoardPicker.browse", () => ({ RepositoryBrowse: () => null }));
 vi.mock("./BoardPicker.branches", () => ({ BaseBranchPicker: () => null }));
 vi.mock("../../state/entities", () => ({ useProjects: () => [] }));
+vi.mock("../../state/peerLinks", () => ({ useLinkedEnvironments: () => new Map() }));
 vi.mock("@tanstack/react-router", () => ({ useNavigate: () => vi.fn() }));
 vi.mock("../../hooks/useHandleNewThread", () => ({ useNewThreadHandler: () => vi.fn() }));
 

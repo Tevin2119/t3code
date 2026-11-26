@@ -23,6 +23,7 @@ import * as Schedule from "effect/Schedule";
 
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as DeliveryService from "./DeliveryService.ts";
+import { linkedReturnPeer } from "./linkedReturn.ts";
 
 type Direction = "send" | "bring";
 type Credentials = Pick<typeof LinkedBringInput.Type, "by" | "key">;
@@ -99,8 +100,10 @@ export function makeLinkedHandoffs(
   actingPeer: (peer: EnvironmentId) => Effect.Effect<{ readonly label: string }, DeliveryError>,
   peerIds: Effect.Effect<ReadonlyArray<EnvironmentId>, DeliveryError>,
   newId: Effect.Effect<string>,
+  returnId: (handoff: string) => Effect.Effect<string, never, ServerEnvironment.ServerEnvironment>,
   resolveArrivalPeer: (
     peer: string,
+    expectedPeer?: EnvironmentId,
   ) => Effect.Effect<EnvironmentId | null, never, ServerEnvironment.ServerEnvironment>,
 ) {
   const owner = Effect.fn("LinkedHandoffs.owner")(function* <A>(
@@ -115,18 +118,25 @@ export function makeLinkedHandoffs(
       .pipe(Effect.flatMap(decode(schema)));
   });
 
-  const sendDestination = Effect.fn("LinkedHandoffs.sendDestination")(function* (taskId: string) {
+  const readArrival = Effect.fn("LinkedHandoffs.readArrival")(function* (
+    taskId: string,
+    expectedPeer?: EnvironmentId,
+  ) {
     if (!isId(taskId)) return yield* invalid;
     const view = yield* owner(taskView, "GET", `/api/tasks/${taskId}`);
     const arrival = view.linkedArrival ?? null;
     const boardId = arrival?.fromBoard;
-    const peerEnvironmentId =
-      !arrival || !boardId
-        ? null
-        : arrival.via === "owner"
-          ? EnvironmentId.make(arrival.peer)
-          : yield* resolveArrivalPeer(arrival.peer);
+    const peerEnvironmentId = !arrival
+      ? null
+      : arrival.via === "owner"
+        ? EnvironmentId.make(arrival.peer)
+        : yield* resolveArrivalPeer(arrival.peer, expectedPeer);
     const destination = peerEnvironmentId && boardId ? { peerEnvironmentId, boardId } : null;
+    return { arrival, destination, peerEnvironmentId };
+  });
+
+  const sendDestination = Effect.fn("LinkedHandoffs.sendDestination")(function* (taskId: string) {
+    const { arrival, destination } = yield* readArrival(taskId);
     return { arrival, destination };
   });
 
@@ -237,23 +247,28 @@ export function makeLinkedHandoffs(
     direction: Direction,
     input: Credentials & { taskId: string },
     target: Destination,
-    handoff: string,
+    requestedHandoff: string,
   ) {
     if (!validKey(input.key))
-      return refused(handoff, "Enter the approval passphrase for this machine.");
+      return refused(requestedHandoff, "Enter the approval passphrase for this machine.");
     const { peerEnvironmentId: peer, boardId } = target;
-    if (![input.taskId, boardId, peer, handoff].every(isId))
-      return refused(handoff, "Invalid hand-off identifier.");
+    if (![input.taskId, boardId, peer, requestedHandoff].every(isId))
+      return refused(requestedHandoff, "Invalid hand-off identifier.");
     const link = yield* actingPeer(peer).pipe(Effect.result);
-    if (Result.isFailure(link)) return refused(handoff, link.failure.detail);
+    if (Result.isFailure(link)) return refused(requestedHandoff, link.failure.detail);
     const prepare =
       direction === "bring"
-        ? peerPhase(peer, { operation: "prepare", taskId: input.taskId, boardId, handoff })
+        ? peerPhase(peer, {
+            operation: "prepare",
+            taskId: input.taskId,
+            boardId,
+            handoff: requestedHandoff,
+          })
         : owner(LinkedHandoffPrepared, "POST", "/api/handoffs/prepare", {
             key: Redacted.value(input.key),
             by: input.by,
             task: input.taskId,
-            handoff,
+            handoff: requestedHandoff,
             to: { peer, board: boardId, name: link.success.label },
             maxBytes: LINKED_HANDOFF_BUNDLE_MAX_BYTES,
           });
@@ -269,16 +284,22 @@ export function makeLinkedHandoffs(
     );
     if (Result.isFailure(prepared)) {
       return uncertain
-        ? needsPerson(handoff, direction, "prepare", "unknown", prepared.failure.detail)
-        : refused(handoff, prepared.failure.detail);
+        ? needsPerson(requestedHandoff, direction, "prepare", "unknown", prepared.failure.detail)
+        : refused(
+            requestedHandoff,
+            prepared.failure.status === 413
+              ? `This task is too large to move. ${prepared.failure.detail}`
+              : prepared.failure.detail,
+          );
     }
-    const { bundle, digest } = prepared.success;
+    const { handoff, bundle, digest } = prepared.success;
     if (
-      prepared.success.handoff !== handoff ||
       bundle.handoff !== handoff ||
       bundle.root !== input.taskId ||
       prepared.success.to.board !== boardId ||
-      (direction === "send" && prepared.success.to.peer !== peer)
+      (direction === "send" &&
+        (prepared.success.to.peer !== peer ||
+          linkedReturnPeer(handoff) !== linkedReturnPeer(requestedHandoff)))
     ) {
       return needsPerson(handoff, direction, "prepare", "unknown", invalid.detail);
     }
@@ -313,12 +334,25 @@ export function makeLinkedHandoffs(
 
   const send = Effect.fn("LinkedHandoffs.send")(function* (input: typeof LinkedSendInput.Type) {
     const handoff = input.handoff ?? (yield* newId);
-    if (input.destination) return yield* move("send", input, input.destination, handoff);
-    const found = yield* sendDestination(input.taskId).pipe(Effect.result);
+    if (linkedReturnPeer(handoff) !== null) return refused(handoff, "Invalid hand-off identifier.");
+    if (input.destination) {
+      const link = yield* actingPeer(input.destination.peerEnvironmentId).pipe(Effect.result);
+      if (Result.isFailure(link)) return refused(handoff, link.failure.detail);
+    }
+    const found = yield* readArrival(input.taskId, input.destination?.peerEnvironmentId).pipe(
+      Effect.result,
+    );
     if (Result.isFailure(found)) return refused(handoff, found.failure.detail);
-    if (found.success.destination === null)
+    const destination = input.destination ?? found.success.destination;
+    if (destination === null)
       return refused(handoff, "Choose a linked machine and its Shared board.");
-    return yield* move("send", input, found.success.destination, handoff);
+    const returning =
+      found.success.arrival?.via === "linked" &&
+      found.success.peerEnvironmentId === destination.peerEnvironmentId;
+    // Keep the return's receipt namespace in the engine's durable hand-off ID.
+    const id = returning ? yield* returnId(handoff) : handoff;
+    if (returning && linkedReturnPeer(id) === null) return refused(handoff, invalid.detail);
+    return yield* move("send", input, destination, id);
   });
 
   const list = Effect.fn("LinkedHandoffs.list")(function* (input: typeof LinkedHandoffsInput.Type) {
@@ -381,7 +415,7 @@ export function makeLinkedHandoffs(
       return refused(handoff, "The hand-off could not be found for that link.");
     if (row.state !== "moving")
       return { handoff, outcome: row.state } satisfies LinkedHandoffOutcome;
-    if (input.mode === "retry") {
+    if (input.mode === "retry" && direction === "send") {
       return yield* move(
         direction,
         { by: input.by, key: input.key, taskId: row.root },
