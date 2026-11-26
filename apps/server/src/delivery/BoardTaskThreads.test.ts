@@ -691,6 +691,11 @@ it.effect("starts the successor once after a restart between its create and firs
     });
     assert.isFalse(store.messages.has(successor));
     const restarted = yield* service(store);
+    // The restarted server holds no claim until the old lease lapses: the hand-off waits for it.
+    yield* restarted.reconcile();
+    assert.equal(engine.linkOf("task-7")?.threadId, THREAD);
+    assert.isFalse(store.messages.has(successor));
+    engine.advance(120_001);
     yield* restarted.reconcile();
     assert.equal(engine.linkOf("task-7")?.threadId, successor);
     assert.isTrue(store.messages.get(successor)?.has(messageId));
@@ -813,6 +818,35 @@ it.effect.each([
     }).pipe(Effect.provide(deliveryLayer(engine, `board-threads-swap-${state}-`)));
   },
 );
+
+it.effect("keeps a lead hand-off pending until this server holds the task claim again", () => {
+  const engine = board({ cap: 1 });
+  const task = engine.addTask({ id: "task-7" });
+  const store = threadStore();
+  return Effect.gen(function* () {
+    const { threads, successor, continuation } = yield* pendingHandoff(engine, store);
+    task.state = "approved";
+    task.lane = "approved";
+    yield* threads.reconcile();
+    assert.isNull(engine.leaseOf("task-7"));
+    engine.addTask({ id: "task-8" });
+    yield* threads.reconcile();
+    assert.isNotNull(engine.leaseOf("task-8"));
+    // Back in work while the cap is reached: the claim is refused, and the hand-off waits for it.
+    task.state = "rework";
+    task.lane = "in-work";
+    yield* threads.reconcile();
+    assert.isNull(engine.leaseOf("task-7"));
+    assert.equal(engine.linkOf("task-7")?.threadId, THREAD);
+    assert.isFalse(store.messages.has(successor));
+    assert.isNull(store.threads.get(THREAD)!.archivedAt);
+    engine.removeTask("task-8");
+    yield* threads.reconcile();
+    assert.isNotNull(engine.leaseOf("task-7"));
+    assert.equal(engine.linkOf("task-7")?.threadId, successor);
+    assert.isTrue(store.messages.get(successor)?.has(continuation));
+  }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-swap-capped-")));
+});
 
 it.effect("stops a lead hand-off when the task it reads before continuing is finished", () => {
   const engine = board();

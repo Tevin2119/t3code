@@ -282,7 +282,7 @@ export const make = Effect.gen(function* () {
   /**
    * The claim of a task whose conversation is this server's, and its heartbeat. A refusal is the
    * engine's answer (the cap is reached, the task is paused, another holder's lease still stands)
-   * and changes nothing here: the next pass asks again.
+   * and changes nothing here: the next pass asks again. Answers whether this server holds it.
    */
   const holdClaim = Effect.fn("BoardTaskThreads.holdClaim")(function* (
     taskId: string,
@@ -295,7 +295,7 @@ export const make = Effect.gen(function* () {
       const renewed = yield* delivery
         .boardThreadAct({ method: "POST", path: `${path}/ack`, body: { holder: held } })
         .pipe(Effect.result);
-      if (renewed._tag === "Success") return;
+      if (renewed._tag === "Success") return true;
       holders.delete(taskId);
     }
     const claimed = yield* delivery
@@ -310,9 +310,11 @@ export const make = Effect.gen(function* () {
         },
       })
       .pipe(Effect.result);
-    if (claimed._tag !== "Success") return;
+    if (claimed._tag !== "Success") return false;
     const decoded = decodeClaimed(claimed.success.body);
-    if (Option.isSome(decoded)) holders.set(taskId, decoded.value.holder);
+    if (Option.isNone(decoded)) return false;
+    holders.set(taskId, decoded.value.holder);
+    return true;
   });
 
   const releaseClaim = Effect.fn("BoardTaskThreads.releaseClaim")(function* (taskId: string) {
@@ -459,9 +461,10 @@ export const make = Effect.gen(function* () {
     readonly cards: Map<string, Card>;
     readonly standings: Map<string, TaskStanding | "deleted">;
     readonly openThreads: ReadonlyArray<BoardThreadRows.BoardThreadRow>;
+    readonly claimed: ReadonlySet<string>;
     readonly environmentId: EnvironmentId;
   }) {
-    const { cards, standings, openThreads, environmentId } = input;
+    const { cards, standings, openThreads, claimed, environmentId } = input;
     const byThread = new Map(openThreads.map((row) => [row.threadId, row]));
     const pending = new Set<ThreadId>();
     // Both rows must remain open until the continuation and link move finish.
@@ -486,6 +489,8 @@ export const make = Effect.gen(function* () {
         // The successor continues the lead's work: a task out of work, such as a split parent,
         // keeps both threads until it is back in work.
         if (!boardTaskInWork(task)) break;
+        // Only under this server's claim: one refused, as at the task cap, waits for a later pass.
+        if (!claimed.has(taskId)) break;
         const resumed = yield* swaps
           .resumeBoardLeadHandoff(row.task, shell, shell.latestRunId)
           .pipe(Effect.result);
@@ -585,6 +590,7 @@ export const make = Effect.gen(function* () {
       const openThreads = yield* local(rows.list({ archived: false }));
       const standings = yield* standingsOf(cards, openThreads);
       const steering = new Set<string>();
+      const claimed = new Set<string>();
       for (const [taskId, task] of standings) {
         if (task === "deleted") continue;
         const link = task.boardThread;
@@ -594,9 +600,9 @@ export const make = Effect.gen(function* () {
           continue;
         }
         steering.add(taskId);
-        yield* holdClaim(taskId, environmentId, link.threadId);
+        if (yield* holdClaim(taskId, environmentId, link.threadId)) claimed.add(taskId);
       }
-      yield* settleEnded({ cards, standings, openThreads, environmentId });
+      yield* settleEnded({ cards, standings, openThreads, claimed, environmentId });
       // Moved tasks are worked on another machine: their conversation is not told from here.
       const mirrored = [...cards.values()].filter((card) => !MOVED.has(card.state));
       if (key !== undefined)
