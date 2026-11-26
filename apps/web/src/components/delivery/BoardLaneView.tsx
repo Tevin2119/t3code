@@ -64,6 +64,7 @@ export const CardFace = memo(function CardFace(props: {
   /** In the queue lane: its place in line, or null when it is not in line. Undefined elsewhere. */
   readonly queuePlace?: number | null | undefined;
 }) {
+  const gt = useGT();
   const { card } = props;
   const waitsOnPerson = card.waitingOn === "person" && card.lane !== "draft";
   const rework = reworkOf(card);
@@ -90,7 +91,7 @@ export const CardFace = memo(function CardFace(props: {
           </span>
         ) : null}
         <span className="ml-auto flex items-center gap-1.5">
-          <Age at={card.updated} now={props.now} label="Last changed" />
+          <Age at={card.updated} now={props.now} label={gt("Last changed")} />
           {props.menu}
         </span>
       </div>
@@ -136,6 +137,7 @@ function DraggableCard(props: {
   readonly onPickTag: (tag: string) => void;
   readonly queuePlace?: number | null | undefined;
 }) {
+  const gt = useGT();
   const { card } = props;
   const drag = useDraggable({ id: `card:${card.id}`, data: { card } });
   const drop = useDroppable({ id: `over:${card.id}`, data: { lane: card.lane, before: card.id } });
@@ -174,7 +176,7 @@ function DraggableCard(props: {
                 render={
                   <button
                     type="button"
-                    aria-label={`What can be done with #${card.number}`}
+                    aria-label={gt("What can be done with #{number}", { number: card.number })}
                     className="flex size-4 cursor-pointer items-center justify-center rounded text-muted-foreground hover:text-foreground"
                     onClick={(event) => event.stopPropagation()}
                     onPointerDown={(event) => event.stopPropagation()}
@@ -232,6 +234,7 @@ export function Lane(props: {
   readonly onAction: (card: DeliveryCard, action: string) => void;
   readonly onPickTag: (tag: string) => void;
 }) {
+  const gt = useGT();
   const { lane } = props;
   const m = useMessages();
   const title = boardLaneTitle(lane.lane, m, lane.title);
@@ -283,15 +286,17 @@ export function Lane(props: {
         <button
           type="button"
           onClick={props.onToggle}
-          aria-label={`Open ${title}`}
+          aria-label={gt("Open {title}", { title })}
           className="flex flex-1 cursor-pointer flex-col items-center gap-2 py-2 text-xs text-muted-foreground"
         >
           <span className="font-mono" data-lane-count>
             {lane.cards.length}
           </span>
-          <span className="[writing-mode:vertical-rl]">{title}</span>
+          <span style={{ writingMode: "vertical-rl" }}>{title}</span>
           {props.dragged && offer ? (
-            <span className="text-3xs [writing-mode:vertical-rl]">{offer}</span>
+            <span className="text-3xs" style={{ writingMode: "vertical-rl" }}>
+              {offer}
+            </span>
           ) : null}
         </button>
       </section>
@@ -326,7 +331,7 @@ export function Lane(props: {
         <button
           type="button"
           onClick={props.onToggle}
-          aria-label={`Fold ${title}`}
+          aria-label={gt("Fold {title}", { title })}
           className="ml-auto flex size-4 cursor-pointer items-center justify-center text-muted-foreground hover:text-foreground"
         >
           <ChevronsLeftRightIcon className="size-3" />

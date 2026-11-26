@@ -99,7 +99,11 @@ const handlers = {
   delivery_linked_origin: McpToolAccess.reads(
     Effect.fn("mcp.deliveryLinkedOrigin")(function* (input: typeof LinkedArrivalProofInput.Type) {
       const scope = yield* McpInvocationContext.McpInvocationContext;
-      if (scope.client?.linked !== true || !scope.capabilities.has("orchestration")) {
+      if (
+        scope.client?.linked !== true ||
+        scope.client.access === "read-only" ||
+        !scope.capabilities.has("orchestration")
+      ) {
         return yield* new OrchestratorMcpFailure({
           code: "capability_denied",
           message: "A delivery peer link is required.",
@@ -107,7 +111,7 @@ const handlers = {
       }
       const links = yield* PeerLinks.PeerLinks;
       const proof = yield* links
-        .arrivalProof(input.environmentId, input.challenge, input.claim)
+        .arrivalProof(input.environmentId, input.challenge, input.claim, scope.client.sessionId)
         .pipe(Effect.orElseSucceed(() => null));
       return { environmentId: scope.environmentId, proof };
     }),

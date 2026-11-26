@@ -1,3 +1,4 @@
+import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as DeliveryService from "../delivery/DeliveryService.ts";
 import { isDeliveryTiedThread } from "../delivery/linkedThreadAccess.ts";
 import {
@@ -7,6 +8,7 @@ import {
   PEER_LINK_THREAD_HISTORY_ROUTE,
   PEER_LINK_THREAD_ITEM_ROUTE,
   PEER_LINK_THREAD_STREAM_ROUTE,
+  type EnvironmentId,
   ThreadId,
   TurnItemId,
 } from "@t3tools/contracts";
@@ -46,6 +48,7 @@ const refusal = (status: number, error: string) =>
  */
 const admitLink = Effect.fn("linkThreadHttp.admitLink")(function* (
   delivery: DeliveryService.DeliveryService["Service"],
+  environmentId: EnvironmentId,
 ) {
   const request = yield* HttpServerRequest.HttpServerRequest;
   if (request.headers.origin !== undefined) return refusal(403, "origin_not_allowed");
@@ -70,10 +73,19 @@ const admitLink = Effect.fn("linkThreadHttp.admitLink")(function* (
   if (shell.value === null || shell.value.deletedAt !== null) {
     return refusal(404, "thread_not_found");
   }
-  if (yield* isDeliveryTiedThread(shell.value, delivery)) return refusal(404, "thread_not_found");
+  const resolvedId = shell.value.id;
+  const deliveryTied = Effect.gen(function* () {
+    const ownerTied = yield* delivery.ownerTiedThreads(environmentId).pipe(Effect.option);
+    if (ownerTied._tag === "None") return true;
+    const current = yield* threads.getThreadShell(resolvedId).pipe(Effect.option);
+    if (current._tag === "None" || current.value === null || current.value.deletedAt !== null)
+      return true;
+    return yield* isDeliveryTiedThread(current.value, threads, delivery, ownerTied.value);
+  });
+  if (yield* deliveryTied) return refusal(404, "thread_not_found");
   return {
     threadId: shell.value.id,
-    deliveryTied: isDeliveryTiedThread(shell.value, delivery),
+    deliveryTied,
     params,
     linkExpiresAt: client.value.linkExpiresAt,
     /** Completes once the link's session or the beta no longer admits it. */
@@ -99,12 +111,15 @@ const withLinkExpiry = (
       );
 
 // The owner's thread subscription with a bounded snapshot: the same items, in the same order.
-const streamRoute = (delivery: DeliveryService.DeliveryService["Service"]) =>
+const streamRoute = (
+  delivery: DeliveryService.DeliveryService["Service"],
+  environmentId: EnvironmentId,
+) =>
   HttpRouter.add(
     "GET",
     PEER_LINK_THREAD_STREAM_ROUTE,
     Effect.gen(function* () {
-      const admitted = yield* admitLink(delivery);
+      const admitted = yield* admitLink(delivery, environmentId);
       if (HttpServerResponse.isHttpServerResponse(admitted)) return admitted;
       const items = yield* subscribeOrchestrationV2Thread({
         threadId: admitted.threadId,
@@ -126,12 +141,15 @@ const streamRoute = (delivery: DeliveryService.DeliveryService["Service"]) =>
     }),
   );
 
-const historyRoute = (delivery: DeliveryService.DeliveryService["Service"]) =>
+const historyRoute = (
+  delivery: DeliveryService.DeliveryService["Service"],
+  environmentId: EnvironmentId,
+) =>
   HttpRouter.add(
     "GET",
     PEER_LINK_THREAD_HISTORY_ROUTE,
     Effect.gen(function* () {
-      const admitted = yield* admitLink(delivery);
+      const admitted = yield* admitLink(delivery, environmentId);
       if (HttpServerResponse.isHttpServerResponse(admitted)) return admitted;
       const cursor = admitted.params.get("cursor");
       if (!cursor) return refusal(400, "invalid_request");
@@ -147,12 +165,15 @@ const historyRoute = (delivery: DeliveryService.DeliveryService["Service"]) =>
     }),
   );
 
-const itemRoute = (delivery: DeliveryService.DeliveryService["Service"]) =>
+const itemRoute = (
+  delivery: DeliveryService.DeliveryService["Service"],
+  environmentId: EnvironmentId,
+) =>
   HttpRouter.add(
     "GET",
     PEER_LINK_THREAD_ITEM_ROUTE,
     Effect.gen(function* () {
-      const admitted = yield* admitLink(delivery);
+      const admitted = yield* admitLink(delivery, environmentId);
       if (HttpServerResponse.isHttpServerResponse(admitted)) return admitted;
       const itemId = admitted.params.get("item");
       if (!itemId) return refusal(400, "invalid_request");
@@ -170,7 +191,14 @@ const itemRoute = (delivery: DeliveryService.DeliveryService["Service"]) =>
 
 /** What an environment serves of its threads to the environments linked to it. */
 export const layer = Layer.unwrap(
-  Effect.map(DeliveryService.DeliveryService, (delivery) =>
-    Layer.mergeAll(streamRoute(delivery), historyRoute(delivery), itemRoute(delivery)),
-  ),
+  Effect.gen(function* () {
+    const delivery = yield* DeliveryService.DeliveryService;
+    const environment = yield* ServerEnvironment.ServerEnvironment;
+    const environmentId = yield* environment.getEnvironmentId;
+    return Layer.mergeAll(
+      streamRoute(delivery, environmentId),
+      historyRoute(delivery, environmentId),
+      itemRoute(delivery, environmentId),
+    );
+  }),
 );

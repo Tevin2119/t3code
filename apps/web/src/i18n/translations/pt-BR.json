@@ -12974,5 +12974,218 @@
   "e08c37434e7fbfbf": "Critérios de aceitação",
   "867ed85dc890c39b": "Sem registro",
   "e930f65d1606dd38": "Abrir conversa",
-  "d8532b5c00f44081": "Funções"
+  "d8532b5c00f44081": "Funções",
+  "fda83a6b3294a29c": "Approval passphrase or terminal key",
+  "e2b2aaae906c6e67": "Last changed",
+  "04385a66a5c67804": "What can be done with #{number}",
+  "e18edd65c6de2ffe": "Fold {title}",
+  "3b236c3471de197f": "Board visibility for linked machines",
+  "c093c0bb6dbb6160": "Shared with linked machines",
+  "52d06e856c3ed277": "Linked machines",
+  "b383ca29c24ee6e9": "Shared with linked machines means anyone on a machine linked to this one can see and act on this board. Private means no linked machine is shown it.",
+  "9c638fc860071788": "This connection cannot change the board's visibility.",
+  "0c53fef866977e24": "Board",
+  "193bebb3e3a4594d": "{count, plural, one {{count} task} other {{count} tasks}}",
+  "447a508babfb7c12": " · {count} waiting on you",
+  "bb30838fe2e2a6fe": " · {count} questions",
+  "2b2b4a84516ac6a5": " · shared boards",
+  "e7a16603afd75e38": "This link is read-only.",
+  "f14e6f595602b66a": "This environment is unavailable. Choose an added environment or open Connections settings.",
+  "584a3bfeed5ad428": "The linked machines could not be read. ",
+  "591b50bb9feeaa3f": [
+    "Boards ",
+    {
+      "i": 1,
+      "k": "_gt_value_1",
+      "v": "v"
+    },
+    " shares with machines linked to it. The machine that owns a board chooses whether to share it."
+  ],
+  "9d57886b369c5d6c": [
+    "Reading ",
+    {
+      "i": 1,
+      "k": "_gt_value_1",
+      "v": "v"
+    },
+    "'s boards..."
+  ],
+  "29f968465efbebe3": [
+    "No boards are shared with this machine. ",
+    {
+      "i": 1,
+      "k": "_gt_value_1",
+      "v": "v"
+    },
+    " chooses which boards it shares."
+  ],
+  "b4e1c41c8deed03a": "Read the machines again",
+  "016bc24407015f6b": "Searching...",
+  "c9266e305ae713eb": "No matching tasks.",
+  "7ca99f76a119768b": "Task moved.",
+  "beb3475dedefd82a": "The task was restored on its source machine.",
+  "cd32ec2e24f6df78": "{source} holds the frozen source task.",
+  "c683cb8ae310ff95": "{source} has not confirmed the source task's state.",
+  "8c768e3e9d14c2fd": "{destination} holds the paused copy.",
+  "c11edd968ecd139f": "{destination} confirmed the task did not arrive.",
+  "ee12b2fe4b107a0c": "{destination} already holds work with these task IDs.",
+  "8ef35302f4f4be73": "{destination} has not confirmed receipt.",
+  "2093936733fa43b0": "You can finish the move later from Task moves on the Board.",
+  "f06ac78671907a0e": "Task moved",
+  "a400da85c6d08f64": "Bring to this machine",
+  "0ea646ae9c18bc9b": "Destination board",
+  "2c847b6933a5d474": "Choose a board",
+  "1866d4264993fe34": "Destination machine",
+  "0a7854f0f445fbfe": "Choose a shared board",
+  "0cd296dfc41f762f": " It will become visible to machines linked to {machine}.",
+  "ca939419aebccd4f": "Task moves",
+  "8d4abd050ce60cf9": "{task} · from {machine}",
+  "1048c73fd336b183": "{task} · to {machine}",
+  "e8160af41ecb5aa8": "Retry move",
+  "32e9b4a4f152f009": "Settle move",
+  "afb0cccffb05c6d1": "Try sending the task again.",
+  "876721ad2962626c": "Check which machine holds the task. If it never arrived, restore it on the source machine.",
+  "a3385bc3bd67537c": "Use the approval passphrase or terminal key for this machine.",
+  "0b8084c125eb1207": "Bring to this machine",
+  "f972146508ff1040": [
+    "The task will arrive paused on",
+    " ",
+    {
+      "t": "strong",
+      "i": 1,
+      "c": {
+        "i": 2,
+        "k": "_gt_value_2",
+        "v": "v"
+      }
+    },
+    " ",
+    "and take its visibility (",
+    {
+      "i": 3,
+      "k": "_gt_value_3",
+      "v": "v"
+    },
+    ")."
+  ],
+  "4aa4720e0ed97a08": "The delivery engine returned an incompatible board list.",
+  "c3cf9a6388ced893": "This machine has no destination boards.",
+  "f2ed4fff3c94994f": "Send back",
+  "81c727916404fb7a": "Send to linked machine",
+  "f187e54e90500224": "Finding the original board…",
+  "b28d8064e30e2024": "The original machine or board is unknown or unreachable.",
+  "d21d295475e5ead3": [
+    "Original board ",
+    {
+      "i": 1,
+      "k": "_gt_value_1",
+      "v": "v"
+    },
+    " on ",
+    {
+      "i": 2,
+      "k": "_gt_value_2",
+      "v": "v"
+    },
+    "."
+  ],
+  "ade69df6b4e69a5d": "The destination machine is unreachable or no longer linked.",
+  "8e4d6441c0d1065c": "No linked machines are available.",
+  "e3f992fffddf1e43": [
+    "The link to ",
+    {
+      "i": 1,
+      "k": "_gt_value_1",
+      "v": "v"
+    },
+    " is read-only."
+  ],
+  "c51bc15963444033": "The original board is unavailable. It may be private.",
+  "2f9237052b373b9f": [
+    {
+      "i": 1,
+      "k": "_gt_value_1",
+      "v": "v"
+    },
+    " has no Shared boards."
+  ],
+  "712743645ff77dab": [
+    "The task will arrive paused on",
+    " ",
+    {
+      "t": "strong",
+      "i": 1,
+      "c": {
+        "i": 2,
+        "k": "_gt_value_2",
+        "v": "v"
+      }
+    },
+    " ",
+    "on",
+    " ",
+    {
+      "t": "strong",
+      "i": 3,
+      "c": {
+        "i": 4,
+        "k": "_gt_value_4",
+        "v": "v"
+      }
+    },
+    ", Shared with linked machines."
+  ],
+  "e246ad25787de0d6": "This task is Hidden from linked machines here.",
+  "85edb498fdbb0d87": "Task moves",
+  "35f741a9206a7ddf": "Reading task moves…",
+  "77f77fd9f72e02d3": "There are no interrupted moves on the machines that answered.",
+  "e37e4ab76d0c08a1": [
+    "Could not read moves from",
+    " ",
+    {
+      "i": 1,
+      "k": "_gt_value_1",
+      "v": "v"
+    },
+    "."
+  ],
+  "efb0f64eb34557ae": "The link is read-only.",
+  "9f52ea3133da8ea4": "Task",
+  "90ff7a348a250358": "Refresh task",
+  "e60babeba5c766ef": "This environment is unavailable. Choose an added environment.",
+  "3289c4cdd6614585": "Reading the task...",
+  "20ee89cd86edf5ab": "This link is read-only.",
+  "3da7ba25e64c69d9": "This connection cannot act on tasks on that machine.",
+  "8cfaa098250ffd84": "Priority",
+  "af4706ab3403ca6c": "Now",
+  "0538b6bc1ade7217": "Blocked by",
+  "ab5093cfaea3c0ae": "Tags",
+  "e97e409bef7c68db": "Owner",
+  "cba14589b921cce4": "Reply to question {question}",
+  "079116dae2b24bdb": "{author}, team",
+  "d1c3ffafc43f060f": "Write to the task",
+  "4ecfb0cc1ac4d556": "Write to the task: a message for the record, or an instruction for the work",
+  "85f00c37ec048927": "The task could not be read. ",
+  "ba4f61d54be0e36c": "Back to the board",
+  "26fd2dba1aa7dec3": "Questions",
+  "2a30fc2634766ea1": "Conversation",
+  "82f70a50364b9d1d": "Timeline",
+  "f40e138b5124280c": [
+    {
+      "i": 1,
+      "k": "_gt_value_1",
+      "v": "v"
+    },
+    " asked · ",
+    {
+      "i": 2,
+      "k": "_gt_value_2",
+      "v": "v"
+    }
+  ],
+  "23cedadd195e727a": "Answer in my own words",
+  "b8591f901daf77a1": "Send reply",
+  "2750acd6cf1c03c1": "Send message",
+  "76d2be8ba55dd53e": "Give the instruction",
+  "4ef37f3ba7c9e6ba": "An instruction reaches every seat at work; the step starts again with it once they have ended."
 }

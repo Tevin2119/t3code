@@ -16,9 +16,10 @@ import {
   type DeliverySetThreadLineupInput,
   type DeliveryResponse,
   type DeliveryThreadState,
-  type ThreadId,
-  type AuthMcpClientAccess,
+  ThreadId,
+  type EnvironmentId,
   LinkedDeliveryRead,
+  LinkedHandoffPeerId,
   LinkedDeliveryId,
   LINKED_HANDOFF_BUNDLE_MAX_BYTES,
   LinkedHandoffPeerRequest,
@@ -198,7 +199,28 @@ const linkedRefusal = (status: 403 | 404) =>
     detail: "The delivery operation is unavailable.",
   });
 
-const validLinkedId = Schema.is(LinkedDeliveryId);
+const validPeerId = Schema.is(LinkedHandoffPeerId);
+const validDeliveryId = Schema.is(LinkedDeliveryId);
+const OwnerThreadRef = Schema.Struct({
+  environmentId: Schema.String.check(Schema.isPattern(/^[^\s\p{C}/]{1,256}$/u)),
+  threadId: ThreadId.check(Schema.isPattern(/^[^\s\p{C}]{1,1024}$/u)),
+});
+const OwnerTask = Schema.Struct({
+  id: LinkedDeliveryId,
+  origin: Schema.String,
+  boardThread: Schema.NullOr(OwnerThreadRef),
+});
+const OwnerTaskCards = Schema.Array(OwnerTask);
+const OwnerTaskEvents = Schema.Array(
+  Schema.Struct({
+    kind: Schema.String,
+    task: Schema.NullOr(Schema.String),
+    data: Schema.Unknown,
+  }),
+);
+const OwnerBoardThreadEvent = Schema.Struct({ boardThread: OwnerThreadRef });
+const OwnerTaskOriginEvent = Schema.Struct({ origin: Schema.String });
+const originPattern = /^thread:([^\s\p{C}/]{1,256})\/([^\s\p{C}]{1,1024})$/u;
 
 const encodeBundleJson = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
 
@@ -246,6 +268,9 @@ export class DeliveryService extends Context.Service<
       path: string,
       body?: unknown,
     ) => Effect.Effect<unknown, DeliveryError>;
+    readonly ownerTiedThreads: (
+      environmentId: EnvironmentId,
+    ) => Effect.Effect<ReadonlySet<ThreadId>, DeliveryError>;
     readonly linkedThreads: Effect.Effect<typeof LinkedDeliveryThreads.Type, DeliveryError>;
     readonly setBoardLinkedVisibility: (
       input: typeof DeliverySetBoardLinkedVisibility.Type,
@@ -318,6 +343,9 @@ export const layerTest = Layer.succeed(
     actLinked: disabled,
     peerHandoff: disabled,
     ownerHandoffRequest: disabled,
+    ownerTiedThreads: Effect.fn("DeliveryService.ownerTiedThreads")(() =>
+      Effect.succeed(new Set<ThreadId>()),
+    ),
     linkedThreads: disabled(),
     setBoardLinkedVisibility: disabled,
     setTaskLinkedHidden: disabled,
@@ -467,16 +495,25 @@ const make = Effect.fn("DeliveryService.make")(function* (
     { until: number; read: Effect.Effect<DeliveryResponse, DeliveryError> }
   >();
   const discoveryLock = yield* Semaphore.make(1);
-  const linkedThreadCache = new Map<
-    AuthMcpClientAccess,
-    { engineUrl: string; until: number; value: typeof LinkedDeliveryThreads.Type }
-  >();
+  const threadIndexLock = yield* Semaphore.make(1);
+  let linkedThreadCache:
+    | { engineUrl: string; until: number; value: typeof LinkedDeliveryThreads.Type }
+    | undefined;
+  let ownerThreadCache:
+    | {
+        engineUrl: string;
+        environmentId: EnvironmentId;
+        until: number;
+        value: Effect.Effect<ReadonlySet<ThreadId>, DeliveryError>;
+      }
+    | undefined;
   let discoveryGeneration = 0;
   let discoveryConfiguration = "";
   const invalidateDiscovery = () => {
     discoveryGeneration++;
     discoveryCache.clear();
-    linkedThreadCache.clear();
+    linkedThreadCache = undefined;
+    ownerThreadCache = undefined;
   };
 
   const readHealth = Effect.fn("DeliveryService.readHealth")(
@@ -563,7 +600,9 @@ const make = Effect.fn("DeliveryService.make")(function* (
       });
   });
   const isPeerInvocation = Effect.serviceOption(McpInvocationContext.McpInvocationContext).pipe(
-    Effect.map((scope) => Option.getOrUndefined(scope)?.client?.linked === true),
+    Effect.map((scope) =>
+      McpInvocationContext.isLinkedDeliveryCaller(Option.getOrUndefined(scope)),
+    ),
   );
   const requireOwner = isPeerInvocation.pipe(
     Effect.flatMap((isPeer) => (isPeer ? Effect.fail(linkedRefusal(403)) : Effect.void)),
@@ -577,12 +616,26 @@ const make = Effect.fn("DeliveryService.make")(function* (
       observedHealth?: { engineUrl: string; response: DeliveryResponse },
       expectedConfiguration?: string,
       dispatchDeadline?: number,
-      format?: "json" | "binary" | "linked-handoff" | "owner-handoff",
+      format?: "json" | "binary" | "linked-handoff" | "owner-handoff" | "owner-thread-index",
     ) {
-      const linked = format !== undefined && format !== "owner-handoff";
+      const linked = format === "json" || format === "binary" || format === "linked-handoff";
       const handoff = format === "linked-handoff" || format === "owner-handoff";
-      const limit = handoff ? LINKED_HANDOFF_BUNDLE_MAX_BYTES + 1_048_576 : 1_048_576;
-      if ((yield* isPeerInvocation) !== linked) return yield* linkedRefusal(403);
+      const preparesBundle =
+        method === "POST" &&
+        (enginePath === "/api/handoffs/prepare" ||
+          /^\/api\/linked\/tasks\/[\w-]+\/handoff$/.test(enginePath));
+      const limit =
+        handoff && preparesBundle
+          ? LINKED_HANDOFF_BUNDLE_MAX_BYTES + 1_048_576
+          : format === "owner-thread-index"
+            ? 16 * 1_048_576
+            : 1_048_576;
+      if (linked) {
+        const scope = yield* Effect.serviceOption(McpInvocationContext.McpInvocationContext);
+        if (Option.getOrUndefined(scope)?.client?.linked !== true) return yield* linkedRefusal(403);
+      } else if (format !== "owner-thread-index" && (yield* isPeerInvocation)) {
+        return yield* linkedRefusal(403);
+      }
       if (expectedConfiguration !== undefined) yield* assertConfiguration(expectedConfiguration);
       const settings = yield* delivery;
       if (method !== "GET") invalidateDiscovery();
@@ -978,7 +1031,7 @@ const make = Effect.fn("DeliveryService.make")(function* (
         detail: "The reciprocal link for this return could not be verified.",
       });
     const peer = returnPeer ?? client.sessionId;
-    if (!validLinkedId(peer)) return yield* linkedRefusal(403);
+    if (!validPeerId(peer)) return yield* linkedRefusal(403);
     const read = operation === "list" || operation === "get";
     if (!read && client.access === "read-only") return yield* linkedRefusal(403);
     const acting = { access: "act", peer };
@@ -1098,6 +1151,7 @@ const make = Effect.fn("DeliveryService.make")(function* (
   const setThreadLineup = Effect.fn("DeliveryService.setThreadLineup")(function* (
     input: DeliverySetThreadLineupInput,
   ) {
+    yield* requireOwner;
     yield* storeReadable;
     if (input.orchestration !== null) yield* checkParticipants(input.orchestration.participants);
     const had = lineups.has(input.threadId);
@@ -1142,6 +1196,7 @@ const make = Effect.fn("DeliveryService.make")(function* (
     input: DeliveryBindThreadInput,
     configuration?: string,
   ) {
+    yield* requireOwner;
     yield* storeReadable;
     if (input.orchestration !== undefined) {
       yield* checkParticipants(input.orchestration.participants);
@@ -1298,6 +1353,7 @@ const make = Effect.fn("DeliveryService.make")(function* (
     threadId: ThreadId,
     configuration: string,
   ) {
+    yield* requireOwner;
     yield* storeReadable;
     const existing = bindings.get(threadId);
     if (!existing)
@@ -1319,6 +1375,7 @@ const make = Effect.fn("DeliveryService.make")(function* (
   });
 
   const releaseThread = Effect.fn("DeliveryService.releaseThread")(function* (threadId: ThreadId) {
+    yield* requireOwner;
     yield* storeReadable;
     if (bindings.has(threadId)) {
       return yield* new DeliveryError({
@@ -1453,8 +1510,7 @@ const make = Effect.fn("DeliveryService.make")(function* (
             ),
             Effect.orElseSucceed(() => undefined),
           );
-    const scope = yield* Effect.serviceOption(McpInvocationContext.McpInvocationContext);
-    if (Option.getOrUndefined(scope)?.client?.linked === true) {
+    if (yield* isPeerInvocation) {
       return {
         ...Discovery.emptyDiscovery(
           input,
@@ -1996,33 +2052,128 @@ const make = Effect.fn("DeliveryService.make")(function* (
         )).body;
       },
     ),
-    linkedThreads: Effect.gen(function* () {
-      const scope = yield* Effect.serviceOption(McpInvocationContext.McpInvocationContext);
-      const client = Option.getOrUndefined(scope)?.client;
-      if (client?.linked !== true) return yield* linkedRefusal(403);
-      const settings = yield* delivery;
-      if (!settings.enabled) return yield* linkedRefusal(403);
-      const now = yield* Clock.currentTimeMillis;
-      const cached = linkedThreadCache.get(client.access);
-      if (cached?.engineUrl === settings.engineUrl && now < cached.until) return cached.value;
-      const generation = discoveryGeneration;
-      const value = yield* linkedRequest("GET", "threads").pipe(
-        Effect.flatMap(decodeEngine(LinkedDeliveryThreads)),
-      );
-      const current = yield* delivery;
-      if (
-        generation !== discoveryGeneration ||
-        !current.enabled ||
-        current.engineUrl !== settings.engineUrl
-      )
-        return yield* linkedRefusal(404);
-      linkedThreadCache.set(client.access, {
-        engineUrl: settings.engineUrl,
-        until: now + 3_000,
-        value,
-      });
-      return value;
-    }),
+    ownerTiedThreads: Effect.fn("DeliveryService.ownerTiedThreads")(
+      function* (environmentId) {
+        const settings = yield* delivery;
+        if (!settings.enabled) return yield* linkedRefusal(403);
+        const now = yield* Clock.currentTimeMillis;
+        if (
+          ownerThreadCache?.engineUrl === settings.engineUrl &&
+          ownerThreadCache.environmentId === environmentId &&
+          now < ownerThreadCache.until
+        )
+          return yield* ownerThreadCache.value;
+        const generation = discoveryGeneration;
+        const get = Effect.fn("DeliveryService.readOwnerThreadIndex")(function* <A>(
+          path: string,
+          schema: Schema.Decoder<A>,
+        ) {
+          const { body } = yield* request(
+            "GET",
+            path,
+            undefined,
+            true,
+            undefined,
+            undefined,
+            undefined,
+            "owner-thread-index",
+          );
+          return yield* decodeEngine(schema)(body);
+        });
+        const read = Effect.gen(function* () {
+          const [cards, events] = yield* Effect.all(
+            [
+              get("/api/tasks?set=all&limit=500", OwnerTaskCards),
+              get("/api/events", OwnerTaskEvents),
+            ],
+            { concurrency: 2 },
+          );
+          const ids = new Set<ThreadId>();
+          const indexedTasks = new Set<string>();
+          const arrivals = new Set<string>();
+          const invalidOrigin = new DeliveryError({
+            reason: "invalid",
+            detail: "The task origin is incompatible.",
+          });
+          const addOrigin = Effect.fn("DeliveryService.indexTaskOrigin")(function* (
+            origin: string,
+          ) {
+            if (!origin.startsWith("thread:")) return;
+            const match = originPattern.exec(origin);
+            if (match === null) return yield* invalidOrigin;
+            if (match[1] === environmentId && match[2] !== undefined)
+              ids.add(ThreadId.make(match[2]));
+          });
+          const addCard = Effect.fn("DeliveryService.indexTaskCard")(function* (
+            card: typeof OwnerTask.Type,
+          ) {
+            yield* addOrigin(card.origin);
+            indexedTasks.add(card.id);
+            if (card.boardThread?.environmentId === environmentId)
+              ids.add(card.boardThread.threadId);
+          });
+          for (const card of cards) yield* addCard(card);
+          // Search caps the cards and omits nested triage parts. The journal covers both.
+          for (const { kind, data, task } of events) {
+            if (kind === "task.board-thread-set") {
+              const { boardThread } = yield* decodeEngine(OwnerBoardThreadEvent)(data);
+              if (boardThread.environmentId === environmentId) ids.add(boardThread.threadId);
+            } else if (kind === "task.drafted" || kind === "task.filed") {
+              const { origin } = yield* decodeEngine(OwnerTaskOriginEvent)(data);
+              yield* addOrigin(origin);
+              if (task !== null) indexedTasks.add(task);
+            } else if (kind === "task.arrived") {
+              if (task === null || !validDeliveryId(task)) return yield* invalidOrigin;
+              arrivals.add(task);
+            }
+          }
+          // A transfer can omit its original filing event.
+          yield* Effect.forEach(
+            [...arrivals].filter((id) => !indexedTasks.has(id)),
+            (id) => get(`/api/tasks/${id}`, OwnerTask).pipe(Effect.flatMap(addCard)),
+            { concurrency: 4, discard: true },
+          );
+          return ids;
+        });
+        const value = yield* Effect.cached(read);
+        if (generation === discoveryGeneration) {
+          ownerThreadCache = {
+            engineUrl: settings.engineUrl,
+            environmentId,
+            until: now + 3_000,
+            value,
+          };
+        }
+        const ids = yield* value;
+        if (generation !== discoveryGeneration) return yield* linkedRefusal(404);
+        return ids;
+      },
+      (effect) => threadIndexLock.withPermit(effect),
+    ),
+    linkedThreads: threadIndexLock.withPermit(
+      Effect.gen(function* () {
+        const scope = yield* Effect.serviceOption(McpInvocationContext.McpInvocationContext);
+        if (Option.getOrUndefined(scope)?.client?.linked !== true) return yield* linkedRefusal(403);
+        const settings = yield* delivery;
+        if (!settings.enabled) return yield* linkedRefusal(403);
+        const now = yield* Clock.currentTimeMillis;
+        const cached = linkedThreadCache;
+        if (cached?.engineUrl === settings.engineUrl && now < cached.until) return cached.value;
+        const generation = discoveryGeneration;
+        const value = yield* linkedRequest("GET", "threads").pipe(
+          Effect.flatMap(decodeEngine(LinkedDeliveryThreads)),
+        );
+        const current = yield* delivery;
+        if (
+          generation !== discoveryGeneration ||
+          !current.enabled ||
+          current.engineUrl !== settings.engineUrl
+        )
+          return yield* linkedRefusal(404);
+        linkedThreadCache = { engineUrl: settings.engineUrl, until: now + 3_000, value };
+        return value;
+      }),
+    ),
     setBoardLinkedVisibility: Effect.fn("DeliveryService.setBoardLinkedVisibility")(
       function* (raw) {
         const { boardId, ...body } = yield* decodeEngine(DeliverySetBoardLinkedVisibility)(raw);

@@ -1,3 +1,4 @@
+import { T, Var, useGT } from "gt-react";
 import { useAtomValue } from "@effect/atom-react";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import {
@@ -70,6 +71,7 @@ function MoveDialog(props: {
     key: Redacted.Redacted<string>;
   }) => Promise<LinkedHandoffOutcome>;
 }) {
+  const gt = useGT();
   const by = usePersonName();
   const [key, setKey] = useState("");
   const [busy, setBusy] = useState(false);
@@ -91,7 +93,7 @@ function MoveDialog(props: {
       return;
     }
     if (result.outcome.outcome === "done") {
-      toastManager.add({ type: "success", title: "Task moved" });
+      toastManager.add({ type: "success", title: gt("Task moved") });
       props.onDone();
       return;
     }
@@ -109,7 +111,9 @@ function MoveDialog(props: {
             {props.children}
             {props.ready && (
               <>
-                <p>Use the approval passphrase or terminal key for this machine.</p>
+                <p>
+                  <T>Use the approval passphrase or terminal key for this machine.</T>
+                </p>
                 <ApprovalKeyInput value={key} onChange={setKey} />
               </>
             )}
@@ -122,10 +126,10 @@ function MoveDialog(props: {
         </DialogPanel>
         <DialogFooter>
           <Button variant="outline" disabled={busy} onClick={props.onClose}>
-            Close
+            <T>Close</T>
           </Button>
           <Button disabled={!props.ready || busy || !key} onClick={() => void submit()}>
-            {busy ? "Working…" : props.title}
+            {busy ? gt("Working…") : props.title}
           </Button>
         </DialogFooter>
       </DialogPopup>
@@ -144,7 +148,7 @@ export function BringLinkedTask(props: {
   return allowed ? (
     <>
       <Button size="xs" variant="outline" onClick={() => setOpen(true)}>
-        Bring to this machine
+        <T>Bring to this machine</T>
       </Button>
       {open && <BringDialog {...props} onClose={() => setOpen(false)} />}
     </>
@@ -152,6 +156,7 @@ export function BringLinkedTask(props: {
 }
 
 function BringDialog(props: Parameters<typeof BringLinkedTask>[0] & { onClose: () => void }) {
+  const gt = useGT();
   const boardsRead = useDeliveryRead(props.environmentId, "/api/boards");
   const boards = localMoveBoards(boardsRead.body);
   const [boardId, setBoardId] = useState("");
@@ -160,7 +165,7 @@ function BringDialog(props: Parameters<typeof BringLinkedTask>[0] & { onClose: (
   const bring = useAtomCommand(deliveryEnvironment.linkedBring, { reportFailure: false });
   return (
     <MoveDialog
-      title="Bring to this machine"
+      title={gt("Bring to this machine")}
       machine={props.machine}
       ready={board !== undefined}
       onClose={props.onClose}
@@ -180,25 +185,40 @@ function BringDialog(props: Parameters<typeof BringLinkedTask>[0] & { onClose: (
       }}
     >
       <BoardPicker
-        label="Destination board"
+        label={gt("Destination board")}
         marker="bring-destination"
         look="field"
         items={boards ?? []}
-        placeholder="Choose a board"
+        placeholder={gt("Choose a board")}
         value={boardId}
         onChoose={setBoardId}
       />
       {board ? (
         <p>
-          The task will arrive paused on <strong>{board.title}</strong> and take its visibility (
-          {board.linkedVisibility === "shared" ? "Shared with linked machines" : "Private"}).
+          <T>
+            The task will arrive paused on{" "}
+            <strong>
+              <Var>{board.title}</Var>
+            </strong>{" "}
+            and take its visibility (
+            <Var>
+              {board.linkedVisibility === "shared"
+                ? gt("Shared with linked machines")
+                : gt("Private")}
+            </Var>
+            ).
+          </T>
         </p>
       ) : boardsRead.error ? (
         <p>{boardsRead.error}</p>
       ) : !boardsRead.isPending && !boards ? (
-        <p>The delivery engine returned an incompatible board list.</p>
+        <p>
+          <T>The delivery engine returned an incompatible board list.</T>
+        </p>
       ) : boards?.length === 0 ? (
-        <p>This machine has no destination boards.</p>
+        <p>
+          <T>This machine has no destination boards.</T>
+        </p>
       ) : null}
     </MoveDialog>
   );
@@ -218,11 +238,11 @@ export function SendLinkedTask(props: SendProps) {
     <div className="flex flex-wrap justify-end gap-1">
       {props.canSendBack && (
         <Button size="xs" variant="outline" onClick={() => setMode("back")}>
-          Send back
+          <T>Send back</T>
         </Button>
       )}
       <Button size="xs" variant="outline" onClick={() => setMode("send")}>
-        Send to linked machine
+        <T>Send to linked machine</T>
       </Button>
       {mode && <SendDialog {...props} mode={mode} onClose={() => setMode(null)} />}
     </div>
@@ -230,6 +250,7 @@ export function SendLinkedTask(props: SendProps) {
 }
 
 function SendDialog(props: SendProps & { mode: "send" | "back"; onClose: () => void }) {
+  const gt = useGT();
   const back = props.mode === "back";
   const links = useLinkedBoards(props.environmentId);
   const origin = useEnvironmentQuery(
@@ -295,8 +316,8 @@ function SendDialog(props: SendProps & { mode: "send" | "back"; onClose: () => v
             setBoardChoice("");
           }}
         >
-          <SelectTrigger aria-label="Destination machine">
-            <SelectValue placeholder="Choose a machine" />
+          <SelectTrigger aria-label={gt("Destination machine")}>
+            <SelectValue placeholder={gt("Choose a machine")} />
           </SelectTrigger>
           <SelectPopup>
             {links.links.map((entry) => (
@@ -309,54 +330,89 @@ function SendDialog(props: SendProps & { mode: "send" | "back"; onClose: () => v
       )}
       {!back && link && link.boards.length > 0 && linkedLinkCanAct(link.access) && (
         <BoardPicker
-          label="Destination board"
+          label={gt("Destination board")}
           marker="send-destination"
           look="field"
           items={link.boards.map((entry) => ({ ...entry, kind: "linked" }))}
-          placeholder="Choose a shared board"
+          placeholder={gt("Choose a shared board")}
           value={boardChoice}
           onChoose={setBoardChoice}
         />
       )}
-      {back && origin.isPending && <p role="status">Finding the original board…</p>}
+      {back && origin.isPending && (
+        <p role="status">
+          <T>Finding the original board…</T>
+        </p>
+      )}
       {back && !peer && !origin.isPending && (
         <p>
-          The original machine or board is unknown or unreachable.
+          <T>The original machine or board is unknown or unreachable.</T>
           {origin.error ? ` ${origin.error}` : ""}
         </p>
       )}
       {back && peer && boardId && !ready && (
         <p>
-          Original board {board?.title ?? boardId} on {link?.label ?? peer}.
+          <T>
+            Original board <Var>{board?.title ?? boardId}</Var> on <Var>{link?.label ?? peer}</Var>.
+          </T>
         </p>
       )}
       {links.error && <p>{links.error}</p>}
       {peer && !link && !links.isPending && (
-        <p>The destination machine is unreachable or no longer linked.</p>
+        <p>
+          <T>The destination machine is unreachable or no longer linked.</T>
+        </p>
       )}
-      {!back && links.links?.length === 0 && <p>No linked machines are available.</p>}
+      {!back && links.links?.length === 0 && (
+        <p>
+          <T>No linked machines are available.</T>
+        </p>
+      )}
       {link &&
         (!linkedLinkCanAct(link.access) ? (
-          <p>The link to {link.label} is read-only.</p>
+          <p>
+            <T>
+              The link to <Var>{link.label}</Var> is read-only.
+            </T>
+          </p>
         ) : link.diagnostic ? (
           <p>
             {link.label}. {LINKED_DIAGNOSTIC_TEXT[link.diagnostic]}
           </p>
         ) : back && !board ? (
-          <p>The original board is unavailable. It may be private.</p>
+          <p>
+            <T>The original board is unavailable. It may be private.</T>
+          </p>
         ) : link.boards.length === 0 ? (
-          <p>{link.label} has no Shared boards.</p>
+          <p>
+            <T>
+              <Var>{link.label}</Var> has no Shared boards.
+            </T>
+          </p>
         ) : null)}
       {ready && link && board && (
         <p>
-          The task will arrive paused on <strong>{board.title}</strong> on{" "}
-          <strong>{link.label}</strong>, Shared with linked machines.
+          <T>
+            The task will arrive paused on{" "}
+            <strong>
+              <Var>{board.title}</Var>
+            </strong>{" "}
+            on{" "}
+            <strong>
+              <Var>{link.label}</Var>
+            </strong>
+            , Shared with linked machines.
+          </T>
         </p>
       )}
       {props.hidden && (
         <p>
-          This task is Hidden from linked machines here.
-          {ready && link ? ` It will become visible to machines linked to ${link.label}.` : ""}
+          <T>This task is Hidden from linked machines here.</T>
+          {ready && link
+            ? gt(" It will become visible to machines linked to {machine}.", {
+                machine: link.label,
+              })
+            : ""}
         </p>
       )}
     </MoveDialog>
@@ -366,6 +422,7 @@ function SendDialog(props: SendProps & { mode: "send" | "back"; onClose: () => v
 type PendingMove = (typeof LinkedHandoffsResult.Type)["handoffs"][number];
 
 export function LinkedMovesButton({ environmentId }: { readonly environmentId: EnvironmentId }) {
+  const gt = useGT();
   const [open, setOpen] = useState(false);
   const [selected, setSelected] = useState<{ move: PendingMove; mode: "retry" | "settle" } | null>(
     null,
@@ -390,8 +447,8 @@ export function LinkedMovesButton({ environmentId }: { readonly environmentId: E
       <Button
         size="icon-sm"
         variant="ghost"
-        aria-label="Task moves"
-        title="Task moves"
+        aria-label={gt("Task moves")}
+        title={gt("Task moves")}
         onClick={() => setOpen(true)}
       >
         <ArrowRightLeftIcon />
@@ -400,18 +457,31 @@ export function LinkedMovesButton({ environmentId }: { readonly environmentId: E
         <Dialog open onOpenChange={(next) => !next && close()}>
           <DialogPopup>
             <DialogHeader>
-              <DialogTitle>Task moves</DialogTitle>
+              <DialogTitle>
+                <T>Task moves</T>
+              </DialogTitle>
             </DialogHeader>
             <DialogPanel>
-              {query.isPending && <p role="status">Reading task moves…</p>}
+              {query.isPending && (
+                <p role="status">
+                  <T>Reading task moves…</T>
+                </p>
+              )}
               {query.error && <p role="status">{query.error}</p>}
               {query.data && query.data.handoffs.length === 0 && (
-                <p>There are no interrupted moves on the machines that answered.</p>
+                <p>
+                  <T>There are no interrupted moves on the machines that answered.</T>
+                </p>
               )}
               {query.data && query.data.unavailablePeers.length > 0 && (
                 <p className="text-sm text-muted-foreground">
-                  Could not read moves from{" "}
-                  {query.data.unavailablePeers.map((id) => peer(id)?.label ?? id).join(", ")}.
+                  <T>
+                    Could not read moves from{" "}
+                    <Var>
+                      {query.data.unavailablePeers.map((id) => peer(id)?.label ?? id).join(", ")}
+                    </Var>
+                    .
+                  </T>
                 </p>
               )}
               <ul className="divide-y divide-border">
@@ -423,11 +493,20 @@ export function LinkedMovesButton({ environmentId }: { readonly environmentId: E
                       className="flex flex-wrap items-center justify-between gap-2 py-2 text-sm"
                     >
                       <span>
-                        {move.root} · {move.direction === "bring" ? "from" : "to"}{" "}
-                        {link?.label ?? move.peerEnvironmentId}
+                        {move.direction === "bring"
+                          ? gt("{task} · from {machine}", {
+                              task: move.root,
+                              machine: link?.label ?? move.peerEnvironmentId,
+                            })
+                          : gt("{task} · to {machine}", {
+                              task: move.root,
+                              machine: link?.label ?? move.peerEnvironmentId,
+                            })}
                       </span>
                       {link?.access === "read-only" ? (
-                        <span>The link is read-only.</span>
+                        <span>
+                          <T>The link is read-only.</T>
+                        </span>
                       ) : allowed && link ? (
                         <div className="flex gap-1">
                           {move.direction === "send" && (
@@ -436,7 +515,7 @@ export function LinkedMovesButton({ environmentId }: { readonly environmentId: E
                               variant="outline"
                               onClick={() => setSelected({ move, mode: "retry" })}
                             >
-                              Retry
+                              <T>Retry</T>
                             </Button>
                           )}
                           <Button
@@ -444,7 +523,7 @@ export function LinkedMovesButton({ environmentId }: { readonly environmentId: E
                             variant="outline"
                             onClick={() => setSelected({ move, mode: "settle" })}
                           >
-                            Settle
+                            <T>Settle</T>
                           </Button>
                         </div>
                       ) : null}
@@ -455,7 +534,7 @@ export function LinkedMovesButton({ environmentId }: { readonly environmentId: E
             </DialogPanel>
             <DialogFooter>
               <Button variant="outline" onClick={close}>
-                Close
+                <T>Close</T>
               </Button>
             </DialogFooter>
           </DialogPopup>
@@ -463,7 +542,7 @@ export function LinkedMovesButton({ environmentId }: { readonly environmentId: E
       )}
       {selected && (
         <MoveDialog
-          title={selected.mode === "retry" ? "Retry move" : "Settle move"}
+          title={selected.mode === "retry" ? gt("Retry move") : gt("Settle move")}
           machine={peer(selected.move.peerEnvironmentId)?.label ?? selected.move.peerEnvironmentId}
           ready={allowed && peer(selected.move.peerEnvironmentId)?.access !== "read-only"}
           onClose={() => setSelected(null)}
@@ -494,8 +573,10 @@ export function LinkedMovesButton({ environmentId }: { readonly environmentId: E
         >
           <p>
             {selected.mode === "retry"
-              ? "Try sending the task again."
-              : "Check which machine holds the task. If it never arrived, restore it on the source machine."}
+              ? gt("Try sending the task again.")
+              : gt(
+                  "Check which machine holds the task. If it never arrived, restore it on the source machine.",
+                )}
           </p>
         </MoveDialog>
       )}

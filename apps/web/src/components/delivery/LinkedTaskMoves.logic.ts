@@ -1,3 +1,6 @@
+import { msg } from "gt-react";
+
+import { m } from "../../i18n/messages";
 import { DeliveryLinkedDestinationBoards, type LinkedHandoffOutcome } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 
@@ -17,27 +20,32 @@ export function localMoveBoards(body: unknown) {
 export function linkedMoveNotice(result: LinkedHandoffOutcome, machine: string): string {
   switch (result.outcome) {
     case "done":
-      return "Task moved.";
+      return m(msg("Task moved."));
     case "refused":
       return result.message;
     case "restored":
-      return ["The task was restored on its source machine.", result.message]
+      return [m(msg("The task was restored on its source machine.")), result.message]
         .filter(Boolean)
         .join(" ");
     case "needs-person": {
-      const source = result.source === "linked" ? machine : "This machine";
-      const destination = result.source === "linked" ? "This machine" : machine;
+      const source = result.source === "linked" ? machine : m(msg("This machine"));
+      const destination = result.source === "linked" ? m(msg("This machine")) : machine;
       const sourceStatus =
         result.sourceState === "frozen"
-          ? `${source} holds the frozen source task.`
-          : `${source} has not confirmed the source task's state.`;
+          ? m(msg("{source} holds the frozen source task."), { source })
+          : m(msg("{source} has not confirmed the source task's state."), { source });
       const destinationStatus = {
-        accepted: `${destination} holds the paused copy.`,
-        cancelled: `${destination} confirmed the task did not arrive.`,
-        occupied: `${destination} already holds work with these task IDs.`,
-        unknown: `${destination} has not confirmed receipt.`,
+        accepted: m(msg("{destination} holds the paused copy."), { destination }),
+        cancelled: m(msg("{destination} confirmed the task did not arrive."), { destination }),
+        occupied: m(msg("{destination} already holds work with these task IDs."), { destination }),
+        unknown: m(msg("{destination} has not confirmed receipt."), { destination }),
       }[result.destination];
-      return `${result.message} ${sourceStatus} ${destinationStatus} You can finish the move later from Task moves on the Board.`;
+      return [
+        result.message,
+        sourceStatus,
+        destinationStatus,
+        m(msg("You can finish the move later from Task moves on the Board.")),
+      ].join(" ");
     }
   }
 }

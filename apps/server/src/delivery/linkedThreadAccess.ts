@@ -1,7 +1,9 @@
 import {
   isServerOwnedThreadLineage,
   OrchestratorMcpFailure,
-  ThreadId,
+  type EnvironmentId,
+  type ThreadId,
+  type OrchestrationV2ThreadProjection,
   type OrchestrationV2ThreadShell,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
@@ -9,34 +11,74 @@ import * as Option from "effect/Option";
 
 import * as McpInvocationContext from "../mcp/McpInvocationContext.ts";
 import { resolveThreadReference } from "../mcp/threadAccess.ts";
-import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
+import type { ProjectionStoreV2Error } from "../orchestration-v2/ProjectionStore.ts";
+import type { OrchestratorV2Error } from "../orchestration-v2/Orchestrator.ts";
+import type * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import { boardTaskOfMarker } from "./boardThreadMarker.ts";
 import * as DeliveryService from "./DeliveryService.ts";
 
-type Shell = Pick<OrchestrationV2ThreadShell, "id" | "lineage">;
+type Shell = Pick<OrchestrationV2ThreadShell, "id" | "lineage" | "creationSource">;
 type Delivery = DeliveryService.DeliveryService["Service"];
-type Threads = Pick<ThreadManagement.ThreadManagementService["Service"], "getThreadShell">;
+type LineageReader = {
+  readonly getThreadShell: (
+    id: ThreadId,
+  ) => Effect.Effect<
+    OrchestrationV2ThreadShell | null,
+    OrchestratorV2Error | ProjectionStoreV2Error
+  >;
+  readonly getThreadProjection: (
+    id: ThreadId,
+  ) => Effect.Effect<
+    OrchestrationV2ThreadProjection | null,
+    OrchestratorV2Error | ProjectionStoreV2Error
+  >;
+};
+type Threads = Pick<ThreadManagement.ThreadManagementService["Service"], keyof LineageReader>;
 
 export const isDeliveryTiedThread = Effect.fn("linkedThreadAccess.isDeliveryTiedThread")(function* (
   thread: Shell,
-  delivery: Delivery | undefined,
+  threads: LineageReader,
+  delivery: Delivery,
+  ownerTied: ReadonlySet<ThreadId>,
 ) {
-  if (
-    isServerOwnedThreadLineage(thread.lineage) ||
-    boardTaskOfMarker(thread.id) !== null ||
-    boardTaskOfMarker(thread.lineage.rootThreadId) !== null
-  )
-    return true;
-  if (delivery === undefined) return true;
-  const hasBinding = (id: ThreadId) =>
-    delivery.threadState(id).pipe(
-      Effect.map(({ binding }) => binding !== null),
-      Effect.orElseSucceed(() => true),
-    );
-  if (yield* hasBinding(thread.id)) return true;
-  return (
-    thread.lineage.rootThreadId !== thread.id && (yield* hasBinding(thread.lineage.rootThreadId))
-  );
+  const visited = new Set<ThreadId>();
+  const pending = [thread];
+  for (const current of pending) {
+    if (visited.has(current.id)) continue;
+    visited.add(current.id);
+    const { lineage } = current;
+    if (
+      isServerOwnedThreadLineage(lineage) ||
+      boardTaskOfMarker(current.id) !== null ||
+      ownerTied.has(current.id)
+    )
+      return true;
+
+    const state = yield* delivery.threadState(current.id).pipe(Effect.option);
+    if (Option.isNone(state) || state.value.binding !== null || state.value.pending !== null)
+      return true;
+
+    let launchedFrom = lineage.launchedFromThreadId;
+    if (
+      launchedFrom === undefined &&
+      current.creationSource === "mcp" &&
+      lineage.parentThreadId === null
+    ) {
+      // Launches recorded before lineage carried their creator used the first message's sender.
+      const projection = yield* threads.getThreadProjection(current.id).pipe(Effect.option);
+      if (Option.isNone(projection) || projection.value === null) return true;
+      launchedFrom = projection.value.messages[0]?.senderThreadId;
+      if (launchedFrom === undefined) return true;
+    }
+    for (const ancestorId of [lineage.rootThreadId, lineage.parentThreadId, launchedFrom]) {
+      if (ancestorId == null || visited.has(ancestorId)) continue;
+      if (boardTaskOfMarker(ancestorId) !== null || ownerTied.has(ancestorId)) return true;
+      const ancestor = yield* threads.getThreadShell(ancestorId).pipe(Effect.option);
+      if (Option.isNone(ancestor) || ancestor.value === null) return true;
+      pending.push(ancestor.value);
+    }
+  }
+  return false;
 });
 
 const notFound = () =>
@@ -45,21 +87,31 @@ const notFound = () =>
     message: "The thread was not found.",
   });
 
-const listedThreads = Effect.fn("linkedThreadAccess.listedThreads")(function* (
+const threadVisibility = Effect.fn("linkedThreadAccess.threadVisibility")(function* (
   service: Delivery,
-  environmentId: McpInvocationContext.McpInvocationScope["environmentId"],
+  threads: LineageReader,
+  environmentId: EnvironmentId,
 ) {
-  return yield* service.linkedThreads.pipe(
-    Effect.map(
-      ({ threads }) =>
-        new Set(
-          threads
-            .filter((entry) => entry.environmentId === environmentId)
-            .map(({ threadId }) => threadId),
-        ),
+  const ownerTied = yield* service.ownerTiedThreads(environmentId).pipe(Effect.option);
+  // The first failed owner read can hide a source thread T3 has never seen.
+  if (Option.isNone(ownerTied)) return (_shell: Shell) => Effect.succeed(false);
+  const listed = yield* Effect.cached(
+    service.linkedThreads.pipe(
+      Effect.map(
+        ({ threads }) =>
+          new Set(
+            threads
+              .filter((entry) => entry.environmentId === environmentId)
+              .map(({ threadId }) => threadId),
+          ),
+      ),
+      Effect.orElseSucceed(() => new Set<ThreadId>()),
     ),
-    Effect.orElseSucceed(() => new Set<ThreadId>()),
   );
+  return Effect.fn("linkedThreadAccess.canSeeThread")(function* (shell: Shell) {
+    if (!(yield* isDeliveryTiedThread(shell, threads, service, ownerTied.value))) return true;
+    return (yield* listed).has(shell.id);
+  });
 });
 
 export const assertPeerThreadTargets = Effect.fn("linkedThreadAccess.assertPeerThreadTargets")(
@@ -69,16 +121,15 @@ export const assertPeerThreadTargets = Effect.fn("linkedThreadAccess.assertPeerT
     threads: Threads | undefined,
     delivery: Delivery | undefined,
   ) {
-    if (scope.client?.linked !== true) return;
-    let listed: ReadonlySet<ThreadId> | undefined;
+    if (!McpInvocationContext.isLinkedDeliveryCaller(scope)) return;
+    let visible: ((shell: Shell) => Effect.Effect<boolean>) | undefined;
     for (const id of ids) {
       if (threads === undefined) return yield* notFound();
       const { shell } = yield* resolveThreadReference(threads, id).pipe(Effect.mapError(notFound));
       if (shell === null || shell.deletedAt !== null) continue;
-      if (!(yield* isDeliveryTiedThread(shell, delivery))) continue;
       if (delivery === undefined) return yield* notFound();
-      listed ??= yield* listedThreads(delivery, scope.environmentId);
-      if (!listed.has(shell.id)) return yield* notFound();
+      visible ??= yield* threadVisibility(delivery, threads, scope.environmentId);
+      if (!(yield* visible(shell))) return yield* notFound();
     }
   },
 );
@@ -89,27 +140,20 @@ export const filterPeerThreadRows = Effect.fn("linkedThreadAccess.filterPeerThre
   scope: McpInvocationContext.McpInvocationScope,
   rows: ReadonlyArray<A>,
   shellOf: (row: A) => Effect.Effect<Shell | null>,
+  threads: LineageReader,
   delivery?: Delivery,
 ) {
-  if (scope.client?.linked !== true) return rows;
+  if (!McpInvocationContext.isLinkedDeliveryCaller(scope) || rows.length === 0) return rows;
   const service =
     delivery ?? Option.getOrUndefined(yield* Effect.serviceOption(DeliveryService.DeliveryService));
   if (service === undefined) return [];
-  const shells = yield* Effect.forEach(
+  const visible = yield* threadVisibility(service, threads, scope.environmentId);
+  return yield* Effect.filter(
     rows,
     (row) =>
-      Effect.gen(function* () {
-        const shell = yield* shellOf(row);
-        const tied = shell === null || (yield* isDeliveryTiedThread(shell, service));
-        return { row, shell, tied };
-      }),
+      shellOf(row).pipe(
+        Effect.flatMap((shell) => (shell === null ? Effect.succeed(false) : visible(shell))),
+      ),
     { concurrency: 8 },
   );
-  if (!shells.some(({ tied, shell }) => tied && shell !== null)) {
-    return shells.filter(({ tied }) => !tied).map(({ row }) => row);
-  }
-  const allowed = yield* listedThreads(service, scope.environmentId);
-  return shells
-    .filter(({ tied, shell }) => !tied || (shell !== null && allowed.has(shell.id)))
-    .map(({ row }) => row);
 });

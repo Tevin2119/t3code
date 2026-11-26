@@ -382,8 +382,19 @@ const makeMcpAuthMiddleware = Effect.gen(function* () {
       limited.thread === undefined
         ? undefined
         : yield* Cache.get(forgeOfThread, limited.thread.threadId);
+    let thread = limited.thread;
+    if (delivery && thread !== undefined) {
+      const shell = Option.isNone(projections)
+        ? null
+        : yield* projections.value
+            .getThreadShell(thread.threadId)
+            .pipe(Effect.orElseSucceed(() => null));
+      if (shell === null) thread = { ...thread, deliveryOriginUnknown: true };
+      else if (shell.linkOrigin !== undefined) thread = { ...thread, linkOrigin: shell.linkOrigin };
+    }
     return {
       ...limited,
+      thread,
       linkedEnvironments,
       agentFeedback,
       workflows,

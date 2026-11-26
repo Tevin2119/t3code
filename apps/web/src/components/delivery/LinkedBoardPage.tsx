@@ -1,3 +1,4 @@
+import { T, Var, useGT } from "gt-react";
 import { LinkedMovesButton } from "./LinkedTaskMoves";
 import { DndContext } from "@dnd-kit/core";
 import { useNavigate, useSearch } from "@tanstack/react-router";
@@ -45,6 +46,7 @@ export function LinkedBoardPage(props: {
   readonly environmentId: EnvironmentId | null;
   readonly linked: string;
 }) {
+  const gt = useGT();
   const peer = EnvironmentId.make(props.linked);
   const search = useSearch({ strict: false }) as DeliveryBoardSearch;
   const navigate = useNavigate();
@@ -147,8 +149,8 @@ export function LinkedBoardPage(props: {
       : [];
 
   return (
-    <SidebarInset className="isolate h-dvh min-h-0 overflow-hidden overscroll-y-none">
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+    <SidebarInset>
+      <div className="isolate flex h-dvh min-h-0 min-w-0 flex-1 flex-col overflow-hidden overscroll-y-none">
         <WorkspacePageHeader electron={isElectron} className="h-auto">
           <BoardToolbar
             environmentId={null}
@@ -164,7 +166,7 @@ export function LinkedBoardPage(props: {
             boardPicker={
               showingBoard && boardRead.board ? (
                 <BoardPicker
-                  label="Board"
+                  label={gt("Board")}
                   marker="linked-board"
                   items={pickerItems}
                   value={`linked:${boardId}`}
@@ -172,7 +174,8 @@ export function LinkedBoardPage(props: {
                 />
               ) : (
                 <span className="max-w-48 min-w-0 truncate text-xs text-muted-foreground">
-                  {label} · shared boards
+                  {label}
+                  <T> · shared boards</T>
                 </span>
               )
             }
@@ -204,7 +207,9 @@ export function LinkedBoardPage(props: {
         </WorkspacePageHeader>
 
         {link?.access === "read-only" && (
-          <p className="px-4 pt-2 text-xs text-muted-foreground">This link is read-only.</p>
+          <p className="px-4 pt-2 text-xs text-muted-foreground">
+            <T>This link is read-only.</T>
+          </p>
         )}
         {problem ? (
           <p
@@ -213,19 +218,22 @@ export function LinkedBoardPage(props: {
           >
             <span className="min-w-0 flex-1">{problem}</span>
             <button type="button" className="cursor-pointer" onClick={() => setProblem(null)}>
-              Dismiss
+              <T>Dismiss</T>
             </button>
           </p>
         ) : null}
 
         {!props.environmentId ? (
           <p className="p-6 text-sm text-muted-foreground">
-            This environment is unavailable. Choose an added environment or open Connections
-            settings.
+            <T>
+              This environment is unavailable. Choose an added environment or open Connections
+              settings.
+            </T>
           </p>
         ) : boards.error ? (
           <p className="p-6 text-sm text-muted-foreground">
-            The linked machines could not be read. {boards.error}
+            <T>The linked machines could not be read. </T>
+            {boards.error}
           </p>
         ) : searching ? (
           <LinkedSearchResults
@@ -300,12 +308,16 @@ function LinkedBoardsList(props: {
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto p-6" data-linked-boards>
       <p className="text-xs text-muted-foreground">
-        Boards {props.label} shares with machines linked to it. The machine that owns a board
-        chooses whether to share it.
+        <T>
+          Boards <Var>{props.label}</Var> shares with machines linked to it. The machine that owns a
+          board chooses whether to share it.
+        </T>
       </p>
       {state.kind === "unread" ? (
         <p className="text-sm text-muted-foreground" role="status">
-          Reading {props.label}&apos;s boards...
+          <T>
+            Reading <Var>{props.label}</Var>&apos;s boards...
+          </T>
         </p>
       ) : null}
       {state.kind === "blocked" ? (
@@ -315,7 +327,10 @@ function LinkedBoardsList(props: {
       ) : null}
       {state.kind === "empty" ? (
         <p className="text-sm text-muted-foreground">
-          No boards are shared with this machine. {props.label} chooses which boards it shares.
+          <T>
+            No boards are shared with this machine. <Var>{props.label}</Var> chooses which boards it
+            shares.
+          </T>
         </p>
       ) : null}
       {state.kind === "ready"
@@ -330,7 +345,7 @@ function LinkedBoardsList(props: {
           onClick={props.onRefresh}
           data-linked-boards-refresh
         >
-          Read the machines again
+          <T>Read the machines again</T>
         </button>
       ) : null}
     </div>
@@ -341,6 +356,7 @@ function LinkedBoardRow(props: {
   readonly board: LinkedBoardChoice;
   readonly onChoose: (id: string) => void;
 }) {
+  const gt = useGT();
   const { board } = props;
   return (
     <button
@@ -359,9 +375,15 @@ function LinkedBoardRow(props: {
         <span className="line-clamp-2 text-xs text-muted-foreground">{board.description}</span>
       ) : null}
       <span className="text-xs text-muted-foreground">
-        {board.counts.tasks === 1 ? "1 task" : `${board.counts.tasks} tasks`}
-        {board.counts.waitingOnYou > 0 ? ` · ${board.counts.waitingOnYou} waiting on you` : ""}
-        {board.counts.questions > 0 ? ` · ${board.counts.questions} questions` : ""}
+        {gt("{count, plural, one {{count} task} other {{count} tasks}}", {
+          count: board.counts.tasks,
+        })}
+        {board.counts.waitingOnYou > 0
+          ? gt(" · {count} waiting on you", { count: board.counts.waitingOnYou })
+          : ""}
+        {board.counts.questions > 0
+          ? gt(" · {count} questions", { count: board.counts.questions })
+          : ""}
       </span>
     </button>
   );
@@ -386,7 +408,7 @@ function LinkedSearchResults(props: {
     <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto p-6" data-linked-search>
       {props.pending && props.cards.length === 0 ? (
         <p className="text-sm text-muted-foreground" role="status">
-          Searching...
+          <T>Searching...</T>
         </p>
       ) : null}
       {props.cards.map((card) => (
@@ -406,7 +428,9 @@ function LinkedSearchResults(props: {
         </div>
       ))}
       {!props.pending && props.cards.length === 0 ? (
-        <p className="text-sm text-muted-foreground">No matching tasks.</p>
+        <p className="text-sm text-muted-foreground">
+          <T>No matching tasks.</T>
+        </p>
       ) : null}
     </div>
   );

@@ -75,6 +75,10 @@ export interface ProjectDeleteInput {
   readonly commandId: CommandId;
   readonly projectId: ProjectId;
   readonly force?: boolean;
+  readonly authorizeThreads?: (
+    threads: ReadonlyArray<OrchestrationV2ThreadShell>,
+    projections: ProjectionStore.ProjectionStoreV2["Service"],
+  ) => Effect.Effect<boolean>;
 }
 
 export class ProjectNotFoundError extends Schema.TaggedError<ProjectNotFoundError>()(
@@ -754,6 +758,15 @@ export const make = Effect.gen(function* () {
     );
     if (projectThreads.length > 0 && input.force !== true) {
       return yield* new ProjectNotEmptyError({ projectId });
+    }
+    if (
+      input.authorizeThreads &&
+      !(yield* input.authorizeThreads(projectThreads, threadProjections))
+    ) {
+      return yield* new ProjectInvalidError({
+        projectId,
+        detail: "The project could not be deleted through this link.",
+      });
     }
     const kept = serverOwnedFamilyIds(projectThreads);
     // Delete children durably before the project so a failed cascade can be retried.

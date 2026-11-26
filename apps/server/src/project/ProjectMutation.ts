@@ -2,13 +2,14 @@ import { type ProjectMutation } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 
 import { type ProjectCloneTracker } from "./ProjectCloneTracker.ts";
-import { type ProjectService } from "./ProjectService.ts";
+import { type ProjectDeleteInput, type ProjectService } from "./ProjectService.ts";
 
 type ProjectMutations = Pick<ProjectService["Service"], "create" | "delete" | "update">;
 
 export const projectMutationOperation = Effect.fn("projectMutationOperation")(function* (
   projects: ProjectMutations,
   mutation: ProjectMutation,
+  authorizeThreads?: ProjectDeleteInput["authorizeThreads"],
 ) {
   switch (mutation.type) {
     case "project.create":
@@ -61,6 +62,7 @@ export const projectMutationOperation = Effect.fn("projectMutationOperation")(fu
         commandId: mutation.commandId,
         projectId: mutation.projectId,
         ...(mutation.force === undefined ? {} : { force: mutation.force }),
+        ...(authorizeThreads === undefined ? {} : { authorizeThreads }),
       });
   }
 });
@@ -70,10 +72,11 @@ export const mutateProjectWithClone = Effect.fn("mutateProjectWithClone")(functi
   projects: ProjectMutations,
   clones: Pick<ProjectCloneTracker["Service"], "discard">,
   mutation: ProjectMutation,
+  authorizeThreads?: ProjectDeleteInput["authorizeThreads"],
 ) {
   if (mutation.type !== "project.delete")
     return yield* projectMutationOperation(projects, mutation);
-  return yield* projectMutationOperation(projects, mutation).pipe(
+  return yield* projectMutationOperation(projects, mutation, authorizeThreads).pipe(
     Effect.tap(() => clones.discard(mutation.projectId)),
     Effect.uninterruptible,
   );

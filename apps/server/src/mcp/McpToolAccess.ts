@@ -460,7 +460,8 @@ const routed = Effect.fn("McpToolAccess.routed")(function* <Tools extends Record
       const scope = Option.getOrUndefined(
         yield* Effect.serviceOption(McpInvocationContext.McpInvocationContext),
       );
-      if (scope?.client?.linked !== true) return yield* handle(params);
+      if (scope === undefined || !McpInvocationContext.isLinkedDeliveryCaller(scope))
+        return yield* handle(params);
       const run =
         delivery === undefined
           ? handle(params)

@@ -391,6 +391,9 @@ export const LinkedDeliveryThread = Schema.Struct({
 export const LinkedDeliveryThreads = Schema.Struct({ threads: Schema.Array(LinkedDeliveryThread) });
 
 export const LinkedDeliveryId = Id;
+export const LinkedHandoffPeerId = Schema.String.check(
+  Schema.isPattern(/^[A-Za-z0-9][A-Za-z0-9_-]{0,80}$/),
+);
 export const LINKED_HANDOFF_BUNDLE_MAX_BYTES = 16 * 1024 * 1024;
 // Prepare returns structured content plus a JSON string whose escaping can double its size.
 export const LINKED_HANDOFF_MCP_MAX_BYTES = 52 * 1024 * 1024;
@@ -422,7 +425,7 @@ const BundleShape = Schema.StructWithRest(
 );
 // The engine hashes JSON.stringify(bundle), so decoding must keep the original key order.
 export const LinkedHandoffBundle = Schema.Unknown.pipe(Schema.refine(Schema.is(BundleShape)));
-const Destination = Schema.Struct({ peer: Id, board: Id });
+const Destination = Schema.Struct({ peer: LinkedHandoffPeerId, board: Id });
 export const LinkedHandoffPrepared = Schema.Struct({
   ...HandoffId,
   state: Schema.Literal("moving"),
@@ -560,7 +563,7 @@ export type LinkedHandoffOutcome = typeof LinkedHandoffOutcome.Type;
 
 export const LinkedArrival = Schema.Struct({
   ...HandoffId,
-  peer: Id,
+  peer: LinkedHandoffPeerId,
   via: Schema.Literals(["owner", "linked"]),
   fromBoard: Schema.NullOr(Id),
   fromTask: Id,

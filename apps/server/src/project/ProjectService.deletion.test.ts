@@ -166,6 +166,16 @@ it.effect("retries a partial project deletion without repeating child events or 
         Effect.provideService(EventSink.EventSinkV2, failingEventSink),
       );
       const input = { commandId, projectId, force: true };
+      const forbidden = yield* service
+        .delete({
+          ...input,
+          authorizeThreads: (threads) =>
+            Effect.succeed(threads.every(({ id }) => id !== threadIds[1])),
+        })
+        .pipe(Effect.flip);
+      assert.instanceOf(forbidden, ProjectService.ProjectInvalidError);
+      assert.equal(forbidden.message, "The project could not be deleted through this link.");
+      assert.isEmpty(attempts);
       const failure = yield* service.delete(input).pipe(Effect.flip);
       assert.instanceOf(failure, ProjectService.ProjectOperationError);
       if (failure._tag !== "ProjectOperationError") return assert.fail("Expected a child failure");

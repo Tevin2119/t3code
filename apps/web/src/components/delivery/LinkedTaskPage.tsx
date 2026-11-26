@@ -1,7 +1,7 @@
+import { T, Var, useGT, useMessages } from "gt-react";
 import { BringLinkedTask } from "./LinkedTaskMoves";
 import type { EnvironmentId } from "@t3tools/contracts";
 import { ArrowLeftIcon } from "lucide-react";
-import { useMessages } from "gt-react";
 import { useState } from "react";
 
 import { isElectron } from "../../env";
@@ -48,6 +48,7 @@ export function LinkedTaskPage(props: {
   readonly onBack: () => void;
   readonly onOpenTask: (taskId: string) => void;
 }) {
+  const gt = useGT();
   const m = useMessages();
   const read = useLinkedTask(props.environmentId, props.peerEnvironmentId, props.taskId);
   const commands = useLinkedTaskCommands({
@@ -82,7 +83,7 @@ export function LinkedTaskPage(props: {
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-linked-task={props.taskId}>
       <WorkspacePageHeader electron={isElectron}>
-        <WorkspaceBreadcrumb ariaLabel="Thread breadcrumb" className="min-w-0 flex-1">
+        <WorkspaceBreadcrumb ariaLabel={gt("Thread breadcrumb")} className="min-w-0 flex-1">
           <WorkspaceBreadcrumbItem>
             <button
               type="button"
@@ -91,7 +92,10 @@ export function LinkedTaskPage(props: {
               data-linked-task-back
             >
               <ArrowLeftIcon className="size-3.5 shrink-0" />
-              <WorkspaceBreadcrumbText>{props.machine} · shared boards</WorkspaceBreadcrumbText>
+              <WorkspaceBreadcrumbText>
+                {props.machine}
+                <T> · shared boards</T>
+              </WorkspaceBreadcrumbText>
             </button>
           </WorkspaceBreadcrumbItem>
           <WorkspaceBreadcrumbSeparator>
@@ -100,7 +104,7 @@ export function LinkedTaskPage(props: {
           <WorkspaceBreadcrumbItem current className="min-w-10 flex-1">
             <h2 className="min-w-0">
               <WorkspaceBreadcrumbText>
-                {task ? `#${task.number} ${task.title}` : "Task"}
+                {task ? `#${task.number} ${task.title}` : gt("Task")}
               </WorkspaceBreadcrumbText>
             </h2>
           </WorkspaceBreadcrumbItem>
@@ -131,7 +135,7 @@ export function LinkedTaskPage(props: {
           <Button
             size="icon-sm"
             variant="ghost"
-            aria-label="Refresh task"
+            aria-label={gt("Refresh task")}
             disabled={read.isPending}
             onClick={read.refresh}
             data-linked-task-refresh
@@ -148,13 +152,14 @@ export function LinkedTaskPage(props: {
         >
           <span className="min-w-0 flex-1">{problem}</span>
           <button type="button" className="cursor-pointer" onClick={() => setProblem(null)}>
-            Dismiss
+            <T>Dismiss</T>
           </button>
         </p>
       ) : null}
       {read.error ? (
         <p className="shrink-0 border-b border-border px-3 py-1.5 text-xs text-warning">
-          The task could not be read. {read.error}
+          <T>The task could not be read. </T>
+          {read.error}
         </p>
       ) : null}
       {read.diagnostic ? (
@@ -168,7 +173,7 @@ export function LinkedTaskPage(props: {
             className="cursor-pointer text-primary underline-offset-2 hover:underline"
             onClick={props.onBack}
           >
-            Back to the board
+            <T>Back to the board</T>
           </button>
         </p>
       ) : null}
@@ -176,15 +181,17 @@ export function LinkedTaskPage(props: {
       {!task || !data ? (
         <p className="p-6 text-sm text-muted-foreground" role="status">
           {props.environmentId === null
-            ? "This environment is unavailable. Choose an added environment."
-            : "Reading the task..."}
+            ? gt("This environment is unavailable. Choose an added environment.")
+            : gt("Reading the task...")}
         </p>
       ) : (
         <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-4">
           <LinkedTaskFacts card={card} body={task.body} stage={stageOf(card, m)} />
           {task.questions.length > 0 ? (
             <section className="flex min-w-0 flex-col gap-2" data-linked-questions>
-              <h3 className="text-xs font-medium text-muted-foreground">Questions</h3>
+              <h3 className="text-xs font-medium text-muted-foreground">
+                <T>Questions</T>
+              </h3>
               {task.questions.map((question) => (
                 <LinkedQuestion
                   key={question.seq}
@@ -201,7 +208,9 @@ export function LinkedTaskPage(props: {
           ) : null}
           {data.messages.length > 0 ? (
             <section className="flex min-w-0 flex-col gap-2" data-linked-messages>
-              <h3 className="text-xs font-medium text-muted-foreground">Conversation</h3>
+              <h3 className="text-xs font-medium text-muted-foreground">
+                <T>Conversation</T>
+              </h3>
               {data.messages.map((message) => (
                 <LinkedMessage
                   key={message.seq}
@@ -213,7 +222,9 @@ export function LinkedTaskPage(props: {
           ) : null}
           {timeline.length > 0 ? (
             <section className="flex min-w-0 flex-col gap-2" data-linked-timeline>
-              <h3 className="text-xs font-medium text-muted-foreground">Timeline</h3>
+              <h3 className="text-xs font-medium text-muted-foreground">
+                <T>Timeline</T>
+              </h3>
               {timeline.map((entry) => (
                 <Happening key={entry.id} entry={entry} />
               ))}
@@ -235,8 +246,8 @@ export function LinkedTaskPage(props: {
             data-linked-cannot-act
           >
             {props.readOnly
-              ? "This link is read-only."
-              : "This connection cannot act on tasks on that machine."}
+              ? gt("This link is read-only.")
+              : gt("This connection cannot act on tasks on that machine.")}
           </p>
         )
       ) : null}
@@ -259,38 +270,39 @@ function LinkedTaskFacts(props: {
   readonly body: string;
   readonly stage: string;
 }) {
+  const gt = useGT();
   const now = useMinuteClock();
   const { card } = props;
   return (
     <section className="flex min-w-0 flex-col gap-2" data-linked-task-facts>
       <h2 className="text-sm font-medium break-words">
-        {card ? `#${card.number} ${card.title}` : "Task"}
+        {card ? `#${card.number} ${card.title}` : gt("Task")}
       </h2>
       {props.body ? <p className="text-sm break-words whitespace-pre-wrap">{props.body}</p> : null}
       {card ? (
         <div className="flex flex-col gap-1">
-          <Row label="Stage">
+          <Row label={gt("Stage")}>
             <span data-linked-task-stage>{props.stage}</span>
           </Row>
-          <Row label="Priority">
+          <Row label={gt("Priority")}>
             <PriorityPill priority={card.priority} by={card.priorityBy} />
           </Row>
-          <Row label="Now">
+          <Row label={gt("Now")}>
             <WaitingOn card={card} />
           </Row>
           {card.blocker ? (
-            <Row label="Blocked by">
+            <Row label={gt("Blocked by")}>
               <span className="text-xs text-muted-foreground">{card.blocker}</span>
             </Row>
           ) : null}
           {card.tags.length > 0 ? (
-            <Row label="Tags">
+            <Row label={gt("Tags")}>
               <TagList tags={card.tags} />
             </Row>
           ) : null}
-          <Row label="Owner">{card.owner || "nobody"}</Row>
-          <Row label="Last changed">
-            <Age at={card.updated} now={now} label="Last changed" />
+          <Row label={gt("Owner")}>{card.owner || "nobody"}</Row>
+          <Row label={gt("Last changed")}>
+            <Age at={card.updated} now={now} label={gt("Last changed")} />
           </Row>
         </div>
       ) : null}
@@ -311,6 +323,7 @@ function LinkedQuestion(props: {
     answer: { readonly text: string } | { readonly option: string },
   ) => void;
 }) {
+  const gt = useGT();
   const [text, setText] = useState("");
   const [option, setOption] = useState<string | null>(null);
   const options = props.question.options;
@@ -320,7 +333,9 @@ function LinkedQuestion(props: {
       data-linked-question={props.question.seq}
     >
       <p className="text-xs text-muted-foreground">
-        {props.question.by} asked · {time(props.question.at)}
+        <T>
+          <Var>{props.question.by}</Var> asked · <Var>{time(props.question.at)}</Var>
+        </T>
       </p>
       <ChatMarkdown
         text={props.question.text}
@@ -348,7 +363,7 @@ function LinkedQuestion(props: {
           ))}
           {option !== null ? (
             <Button size="sm" variant="ghost" disabled={props.busy} onClick={() => setOption(null)}>
-              Answer in my own words
+              <T>Answer in my own words</T>
             </Button>
           ) : null}
         </div>
@@ -357,7 +372,7 @@ function LinkedQuestion(props: {
         <div className="flex flex-col gap-2">
           {option === null ? (
             <Textarea
-              aria-label={`Reply to question ${props.question.seq}`}
+              aria-label={gt("Reply to question {question}", { question: props.question.seq })}
               value={text}
               disabled={props.busy}
               onChange={(event) => setText(event.target.value)}
@@ -367,22 +382,23 @@ function LinkedQuestion(props: {
               {option}: {options.find((choice) => choice.label === option)?.meaning ?? option}
             </p>
           )}
-          <Button
-            size="sm"
-            className="self-start"
-            disabled={props.busy || (!text.trim() && option === null)}
-            onClick={() => {
-              props.onAnswer(
-                props.question.seq,
-                option !== null ? { option } : { text: text.trim() },
-              );
-              setText("");
-              setOption(null);
-            }}
-            data-linked-question-answer
-          >
-            Send reply
-          </Button>
+          <div className="self-start">
+            <Button
+              size="sm"
+              disabled={props.busy || (!text.trim() && option === null)}
+              onClick={() => {
+                props.onAnswer(
+                  props.question.seq,
+                  option !== null ? { option } : { text: text.trim() },
+                );
+                setText("");
+                setOption(null);
+              }}
+              data-linked-question-answer
+            >
+              <T>Send reply</T>
+            </Button>
+          </div>
         </div>
       ) : null}
     </article>
@@ -403,17 +419,22 @@ function LinkedMessage(props: {
     readonly replyTo: number | null;
   };
 }) {
+  const gt = useGT();
   const { message } = props;
   const mine = message.from === "person";
   const state = messageStateLabel(message.state, null);
   return (
     <div
-      className={`flex max-w-[88%] gap-2 ${mine ? "ml-auto flex-row-reverse" : ""}`}
+      className={`flex max-w-7/8 gap-2 ${mine ? "ml-auto flex-row-reverse" : ""}`}
       data-linked-message={message.seq}
       data-message-kind={message.kind}
       data-message-state={message.state}
     >
-      <Avatar name={message.by} seat={!mine} detail={mine ? message.by : `${message.by}, team`} />
+      <Avatar
+        name={message.by}
+        seat={!mine}
+        detail={mine ? message.by : gt("{author}, team", { author: message.by })}
+      />
       <div
         className={`flex min-w-0 flex-col gap-1 rounded-lg border border-border px-3 py-2 text-sm ${
           mine ? "bg-accent" : ""
@@ -449,12 +470,15 @@ function LinkedComposer(props: {
   readonly onComment: (text: string) => void;
   readonly onSteer: (text: string) => void;
 }) {
+  const gt = useGT();
   const [text, setText] = useState("");
   return (
     <div className="flex shrink-0 flex-col gap-2 border-t border-border p-3" data-linked-composer>
       <Textarea
-        aria-label="Write to the task"
-        placeholder="Write to the task: a message for the record, or an instruction for the work"
+        aria-label={gt("Write to the task")}
+        placeholder={gt(
+          "Write to the task: a message for the record, or an instruction for the work",
+        )}
         value={text}
         disabled={props.busy}
         onChange={(event) => setText(event.target.value)}
@@ -469,7 +493,7 @@ function LinkedComposer(props: {
           }}
           data-linked-comment
         >
-          Send message
+          <T>Send message</T>
         </Button>
         <Button
           size="sm"
@@ -481,11 +505,13 @@ function LinkedComposer(props: {
           }}
           data-linked-steer
         >
-          Give the instruction
+          <T>Give the instruction</T>
         </Button>
         <p className="min-w-0 flex-1 text-2xs text-muted-foreground">
-          An instruction reaches every seat at work; the step starts again with it once they have
-          ended.
+          <T>
+            An instruction reaches every seat at work; the step starts again with it once they have
+            ended.
+          </T>
         </p>
       </div>
     </div>

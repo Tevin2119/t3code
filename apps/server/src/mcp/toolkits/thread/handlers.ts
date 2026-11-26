@@ -164,8 +164,11 @@ export const layer = McpToolAccess.toLayer(ThreadToolkit, {
       const { matches } = yield* threadSearch
         .searchThreads({ ...input, projectId: input.projectId ?? caller?.projectId })
         .pipe(Effect.mapError(unavailable));
-      const visible = yield* filterPeerThreadRows(scope, matches, (match) =>
-        threads.getThreadShell(match.threadId).pipe(Effect.orElseSucceed(() => null)),
+      const visible = yield* filterPeerThreadRows(
+        scope,
+        matches,
+        (match) => threads.getThreadShell(match.threadId).pipe(Effect.orElseSucceed(() => null)),
+        threads,
       );
       return {
         currentThreadId: scope.thread?.threadId ?? null,

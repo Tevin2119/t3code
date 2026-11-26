@@ -515,8 +515,6 @@ const make = Effect.gen(function* () {
     const environment = yield* ServerEnvironment.ServerEnvironment;
     const environmentId = yield* environment.getEnvironmentId;
     const challenge = yield* newId;
-    const claim = yield* PeerLinks.hashArrivalProof(crypto, challenge, sessionId, "claim");
-    const expected = yield* PeerLinks.hashArrivalProof(crypto, challenge, sessionId, "proof");
     const stored = yield* links.listStored.pipe(Effect.orElseSucceed(() => []));
     const now = yield* DateTime.now;
     const eligible = stored.filter(
@@ -528,24 +526,39 @@ const make = Effect.gen(function* () {
     const matching = yield* Effect.forEach(
       eligible,
       (link) =>
-        peers
-          .call({
-            environmentId: link.environmentId,
-            tool: "delivery_linked_origin",
-            arguments: { environmentId, challenge, claim },
-            limits: { runtimeMode: "full-access", interactionMode: "default" },
-            success: LinkedArrivalProofResult,
-            maxResponseBytes: 4096,
-          })
-          .pipe(
-            Effect.timeout("15 seconds"),
-            Effect.map((answer) =>
-              answer.environmentId === link.environmentId && answer.proof === expected
-                ? link.environmentId
-                : null,
-            ),
-            Effect.orElseSucceed(() => null),
-          ),
+        Effect.gen(function* () {
+          const callerSessionId = yield* links.actingSessionId(link.environmentId);
+          if (callerSessionId === null) return null;
+          const claim = yield* PeerLinks.hashArrivalProof(
+            crypto,
+            challenge,
+            sessionId,
+            "claim",
+            link.environmentId,
+            callerSessionId,
+          );
+          const expected = yield* PeerLinks.hashArrivalProof(
+            crypto,
+            challenge,
+            sessionId,
+            "proof",
+            link.environmentId,
+            callerSessionId,
+          );
+          const answer = yield* peers
+            .call({
+              environmentId: link.environmentId,
+              tool: "delivery_linked_origin",
+              arguments: { environmentId, challenge, claim },
+              limits: { runtimeMode: "full-access", interactionMode: "default" },
+              success: LinkedArrivalProofResult,
+              maxResponseBytes: 4096,
+            })
+            .pipe(Effect.timeout("15 seconds"));
+          return answer.environmentId === link.environmentId && answer.proof === expected
+            ? link.environmentId
+            : null;
+        }).pipe(Effect.orElseSucceed(() => null)),
       { concurrency: 4 },
     );
     const matches = matching.filter((peer) => peer !== null);
@@ -580,10 +593,7 @@ const make = Effect.gen(function* () {
     const scope = yield* Effect.serviceOption(McpInvocationContext.McpInvocationContext);
     if (Option.getOrUndefined(scope)?.client?.linked === true || !(yield* links.enabled))
       return null;
-    const known = (yield* links.listStored.pipe(Effect.orElseSucceed(() => []))).find(
-      (link) => link.environmentId === peer,
-    );
-    return known ? known.environmentId : yield* provePeer(peer, expectedPeer);
+    return yield* provePeer(peer, expectedPeer);
   });
 
   const returnId = Effect.fn("PeerForwarding.returnId")(function* (handoff: string) {

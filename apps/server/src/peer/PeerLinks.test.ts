@@ -196,21 +196,35 @@ it.effect("links with a pairing code, and the peer holds its agents to the limit
       const session = sessions[0]!;
       const digest = yield* Digest.Digest;
       const challenge = "random-challenge";
+      const callerSessionId = "reciprocal-link";
       const claim = yield* PeerLinks.hashArrivalProof(
         digest,
         challenge,
         session.sessionId,
         "claim",
+        laptop.environmentId,
+        callerSessionId,
       );
       const proof = yield* PeerLinks.hashArrivalProof(
         digest,
         challenge,
         session.sessionId,
         "proof",
+        laptop.environmentId,
+        callerSessionId,
       );
-      expect(yield* a.links.arrivalProof(box.environmentId, challenge, claim)).toBe(proof);
-      expect(yield* a.links.arrivalProof(box.environmentId, "other-challenge", claim)).toBeNull();
-      expect(yield* a.links.arrivalProof(box.environmentId, challenge, proof)).toBeNull();
+      expect(
+        yield* a.links.arrivalProof(box.environmentId, challenge, claim, callerSessionId),
+      ).toBe(proof);
+      expect(
+        yield* a.links.arrivalProof(box.environmentId, "other-challenge", claim, callerSessionId),
+      ).toBeNull();
+      expect(
+        yield* a.links.arrivalProof(box.environmentId, challenge, proof, callerSessionId),
+      ).toBeNull();
+      expect(
+        yield* a.links.arrivalProof(box.environmentId, challenge, claim, "another-link"),
+      ).toBeNull();
       expect(
         (yield* a.links.list).map(({ environmentId, status }) => [environmentId, status]),
       ).toEqual([[box.environmentId, "reachable"]]);

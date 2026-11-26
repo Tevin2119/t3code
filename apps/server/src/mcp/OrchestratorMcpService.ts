@@ -126,6 +126,7 @@ import * as ScheduledTaskService from "../scheduledTasks/ScheduledTaskService.ts
 import * as ServerSettings from "../serverSettings.ts";
 import {
   clientModeCeiling,
+  isLinkedDeliveryCaller,
   type McpInvocationScope,
   type McpThreadInvocationScope,
   requireThreadScope,
@@ -2513,7 +2514,7 @@ const make = Effect.gen(function* () {
             (projectId === undefined || task.projectId === projectId) &&
             (input.scheduledTaskId === undefined || task.id === input.scheduledTaskId),
         );
-        if (scope.client?.linked !== true) {
+        if (!isLinkedDeliveryCaller(scope)) {
           return { tasks: matching.map((task) => scheduledTaskSummary(task, false)) };
         }
         const bound = matching.flatMap((task) =>
@@ -2525,6 +2526,7 @@ const make = Effect.gen(function* () {
             bound,
             ({ threadId }) =>
               threadManagement.getThreadShell(threadId).pipe(Effect.orElseSucceed(() => null)),
+            threadManagement,
             delivery,
           )).map(({ taskId }) => taskId),
         );
@@ -3388,6 +3390,7 @@ const make = Effect.gen(function* () {
                   interactionMode,
                   branch: parent.thread.branch,
                   worktreePath: parent.thread.worktreePath,
+                  launchedFromThreadId: parent.thread.id,
                   ...(parent.thread.linkOrigin === undefined
                     ? {}
                     : { linkOrigin: parent.thread.linkOrigin }),
@@ -3543,7 +3546,13 @@ const make = Effect.gen(function* () {
               ),
             )
           : null;
-      const visible = yield* filterPeerThreadRows(scope, projectThreads, Effect.succeed, delivery);
+      const visible = yield* filterPeerThreadRows(
+        scope,
+        projectThreads,
+        ({ id }) => threadManagement.getThreadShell(id).pipe(Effect.orElseSucceed(() => null)),
+        threadManagement,
+        delivery,
+      );
       const candidates = visible
         .filter((thread) => mayBeLiveIds === null || mayBeLiveIds.has(thread.id))
         .filter(

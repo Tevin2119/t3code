@@ -1,6 +1,7 @@
 import { expect, it } from "@effect/vitest";
 import {
   DeliveryError,
+  type DeliveryThreadState,
   EnvironmentId,
   OrchestratorMcpEnvironmentTarget,
   OrchestratorMcpFailure,
@@ -548,88 +549,130 @@ it.effect("refuses to build a thread-bound tool that outside clients would be of
   }),
 );
 
-it.effect.each(["private", "shared", "offline", "wrong-environment", "owner"] as const)(
-  "checks thread targets before invoking the handler for %s",
-  (visibility) => {
-    const id = ThreadId.make("thread:delegated-task:command%3Aexample");
-    const target = liveThreadShell(id);
-    const tools = Toolkit.make(
-      Tool.make("test_thread_target", {
-        parameters: Schema.Struct({
-          threadId: ThreadId,
-          targetThreadId: Schema.optional(ThreadId),
-        }),
-        success: Schema.Struct({ ran: Schema.String }),
-        failure: OrchestratorMcpFailure,
-        failureMode: "return",
-        dependencies: [McpInvocationContext.McpInvocationContext],
+it.effect.each([
+  "private",
+  "shared",
+  "offline",
+  "wrong-environment",
+  "owner",
+  "source",
+  "owner-index-offline",
+  "pending",
+  "descendant",
+] as const)("checks thread targets before invoking the handler for %s", (visibility) => {
+  const id = ThreadId.make("thread:delegated-task:command%3Aexample");
+  const parent = ThreadId.make("launching-thread");
+  const base = liveThreadShell(id);
+  const target =
+    visibility === "descendant"
+      ? {
+          ...base,
+          lineage: { ...base.lineage, launchedFromThreadId: parent },
+        }
+      : base;
+  const tools = Toolkit.make(
+    Tool.make("test_thread_target", {
+      parameters: Schema.Struct({
+        threadId: ThreadId,
+        targetThreadId: Schema.optional(ThreadId),
       }),
-    );
-    const owner = visibility === "owner";
-    const visible = visibility === "shared";
-    let engineCalls = 0;
-    const delivery = Layer.effect(
-      DeliveryService.DeliveryService,
-      Effect.map(DeliveryService.DeliveryService, (service) => ({
-        ...service,
-        threadState: (threadId) =>
-          threadId === id
+      success: Schema.Struct({ ran: Schema.String }),
+      failure: OrchestratorMcpFailure,
+      failureMode: "return",
+      dependencies: [McpInvocationContext.McpInvocationContext],
+    }),
+  );
+  const owner = visibility === "owner";
+  const visible = visibility === "shared";
+  let engineCalls = 0;
+  const delivery = Layer.effect(
+    DeliveryService.DeliveryService,
+    Effect.map(DeliveryService.DeliveryService, (service) => ({
+      ...service,
+      ownerTiedThreads: Effect.fn("fixture.ownerTiedThreads")(function* () {
+        if (visibility === "owner-index-offline")
+          return yield* new DeliveryError({
+            reason: "unreachable",
+            detail: "Fixture engine offline.",
+          });
+        return new Set<ThreadId>(visibility === "source" ? [id] : []);
+      }),
+      threadState: (threadId): Effect.Effect<DeliveryThreadState, DeliveryError> =>
+        visibility === "pending" && threadId === id
+          ? Effect.succeed({
+              binding: null,
+              pending: {
+                threadId,
+                team: "development",
+                driver: "codex",
+                role: null,
+                cwd: "/tmp",
+                since: "now",
+                why: null,
+              },
+            })
+          : (
+                visibility === "descendant"
+                  ? threadId === parent
+                  : visibility !== "source" &&
+                    visibility !== "owner-index-offline" &&
+                    threadId === id
+              )
             ? Effect.fail(
                 new DeliveryError({ reason: "invalid", detail: "Fixture binding lookup failed." }),
               )
             : service.threadState(threadId),
-        linkedThreads: Effect.suspend(() => {
-          engineCalls++;
-          if (visibility === "offline")
-            return Effect.fail(
-              new DeliveryError({ reason: "unreachable", detail: "Fixture refusal." }),
-            );
-          return Effect.succeed({
-            threads:
-              visibility === "private"
-                ? []
-                : [
-                    {
-                      threadId: id,
-                      environmentId: visible
-                        ? fullAccessLinkedClient.environmentId
-                        : EnvironmentId.make("other"),
-                      tasks: [{ id: "task-demo", number: 1, kind: "board-thread" }],
-                    },
-                  ],
-          });
-        }),
-      })),
-    ).pipe(Layer.provide(DeliveryService.layerTest));
-    const server = McpHttpServer.toolkitRegistration(
-      tools,
-      McpToolAccess.toLayer(tools, {
-        test_thread_target: McpToolAccess.reads(() => Effect.succeed({ ran: "ran" })),
+      linkedThreads: Effect.suspend(() => {
+        engineCalls++;
+        if (visibility === "offline" || visibility === "pending" || visibility === "descendant")
+          return Effect.fail(
+            new DeliveryError({ reason: "unreachable", detail: "Fixture refusal." }),
+          );
+        return Effect.succeed({
+          threads:
+            visibility === "private" || visibility === "source"
+              ? []
+              : [
+                  {
+                    threadId: id,
+                    environmentId: visible
+                      ? fullAccessLinkedClient.environmentId
+                      : EnvironmentId.make("other"),
+                    tasks: [{ id: "task-demo", number: 1, kind: "board-thread" }],
+                  },
+                ],
+        });
       }),
-    ).pipe(
-      Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
-      Layer.provide(delivery),
-      Layer.provide(
-        Layer.mock(ThreadManagement.ThreadManagementService)({
-          getThreadShell: (threadId) =>
-            Effect.succeed(threadId === id ? target : liveThreadShell(threadId)),
-        }),
-      ),
+    })),
+  ).pipe(Layer.provide(DeliveryService.layerTest));
+  const server = McpHttpServer.toolkitRegistration(
+    tools,
+    McpToolAccess.toLayer(tools, {
+      test_thread_target: McpToolAccess.reads(() => Effect.succeed({ ran: "ran" })),
+    }),
+  ).pipe(
+    Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
+    Layer.provide(delivery),
+    Layer.provide(
+      Layer.mock(ThreadManagement.ThreadManagementService)({
+        getThreadShell: (threadId) =>
+          Effect.succeed(threadId === id ? target : liveThreadShell(threadId)),
+      }),
+    ),
+  );
+  const scope = owner ? fullAccessClient : fullAccessLinkedClient;
+  return Effect.gen(function* () {
+    const expected = owner || visible ? "ran" : "thread_not_found";
+    expect(yield* call("test_thread_target", scope, { threadId: id })).toBe(expected);
+    expect(
+      yield* call("test_thread_target", scope, {
+        threadId: fullAccessThreadId,
+        targetThreadId: id,
+      }),
+    ).toBe(expected);
+    expect(engineCalls).toBe(owner || visibility === "owner-index-offline" ? 0 : 2);
+    expect(yield* call("test_thread_target", scope, { threadId: fullAccessThreadId })).toBe(
+      visibility === "owner-index-offline" ? "thread_not_found" : "ran",
     );
-    const scope = owner ? fullAccessClient : fullAccessLinkedClient;
-    return Effect.gen(function* () {
-      const expected = owner || visible ? "ran" : "thread_not_found";
-      expect(yield* call("test_thread_target", scope, { threadId: id })).toBe(expected);
-      expect(
-        yield* call("test_thread_target", scope, {
-          threadId: fullAccessThreadId,
-          targetThreadId: id,
-        }),
-      ).toBe(expected);
-      expect(engineCalls).toBe(owner ? 0 : 2);
-      expect(yield* call("test_thread_target", scope, { threadId: fullAccessThreadId })).toBe(
-        "ran",
-      );
-    }).pipe(Effect.provide(server));
-  },
-);
+  }).pipe(Effect.provide(server));
+});

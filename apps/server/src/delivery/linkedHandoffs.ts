@@ -5,6 +5,7 @@ import {
   LinkedArrival,
   LinkedDeliveryId,
   LinkedHandoffPrepared,
+  LinkedHandoffPeerId,
   LinkedHandoffReceipt,
   LinkedHandoffSummary,
   type LinkedBringInput,
@@ -56,7 +57,10 @@ const completion = Schema.Struct({
   handoff: LinkedDeliveryId,
   outcome: Schema.Literals(["done", "restored"]),
 });
+const encodeBundle = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
 const isId = Schema.is(LinkedDeliveryId);
+const isPeerId = Schema.is(LinkedHandoffPeerId);
+const isPullHandoff = (id: string) => /^lk-[a-f0-9]{40}$/.test(id);
 const validKey = (key: Credentials["key"]) => {
   const passphrase = Redacted.value(key);
   return passphrase.length > 0 && Buffer.byteLength(passphrase) <= 1024;
@@ -252,7 +256,11 @@ export function makeLinkedHandoffs(
     if (!validKey(input.key))
       return refused(requestedHandoff, "Enter the approval passphrase for this machine.");
     const { peerEnvironmentId: peer, boardId } = target;
-    if (![input.taskId, boardId, peer, requestedHandoff].every(isId))
+    if (
+      ![input.taskId, boardId, requestedHandoff].every(isId) ||
+      !isPeerId(peer) ||
+      (direction === "send" && isPullHandoff(requestedHandoff))
+    )
       return refused(requestedHandoff, "Invalid hand-off identifier.");
     const link = yield* actingPeer(peer).pipe(Effect.result);
     if (Result.isFailure(link)) return refused(requestedHandoff, link.failure.detail);
@@ -304,6 +312,16 @@ export function makeLinkedHandoffs(
       return needsPerson(handoff, direction, "prepare", "unknown", invalid.detail);
     }
     const transfer = { root: bundle.root, tasks: bundle.tasks.map((task) => task.id), digest };
+    const encoded = direction === "bring" ? yield* encodeBundle(bundle).pipe(Effect.option) : null;
+    if (
+      encoded !== null &&
+      (encoded._tag === "None" ||
+        Buffer.byteLength(encoded.value) > LINKED_HANDOFF_BUNDLE_MAX_BYTES)
+    ) {
+      const message = "The received bundle exceeds the linked hand-off size limit.";
+      const outcome = yield* finish(direction, peer, handoff, transfer, input, undefined, message);
+      return outcome.outcome === "restored" ? refused(handoff, message) : outcome;
+    }
     const imported = yield* (
       direction === "bring"
         ? owner(LinkedHandoffReceipt, "POST", "/api/handoffs/import", {
@@ -396,7 +414,9 @@ export function makeLinkedHandoffs(
     const { direction, handoff, peerEnvironmentId: peer } = input;
     if (!validKey(input.key))
       return refused(handoff, "Enter the approval passphrase for this machine.");
-    if (!isId(handoff)) return refused(handoff, "Invalid hand-off identifier.");
+    if (!isId(handoff) || !isPeerId(peer)) return refused(handoff, "Invalid hand-off identifier.");
+    if (isPullHandoff(handoff) !== (direction === "bring"))
+      return refused(handoff, "The hand-off does not match that direction.");
     const link = yield* actingPeer(peer).pipe(Effect.result);
     if (Result.isFailure(link))
       return needsPerson(handoff, direction, "settle", "unknown", link.failure.detail, "unknown");

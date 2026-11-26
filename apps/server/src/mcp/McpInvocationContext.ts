@@ -1,6 +1,7 @@
 import {
   type AgentFeedbackMode,
   type AuthMcpClientAccess,
+  type OrchestrationV2LinkOrigin,
   type EnvironmentId,
   McpCapabilityUnavailableError,
   OrchestratorMcpFailure,
@@ -32,6 +33,8 @@ export interface McpThreadCaller {
   readonly threadId: ThreadId;
   readonly providerSessionId: string;
   readonly providerInstanceId: ProviderInstanceId;
+  readonly linkOrigin?: OrchestrationV2LinkOrigin;
+  readonly deliveryOriginUnknown?: boolean;
   /** A delegated child task; its parent owns the work it hands back. */
   readonly subagent?: boolean;
 }
@@ -167,6 +170,11 @@ export interface McpInvocationScope {
   /** False when the calling thread's project is on no forge T3 reads; `/mcp` reads it per request. */
   readonly forge?: boolean;
 }
+
+export const isLinkedDeliveryCaller = (scope: McpInvocationScope | undefined): boolean =>
+  scope?.client?.linked === true ||
+  scope?.thread?.linkOrigin !== undefined ||
+  scope?.thread?.deliveryOriginUnknown === true;
 
 /**
  * T3 Code renders `t3-thread://` links as thread chips. Other MCP clients cannot open them, so
