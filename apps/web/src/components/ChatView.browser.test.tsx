@@ -1206,8 +1206,9 @@ async function renderBoardTaskLineage() {
 
 it("a board task's seat conversation is a lineage row that opens at its own route", async () => {
   await using view = await renderBoardTaskLineage();
-  await expect.element(view.lineage.getByText(view.filedFrom.title)).toBeVisible();
-  await view.lineage.getByRole("button", { name: /qa/ }).click();
+  const row = view.lineage.getByRole("button", { name: /qa/ });
+  await expect.element(row).toBeVisible();
+  await row.click();
   await expect
     .poll(() => view.router.state.location.pathname)
     .toBe(`/${ENVIRONMENT_ID}/${view.seat.id}`);
@@ -1215,8 +1216,12 @@ it("a board task's seat conversation is a lineage row that opens at its own rout
 
 it("the thread a board task was filed from is a lineage row that opens at its own route", async () => {
   await using view = await renderBoardTaskLineage();
-  await expect.element(view.lineage.getByText(view.filedFrom.title)).toBeVisible();
-  await view.lineage.getByText(view.filedFrom.title).click();
+  // Named by the thread's title once the shell has it, else by what it is.
+  const row = view.lineage.getByRole("button", {
+    name: new RegExp(`${view.filedFrom.title}|The conversation this task came from`),
+  });
+  await expect.element(row).toBeVisible();
+  await row.click();
   await expect
     .poll(() => view.router.state.location.pathname)
     .toBe(`/${ENVIRONMENT_ID}/${view.filedFrom.id}`);
