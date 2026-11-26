@@ -11,6 +11,8 @@ import {
   openSeatThread,
   seatChildrenWithAttestations,
   seatConversation,
+  seatEnvironmentsNeedingLinks,
+  seatLinksRefreshKey,
   seatOfThread,
   steadySeatThread,
   taskConversation,
@@ -142,6 +144,49 @@ describe("a seat's conversation", () => {
   const reach = (own: { readonly connected: boolean } | undefined, linked: boolean) => ({
     ownConnection: () => own,
     isLinked: () => linked,
+  });
+
+  it("asks for the links of each machine a seat runs on that this client is not connected to", () => {
+    const other = EnvironmentId.make("env-other");
+    const seats = [
+      ...children,
+      {
+        childThreadId: null,
+        remoteChild: { environmentId: remote, threadId: id("again"), label: "Desktop" },
+      },
+      {
+        childThreadId: null,
+        remoteChild: { environmentId: other, threadId: id("child-o"), label: "Laptop" },
+      },
+    ];
+    // A saved but offline connection still needs the link, so an offline machine is wanted too.
+    const offline = (environmentId: EnvironmentId) =>
+      environmentId === remote ? { connected: false } : undefined;
+    expect(seatEnvironmentsNeedingLinks(seats, offline)).toEqual([remote, other]);
+    expect(
+      seatEnvironmentsNeedingLinks(seats, (environmentId) =>
+        environmentId === remote ? { connected: true } : undefined,
+      ),
+    ).toEqual([other]);
+    expect(seatEnvironmentsNeedingLinks(children.slice(0, 5), offline)).toEqual([]);
+  });
+
+  it("keeps a machine whose id has a comma whole, and asks again only when the machines change", () => {
+    const comma = EnvironmentId.make("env-a,env-b");
+    const [a, b] = [EnvironmentId.make("env-a"), EnvironmentId.make("env-b")];
+    const seat = (environmentId: EnvironmentId) => ({
+      childThreadId: null,
+      remoteChild: { environmentId, threadId: id(`on-${environmentId}`), label: "Desktop" },
+    });
+    expect(seatEnvironmentsNeedingLinks([seat(comma)], () => undefined)).toEqual([comma]);
+    expect(seatLinksRefreshKey(ref.environmentId, [comma])).not.toBe(
+      seatLinksRefreshKey(ref.environmentId, [a, b]),
+    );
+    expect(seatLinksRefreshKey(ref.environmentId, [b, a])).toBe(
+      seatLinksRefreshKey(ref.environmentId, [a, b]),
+    );
+    expect(seatLinksRefreshKey(ref.environmentId, [])).toBe("");
+    expect(seatLinksRefreshKey(null, [a])).toBe("");
   });
 
   it("is the seat's newest delegated child in the same environment", () => {

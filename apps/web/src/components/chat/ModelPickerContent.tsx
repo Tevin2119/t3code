@@ -70,7 +70,6 @@ import {
 import { announce } from "~/lib/announce";
 import { cn } from "~/lib/utils";
 import { getVirtualizedScrollFadeClassName } from "../ui/scroll-area";
-import { TooltipProvider } from "../ui/tooltip";
 import { InlineButton } from "../ui/button";
 import { Badge } from "../ui/badge";
 import {
@@ -724,6 +723,7 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
         lockedProvider !== null ? result.filter((m) => matchesLockedProvider(m)) : result;
       return rankModelPickerSearch(candidates, searchQuery, (model) => ({
         name: model.name,
+        slug: model.slug,
         ...(model.shortName ? { shortName: model.shortName } : {}),
         ...(model.subProvider ? { subProvider: model.subProvider } : {}),
         driverKind: model.driverKind,
@@ -972,7 +972,7 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
   };
 
   return (
-    <TooltipProvider delay={0}>
+    <>
       <WindowKeyDownListener onKeyDown={onWindowKeyDown} />
       <div
         ref={pickerContentRef}
@@ -1309,6 +1309,6 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
           </Combobox>
         )}
       </div>
-    </TooltipProvider>
+    </>
   );
 });
