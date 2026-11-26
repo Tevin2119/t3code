@@ -12,16 +12,20 @@ import {
   type OrchestrationV2StoredEvent,
   type ThreadId,
 } from "@t3tools/contracts";
+import { writeFileStringAtomically } from "@t3tools/shared/atomicWrite";
 import { modelAccountFamily } from "@t3tools/shared/limitedSeat";
 import { createModelSelection } from "@t3tools/shared/model";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 
+import { ServerConfig } from "../config.ts";
 import * as EventStore from "../orchestration-v2/EventStore.ts";
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
@@ -47,7 +51,7 @@ interface Activity {
   readonly kind: ActivityKind;
   readonly excerpt: string | null;
   /** A person's words typed in this conversation, told to the engine as its steer once. */
-  readonly thread: string | null;
+  readonly steer: { readonly messageId: string; readonly text: string } | null;
 }
 
 const STEER_MESSAGE_PREFIX = "message:board-steer:";
@@ -129,7 +133,7 @@ function scanActivity(
         at: DateTime.formatIso(event.occurredAt),
         kind: steer ? "steer" : "message",
         excerpt: steer ? null : excerptOf(message.text),
-        thread: typed && message.text.trim() ? message.text : null,
+        steer: typed && message.text.trim() ? { messageId: message.id, text: message.text } : null,
       });
       continue;
     }
@@ -145,7 +149,7 @@ function scanActivity(
         at: DateTime.formatIso(event.occurredAt),
         kind: "summary",
         excerpt: excerptOf(reply),
-        thread: null,
+        steer: null,
       });
     }
   }
@@ -200,6 +204,12 @@ const codeOf = (error: DeliveryError) => {
   return Option.isSome(decoded) ? (decoded.value.code ?? null) : null;
 };
 
+/** Thread steers this server has told, kept across restarts; the oldest are forgotten past it. */
+const STEERED_KEPT = 2000;
+const SteeredFile = Schema.fromJsonString(Schema.Struct({ steered: Schema.Array(Schema.String) }));
+const decodeSteered = Schema.decodeUnknownOption(SteeredFile);
+const encodeSteered = Schema.encodeEffect(SteeredFile);
+
 const ACTIVE_RUN_STATUSES = ["preparing", "queued", "starting", "running", "waiting"] as const;
 
 /** Refusals that never pass: the steer is told failed. Any other failure is tried next pass. */
@@ -233,6 +243,36 @@ export const make = Effect.gen(function* () {
   const projections = yield* ProjectionStore.ProjectionStoreV2;
   const threads = yield* ThreadManagementService.ThreadManagementService;
   const instances = yield* ProviderInstanceRegistry.ProviderInstanceRegistry;
+  const fileSystem = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const config = yield* ServerConfig;
+  // The engine's steer route takes no key to dedupe on, so which person's words were told is
+  // kept here: a mirror lost after its steer, then a restart, must not tell them twice.
+  const steeredPath = path.join(config.stateDir, "delivery-thread-steers.json");
+  const steered = new Set(
+    yield* fileSystem.readFileString(steeredPath).pipe(
+      Effect.map((text) => {
+        const decoded = decodeSteered(text);
+        return Option.isSome(decoded) ? decoded.value.steered : [];
+      }),
+      Effect.orElseSucceed((): ReadonlyArray<string> => []),
+    ),
+  );
+  const rememberSteer = Effect.fn("BoardConversation.rememberSteer")(function* (key: string) {
+    steered.add(key);
+    for (const old of steered) {
+      if (steered.size <= STEERED_KEPT) break;
+      steered.delete(old);
+    }
+    yield* encodeSteered({ steered: [...steered] }).pipe(
+      Effect.flatMap((contents) => writeFileStringAtomically({ filePath: steeredPath, contents })),
+      Effect.provideService(FileSystem.FileSystem, fileSystem),
+      Effect.provideService(Path.Path, path),
+      Effect.catchCause((cause) =>
+        Effect.logWarning("Which thread steers were told could not be saved.", { cause }),
+      ),
+    );
+  });
   // Kept in memory: after a restart each task starts again from the engine's highest seq.
   const scans = new Map<string, ScanState>();
   const floors = new Map<string, number>();
@@ -277,27 +317,33 @@ export const make = Effect.gen(function* () {
 
   /**
    * A person's words typed in the conversation, given to the run as a steer from the thread: the
-   * engine never queues one back, so it is not delivered here a second time. `false` while the
-   * engine is away, to be told on a later pass; any answer, a refusal included, settles it.
+   * engine never queues one back, so it is not delivered here a second time. `false` only when
+   * the engine did not answer, to be told on a later pass; any answer, a refusal or a server
+   * error included, settles it and is remembered across restarts.
    */
   const tellSteer = Effect.fn("BoardConversation.tellSteer")(function* (
     taskId: string,
-    text: string,
+    threadId: ThreadId,
+    steer: { readonly messageId: string; readonly text: string },
   ) {
+    const key = `${threadId}\u0000${steer.messageId}`;
+    if (steered.has(key)) return true;
     const told = yield* post(`/api/tasks/${taskId}/steer`, {
-      text,
+      text: steer.text,
       by: "person",
       from: "thread",
+      // Stable per message, for an engine that dedupes on it; today's engine ignores it.
+      ref: `thread:${threadId}:${steer.messageId}`,
     });
-    if (told._tag === "Success") return true;
-    const status = told.failure.status;
-    if (status === undefined || status >= 500) return false;
+    if (told._tag === "Failure" && told.failure.status === undefined) return false;
+    yield* rememberSteer(key);
     // A task with no run under way is refused 409: the lead reads the words in the thread itself.
-    yield* Effect.logDebug("A person's words in a task thread were not taken as a steer.", {
-      task: taskId,
-      status,
-      code: codeOf(told.failure),
-    });
+    if (told._tag === "Failure")
+      yield* Effect.logDebug("A person's words in a task thread were not taken as a steer.", {
+        task: taskId,
+        status: told.failure.status,
+        code: codeOf(told.failure),
+      });
     return true;
   });
 
@@ -345,9 +391,9 @@ export const make = Effect.gen(function* () {
       if (sent >= INGESTS_PER_PASS) break;
       // Told before the item is mirrored, and told once: a later retry of the ingest sends only
       // the ingest. Only a task in work has a run to steer.
-      if (item.thread !== null) {
-        if (steering && !(yield* tellSteer(card.id, item.thread))) break;
-        queued[index] = { ...item, thread: null };
+      if (item.steer !== null) {
+        if (steering && !(yield* tellSteer(card.id, threadId, item.steer))) break;
+        queued[index] = { ...item, steer: null };
       }
       const answer = yield* post(`/api/tasks/${card.id}/activity`, {
         at: item.at,

@@ -2303,3 +2303,54 @@ it.effect("tells the engine a person's words in a task thread as a thread steer,
     assert.equal(engine.activityOf("task-7").at(-1)?.kind, "steer");
   }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-thread-steer-")));
 });
+
+it.effect("tells a person's words once across a restart after their mirror was lost", () => {
+  const engine = board();
+  engine.addTask({ id: "task-7", run: { id: "run-1" } });
+  const store = threadStore();
+  return Effect.gen(function* () {
+    yield* (yield* service(store)).reconcile();
+    store.say(THREAD, "m-1", "Use the other API", "user");
+    // The steer is taken, then its mirror is lost, and the server restarts before the next pass.
+    engine.dropNext(/\/activity$/);
+    yield* (yield* service(store)).reconcile();
+    assert.equal(engine.steeredOf("task-7").length, 1);
+    assert.equal(engine.activityOf("task-7").length, 0);
+    const restarted = yield* service(store);
+    yield* restarted.reconcile();
+    yield* restarted.reconcile();
+    assert.deepEqual(
+      engine.steeredOf("task-7").map(({ text }) => text),
+      ["Use the other API"],
+    );
+    // The steer carries a key stable per message, for an engine that dedupes on it.
+    const refs = engine.requests
+      .filter((request) => request.path.endsWith("/steer"))
+      .map((request) => (request.body as { ref?: string }).ref);
+    assert.deepEqual(refs, [`thread:${THREAD}:m-1`]);
+    assert.deepEqual(
+      engine.activityOf("task-7").map((row) => row.kind),
+      ["steer"],
+    );
+  }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-steer-restart-")));
+});
+
+it.effect("takes an engine error with a body as its answer to a thread steer", () => {
+  const engine = board();
+  engine.addTask({ id: "task-7", run: { id: "run-1" } });
+  const store = threadStore();
+  return Effect.gen(function* () {
+    const threads = yield* service(store);
+    yield* threads.reconcile();
+    store.say(THREAD, "m-1", "Use the other API", "user");
+    engine.answerNext(/\/steer$/, 500, { error: "the run could not be told" });
+    yield* threads.reconcile();
+    yield* threads.reconcile();
+    assert.equal(engine.requests.filter((request) => request.path.endsWith("/steer")).length, 1);
+    // The mirror goes on past it.
+    assert.deepEqual(
+      engine.activityOf("task-7").map((row) => row.kind),
+      ["steer"],
+    );
+  }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-steer-error-")));
+});

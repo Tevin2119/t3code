@@ -107,6 +107,8 @@ export function scratchEngine(
   const steered: Array<{ task: string; text: string; by: string; from: string }> = [];
   /** Requests whose path matches are lost on the way, once each, as a dropped connection. */
   const drops: Array<RegExp> = [];
+  /** Requests whose path matches are answered with this instead, once each, before routing. */
+  const answers: Array<{ readonly path: RegExp; readonly answer: Answer }> = [];
   let teams: unknown = [];
   let clock = Date.parse("2026-11-22T10:00:00.000Z");
   let holderSeq = 0;
@@ -349,6 +351,8 @@ export function scratchEngine(
   const handle = (method: string, pathname: string, raw: unknown): Answer => {
     const body = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
     requests.push({ method, path: pathname, body: raw });
+    const forced = answers.findIndex((entry) => entry.path.test(pathname));
+    if (forced >= 0) return answers.splice(forced, 1)[0]!.answer;
     if (method === "GET" && pathname === "/api/lanes") {
       // A task that moved away has no lane and is on no board; one on its way keeps its lane.
       const cards = [...tasks.values()].filter((task) => task.state !== "moved").map(cardOf);
@@ -541,6 +545,10 @@ export function scratchEngine(
     },
     dropNext: (path: RegExp) => {
       drops.push(path);
+    },
+    /** The next request to `path` is answered so, as a failing engine would answer it. */
+    answerNext: (path: RegExp, status: number, body: unknown) => {
+      answers.push({ path, answer: { status, body } });
     },
     /** Whether this request is lost on the way: true once for each drop that matches it. */
     drops: (path: string) => {
