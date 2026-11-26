@@ -147,6 +147,7 @@ describe("parseElicitationForm", () => {
           { label: "Hotfix", description: "Hotfix.", value: "Hotfix" },
         ],
         allowCustomAnswer: false,
+        required: false,
       },
       {
         id: "q1",
