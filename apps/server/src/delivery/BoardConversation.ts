@@ -46,6 +46,8 @@ interface Activity {
   readonly at: string;
   readonly kind: ActivityKind;
   readonly excerpt: string | null;
+  /** A person's words typed in this conversation, told to the engine as its steer once. */
+  readonly thread: string | null;
 }
 
 const STEER_MESSAGE_PREFIX = "message:board-steer:";
@@ -117,15 +119,17 @@ function scanActivity(
       }
       if (message.role !== "user" || state.messages.has(message.id)) continue;
       state.messages.add(message.id);
+      const typed = message.createdBy === "user";
       const steer =
         message.id.startsWith(STEER_MESSAGE_PREFIX) ||
         message.id.startsWith(HANDOFF_NOTICE_PREFIX) ||
-        message.createdBy === "user";
+        typed;
       found.push({
         seq: stored.sequence,
         at: DateTime.formatIso(event.occurredAt),
         kind: steer ? "steer" : "message",
         excerpt: steer ? null : excerptOf(message.text),
+        thread: typed && message.text.trim() ? message.text : null,
       });
       continue;
     }
@@ -141,6 +145,7 @@ function scanActivity(
         at: DateTime.formatIso(event.occurredAt),
         kind: "summary",
         excerpt: excerptOf(reply),
+        thread: null,
       });
     }
   }
@@ -270,11 +275,38 @@ export const make = Effect.gen(function* () {
       : createModelSelection(next.instanceId, published.model);
   });
 
+  /**
+   * A person's words typed in the conversation, given to the run as a steer from the thread: the
+   * engine never queues one back, so it is not delivered here a second time. `false` while the
+   * engine is away, to be told on a later pass; any answer, a refusal included, settles it.
+   */
+  const tellSteer = Effect.fn("BoardConversation.tellSteer")(function* (
+    taskId: string,
+    text: string,
+  ) {
+    const told = yield* post(`/api/tasks/${taskId}/steer`, {
+      text,
+      by: "person",
+      from: "thread",
+    });
+    if (told._tag === "Success") return true;
+    const status = told.failure.status;
+    if (status === undefined || status >= 500) return false;
+    // A task with no run under way is refused 409: the lead reads the words in the thread itself.
+    yield* Effect.logDebug("A person's words in a task thread were not taken as a steer.", {
+      task: taskId,
+      status,
+      code: codeOf(told.failure),
+    });
+    return true;
+  });
+
   const mirror = Effect.fn("BoardConversation.mirror")(function* (
     card: ConversationCard,
     threadId: ThreadId,
     context: { readonly environmentId: EnvironmentId; readonly key: string },
     detail: () => Effect.Effect<Option.Option<typeof Detail.Type>>,
+    steering: boolean,
   ) {
     const scanKey = `${card.id}\u0000${threadId}`;
     let floor = floors.get(scanKey);
@@ -309,8 +341,14 @@ export const make = Effect.gen(function* () {
       ...scanActivity(scan, read.success).filter((item) => item.seq > known),
     ];
     let sent = 0;
-    for (const item of queued) {
+    for (const [index, item] of queued.entries()) {
       if (sent >= INGESTS_PER_PASS) break;
+      // Told before the item is mirrored, and told once: a later retry of the ingest sends only
+      // the ingest. Only a task in work has a run to steer.
+      if (item.thread !== null) {
+        if (steering && !(yield* tellSteer(card.id, item.thread))) break;
+        queued[index] = { ...item, thread: null };
+      }
       const answer = yield* post(`/api/tasks/${card.id}/activity`, {
         at: item.at,
         kind: item.kind,
@@ -474,7 +512,7 @@ export const make = Effect.gen(function* () {
         const steering = input.steering.has(card.id);
         // A finished task's conversation is followed only if this server already followed it.
         if (steering || floors.has(`${card.id}\u0000${threadId}`))
-          yield* mirror(card, threadId, context, detail);
+          yield* mirror(card, threadId, context, detail, steering);
         if (steering && (card.steers?.pending ?? 0) > 0)
           yield* steer(task, threadId, context, detail);
         if (steering && card.hold?.stage === "qa" && card.hold.handoff === null && card.run?.id)

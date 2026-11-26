@@ -2199,3 +2199,107 @@ it.effect.each([
     }
   }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-older-client-")));
 });
+
+it.effect("gives each part of a split task its own thread, and none to the parent", () => {
+  const engine = board();
+  // A parent putting its parts together is in work by its lane, and still gets no thread.
+  const whole = engine.addTask({ id: "whole-3", lane: "in-work", state: "doing" });
+  engine.addTask({
+    id: "part-1",
+    served: { partOf: { id: "whole-3", number: 1002, title: "The whole", here: true } },
+  });
+  // A part whose parent is not here is worked like any other part.
+  engine.addTask({
+    id: "part-2",
+    served: { partOf: { id: "whole-elsewhere", number: null, title: null, here: false } },
+  });
+  const store = threadStore();
+  const threadOf = (id: string) => boardTaskThreadId(boardTaskOf("work", id)!);
+  return Effect.gen(function* () {
+    const threads = yield* service(store);
+    // Before its split the task is worked as itself, with a thread and a claim.
+    yield* threads.reconcile();
+    assert.isNotNull(engine.leaseOf("whole-3"));
+    whole.served = { split: true };
+    engine.advance(30_000);
+    assert.deepEqual([...(yield* threads.reconcile())], []);
+    assert.deepEqual(
+      [...store.threads.keys()].toSorted(),
+      [threadOf("part-1"), threadOf("part-2"), threadOf("whole-3")].toSorted(),
+    );
+    assert.equal(engine.linkOf("part-1")?.threadId, threadOf("part-1"));
+    assert.equal(engine.linkOf("part-2")?.threadId, threadOf("part-2"));
+    assert.isNotNull(engine.leaseOf("part-1"));
+    assert.isNotNull(engine.leaseOf("part-2"));
+    // Split, the parent releases its claim and keeps the thread it had, unarchived.
+    assert.isNull(engine.leaseOf("whole-3"));
+    assert.isNull(store.threads.get(threadOf("whole-3"))!.archivedAt);
+    // A parent split before it had a thread is never given one.
+    engine.addTask({ id: "whole-4", lane: "in-work", state: "doing", served: { split: true } });
+    yield* threads.reconcile();
+    assert.isFalse(store.threads.has(threadOf("whole-4")));
+    assert.isNull(engine.linkOf("whole-4"));
+    assert.isNull(engine.leaseOf("whole-4"));
+  }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-parts-")));
+});
+
+it.effect("tells the engine a person's words in a task thread as a thread steer, once", () => {
+  const engine = board();
+  const task = engine.addTask({ id: "task-7", run: { id: "run-1" } });
+  const store = threadStore();
+  const steered = () => engine.steeredOf("task-7").map(({ text, by, from }) => [text, by, from]);
+  return Effect.gen(function* () {
+    const threads = yield* service(store);
+    yield* threads.reconcile();
+    store.say(THREAD, "m-1", "Build it", "system");
+    store.reply(THREAD, "Planned");
+    store.say(THREAD, "m-2", "Use the other API", "user");
+    yield* threads.reconcile();
+    // Only a person's words are a steer; the engine's own brief is not.
+    assert.deepEqual(steered(), [["Use the other API", "person", "thread"]]);
+    // The engine queues no thread steer back, so nothing is delivered into the thread again.
+    assert.deepEqual(steerSends(store), []);
+    assert.equal(engine.requests.filter((r) => r.path.includes("/steers/")).length, 0);
+    yield* threads.reconcile();
+    yield* (yield* service(store)).reconcile();
+    assert.deepEqual(steered(), [["Use the other API", "person", "thread"]]);
+
+    // The engine away: the words are told on a later pass, before their mirror.
+    engine.dropNext(/\/steer$/);
+    store.reply(THREAD, "On it");
+    store.say(THREAD, "m-3", "Also add tests", "user");
+    const before = ingests(engine);
+    yield* threads.reconcile();
+    assert.equal(steered().length, 1);
+    assert.equal(ingests(engine), before + 1, "the reply before them is mirrored");
+    yield* threads.reconcile();
+    assert.deepEqual(steered().at(-1), ["Also add tests", "person", "thread"]);
+
+    // A mirror lost after its steer went through sends only the mirror again.
+    engine.dropNext(/\/activity$/);
+    store.reply(THREAD, "Tests added");
+    store.say(THREAD, "m-4", "Thanks", "user");
+    yield* threads.reconcile();
+    yield* threads.reconcile();
+    yield* threads.reconcile();
+    assert.deepEqual(
+      steered().map(([text]) => text),
+      ["Use the other API", "Also add tests", "Thanks"],
+    );
+    assert.deepEqual(
+      engine.activityOf("task-7").map((row) => row.kind),
+      ["message", "summary", "steer", "summary", "steer", "summary", "steer"],
+    );
+
+    // With no run under way the engine refuses the steer; the words stay mirrored and are not
+    // tried again.
+    task.run = null;
+    store.reply(THREAD, "Done");
+    store.say(THREAD, "m-5", "One more thing", "user");
+    yield* threads.reconcile();
+    yield* threads.reconcile();
+    assert.equal(steered().length, 3);
+    assert.equal(engine.requests.filter((r) => r.path.endsWith("/steer")).length, 4);
+    assert.equal(engine.activityOf("task-7").at(-1)?.kind, "steer");
+  }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-thread-steer-")));
+});

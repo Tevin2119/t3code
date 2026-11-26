@@ -53,6 +53,8 @@ const Card = Schema.Struct({
   set: Schema.optional(Schema.NullOr(Schema.String)),
   // Absent on an engine without the link: such an engine is never written to.
   boardThread: Schema.optional(Schema.NullOr(BoardThreadLink)),
+  // A task split into parts: its parts get threads, never the parent (engine slice E1).
+  split: readOrNull(Schema.Boolean),
   // Read only to make a thread: without them a task is held as `unreadable-card`.
   title: readOrNull(Schema.String),
   team: readOrNull(Schema.String),

@@ -1,4 +1,3 @@
-import { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import { useGT, useMessages } from "gt-react";
 import { PencilIcon } from "lucide-react";
 import { useRef, useState } from "react";
@@ -388,7 +387,6 @@ function TaskDetailsBody(props: { readonly board: BoardTask; readonly task: Task
     if (!result.ok) setProblem(result.why);
     board.refresh();
   };
-  const source = task.source;
   const container = useRef<HTMLDivElement>(null);
   const [askedOpen, setAskedOpen] = useState(true);
   // The log stands in for the conversation while the task has none, so it starts open then.
@@ -696,30 +694,6 @@ function TaskDetailsBody(props: { readonly board: BoardTask; readonly task: Task
           <span className="font-mono text-3xs">{task.id}</span>
         </Row>
         {problem ? <p className="text-xs text-warning">{problem}</p> : null}
-      </TaskDisclosure>
-
-      <TaskDisclosure title="Linked conversations" defaultOpen={false}>
-        <p className="text-2xs text-muted-foreground">
-          What is said on this task is its conversation with the team. A thread in the chat list is
-          a conversation of its own; it becomes a task only when you create one from it.
-        </p>
-        {source ? (
-          <Row label="Made from">
-            <button
-              type="button"
-              className="text-primary underline-offset-2 hover:underline"
-              data-task-related-source
-              onClick={() =>
-                board.openThread({
-                  environmentId: EnvironmentId.make(source.environmentId),
-                  threadId: ThreadId.make(source.threadId),
-                })
-              }
-            >
-              the conversation it came from
-            </button>
-          </Row>
-        ) : null}
       </TaskDisclosure>
 
       {closed ? null : (
