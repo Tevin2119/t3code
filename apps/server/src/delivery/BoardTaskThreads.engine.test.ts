@@ -198,7 +198,10 @@ function threadStore() {
 function service(store: ReturnType<typeof threadStore>, key: string | null = PHRASE) {
   return BoardTaskThreads.make.pipe(
     // The conversation mirror is proven against the scratch engine in BoardTaskThreads.test.ts.
-    Effect.provideService(BoardConversation.BoardConversation, { sync: () => Effect.void }),
+    Effect.provideService(BoardConversation.BoardConversation, {
+      sync: () => Effect.void,
+      settleSteers: () => Effect.void,
+    }),
     Effect.provideService(LimitedSeatSwap.LimitedSeatSwap, {
       resumeBoardLeadHandoff: () => Effect.die("This fixture has no lead hand-offs"),
       handOffLimitedLead: () => Effect.succeed(null),

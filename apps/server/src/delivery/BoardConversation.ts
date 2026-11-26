@@ -30,7 +30,7 @@ import * as EventStore from "../orchestration-v2/EventStore.ts";
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
-import { boardTaskFinishedBy } from "./boardTaskWork.ts";
+import { boardTaskFinishedBy, boardTaskInWork, MOVED } from "./boardTaskWork.ts";
 import { boardTaskOf, boardTaskThreadMarker, type BoardTask } from "./boardThreadMarker.ts";
 import * as DeliveryService from "./DeliveryService.ts";
 import { BoardLeadSeat, boardLeadSeat, resolveSeatProvider } from "./seatProvider.ts";
@@ -226,12 +226,36 @@ const OwedNotice = Schema.Struct({
   reason: Schema.String,
 });
 type OwedNotice = typeof OwedNotice.Type;
+/** A person's words seen in a task's conversation and not yet settled as a steer. */
+const PendingSteer = Schema.Struct({
+  board: Schema.String,
+  task: Schema.String,
+  threadId: Schema.String,
+  messageId: Schema.String,
+  text: Schema.String,
+  typedAt: Schema.String,
+});
+type PendingSteer = typeof PendingSteer.Type;
 const SteeredFile = Schema.fromJsonString(
   Schema.Struct({
     steered: Schema.Array(Schema.String),
+    pending: Schema.optional(Schema.Record(Schema.String, PendingSteer)),
     owed: Schema.optional(Schema.Record(Schema.String, OwedNotice)),
   }),
 );
+
+/** Where a task stands for its steers, from its card or, off the lanes, its own detail. */
+export type SteerStanding =
+  | {
+      readonly state: string;
+      readonly lane?: string | null | undefined;
+      readonly split?: boolean | null | undefined;
+      readonly boardThread?:
+        | { readonly environmentId: string; readonly threadId: string }
+        | null
+        | undefined;
+    }
+  | "deleted";
 const decodeSteered = Schema.decodeUnknownOption(SteeredFile);
 const encodeSteered = Schema.encodeEffect(SteeredFile);
 
@@ -259,6 +283,16 @@ export class BoardConversation extends Context.Service<
       readonly environmentId: EnvironmentId;
       readonly key: string;
     }) => Effect.Effect<void>;
+    /**
+     * Settles the steer ledger, every pass and for every thread whatever its task's card says:
+     * owed notices are posted, and each pending steer is told, retried within its window, or
+     * given up with a notice owed. `standings` holds every task the lanes or a detail read show;
+     * a task not in it is unknown, and its steers wait out their window.
+     */
+    readonly settleSteers: (input: {
+      readonly standings: ReadonlyMap<string, SteerStanding>;
+      readonly environmentId: EnvironmentId;
+    }) => Effect.Effect<void>;
   }
 >()("t3/delivery/BoardConversation") {}
 
@@ -279,6 +313,10 @@ export const make = Effect.gen(function* () {
     Effect.orElseSucceed(() => Option.none()),
   );
   const steered = new Set(Option.isSome(saved) ? saved.value.steered : []);
+  // Saved before the words are mirrored, so a steer is settled whatever happens to the scan.
+  const pendingSteers = new Map(
+    Object.entries(Option.isSome(saved) ? (saved.value.pending ?? {}) : {}),
+  );
   // Kept until posted: the steer is settled first, so a notice never sends the steer again.
   const owed = new Map(Object.entries(Option.isSome(saved) ? (saved.value.owed ?? {}) : {}));
   const saveSteers = Effect.fn("BoardConversation.saveSteers")(function* () {
@@ -286,7 +324,11 @@ export const make = Effect.gen(function* () {
       if (steered.size <= STEERED_KEPT) break;
       steered.delete(old);
     }
-    yield* encodeSteered({ steered: [...steered], owed: Object.fromEntries(owed) }).pipe(
+    yield* encodeSteered({
+      steered: [...steered],
+      pending: Object.fromEntries(pendingSteers),
+      owed: Object.fromEntries(owed),
+    }).pipe(
       Effect.flatMap((contents) => writeFileStringAtomically({ filePath: steeredPath, contents })),
       Effect.provideService(FileSystem.FileSystem, fileSystem),
       Effect.provideService(Path.Path, path),
@@ -338,14 +380,11 @@ export const make = Effect.gen(function* () {
   });
 
   /**
-   * Posts the notices owed to one thread. One that cannot be posted now stays owed and is tried
-   * on the next pass; only a refusal that never passes drops it, which is logged.
+   * Posts every owed notice. One that cannot be posted now stays owed and is tried on the next
+   * pass; only a refusal that never passes drops it, which is logged.
    */
-  const postOwedNotices = Effect.fn("BoardConversation.postOwedNotices")(function* (
-    threadId: ThreadId,
-  ) {
+  const postOwedNotices = Effect.fn("BoardConversation.postOwedNotices")(function* () {
     for (const [key, notice] of owed) {
-      if (notice.threadId !== threadId) continue;
       const posted = yield* noticeUndelivered(notice);
       if (posted === "later") continue;
       if (posted === "refused")
@@ -390,73 +429,85 @@ export const make = Effect.gen(function* () {
   });
 
   /** Settles a steer that never reached the team, and owes the thread a notice of it. */
-  const giveUp = Effect.fn("BoardConversation.giveUp")(function* (
-    task: BoardTask,
-    threadId: ThreadId,
-    key: string,
-    steer: { readonly messageId: string; readonly text: string },
-    reason: string,
-  ) {
+  const giveUp = (key: string, steer: PendingSteer, reason: string) => {
+    pendingSteers.delete(key);
     steered.add(key);
     owed.set(key, {
-      board: task.board,
-      task: task.id,
-      threadId,
+      board: steer.board,
+      task: steer.task,
+      threadId: steer.threadId,
       messageId: steer.messageId,
       quoted: excerptOf(steer.text)?.slice(0, 80) ?? "",
       reason,
     });
-    yield* saveSteers();
-    yield* postOwedNotices(threadId);
-    return true;
-  });
+  };
 
-  /**
-   * A person's words in the thread, told to the run as a thread steer (never queued back here).
-   * `false` on no answer or a 5xx within the hand-off wait: told again with the same `ref`. A
-   * refusal, giving up, or a task no longer in work owes the thread a notice. Settled steers are
-   * remembered across restarts.
-   */
-  const tellSteer = Effect.fn("BoardConversation.tellSteer")(function* (
-    task: BoardTask,
-    threadId: ThreadId,
-    steer: { readonly messageId: string; readonly text: string },
-    typedAt: string,
-    steering: boolean,
-  ) {
-    const key = `${threadId}\u0000${steer.messageId}`;
-    if (steered.has(key)) return true;
-    if (!steering)
-      return yield* giveUp(task, threadId, key, steer, "the task is no longer in work");
-    const taskId = task.id;
-    const told = yield* post(`/api/tasks/${taskId}/steer`, {
-      text: steer.text,
-      by: "person",
-      from: "thread",
-      // Stable per message: the engine applies a steer once per `ref`, so a retry is safe.
-      ref: `thread:${threadId}:${steer.messageId}`,
-    });
-    if (told._tag === "Success") {
-      steered.add(key);
+  /** Why a task cannot take a steer from this thread now, or `null` when it can. */
+  const steerRefusedBy = (standing: SteerStanding, steer: PendingSteer, environmentId: string) => {
+    if (standing === "deleted") return "the task was deleted";
+    if (MOVED.has(standing.state)) return "the task moved to another machine";
+    const link = standing.boardThread;
+    if (link?.environmentId !== environmentId || link.threadId !== steer.threadId)
+      return "this conversation no longer holds the task";
+    return boardTaskInWork(standing) ? null : "the task is no longer in work";
+  };
+
+  const settleSteers = Effect.fn("BoardConversation.settleSteers")(
+    function* (input: {
+      readonly standings: ReadonlyMap<string, SteerStanding>;
+      readonly environmentId: EnvironmentId;
+    }) {
+      const now = DateTime.toEpochMillis(yield* DateTime.now);
+      const expired = `the engine could not take it for ${STEER_RETRY_MINUTES} minutes`;
+      for (const [key, steer] of pendingSteers) {
+        if (steered.has(key)) {
+          pendingSteers.delete(key);
+          continue;
+        }
+        const late = now - Date.parse(steer.typedAt) >= STEER_RETRY_MS;
+        const standing = input.standings.get(steer.task);
+        if (standing === undefined) {
+          if (late) giveUp(key, steer, expired);
+          continue;
+        }
+        const refused = steerRefusedBy(standing, steer, input.environmentId);
+        if (refused !== null) {
+          giveUp(key, steer, refused);
+          continue;
+        }
+        const told = yield* post(`/api/tasks/${steer.task}/steer`, {
+          text: steer.text,
+          by: "person",
+          from: "thread",
+          // Stable per message: the engine applies a steer once per `ref`, so a retry is safe.
+          ref: `thread:${steer.threadId}:${steer.messageId}`,
+        });
+        if (told._tag === "Success") {
+          pendingSteers.delete(key);
+          steered.add(key);
+          continue;
+        }
+        const status = told.failure.status;
+        if (status !== undefined && status < 500)
+          giveUp(key, steer, told.failure.detail.replace(/\s+/g, " ").slice(0, 200));
+        else if (late) giveUp(key, steer, expired);
+      }
       yield* saveSteers();
-      return true;
-    }
-    const status = told.failure.status;
-    const retried = status === undefined || status >= 500;
-    const now = DateTime.toEpochMillis(yield* DateTime.now);
-    if (retried && now - Date.parse(typedAt) < STEER_RETRY_MS) return false;
-    const reason = retried
-      ? `the engine could not take it for ${STEER_RETRY_MINUTES} minutes`
-      : told.failure.detail.replace(/\s+/g, " ").slice(0, 200);
-    return yield* giveUp(task, threadId, key, steer, reason);
-  });
+      yield* postOwedNotices();
+    },
+    (effect) =>
+      effect.pipe(
+        Effect.catchCause(() =>
+          Effect.logDebug("Thread steers were not settled; the next pass carries on."),
+        ),
+      ),
+  );
 
   const mirror = Effect.fn("BoardConversation.mirror")(function* (
     card: ConversationCard,
     threadId: ThreadId,
     context: { readonly environmentId: EnvironmentId; readonly key: string },
     detail: () => Effect.Effect<Option.Option<typeof Detail.Type>>,
-    steering: boolean,
   ) {
     const scanKey = `${card.id}\u0000${threadId}`;
     let floor = floors.get(scanKey);
@@ -490,15 +541,24 @@ export const make = Effect.gen(function* () {
       ...(pending.get(scanKey) ?? []),
       ...scanActivity(scan, read.success).filter((item) => item.seq > known),
     ];
-    yield* postOwedNotices(threadId);
     const task = card.set ? boardTaskOf(card.set, card.id) : null;
     let sent = 0;
     for (const [index, item] of queued.entries()) {
       if (sent >= INGESTS_PER_PASS) break;
-      // Settled before the item is mirrored, and once: a later retry of the ingest sends only
-      // the ingest. Words a task out of work can no longer take are given up and told.
+      // Saved to the steer ledger before the item is mirrored; `settleSteers` tells it.
       if (item.steer !== null) {
-        if (task && !(yield* tellSteer(task, threadId, item.steer, item.at, steering))) break;
+        const key = `${threadId}\u0000${item.steer.messageId}`;
+        if (task && !steered.has(key) && !pendingSteers.has(key)) {
+          pendingSteers.set(key, {
+            board: task.board,
+            task: task.id,
+            threadId,
+            messageId: item.steer.messageId,
+            text: item.steer.text,
+            typedAt: item.at,
+          });
+          yield* saveSteers();
+        }
         queued[index] = { ...item, steer: null };
       }
       const answer = yield* post(`/api/tasks/${card.id}/activity`, {
@@ -677,7 +737,7 @@ export const make = Effect.gen(function* () {
         const steering = input.steering.has(card.id);
         // A finished task's conversation is followed only if this server already followed it.
         if (steering || floors.has(`${card.id}\u0000${threadId}`))
-          yield* mirror(card, threadId, context, detail, steering);
+          yield* mirror(card, threadId, context, detail);
         // A finished task is no longer steered, but a steer left pending on it is still settled.
         const finished =
           card.state !== undefined &&
@@ -702,7 +762,7 @@ export const make = Effect.gen(function* () {
       ),
   );
 
-  return BoardConversation.of({ sync });
+  return BoardConversation.of({ sync, settleSteers });
 });
 
 export const layer = Layer.effect(BoardConversation, make);

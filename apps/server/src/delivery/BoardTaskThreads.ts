@@ -671,6 +671,8 @@ export const make = Effect.gen(function* () {
       const environmentId = yield* identity.getEnvironmentId;
       const lanes = yield* engine(delivery.read({ path: LANES_PATH })).pipe(
         Effect.flatMap((response) => engine(decodeLanes(response.body))),
+        // Unread lanes leave every task unknown: steers wait out their window, notices post.
+        Effect.tapError(() => conversation.settleSteers({ standings: new Map(), environmentId })),
       );
       const cards = new Map<string, Card>();
       const unread = new Map<string, string>();
@@ -729,6 +731,8 @@ export const make = Effect.gen(function* () {
       }
       const openThreads = yield* local(rows.list({ archived: false }));
       const standings = yield* standingsOf(cards, openThreads);
+      // The steer ledger is settled for every thread, before any card is filtered out.
+      yield* conversation.settleSteers({ standings, environmentId });
       const steering = new Set<string>();
       for (const [taskId, task] of standings) {
         if (task === "deleted") continue;
@@ -747,6 +751,8 @@ export const make = Effect.gen(function* () {
       const mirrored = [...cards.values()].filter((card) => !MOVED.has(card.state));
       if (key !== undefined)
         yield* conversation.sync({ cards: mirrored, steering, environmentId, key });
+      // Again, so words the mirror saw this pass are told in it.
+      yield* conversation.settleSteers({ standings, environmentId });
       for (const [task, hold] of holds) {
         if (told.get(task) === hold) continue;
         yield* Effect.logWarning("A started board task has no conversation yet.", { task, hold });
