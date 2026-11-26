@@ -116,7 +116,7 @@ export function OrchestratorLineup(props: {
 
   // A board task's team is the board's: a person's binding saved on its thread is not shown.
   const binding = props.boardOwned ? null : (state.data?.binding ?? null);
-  const lineup = state.data?.lineup;
+  const lineup = state.data?.boardLineup ?? state.data?.lineup;
   const teamName = binding?.team ?? (edit.team !== undefined ? edit.team : (lineup?.team ?? null));
   const team = teams.find((item) => item.team === teamName) ?? null;
   // A board task's thread is bound to no team: its lead holds the team's lead seat, as the board

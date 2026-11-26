@@ -325,8 +325,14 @@ export type DeliveryThreadPending = typeof DeliveryThreadPending.Type;
 export const DeliveryThreadState = Schema.Struct({
   binding: Schema.NullOr(DeliveryThreadBinding),
   pending: Schema.NullOr(DeliveryThreadPending),
-  /** Who joins the next message. Absent for an ordinary conversation. */
-  lineup: Schema.optional(DeliveryThreadLineup),
+  /**
+   * Who joins the next message, as every client reads it: two to twelve participants. Absent for
+   * an ordinary conversation, and for a board task's team of one seat, which `boardLineup` alone
+   * carries so a client that predates it never meets a lineup it cannot read.
+   */
+  lineup: Schema.optional(DeliveryOrchestrationConfig),
+  /** A board task's team as the board picks it, its lead and one seat included. */
+  boardLineup: Schema.optional(DeliveryThreadLineup),
   /** The team this conversation most recently switched away from, if any. */
   rememberedLineup: Schema.optional(DeliveryRememberedLineup),
 });

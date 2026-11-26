@@ -585,7 +585,7 @@ it("shows a board task's lead with the crown, on the model the lead runs now", a
   testState.threadState = {
     data: {
       binding: null,
-      lineup: { team: "development", participants: [LINEUP.participants[1]!] },
+      boardLineup: { team: "development", participants: [LINEUP.participants[1]!] },
       pending: null,
     },
   };
@@ -633,7 +633,7 @@ it("shows a board task's team over a person's binding saved on its thread", asyn
     data: {
       // Saved by a person before the upgrade: never the board's team.
       binding: RESEARCH_BINDING,
-      lineup: { team: "development", participants: [LINEUP.participants[1]!] },
+      boardLineup: { team: "development", participants: [LINEUP.participants[1]!] },
       pending: null,
     },
   };
@@ -675,7 +675,7 @@ it("crowns a board task's lead by its seat when another seat shares its role and
   testState.threadState = {
     data: {
       binding: null,
-      lineup: { team: "development", participants: [LINEUP.participants[1]!] },
+      boardLineup: { team: "development", participants: [LINEUP.participants[1]!] },
       pending: null,
     },
   };

@@ -1,7 +1,13 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   CommandId,
+  DeliveryRememberedLineup,
+  DeliveryThreadBinding,
+  DeliveryThreadPending,
+  DeliveryThreadState,
   EnvironmentId,
+  ModelSelection,
+  TrimmedNonEmptyString,
   MessageId,
   ProjectId,
   ProviderInstanceId,
@@ -18,6 +24,7 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 
 import * as ServerConfig from "../config.ts";
@@ -1604,7 +1611,8 @@ const CLAUDE = { instanceId: ProviderInstanceId.make("claudeAgent"), model: "cla
 /** A lineup as plain data, so it compares by value. */
 const plainLineup = (threadId: ThreadId) =>
   Effect.gen(function* () {
-    const { lineup } = yield* (yield* DeliveryService.DeliveryService).threadState(threadId);
+    const state = yield* (yield* DeliveryService.DeliveryService).threadState(threadId);
+    const lineup = state.boardLineup ?? state.lineup;
     return lineup === undefined ? undefined : JSON.parse(JSON.stringify(lineup));
   });
 const DEVELOPER = {
@@ -2045,7 +2053,7 @@ it.effect(
       const delivery = yield* DeliveryService.DeliveryService;
       const shown = yield* delivery.threadState(THREAD);
       assert.isNull(shown.binding);
-      assert.equal(shown.lineup?.team, "development");
+      assert.equal(shown.boardLineup?.team, "development");
       // The board's lead runs on Codex: its session starts as an ordinary one, as the panel says.
       assert.isFalse(yield* delivery.prepareThread(THREAD, { driver: "codex", cwd: REPO }));
     }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-legacy-binding-", legacy)));
@@ -2082,7 +2090,7 @@ it.effect(
       ]) {
         assert.isNull(state.pending);
         assert.isNull(state.binding);
-        assert.equal(state.lineup?.team, "development");
+        assert.equal(state.boardLineup?.team, "development");
       }
       assert.isFalse(yield* delivery.prepareThread(THREAD, { driver: "codex", cwd: REPO }));
       // A person's own conversation keeps what it had.
@@ -2130,4 +2138,64 @@ it.effect("starts an old successor as the board's even when the engine cannot be
       deliveryLayer(engine, "board-threads-successor-offline-", legacyStoreOn(successor)),
     ),
   );
+});
+
+/**
+ * The thread state a client from before board lineups decodes (`cee1846c`), frozen here so this
+ * stays a test of what such a client reads.
+ */
+const MasterThreadState = Schema.Struct({
+  binding: Schema.NullOr(DeliveryThreadBinding),
+  pending: Schema.NullOr(DeliveryThreadPending),
+  lineup: Schema.optional(
+    Schema.Struct({
+      participants: Schema.Array(
+        Schema.Struct({
+          seat: TrimmedNonEmptyString,
+          role: TrimmedNonEmptyString,
+          modelSelection: ModelSelection,
+          access: Schema.optional(
+            Schema.Literals(["read-only", "approval-required", "full-access"]),
+          ),
+          picked: Schema.optional(Schema.Boolean),
+          duty: Schema.optional(Schema.Literals(["build", "qa"])),
+          substitute: Schema.optional(ModelSelection),
+        }),
+      ).check(Schema.isMinLength(2), Schema.isMaxLength(12)),
+      critique: Schema.optional(Schema.Literals(["first", "always", "never"])),
+      limitedSeat: Schema.optional(Schema.Literals(["swap", "ask", "skip"])),
+      access: Schema.optional(Schema.Literals(["approval-required", "full-access"])),
+      team: Schema.optional(TrimmedNonEmptyString),
+    }),
+  ),
+  rememberedLineup: Schema.optional(DeliveryRememberedLineup),
+});
+const encodeThreadState = Schema.encodeEffect(DeliveryThreadState);
+const decodeByOlderClient = Schema.decodeUnknownEffect(MasterThreadState);
+/** A thread's state as the RPC sends it, read back by a client from before board lineups. */
+const readByOlderClient = (state: DeliveryThreadState) =>
+  encodeThreadState(state).pipe(Effect.flatMap(decodeByOlderClient));
+
+it.effect.each([
+  { name: "a lead and one seat", teams: TEAMS, seats: 1 },
+  { name: "a lead and two seats", teams: TEAM_OF_THREE, seats: 2 },
+])("sends $name in a thread state a client from before board lineups reads", ({ teams, seats }) => {
+  const engine = board();
+  engine.setTeams(teams);
+  engine.addTask({ id: "task-7" });
+  return Effect.gen(function* () {
+    yield* (yield* service(threadStore())).reconcile();
+    const delivery = yield* DeliveryService.DeliveryService;
+    for (const state of [
+      yield* delivery.threadState(THREAD),
+      yield* delivery.threadState(THREAD, { boardOwned: true }),
+    ]) {
+      // An older client reads a team it can show, or, for one seat, an ordinary conversation.
+      const older = yield* readByOlderClient(state);
+      assert.equal(older.lineup?.participants.length, seats === 1 ? undefined : seats);
+      assert.isNull(older.binding);
+      // Clients that know board lineups read the team, one seat included.
+      assert.lengthOf(state.boardLineup?.participants ?? [], seats);
+    }
+  }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-older-client-")));
 });

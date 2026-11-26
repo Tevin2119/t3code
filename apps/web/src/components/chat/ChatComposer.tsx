@@ -2379,7 +2379,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         })
       : null,
   );
-  const startedLineup = startedLineupQuery.data?.lineup;
+  const startedLineup = startedLineupQuery.data?.boardLineup ?? startedLineupQuery.data?.lineup;
   // A board task's conversation: the engine picks its team and models, so nothing here changes them.
   const boardOwned = activeThread !== undefined && isServerOwnedThreadLineage(activeThread.lineage);
   const setComposerThreadLineup = useAtomCommand(deliveryEnvironment.setThreadLineup, {

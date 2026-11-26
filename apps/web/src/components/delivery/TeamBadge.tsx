@@ -40,7 +40,7 @@ export function TeamBadge(props: {
   // A thread that was sent with no team says so, where the team would stand.
   if (!binding) {
     if (state.data === undefined || state.data === null) return null;
-    const lineup = state.data.lineup;
+    const lineup = state.data.boardLineup ?? state.data.lineup;
     // A teamless conversation with participants: who receives the next message.
     if (lineup) {
       const rows = lineup.participants.map(
@@ -121,7 +121,7 @@ export function TeamBadge(props: {
     );
   }
   const seat = binding.seatSettings ?? null;
-  const lineup = state.data?.lineup;
+  const lineup = state.data?.boardLineup ?? state.data?.lineup;
   const effective = parseSessionEffective(sessionRead.body);
   const overrides = effective?.overrides ?? [];
   const rows: ReadonlyArray<readonly [string, string]> = [

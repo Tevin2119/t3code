@@ -762,7 +762,12 @@ const make = Effect.fn("DeliveryService.make")(function* (
       // The board's team only: a person's binding, lineup or held team choice saved here is not
       // the board's, and stays on disk for a build that predates board lineups.
       const lineup = boardLineups.get(threadId);
-      return { binding: null, pending: null, ...(lineup ? { lineup } : {}) };
+      return {
+        binding: null,
+        pending: null,
+        ...(lineup ? { boardLineup: lineup } : {}),
+        ...(lineup && lineup.participants.length >= 2 ? { lineup } : {}),
+      };
     }
     const binding = bindings.get(threadId) ?? null;
     // What the thread was started with stands until a person changes it.
