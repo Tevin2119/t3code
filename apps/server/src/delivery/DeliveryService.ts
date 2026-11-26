@@ -18,6 +18,11 @@ import {
   type DeliveryThreadState,
   type ThreadId,
   LinkedDeliveryRead,
+  LinkedDeliveryId,
+  LINKED_HANDOFF_BUNDLE_MAX_BYTES,
+  LINKED_HANDOFF_MCP_MAX_BYTES,
+  LinkedHandoffPeerRequest,
+  LinkedHandoffPeerResponses,
   LinkedDeliveryAction,
   LinkedDeliveryResults,
   LinkedDeliveryThread,
@@ -193,6 +198,11 @@ const linkedRefusal = (status: 403 | 404) =>
     detail: "The delivery operation is unavailable.",
   });
 
+const validLinkedId = Schema.is(LinkedDeliveryId);
+const LINKED_THREAD_PATH_ID = /^[\w-]+(?::[\w-]+)*$/;
+
+const encodeBundleJson = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
+
 const decodeLinkedJson = Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Unknown));
 
 const decodeEngine = <A>(schema: Schema.Decoder<A>) =>
@@ -225,6 +235,17 @@ export class DeliveryService extends Context.Service<
     readonly actLinked: <K extends LinkedDeliveryAction["operation"]>(
       input: Extract<LinkedDeliveryAction, { operation: K }>,
     ) => Effect.Effect<LinkedData<K>, DeliveryError>;
+    readonly peerHandoff: (
+      input: LinkedHandoffPeerRequest,
+    ) => Effect.Effect<
+      (typeof LinkedHandoffPeerResponses)[LinkedHandoffPeerRequest["operation"]]["Type"],
+      DeliveryError
+    >;
+    readonly ownerHandoffRequest: (
+      method: "GET" | "POST",
+      path: string,
+      body?: unknown,
+    ) => Effect.Effect<unknown, DeliveryError>;
     readonly linkedThread: (
       threadId: ThreadId,
     ) => Effect.Effect<typeof LinkedDeliveryThread.Type, DeliveryError>;
@@ -298,6 +319,8 @@ export const layerTest = Layer.succeed(
     read: disabled,
     readLinked: disabled,
     actLinked: disabled,
+    peerHandoff: disabled,
+    ownerHandoffRequest: disabled,
     linkedThread: disabled,
     linkedThreads: disabled(),
     setBoardLinkedVisibility: disabled,
@@ -548,14 +571,17 @@ const make = Effect.fn("DeliveryService.make")(function* (
     function* (
       method: "GET" | "POST" | "PUT" | "DELETE",
       enginePath: string,
-      body?: unknown,
+      requestBody?: unknown,
       bounded = false,
       observedHealth?: { engineUrl: string; response: DeliveryResponse },
       expectedConfiguration?: string,
       dispatchDeadline?: number,
-      linked?: "json" | "binary",
+      format?: "json" | "binary" | "linked-handoff" | "owner-handoff",
     ) {
-      if ((yield* isPeerInvocation) !== (linked !== undefined)) return yield* linkedRefusal(403);
+      const linked = format !== undefined && format !== "owner-handoff";
+      const handoff = format === "linked-handoff" || format === "owner-handoff";
+      const limit = handoff ? LINKED_HANDOFF_MCP_MAX_BYTES : 1_048_576;
+      if ((yield* isPeerInvocation) !== linked) return yield* linkedRefusal(403);
       if (expectedConfiguration !== undefined) yield* assertConfiguration(expectedConfiguration);
       const settings = yield* delivery;
       if (method !== "GET") invalidateDiscovery();
@@ -586,7 +612,7 @@ const make = Effect.fn("DeliveryService.make")(function* (
           }
           const target = new URL(enginePath, base);
           const isLinkedRoute = /^\/api\/linked(?:\/|$)/.test(target.pathname);
-          if (target.origin !== base.origin || isLinkedRoute !== (linked !== undefined)) {
+          if (target.origin !== base.origin || isLinkedRoute !== linked) {
             throw new Error("invalid engine route");
           }
           return target.toString();
@@ -680,7 +706,7 @@ const make = Effect.fn("DeliveryService.make")(function* (
               ? HttpClientRequest.delete(url)
               : HttpClientRequest.post(url);
       const prepared =
-        method === "GET" ? base : base.pipe(HttpClientRequest.bodyJsonUnsafe(body ?? {}));
+        method === "GET" ? base : base.pipe(HttpClientRequest.bodyJsonUnsafe(requestBody ?? {}));
       if (expectedConfiguration !== undefined) yield* assertConfiguration(expectedConfiguration);
       if (dispatchDeadline !== undefined && (yield* Clock.currentTimeMillis) >= dispatchDeadline) {
         return yield* new DeliveryError({
@@ -701,40 +727,42 @@ const make = Effect.fn("DeliveryService.make")(function* (
             }),
         ),
       );
-      if (bounded && Number(response.headers["content-length"]) > 1_048_576) {
+      if (bounded && Number(response.headers["content-length"]) > limit) {
         return yield* new DeliveryError({
           reason: "invalid",
           status: 413,
-          detail:
-            linked === undefined
-              ? "Discovery response exceeds its size limit."
-              : "Linked delivery response exceeds its size limit.",
+          detail: !linked
+            ? "Discovery response exceeds its size limit."
+            : "Linked delivery response exceeds its size limit.",
         });
       }
-      if (linked !== undefined && (response.status < 200 || response.status >= 300)) {
+      if (linked && !handoff && (response.status < 200 || response.status >= 300)) {
         return yield* new DeliveryError({
           reason: "refused",
           status: response.status,
           detail: "The linked delivery operation was refused.",
         });
       }
-      if (linked !== undefined) {
-        const bytes = yield* readBoundedBody(
-          response,
-          linked === "binary" ? 524_288 : 1_048_576,
-        ).pipe(
+      if (format !== undefined) {
+        const bytes = yield* readBoundedBody(response, format === "binary" ? 524_288 : limit).pipe(
           Effect.timeout("4 seconds"),
           Effect.mapError(
             (error) =>
               new DeliveryError({
                 reason: error._tag === "TimeoutError" ? "unreachable" : "invalid",
                 ...(error._tag === "BodyTooLarge" ? { status: 413 } : {}),
-                detail: "The linked delivery response could not be read.",
+                detail: handoff
+                  ? "The hand-off response could not be read."
+                  : "The linked delivery response could not be read.",
               }),
           ),
         );
+        const bodyKey =
+          typeof requestBody === "object" && requestBody !== null && "key" in requestBody
+            ? requestBody.key
+            : undefined;
         const body: unknown =
-          linked === "binary"
+          format === "binary"
             ? {
                 mediaType: response.headers["content-type"] ?? "application/octet-stream",
                 data: bytes.toString("base64"),
@@ -748,6 +776,16 @@ const make = Effect.fn("DeliveryService.make")(function* (
                     }),
                 ),
               );
+        if (response.status < 200 || response.status >= 300) {
+          const refusal = decodeRefusal(body);
+          const key = typeof bodyKey === "string" ? bodyKey : undefined;
+          const message = refusal._tag === "Some" ? refusal.value.error : `HTTP ${response.status}`;
+          return yield* new DeliveryError({
+            reason: response.status >= 500 || response.status === 408 ? "unreachable" : "refused",
+            detail: (key ? message.replaceAll(key, "[redacted]") : message).slice(0, 500),
+            status: response.status,
+          });
+        }
         return { readAt: DateTime.formatIso(yield* DateTime.now), body } satisfies DeliveryResponse;
       }
       // The engine answers a clear with 204 and no body.
@@ -798,7 +836,7 @@ const make = Effect.fn("DeliveryService.make")(function* (
     method: "GET" | "POST",
     path: string,
     body?: unknown,
-    format: "json" | "binary" = "json",
+    format: "json" | "binary" | "linked-handoff" = "json",
   ) {
     return (yield* request(
       method,
@@ -812,7 +850,8 @@ const make = Effect.fn("DeliveryService.make")(function* (
     )).body;
   });
 
-  const readLinked = Effect.fn("DeliveryService.readLinked")(function* (input: LinkedDeliveryRead) {
+  const readLinked = Effect.fn("DeliveryService.readLinked")(function* (raw: LinkedDeliveryRead) {
+    const input = yield* decodeEngine(LinkedDeliveryRead)(raw);
     const taskPath = "taskId" in input ? `tasks/${encodeURIComponent(input.taskId)}` : "";
     switch (input.operation) {
       case "boards":
@@ -888,11 +927,11 @@ const make = Effect.fn("DeliveryService.make")(function* (
     }
   });
 
-  const actLinked = Effect.fn("DeliveryService.actLinked")(function* (input: LinkedDeliveryAction) {
+  const actLinked = Effect.fn("DeliveryService.actLinked")(function* (raw: LinkedDeliveryAction) {
     const scope = yield* Effect.serviceOption(McpInvocationContext.McpInvocationContext);
     const client = Option.getOrUndefined(scope)?.client;
     if (client?.linked !== true || client.access === "read-only") return yield* linkedRefusal(403);
-    const { operation, taskId, ...fields } = input;
+    const { operation, taskId, ...fields } = yield* decodeEngine(LinkedDeliveryAction)(raw);
     const endpoint = {
       comment: "messages",
       answer: "answer",
@@ -908,6 +947,87 @@ const make = Effect.fn("DeliveryService.make")(function* (
       access: "act",
       by: client.label,
     }).pipe(Effect.flatMap(decodeEngine(LinkedDeliveryResults[operation])));
+  });
+
+  const peerHandoff = Effect.fn("DeliveryService.peerHandoff")(function* (
+    raw: LinkedHandoffPeerRequest,
+  ) {
+    const scope = Option.getOrUndefined(
+      yield* Effect.serviceOption(McpInvocationContext.McpInvocationContext),
+    );
+    const client = scope?.client;
+    if (client?.linked !== true || !scope?.capabilities.has("orchestration"))
+      return yield* linkedRefusal(403);
+    const input = yield* decodeEngine(LinkedHandoffPeerRequest)(raw);
+    const { operation } = input;
+    const peer = client.sessionId;
+    if (!validLinkedId(peer)) return yield* linkedRefusal(403);
+    const read = operation === "list" || operation === "get";
+    if (!read && client.access === "read-only") return yield* linkedRefusal(403);
+    const acting = { access: "act", peer };
+    const perform = (method: "GET" | "POST", path: string, body?: unknown) =>
+      linkedRequest(method, path, body, "linked-handoff").pipe(
+        Effect.flatMap(
+          decodeEngine(
+            LinkedHandoffPeerResponses[operation] as Schema.Decoder<
+              (typeof LinkedHandoffPeerResponses)[typeof operation]["Type"]
+            >,
+          ),
+        ),
+      );
+    switch (operation) {
+      case "prepare":
+        return yield* perform("POST", `tasks/${input.taskId}/handoff`, {
+          ...acting,
+          by: client.label,
+          board: input.boardId,
+          handoff: input.handoff,
+          maxBytes: LINKED_HANDOFF_BUNDLE_MAX_BYTES,
+        });
+      case "import": {
+        const encoded = yield* encodeBundleJson(input.bundle).pipe(
+          Effect.mapError(
+            () =>
+              new DeliveryError({ reason: "invalid", detail: "The hand-off bundle is invalid." }),
+          ),
+        );
+        if (Buffer.byteLength(encoded) > LINKED_HANDOFF_BUNDLE_MAX_BYTES)
+          return yield* new DeliveryError({
+            reason: "refused",
+            status: 413,
+            detail: "The bundle exceeds the linked hand-off size limit.",
+          });
+        return yield* perform("POST", "imports", {
+          ...acting,
+          by: client.label,
+          board: input.boardId,
+          bundle: input.bundle,
+        });
+      }
+      case "settle": {
+        const { handoff, root, tasks, digest } = input;
+        return yield* perform("POST", `transfers/${handoff}/settle`, {
+          ...acting,
+          root,
+          tasks,
+          digest,
+        });
+      }
+      case "commit":
+        return yield* perform("POST", `handoffs/${input.handoff}/commit`, {
+          ...acting,
+          receipt: input.receipt,
+        });
+      case "cancel":
+        return yield* perform("POST", `handoffs/${input.handoff}/cancel`, {
+          ...acting,
+          answer: input.answer,
+        });
+      case "list":
+        return yield* perform("GET", queryPath("handoffs", { peer }));
+      case "get":
+        return yield* perform("GET", queryPath(`handoffs/${input.handoff}`, { peer }));
+    }
   });
 
   /** The root of the repository a folder is in, or the folder itself when it is in none. */
@@ -1838,11 +1958,28 @@ const make = Effect.fn("DeliveryService.make")(function* (
     discover,
     readLinked: readLinked as DeliveryService["Service"]["readLinked"],
     actLinked: actLinked as DeliveryService["Service"]["actLinked"],
-    linkedThread: Effect.fn("DeliveryService.linkedThread")((threadId) =>
-      linkedRequest("GET", `threads/${encodeURIComponent(threadId)}`).pipe(
-        Effect.flatMap(decodeEngine(LinkedDeliveryThread)),
-      ),
+    peerHandoff,
+    ownerHandoffRequest: Effect.fn("DeliveryService.ownerHandoffRequest")(
+      function* (method, path, body) {
+        return (yield* request(
+          method,
+          path,
+          body,
+          true,
+          undefined,
+          undefined,
+          undefined,
+          "owner-handoff",
+        )).body;
+      },
     ),
+    linkedThread: Effect.fn("DeliveryService.linkedThread")(function* (threadId) {
+      if (threadId.length > 1024 || !LINKED_THREAD_PATH_ID.test(threadId))
+        return yield* linkedRefusal(404);
+      return yield* linkedRequest("GET", `threads/${encodeURIComponent(threadId)}`).pipe(
+        Effect.flatMap(decodeEngine(LinkedDeliveryThread)),
+      );
+    }),
     linkedThreads: linkedRequest("GET", "threads").pipe(
       Effect.flatMap(decodeEngine(LinkedDeliveryThreads)),
     ),

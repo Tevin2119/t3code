@@ -3781,6 +3781,32 @@ const layerForkWsRpc = (
           checkoutUpdate.start.pipe(Effect.as({})),
         [WS_METHODS.deliveryAnswerBoardTask]: (input) => boardThreadTasks.answer(input),
         [WS_METHODS.deliveryRead]: (input) => delivery.read(input),
+        [WS_METHODS.deliveryLinkedBring]: (input) =>
+          linked
+            .bringLinkedTask(input)
+            .pipe(Effect.provideService(DeliveryService.DeliveryService, delivery)),
+        [WS_METHODS.deliveryLinkedSend]: (input) =>
+          linked
+            .sendLinkedTask(input)
+            .pipe(
+              Effect.provideService(DeliveryService.DeliveryService, delivery),
+              Effect.provideService(ServerEnvironment.ServerEnvironment, serverEnvironment),
+            ),
+        [WS_METHODS.deliveryLinkedHandoffs]: (input) =>
+          linked
+            .listLinkedHandoffs(input)
+            .pipe(Effect.provideService(DeliveryService.DeliveryService, delivery)),
+        [WS_METHODS.deliveryLinkedHandoffRetry]: (input) =>
+          linked
+            .retryLinkedHandoff(input)
+            .pipe(Effect.provideService(DeliveryService.DeliveryService, delivery)),
+        [WS_METHODS.deliveryLinkedSendDestination]: ({ taskId }) =>
+          linked
+            .linkedSendDestination(taskId)
+            .pipe(
+              Effect.provideService(DeliveryService.DeliveryService, delivery),
+              Effect.provideService(ServerEnvironment.ServerEnvironment, serverEnvironment),
+            ),
         [WS_METHODS.deliveryLinkedBoards]: (input) => linked.listLinkedBoards(input),
         [WS_METHODS.deliveryLinkedBoard]: ({ peerEnvironmentId, fresh, ...input }) =>
           linked.linkedDelivery({ peerEnvironmentId, fresh }, { ...input, operation: "board" }),

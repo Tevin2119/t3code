@@ -78,6 +78,7 @@ import * as ThreadHandlers from "./toolkits/thread/handlers.ts";
 import * as ThreadMetadataMcpService from "./ThreadMetadataMcpService.ts";
 import * as McpSessionRegistry from "./McpSessionRegistry.ts";
 import * as PreviewAutomationBroker from "./PreviewAutomationBroker.ts";
+import * as LinkedDeliveryTools from "./toolkits/linkedDelivery.ts";
 import * as OrchestratorHandlers from "./toolkits/orchestrator/handlers.ts";
 import * as SeatHandoffs from "../delivery/SeatHandoffs.ts";
 import { OrchestratorToolkit } from "./toolkits/orchestrator/tools.ts";
@@ -1355,6 +1356,11 @@ export const layerOrchestratorToolkit = toolkitRegistration(
   Layer.provide(ThreadMetadataMcpService.layer),
 );
 
+export const layerLinkedDeliveryToolkit = toolkitRegistration(
+  LinkedDeliveryTools.LinkedDeliveryToolkit,
+  LinkedDeliveryTools.layer,
+);
+
 export const layerThreadToolkit = toolkitRegistration(ThreadToolkit, ThreadHandlers.layer);
 const layerWorkflowToolkit = toolkitRegistration(WorkflowToolkit, WorkflowHandlers.layer);
 
@@ -1448,7 +1454,7 @@ export const layerMcpTransport = <RA, RE, RR>(registrations: Layer.Layer<RA, RE,
     registrations,
   }).pipe(Layer.provide(layerMcpAuthMiddleware));
 
-/** Every tool the T3 MCP server advertises. AgentContextBudget.test.ts measures this set. */
+/** The MCP tools available to agents. AgentContextBudget.test.ts measures this set. */
 export const layerTools = Layer.mergeAll(
   layerPreviewToolkit,
   layerOrchestratorToolkit,
@@ -1578,5 +1584,5 @@ export const layerMilestoneEvents = Layer.effectDiscard(
 );
 
 export const layer = layerMcpTransport(
-  Layer.mergeAll(layerTools, layerToolSearch, layerMilestoneEvents),
+  Layer.mergeAll(layerTools, layerLinkedDeliveryToolkit, layerToolSearch, layerMilestoneEvents),
 );

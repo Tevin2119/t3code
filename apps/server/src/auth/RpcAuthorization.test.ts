@@ -66,6 +66,9 @@ describe("RPC authorization scopes", () => {
       WS_METHODS.deliveryLinkedTake,
       WS_METHODS.deliveryLinkedRenew,
       WS_METHODS.deliveryLinkedRelease,
+      WS_METHODS.deliveryLinkedBring,
+      WS_METHODS.deliveryLinkedSend,
+      WS_METHODS.deliveryLinkedHandoffRetry,
       WS_METHODS.deliverySetBoardLinkedVisibility,
       WS_METHODS.deliverySetTaskLinkedHidden,
     ]) {

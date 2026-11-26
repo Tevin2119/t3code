@@ -142,6 +142,26 @@ export function createDeliveryEnvironmentAtoms<R, E>(
     }),
     /** A thread's team, or the team choice that is still held. Cheap, and read often. */
     threadBinding,
+    linkedBring: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:delivery:linked-bring",
+      tag: WS_METHODS.deliveryLinkedBring,
+    }),
+    linkedSend: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:delivery:linked-send",
+      tag: WS_METHODS.deliveryLinkedSend,
+    }),
+    linkedHandoffs: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:delivery:linked-handoffs",
+      tag: WS_METHODS.deliveryLinkedHandoffs,
+    }),
+    linkedHandoffRetry: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:delivery:linked-handoff-retry",
+      tag: WS_METHODS.deliveryLinkedHandoffRetry,
+    }),
+    linkedSendDestination: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:delivery:linked-send-destination",
+      tag: WS_METHODS.deliveryLinkedSendDestination,
+    }),
     linkedBoards: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:delivery:linked-boards",
       tag: WS_METHODS.deliveryLinkedBoards,

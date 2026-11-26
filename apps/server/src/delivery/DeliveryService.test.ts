@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   DeliveryActInput,
@@ -6,6 +7,13 @@ import {
   DeliveryReadInput,
   EnvironmentId,
   type LinkedDeliveryAction,
+  type LinkedDeliveryRead,
+  LINKED_HANDOFF_BUNDLE_MAX_BYTES,
+  LinkedBringInput,
+  LinkedHandoffPeerRequest,
+  LinkedHandoffRetryInput,
+  LinkedSendInput,
+  OrchestratorMcpFailure,
   type LinkedDeliveryResults,
   ProviderDriverKind,
   ProviderInstanceId,
@@ -14,6 +22,15 @@ import {
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import { createModelSelection } from "@t3tools/shared/model";
 import { describe, expect, it } from "@effect/vitest";
+import * as PeerForwarding from "../peer/PeerForwarding.ts";
+import * as PeerLinks from "../peer/PeerLinks.ts";
+import * as PeerMcpClient from "../peer/PeerMcpClient.ts";
+import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
+import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
+import * as DateTime from "effect/DateTime";
+import * as Option from "effect/Option";
+import * as Logger from "effect/Logger";
+import * as Digest from "effect/crypto/Digest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -91,6 +108,9 @@ interface Engine {
   health?: { profile: string | null; home: string };
   replies?: Readonly<Record<string, unknown>>;
   statuses?: Readonly<Record<string, number>>;
+  reply?: (
+    request: Engine["requests"][number],
+  ) => { status?: number; body: unknown } | "disconnect" | undefined;
   beforeRequest?: (url: URL) => Effect.Effect<void>;
 }
 
@@ -183,6 +203,11 @@ const layer = (
                   }),
                 ),
               );
+            const reply = fake.requests.at(-1);
+            const simulated = reply && fake.reply?.(reply);
+            if (simulated === "disconnect")
+              return Effect.fail(new Error("connection closed") as never);
+            if (simulated) return json(simulated.body, simulated.status);
             if (fake.replies && Object.hasOwn(fake.replies, url.pathname + url.search))
               return json(
                 fake.replies[url.pathname + url.search],
@@ -644,6 +669,504 @@ it.effect(
     }).pipe(Effect.provide(layer(fake, { prefix: "t3-delivery-link-actions-" })));
   },
 );
+
+const handoffFixture = "move-fixture";
+const digestFixture = "1".repeat(64);
+const keyFixture = "local passphrase never forwarded";
+const boardFixture = "work";
+const peerFixture = EnvironmentId.make("peer-machine");
+const localFixture = EnvironmentId.make("local-machine");
+const bundleFixture = {
+  version: 1,
+  root: sharedTask.id,
+  tasks: [{ title: "A task", id: sharedTask.id }],
+  handoff: handoffFixture,
+  linked: { board: "origin" },
+};
+const prepareFixture = (peer: string) => ({
+  handoff: handoffFixture,
+  state: "moving",
+  digest: digestFixture,
+  bytes: 256,
+  to: { peer, board: boardFixture },
+  tasks: 1,
+  bundle: bundleFixture,
+});
+const receiptFixture = (outcome: "accepted" | "cancelled" | "occupied") => ({
+  handoff: handoffFixture,
+  digest: digestFixture,
+  outcome,
+});
+const handoffRow = {
+  id: handoffFixture,
+  root: sharedTask.id,
+  tasks: [sharedTask.id],
+  state: "moving",
+  digest: digestFixture,
+  to: { peer: "peer-session", board: boardFixture },
+  started: "start",
+  updated: "now",
+};
+const decodeBring = Schema.decodeUnknownSync(LinkedBringInput);
+const decodeSend = Schema.decodeUnknownSync(LinkedSendInput);
+const decodeRetry = Schema.decodeUnknownSync(LinkedHandoffRetryInput);
+const decodePeerRequest = Schema.decodeUnknownSync(LinkedHandoffPeerRequest);
+
+it.effect(
+  "dispatches peer phases with the authenticated link and refuses invalid IDs before HTTP",
+  () => {
+    const fake = engine();
+    fake.replies = {
+      "/api/linked/tasks/task-shared/handoff": prepareFixture("peer-session"),
+      "/api/linked/imports": receiptFixture("accepted"),
+      "/api/linked/transfers/move-fixture/settle": receiptFixture("cancelled"),
+      "/api/linked/handoffs/move-fixture/commit": { handoff: handoffFixture, outcome: "done" },
+      "/api/linked/handoffs/move-fixture/cancel": { handoff: handoffFixture, outcome: "restored" },
+      "/api/linked/handoffs?peer=peer-session": { handoffs: [handoffRow] },
+      "/api/linked/handoffs/move-fixture?peer=peer-session": handoffRow,
+      "/api/linked/threads/board-task%3Awork%3Atask-shared": {
+        environmentId: linkedEnvironmentId,
+        threadId: "board-task:work:task-shared",
+        tasks: [{ id: sharedTask.id, number: 1, kind: "board-thread" }],
+      },
+    };
+    return Effect.gen(function* () {
+      const service = yield* DeliveryService.DeliveryService;
+      const prepare = {
+        operation: "prepare",
+        handoff: handoffFixture,
+        taskId: sharedTask.id,
+        boardId: boardFixture,
+        peer: "forged",
+        access: "act",
+        logs: true,
+      } as const;
+      expect(
+        (yield* service
+          .peerHandoff(prepare)
+          .pipe(
+            Effect.provideService(
+              McpInvocationContext.McpInvocationContext,
+              linkedScope("read-only"),
+            ),
+            Effect.flip,
+          )).status,
+      ).toBe(403);
+      expect((yield* service.peerHandoff(prepare).pipe(Effect.flip)).status).toBe(403);
+      const act = linkedScope("full-access");
+      for (const id of ["..", "x.y", "x/y", "x\\y", "x%2Fy"]) {
+        const invalid: ReadonlyArray<LinkedDeliveryRead> = [
+          { operation: "board", boardId: id },
+          { operation: "task", taskId: id },
+          { operation: "file", taskId: sharedTask.id, fileId: id },
+          { operation: "attached", taskId: sharedTask.id, runId: id },
+        ];
+        for (const request of invalid)
+          yield* service
+            .readLinked(request)
+            .pipe(
+              Effect.provideService(McpInvocationContext.McpInvocationContext, act),
+              Effect.flip,
+            );
+        const calls: ReadonlyArray<Effect.Effect<unknown, DeliveryError>> = [
+          service.actLinked({ operation: "control", taskId: id, action: "pause" }),
+          service.linkedThread(ThreadId.make(id)),
+          service.peerHandoff({ ...prepare, handoff: id }),
+          service.peerHandoff({
+            operation: "settle",
+            handoff: id,
+            root: sharedTask.id,
+            tasks: [sharedTask.id],
+            digest: digestFixture,
+          }),
+        ];
+        for (const call of calls) {
+          const rejected = yield* call.pipe(
+            Effect.provideService(McpInvocationContext.McpInvocationContext, act),
+            Effect.result,
+          );
+          expect(rejected._tag).toBe("Failure");
+        }
+      }
+      expect(fake.requests).toEqual([]);
+      const oversized = {
+        operation: "import",
+        boardId: boardFixture,
+        bundle: { ...bundleFixture, extra: "x".repeat(LINKED_HANDOFF_BUNDLE_MAX_BYTES) },
+      } as const;
+      expect(
+        (yield* service
+          .peerHandoff(oversized)
+          .pipe(Effect.provideService(McpInvocationContext.McpInvocationContext, act), Effect.flip))
+          .status,
+      ).toBe(413);
+      expect(fake.requests).toEqual([]);
+      const requests = [
+        prepare,
+        { operation: "import", boardId: boardFixture, bundle: bundleFixture, peer: "forged" },
+        {
+          operation: "settle",
+          handoff: handoffFixture,
+          root: sharedTask.id,
+          tasks: [sharedTask.id],
+          digest: digestFixture,
+          peer: "forged",
+        },
+        {
+          operation: "commit",
+          handoff: handoffFixture,
+          receipt: receiptFixture("accepted"),
+          peer: "forged",
+        },
+        {
+          operation: "cancel",
+          handoff: handoffFixture,
+          answer: receiptFixture("cancelled"),
+          peer: "forged",
+        },
+        { operation: "list", peer: "forged" },
+        { operation: "get", handoff: handoffFixture, peer: "forged" },
+      ] as const;
+      for (const request of requests) {
+        yield* service
+          .peerHandoff(request)
+          .pipe(Effect.provideService(McpInvocationContext.McpInvocationContext, act));
+      }
+      expect(fake.requests.map(({ path, method, search }) => [method, path + search])).toEqual([
+        ["POST", "/api/linked/tasks/task-shared/handoff"],
+        ["POST", "/api/linked/imports"],
+        ["POST", "/api/linked/transfers/move-fixture/settle"],
+        ["POST", "/api/linked/handoffs/move-fixture/commit"],
+        ["POST", "/api/linked/handoffs/move-fixture/cancel"],
+        ["GET", "/api/linked/handoffs?peer=peer-session"],
+        ["GET", "/api/linked/handoffs/move-fixture?peer=peer-session"],
+      ]);
+      expect(fake.requests[0]?.body).toEqual({
+        access: "act",
+        by: "Linked machine",
+        peer: "peer-session",
+        board: boardFixture,
+        handoff: handoffFixture,
+        maxBytes: LINKED_HANDOFF_BUNDLE_MAX_BYTES,
+      });
+      expect(JSON.stringify(fake.requests)).not.toContain("forged");
+      for (const { body } of fake.requests.slice(1, 5))
+        expect(body).toMatchObject({ access: "act", peer: "peer-session" });
+    }).pipe(Effect.provide(layer(fake, { prefix: "handoff-peer-" })));
+  },
+);
+
+it.effect.each([
+  { name: "pull", direction: "bring", outcome: "done" },
+  { name: "push", direction: "send", outcome: "done" },
+  { name: "send back", direction: "send", outcome: "done", arrival: "owner" },
+  {
+    name: "send back after a linked import",
+    direction: "send",
+    outcome: "done",
+    arrival: "linked",
+  },
+  { name: "denied on this link", direction: "send", outcome: "refused", readOnly: true },
+  { name: "prepare answer lost", direction: "bring", outcome: "done", drop: "prepare" },
+  { name: "local import answer lost", direction: "bring", outcome: "done", drop: "local-import" },
+  { name: "linked import answer lost", direction: "send", outcome: "done", drop: "import" },
+  { name: "commit answer lost", direction: "bring", outcome: "done", drop: "commit" },
+  {
+    name: "cancelled destination",
+    direction: "send",
+    outcome: "restored",
+    drop: "import",
+    receipt: "cancelled",
+  },
+  {
+    name: "bad key on destination",
+    direction: "bring",
+    outcome: "restored",
+    receipt: "cancelled",
+    wrongKey: true,
+  },
+  {
+    name: "occupied destination",
+    direction: "bring",
+    outcome: "needs-person",
+    drop: "local-import",
+    receipt: "occupied",
+  },
+  {
+    name: "source unreachable until later",
+    direction: "bring",
+    outcome: "needs-person",
+    drop: "before-commit",
+  },
+  {
+    name: "destination unreachable until later",
+    direction: "send",
+    outcome: "needs-person",
+    drop: "before-settle",
+  },
+  { name: "oversize", direction: "bring", outcome: "refused", oversize: true },
+] as const)("handles $name through the engine and peer boundaries", (scenario) => {
+  const fake = engine();
+  const peerRequests: LinkedHandoffPeerRequest[] = [];
+  const messages: unknown[] = [];
+  const logger = Logger.make(({ message }) => {
+    messages.push(message);
+  });
+  const drop = "drop" in scenario ? scenario.drop : undefined;
+  const answer = "receipt" in scenario ? scenario.receipt : "accepted";
+  let recovered = false;
+  const ownerRow = { ...handoffRow, via: "owner", peer: peerFixture, to_board: boardFixture };
+  fake.reply = ({ path, body }) => {
+    switch (path) {
+      case "/api/handoffs/prepare":
+        expect(body).toMatchObject({
+          by: "Person",
+          key: keyFixture,
+          handoff: handoffFixture,
+          maxBytes: LINKED_HANDOFF_BUNDLE_MAX_BYTES,
+          to: { peer: peerFixture, board: boardFixture },
+        });
+        return { body: prepareFixture(peerFixture) };
+      case "/api/handoffs/import":
+        expect(body).toMatchObject({ key: keyFixture, peer: peerFixture, board: boardFixture });
+        expect(JSON.stringify((body as { bundle: unknown }).bundle)).toBe(
+          JSON.stringify(bundleFixture),
+        );
+        if ("wrongKey" in scenario)
+          return { status: 403, body: { error: `Wrong key ${keyFixture}` } };
+        return drop === "local-import" ? "disconnect" : { body: receiptFixture("accepted") };
+      case "/api/transfers/move-fixture/settle":
+        expect(body).toEqual({
+          root: sharedTask.id,
+          tasks: [sharedTask.id],
+          digest: digestFixture,
+        });
+        return { body: receiptFixture(answer) };
+      case "/api/handoffs/move-fixture/commit":
+        expect(body).toMatchObject({ key: keyFixture, receipt: receiptFixture("accepted") });
+        return { body: { handoff: handoffFixture, outcome: "done" } };
+      case "/api/handoffs/move-fixture/resolve":
+        expect(body).toMatchObject({
+          key: keyFixture,
+          outcome: "restore",
+          answer: receiptFixture("cancelled"),
+        });
+        return { body: { handoff: handoffFixture, outcome: "restored" } };
+      case "/api/tasks/task-shared": {
+        const via = "arrival" in scenario ? scenario.arrival : "owner";
+        return {
+          body: {
+            linkedArrival: {
+              handoff: "old-handoff",
+              peer: via === "owner" ? peerFixture : "remote-session",
+              via,
+              fromBoard: boardFixture,
+              fromTask: sharedTask.id,
+              fromNumber: 1,
+              board: "here",
+              at: "then",
+            },
+          },
+        };
+      }
+      case "/api/handoffs":
+        return { body: scenario.direction === "send" ? [ownerRow] : [] };
+    }
+  };
+  const disconnected = new OrchestratorMcpFailure({
+    code: "orchestration_error",
+    message: "Link disconnected",
+  });
+  const mockPeers =
+    (crypto: Digest.Digest["Service"]): PeerMcpClient.PeerMcpClient["Service"]["call"] =>
+    (input) =>
+      Effect.gen(function* () {
+        const decode = Schema.decodeUnknownEffect(Schema.fromJsonString(input.success));
+        expect(JSON.stringify(input.arguments)).not.toContain(keyFixture);
+        if (input.tool === "delivery_linked_origin") {
+          const { environmentId, challenge, claim } = input.arguments;
+          expect(environmentId).toBe(localFixture);
+          expect(claim).toBe(
+            yield* PeerLinks.hashArrivalProof(crypto, String(challenge), "remote-session", "claim"),
+          );
+          const proof = yield* PeerLinks.hashArrivalProof(
+            crypto,
+            String(challenge),
+            "remote-session",
+            "proof",
+          );
+          return yield* decode(JSON.stringify({ environmentId: peerFixture, proof }));
+        }
+        const request = decodePeerRequest(input.arguments.request);
+        peerRequests.push(request);
+        const count = peerRequests.filter((entry) => entry.operation === request.operation).length;
+        if (
+          (drop === request.operation && count === 1) ||
+          (!recovered &&
+            ((drop === "before-commit" && request.operation === "commit") ||
+              (drop === "before-settle" &&
+                (request.operation === "import" || request.operation === "settle"))))
+        ) {
+          return yield* disconnected;
+        }
+        const data = {
+          prepare: prepareFixture("peer-session"),
+          import: receiptFixture("accepted"),
+          settle: receiptFixture(answer),
+          commit: { handoff: handoffFixture, outcome: "done" },
+          cancel: { handoff: handoffFixture, outcome: "restored" },
+          list: { handoffs: [handoffRow, { ...handoffRow, id: "closed-move", state: "done" }] },
+          get: handoffRow,
+        }[request.operation];
+        const result =
+          "oversize" in scenario
+            ? {
+                environmentId: peerFixture,
+                data: null,
+                error: { refused: true, status: 413, message: "Nothing was frozen." },
+              }
+            : { environmentId: peerFixture, data, error: null };
+        if (request.operation === "import")
+          expect(JSON.stringify(request.bundle)).toBe(JSON.stringify(bundleFixture));
+        return yield* decode(JSON.stringify(result));
+      }).pipe(Effect.mapError(() => disconnected));
+
+  return Effect.gen(function* () {
+    const forwarding = yield* PeerForwarding.PeerForwarding;
+    const input = { by: "Person", key: keyFixture, handoff: handoffFixture, taskId: sharedTask.id };
+    const target = { peerEnvironmentId: peerFixture, boardId: boardFixture };
+    if ("arrival" in scenario) {
+      expect((yield* forwarding.linkedSendDestination(sharedTask.id)).destination).toEqual(target);
+    }
+    const moved = yield* scenario.direction === "bring"
+      ? forwarding.bringLinkedTask(decodeBring({ ...input, ...target }))
+      : forwarding.sendLinkedTask(
+          decodeSend({
+            ...input,
+            ...("arrival" in scenario ? {} : { destination: target }),
+          }),
+        );
+    expect(moved).toMatchObject({ handoff: handoffFixture, outcome: scenario.outcome });
+    if ("oversize" in scenario) expect(moved).toMatchObject({ message: "Nothing was frozen." });
+    if ("wrongKey" in scenario) expect(moved).toMatchObject({ message: "Wrong key [redacted]" });
+    if ("readOnly" in scenario || "oversize" in scenario) expect(fake.requests).toEqual([]);
+    if ("readOnly" in scenario) expect(peerRequests).toEqual([]);
+    if (drop === "prepare") {
+      expect(peerRequests.slice(0, 2)).toEqual([
+        {
+          operation: "prepare",
+          boardId: boardFixture,
+          taskId: sharedTask.id,
+          handoff: handoffFixture,
+        },
+        {
+          operation: "prepare",
+          boardId: boardFixture,
+          taskId: sharedTask.id,
+          handoff: handoffFixture,
+        },
+      ]);
+    }
+    if (drop === "commit")
+      expect(peerRequests.map(({ operation }) => operation)).toEqual([
+        "prepare",
+        "commit",
+        "commit",
+      ]);
+    if (drop === "import")
+      expect(peerRequests.map(({ operation }) => operation)).toEqual(["import", "settle"]);
+    if (drop === "local-import" || "wrongKey" in scenario) {
+      expect(fake.requests.map(({ path }) => path)).toEqual([
+        "/api/handoffs/import",
+        "/api/transfers/move-fixture/settle",
+      ]);
+      expect(peerRequests.map(({ operation }) => operation)).toEqual(
+        answer === "occupied"
+          ? ["prepare"]
+          : ["prepare", answer === "accepted" ? "commit" : "cancel"],
+      );
+    }
+    if (drop === "before-commit" || drop === "before-settle") {
+      expect(moved).toMatchObject({ phase: drop === "before-commit" ? "commit" : "settle" });
+      recovered = true;
+      const listed = yield* forwarding.listLinkedHandoffs({ peerEnvironmentId: peerFixture });
+      expect(listed.handoffs.every((row) => row.state === "moving")).toBe(true);
+      expect(listed.handoffs).toContainEqual(
+        expect.objectContaining({ direction: scenario.direction, id: handoffFixture }),
+      );
+      const recoveredMove = yield* forwarding.retryLinkedHandoff(
+        decodeRetry({
+          direction: scenario.direction,
+          handoff: handoffFixture,
+          peerEnvironmentId: peerFixture,
+          mode: drop === "before-settle" ? "retry" : "settle",
+          key: keyFixture,
+          by: "Person",
+        }),
+      );
+      expect(recoveredMove).toEqual({ handoff: handoffFixture, outcome: "done" });
+      if (drop === "before-settle") {
+        const prepares = fake.requests.filter(({ path }) => path === "/api/handoffs/prepare");
+        expect(prepares).toHaveLength(2);
+        expect(prepares[1]?.body).toEqual(prepares[0]?.body);
+        expect(peerRequests.filter(({ operation }) => operation === "import")).toHaveLength(2);
+      }
+    }
+    expect(JSON.stringify([moved, messages, peerRequests])).not.toContain(keyFixture);
+  }).pipe(
+    Effect.provide([
+      layer(fake, { prefix: "linked-handoff-" }),
+      Logger.layer([logger]),
+      Layer.mock(ServerEnvironment.ServerEnvironment)({
+        getEnvironmentId: Effect.succeed(localFixture),
+      }),
+      PeerForwarding.layer.pipe(
+        Layer.provide([
+          NodeCrypto.layer,
+          Layer.mock(ThreadManagement.ThreadManagementService)({}),
+          Layer.effect(
+            PeerMcpClient.PeerMcpClient,
+            Effect.map(Digest.Digest, (crypto) =>
+              PeerMcpClient.PeerMcpClient.of({ call: mockPeers(crypto) }),
+            ),
+          ).pipe(Layer.provide(NodeCrypto.layer)),
+          Layer.mock(PeerLinks.PeerLinks)({
+            enabled: Effect.succeed(true),
+            get: () =>
+              DateTime.now.pipe(
+                Effect.map((now) =>
+                  Option.some({
+                    environmentId: peerFixture,
+                    label: "Peer",
+                    access: "readOnly" in scenario ? "read-only" : "full-access",
+                    urls: [],
+                    linkedAt: now,
+                    expiresAt: DateTime.add(now, { hours: 1 }),
+                    lastReachedAt: null,
+                    lastError: null,
+                  }),
+                ),
+              ),
+            listStored: DateTime.now.pipe(
+              Effect.map((now) => [
+                {
+                  environmentId: peerFixture,
+                  label: "Peer",
+                  access: "full-access",
+                  urls: [],
+                  linkedAt: now,
+                  expiresAt: DateTime.add(now, { hours: 1 }),
+                  lastReachedAt: null,
+                  lastError: null,
+                },
+              ]),
+            ),
+          }),
+        ]),
+      ),
+    ]),
+  );
+});
 
 describe("DeliveryService", () => {
   it.effect("pulls only 24 cards from the named set and marks the caller's origin", () => {

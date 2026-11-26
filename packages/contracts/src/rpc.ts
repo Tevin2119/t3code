@@ -5,6 +5,14 @@ import {
   DeliverySetTaskLinkedHidden,
   DeliveryTaskLinkedHidden,
   LinkedDeliveryActions,
+  LinkedBringInput,
+  LinkedHandoffOutcome,
+  LinkedSendInput,
+  LinkedHandoffsInput,
+  LinkedHandoffsResult,
+  LinkedHandoffRetryInput,
+  LinkedSendDestinationInput,
+  LinkedSendDestinationResult,
   LinkedDeliveryBoardsResult,
   LinkedDeliveryFresh,
   LinkedDeliveryReads,
@@ -688,6 +696,11 @@ export const WS_METHODS = {
   deliveryLinkedTake: "delivery.linkedTake",
   deliveryLinkedRenew: "delivery.linkedRenew",
   deliveryLinkedRelease: "delivery.linkedRelease",
+  deliveryLinkedBring: "delivery.linkedBring",
+  deliveryLinkedSend: "delivery.linkedSend",
+  deliveryLinkedHandoffs: "delivery.linkedHandoffs",
+  deliveryLinkedHandoffRetry: "delivery.linkedHandoffRetry",
+  deliveryLinkedSendDestination: "delivery.linkedSendDestination",
   deliverySetBoardLinkedVisibility: "delivery.setBoardLinkedVisibility",
   deliverySetTaskLinkedHidden: "delivery.setTaskLinkedHidden",
   deliveryAnswerBoardTask: "delivery.answerBoardTask",
@@ -1237,6 +1250,36 @@ const WsServerRetryResourceTelemetryRpc = Rpc.make(WS_METHODS.serverRetryResourc
   payload: Schema.Struct({}),
   success: ResourceTelemetryRetryResult,
   error: EnvironmentAuthorizationError,
+});
+
+const WsDeliveryLinkedBringRpc = Rpc.make(WS_METHODS.deliveryLinkedBring, {
+  payload: LinkedBringInput,
+  success: LinkedHandoffOutcome,
+  error: EnvironmentAuthorizationError,
+});
+
+const WsDeliveryLinkedSendRpc = Rpc.make(WS_METHODS.deliveryLinkedSend, {
+  payload: LinkedSendInput,
+  success: LinkedHandoffOutcome,
+  error: EnvironmentAuthorizationError,
+});
+
+const WsDeliveryLinkedHandoffsRpc = Rpc.make(WS_METHODS.deliveryLinkedHandoffs, {
+  payload: LinkedHandoffsInput,
+  success: LinkedHandoffsResult,
+  error: Schema.Union([DeliveryError, EnvironmentAuthorizationError]),
+});
+
+const WsDeliveryLinkedHandoffRetryRpc = Rpc.make(WS_METHODS.deliveryLinkedHandoffRetry, {
+  payload: LinkedHandoffRetryInput,
+  success: LinkedHandoffOutcome,
+  error: EnvironmentAuthorizationError,
+});
+
+const WsDeliveryLinkedSendDestinationRpc = Rpc.make(WS_METHODS.deliveryLinkedSendDestination, {
+  payload: LinkedSendDestinationInput,
+  success: LinkedSendDestinationResult,
+  error: Schema.Union([DeliveryError, EnvironmentAuthorizationError]),
 });
 
 const WsDeliveryLinkedBoardsRpc = Rpc.make(WS_METHODS.deliveryLinkedBoards, {
@@ -3062,6 +3105,11 @@ export const ForkWsRpcGroup = RpcGroup.make(
   WsDeliveryLinkedTakeRpc,
   WsDeliveryLinkedRenewRpc,
   WsDeliveryLinkedReleaseRpc,
+  WsDeliveryLinkedBringRpc,
+  WsDeliveryLinkedSendRpc,
+  WsDeliveryLinkedHandoffsRpc,
+  WsDeliveryLinkedHandoffRetryRpc,
+  WsDeliveryLinkedSendDestinationRpc,
   WsDeliverySetBoardLinkedVisibilityRpc,
   WsDeliverySetTaskLinkedHiddenRpc,
   WsDeliveryAnswerBoardTaskRpc,

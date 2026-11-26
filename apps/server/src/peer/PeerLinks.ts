@@ -121,6 +121,11 @@ export class PeerLinks extends Context.Service<
     readonly unlink: (
       environmentId: EnvironmentId,
     ) => Effect.Effect<{ readonly removed: boolean; readonly endedThere: boolean }, PeerLinkError>;
+    readonly arrivalProof: (
+      environmentId: EnvironmentId,
+      challenge: string,
+      claim: string,
+    ) => Effect.Effect<string | null, PeerLinkError>;
     /** An address that answers as the linked peer, with its token, ready to call. */
     readonly resolve: (
       environmentId: EnvironmentId,
@@ -137,6 +142,27 @@ export class PeerLinks extends Context.Service<
     ) => Effect.Effect<void>;
   }
 >()("t3/peer/PeerLinks") {}
+
+const decodeLinkClaims = Schema.decodeUnknownEffect(
+  Schema.fromJsonString(
+    Schema.Struct({
+      kind: Schema.Literal("session"),
+      plk: Schema.Literal(1),
+      sid: Schema.String,
+    }),
+  ),
+);
+
+export const hashArrivalProof = (
+  crypto: Digest.Digest["Service"],
+  challenge: string,
+  sessionId: string,
+  side: "claim" | "proof",
+) =>
+  crypto.digestHex(
+    Digest.sha256,
+    new TextEncoder().encode(`delivery-arrival:${side}:${challenge}:${sessionId}`),
+  );
 
 interface PeerLinkRow {
   readonly environment_id: string;
@@ -805,6 +831,36 @@ const make = Effect.gen(function* () {
     },
   );
 
+  // The signed token's public claims provide the session id without contacting the peer.
+  const arrivalProof = Effect.fn("PeerLinks.arrivalProof")(function* (
+    environmentId: EnvironmentId,
+    challenge: string,
+    claim: string,
+  ) {
+    if (!(yield* enabled)) return null;
+    const row = yield* readRow(environmentId);
+    if (Option.isNone(row)) return null;
+    const link = yield* toLink(row.value);
+    if (DateTime.isLessThanOrEqualTo(link.expiresAt, yield* DateTime.now)) return null;
+    const stored = yield* secrets.get(row.value.secret_name).pipe(Effect.catch(failStorage));
+    if (Option.isNone(stored)) return null;
+    const [payload, signature] = new TextDecoder().decode(stored.value).split(".");
+    if (!payload || !signature) return null;
+    return yield* Effect.fromResult(Base64Url.decodeString(payload)).pipe(
+      Effect.flatMap(decodeLinkClaims),
+      Effect.flatMap(({ sid }) =>
+        hashArrivalProof(digest, challenge, sid, "claim").pipe(
+          Effect.flatMap((actual) =>
+            actual === claim
+              ? hashArrivalProof(digest, challenge, sid, "proof")
+              : Effect.succeed(null),
+          ),
+        ),
+      ),
+      Effect.orElseSucceed(() => null),
+    );
+  });
+
   const recordOutcome: PeerLinks["Service"]["recordOutcome"] = (environmentId, outcome) =>
     DateTime.now.pipe(
       Effect.flatMap((now) =>
@@ -839,6 +895,7 @@ const make = Effect.gen(function* () {
     get,
     unlink,
     resolve,
+    arrivalProof,
     recordOutcome,
     recordExpiry,
   });

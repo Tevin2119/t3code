@@ -1,10 +1,16 @@
 import {
   type EnvironmentId,
+  DeliveryError,
+  LinkedArrivalProofResult,
+  LINKED_HANDOFF_MCP_MAX_BYTES,
+  linkedHandoffPeerResult,
+  LinkedHandoffPeerResponses,
+  type LinkedHandoffPeerRequest,
   DeliveryDiscoveryInput,
   type DeliveryDiscoverySnapshot,
   type LinkedDeliveryDiagnostic,
-  type LinkedDeliveryRead,
-  type LinkedDeliveryAction,
+  LinkedDeliveryRead,
+  LinkedDeliveryAction,
   type LinkedDeliveryBoardsResult,
   LinkedDeliveryResults,
   linkedDeliveryResult,
@@ -23,6 +29,8 @@ import {
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Digest from "effect/crypto/Digest";
+import * as SecureRandom from "effect/crypto/SecureRandom";
+import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Hex from "effect/encoding/Hex";
@@ -40,6 +48,7 @@ import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.t
 import * as PeerLinks from "./PeerLinks.ts";
 import * as PeerMcpClient from "./PeerMcpClient.ts";
 import * as DeliveryService from "../delivery/DeliveryService.ts";
+import { makeLinkedHandoffs, type LinkedHandoffs } from "../delivery/linkedHandoffs.ts";
 import { emptyDiscovery, invalidDiscoveryCards } from "../delivery/deliveryDiscovery.ts";
 
 // Match local waits: return before MCP client timeouts and T3 Connect's ~100 s idle drop.
@@ -69,6 +78,8 @@ const noLinkedResult = (environmentId: EnvironmentId, diagnostic: LinkedDelivery
 
 const linkedCacheKey = (link: PeerLink, request: LinkedRequest) =>
   JSON.stringify([link.environmentId, link.access, DateTime.formatIso(link.linkedAt), request]);
+
+const isLinkedRequest = Schema.is(Schema.Union([LinkedDeliveryRead, LinkedDeliveryAction]));
 
 const actionOperations = new Set<LinkedOperation>([
   "comment",
@@ -114,6 +125,11 @@ export class PeerForwarding extends Context.Service<
       target: LinkedTarget,
       request: LinkedRequest & { readonly operation: K },
     ) => Effect.Effect<LinkedResult<LinkedResultData<K>>>;
+    readonly bringLinkedTask: LinkedHandoffs["bring"];
+    readonly sendLinkedTask: LinkedHandoffs["send"];
+    readonly listLinkedHandoffs: LinkedHandoffs["list"];
+    readonly retryLinkedHandoff: LinkedHandoffs["retry"];
+    readonly linkedSendDestination: LinkedHandoffs["sendDestination"];
     readonly readLinkedAsAgent: (
       scope: Scope,
       target: LinkedTarget,
@@ -187,6 +203,8 @@ const make = Effect.gen(function* () {
   const peers = yield* PeerMcpClient.PeerMcpClient;
   const links = yield* PeerLinks.PeerLinks;
   const crypto = yield* Digest.Digest;
+  const random = yield* SecureRandom.SecureRandom;
+  const newId = random.uuidV4().pipe(Effect.orDie);
   const threads = yield* ThreadManagement.ThreadManagementService;
 
   /**
@@ -299,6 +317,7 @@ const make = Effect.gen(function* () {
     request: LinkedRequest,
   ) {
     const { peerEnvironmentId: environmentId } = target;
+    if (!isLinkedRequest(request)) return noLinkedResult(environmentId, "refused");
     if (!(yield* links.enabled)) return noLinkedResult(environmentId, "not-linked");
     const stored = yield* links.get(environmentId).pipe(Effect.result);
     if (stored._tag === "Failure") return noLinkedResult(environmentId, "offline");
@@ -379,6 +398,159 @@ const make = Effect.gen(function* () {
     );
     return yield* read;
   });
+
+  const handoffLink = Effect.fn("PeerForwarding.handoffLink")(function* (
+    environmentId: EnvironmentId,
+    acting: boolean,
+  ) {
+    const scope = yield* Effect.serviceOption(McpInvocationContext.McpInvocationContext);
+    if (Option.getOrUndefined(scope)?.client?.linked === true) {
+      return yield* new DeliveryError({
+        reason: "refused",
+        detail: "A peer cannot forward a hand-off.",
+      });
+    }
+    if (!(yield* links.enabled)) {
+      return yield* new DeliveryError({
+        reason: "disabled",
+        detail: "Linked environments are turned off.",
+      });
+    }
+    const found = yield* links.get(environmentId).pipe(
+      Effect.mapError(
+        () =>
+          new DeliveryError({
+            reason: "unreachable",
+            detail: "The peer link could not be read.",
+          }),
+      ),
+    );
+    if (
+      Option.isNone(found) ||
+      DateTime.isLessThanOrEqualTo(found.value.expiresAt, yield* DateTime.now)
+    ) {
+      return yield* new DeliveryError({
+        reason: "refused",
+        detail: "The peer link is missing or expired.",
+      });
+    }
+    if (acting && found.value.access === "read-only") {
+      return yield* new DeliveryError({ reason: "refused", detail: "The peer link is read-only." });
+    }
+    return found.value;
+  });
+
+  const handoffPhase = Effect.fn("PeerForwarding.handoffPhase")(function* <
+    Request extends LinkedHandoffPeerRequest,
+  >(
+    environmentId: EnvironmentId,
+    request: Request,
+  ): Effect.fn.Return<
+    (typeof LinkedHandoffPeerResponses)[Request["operation"]]["Type"],
+    DeliveryError
+  > {
+    const acting = request.operation !== "get" && request.operation !== "list";
+    yield* handoffLink(environmentId, acting);
+    const success = LinkedHandoffPeerResponses[request.operation] as Schema.Decoder<
+      (typeof LinkedHandoffPeerResponses)[Request["operation"]]["Type"]
+    >;
+    if (acting) evictLinked(environmentId);
+    const result = yield* peers
+      .call({
+        environmentId,
+        tool: acting ? "delivery_linked_handoff" : "delivery_linked_handoff_read",
+        arguments: { request },
+        limits: { runtimeMode: "full-access", interactionMode: "default" },
+        success: linkedHandoffPeerResult(success),
+        maxResponseBytes: LINKED_HANDOFF_MCP_MAX_BYTES,
+      })
+      .pipe(
+        Effect.timeout("15 seconds"),
+        Effect.mapError(
+          () =>
+            new DeliveryError({
+              reason: "unreachable",
+              detail: "The linked machine did not confirm the hand-off phase.",
+            }),
+        ),
+        Effect.ensuring(
+          Effect.sync(() => {
+            if (acting) evictLinked(environmentId);
+          }),
+        ),
+      );
+    if (result.environmentId !== environmentId) {
+      return yield* new DeliveryError({
+        reason: "invalid",
+        detail: "The hand-off answered from another environment.",
+      });
+    }
+    if (result.error !== null) {
+      return yield* new DeliveryError({
+        reason: result.error.refused ? "refused" : "unreachable",
+        detail: result.error.message.slice(0, 500),
+        ...(result.error.status === undefined ? {} : { status: result.error.status }),
+      });
+    }
+    return result.data;
+  });
+
+  const resolveArrivalPeer = Effect.fn("PeerForwarding.resolveArrivalPeer")(function* (
+    sessionId: string,
+  ) {
+    const scope = yield* Effect.serviceOption(McpInvocationContext.McpInvocationContext);
+    if (Option.getOrUndefined(scope)?.client?.linked === true || !(yield* links.enabled))
+      return null;
+    const environment = yield* ServerEnvironment.ServerEnvironment;
+    const environmentId = yield* environment.getEnvironmentId;
+    const challenge = yield* newId;
+    const claim = yield* PeerLinks.hashArrivalProof(crypto, challenge, sessionId, "claim");
+    const expected = yield* PeerLinks.hashArrivalProof(crypto, challenge, sessionId, "proof");
+    const stored = yield* links.listStored.pipe(Effect.orElseSucceed(() => []));
+    const now = yield* DateTime.now;
+    const eligible = stored.filter(
+      (link) => link.access !== "read-only" && DateTime.isGreaterThan(link.expiresAt, now),
+    );
+    const matching = yield* Effect.forEach(
+      eligible,
+      (link) =>
+        peers
+          .call({
+            environmentId: link.environmentId,
+            tool: "delivery_linked_origin",
+            arguments: { environmentId, challenge, claim },
+            limits: { runtimeMode: "full-access", interactionMode: "default" },
+            success: LinkedArrivalProofResult,
+            maxResponseBytes: 4096,
+          })
+          .pipe(
+            Effect.timeout("15 seconds"),
+            Effect.map((answer) =>
+              answer.environmentId === link.environmentId && answer.proof === expected
+                ? link.environmentId
+                : null,
+            ),
+            Effect.orElseSucceed(() => null),
+          ),
+      { concurrency: 4 },
+    );
+    const matches = matching.filter((peer) => peer !== null);
+    return matches.length === 1 ? (matches[0] ?? null) : null;
+  });
+
+  const handoffs = makeLinkedHandoffs(
+    handoffPhase,
+    (environmentId) => handoffLink(environmentId, true),
+    links.listStored.pipe(
+      Effect.map((stored) => stored.map((link) => link.environmentId)),
+      Effect.mapError(
+        () =>
+          new DeliveryError({ reason: "unreachable", detail: "The peer links could not be read." }),
+      ),
+    ),
+    newId,
+    resolveArrivalPeer,
+  );
 
   const listLinkedBoards = Effect.fn("PeerForwarding.listLinkedBoards")(function* (input: {
     readonly fresh?: boolean | undefined;
@@ -603,6 +775,11 @@ const make = Effect.gen(function* () {
     call,
     readDelivery,
     listLinkedBoards,
+    bringLinkedTask: handoffs.bring,
+    sendLinkedTask: handoffs.send,
+    listLinkedHandoffs: handoffs.list,
+    retryLinkedHandoff: handoffs.retry,
+    linkedSendDestination: handoffs.sendDestination,
     linkedDelivery: linkedDelivery as PeerForwarding["Service"]["linkedDelivery"],
     readLinkedAsAgent: readLinkedAsAgent as PeerForwarding["Service"]["readLinkedAsAgent"],
     readThread,

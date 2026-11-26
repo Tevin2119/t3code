@@ -8,6 +8,8 @@ import {
   DeliveryError,
   EnvironmentId,
   type LinkedDeliveryAction,
+  LinkedHandoffPeerResponses,
+  linkedHandoffPeerResult,
   type PeerLink,
   type OrchestrationV2Run,
   type OrchestrationV2ThreadShell,
@@ -439,6 +441,7 @@ const serveBox = (
       McpHttpServer.layerOrchestratorToolkit.pipe(
         Layer.provide(Layer.mock(BoardThreadTasks.BoardThreadTasks)({})),
       ),
+      McpHttpServer.layerLinkedDeliveryToolkit,
       McpHttpServer.layerProjectRegistration,
       McpHttpServer.layerThreadToolkit,
     ).pipe(
@@ -512,6 +515,7 @@ const mcpClient = McpSchema.McpServerClient.of({
 const makeLaptop = Effect.gen(function* () {
   const linking = yield* layerLinkingEnvironment(laptop).pipe(Layer.build);
   const layerHere = Layer.mergeAll(
+    McpHttpServer.layerLinkedDeliveryToolkit.pipe(Layer.provide(DeliveryService.layerTest)),
     McpHttpServer.layerOrchestratorToolkit.pipe(
       Layer.provide(Layer.mock(BoardThreadTasks.BoardThreadTasks)({})),
       Layer.provide(DeliveryService.layerTest),
@@ -610,7 +614,11 @@ const makeLaptop = Effect.gen(function* () {
         ),
         Effect.provideService(McpSchema.McpServerClient, mcpClient),
       );
-  return { links: Context.get(linking, PeerLinks.PeerLinks), call };
+  return {
+    links: Context.get(linking, PeerLinks.PeerLinks),
+    peer: Context.get(linking, PeerMcpClient.PeerMcpClient),
+    call,
+  };
 });
 
 const failureOf = (result: McpSchema.CallToolResult) => {
@@ -720,6 +728,65 @@ it.effect("uses the owner engine's visibility for linked thread snapshots, lists
       expect((yield* Ref.get(seen)).sends).toHaveLength(1);
     }),
   ).pipe(Effect.provide(NodeHttpServer.layerTest)),
+);
+
+it.effect(
+  "only a linked MCP client reaches hand-off phases and preserves the bundle digest input",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const seen = yield* Ref.make<Seen>(nothingSeen);
+        const linkSession = yield* Ref.make("");
+        const bundle = {
+          version: 1,
+          root: "task",
+          tasks: [{ title: "Move me", id: "task" }],
+          handoff: "move",
+          linked: { board: "shared" },
+        };
+        const taskDelivery = Layer.effect(
+          DeliveryService.DeliveryService,
+          Effect.map(DeliveryService.DeliveryService, (service) => ({
+            ...service,
+            peerHandoff: () =>
+              Effect.succeed({
+                handoff: "move",
+                state: "moving",
+                digest: "0".repeat(64),
+                bytes: 512,
+                to: { peer: "linked", board: "shared" },
+                tasks: 1,
+                bundle,
+              } as const),
+          })),
+        ).pipe(Layer.provide(DeliveryService.layerTest));
+        const b = yield* serveBox(seen, linkSession, taskDelivery);
+        const a = yield* makeLaptop;
+        yield* linkTo(a.links, b, "auto");
+        yield* Ref.set(linkSession, (yield* b.linkedSessions)[0]!.sessionId);
+        const request = {
+          operation: "prepare",
+          taskId: "task",
+          handoff: "move",
+          boardId: "shared",
+        };
+        const result = yield* a.peer.call({
+          environmentId: box.environmentId,
+          tool: "delivery_linked_handoff",
+          arguments: { request },
+          limits: { runtimeMode: "auto", interactionMode: "default" },
+          success: linkedHandoffPeerResult(LinkedHandoffPeerResponses.prepare),
+          maxResponseBytes: 10 * 1024 * 1024,
+        });
+        expect(result.error).toBeNull();
+        expect(JSON.stringify(result.data?.bundle)).toBe(JSON.stringify(bundle));
+
+        const local = yield* a
+          .call("thread:laptop-full", "delivery_linked_handoff", { request })
+          .pipe(Effect.result);
+        expect(local).not.toMatchObject({ _tag: "Success", success: { isError: false } });
+      }),
+    ).pipe(Effect.provide(NodeHttpServer.layerTest)),
 );
 
 it.effect("an agent here works on a linked environment's threads within its own modes", () =>

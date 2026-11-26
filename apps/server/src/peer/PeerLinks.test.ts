@@ -2,6 +2,8 @@
 import * as NodeFS from "node:fs";
 // @effect-diagnostics-next-line nodeBuiltinImport:off - A peer with a certificate this machine does not trust.
 import * as NodeHttps from "node:https";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+import * as Digest from "effect/crypto/Digest";
 import { NodeHttpServer } from "@effect/platform-node";
 import { type ExecutionEnvironmentDescriptor, OrchestratorMcpFailure } from "@t3tools/contracts";
 import { expect, it } from "@effect/vitest";
@@ -189,10 +191,26 @@ it.effect("links with a pairing code, and the peer holds its agents to the limit
         urls: [b.url],
         access: "auto",
       });
-      // B lists the link under A's name, where it can be revoked.
-      expect((yield* linkedSessions(b)).map((session) => session.client.label)).toEqual([
-        "T3 Code · Laptop",
-      ]);
+      const sessions = yield* linkedSessions(b);
+      expect(sessions.map((session) => session.client.label)).toEqual(["T3 Code · Laptop"]);
+      const session = sessions[0]!;
+      const digest = yield* Digest.Digest;
+      const challenge = "random-challenge";
+      const claim = yield* PeerLinks.hashArrivalProof(
+        digest,
+        challenge,
+        session.sessionId,
+        "claim",
+      );
+      const proof = yield* PeerLinks.hashArrivalProof(
+        digest,
+        challenge,
+        session.sessionId,
+        "proof",
+      );
+      expect(yield* a.links.arrivalProof(box.environmentId, challenge, claim)).toBe(proof);
+      expect(yield* a.links.arrivalProof(box.environmentId, "other-challenge", claim)).toBeNull();
+      expect(yield* a.links.arrivalProof(box.environmentId, challenge, proof)).toBeNull();
       expect(
         (yield* a.links.list).map(({ environmentId, status }) => [environmentId, status]),
       ).toEqual([[box.environmentId, "reachable"]]);
@@ -221,7 +239,7 @@ it.effect("links with a pairing code, and the peer holds its agents to the limit
         endedThere: false,
       });
     }),
-  ).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  ).pipe(Effect.provide([NodeHttpServer.layerTest, NodeCrypto.layer])),
 );
 
 it.effect(

@@ -375,3 +375,197 @@ export const LinkedDeliveryThread = Schema.Struct({
   ),
 });
 export const LinkedDeliveryThreads = Schema.Struct({ threads: Schema.Array(LinkedDeliveryThread) });
+
+export const LinkedDeliveryId = Id;
+export const LINKED_HANDOFF_MCP_MAX_BYTES = 10 * 1024 * 1024;
+// MCP returns the object and a JSON-escaped text copy. Leave room for both envelopes.
+export const LINKED_HANDOFF_BUNDLE_MAX_BYTES = 2 * 1024 * 1024;
+const Digest = Schema.String.check(Schema.isPattern(/^[a-f0-9]{64}$/));
+const HandoffState = Schema.Literals(["moving", "done", "restored"]);
+const Transfer = {
+  root: Id,
+  tasks: Schema.Array(Id).check(Schema.isMinLength(1)),
+  digest: Digest,
+};
+const HandoffId = { handoff: Id };
+export const LinkedHandoffReceipt = Schema.Struct({
+  ...HandoffId,
+  digest: Digest,
+  outcome: Schema.Literals(["accepted", "cancelled", "occupied"]),
+  result: Schema.optional(Schema.Json),
+});
+const BundleShape = Schema.StructWithRest(
+  Schema.Struct({
+    ...HandoffId,
+    root: Id,
+    tasks: Schema.Array(
+      Schema.StructWithRest(Schema.Struct({ id: Id }), [
+        Schema.Record(Schema.String, Schema.Unknown),
+      ]),
+    ).check(Schema.isMinLength(1)),
+  }),
+  [Schema.Record(Schema.String, Schema.Unknown)],
+);
+// The engine hashes JSON.stringify(bundle), so decoding must keep the original key order.
+export const LinkedHandoffBundle = Schema.Unknown.pipe(Schema.refine(Schema.is(BundleShape)));
+const Destination = Schema.Struct({ peer: Id, board: Id });
+export const LinkedHandoffPrepared = Schema.Struct({
+  ...HandoffId,
+  state: Schema.Literal("moving"),
+  digest: Digest,
+  bytes: Count,
+  to: Destination,
+  tasks: Count,
+  bundle: LinkedHandoffBundle,
+});
+export const LinkedHandoffSummary = Schema.Struct({
+  id: Id,
+  ...Transfer,
+  state: HandoffState,
+  to: Destination,
+  started: Schema.String,
+  updated: Schema.String,
+});
+const Completion = Schema.Struct({ ...HandoffId, outcome: Schema.Literals(["done", "restored"]) });
+const LinkedHandoffPeerRequests = {
+  prepare: Schema.Struct({
+    operation: Schema.Literal("prepare"),
+    ...HandoffId,
+    taskId: Id,
+    boardId: Id,
+  }),
+  import: Schema.Struct({
+    operation: Schema.Literal("import"),
+    boardId: Id,
+    bundle: LinkedHandoffBundle,
+  }),
+  settle: Schema.Struct({ operation: Schema.Literal("settle"), ...HandoffId, ...Transfer }),
+  commit: Schema.Struct({
+    operation: Schema.Literal("commit"),
+    ...HandoffId,
+    receipt: LinkedHandoffReceipt,
+  }),
+  cancel: Schema.Struct({
+    operation: Schema.Literal("cancel"),
+    ...HandoffId,
+    answer: LinkedHandoffReceipt,
+  }),
+  list: Schema.Struct({ operation: Schema.Literal("list") }),
+  get: Schema.Struct({ operation: Schema.Literal("get"), ...HandoffId }),
+} as const;
+export const LinkedHandoffPeerRead = Schema.Union([
+  LinkedHandoffPeerRequests.list,
+  LinkedHandoffPeerRequests.get,
+]);
+export const LinkedHandoffPeerAct = Schema.Union([
+  LinkedHandoffPeerRequests.prepare,
+  LinkedHandoffPeerRequests.import,
+  LinkedHandoffPeerRequests.settle,
+  LinkedHandoffPeerRequests.commit,
+  LinkedHandoffPeerRequests.cancel,
+]);
+export const LinkedHandoffPeerRequest = Schema.Union(Object.values(LinkedHandoffPeerRequests));
+export type LinkedHandoffPeerRequest = typeof LinkedHandoffPeerRequest.Type;
+export const LinkedHandoffPeerResponses = {
+  prepare: LinkedHandoffPrepared,
+  import: LinkedHandoffReceipt,
+  settle: LinkedHandoffReceipt,
+  commit: Completion,
+  cancel: Completion,
+  list: Schema.Struct({ handoffs: Schema.Array(LinkedHandoffSummary) }),
+  get: LinkedHandoffSummary,
+} as const;
+export const linkedHandoffPeerResult = <S extends Schema.Top>(data: S) =>
+  Schema.Union([
+    Schema.Struct({ environmentId: EnvironmentId, data, error: Schema.Null }),
+    Schema.Struct({
+      environmentId: EnvironmentId,
+      data: Schema.Null,
+      error: Schema.Struct({
+        message: Schema.String,
+        refused: Schema.Boolean,
+        status: Schema.optional(Schema.Number),
+      }),
+    }),
+  ]);
+export const LinkedHandoffPeerResult = linkedHandoffPeerResult(
+  Schema.Union(Object.values(LinkedHandoffPeerResponses)),
+);
+
+const Approver = {
+  key: Schema.RedactedFromValue(Schema.String),
+  by: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(60)),
+};
+export const LinkedBringInput = Schema.Struct({
+  ...LinkedDeliveryPeerTarget,
+  ...Approver,
+  taskId: Id,
+  boardId: Id,
+  handoff: Schema.optional(Id),
+});
+export const LinkedSendInput = Schema.Struct({
+  ...Approver,
+  taskId: Id,
+  destination: Schema.optional(Schema.Struct({ ...LinkedDeliveryPeerTarget, boardId: Id })),
+  handoff: Schema.optional(Id),
+});
+export const LinkedHandoffRetryInput = Schema.Struct({
+  ...Approver,
+  ...HandoffId,
+  direction: Schema.Literals(["bring", "send"]),
+  mode: Schema.optional(Schema.Literals(["retry", "settle"])),
+  ...LinkedDeliveryPeerTarget,
+});
+export const LinkedHandoffsInput = Schema.Struct({
+  peerEnvironmentId: Schema.optional(EnvironmentId),
+});
+export const LinkedHandoffsResult = Schema.Struct({
+  handoffs: Schema.Array(
+    Schema.Struct({
+      ...LinkedHandoffSummary.fields,
+      ...LinkedDeliveryPeerTarget,
+      direction: Schema.Literals(["bring", "send"]),
+    }),
+  ),
+  unavailablePeers: Schema.Array(EnvironmentId),
+});
+export const LinkedHandoffOutcome = Schema.Union([
+  Schema.Struct({ ...Completion.fields, message: Schema.optional(Schema.String) }),
+  Schema.Struct({
+    ...HandoffId,
+    outcome: Schema.Literal("needs-person"),
+    phase: Schema.Literals(["prepare", "settle", "commit", "cancel"]),
+    source: Schema.Literals(["local", "linked"]),
+    sourceState: Schema.Literals(["frozen", "unknown"]),
+    destination: Schema.Literals(["unknown", "accepted", "cancelled", "occupied"]),
+    message: Schema.String,
+  }),
+  Schema.Struct({ ...HandoffId, outcome: Schema.Literal("refused"), message: Schema.String }),
+]);
+export type LinkedHandoffOutcome = typeof LinkedHandoffOutcome.Type;
+
+export const LinkedArrival = Schema.Struct({
+  ...HandoffId,
+  peer: Id,
+  via: Schema.Literals(["owner", "linked"]),
+  fromBoard: Schema.NullOr(Id),
+  fromTask: Id,
+  fromNumber: Schema.NullOr(Count),
+  board: Id,
+  at: Schema.String,
+});
+export const LinkedSendDestinationInput = Schema.Struct({ taskId: Id });
+export const LinkedSendDestinationResult = Schema.Struct({
+  arrival: Schema.NullOr(LinkedArrival),
+  destination: Schema.NullOr(Schema.Struct({ ...LinkedDeliveryPeerTarget, boardId: Id })),
+});
+
+export const LinkedArrivalProofInput = Schema.Struct({
+  environmentId: EnvironmentId,
+  challenge: Id,
+  claim: Digest,
+});
+export const LinkedArrivalProofResult = Schema.Struct({
+  environmentId: EnvironmentId,
+  proof: Schema.NullOr(Digest),
+});
