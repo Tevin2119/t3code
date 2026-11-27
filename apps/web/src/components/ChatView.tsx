@@ -1,7 +1,10 @@
 import { useThreadInspection } from "./chat/ThreadInspectionContext";
 import { useThreadPanelHost } from "./chat/ThreadPanelHostContext";
 import { useBoardTask } from "./delivery/BoardTaskContext";
-import { deriveTeamChatPhase } from "@t3tools/client-runtime/state/thread-workflows";
+import {
+  deriveEngineStageLabel,
+  deriveTeamChatPhase,
+} from "@t3tools/client-runtime/state/thread-workflows";
 import { m } from "../i18n/messages";
 import { thrownErrorMessage } from "@t3tools/client-runtime/errors";
 import { useGT, useMessages } from "gt-react";
@@ -1757,6 +1760,7 @@ export default function ChatView(props: ChatViewProps) {
   });
   const teamChatPhase = deriveTeamChatPhase(serverProjection, activeActivityRun?.runId);
   const teamSeatsWorking = teamChatPhase === "contribution" || teamChatPhase === "critique";
+  const engineStageLabel = deriveEngineStageLabel(serverProjection, activeActivityRun?.runId);
   const teamLeadAnswering = teamChatPhase === "lead" && activeActivityRun?.status === "running";
   const hasTeamChatActivity = teamSeatsWorking || teamLeadAnswering;
   const isWorking =
@@ -3663,9 +3667,11 @@ export default function ChatView(props: ChatViewProps) {
             className="mx-auto w-full max-w-(--chat-content-max-width) pb-3 text-sm text-muted-foreground"
             role="status"
           >
-            {teamChatPhase === "critique"
-              ? "The team is reviewing its findings."
-              : "The team is gathering findings."}
+            {engineStageLabel !== null
+              ? `${engineStageLabel}.`
+              : teamChatPhase === "critique"
+                ? "The team is reviewing its findings."
+                : "The team is gathering findings."}
           </p>
         ) : teamLeadAnswering ? (
           <p className="mx-auto w-full max-w-(--chat-content-max-width) pb-3 text-sm text-muted-foreground">

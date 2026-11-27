@@ -86,6 +86,9 @@ const terminalTask = (task: OrchestrationV2Subagent) =>
 /** A terminal run or subagent as the engine's terminal states name it. */
 const attemptState = (status: string) =>
   status === "completed" || status === "failed" || status === "interrupted" ? status : "cancelled";
+/** Cancelled without the engine asking, as T3's own restart recovery cancels a step. */
+const unaskedCancel = (record: Pick<NativeAttempt, "cancelRequested">, state: string) =>
+  state === "cancelled" && !record.cancelRequested;
 /** The engine's name for a driver; a driver it has no name for is told by its own. */
 const harnessOf = (driver: ProviderDriverKind | string | undefined) =>
   driver === undefined ? null : (DELIVERY_HARNESS_BY_DRIVER[driver] ?? driver);
@@ -412,7 +415,12 @@ export const make = Effect.gen(function* () {
         });
     });
 
-    /** A terminal step's report. No model or harness known is none reported: the engine decides. */
+    /**
+     * A terminal step's report. No model or harness known is none reported: the engine decides.
+     * Only a stop the engine asked for is reported cancelled. A cancel it never asked for, as T3's
+     * restart recovery makes, is a step T3 could not finish: interrupted, which the engine runs
+     * again or falls back from, with no identity, since nothing finished on it.
+     */
     const complete = (
       record: NativeAttempt,
       receipt: { readonly threadId: ThreadId } | { readonly childThreadId: ThreadId },
@@ -424,17 +432,22 @@ export const make = Effect.gen(function* () {
         readonly harness?: string | null;
         readonly contributions?: ReadonlyArray<unknown>;
       },
-    ) =>
-      act(record, "complete", {
+    ) => {
+      const unasked = unaskedCancel(record, result.state);
+      const state = unasked ? "interrupted" : result.state;
+      return act(record, "complete", {
         owner,
         ...receipt,
-        state: result.state,
+        state,
         text: result.text.slice(0, TEXT_LIMIT),
-        reason: result.reason ?? (result.state === "completed" ? null : `Ended ${result.state}.`),
-        ...(result.model ? { model: result.model } : {}),
-        ...(result.harness ? { harness: result.harness } : {}),
+        reason: unasked
+          ? "T3 stopped this step before it finished, as a restart does; the engine did not ask."
+          : (result.reason ?? (state === "completed" ? null : `Ended ${state}.`)),
+        ...(result.model && !unasked ? { model: result.model } : {}),
+        ...(result.harness && !unasked ? { harness: result.harness } : {}),
         ...(result.contributions === undefined ? {} : { contributions: result.contributions }),
       }).pipe(Effect.tap(() => Effect.sync(() => attested.delete(record.id))));
+    };
 
     /** Stops a turn the engine no longer wants: a queued one is cancelled, a live one interrupted. */
     const stopRun = (
@@ -765,8 +778,9 @@ export const make = Effect.gen(function* () {
           }
           if (!terminalTask(task) && task.childThreadId !== null) {
             // The child waits in the engine's worktree until its run is prepared, which the
-            // delegate tool asks of the launch service too. Asked on every pass, so a restart
-            // between the dispatch and the preparation leaves no child waiting.
+            // delegate tool asks of the launch service too. Asked on every pass, so a pass that
+            // missed it prepares it later. A restart is not rescued here: boot recovery cancels
+            // the preparing child, and complete() reports that as interrupted.
             const childRuns = yield* local(
               projections.getThreadRecords(task.childThreadId, ["runs"]),
             );
@@ -781,7 +795,8 @@ export const make = Effect.gen(function* () {
           if (!terminalTask(task)) continue;
           const outcome = yield* childOutcome(task);
           // Attested again when the seat ran on something other than it was attested with.
-          yield* attest(record, child, outcome.model, outcome.harness);
+          if (!unaskedCancel(record, attemptState(task.status)))
+            yield* attest(record, child, outcome.model, outcome.harness);
           yield* complete(record, receiptOf(record), {
             state: attemptState(task.status),
             ...outcome,
