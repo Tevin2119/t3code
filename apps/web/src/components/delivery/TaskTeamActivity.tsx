@@ -5,7 +5,7 @@ import {
   type OrchestrationV2TurnItemStatus,
   type ProviderInstanceId,
 } from "@t3tools/contracts";
-import { useMessages } from "gt-react";
+import { msg, useMessages } from "gt-react";
 
 import type { CouncilSeat, TaskView } from "../../lib/delivery";
 import { TASK_PIPELINE_STAGES, taskPipelineStage } from "../../lib/deliveryPipeline";
@@ -100,7 +100,8 @@ export function SeatThreadRow(props: {
   const { seat, catalog } = props;
   const m = useMessages();
   const trigger = useSideThreadTrigger();
-  const status = seatStatus(seat.activity);
+  // A step T3's restart cut short never reads as running, even while the engine runs it again.
+  const status = seat.cutByT3 ? "interrupted" : seatStatus(seat.activity);
   const actualModel = seat.attestedModel?.model ?? seat.actualModel;
   const harness = seat.attestedModel?.harness ?? seat.harness;
   const entry = entryForHarness(catalog.entries, harness);
@@ -113,18 +114,21 @@ export function SeatThreadRow(props: {
     startedAt: seat.live?.started ?? null,
     completedAt: live ? null : (seat.live?.updated ?? null),
   };
-  const detail = seat.blockedBy
-    ? `waits for ${seat.blockedBy}`
-    : seat.verdict
-      ? `verdict ${seat.verdict}`
-      : seat.activity === "unavailable"
-        ? "unavailable"
-        : (seat.stage ?? threadRelationshipStatusLabel(status, m));
+  const detail = seat.cutByT3
+    ? m(msg("{stage} cut short by a T3 restart, needs you", { stage: seat.cutByT3 }))
+    : seat.blockedBy
+      ? `waits for ${seat.blockedBy}`
+      : seat.verdict
+        ? `verdict ${seat.verdict}`
+        : seat.activity === "unavailable"
+          ? "unavailable"
+          : (seat.stage ?? threadRelationshipStatusLabel(status, m));
   return (
     <li
       className="group relative flex h-8 items-center rounded-lg"
       data-task-seat={seat.seat}
       data-seat-activity={seat.activity}
+      data-seat-cut-by-t3={seat.cutByT3 ?? undefined}
     >
       <Tooltip>
         <TooltipTrigger
@@ -142,12 +146,16 @@ export function SeatThreadRow(props: {
           <span className="min-w-0 flex-1 truncate text-left text-sm font-medium leading-4 text-foreground/85">
             {seat.seat}
           </span>
-          <span className="sr-only">{seat.activity}</span>
+          <span className="sr-only">{seat.cutByT3 ? status : seat.activity}</span>
           <span
             className={cn(
               // At most half the row, so a long detail ellipsizes and the seat name keeps the rest.
               "min-w-0 max-w-1/2 truncate text-2xs font-normal",
-              seat.activity === "unavailable" ? "text-destructive" : "text-muted-foreground",
+              seat.activity === "unavailable"
+                ? "text-destructive"
+                : seat.cutByT3
+                  ? "text-warning-foreground"
+                  : "text-muted-foreground",
             )}
             data-seat-detail
           >

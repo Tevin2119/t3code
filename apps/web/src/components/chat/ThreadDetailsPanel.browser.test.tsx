@@ -18,6 +18,13 @@ const state = vi.hoisted(() => ({
   configLoaded: true,
 }));
 
+// The Task item's module, held back as a slow runner holds it; resolved unless a case holds it.
+const taskDetailsModule = vi.hoisted(() => ({ loaded: Promise.resolve() }));
+vi.mock(import("../delivery/TaskDetails"), async (importOriginal) => {
+  await taskDetailsModule.loaded;
+  return importOriginal();
+});
+
 // The read of t3.json is a cache: a re-read is the only way to see what is on disk now.
 const t3File = vi.hoisted(() => ({
   disk: "",
@@ -287,6 +294,52 @@ it("shows a linked pull request in a folder that is not a git repository", async
   await expect.element(page.getByRole("button", { name: "Initialize Git" })).toBeVisible();
 });
 
+// First of the board cases: the panel loads the board modules once, so only the first can hold them.
+it("shows no section above where the Task item lands until it has loaded", async () => {
+  using fixture = setup({ workspaceRoot: "/work/plain", folder: "/work/plain" });
+  const held = Promise.withResolvers<void>();
+  taskDetailsModule.loaded = held.promise;
+  // Released however the case ends, so the cases after it get the module.
+  using _released = { [Symbol.dispose]: () => held.resolve() };
+  const task = parseTask({
+    id: "t1",
+    number: 12,
+    title: "Fix the sync",
+    body: "Make the sync stop dropping rows.",
+    state: "in-work",
+    lane: "implementation",
+    card: { id: "t1", number: 12, title: "Fix the sync", lane: "implementation" },
+  });
+  await using _screen = await render(
+    <BoardTaskContext
+      value={{
+        environmentId: null,
+        taskId: "t1",
+        task,
+        stale: false,
+        refresh: () => {},
+        openTask: () => {},
+        openTab: () => {},
+        decisions: null,
+        thread: null,
+        seats: { thread: () => null, rows: [] },
+      }}
+    >
+      <Panel fixture={fixture} />
+    </BoardTaskContext>,
+  );
+  // Held back: no section shows yet, so none is there to be pushed down when the Task item lands.
+  expect(document.querySelector("[data-thread-details-panel] section")).toBeNull();
+  held.resolve();
+  const taskItem = page.getByRole("region", { name: "Task #12" });
+  await expect.element(taskItem).toBeVisible();
+  const workspace = page.getByRole("region", { name: "Workspace" });
+  await expect.element(workspace).toBeVisible();
+  expect(workspace.element().getBoundingClientRect().top).toBeGreaterThanOrEqual(
+    taskItem.element().getBoundingClientRect().bottom,
+  );
+});
+
 it("shows the Task item only where a board task's view hosts the thread, with its number, decisions and lineage", async () => {
   using fixture = setup({ workspaceRoot: "/work/plain", folder: "/work/plain" });
   await using screen = await render(<Panel fixture={fixture} />);
@@ -300,6 +353,23 @@ it("shows the Task item only where a board task's view hosts the thread, with it
     state: "closed",
     lane: "completed",
     source: { kind: "thread", ref: "env-elsewhere/filed-from" },
+    // Cut short by a T3 restart before it closed: nothing is owed on a closed task.
+    council: {
+      seats: [
+        {
+          seat: "builder",
+          activity: "stopped",
+          attempts: [
+            {
+              stage: "build",
+              state: "stopped",
+              reason: "interrupted: T3 restarted and cut this step short",
+              ended: "2026-11-27T10:00:00Z",
+            },
+          ],
+        },
+      ],
+    },
     card: { id: "t1", number: 12, title: "Fix the sync", lane: "completed" },
   });
   await screen.rerender(
@@ -314,7 +384,10 @@ it("shows the Task item only where a board task's view hosts the thread, with it
         openTab: () => {},
         decisions: <p>Your decision</p>,
         thread: null,
-        seats: { thread: () => null, rows: [] },
+        seats: {
+          thread: () => null,
+          rows: [{ seat: "builder", activity: "stopped", target: threadRef }],
+        },
       }}
     >
       <Panel fixture={fixture} />
@@ -325,6 +398,12 @@ it("shows the Task item only where a board task's view hosts the thread, with it
   await expect.element(page.getByText("Make the sync stop dropping rows.")).toBeVisible();
   await expect.element(page.getByText("Your decision")).toBeVisible();
   await expect.element(page.getByText("This is closed. What was said is kept.")).toBeVisible();
+  const builder = page.getByRole("button", { name: /builder/ });
+  await expect.element(builder).toBeVisible();
+  expect(
+    document.querySelector("[data-task-seat='builder']")?.hasAttribute("data-seat-cut-by-t3"),
+  ).toBe(false);
+  expect(document.querySelector("[data-steps-cut-by-t3]")).toBeNull();
   // The thread it was filed from is a row of the lineage, not a link in the Task item.
   await expect
     .element(page.getByRole("button", { name: /The conversation it came from/ }))
