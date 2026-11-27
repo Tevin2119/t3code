@@ -51,12 +51,15 @@ import {
 } from "./threadDetailsPanelStyles";
 import { Menu, MenuPopup } from "../ui/menu";
 
-// Board code loads only where a board task's view hosts the thread.
+// Board code loads only where a board task's view hosts the thread. Both parts wait for both
+// modules: the task item sits above the lineage, and arriving after it would push its rows down.
+const boardTaskModules = () =>
+  Promise.all([import("../delivery/TaskDetails"), import("../delivery/TaskLineage")]);
 const TaskDetailsItem = lazy(() =>
-  import("../delivery/TaskDetails").then((module) => ({ default: module.TaskDetailsItem })),
+  boardTaskModules().then(([details]) => ({ default: details.TaskDetailsItem })),
 );
 const TaskLineage = lazy(() =>
-  import("../delivery/TaskLineage").then((module) => ({ default: module.TaskLineage })),
+  boardTaskModules().then(([, lineage]) => ({ default: lineage.TaskLineage })),
 );
 
 interface ThreadDetailsPanelProps extends Pick<
