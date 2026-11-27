@@ -493,7 +493,7 @@ export function promotionConfirmation(input: {
       return {
         state: "moved",
         head: resolution.head,
-        why: `The sync branch moved: the report shown was for ${short12(pending.head) ?? "another head"}, and the engine now reports on ${short12(resolution.head)}. Read the new report on the card, then approve again.`,
+        why: `The sync branch moved: the report shown was for ${short12(pending.head) ?? "another head"}, and the engine now reports on ${short12(resolution.head)}. Review ${short12(resolution.head)} to see its report here before approving it.`,
       };
   }
   const movesBranch = pending.kind === "promote" || pending.action === "advance";

@@ -21,7 +21,7 @@ import { PullRequestGlyph } from "../pullRequest/pullRequestIcons";
 import { Button } from "../ui/button";
 import type { DeploymentRequest } from "./DeploymentInstance";
 import { InstanceChip } from "./ReleaseLine.chip";
-import { PromotionSync, type SyncCheckout } from "./ReleaseLine.sync";
+import { PromotionSync, SurvivalReport, type SyncCheckout } from "./ReleaseLine.sync";
 import {
   compareReadingProblem,
   promoteBlocked,
@@ -193,6 +193,15 @@ export function PromotionControls({
                     ? shown.why
                     : `Reading ${from.environment} and ${to.environment} again…`)}
               </AlertDialogDescription>
+              {/* The card is behind the modal, so an approval shows the report it signs here. */}
+              {confirm &&
+              pending.kind === "action" &&
+              pending.action === "approve" &&
+              promotion?.resolution ? (
+                <div className="max-h-72 overflow-y-auto text-left" data-promotion-approve-report>
+                  <SurvivalReport resolution={promotion.resolution} />
+                </div>
+              ) : null}
             </AlertDialogHeader>
             <AlertDialogFooter>
               <AlertDialogClose render={<Button variant="outline" />}>

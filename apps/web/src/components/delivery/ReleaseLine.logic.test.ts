@@ -527,7 +527,7 @@ describe("a sync conflict through the sync PR (D3b)", () => {
     expect(moved).toEqual({
       state: "moved",
       head: newer.resolution!.head,
-      why: `The sync branch moved: the report shown was for ${shownHead.slice(0, 12)}, and the engine now reports on ${newer.resolution!.head.slice(0, 12)}. Read the new report on the card, then approve again.`,
+      why: `The sync branch moved: the report shown was for ${shownHead.slice(0, 12)}, and the engine now reports on ${newer.resolution!.head.slice(0, 12)}. Review ${newer.resolution!.head.slice(0, 12)} to see its report here before approving it.`,
     });
     // The engine refuses the old head the same way (recorded): 400, read the report again.
     expect(syncConflicts.approveStaleHead.status).toBe(400);

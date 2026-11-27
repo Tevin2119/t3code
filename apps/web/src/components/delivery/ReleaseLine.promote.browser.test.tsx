@@ -460,6 +460,11 @@ it("shows the survival report with missing and changed hunks first, and approves
   const changed = screen.container.querySelector('[data-survival-status="changed"]')!;
   expect(changed.querySelector(".text-warning-foreground")).not.toBeNull();
   expect(screen.container.querySelector('[data-survival-status="present"] pre')).toBeNull();
+  // On a wide card the hash sits right after its path, not at the far edge.
+  const [path, hash] = [...missing.querySelectorAll("code")].map((node) =>
+    node.getBoundingClientRect(),
+  );
+  expect(hash!.left - path!.right).toBeLessThan(16);
   await screen.getByRole("button", { name: "Approve sync" }).click();
   const dialog = page.getByRole("alertdialog");
   await expect
@@ -467,7 +472,12 @@ it("shows the survival report with missing and changed hunks first, and approves
       dialog.getByText(new RegExp(`^Fast-forwards qa to the sync head ${head.slice(0, 12)}`)),
     )
     .toBeVisible();
-  await expect.element(dialog.getByText(/1 present, 1 changed, 1 missing/)).toBeVisible();
+  await expect
+    .element(dialog.getByText(/^Fast-forwards.*1 present, 1 changed, 1 missing/))
+    .toBeVisible();
+  await expect
+    .element(dialog.getByText("Hotfix survival report for", { exact: false }))
+    .toBeVisible();
   await dialog.getByRole("button", { name: "Approve sync…" }).click();
   await sign();
   expect(mock.acts).toEqual([
@@ -492,7 +502,15 @@ it("says so when a refresh reports on a newer sync head, and asks again before a
     .element(dialog.getByRole("button", { name: /^Approve sync/ }))
     .not.toBeInTheDocument();
   await dialog.getByRole("button", { name: `Review ${newHead.slice(0, 12)}` }).click();
-  await expect.element(dialog.getByText(/3 present, 0 changed, 0 missing/)).toBeVisible();
+  await expect
+    .element(dialog.getByText(/^Fast-forwards.*3 present, 0 changed, 0 missing/))
+    .toBeVisible();
+  // The card is behind the modal: the new head's report is shown in the dialog itself.
+  await expect
+    .element(
+      dialog.getByText(`Hotfix survival report for ${newHead.slice(0, 12)}`, { exact: false }),
+    )
+    .toBeVisible();
   await dialog.getByRole("button", { name: "Approve sync…" }).click();
   await sign();
   expect(mock.acts).toEqual([

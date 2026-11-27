@@ -415,6 +415,6 @@ export const DeploymentPromotionInput = Schema.Struct({
 export const DeploymentPromotionActionInput = Schema.Struct({
   action: DeploymentPromotionAction,
   // Approve names the sync branch head whose survival report was shown; the engine refuses another.
-  head: Schema.optional(Schema.String.check(Schema.isPattern(/^[0-9a-f]{40}$/))),
+  head: Schema.optional(Revision),
   ...Approval,
 });
