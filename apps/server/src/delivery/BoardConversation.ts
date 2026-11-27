@@ -26,7 +26,7 @@ import * as EventStore from "../orchestration-v2/EventStore.ts";
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
-import { boardTaskFinishedBy } from "./boardTaskWork.ts";
+import { boardTaskFinishedBy } from "@t3tools/shared/boardTaskFinished";
 import { boardTaskOf, boardTaskThreadMarker, type BoardTask } from "./boardThreadMarker.ts";
 import * as DeliveryService from "./DeliveryService.ts";
 import { BoardLeadSeat, boardLeadSeat, resolveSeatProvider } from "./seatProvider.ts";

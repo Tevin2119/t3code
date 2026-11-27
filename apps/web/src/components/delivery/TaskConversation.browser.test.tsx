@@ -1,6 +1,6 @@
 import { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import { useEffect, useState } from "react";
-import { page } from "vite-plus/test/browser";
+import { page, userEvent } from "vite-plus/test/browser";
 import { expect, it, vi } from "vite-plus/test";
 
 import "~/index.css";
@@ -216,6 +216,37 @@ it("keeps a closed task's composer, and hands what is written to the engine inst
   await screen.getByRole("button", { name: "Send" }).click();
   expect(steer).toHaveBeenLastCalledWith("taken");
   await expect.element(composer).toHaveValue("");
+});
+
+it("gives a finished task with no thread a composer that hands its words to the engine", async () => {
+  const steer = vi.fn(async (text: string) => text !== "refused");
+  await using screen = await render(
+    <TaskConversation
+      chrome={{ ...chrome, steer }}
+      task={task({ state: "closed", lane: "completed" })}
+      state={{ kind: "unlinked" }}
+    />,
+  );
+  const composer = screen.getByRole("textbox", { name: "Message this task" });
+  await expect.element(composer).toBeVisible();
+  // Refused: the words stay to be sent again.
+  await composer.fill("refused");
+  await screen.getByRole("button", { name: "Send" }).click();
+  expect(steer).toHaveBeenLastCalledWith("refused");
+  await expect.element(composer).toHaveValue("refused");
+  await composer.fill("taken");
+  await composer.click();
+  await userEvent.keyboard("{Enter}");
+  expect(steer).toHaveBeenLastCalledWith("taken");
+  await expect.element(composer).toHaveValue("");
+});
+
+it("gives a task still in work with no thread nothing to type into", async () => {
+  await using screen = await render(
+    <TaskConversation chrome={chrome} task={task()} state={{ kind: "unlinked" }} />,
+  );
+  await expect.element(screen.getByText(/No conversation is linked/)).toBeVisible();
+  await expect.element(screen.getByRole("textbox")).not.toBeInTheDocument();
 });
 
 it("leads back to the board from a phone, over the thread view and a page alike", async () => {

@@ -1,3 +1,4 @@
+import { boardTaskFinishedBy } from "@t3tools/shared/boardTaskFinished";
 import { useGT, useMessages } from "gt-react";
 import { ClipboardListIcon, PencilIcon, RocketIcon } from "lucide-react";
 import { useRef, useState } from "react";
@@ -453,7 +454,7 @@ function TaskDetailsBody(props: { readonly board: BoardTask; readonly task: Task
 
   return (
     <div ref={container} className="flex min-w-0 flex-col gap-2 px-2.5" data-task-details>
-      {task.state === "rejected" || task.state === "closed" ? (
+      {boardTaskFinishedBy(task) !== null ? (
         <p
           role="status"
           className="rounded-lg border border-border bg-muted/30 px-3 py-2 text-xs text-muted-foreground"
@@ -672,12 +673,7 @@ function TaskDetailsBody(props: { readonly board: BoardTask; readonly task: Task
                 value={task.priority}
                 onValueChange={(value) => void edit({ priority: value as TaskPriority })}
               >
-                <SelectTrigger
-                  aria-label="Priority"
-                  size="compact"
-                  variant="ghost"
-                  className="ml-auto w-auto min-w-0"
-                >
+                <SelectTrigger aria-label="Priority" size="compact" variant="ghost">
                   <SelectValue>
                     <PriorityPill priority={task.priority} />
                   </SelectValue>

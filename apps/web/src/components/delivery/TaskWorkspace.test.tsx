@@ -192,6 +192,31 @@ it("sends what is written to a closed task to the engine, and shows its refusal 
   });
 });
 
+it.each([
+  { state: "approved", lane: "implementation" },
+  { state: "merged", lane: "implementation" },
+  { state: "pr-open", lane: "implementation" },
+  { state: "ready", lane: "completed" },
+])(
+  "hands what is written to a task the engine finished ($state, $lane) to the engine",
+  async ({ state, lane }) => {
+    read.body = { id: "t6", number: 6, title: "Done", state, lane, card: { id: "t6", lane } };
+    engine.chrome = null as typeof engine.chrome;
+    await act(() => {
+      renderer = create(
+        <TaskWorkspace
+          environmentId={null}
+          taskId="t6"
+          from="Board"
+          onClose={() => {}}
+          onOpenTask={() => {}}
+        />,
+      );
+    });
+    expect(engine.chrome?.steer).toBeTypeOf("function");
+  },
+);
+
 it("leaves an open task's messages to its thread, as turns", async () => {
   read.body = { id: "t5", number: 5, title: "Open", state: "ready", card: { id: "t5" } };
   await act(() => {

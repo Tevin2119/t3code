@@ -1,4 +1,5 @@
 import type { EnvironmentId } from "@t3tools/contracts";
+import { boardTaskFinishedBy } from "@t3tools/shared/boardTaskFinished";
 import { useGT } from "gt-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 
@@ -109,8 +110,8 @@ export function TaskWorkspace(props: {
     thread: conversation.ref,
     seats: conversation.seats,
   };
-  // A closed task takes no turns. What is written to it goes to the engine, which says why not.
-  const closed = task?.state === "rejected" || task?.state === "closed";
+  // A finished task takes no turns. What is written to it goes to the engine, which says why not.
+  const finished = task !== null && boardTaskFinishedBy(task) !== null;
   const steer = async (text: string) => {
     if (!task) return false;
     const result = await steerAct(`/api/tasks/${task.id}/steer`, { text, seat: null, by: person });
@@ -221,7 +222,7 @@ export function TaskWorkspace(props: {
                           ?.scrollIntoView({ block: "start", behavior: "smooth" }),
                       );
                     },
-                    steer: closed ? steer : undefined,
+                    steer: finished ? steer : undefined,
                     backToBoard: props.onClose,
                   }}
                 />

@@ -10,6 +10,7 @@ import { useRightPanelStore } from "../../rightPanelStore";
 import { ThreadPanelHostContext } from "../chat/ThreadPanelHostContext";
 import { RenderErrorBoundary } from "../RenderErrorBoundary";
 import { Button } from "../ui/button";
+import { Textarea } from "../ui/textarea";
 import {
   WorkspaceBreadcrumb,
   WorkspaceBreadcrumbItem,
@@ -154,6 +155,51 @@ function TaskBar(props: { readonly onBack: () => void }) {
 }
 
 /**
+ * What a finished task with no thread takes in place of a thread's composer: the words go to the
+ * engine, which refuses or takes them; refused, they stay to be sent again.
+ */
+function SteerComposer(props: { readonly steer: (text: string) => Promise<boolean> }) {
+  const gt = useGT();
+  const [text, setText] = useState("");
+  const [sending, setSending] = useState(false);
+  const send = async () => {
+    const message = text.trim();
+    if (!message || sending) return;
+    setSending(true);
+    const taken = await props.steer(message);
+    setSending(false);
+    if (taken) setText("");
+  };
+  return (
+    <form
+      className="flex shrink-0 items-end gap-2 border-t border-border p-3"
+      data-task-steer-composer
+      onSubmit={(event) => {
+        event.preventDefault();
+        void send();
+      }}
+    >
+      <div className="min-w-0 flex-1">
+        <Textarea
+          aria-label={gt("Message this task")}
+          size="sm"
+          value={text}
+          onChange={(event) => setText(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) return;
+            event.preventDefault();
+            void send();
+          }}
+        />
+      </div>
+      <Button type="submit" size="sm" disabled={sending || text.trim() === ""}>
+        {gt("Send", { $context: "verb, sends a message" })}
+      </Button>
+    </form>
+  );
+}
+
+/**
  * The native page for the task when no thread view stands in the centre: the task's title, its
  * menu and the native panel toggles in the header, and the notices under it.
  */
@@ -287,6 +333,9 @@ export function TaskConversation(props: {
 }) {
   const gt = useGT();
   const { state, task, chrome } = props;
+  // A finished task with no thread still takes words, so its engine can say why it will not act.
+  const steerComposer =
+    chrome.steer && !props.draft ? <SteerComposer steer={chrome.steer} /> : null;
   const page = (content: ReactNode) => (
     <TaskPage
       title={task.title}
@@ -301,6 +350,7 @@ export function TaskConversation(props: {
       }
     >
       {content}
+      {steerComposer}
     </TaskPage>
   );
   if (props.draft) return page(props.draft);
