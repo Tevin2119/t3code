@@ -12,7 +12,6 @@ import {
   type OrchestrationV2ServerCommand,
   type OrchestrationV2StoredEvent,
 } from "@t3tools/contracts";
-import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -104,6 +103,7 @@ const harness = Effect.fn("BoardThreadTasks.testHarness")(function* (
     Layer.provide(
       Layer.mergeAll(
         Layer.mock(Delivery.DeliveryService)({
+          boardApprovalKey: Effect.succeed(key),
           boardThreadConfiguration: Effect.sync(() => {
             reads.push("configuration");
             return "engine-test";
@@ -143,7 +143,6 @@ const harness = Effect.fn("BoardThreadTasks.testHarness")(function* (
           streamStoredEventsFrom: () => Stream.fromQueue(events),
         }),
         SecureRandom.layerWebCrypto,
-        Layer.succeed(HostProcess.Environment, { [Delivery.BOARD_THREAD_KEY_VARIABLE]: key }),
       ),
     ),
   );

@@ -50,7 +50,12 @@ import {
   useMinuteClock,
   useStaleReading,
 } from "../../state/delivery";
-import { BoardEngineNotice, BoardNotice, CloseNoticeButton } from "./BoardEngineNotice";
+import {
+  BoardApprovalKeyNotice,
+  BoardEngineNotice,
+  BoardNotice,
+  CloseNoticeButton,
+} from "./BoardEngineNotice";
 import { EngineAttentionBar } from "./EnginePanel";
 import { ArchivedBoardThreads } from "./ArchivedBoardThreads";
 import { BoardToolbar } from "./BoardToolbar";
@@ -847,6 +852,7 @@ function EnvironmentBoardPage({ environmentId }: { readonly environmentId: Envir
           )
         ) : (
           <>
+            {environmentId ? <BoardApprovalKeyNotice environmentId={environmentId} /> : null}
             {actions.problem ? (
               <p
                 className="flex items-start gap-2 px-4 pt-2 text-sm text-warning"

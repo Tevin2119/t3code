@@ -29,12 +29,14 @@ import {
 } from "@t3tools/contracts";
 import { assert, it } from "@effect/vitest";
 import * as HostProcess from "@t3tools/shared/HostProcess";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import { HttpClient, HttpClientResponse } from "effect/http";
 
 import * as ServerConfig from "../config.ts";
+import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
@@ -48,6 +50,16 @@ import * as BoardThreadRows from "./boardThreadRows.ts";
 import { boardTaskOf, boardTaskOfMarker, boardTaskThreadId } from "./boardThreadMarker.ts";
 import * as DeliveryService from "./DeliveryService.ts";
 import * as LimitedSeatSwap from "./LimitedSeatSwap.ts";
+
+/** The delivery service the case runs on, holding the board approval key a server would. */
+const withBoardApprovalKey = (key: string | undefined) =>
+  Effect.provideServiceEffect(
+    DeliveryService.DeliveryService,
+    Effect.gen(function* () {
+      const delivery = yield* DeliveryService.DeliveryService;
+      return { ...delivery, boardApprovalKey: Effect.succeed(key) };
+    }),
+  );
 
 const ENGINE_ROOT = process.env.T3_BOARD_THREAD_ENGINE_ROOT ?? "";
 // Scratch values: the engine is seeded with this passphrase and nothing else knows it.
@@ -208,10 +220,7 @@ function service(store: ReturnType<typeof threadStore>, key: string | null = PHR
       status: () => Effect.die("This fixture has no limit notices"),
       swap: () => Effect.die("This fixture has no seat swaps"),
     }),
-    Effect.provideService(
-      HostProcess.Environment,
-      key === null ? {} : { [DeliveryService.BOARD_THREAD_KEY_VARIABLE]: key },
-    ),
+    withBoardApprovalKey(key ?? undefined),
     Effect.provideService(ServerEnvironment.ServerEnvironmentIdentity, {
       getEnvironmentId: Effect.succeed(ENVIRONMENT),
     }),
@@ -280,6 +289,7 @@ const realHttp = Layer.succeed(
 );
 const deliveryLayer = (engineUrl: string) =>
   Layer.fresh(DeliveryService.layer(deriveProviderInstanceConfigMap)).pipe(
+    Layer.provideMerge(ServerSecretStore.layer.pipe(Layer.provide(SecureRandom.layerWebCrypto))),
     Layer.provideMerge(Layer.succeed(HostProcess.Environment, {})),
     Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "board-threads-real-" })),
     Layer.provideMerge(NodeServices.layer),

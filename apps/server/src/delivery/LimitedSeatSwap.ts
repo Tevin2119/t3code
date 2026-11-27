@@ -17,7 +17,6 @@ import {
   type RunId,
   ThreadId,
 } from "@t3tools/contracts";
-import * as HostProcess from "@t3tools/shared/HostProcess";
 import {
   agreedStandIn,
   firstFreeFavorite,
@@ -189,7 +188,6 @@ const decodePickRefusal = Schema.decodeUnknownOption(Schema.Struct({ code: Schem
 const make = Effect.gen(function* () {
   const deliveryOption = yield* Effect.serviceOption(DeliveryService.DeliveryService);
   const identityOption = yield* Effect.serviceOption(ServerEnvironment.ServerEnvironmentIdentity);
-  const hostEnvironment = yield* HostProcess.Environment;
   const limitedSeats = yield* LimitedSeats.LimitedSeats;
   const rows = yield* BoardThreadRows.BoardThreadRows;
   const projections = yield* ProjectionStore.ProjectionStoreV2;
@@ -398,10 +396,10 @@ const make = Effect.gen(function* () {
     resetAt: string | null,
     resuming: boolean,
   ) {
-    const key = hostEnvironment[DeliveryService.BOARD_THREAD_KEY_VARIABLE];
-    if ((!key && !resuming) || Option.isNone(deliveryOption) || Option.isNone(identityOption))
-      return null;
+    if (Option.isNone(deliveryOption) || Option.isNone(identityOption)) return null;
     const delivery = deliveryOption.value;
+    const key = yield* delivery.boardApprovalKey;
+    if (!key && !resuming) return null;
     const environmentId = yield* identityOption.value.getEnvironmentId;
     const target = leadHandoffThreadId(runId);
     const path = `/api/tasks/${task.id}`;

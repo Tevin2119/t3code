@@ -18,6 +18,7 @@ import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import { checkpointWorkspace } from "@t3tools/provider-testing/replayWorkspace";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as DateTime from "effect/DateTime";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -29,6 +30,7 @@ import * as TestClock from "effect/testing/TestClock";
 import type * as SqlClient from "effect/sql/SqlClient";
 
 import * as ServerConfig from "../config.ts";
+import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import { CodexProviderCapabilitiesV2 } from "../orchestration-v2/Adapters/CodexAdapterV2.ts";
@@ -60,6 +62,16 @@ import {
 } from "./boardThreadMarker.ts";
 import * as DeliveryService from "./DeliveryService.ts";
 
+/** The delivery service the case runs on, holding the board approval key a server would. */
+const withBoardApprovalKey = (key: string | undefined) =>
+  Effect.provideServiceEffect(
+    DeliveryService.DeliveryService,
+    Effect.gen(function* () {
+      const delivery = yield* DeliveryService.DeliveryService;
+      return { ...delivery, boardApprovalKey: Effect.succeed(key) };
+    }),
+  );
+
 // A board task's engine steps on the real stack: the orchestrator, ProviderTurnStartService and
 // NativeTeamChat, with a scripted provider and the scratch engine. Each seat starts, wakes its
 // stage turn and stops on the paths a delegated task and a team round already take.
@@ -77,6 +89,7 @@ const THREAD = boardTaskThreadId(TASK);
 /** The delivery service as the server runs it, with the scratch engine behind its client. */
 const deliveryLayer = (engine: ScratchEngine, prefix: string) =>
   Layer.fresh(DeliveryService.layer(deriveProviderInstanceConfigMap)).pipe(
+    Layer.provideMerge(ServerSecretStore.layer.pipe(Layer.provide(SecureRandom.layerWebCrypto))),
     Layer.provideMerge(Layer.succeed(HostProcess.Environment, {})),
     Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix })),
     Layer.provideMerge(NodeServices.layer),
@@ -340,9 +353,7 @@ const execution = () =>
             });
           }).pipe(Effect.ignore),
       } as unknown as ThreadLaunchService.ThreadLaunchService["Service"]),
-      Effect.provideService(HostProcess.Environment, {
-        [DeliveryService.BOARD_THREAD_KEY_VARIABLE]: "scratch approval passphrase",
-      }),
+      withBoardApprovalKey("scratch approval passphrase"),
       Effect.provideService(ServerEnvironment.ServerEnvironmentIdentity, {
         getEnvironmentId: Effect.succeed(ENVIRONMENT),
       }),

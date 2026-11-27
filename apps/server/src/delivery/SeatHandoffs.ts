@@ -12,7 +12,6 @@ import {
   OrchestratorMcpFailure,
   ThreadId,
 } from "@t3tools/contracts";
-import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Hex from "effect/encoding/Hex";
@@ -102,7 +101,7 @@ const decodeRefusal = Schema.decodeUnknownOption(
 const refusalOf = (error: DeliveryError) => Option.getOrUndefined(decodeRefusal(error.body));
 const invalidRequest = (message: string) =>
   new OrchestratorMcpFailure({ code: "invalid_request", message });
-const missingKey = () => invalidRequest("This server has no board approval key configured.");
+const missingKey = () => invalidRequest(DeliveryService.NO_BOARD_APPROVAL_KEY);
 const notQaSeat = () =>
   invalidRequest("File QA receipts from an attested QA seat thread for the task's current run.");
 const notLead = () => invalidRequest("Only this board task's lead thread can hand off QA.");
@@ -165,7 +164,6 @@ const checklistChanged = (items: ReadonlyArray<string>) =>
  */
 export const attestSeatWith = Effect.fn("SeatHandoffs.attestSeatAs")(function* (
   delivery: DeliveryService.DeliveryService["Service"],
-  hostEnvironment: NodeJS.ProcessEnv,
   input: {
     readonly environmentId: EnvironmentId;
     readonly run: string;
@@ -175,7 +173,7 @@ export const attestSeatWith = Effect.fn("SeatHandoffs.attestSeatAs")(function* (
     readonly harness?: string;
   },
 ) {
-  const key = hostEnvironment[DeliveryService.BOARD_THREAD_KEY_VARIABLE];
+  const key = yield* delivery.boardApprovalKey;
   if (!key) return yield* missingKey();
   const { environmentId, run, seat, threadId, model, harness } = input;
   const response = yield* delivery
@@ -220,7 +218,6 @@ const make = Effect.gen(function* () {
   const delivery = yield* DeliveryService.DeliveryService;
   const threads = yield* ThreadManagementService.ThreadManagementService;
   const orchestrator = yield* OrchestratorMcpService.OrchestratorMcpService;
-  const hostEnvironment = yield* HostProcess.Environment;
   const handoffLock = yield* Semaphore.make(1);
 
   const readTask = Effect.fn("SeatHandoffs.readTask")(function* (path: string) {
@@ -240,7 +237,7 @@ const make = Effect.gen(function* () {
     model: string,
     harness?: string,
   ) =>
-    attestSeatWith(delivery, hostEnvironment, {
+    attestSeatWith(delivery, {
       environmentId,
       run,
       seat,
@@ -374,7 +371,7 @@ const make = Effect.gen(function* () {
         const lead = yield* findThread(threadId);
         const task = boardTaskOfMarker(lead?.lineage.engineIntake);
         if (!task) return yield* notLead();
-        const key = hostEnvironment[DeliveryService.BOARD_THREAD_KEY_VARIABLE];
+        const key = yield* delivery.boardApprovalKey;
         if (!key) return yield* missingKey();
 
         const path = `/api/tasks/${task.id}`;
@@ -566,7 +563,7 @@ const make = Effect.gen(function* () {
     fileQaReceipt: Effect.fn("SeatHandoffs.fileQaReceipt")(function* (scope, input) {
       const caller = yield* requireThreadScope(scope, "Filing a QA receipt");
       const environmentId = caller.environmentId;
-      const key = hostEnvironment[DeliveryService.BOARD_THREAD_KEY_VARIABLE];
+      const key = yield* delivery.boardApprovalKey;
       if (!key) return yield* missingKey();
 
       const thread = yield* findThread(caller.thread.threadId);

@@ -12,7 +12,6 @@ import {
   ThreadId,
 } from "@t3tools/contracts";
 import { expect, it } from "@effect/vitest";
-import * as HostProcess from "@t3tools/shared/HostProcess";
 import type { LimitedSeatFacts } from "@t3tools/shared/limitedSeat";
 import { createModelSelection } from "@t3tools/shared/model";
 import * as DateTime from "effect/DateTime";
@@ -227,6 +226,7 @@ function setup({
         lineups.set(input.threadId, input.orchestration);
         return {};
       }),
+    boardApprovalKey: Effect.succeed(KEY),
   } as unknown as DeliveryService.DeliveryService["Service"];
   const projections = {
     getThreadShell: (thread: ThreadId) => Effect.succeed(thread === threadId ? shell : null),
@@ -299,9 +299,6 @@ function setup({
     Layer.provide(
       Layer.mergeAll(
         Layer.succeed(DeliveryService.DeliveryService, delivery),
-        Layer.succeed(HostProcess.Environment, {
-          [DeliveryService.BOARD_THREAD_KEY_VARIABLE]: KEY,
-        }),
         Layer.succeed(ServerEnvironment.ServerEnvironmentIdentity, {
           getEnvironmentId: Effect.succeed(ENVIRONMENT),
         }),
