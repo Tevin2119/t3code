@@ -64,6 +64,6 @@ it("reads only the board repository's instances and shows no other repository's"
   const sections = renderer.root
     .findAllByType("section")
     .map((node) => node.props["aria-label"] as string);
-  expect(sections).toEqual(["Board deployments", "payoutlab main"]);
+  expect(sections).toEqual(["Board deployments", "payoutlab release line", "payoutlab main"]);
   await act(() => renderer.unmount());
 });

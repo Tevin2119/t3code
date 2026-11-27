@@ -6,15 +6,12 @@ import type { DeliveryTarget } from "../../lib/delivery";
 import { parseDeployments } from "../../lib/deployments";
 import { deliveryEnvironment, useDeliveryRead, useStaleReading } from "../../state/delivery";
 import { Button } from "../ui/button";
-import {
-  DeploymentApproval,
-  DeploymentInstances,
-  type DeploymentRequest,
-} from "./DeploymentInstance";
+import { DeploymentApproval, type DeploymentRequest } from "./DeploymentInstance";
 import { Configuration } from "./DeploymentsPage";
+import { ReleaseLines } from "./ReleaseLine";
 
 /**
- * The board repository's deployment instances, with the same cards and actions as Deployments.
+ * The board repository's release line, with the same cards and actions as Deployments.
  * Read only while the board's settings are open; the engine narrows it to the repository.
  */
 export function BoardDeployments(props: {
@@ -88,7 +85,8 @@ export function BoardDeployments(props: {
       ) : null}
       {snapshot ? (
         <div className="flex min-w-0 flex-col gap-4">
-          <DeploymentInstances
+          <ReleaseLines
+            environmentId={props.environmentId}
             snapshot={snapshot}
             projects={projects}
             unavailable={unavailable}

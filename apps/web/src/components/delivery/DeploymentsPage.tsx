@@ -41,11 +41,11 @@ import { ADD_REPOSITORY, RepositoryPicker } from "./RepositoryPicker";
 import { useBoardDesktop } from "./BoardToolbar";
 import { EnginePanel } from "./EnginePanel";
 import { EnvironmentPicker } from "./EnvironmentPicker";
+import { ReleaseLines } from "./ReleaseLine";
 import { BoardDelivery } from "./BoardDelivery";
 import { Choice } from "./Choice";
 import {
   DeploymentApproval,
-  DeploymentInstances,
   MODE_LABELS,
   type DeploymentRequest,
   when,
@@ -555,10 +555,10 @@ function DeploymentsContent({ environmentId }: { environmentId: EnvironmentId | 
       <div className="mx-auto flex max-w-7xl flex-col gap-6">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
           <div className="min-w-0">
-            <h2 className="text-lg font-semibold">Releases by environment</h2>
+            <h2 className="text-lg font-semibold">Release lines</h2>
             <p className="mt-1 text-sm text-muted-foreground">
-              Compare runtime observations with pinned release candidates. New deployments start in
-              manual mode.
+              Each repository's instances in promotion order, with what lies between each one and
+              the next. New deployments start in manual mode.
             </p>
             <p className="mt-2 text-xs text-muted-foreground">
               {read.readAt
@@ -638,9 +638,9 @@ function DeploymentsContent({ environmentId }: { environmentId: EnvironmentId | 
             <BoardDelivery key={environmentId} environmentId={environmentId} />
           ) : null}
           {snapshot ? (
-            <DeploymentInstances
+            <ReleaseLines
+              environmentId={environmentId}
               snapshot={snapshot}
-              projects={snapshot.projects}
               unavailable={unavailable}
               disabled={disabled}
               onRequest={setRequest}
