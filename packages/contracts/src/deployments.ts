@@ -107,6 +107,8 @@ export const DeploymentProject = Schema.Struct({
   liveAdoptedCommit: OptionalText,
   liveAdoptedSite: OptionalText,
   busy: Schema.optional(Schema.Boolean),
+  // The environment of this repository's instance its work promotes into (qa into production).
+  promotesTo: OptionalText,
 });
 export type DeploymentProject = typeof DeploymentProject.Type;
 export const DeploymentCandidate = Schema.Struct({
@@ -139,11 +141,20 @@ export const DeploymentCandidate = Schema.Struct({
   dependencies: Schema.optional(Schema.Unknown),
 });
 export type DeploymentCandidate = typeof DeploymentCandidate.Type;
+/** One repository's instances in promotion order, as the engine's promotesTo settings make it. */
+export const DeploymentReleaseLine = Schema.Struct({
+  repository: Schema.String,
+  instances: Schema.Array(Schema.String),
+  problem: Schema.NullOr(Schema.String),
+});
+export type DeploymentReleaseLine = typeof DeploymentReleaseLine.Type;
 export const DeploymentsSnapshot = Schema.Struct({
   problem: Problem,
   version: Schema.Literal(1),
   projects: Schema.Array(DeploymentProject),
   candidates: Schema.Array(DeploymentCandidate),
+  // Absent from an engine older than release lines.
+  lines: Schema.optional(Schema.Array(DeploymentReleaseLine)),
   repositories: Schema.Array(
     Schema.Struct({
       id: TrimmedNonEmptyString,
@@ -164,6 +175,76 @@ export const DeploymentsSnapshot = Schema.Struct({
   }),
 });
 export type DeploymentsSnapshot = typeof DeploymentsSnapshot.Type;
+const CompareKind = Schema.Literals(["feature", "fix", "other"]);
+const ComparePullRequest = Schema.Struct({
+  number: Schema.NullOr(Schema.Number),
+  url: Schema.NullOr(Schema.String),
+  title: Schema.String,
+  commit: Schema.String,
+  kind: CompareKind,
+  source: Schema.String,
+  head: Schema.optional(Schema.String),
+  task: Schema.NullOr(Schema.String),
+  run: Schema.NullOr(Schema.String),
+});
+export type DeploymentComparePullRequest = typeof ComparePullRequest.Type;
+const CompareTask = Schema.Struct({
+  id: Schema.String,
+  number: Schema.NullOr(Schema.Number),
+  title: Schema.String,
+  state: Schema.NullOr(Schema.String),
+  prs: Schema.Array(Schema.NullOr(Schema.Number)),
+});
+export type DeploymentCompareTask = typeof CompareTask.Type;
+const CompareRange = Schema.Struct({
+  prs: Schema.Array(ComparePullRequest),
+  loose: Schema.Array(Schema.Struct({ commit: Schema.String, subject: Schema.String })),
+  tasks: Schema.Array(CompareTask),
+  count: Schema.Number,
+  truncated: Schema.Boolean,
+});
+export type DeploymentCompareRange = typeof CompareRange.Type;
+const CompareInstance = Schema.Struct({
+  id: Schema.String,
+  environment: Schema.String,
+  branch: Schema.String,
+  servedFolder: Schema.NullOr(Schema.String),
+});
+const NullableCount = Schema.NullOr(Schema.Number);
+/** GET /api/deployments/compare: what promoting from into to would bring, read only. */
+export const DeploymentCompare = Schema.Struct({
+  version: Schema.Literal(1),
+  repository: Schema.String,
+  from: CompareInstance,
+  to: CompareInstance,
+  points: Schema.Struct({
+    fromLive: Schema.NullOr(Schema.String),
+    toLive: Schema.NullOr(Schema.String),
+    fromTip: Schema.NullOr(Schema.String),
+    toTip: Schema.NullOr(Schema.String),
+  }),
+  limit: Schema.Number,
+  ahead: CompareRange,
+  hotfixes: CompareRange,
+  waiting: CompareRange,
+  folders: Schema.NullOr(
+    Schema.Struct({
+      unknown: Schema.optional(Schema.Boolean),
+      to: Schema.NullOr(Schema.String),
+      from: Schema.NullOr(Schema.String),
+      touchesTo: NullableCount,
+      onlyFrom: NullableCount,
+      untouched: NullableCount,
+      truncated: Schema.Boolean,
+      text: Schema.NullOr(Schema.String),
+      problem: Schema.optional(Schema.String),
+    }),
+  ),
+  promote: Schema.Literals(["promote", "sync-hotfixes-first"]),
+  problem: Schema.NullOr(Schema.String),
+});
+export type DeploymentCompare = typeof DeploymentCompare.Type;
+
 // Deployment mutations need the direct approval key; an open approval window is not enough.
 const Approval = { by: TrimmedNonEmptyString, key: Schema.String.check(Schema.isMinLength(1)) };
 export const DeploymentProjectInput = Schema.Struct({

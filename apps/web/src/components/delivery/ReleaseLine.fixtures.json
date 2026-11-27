@@ -1,0 +1,242 @@
+{
+  "recordedWith": "Operation-PaperClip 8439915c delivery/lib/deployment-compare.mjs, run against a scratch repository: qa (serves sandbox/) promotes into app (serves public/), with one hotfix on app's branch.",
+  "lines": [
+    {
+      "repository": "t3code",
+      "instances": ["t3code-qa", "t3code-app"],
+      "problem": null
+    }
+  ],
+  "withHotfix": {
+    "version": 1,
+    "repository": "t3code",
+    "from": {
+      "id": "t3code-qa",
+      "environment": "qa",
+      "branch": "qa",
+      "servedFolder": "sandbox"
+    },
+    "to": {
+      "id": "t3code-app",
+      "environment": "app",
+      "branch": "main",
+      "servedFolder": "public"
+    },
+    "points": {
+      "fromLive": "be8996625824bfab38f9609e5842f98dfc89c348",
+      "toLive": "0d742aedc84b54c55f03fe8c8b01e029b85b4f68",
+      "fromTip": "be8996625824bfab38f9609e5842f98dfc89c348",
+      "toTip": "9d4a8d986e242a21b8f609d3159fc0a77161165f"
+    },
+    "remote": "origin",
+    "limit": 500,
+    "ahead": {
+      "prs": [
+        {
+          "number": 14,
+          "url": null,
+          "title": "fix(web): instance card spacing",
+          "commit": "bb6fdc0d340c103e1c7cc8264a1d9663875f1c54",
+          "kind": "fix",
+          "source": "squash-subject",
+          "task": null,
+          "run": null
+        },
+        {
+          "number": 12,
+          "url": "https://github.com/Tevin2119/t3code/pull/12",
+          "title": "feat(web): release-line strip and difference rows",
+          "commit": "4255d964a7a0d640c7849bc5fbf27cf392efe393",
+          "kind": "feature",
+          "source": "publication",
+          "head": "Tevin2119/feat-strip",
+          "task": "task-strip",
+          "run": "run-412"
+        }
+      ],
+      "loose": [
+        {
+          "commit": "be8996625824bfab38f9609e5842f98dfc89c348",
+          "subject": "chore(sandbox): second sandbox page"
+        },
+        {
+          "commit": "a601350a24bbc2f63f615504c760657ea5e54e77",
+          "subject": "chore(sandbox): sandbox copy for the demo"
+        }
+      ],
+      "tasks": [
+        {
+          "id": "task-strip",
+          "number": 412,
+          "title": "Release-line strip on Deployments",
+          "state": "done",
+          "prs": [12]
+        }
+      ],
+      "count": 4,
+      "truncated": false
+    },
+    "hotfixes": {
+      "prs": [
+        {
+          "number": 15,
+          "url": null,
+          "title": "fix(web): header crash on app",
+          "commit": "9d4a8d986e242a21b8f609d3159fc0a77161165f",
+          "kind": "fix",
+          "source": "squash-subject",
+          "task": null,
+          "run": null
+        }
+      ],
+      "loose": [],
+      "tasks": [],
+      "count": 1,
+      "truncated": false
+    },
+    "waiting": {
+      "prs": [
+        {
+          "number": 15,
+          "url": null,
+          "title": "fix(web): header crash on app",
+          "commit": "9d4a8d986e242a21b8f609d3159fc0a77161165f",
+          "kind": "fix",
+          "source": "squash-subject",
+          "task": null,
+          "run": null
+        }
+      ],
+      "loose": [],
+      "tasks": [],
+      "count": 1,
+      "truncated": false
+    },
+    "folders": {
+      "to": "public",
+      "from": "sandbox",
+      "touchesTo": 2,
+      "onlyFrom": 2,
+      "untouched": 2,
+      "commits": {
+        "touchesTo": [
+          "bb6fdc0d340c103e1c7cc8264a1d9663875f1c54",
+          "4255d964a7a0d640c7849bc5fbf27cf392efe393"
+        ],
+        "onlyFrom": [
+          "be8996625824bfab38f9609e5842f98dfc89c348",
+          "a601350a24bbc2f63f615504c760657ea5e54e77"
+        ]
+      },
+      "truncated": false,
+      "text": "2 commits change only sandbox/. Promoting them changes nothing on app."
+    },
+    "promote": "sync-hotfixes-first",
+    "problem": null
+  },
+  "inSync": {
+    "version": 1,
+    "repository": "t3code",
+    "from": {
+      "id": "t3code-qa",
+      "environment": "qa",
+      "branch": "qa",
+      "servedFolder": "sandbox"
+    },
+    "to": {
+      "id": "t3code-release",
+      "environment": "release",
+      "branch": "release",
+      "servedFolder": "public"
+    },
+    "points": {
+      "fromLive": "be8996625824bfab38f9609e5842f98dfc89c348",
+      "toLive": "0d742aedc84b54c55f03fe8c8b01e029b85b4f68",
+      "fromTip": "be8996625824bfab38f9609e5842f98dfc89c348",
+      "toTip": "0d742aedc84b54c55f03fe8c8b01e029b85b4f68"
+    },
+    "remote": "origin",
+    "limit": 500,
+    "ahead": {
+      "prs": [
+        {
+          "number": 14,
+          "url": null,
+          "title": "fix(web): instance card spacing",
+          "commit": "bb6fdc0d340c103e1c7cc8264a1d9663875f1c54",
+          "kind": "fix",
+          "source": "squash-subject",
+          "task": null,
+          "run": null
+        },
+        {
+          "number": 12,
+          "url": "https://github.com/Tevin2119/t3code/pull/12",
+          "title": "feat(web): release-line strip and difference rows",
+          "commit": "4255d964a7a0d640c7849bc5fbf27cf392efe393",
+          "kind": "feature",
+          "source": "publication",
+          "head": "Tevin2119/feat-strip",
+          "task": "task-strip",
+          "run": "run-412"
+        }
+      ],
+      "loose": [
+        {
+          "commit": "be8996625824bfab38f9609e5842f98dfc89c348",
+          "subject": "chore(sandbox): second sandbox page"
+        },
+        {
+          "commit": "a601350a24bbc2f63f615504c760657ea5e54e77",
+          "subject": "chore(sandbox): sandbox copy for the demo"
+        }
+      ],
+      "tasks": [
+        {
+          "id": "task-strip",
+          "number": 412,
+          "title": "Release-line strip on Deployments",
+          "state": "done",
+          "prs": [12]
+        }
+      ],
+      "count": 4,
+      "truncated": false
+    },
+    "hotfixes": {
+      "prs": [],
+      "loose": [],
+      "tasks": [],
+      "count": 0,
+      "truncated": false
+    },
+    "waiting": {
+      "prs": [],
+      "loose": [],
+      "tasks": [],
+      "count": 0,
+      "truncated": false
+    },
+    "folders": {
+      "to": "public",
+      "from": "sandbox",
+      "touchesTo": 2,
+      "onlyFrom": 2,
+      "untouched": 2,
+      "commits": {
+        "touchesTo": [
+          "bb6fdc0d340c103e1c7cc8264a1d9663875f1c54",
+          "4255d964a7a0d640c7849bc5fbf27cf392efe393"
+        ],
+        "onlyFrom": [
+          "be8996625824bfab38f9609e5842f98dfc89c348",
+          "a601350a24bbc2f63f615504c760657ea5e54e77"
+        ]
+      },
+      "truncated": false,
+      "text": "2 commits change only sandbox/. Promoting them changes nothing on release."
+    },
+    "promote": "promote",
+    "problem": null
+  }
+}

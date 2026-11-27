@@ -7,6 +7,7 @@ import type { DeliveryCard } from "../../lib/delivery";
 import { useOpenPrLink } from "../../lib/openPullRequestLink";
 import { RelativeTime } from "../RelativeTime";
 import { Badge } from "../ui/badge";
+import { taskInstancesSummary } from "./ReleaseLine.logic";
 import { TaskDisclosure } from "./TaskDisclosure";
 
 // One parent freshness clock for a whole board; cards never query or schedule work.
@@ -101,6 +102,38 @@ function PublicationDetails({
           </ol>
         </div>
       ) : null}
+    </div>
+  );
+}
+
+const INSTANCE_BADGE = { live: "success", waiting: "info", absent: "outline" } as const;
+const INSTANCE_LABEL = { live: "Live", waiting: "Waiting", absent: "Not there" } as const;
+
+/** The task on each instance of its repository, in release-line order: "Live on qa, not on app". */
+function TaskInstances({
+  instances,
+  historical,
+}: {
+  instances: TaskDeploymentPublication["instances"];
+  historical: boolean;
+}) {
+  const summary = taskInstancesSummary(instances);
+  if (!instances?.length || !summary) return null;
+  return (
+    <div className="space-y-1.5 border-b px-3 py-2" data-task-deployment-instances>
+      <p className="text-sm font-medium">
+        {historical ? "Last known: " : ""}
+        {summary}
+      </p>
+      <ul className="flex flex-wrap gap-1.5">
+        {instances.map((entry) => (
+          <li key={entry.projectId} data-task-instance={entry.state}>
+            <Badge size="sm" variant={historical ? "outline" : INSTANCE_BADGE[entry.state]}>
+              {entry.environment} · {INSTANCE_LABEL[entry.state]}
+            </Badge>
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }
@@ -236,6 +269,7 @@ export function TaskDeploymentsPanel({ card, stale }: { card: DeliveryCard; stal
           ) : null}
         </div>
       ) : null}
+      <TaskInstances instances={deployment.current.instances} historical={stale || earlier} />
       <ul className="flex min-w-0 flex-col p-1.5">
         {[...rows].map(([environment, row]) => (
           <EnvironmentRow
