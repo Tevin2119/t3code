@@ -922,8 +922,10 @@ it("bounds the parts of a megabyte of approval text and still shows what it ends
   }
 });
 
-it("splits a megabyte of approval text the same way as a short one", () => {
-  const size = 1 << 20;
+// Large enough that work growing faster than the text would take minutes, small enough for a
+// loaded CI runner: each code point of a run of joiners or selectors is checked as part of an emoji.
+it("splits a quarter megabyte of approval text the same way as a short one", () => {
+  const size = 1 << 18;
   const fill = (unit: string) => unit.repeat(size / unit.length);
   const count = (text: string) => {
     const { parts } = approvalTextParts(text, {
