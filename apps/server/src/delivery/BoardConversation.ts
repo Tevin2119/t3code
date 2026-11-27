@@ -25,6 +25,7 @@ import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
 import { boardTaskFinishedBy } from "./boardTaskWork.ts";
+import { isEngineMessageId } from "./boardTaskAttempts.ts";
 import { boardTaskOf, boardTaskThreadMarker, type BoardTask } from "./boardThreadMarker.ts";
 import * as DeliveryService from "./DeliveryService.ts";
 import { BoardLeadSeat, boardLeadSeat, turnSelection as pickSelection } from "./seatProvider.ts";
@@ -116,9 +117,11 @@ function scanActivity(
       }
       if (message.role !== "user" || state.messages.has(message.id)) continue;
       state.messages.add(message.id);
+      // The engine's own steps are its record, not the card's: kept off it like a steer.
       const steer =
         message.id.startsWith(STEER_MESSAGE_PREFIX) ||
         message.id.startsWith(HANDOFF_NOTICE_PREFIX) ||
+        isEngineMessageId(message.id) ||
         message.createdBy === "user";
       found.push({
         seq: stored.sequence,
@@ -139,7 +142,7 @@ function scanActivity(
         seq: stored.sequence,
         at: DateTime.formatIso(event.occurredAt),
         kind: "summary",
-        excerpt: excerptOf(reply),
+        excerpt: isEngineMessageId(run.userMessageId) ? null : excerptOf(reply),
       });
     }
   }

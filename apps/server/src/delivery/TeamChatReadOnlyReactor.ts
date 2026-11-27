@@ -14,6 +14,8 @@ import * as Stream from "effect/Stream";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import { forkParked } from "../serverActivation.ts";
+import { isBoardBriefMessageId } from "./boardTaskAttempts.ts";
+import { boardTaskOfMarker } from "./boardThreadMarker.ts";
 import * as DeliveryService from "./DeliveryService.ts";
 
 export const READ_ONLY_FEEDBACK =
@@ -59,6 +61,24 @@ const make = Effect.gen(function* () {
     );
   });
 
+  /**
+   * Whether a board task thread's request comes from the engine's brief, in a thread that runs in
+   * the mode that asks. Board task threads run in full access but for a read-only brief.
+   */
+  const readOnlyBrief = Effect.fnUntraced(function* (
+    threadId: ThreadId,
+    marker: string | null | undefined,
+    runId: RunId | null | undefined,
+  ) {
+    if (boardTaskOfMarker(marker) === null || runId == null) return false;
+    const records = yield* projections.getThreadRecords(threadId, ["runs"], { runIds: [runId] });
+    const run = records.runs.find((candidate) => candidate.id === runId);
+    return (
+      records.thread.runtimeMode === "approval-required" &&
+      isBoardBriefMessageId(run?.userMessageId)
+    );
+  });
+
   // Runs for every domain event; most events return before any work is needed.
   const handle: TeamChatReadOnlyReactor["Service"]["handle"] = Effect.fnUntraced(
     function* (event) {
@@ -75,15 +95,20 @@ const make = Effect.gen(function* () {
       }
       const child = yield* projections.getThread(event.threadId);
       const parentThreadId = child.lineage.parentThreadId;
-      if (parentThreadId === null) return;
-      const parent = yield* projections.getThreadRecords(parentThreadId, ["subagents"]);
-      const task = parent.subagents.find((candidate) => candidate.childThreadId === child.id);
-      if (task === undefined) return;
-      const seat = task.teamChat?.seat;
-      if (seat !== undefined) {
-        const { lineup } = yield* delivery.threadState(parentThreadId);
-        if (lineup === undefined || deliveryParticipantAccess(lineup, seat) !== "read-only") return;
-      } else if (!(yield* engineReadOnlySeat(parentThreadId, task.runId, child.id))) return;
+      if (parentThreadId === null) {
+        // A board task's brief runs read-only in the mode that asks: every change is declined.
+        if (!(yield* readOnlyBrief(child.id, child.lineage.engineIntake, event.runId))) return;
+      } else {
+        const parent = yield* projections.getThreadRecords(parentThreadId, ["subagents"]);
+        const task = parent.subagents.find((candidate) => candidate.childThreadId === child.id);
+        if (task === undefined) return;
+        const seat = task.teamChat?.seat;
+        if (seat !== undefined) {
+          const { lineup } = yield* delivery.threadState(parentThreadId);
+          if (lineup === undefined || deliveryParticipantAccess(lineup, seat) !== "read-only")
+            return;
+        } else if (!(yield* engineReadOnlySeat(parentThreadId, task.runId, child.id))) return;
+      }
       yield* engine.dispatch({
         type: "runtime-request.respond",
         commandId: CommandId.make(`server:team-chat-read-only:${child.id}:${event.payload.id}`),

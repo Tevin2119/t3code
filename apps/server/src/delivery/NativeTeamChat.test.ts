@@ -33,7 +33,7 @@ import {
   seatCommandId,
   stageMessageId,
 } from "./boardTaskAttempts.ts";
-import { boardTaskOf, boardTaskThreadMarker } from "./boardThreadMarker.ts";
+import { boardTaskOf, boardTaskThreadId, boardTaskThreadMarker } from "./boardThreadMarker.ts";
 import * as DeliveryService from "./DeliveryService.ts";
 import * as LimitedSeats from "./LimitedSeats.ts";
 import * as EventSink from "../orchestration-v2/EventSink.ts";
@@ -1190,9 +1190,14 @@ it.effect("runs the team round for the engine's brief in a board task's conversa
   }),
 );
 
-it.effect("starts an engine stage's seats as children of its turn, and waits for them", () =>
+it.effect("starts an engine stage's seats as children of its turn, with or without a team", () =>
   Effect.gen(function* () {
-    const fixture = setup({ engineIntake: boardTaskThreadMarker(boardTaskOf("work", "task-7")!) });
+    // A task whose team has no seat but its lead's here has no lineup: its seats start all the same.
+    const board = boardTaskThreadId(boardTaskOf("work", "task-7")!);
+    const fixture = setup({
+      engineIntake: boardTaskThreadMarker(boardTaskOf("work", "task-7")!),
+      plain: true,
+    });
     const seat = {
       attemptId: "att-qa",
       seat: "qa",
@@ -1203,7 +1208,10 @@ it.effect("starts an engine stage's seats as children of its turn, and waits for
     };
     Object.assign(fixture.message, {
       id: stageMessageId("att-qa"),
-      notification: engineStageNotice("qa", [seat]),
+      notification: engineStageNotice("qa", [
+        seat,
+        { ...seat, attemptId: "att-stopped", seat: "qa-2", childThreadId: ThreadId.make("c-2") },
+      ]),
     });
     fixture.run.userMessageId = fixture.message.id;
     fixture.attempts.set("att-qa", {
@@ -1225,11 +1233,22 @@ it.effect("starts an engine stage's seats as children of its turn, and waits for
       native: null,
       cancelRequested: false,
     });
+    // The engine stopped this seat, or T3 already reported it: it is read again, and never started.
+    fixture.attempts.set("att-stopped", {
+      ...(fixture.attempts.get("att-qa") as object),
+      id: "att-stopped",
+      seat: "qa-2",
+      state: "cancelled",
+      cancelRequested: true,
+    });
     const service = yield* fixture.service;
-    expect(yield* service.prepareTurn({ threadId, runId })).toEqual({ ready: false, context: "" });
+    expect(yield* service.prepareTurn({ threadId: board, runId })).toEqual({
+      ready: false,
+      context: "",
+    });
     const [started] = [...fixture.admissions.values()];
     expect(started).toMatchObject({
-      commandId: seatCommandId(threadId, "att-qa"),
+      commandId: seatCommandId(board, "att-qa"),
       parentRunId: runId,
       title: "qa · qa",
       task: "Test the candidate.",
@@ -1241,10 +1260,10 @@ it.effect("starts an engine stage's seats as children of its turn, and waits for
     // Not a team discussion: no critique round, and no follow-up for a later one.
     expect(started?.teamChat).toBeUndefined();
     fixture.tasks[0]!.childThreadId = seat.childThreadId;
-    expect((yield* service.prepareTurn({ threadId, runId })).ready).toBe(false);
+    expect((yield* service.prepareTurn({ threadId: board, runId })).ready).toBe(false);
     expect(fixture.admissions.size).toBe(1);
     Object.assign(fixture.tasks[0]!, { status: "completed", result: "All items pass." });
-    const done = yield* service.prepareTurn({ threadId, runId });
+    const done = yield* service.prepareTurn({ threadId: board, runId });
     expect(done.ready).toBe(true);
     expect(done.context).toContain("qa · qa (codex-work/codex-model, completed");
     expect(done.context).toContain("All items pass.");

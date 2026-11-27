@@ -45,7 +45,7 @@ import {
   nativeAttemptPath,
   seatCommandId,
 } from "./boardTaskAttempts.ts";
-import { boardTaskOfMarker } from "./boardThreadMarker.ts";
+import { boardTaskOfMarker, isBoardTaskThreadId } from "./boardThreadMarker.ts";
 
 const decodeAttempt = Schema.decodeUnknownEffect(NativeAttempt);
 import * as DeliveryService from "./DeliveryService.ts";
@@ -226,11 +226,9 @@ export const make = Effect.gen(function* () {
       const state = yield* delivery.threadState(input.threadId);
       let binding = state.binding;
       const lineup = state.lineup;
-      if (lineup === undefined) return { ready: true, context: "" };
-      const roster = lineup.participants;
-      // Participants take a team's roles when there is one; with none they join as themselves.
-      const team = binding?.team ?? lineup.team;
-      const group = team === undefined ? "this conversation" : `team ${team}`;
+      // An engine stage starts its seats whatever the team, so a board task's thread reads on.
+      if (lineup === undefined && !isBoardTaskThreadId(input.threadId))
+        return { ready: true, context: "" };
       const parent = yield* projections.getThreadRecords(input.threadId, [
         "runs",
         "subagents",
@@ -248,6 +246,11 @@ export const make = Effect.gen(function* () {
         if (run === undefined || stage === undefined) return { ready: true, context: "" };
         return yield* runEngineStage(input, run, parent.subagents, stage, delivery);
       }
+      if (lineup === undefined) return { ready: true, context: "" };
+      const roster = lineup.participants;
+      // Participants take a team's roles when there is one; with none they join as themselves.
+      const team = binding?.team ?? lineup.team;
+      const group = team === undefined ? "this conversation" : `team ${team}`;
       if (run === undefined || run.rootNodeId === null || run.activeAttemptId === null) {
         return yield* new NativeTeamChatError({ runId: input.runId, reason: "state" });
       }

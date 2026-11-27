@@ -72,7 +72,6 @@ export const isTerminalAttempt = (state: string) =>
   ["completed", "failed", "cancelled", "interrupted"].includes(state);
 
 const BRIEF_PREFIX = "message:board-brief:";
-const TURN_PREFIX = "message:board-attempt:";
 const STAGE_PREFIX = "message:board-stage:";
 
 /** The team plan's brief: the first message of the run, the only one that starts a team round. */
@@ -80,15 +79,15 @@ export const briefMessageId = (attemptId: string) => MessageId.make(`${BRIEF_PRE
 export const isBoardBriefMessageId = (id: string | null | undefined) =>
   typeof id === "string" && id.startsWith(BRIEF_PREFIX);
 
-/** A lead attempt's turn of the task thread. */
-export const leadTurnMessageId = (attemptId: string) =>
-  MessageId.make(`${TURN_PREFIX}${attemptId}`);
-
 /** The system turn that starts one batch of seats, named by its first attempt. */
 export const stageMessageId = (firstAttemptId: string) =>
   MessageId.make(`${STAGE_PREFIX}${firstAttemptId}`);
 export const isEngineStageMessageId = (id: string | null | undefined) =>
   typeof id === "string" && id.startsWith(STAGE_PREFIX);
+
+/** A message the engine sent: its brief or a stage turn, which a board card never shows. */
+export const isEngineMessageId = (id: string | null | undefined) =>
+  isBoardBriefMessageId(id) || isEngineStageMessageId(id);
 
 /** One command per message, so a replay after any restart sends it once. */
 export const turnCommandId = (messageId: MessageId) => CommandId.make(`${messageId}:dispatch`);
@@ -97,8 +96,20 @@ export const turnCommandId = (messageId: MessageId) => CommandId.make(`${message
 export const seatCommandId = (threadId: ThreadId, attemptId: string) =>
   CommandId.make(`board-stage:${threadId}:${attemptId}:seat`);
 
-export const stopCommandId = (attemptId: string) =>
-  CommandId.make(`board-attempt:${attemptId}:stop`);
+/**
+ * Each way a step is stopped has its own command: a queued turn is cancelled and a running one
+ * interrupted, so a refusal recorded for one never answers the other.
+ */
+export const stopCommandId = (
+  attemptId: string,
+  how: "cancel-queued" | "interrupt" | "stop-seat" | "cancel-stage",
+) => CommandId.make(`board-attempt:${attemptId}:${how}`);
+
+/** The task thread's folder and mode, set for the brief and given back after it. */
+export const briefSetupCommandId = (
+  attemptId: string,
+  step: "folder" | "mode" | "folder-back" | "mode-back",
+) => CommandId.make(`board-attempt:${attemptId}:${step}`);
 
 /** What a batch's system turn carries: no team round, and the engine's seats to start. */
 export const engineStageNotice = (

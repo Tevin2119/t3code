@@ -5,8 +5,11 @@
 import {
   DELIVERY_HARNESS_BY_DRIVER,
   type EnvironmentId,
+  latestProviderTurnForAttempt,
+  type MessageId,
   type ModelSelection,
   type OrchestrationV2EngineStageSeat,
+  type OrchestrationV2ProviderTurn,
   type OrchestrationV2Run,
   type OrchestrationV2Subagent,
   type ProviderDriverKind,
@@ -32,12 +35,12 @@ import * as ThreadManagementService from "../orchestration-v2/ThreadManagementSe
 import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { forkParked } from "../serverActivation.ts";
-import { engineNotice } from "./BoardConversation.ts";
 import {
   briefMessageId,
+  briefSetupCommandId,
   engineStageNotice,
+  isEngineStageMessageId,
   isTerminalAttempt,
-  leadTurnMessageId,
   NATIVE_ATTEMPTS_PATH,
   NativeAttempt,
   NativeAttemptList,
@@ -72,7 +75,8 @@ const TASK_ID = /^[\w-]{1,256}$/;
 const TEXT_LIMIT = 900_000;
 
 const TERMINAL_RUN = new Set(["completed", "failed", "cancelled", "interrupted", "rolled_back"]);
-const terminalRun = (run: OrchestrationV2Run) => TERMINAL_RUN.has(run.status);
+const terminalRun = (run: { readonly status: string }) => TERMINAL_RUN.has(run.status);
+const ACTIVE_RUN = new Set(["preparing", "starting", "running", "waiting"]);
 const terminalTask = (task: OrchestrationV2Subagent) =>
   ["completed", "failed", "cancelled", "interrupted"].includes(task.status);
 /** A terminal run or subagent as the engine's terminal states name it. */
@@ -81,8 +85,19 @@ const attemptState = (status: string) =>
 /** The engine's name for a driver; a driver it has no name for is told by its own. */
 const harnessOf = (driver: ProviderDriverKind | string | undefined) =>
   driver === undefined ? null : (DELIVERY_HARNESS_BY_DRIVER[driver] ?? driver);
+/** The model the provider reported running a run's turn. None reported is none known. */
+const ranModel = (
+  providerTurns: ReadonlyArray<OrchestrationV2ProviderTurn>,
+  run: Pick<OrchestrationV2Run, "activeAttemptId"> | undefined,
+) =>
+  run === undefined
+    ? null
+    : (latestProviderTurnForAttempt(providerTurns, run.activeAttemptId)?.model ?? null);
 
-/** How a step runs here: a turn of the task thread, a subagent of it, or not on this server. */
+/**
+ * How a step runs here. The team plan is a turn of the task thread, which the team round needs;
+ * every other step is a subagent of it, in the engine's worktree and with the step's access.
+ */
 type Plan =
   | { readonly mode: "turn"; readonly modelSelection: ModelSelection | undefined }
   | { readonly mode: "seat"; readonly modelSelection: ModelSelection }
@@ -169,7 +184,7 @@ export const make = Effect.gen(function* () {
     if (!link || link.environmentId !== environmentId) return null;
     const threadId = ThreadId.make(link.threadId);
     const records = yield* projections
-      .getThreadRecords(threadId, ["runs", "subagents"])
+      .getThreadRecords(threadId, ["runs", "subagents", "providerTurns"])
       .pipe(Effect.option);
     if (Option.isNone(records)) return null;
     const marked = boardTaskOfMarker(records.value.thread.lineage.engineIntake);
@@ -183,32 +198,29 @@ export const make = Effect.gen(function* () {
     lineup: ReadonlyArray<{ readonly seat: string; readonly modelSelection: ModelSelection }>,
   ) {
     const providers = yield* instances.listInstances;
-    if (record.lead) {
-      if (record.model !== null) {
-        // Another model of the thread's account family: the turn switches model in place.
-        const switched = turnSelection(providers, current, {
-          harness: record.harness,
-          model: record.model,
-        });
-        if (switched !== undefined) return { mode: "turn", modelSelection: switched } as Plan;
-      } else {
-        const here = providers.find((provider) => provider.instanceId === current.instanceId);
-        if (harnessOf(here?.driverKind) === record.harness)
-          return { mode: "turn", modelSelection: undefined } as Plan;
-      }
-      // The brief is the thread's own turn: on another harness it keeps the thread's model,
-      // and reports the model it ran.
-      if (record.kind === "team-plan") return { mode: "turn", modelSelection: undefined } as Plan;
+    const here = providers.find((provider) => provider.instanceId === current.instanceId);
+    const onThreadHarness = harnessOf(here?.driverKind) === record.harness;
+    if (record.kind === "team-plan") {
+      // Another model of the thread's account family: the turn switches model in place. On
+      // another harness the brief keeps the thread's model, and reports what it ran.
+      const switched =
+        record.model === null
+          ? undefined
+          : turnSelection(providers, current, { harness: record.harness, model: record.model });
+      return { mode: "turn", modelSelection: switched } as Plan;
     }
     const provider = resolveSeatProvider(
       providers.filter((entry) => entry.enabled),
       record.harness,
       (entry) => entry.instanceId,
+      onThreadHarness ? current.instanceId : undefined,
     );
     if (typeof provider === "string") return { mode: "unavailable", why: provider } as Plan;
-    // A null model is the harness's own default: the seat's pick in the thread's team.
+    // A null model is the harness's own default: the seat's pick in the thread's team, or for
+    // the lead the model its thread runs on.
     const model =
       record.model ??
+      (record.lead && onThreadHarness ? current.model : undefined) ??
       lineup.find(
         (seat) =>
           seat.seat === record.seat && seat.modelSelection.instanceId === provider.instanceId,
@@ -247,9 +259,9 @@ export const make = Effect.gen(function* () {
   });
 
   /**
-   * What a child did: its final answer, the last reply of its latest run or the result it
-   * reported, and the model and harness that really ran it. The engine judges QA independence
-   * by that identity, never by the model it picked.
+   * What a child did: its final answer, and the model and harness that ran its latest run, as
+   * its provider turn reported them. The engine judges QA independence by that identity and fails
+   * closed without one, so a model the provider did not report is left out, never guessed.
    */
   const childOutcome = Effect.fn("BoardTaskExecution.childOutcome")(function* (
     task: OrchestrationV2Subagent,
@@ -257,7 +269,9 @@ export const make = Effect.gen(function* () {
     const child =
       task.childThreadId === null
         ? Option.none()
-        : yield* projections.getThreadRecords(task.childThreadId, ["runs"]).pipe(Effect.option);
+        : yield* projections
+            .getThreadRecords(task.childThreadId, ["runs", "providerTurns"])
+            .pipe(Effect.option);
     const latest = Option.isSome(child)
       ? child.value.runs.toSorted((a, b) => b.ordinal - a.ordinal)[0]
       : undefined;
@@ -265,20 +279,11 @@ export const make = Effect.gen(function* () {
       latest === undefined || task.childThreadId === null
         ? ""
         : yield* lastReply(task.childThreadId, latest.id);
-    const model =
-      task.executedModel ??
-      latest?.modelSelection.model ??
-      task.modelSelection?.model ??
-      task.model;
-    const harness =
-      (yield* harnessOfInstance(latest?.providerInstanceId)) ?? harnessOf(task.driver);
-    // The engine fails closed on a step with no identity, so one is never left out or guessed.
-    if (model === null || harness === null)
-      return yield* new BoardTaskExecutionError({ reason: "thread" });
+    const model = Option.isSome(child) ? ranModel(child.value.providerTurns, latest) : null;
     return {
       text: (text.trim() ? text : (task.result ?? "")).slice(0, TEXT_LIMIT),
       model,
-      harness,
+      harness: model === null ? null : yield* harnessOfInstance(latest?.providerInstanceId),
     };
   });
 
@@ -293,7 +298,7 @@ export const make = Effect.gen(function* () {
     const { threadId, detail } = found;
     let shell = found.records;
     const refresh = Effect.suspend(() =>
-      local(projections.getThreadRecords(threadId, ["runs", "subagents"])),
+      local(projections.getThreadRecords(threadId, ["runs", "subagents", "providerTurns"])),
     ).pipe(Effect.tap((records) => Effect.sync(() => (shell = records))));
     // The claim on the task is its heartbeat: renewed on every pass while a step is held, so
     // the engine never sends a step T3 works to needs-decision after the board's hand-off wait.
@@ -304,11 +309,15 @@ export const make = Effect.gen(function* () {
         Option.map((value) => value.participants),
         Option.getOrUndefined,
       ) ?? [];
+    const idle = () => !shell.runs.some((run) => ACTIVE_RUN.has(run.status));
 
     const claim = Effect.fn("BoardTaskExecution.claim")(function* (record: NativeAttempt) {
+      // Without a live claim on the task no step advances here, one this server owns included:
+      // the engine takes a step whose claim lapsed for abandoned.
+      if (!held) return null;
       if (record.owner !== null) return record;
-      // Without a live claim on the task the step stays the engine's, as does one it stopped.
-      if (!held || record.cancelRequested) return null;
+      // A step the engine stopped before it was claimed stays the engine's.
+      if (record.cancelRequested) return null;
       const claimed = yield* act(record, "claim", { owner, worktree: record.worktree });
       return claimed.owner === owner ? claimed : null;
     });
@@ -337,6 +346,7 @@ export const make = Effect.gen(function* () {
         });
     });
 
+    /** A terminal step's report. No model or harness known is none reported: the engine decides. */
     const complete = (
       record: NativeAttempt,
       receipt: { readonly threadId: ThreadId } | { readonly childThreadId: ThreadId },
@@ -344,8 +354,8 @@ export const make = Effect.gen(function* () {
         readonly state: string;
         readonly text: string;
         readonly reason?: string | null;
-        readonly model: string;
-        readonly harness: string;
+        readonly model?: string | null;
+        readonly harness?: string | null;
         readonly contributions?: ReadonlyArray<unknown>;
       },
     ) =>
@@ -355,28 +365,48 @@ export const make = Effect.gen(function* () {
         state: result.state,
         text: result.text.slice(0, TEXT_LIMIT),
         reason: result.reason ?? (result.state === "completed" ? null : `Ended ${result.state}.`),
-        model: result.model,
-        harness: result.harness,
+        ...(result.model ? { model: result.model } : {}),
+        ...(result.harness ? { harness: result.harness } : {}),
         ...(result.contributions === undefined ? {} : { contributions: result.contributions }),
       }).pipe(Effect.tap(() => Effect.sync(() => attested.delete(record.id))));
 
-    /**
-     * What a step that never started is told as: the task thread's own model and harness, which
-     * it was attached to. Nothing ran, so no verdict or contribution counts on it.
-     */
-    const unstarted = Effect.fn("BoardTaskExecution.unstarted")(function* () {
-      const harness = yield* harnessOfInstance(shell.thread.modelSelection.instanceId);
-      if (harness === null) return yield* new BoardTaskExecutionError({ reason: "thread" });
-      return { model: shell.thread.modelSelection.model, harness };
-    });
+    /** Stops a turn the engine no longer wants: a queued one is cancelled, a live one interrupted. */
+    const stopRun = (
+      attemptId: string,
+      run: OrchestrationV2Run,
+      queued: "cancel-queued" | "cancel-stage" = "cancel-queued",
+    ) =>
+      run.status === "queued"
+        ? local(
+            threads.dispatch({
+              type: "queued-run.cancel",
+              commandId: stopCommandId(attemptId, queued),
+              threadId,
+              runId: run.id,
+            }),
+          )
+        : ACTIVE_RUN.has(run.status)
+          ? local(
+              threads.dispatch({
+                type: "run.interrupt",
+                commandId: stopCommandId(attemptId, "interrupt"),
+                threadId,
+                runId: run.id,
+                reason: "The delivery engine asked to stop this step.",
+              }),
+            )
+          : Effect.void;
 
-    /** The team plan, or a lead step on the thread's account family: a turn of the thread. */
-    const stepTurn = Effect.fn("BoardTaskExecution.stepTurn")(function* (
+    /**
+     * The team plan: the brief, a turn of the task thread so its team round runs. The thread is
+     * moved into the engine's worktree first, and a read-only plan runs in the mode that asks,
+     * where TeamChatReadOnlyReactor declines every change. Both are given back after the plan.
+     */
+    const stepBrief = Effect.fn("BoardTaskExecution.stepBrief")(function* (
       record: NativeAttempt,
       plan: Extract<Plan, { mode: "turn" }>,
     ) {
-      const brief = record.kind === "team-plan";
-      const messageId = brief ? briefMessageId(record.id) : leadTurnMessageId(record.id);
+      const messageId = briefMessageId(record.id);
       let current = yield* claim(record);
       if (current === null || isTerminalAttempt(current.state)) return;
       const sent = (yield* local(projections.getMessagesById(threadId, [messageId]))).has(
@@ -387,35 +417,40 @@ export const make = Effect.gen(function* () {
         if (current.cancelRequested || current.native !== null) {
           if (current.native === null)
             current = yield* act(current, "attach", { owner, environmentId, threadId });
-          yield* complete(
-            current,
-            { threadId },
-            { state: "cancelled", text: "", ...(yield* unstarted()) },
-          );
+          yield* complete(current, { threadId }, { state: "cancelled", text: "" });
           return;
         }
         const prompt = current.prompt?.trim();
         if (!prompt) return yield* new BoardTaskExecutionError({ reason: "engine" });
+        // Moving a thread's folder ends its provider sessions, so it waits for an idle thread.
+        if (!idle()) return;
+        if (shell.thread.worktreePath !== current.worktree)
+          yield* local(
+            threads.dispatch({
+              type: "thread.metadata.update",
+              commandId: briefSetupCommandId(current.id, "folder"),
+              threadId,
+              worktreePath: current.worktree,
+            }),
+          );
+        if (current.access === "read-only" && shell.thread.runtimeMode !== "approval-required")
+          yield* local(
+            threads.dispatch({
+              type: "thread.runtime-mode.set",
+              commandId: briefSetupCommandId(current.id, "mode"),
+              threadId,
+              runtimeMode: "approval-required",
+            }),
+          );
         yield* local(
           threads.dispatch({
             type: "message.dispatch",
             commandId: turnCommandId(messageId),
             threadId,
             messageId,
-            text: brief ? briefText(detail, prompt) : prompt,
+            text: briefText(detail, prompt),
             attachments: [],
             ...(plan.modelSelection === undefined ? {} : { modelSelection: plan.modelSelection }),
-            // The brief runs the team round. Every other engine turn is a system notice, which
-            // starts none.
-            ...(brief
-              ? {}
-              : {
-                  notification: engineNotice(
-                    `Engine: ${current.seat} ${current.kind}`,
-                    `The engine's ${current.kind} step of the ${current.stage} stage. Answer as its contract says.`,
-                  ),
-                }),
-            // Never over a person's turn: queued behind it.
             dispatchMode: { type: "queue_after_active" },
             createdBy: "system",
             creationSource: "server",
@@ -427,21 +462,13 @@ export const make = Effect.gen(function* () {
       if (run === undefined) return;
       if (current.native === null)
         current = yield* act(current, "attach", { owner, environmentId, threadId, runId: run.id });
-      // What the turn ran on: its run's provider instance and the model it started.
-      const harness = yield* harnessOfInstance(run.providerInstanceId);
-      if (harness === null) return yield* new BoardTaskExecutionError({ reason: "thread" });
-      yield* attest(current, threadId, run.modelSelection.model, harness);
+      // What the turn ran on, as its provider turn reports it, and nothing when it reports none.
+      const model = ranModel(shell.providerTurns, run);
+      const harness = model === null ? null : yield* harnessOfInstance(run.providerInstanceId);
       if (!terminalRun(run)) {
-        if (current.cancelRequested)
-          yield* local(
-            threads.dispatch({
-              type: "run.interrupt",
-              commandId: stopCommandId(current.id),
-              threadId,
-              runId: run.id,
-              reason: "The delivery engine asked to stop this step.",
-            }),
-          );
+        if (current.cancelRequested) yield* stopRun(current.id, run);
+        // The lead's turn is attested as it runs, so its seat counts for the current run.
+        else yield* attest(current, threadId, model, harness);
         return;
       }
       const children = shell.subagents.filter(
@@ -449,46 +476,61 @@ export const make = Effect.gen(function* () {
       );
       if (children.some((task) => !terminalTask(task))) return;
       const participants = current.participants ?? [];
-      const contributions = brief
-        ? children.flatMap((task) => {
-            const seat = task.teamChat?.seat;
-            const joined = participants.some((entry) => entry.seat === seat);
-            // What the seat's child really ran on, as for any seat.
-            const model = task.executedModel ?? task.modelSelection?.model ?? task.model;
-            const harness = harnessOf(task.driver);
-            return task.teamChat?.stage !== "contribution" ||
-              seat === undefined ||
-              !joined ||
-              task.childThreadId === null ||
-              model === null ||
-              harness === null
-              ? []
-              : [
-                  {
-                    seat,
-                    childThreadId: task.childThreadId,
-                    model,
-                    harness,
-                    state: attemptState(task.status),
-                    text: (task.result ?? "").slice(0, 25_000),
-                  },
-                ];
-          })
-        : undefined;
+      const contributions: Array<Record<string, unknown>> = [];
+      for (const task of children) {
+        const seat = task.teamChat?.seat;
+        if (
+          task.teamChat?.stage !== "contribution" ||
+          seat === undefined ||
+          !participants.some((entry) => entry.seat === seat) ||
+          task.childThreadId === null
+        )
+          continue;
+        const outcome = yield* childOutcome(task);
+        contributions.push({
+          seat,
+          childThreadId: task.childThreadId,
+          // What the seat's child really ran on, as for any seat.
+          ...(outcome.model ? { model: outcome.model } : {}),
+          ...(outcome.harness ? { harness: outcome.harness } : {}),
+          state: attemptState(task.status),
+          text: outcome.text.slice(0, 25_000),
+        });
+      }
       yield* complete(
         current,
         { threadId },
         {
           state: attemptState(run.status),
           text: yield* lastReply(threadId, run.id),
-          model: run.modelSelection.model,
+          model,
           harness,
-          ...(contributions === undefined ? {} : { contributions: contributions.slice(0, 32) }),
+          contributions: contributions.slice(0, 32),
         },
       );
+      // The thread goes back to the folder and mode it was made with, once nothing runs in it.
+      if (!idle()) return;
+      if (shell.thread.worktreePath === current.worktree)
+        yield* local(
+          threads.dispatch({
+            type: "thread.metadata.update",
+            commandId: briefSetupCommandId(current.id, "folder-back"),
+            threadId,
+            worktreePath: null,
+          }),
+        );
+      if (current.access === "read-only")
+        yield* local(
+          threads.dispatch({
+            type: "thread.runtime-mode.set",
+            commandId: briefSetupCommandId(current.id, "mode-back"),
+            threadId,
+            runtimeMode: "full-access",
+          }),
+        );
     });
 
-    /** Seats, and a lead on another harness: subagents of one system turn per batch. */
+    /** Every other step: subagents of one system turn per batch, in the engine's worktree. */
     const stepSeats = Effect.fn("BoardTaskExecution.stepSeats")(function* (
       entries: ReadonlyArray<{ readonly record: NativeAttempt; readonly plan: Plan }>,
     ) {
@@ -513,13 +555,58 @@ export const make = Effect.gen(function* () {
         if (current !== null && !isTerminalAttempt(current.state))
           owned.push({ record: current, plan: entry.plan });
       }
-      const unsent = owned.filter(({ record }) => record.native === null);
+      // Each stage turn of this thread, with the seats it starts.
+      const loadStages = Effect.fn("BoardTaskExecution.loadStages")(function* () {
+        const stageRuns = shell.runs.filter((run) => isEngineStageMessageId(run.userMessageId));
+        const stageMessages = yield* local(
+          projections.getMessagesById(
+            threadId,
+            stageRuns.flatMap((run) => (run.userMessageId === null ? [] : [run.userMessageId])),
+          ),
+        );
+        return (attemptId: string) => {
+          for (const run of stageRuns) {
+            const source = stageMessages.get(run.userMessageId as MessageId)?.notification?.source;
+            if (
+              source?.kind === "engine_stage" &&
+              source.seats.some((seat) => seat.attemptId === attemptId)
+            )
+              return { run, seats: source.seats };
+          }
+          return undefined;
+        };
+      });
+      const providers = yield* instances.listInstances;
+      const attachSeat = Effect.fn("BoardTaskExecution.attachSeat")(function* (
+        record: NativeAttempt,
+        plan: Extract<Plan, { mode: "seat" }>,
+      ) {
+        const attached = yield* act(record, "attach", {
+          owner,
+          environmentId,
+          ...receiptOf(record),
+        });
+        const index = owned.findIndex((entry) => entry.record.id === record.id);
+        if (index >= 0) owned[index] = { record: attached, plan };
+        // Attested before its subagent starts, so a QA seat's receipts are its own.
+        const driver = providers.find(
+          (provider) => provider.instanceId === plan.modelSelection.instanceId,
+        )?.driverKind;
+        yield* attest(attached, childOf(record), plan.modelSelection.model, harnessOf(driver));
+      });
+      const sentIn = yield* loadStages();
       const batches = new Map<
         string,
         Array<{ record: NativeAttempt; plan: Extract<Plan, { mode: "seat" }> }>
       >();
-      for (const { record, plan } of unsent) {
-        // Claimed here before, and can no longer run here, or stopped before it started.
+      for (const { record, plan } of owned.filter((entry) => entry.record.native === null)) {
+        // Already in a stage turn, its attach lost: attached to that turn, never sent again, so a
+        // stage turn keeps the id it was sent with whatever seats are left.
+        if (plan.mode === "seat" && sentIn(record.id) !== undefined) {
+          yield* attachSeat(record, plan);
+          continue;
+        }
+        // Claimed here before, and can no longer run here, or stopped before it was sent.
         if (plan.mode !== "seat" || record.cancelRequested) {
           const attached = yield* act(record, "attach", {
             owner,
@@ -527,7 +614,6 @@ export const make = Effect.gen(function* () {
             ...receiptOf(record),
           });
           yield* complete(attached, receiptOf(record), {
-            ...(yield* unstarted()),
             state: record.cancelRequested ? "cancelled" : "failed",
             text: "",
             reason: record.cancelRequested
@@ -563,37 +649,27 @@ export const make = Effect.gen(function* () {
             notification,
             attachments: [],
             dispatchMode: { type: "queue_after_active" },
-            createdBy: "system",
+            // The orchestrator takes a notification only as a queued agent message.
+            createdBy: "agent",
             creationSource: "server",
           }),
         );
-        const providers = yield* instances.listInstances;
-        for (const { record, plan } of sorted) {
-          const attached = yield* act(record, "attach", {
-            owner,
-            environmentId,
-            ...receiptOf(record),
-          });
-          const index = owned.findIndex((entry) => entry.record.id === record.id);
-          if (index >= 0) owned[index] = { record: attached, plan };
-          // Attested before its subagent starts, so a QA seat's receipts are its own.
-          const driver = providers.find(
-            (provider) => provider.instanceId === plan.modelSelection.instanceId,
-          )?.driverKind;
-          yield* attest(attached, childOf(record), plan.modelSelection.model, harnessOf(driver));
-        }
+        for (const { record, plan } of sorted) yield* attachSeat(record, plan);
       }
       if (batches.size > 0) yield* refresh;
+      const stageOf = batches.size > 0 ? yield* loadStages() : sentIn;
+      const wanted = new Map(owned.map(({ record }) => [record.id, record]));
+
       for (const { record } of owned) {
         if (record.native === null || isTerminalAttempt(record.state)) continue;
         const child = childOf(record);
         const task = shell.subagents.find((candidate) => candidate.childThreadId === child);
-        if (record.cancelRequested) {
-          if (task !== undefined && !terminalTask(task) && task.runId !== null) {
+        if (task !== undefined) {
+          if (record.cancelRequested && !terminalTask(task) && task.runId !== null) {
             yield* local(
               threads.dispatch({
                 type: "subagent.stop",
-                commandId: stopCommandId(record.id),
+                commandId: stopCommandId(record.id, "stop-seat"),
                 threadId,
                 runId: task.runId,
                 subagentId: task.id,
@@ -601,26 +677,37 @@ export const make = Effect.gen(function* () {
             );
             continue;
           }
-          if (
-            task === undefined &&
-            !(yield* local(threads.hasReceipt(seatCommandId(threadId, record.id))))
-          ) {
-            yield* complete(record, receiptOf(record), {
-              ...(yield* unstarted()),
-              state: "cancelled",
-              text: "",
-              reason: "Stopped before its subagent started.",
-            });
-            continue;
-          }
+          if (!terminalTask(task)) continue;
+          const outcome = yield* childOutcome(task);
+          // Attested again when the seat ran on something other than it was attested with.
+          yield* attest(record, child, outcome.model, outcome.harness);
+          yield* complete(record, receiptOf(record), {
+            state: attemptState(task.status),
+            ...outcome,
+          });
+          continue;
         }
-        if (task === undefined || !terminalTask(task)) continue;
-        const outcome = yield* childOutcome(task);
-        // Attested again when the seat ran on something other than it was attested with.
-        yield* attest(record, child, outcome.model, outcome.harness);
+        // No child yet: it is started at its stage turn's start, or never.
+        const stage = stageOf(record.id);
+        if (stage === undefined) continue;
+        if (record.cancelRequested && stage.run.status === "queued") {
+          // A queued stage turn starts nothing once every seat it holds is stopped or done.
+          const stopped = stage.seats.every((seat) => {
+            const other = wanted.get(seat.attemptId);
+            return other === undefined || other.cancelRequested;
+          });
+          if (stopped) yield* stopRun(stage.seats[0]!.attemptId, stage.run, "cancel-stage");
+          continue;
+        }
+        // The stage turn is settled past its seats' start: a seat with no child never gets one.
+        const settled = terminalRun(stage.run) || ["running", "waiting"].includes(stage.run.status);
+        if (!settled) continue;
         yield* complete(record, receiptOf(record), {
-          state: attemptState(task.status),
-          ...outcome,
+          state: record.cancelRequested ? "cancelled" : "failed",
+          text: "",
+          reason: record.cancelRequested
+            ? "Stopped before its subagent started."
+            : `Its stage turn ended ${stage.run.status} before this seat's subagent started.`,
         });
       }
     });
@@ -639,15 +726,7 @@ export const make = Effect.gen(function* () {
     const seats: Array<{ record: NativeAttempt; plan: Plan }> = [];
     for (const record of records) {
       const plan = yield* planOf(record, shell.thread.modelSelection, lineup);
-      // A step claimed as a turn stays one after a restart, whatever the providers say now.
-      if (plan.mode === "turn" || (record.lead && record.native?.threadId === threadId))
-        yield* isolated(
-          record.id,
-          stepTurn(
-            record,
-            plan.mode === "turn" ? plan : { mode: "turn", modelSelection: undefined },
-          ),
-        );
+      if (plan.mode === "turn") yield* isolated(record.id, stepBrief(record, plan));
       else seats.push({ record, plan });
     }
     yield* isolated(seats.map((entry) => entry.record.id).join(","), stepSeats(seats));
@@ -699,7 +778,7 @@ export const make = Effect.gen(function* () {
       Stream.runForEach(orchestrator.streamDomainEvents, (event) =>
         isBoardTaskThreadId(event.threadId) &&
         (event.type === "run.updated" || event.type === "subagent.updated") &&
-        TERMINAL_RUN.has(event.payload.status)
+        (TERMINAL_RUN.has(event.payload.status) || event.payload.status === "running")
           ? pass
           : Effect.void,
       ),

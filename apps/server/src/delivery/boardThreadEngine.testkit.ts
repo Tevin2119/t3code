@@ -73,7 +73,7 @@ export interface ScratchAttempt {
   readonly seat: string;
   readonly role: string | null;
   readonly lead: boolean;
-  readonly access: "full" | "read-only";
+  readonly access: "full" | "workspace" | "read-only";
   readonly contract: string;
   readonly participants?: ReadonlyArray<{
     seat: string;
