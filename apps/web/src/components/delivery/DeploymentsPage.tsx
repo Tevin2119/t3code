@@ -1,28 +1,14 @@
 import { useAtomValue } from "@effect/atom-react";
 import {
-  type DeploymentCandidate,
   type DeploymentProject,
   type DeploymentsSnapshot,
   type EnvironmentId,
 } from "@t3tools/contracts";
-import {
-  GitBranchIcon,
-  GitCommitHorizontalIcon,
-  HistoryIcon,
-  PlusIcon,
-  RefreshCwIcon,
-  ServerIcon,
-  Settings2Icon,
-} from "lucide-react";
+import { GitCommitHorizontalIcon, PlusIcon, RefreshCwIcon } from "lucide-react";
 import { useState } from "react";
 import { isElectron } from "../../env";
 import { type DeliveryRepository, environmentForBranch } from "../../lib/delivery";
-import {
-  deploymentActions,
-  deploymentRequestBody,
-  parseDeployments,
-  parseDeploymentCommands,
-} from "../../lib/deployments";
+import { parseDeployments, parseDeploymentCommands } from "../../lib/deployments";
 import {
   deliveryEnvironment,
   useBoardStore,
@@ -35,7 +21,6 @@ import {
 } from "../../state/delivery";
 import { WorkspacePageHeader } from "../WorkspacePageHeader";
 import { Button } from "../ui/button";
-import { Badge } from "../ui/badge";
 import {
   Dialog,
   DialogDescription,
@@ -48,30 +33,32 @@ import {
 import { Checkbox } from "../ui/checkbox";
 import { Textarea } from "../ui/textarea";
 import { SidebarInset } from "../ui/sidebar";
-import { toastManager } from "../ui/toast";
 import { useProjects } from "../../state/entities";
 import { addedRepository, repositoryChoices } from "./BoardPicker.repositories";
 import { RepositoryBrowse } from "./BoardPicker.browse";
+import { BaseBranchPicker } from "./BoardPicker.branches";
 import { ADD_REPOSITORY, RepositoryPicker } from "./RepositoryPicker";
 import { useBoardDesktop } from "./BoardToolbar";
-import { DeliveryApprovalDialog } from "./DeliveryApprovalDialog";
 import { EnginePanel } from "./EnginePanel";
 import { EnvironmentPicker } from "./EnvironmentPicker";
-import { DeploymentRuntime } from "./DeploymentsPage.runtime";
 import { BoardDelivery } from "./BoardDelivery";
 import { Choice } from "./Choice";
-import { TaskDisclosure } from "./TaskDisclosure";
+import {
+  DeploymentApproval,
+  DeploymentInstances,
+  MODE_LABELS,
+  type DeploymentRequest,
+  when,
+} from "./DeploymentInstance";
+import {
+  firebaseFromValue,
+  firebaseListingPath,
+  firebaseTargetChoices,
+  firebaseTargetValue,
+  parseFirebaseListing,
+} from "./FirebaseHosting.logic";
 
-const MODE_LABELS = {
-  manual: "Manual",
-  "auto-qualify": "Auto-qualify",
-  "full-auto": "Full auto",
-} as const;
-const short = (commit: string | null) => commit?.slice(0, 10) ?? "None";
-const when = (iso: string) =>
-  Number.isFinite(Date.parse(iso)) ? new Date(iso).toLocaleString() : "Unknown time";
 type SnapshotRepository = DeploymentsSnapshot["repositories"][number];
-type Request = { title: string; path: string; body: Record<string, unknown> };
 
 function LabelledChoice(props: {
   label: string;
@@ -140,10 +127,15 @@ function useRepositoryRegistration(
   return { projects, repositories, choices, registering, problem, register };
 }
 
-function Configuration({
+/**
+ * One deployment's settings. Everything is chosen from what T3 or the engine lists: the
+ * repository, the branch, and for Firebase Hosting the project and target the engine read.
+ */
+export function Configuration({
   environmentId,
   snapshot,
   project,
+  initialRepository = null,
   onClose,
   onRegistered,
   onSave,
@@ -151,6 +143,8 @@ function Configuration({
   environmentId: EnvironmentId;
   snapshot: DeploymentsSnapshot;
   project: DeploymentProject | null;
+  /** A new deployment's repository, as a board already knows it. */
+  initialRepository?: string | null;
   onClose: () => void;
   onRegistered: () => void;
   onSave: (body: Record<string, unknown>) => void;
@@ -161,21 +155,28 @@ function Configuration({
     onRegistered,
   );
   const [browsing, setBrowsing] = useState(false);
-  const [repository, setRepository] = useState(project?.repository ?? "");
+  const [repository, setRepository] = useState(project?.repository ?? initialRepository ?? "");
   const selected = registration.repositories.find((repo) => repo.id === repository);
-  const [branch, setBranch] = useState(project?.branch ?? "");
+  const [branch, setBranch] = useState(
+    project?.branch ?? (project ? "" : (selected?.defaultBase ?? "")),
+  );
   const [releaseEnvironment, setReleaseEnvironment] = useState(
     project?.environment ?? "production",
   );
   const [mode, setMode] = useState<string>(project?.mode ?? "manual");
   const [adapter, setAdapter] = useState<string>(project?.adapter ?? "command");
+  const savedTarget = project?.firebase ? firebaseTargetValue(project.firebase) : "";
+  const [target, setTarget] = useState(savedTarget);
   // An existing engine deployment keeps its adapter; a new one needs the engine's own checkout.
   const keepsEngine = project?.adapter === "engine" && project.repository === repository;
   const engineEligible =
     snapshot.capabilities.engine && (selected?.engineAdapter === true || keepsEngine);
+  const firebaseOffered =
+    snapshot.capabilities["firebase-hosting"] === true || project?.adapter === "firebase-hosting";
   const choose = (repo: SnapshotRepository) => {
     setRepository(repo.id);
     setBranch(repo.defaultBase ?? "");
+    setTarget("");
     const eligible =
       snapshot.capabilities.engine &&
       (repo.engineAdapter === true ||
@@ -197,13 +198,31 @@ function Configuration({
     const made = await registration.register(choice.folder, choice.name);
     if (made) choose(made);
   };
+  const firebase = adapter === "firebase-hosting";
+  const hosting = useDeliveryRead(
+    firebase && selected && branch ? environmentId : null,
+    selected && branch ? firebaseListingPath(selected.id, branch) : null,
+  );
+  const listing = hosting.error ? null : parseFirebaseListing(hosting.body);
+  const targets = listing ? firebaseTargetChoices(listing) : { items: [], refused: [] };
+  const targetListed = targets.items.some((item) => item.value === target);
+  // A saved target stays saveable while the listing cannot be read, so mode changes still work.
+  const targetUsable = targetListed || (!!target && target === savedTarget && !listing);
   const [confirmed, setConfirmed] = useState(false);
   const [commandsText, setCommandsText] = useState(
-    project?.commands ? JSON.stringify(project.commands, null, 2) : "",
+    project?.commands && project.adapter === "command"
+      ? JSON.stringify(project.commands, null, 2)
+      : "",
   );
   const commandResult = parseDeploymentCommands(commandsText);
   const available =
-    adapter === "engine" ? snapshot.capabilities.engine : snapshot.capabilities.command;
+    adapter === "engine"
+      ? snapshot.capabilities.engine
+      : firebase
+        ? snapshot.capabilities["firebase-hosting"] === true
+        : snapshot.capabilities.command;
+  const savedCommands = project?.adapter === adapter ? project.commands : null;
+  const chosenFirebase = firebase ? firebaseFromValue(target) : null;
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()}>
       <DialogPopup>
@@ -259,12 +278,22 @@ function Configuration({
                 }
               />
             ) : null}
-            <LabelledChoice
-              label="Branch"
-              value={branch}
-              items={(selected?.branches ?? []).map((value) => ({ value, label: value }))}
-              onChange={setBranch}
-            />
+            <label className="flex min-w-0 flex-col gap-1 text-sm">
+              <span>Branch</span>
+              <BaseBranchPicker
+                key={`${environmentId}:${repository}`}
+                ref={null}
+                environmentId={environmentId}
+                cwd={selected?.path ?? null}
+                defaultBase={selected?.defaultBase ?? null}
+                value={branch}
+                onChange={setBranch}
+                disabled={!selected}
+                label="Branch"
+                placeholder="Choose the branch this deploys"
+                localNames
+              />
+            </label>
             <LabelledChoice
               label="Release environment"
               value={releaseEnvironment}
@@ -317,6 +346,9 @@ function Configuration({
               value={adapter}
               items={[
                 { value: "command", label: "Repository commands" },
+                ...(firebaseOffered
+                  ? [{ value: "firebase-hosting", label: "Firebase Hosting" }]
+                  : []),
                 ...(engineEligible ? [{ value: "engine", label: "Built-in engine" }] : []),
               ]}
               onChange={(value) => {
@@ -324,11 +356,84 @@ function Configuration({
                 if (value === "engine") setReleaseEnvironment("production");
               }}
             />
-            {!engineEligible && selected ? (
+            {!engineEligible && selected && !firebase ? (
               <p className="text-sm text-muted-foreground">
                 The built-in engine adapter releases only the engine's own checkout, when this
                 engine has it configured.
               </p>
+            ) : null}
+            {firebase ? (
+              <div className="flex min-w-0 flex-col gap-2">
+                <LabelledChoice
+                  label="Hosting target"
+                  value={target}
+                  items={
+                    targetListed || !target
+                      ? targets.items
+                      : [
+                          ...targets.items,
+                          {
+                            value: target,
+                            label:
+                              target === savedTarget
+                                ? `${target} (saved)`
+                                : `${target} (not listed on this branch)`,
+                          },
+                        ]
+                  }
+                  onChange={setTarget}
+                />
+                <p className="text-sm text-muted-foreground">
+                  The engine reads the targets from .firebaserc and firebase.json at the branch's
+                  fetched tip, and deploys only the chosen one, with the host's Firebase sign-in.
+                </p>
+                {!selected || !branch ? (
+                  <p className="text-sm text-muted-foreground">
+                    Choose a repository and branch to list its hosting targets.
+                  </p>
+                ) : hosting.error ? (
+                  <p role="alert" className="break-words text-sm text-warning-foreground">
+                    Hosting targets could not be read. {hosting.error}
+                  </p>
+                ) : hosting.isPending && !listing ? (
+                  <p role="status" className="text-sm text-muted-foreground">
+                    Reading hosting targets from {branch}...
+                  </p>
+                ) : !listing ? (
+                  <p role="alert" className="text-sm text-warning-foreground">
+                    This engine returned an unsupported Firebase Hosting response.
+                  </p>
+                ) : targets.items.length === 0 ? (
+                  <p role="alert" className="text-sm text-warning-foreground">
+                    {branch} lists no hosting target this preset can deploy.
+                  </p>
+                ) : null}
+                {listing && target && !targetListed ? (
+                  <p role="alert" className="text-sm text-warning-foreground">
+                    The {target === savedTarget ? "saved" : "chosen"} target is not listed on{" "}
+                    {branch}.
+                  </p>
+                ) : null}
+                {[
+                  ...(listing?.problems ?? []),
+                  ...targets.refused.map((row) => `${row.label}: ${row.problem}`),
+                ].map((problem) => (
+                  <p key={problem} className="break-words text-xs text-warning-foreground">
+                    {problem}
+                  </p>
+                ))}
+                {selected && branch ? (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="self-start"
+                    disabled={hosting.isPending}
+                    onClick={hosting.refresh}
+                  >
+                    Read targets again
+                  </Button>
+                ) : null}
+              </div>
             ) : null}
             {adapter === "command" ? (
               <div className="flex flex-col gap-2">
@@ -368,11 +473,12 @@ function Configuration({
             disabled={
               registration.registering ||
               !selected?.ok ||
-              !selected.branches.includes(branch) ||
+              !branch ||
               (adapter === "engine" && !engineEligible) ||
               (mode === "full-auto" && !confirmed) ||
+              (firebase && (!targetUsable || !chosenFirebase)) ||
               (adapter === "command" &&
-                (!!commandResult.problem || (!commandResult.commands && !project?.commands)))
+                (!!commandResult.problem || (!commandResult.commands && !savedCommands)))
             }
             onClick={() =>
               onSave({
@@ -382,8 +488,15 @@ function Configuration({
                 mode,
                 adapter,
                 ...(mode === "full-auto" ? { confirmed: true } : {}),
-                ...(adapter === "command" && (commandResult.commands ?? project?.commands)
-                  ? { commands: commandResult.commands ?? project?.commands }
+                ...(adapter === "command" && (commandResult.commands ?? savedCommands)
+                  ? { commands: commandResult.commands ?? savedCommands }
+                  : {}),
+                // The preset's own setup and qualify checks are kept as saved.
+                ...(firebase && chosenFirebase
+                  ? {
+                      firebase: chosenFirebase,
+                      ...(savedCommands ? { commands: savedCommands } : {}),
+                    }
                   : {}),
               })
             }
@@ -393,190 +506,6 @@ function Configuration({
         </DialogFooter>
       </DialogPopup>
     </Dialog>
-  );
-}
-
-function Approval({
-  environmentId,
-  request,
-  unavailable,
-  onClose,
-  onDone,
-}: {
-  environmentId: EnvironmentId;
-  request: Request;
-  unavailable: boolean;
-  onClose: () => void;
-  onDone: () => void;
-}) {
-  const act = useDeliveryAct(environmentId, "deployments");
-  const allowed = useAtomValue(deliveryEnvironment.act.permissionAtom(environmentId));
-  const person = usePersonName();
-  const setPerson = useBoardStore((state) => state.setPerson);
-  return (
-    <DeliveryApprovalDialog
-      title={request.title}
-      description="Deployment changes always need the engine's approval passphrase, even while an approval window is open. T3 never saves it."
-      person={person}
-      nameField
-      keyLabel="Approval passphrase"
-      allowed={allowed}
-      forbidden="This connection does not have permission to change deployments."
-      unavailable={unavailable}
-      submitLabel="Confirm"
-      busyLabel="Submitting"
-      failure="The deployment request could not be submitted. Check its settings and try again."
-      onSubmit={({ by, key }) =>
-        act(request.path, deploymentRequestBody(request.path, { ...request.body, by, key }))
-      }
-      onDone={(by) => {
-        setPerson(by);
-        toastManager.add({
-          title: request.title,
-          description: "The engine accepted the request.",
-          type: "success",
-        });
-        onDone();
-      }}
-      onClose={onClose}
-    >
-      <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-all text-xs">
-        {JSON.stringify(request.body, null, 2)}
-      </pre>
-    </DeliveryApprovalDialog>
-  );
-}
-
-function Candidate({
-  candidate,
-  unavailable,
-  disabled,
-  projectBusy,
-  onRequest,
-  onDependencies,
-}: {
-  candidate: DeploymentCandidate;
-  unavailable: boolean;
-  disabled: boolean;
-  projectBusy: boolean;
-  onRequest: (request: Request) => void;
-  onDependencies: () => void;
-}) {
-  const attempts = candidate.attempts;
-  return (
-    <article className="flex min-w-0 flex-col gap-3 rounded-lg border border-border bg-background p-4">
-      <div className="flex flex-wrap items-center gap-2">
-        <Badge variant={candidate.state === "blocked" ? "warning" : "secondary"}>
-          {unavailable
-            ? `${candidate.state} · last known`
-            : candidate.state === "live"
-              ? "Live · recorded"
-              : candidate.state}
-        </Badge>
-        {candidate.seq !== undefined ? (
-          <span className="text-xs text-muted-foreground">Release #{candidate.seq}</span>
-        ) : null}
-      </div>
-      <div className="min-w-0">
-        <h4 className="break-words text-sm font-medium">
-          {candidate.subject || `Release ${short(candidate.commit)}`}
-        </h4>
-        <p className="mt-2 flex items-center gap-1 text-xs text-muted-foreground">
-          <GitCommitHorizontalIcon aria-hidden="true" className="size-3.5 shrink-0" />
-          Pinned revision
-        </p>
-        <code className="break-all text-xs">{candidate.commit}</code>
-      </div>
-      <p className="text-xs text-muted-foreground">
-        Base {short(candidate.baseCommit)}
-        <br />
-        Updated {when(candidate.updatedAt)}
-        {candidate.liveAt ? (
-          <>
-            <br />
-            Verified live at {when(candidate.liveAt)}
-          </>
-        ) : null}
-        {candidate.liveUntil ? (
-          <>
-            <br />
-            Replaced {when(candidate.liveUntil)}
-          </>
-        ) : null}
-      </p>
-      {candidate.phase ? (
-        <p className="text-xs text-muted-foreground">Phase: {candidate.phase}</p>
-      ) : null}
-      {candidate.state === "blocked" && candidate.failedPhase ? (
-        <p className="text-xs text-warning-foreground">Stopped during {candidate.failedPhase}</p>
-      ) : null}
-      {attempts && (attempts.qualify > 0 || attempts.deploy > 0) ? (
-        <p className="text-xs text-muted-foreground">
-          Attempts: qualify {attempts.qualify}, deploy {attempts.deploy}
-        </p>
-      ) : null}
-      {candidate.cancelRequested ? (
-        <p role="status" className="text-xs text-muted-foreground">
-          Cancel requested by {candidate.cancelRequested}. It stops at the next safe point.
-        </p>
-      ) : null}
-      {candidate.needsVerify ? (
-        <p className="text-xs text-warning-foreground">
-          Verification required before this release can be live.
-        </p>
-      ) : null}
-      {candidate.state === "live" || candidate.liveAt ? (
-        <p className="text-xs text-muted-foreground">
-          Recorded candidate evidence, not a current runtime health check.
-        </p>
-      ) : null}
-      {candidate.problem ? (
-        <p className="break-words text-sm text-warning-foreground">{candidate.problem}</p>
-      ) : null}
-      <div className="min-w-0 text-xs">
-        <TaskDisclosure title="Evidence, dependencies and history" defaultOpen={false}>
-          <pre className="mt-2 max-h-72 overflow-auto whitespace-pre-wrap break-all">
-            {JSON.stringify(
-              {
-                evidence: candidate.evidence,
-                dependencies: candidate.dependencies,
-                events: candidate.events,
-              },
-              null,
-              2,
-            )}
-          </pre>
-        </TaskDisclosure>
-      </div>
-      <div className="mt-auto flex flex-wrap gap-2">
-        {deploymentActions(candidate, projectBusy).map((action) => (
-          <Button
-            key={action}
-            size="sm"
-            variant="outline"
-            disabled={disabled}
-            onClick={() =>
-              onRequest({
-                title: `${action[0]!.toUpperCase()}${action.slice(1)} ${short(candidate.commit)}`,
-                path: `/api/deployments/candidates/${candidate.id}/action`,
-                body: { action },
-              })
-            }
-          >
-            {action[0]!.toUpperCase()}
-            {action.slice(1)}
-          </Button>
-        ))}
-        <Button
-          size="sm"
-          variant="ghost"
-          disabled={disabled || !["merged", "ready", "blocked"].includes(candidate.state)}
-          onClick={onDependencies}
-        >
-          Dependencies
-        </Button>
-      </div>
-    </article>
   );
 }
 
@@ -618,8 +547,7 @@ function DeploymentsContent({ environmentId }: { environmentId: EnvironmentId | 
   const [configuration, setConfiguration] = useState<{ project: DeploymentProject | null } | null>(
     null,
   );
-  const [dependencies, setDependencies] = useState<DeploymentCandidate | null>(null);
-  const [request, setRequest] = useState<Request | null>(null);
+  const [request, setRequest] = useState<DeploymentRequest | null>(null);
   const unavailable = !enabled || stale || !!read.error || !!snapshot?.problem;
   const disabled = !allowed || unavailable || !snapshot;
   return (
@@ -709,134 +637,18 @@ function DeploymentsContent({ environmentId }: { environmentId: EnvironmentId | 
           {enabled && environmentId ? (
             <BoardDelivery key={environmentId} environmentId={environmentId} />
           ) : null}
-          {snapshot?.projects.map((project) => {
-            const candidates = snapshot.candidates.filter(
-              (candidate) => candidate.projectId === project.id,
-            );
-            const releases = candidates.filter((candidate) => candidate.state !== "superseded");
-            const history = candidates.filter((candidate) => candidate.state === "superseded");
-            const renderCandidate = (candidate: DeploymentCandidate) => (
-              <Candidate
-                key={candidate.id}
-                candidate={candidate}
-                unavailable={unavailable}
-                disabled={disabled}
-                projectBusy={!!project.busy}
-                onRequest={setRequest}
-                onDependencies={() => setDependencies(candidate)}
-              />
-            );
-            return (
-              <section
-                key={project.id}
-                className="flex min-w-0 flex-col gap-4 rounded-xl border border-border bg-card p-4 md:p-5"
-                aria-label={`${project.title} ${project.environment}`}
-              >
-                <div className="flex flex-wrap items-start gap-3">
-                  <div className="min-w-0 flex-1 basis-48">
-                    <p className="flex items-start gap-2 text-sm font-medium">
-                      <ServerIcon
-                        aria-hidden="true"
-                        className="mt-0.5 size-4 shrink-0 text-muted-foreground"
-                      />
-                      <span className="break-words">
-                        <span className="font-normal text-muted-foreground">
-                          Release environment:{" "}
-                        </span>
-                        {project.environment}
-                      </span>
-                    </p>
-                    <h2 className="mt-1 break-words text-lg font-semibold">{project.title}</h2>
-                    <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-2 text-xs text-muted-foreground">
-                      <span className="flex min-w-0 items-start gap-1">
-                        <GitBranchIcon aria-hidden="true" className="size-3.5 shrink-0" />
-                        <span className="break-all">{project.branch}</span>
-                      </span>
-                      <Badge variant="outline">{MODE_LABELS[project.mode]}</Badge>
-                      <span>
-                        {project.adapter === "command" ? "Repository commands" : "Built-in engine"}
-                      </span>
-                    </div>
-                  </div>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    disabled={disabled}
-                    onClick={() => setConfiguration({ project })}
-                  >
-                    <Settings2Icon aria-hidden="true" />
-                    Configure
-                  </Button>
-                </div>
-                <DeploymentRuntime project={project} unavailable={unavailable} />
-                {project.busy ? (
-                  <p role="status" className="text-sm text-muted-foreground">
-                    A release operation is running. Other releases can only be cancelled until it
-                    finishes.
-                  </p>
-                ) : null}
-                {project.adapter === "command" && !project.commands ? (
-                  <p className="text-sm text-warning-foreground">
-                    Repository commands are not configured. Configure them before running a release.
-                  </p>
-                ) : !snapshot.capabilities[project.adapter] ? (
-                  <p className="text-sm text-warning-foreground">
-                    This adapter is unavailable on this engine. Configure the engine before running
-                    a release.
-                  </p>
-                ) : null}
-                <div>
-                  <h3 className="mb-3 text-sm font-medium">
-                    Release candidates{" "}
-                    <span className="text-muted-foreground">({releases.length})</span>
-                  </h3>
-                  {releases.length ? (
-                    <div className="grid min-w-0 grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
-                      {releases.map(renderCandidate)}
-                    </div>
-                  ) : (
-                    <p className="rounded-lg border border-dashed border-border p-4 text-sm text-muted-foreground">
-                      No active candidates. Discover commits to read the watched branch.
-                    </p>
-                  )}
-                </div>
-                {history.length ? (
-                  <div className="min-w-0 border-t border-border pt-3">
-                    <TaskDisclosure
-                      title={
-                        <>
-                          <HistoryIcon aria-hidden="true" className="mx-1 inline size-4" />
-                          Superseded releases ({history.length})
-                        </>
-                      }
-                      defaultOpen={false}
-                    >
-                      <div className="mt-3 grid min-w-0 grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
-                        {history.map(renderCandidate)}
-                      </div>
-                    </TaskDisclosure>
-                  </div>
-                ) : null}
-              </section>
-            );
-          })}
+          {snapshot ? (
+            <DeploymentInstances
+              snapshot={snapshot}
+              projects={snapshot.projects}
+              unavailable={unavailable}
+              disabled={disabled}
+              onRequest={setRequest}
+              onConfigure={(project) => setConfiguration({ project })}
+            />
+          ) : null}
         </div>
       </div>
-      {dependencies && snapshot ? (
-        <Dependencies
-          candidate={dependencies}
-          snapshot={snapshot}
-          onClose={() => setDependencies(null)}
-          onSave={(ids) => {
-            setRequest({
-              title: `Set dependencies for ${short(dependencies.commit)}`,
-              path: `/api/deployments/candidates/${dependencies.id}/dependencies`,
-              body: { dependencies: ids },
-            });
-            setDependencies(null);
-          }}
-        />
-      ) : null}
       {configuration && snapshot && environmentId ? (
         <Configuration
           environmentId={environmentId}
@@ -855,7 +667,7 @@ function DeploymentsContent({ environmentId }: { environmentId: EnvironmentId | 
         />
       ) : null}
       {request && environmentId ? (
-        <Approval
+        <DeploymentApproval
           environmentId={environmentId}
           request={request}
           unavailable={unavailable || !snapshot}
@@ -867,73 +679,5 @@ function DeploymentsContent({ environmentId }: { environmentId: EnvironmentId | 
         />
       ) : null}
     </main>
-  );
-}
-
-function Dependencies({
-  candidate,
-  snapshot,
-  onClose,
-  onSave,
-}: {
-  candidate: DeploymentCandidate;
-  snapshot: DeploymentsSnapshot;
-  onClose: () => void;
-  onSave: (ids: string[]) => void;
-}) {
-  const [selected, setSelected] = useState<string[]>(
-    Array.isArray(candidate.dependencies)
-      ? candidate.dependencies.filter((id): id is string => typeof id === "string")
-      : [],
-  );
-  const choices = snapshot.candidates.filter(
-    (other) => other.id !== candidate.id && other.state !== "superseded",
-  );
-  return (
-    <Dialog open onOpenChange={(open) => !open && onClose()}>
-      <DialogPopup>
-        <DialogHeader>
-          <DialogTitle>Release dependencies</DialogTitle>
-          <DialogDescription>
-            Choose releases that must be live before this revision deploys. The engine checks for
-            dependency cycles.
-          </DialogDescription>
-        </DialogHeader>
-        <DialogPanel>
-          <div className="flex max-h-80 flex-col gap-3 overflow-auto">
-            {choices.length === 0 ? (
-              <p>No other releases are available.</p>
-            ) : (
-              choices.map((other) => (
-                <label key={other.id} className="flex items-start gap-2 text-sm">
-                  <Checkbox
-                    checked={selected.includes(other.id)}
-                    onCheckedChange={(checked) =>
-                      setSelected((ids) =>
-                        checked ? [...ids, other.id] : ids.filter((id) => id !== other.id),
-                      )
-                    }
-                  />
-                  <span>
-                    {snapshot.projects.find((project) => project.id === other.projectId)?.title ??
-                      other.projectId}{" "}
-                    ·{" "}
-                    {snapshot.projects.find((project) => project.id === other.projectId)
-                      ?.environment ?? "Unknown environment"}{" "}
-                    · {short(other.commit)} · {other.state}
-                  </span>
-                </label>
-              ))
-            )}
-          </div>
-        </DialogPanel>
-        <DialogFooter>
-          <Button variant="outline" onClick={onClose}>
-            Cancel
-          </Button>
-          <Button onClick={() => onSave(selected)}>Review dependencies</Button>
-        </DialogFooter>
-      </DialogPopup>
-    </Dialog>
   );
 }

@@ -112,7 +112,16 @@ release to be live first. Every deployment change asks for the engine's approval
 passphrase, even while an approval window is open. While one release for an
 environment is running, the others there can only be cancelled.
 
-New deployments use **Repository commands**: a JSON object of argument arrays,
+For a Firebase Hosting site, choose the **Firebase Hosting** adapter. After you
+pick the repository and branch, T3 lists the hosting targets the engine read from
+`.firebaserc` and `firebase.json` on that branch; choose one, and nothing else is
+typed. The engine deploys only that target, with the Firebase sign-in already on
+its host. A target the engine cannot deploy is listed with its reason. Live state
+is the engine's own reading of the release stamp on the site. A site deployed
+before this has no stamp, so choose **Adopt** on a qualified release once to say
+what runs there now, either a known commit or "Unknown, accept once".
+
+Other repositories use **Repository commands**: a JSON object of argument arrays,
 `qualify`, `deploy` and `verify`, with optional `setup`. Each array begins with
 the executable followed by its arguments. Keep secrets out of this
 configuration. Leaving commands blank keeps the saved ones. The built-in engine
@@ -123,7 +132,9 @@ appears on the deployment rather than being reported as a successful release.
 ### Link a board and follow a task's deployment
 
 On a custom repository-bound board, open **Board delivery settings → Link deployment**.
-Choose the exact deployment project for the repository and release environment; its watched
+The settings also list the board repository's deployments with their releases and
+actions, and **Add instance** starts one for that repository. Choose the exact
+deployment project for the repository and release environment; its watched
 branch must match the board target. Linking an existing project leaves its mode unchanged.
 **Create a new project and link** defaults to auto-qualify, with deployment still manual.
 If creation fails, inspect Deployments before retrying: the project may have been created

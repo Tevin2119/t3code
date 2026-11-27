@@ -26,6 +26,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
 
 import * as ServerConfig from "../config.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
@@ -99,6 +100,8 @@ function threadStore() {
   const active = new Map<string, string>();
   const latestRuns = new Map<string, RunId>();
   const rejects = new Set<string>();
+  /** Messages whose dispatch fails for now, by id prefix, as a busy or disabled thread does. */
+  const unavailable = new Set<string>();
   const commit = (threadId: string, type: string, payload: Record<string, unknown>) =>
     events.push({
       sequence: events.length + 1,
@@ -146,6 +149,8 @@ function threadStore() {
         // A command already answered is answered again with what it did the first time.
         if (receipts.has(command.commandId)) return Effect.succeed({ storedEvents: [] });
         if (command.type === "message.dispatch") {
+          if ([...unavailable].some((prefix) => command.messageId.startsWith(prefix)))
+            return Effect.fail(new BoardTaskThreads.BoardTaskThreadsError({ reason: "thread" }));
           if (rejects.has(command.messageId))
             return Effect.fail(
               new OrchestratorCommandRejectedError({
@@ -206,6 +211,7 @@ function threadStore() {
     active,
     latestRuns,
     rejects,
+    unavailable,
     say,
     reply,
   };
@@ -1366,12 +1372,20 @@ it.effect("keeps the link and claim routes for the server: a client's act is ref
 
 const ingests = (engine: ScratchEngine) =>
   engine.requests.filter((request) => request.path.endsWith("/activity")).length;
+const undelivered = (store: ThreadStore) =>
+  store.commands.flatMap((command) =>
+    command.type === "message.dispatch" &&
+    command.messageId.startsWith("message:board-steer-undelivered:")
+      ? [command]
+      : [],
+  );
 const steerSends = (store: ThreadStore) =>
   store.commands.filter((command) => command.type === "message.dispatch");
 
 it.effect("mirrors each conversation event once, across a restart and a replaced thread", () => {
   const engine = board();
-  engine.addTask({ id: "task-7" });
+  // A run under way takes the person's words as a steer, so no undelivered notice is mirrored.
+  engine.addTask({ id: "task-7", run: { id: "run-1" } });
   const store = threadStore();
   return Effect.gen(function* () {
     const first = yield* service(store);
@@ -2288,4 +2302,390 @@ it.effect.each([
       assert.lengthOf(state.boardLineup?.participants ?? [], seats);
     }
   }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-older-client-")));
+});
+
+it.effect("gives each part of a split task its own thread, and none to the parent", () => {
+  const engine = board();
+  // A parent putting its parts together is in work by its lane, and still gets no thread.
+  const whole = engine.addTask({ id: "whole-3", lane: "in-work", state: "doing" });
+  engine.addTask({
+    id: "part-1",
+    served: { partOf: { id: "whole-3", number: 1002, title: "The whole", here: true } },
+  });
+  // A part whose parent is not here is worked like any other part.
+  engine.addTask({
+    id: "part-2",
+    served: { partOf: { id: "whole-elsewhere", number: null, title: null, here: false } },
+  });
+  const store = threadStore();
+  const threadOf = (id: string) => boardTaskThreadId(boardTaskOf("work", id)!);
+  return Effect.gen(function* () {
+    const threads = yield* service(store);
+    // Before its split the task is worked as itself, with a thread and a claim.
+    yield* threads.reconcile();
+    assert.isNotNull(engine.leaseOf("whole-3"));
+    whole.served = { split: true };
+    engine.advance(30_000);
+    assert.deepEqual([...(yield* threads.reconcile())], []);
+    assert.deepEqual(
+      [...store.threads.keys()].toSorted(),
+      [threadOf("part-1"), threadOf("part-2"), threadOf("whole-3")].toSorted(),
+    );
+    assert.equal(engine.linkOf("part-1")?.threadId, threadOf("part-1"));
+    assert.equal(engine.linkOf("part-2")?.threadId, threadOf("part-2"));
+    assert.isNotNull(engine.leaseOf("part-1"));
+    assert.isNotNull(engine.leaseOf("part-2"));
+    // Split, the parent releases its claim and keeps the thread it had, unarchived.
+    assert.isNull(engine.leaseOf("whole-3"));
+    assert.isNull(store.threads.get(threadOf("whole-3"))!.archivedAt);
+    // A parent split before it had a thread is never given one.
+    engine.addTask({ id: "whole-4", lane: "in-work", state: "doing", served: { split: true } });
+    yield* threads.reconcile();
+    assert.isFalse(store.threads.has(threadOf("whole-4")));
+    assert.isNull(engine.linkOf("whole-4"));
+    assert.isNull(engine.leaseOf("whole-4"));
+  }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-parts-")));
+});
+
+it.effect("tells the engine a person's words in a task thread as a thread steer, once", () => {
+  const engine = board();
+  const task = engine.addTask({ id: "task-7", run: { id: "run-1" } });
+  const store = threadStore();
+  const steered = () => engine.steeredOf("task-7").map(({ text, by, from }) => [text, by, from]);
+  return Effect.gen(function* () {
+    const threads = yield* service(store);
+    yield* threads.reconcile();
+    store.say(THREAD, "m-1", "Build it", "system");
+    store.reply(THREAD, "Planned");
+    store.say(THREAD, "m-2", "Use the other API", "user");
+    yield* threads.reconcile();
+    // Only a person's words are a steer; the engine's own brief is not.
+    assert.deepEqual(steered(), [["Use the other API", "person", "thread"]]);
+    // The engine queues no thread steer back, so nothing is delivered into the thread again.
+    assert.deepEqual(steerSends(store), []);
+    assert.equal(engine.requests.filter((r) => r.path.includes("/steers/")).length, 0);
+    yield* threads.reconcile();
+    yield* (yield* service(store)).reconcile();
+    assert.deepEqual(steered(), [["Use the other API", "person", "thread"]]);
+
+    // The engine away: the words are told on a later pass, before their mirror.
+    engine.dropNext(/\/steer$/);
+    store.reply(THREAD, "On it");
+    store.say(THREAD, "m-3", "Also add tests", "user");
+    const before = ingests(engine);
+    yield* threads.reconcile();
+    assert.equal(steered().length, 1);
+    // The mirror never waits on a steer: the reply and the words are both mirrored.
+    assert.equal(ingests(engine), before + 2);
+    yield* threads.reconcile();
+    assert.deepEqual(steered().at(-1), ["Also add tests", "person", "thread"]);
+
+    // A mirror lost after its steer went through sends only the mirror again.
+    engine.dropNext(/\/activity$/);
+    store.reply(THREAD, "Tests added");
+    store.say(THREAD, "m-4", "Thanks", "user");
+    yield* threads.reconcile();
+    yield* threads.reconcile();
+    yield* threads.reconcile();
+    assert.deepEqual(
+      steered().map(([text]) => text),
+      ["Use the other API", "Also add tests", "Thanks"],
+    );
+    assert.deepEqual(
+      engine.activityOf("task-7").map((row) => row.kind),
+      ["message", "summary", "steer", "summary", "steer", "summary", "steer"],
+    );
+
+    // Words the run took are told in no notice.
+    assert.equal(undelivered(store).length, 0);
+    // With no run under way the engine refuses the steer; the words stay mirrored and are not
+    // tried again.
+    task.run = null;
+    store.reply(THREAD, "Done");
+    store.say(THREAD, "m-5", "One more thing", "user");
+    yield* threads.reconcile();
+    yield* threads.reconcile();
+    assert.equal(steered().length, 3);
+    assert.equal(engine.requests.filter((r) => r.path.endsWith("/steer")).length, 4);
+    assert.equal(engine.activityOf("task-7").at(-1)?.kind, "steer");
+  }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-thread-steer-")));
+});
+
+it.effect("tells a person's words once across a restart after their mirror was lost", () => {
+  const engine = board();
+  engine.addTask({ id: "task-7", run: { id: "run-1" } });
+  const store = threadStore();
+  return Effect.gen(function* () {
+    yield* (yield* service(store)).reconcile();
+    store.say(THREAD, "m-1", "Use the other API", "user");
+    // The steer is taken, then its mirror is lost, and the server restarts before the next pass.
+    engine.dropNext(/\/activity$/);
+    yield* (yield* service(store)).reconcile();
+    assert.equal(engine.steeredOf("task-7").length, 1);
+    assert.equal(engine.activityOf("task-7").length, 0);
+    const restarted = yield* service(store);
+    yield* restarted.reconcile();
+    yield* restarted.reconcile();
+    assert.deepEqual(
+      engine.steeredOf("task-7").map(({ text }) => text),
+      ["Use the other API"],
+    );
+    // The steer carries a key stable per message, for an engine that dedupes on it.
+    const refs = engine.requests
+      .filter((request) => request.path.endsWith("/steer"))
+      .map((request) => (request.body as { ref?: string }).ref);
+    assert.deepEqual(refs, [`thread:${THREAD}:m-1`]);
+    assert.deepEqual(
+      engine.activityOf("task-7").map((row) => row.kind),
+      ["steer"],
+    );
+  }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-steer-restart-")));
+});
+
+it.effect("tells a thread steer again with its ref after an engine error, applied once", () => {
+  const engine = board();
+  engine.addTask({ id: "task-7", run: { id: "run-1" } });
+  const store = threadStore();
+  return Effect.gen(function* () {
+    const threads = yield* service(store);
+    yield* threads.reconcile();
+    store.say(THREAD, "m-1", "Use the other API", "user");
+    engine.answerNext(/\/steer$/, 500, { error: "the run could not be told" });
+    yield* threads.reconcile();
+    // The mirror does not wait for the steer.
+    assert.equal(engine.activityOf("task-7").length, 1);
+    yield* threads.reconcile();
+    yield* threads.reconcile();
+    const sent = engine.requests.filter((request) => request.path.endsWith("/steer"));
+    assert.deepEqual(
+      sent.map((request) => (request.body as { ref?: string }).ref),
+      [`thread:${THREAD}:m-1`, `thread:${THREAD}:m-1`],
+    );
+    assert.equal(engine.steeredOf("task-7").length, 1);
+    assert.deepEqual(
+      engine.activityOf("task-7").map((row) => row.kind),
+      ["steer"],
+    );
+  }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-steer-error-")));
+});
+
+it.effect("gives up on a thread steer the engine keeps failing, and says so once", () => {
+  const engine = board();
+  engine.addTask({ id: "task-7", run: { id: "run-1" } });
+  const store = threadStore();
+  return Effect.gen(function* () {
+    yield* TestClock.setTime(Date.parse("2026-11-22T10:00:00.000Z"));
+    const threads = yield* service(store);
+    yield* threads.reconcile();
+    store.say(THREAD, "m-1", "Use the other API", "user");
+    engine.answerNext(/\/steer$/, 500, { error: "the run could not be told" });
+    yield* threads.reconcile();
+    // Within the hand-off wait it is tried again; the mirror goes on.
+    assert.equal(undelivered(store).length, 0);
+    assert.equal(engine.activityOf("task-7").length, 1);
+    yield* TestClock.adjust("31 minutes");
+    engine.answerNext(/\/steer$/, 500, { error: "the run could not be told" });
+    yield* threads.reconcile();
+    const [notice] = undelivered(store);
+    assert.include(notice?.text, "This message didn't reach the team");
+    assert.include(notice?.text, "Use the other API");
+    // A system notice: the lead reads it, and no team round starts on it.
+    assert.equal(notice?.notification?.source.kind, "system");
+    assert.equal(engine.steeredOf("task-7").length, 0);
+    // The words, then the notice, are mirrored.
+    assert.deepEqual(
+      engine.activityOf("task-7").map((row) => row.kind),
+      ["steer", "steer"],
+    );
+    const restarted = yield* service(store);
+    yield* restarted.reconcile();
+    yield* restarted.reconcile();
+    assert.equal(undelivered(store).length, 1);
+    // Past the window it is given up without being sent again.
+    assert.equal(engine.requests.filter((r) => r.path.endsWith("/steer")).length, 1);
+    // The notice is mirrored like the engine's other notices, with no excerpt.
+    assert.deepEqual(
+      engine.activityOf("task-7").map((row) => [row.kind, row.excerpt]),
+      [
+        ["steer", null],
+        ["steer", null],
+      ],
+    );
+  }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-steer-give-up-")));
+});
+
+it.effect("says once in the thread when the engine refuses a person's words", () => {
+  const engine = board();
+  // Awaiting approval: no run under way, so the engine refuses a steer with 409.
+  engine.addTask({ id: "task-7" });
+  const store = threadStore();
+  return Effect.gen(function* () {
+    yield* (yield* service(store)).reconcile();
+    store.say(THREAD, "m-1", "Use the other API", "user");
+    yield* (yield* service(store)).reconcile();
+    const [notice] = undelivered(store);
+    assert.include(notice?.text, "no run is under way on this task");
+    assert.deepEqual(
+      engine.activityOf("task-7").map((row) => row.kind),
+      ["steer"],
+    );
+    const restarted = yield* service(store);
+    yield* restarted.reconcile();
+    yield* restarted.reconcile();
+    assert.equal(undelivered(store).length, 1);
+    assert.equal(engine.requests.filter((r) => r.path.endsWith("/steer")).length, 1);
+  }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-steer-refused-")));
+});
+
+it.effect("tells words still being retried as undelivered once their task leaves work", () => {
+  const engine = board();
+  const task = engine.addTask({ id: "task-7", run: { id: "run-1" } });
+  const store = threadStore();
+  return Effect.gen(function* () {
+    const threads = yield* service(store);
+    yield* threads.reconcile();
+    store.say(THREAD, "m-1", "Use the other API", "user");
+    engine.answerNext(/\/steer$/, 500, { error: "the run could not be told" });
+    yield* threads.reconcile();
+    assert.equal(undelivered(store).length, 0);
+    // Approved: out of work, so the words can no longer reach a run.
+    task.state = "approved";
+    yield* threads.reconcile();
+    yield* threads.reconcile();
+    assert.equal(undelivered(store).length, 1);
+    assert.include(undelivered(store)[0]?.text, "the task is no longer in work");
+    assert.equal(engine.requests.filter((r) => r.path.endsWith("/steer")).length, 2);
+    assert.equal(engine.activityOf("task-7")[0]?.kind, "steer");
+  }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-steer-left-work-")));
+});
+
+it.effect("gives up on a lost steer answer past the hand-off wait", () => {
+  const engine = board();
+  engine.addTask({ id: "task-7", run: { id: "run-1" } });
+  const store = threadStore();
+  return Effect.gen(function* () {
+    yield* TestClock.setTime(Date.parse("2026-11-22T10:00:00.000Z"));
+    const threads = yield* service(store);
+    yield* threads.reconcile();
+    store.say(THREAD, "m-1", "Use the other API", "user");
+    engine.dropNext(/\/steer$/);
+    yield* threads.reconcile();
+    assert.equal(undelivered(store).length, 0);
+    // Past the window it is given up without being sent again: stale words never reach a run.
+    yield* TestClock.adjust("31 minutes");
+    yield* threads.reconcile();
+    assert.equal(engine.requests.filter((r) => r.path.endsWith("/steer")).length, 0);
+    assert.equal(undelivered(store).length, 1);
+    assert.include(undelivered(store)[0]?.text, "could not take it for 30 minutes");
+    assert.equal(engine.activityOf("task-7")[0]?.kind, "steer");
+  }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-steer-lost-answer-")));
+});
+
+it.effect("posts a notice the thread could not take later, never steering again", () => {
+  const engine = board();
+  engine.addTask({ id: "task-7" });
+  const store = threadStore();
+  return Effect.gen(function* () {
+    yield* (yield* service(store)).reconcile();
+    store.say(THREAD, "m-1", "Use the other API", "user");
+    store.unavailable.add("message:board-steer-undelivered:");
+    yield* (yield* service(store)).reconcile();
+    // Refused 409 and settled; the notice is owed, and the mirror is not held for it.
+    assert.equal(undelivered(store).length, 1);
+    assert.isFalse(store.messages.get(THREAD)?.has(undelivered(store)[0]!.messageId) ?? false);
+    assert.equal(engine.activityOf("task-7")[0]?.kind, "steer");
+    // A restart keeps the notice owed, and the steer is never sent again.
+    const restarted = yield* service(store);
+    yield* restarted.reconcile();
+    store.unavailable.clear();
+    yield* restarted.reconcile();
+    yield* restarted.reconcile();
+    const posted = undelivered(store).filter((command) =>
+      store.messages.get(THREAD)?.has(command.messageId),
+    );
+    assert.equal(new Set(posted.map((command) => command.messageId)).size, 1);
+    assert.equal(engine.requests.filter((r) => r.path.endsWith("/steer")).length, 1);
+  }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-steer-notice-later-")));
+});
+
+it.effect("posts a notice owed on an approved task after a restart", () => {
+  const engine = board();
+  const task = engine.addTask({ id: "task-7", run: { id: "run-1" } });
+  const store = threadStore();
+  return Effect.gen(function* () {
+    const threads = yield* service(store);
+    yield* threads.reconcile();
+    store.say(THREAD, "m-1", "Use the other API", "user");
+    engine.answerNext(/\/steer$/, 500, { error: "the run could not be told" });
+    yield* threads.reconcile();
+    // Approved while the steer is retried, and the thread cannot take the notice yet.
+    task.state = "approved";
+    store.unavailable.add("message:board-steer-undelivered:");
+    yield* threads.reconcile();
+    // A restart forgets every scan and floor; the ledger still owes the notice.
+    store.unavailable.clear();
+    const restarted = yield* service(store);
+    yield* restarted.reconcile();
+    yield* restarted.reconcile();
+    const posted = undelivered(store).filter((command) =>
+      store.messages.get(THREAD)?.has(command.messageId),
+    );
+    assert.equal(new Set(posted.map((command) => command.messageId)).size, 1);
+    assert.include(posted[0]?.text, "the task is no longer in work");
+    assert.equal(engine.requests.filter((r) => r.path.endsWith("/steer")).length, 2);
+  }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-steer-approved-restart-")));
+});
+
+it.effect("gives up a steer still retried when its task moves, and says so once", () => {
+  const engine = board();
+  const task = engine.addTask({ id: "task-7", run: { id: "run-1" } });
+  const store = threadStore();
+  return Effect.gen(function* () {
+    const threads = yield* service(store);
+    yield* threads.reconcile();
+    store.say(THREAD, "m-1", "Use the other API", "user");
+    engine.answerNext(/\/steer$/, 500, { error: "the run could not be told" });
+    yield* threads.reconcile();
+    assert.equal(undelivered(store).length, 0);
+    task.state = "moving";
+    yield* threads.reconcile();
+    task.state = "moved";
+    yield* threads.reconcile();
+    yield* (yield* service(store)).reconcile();
+    assert.equal(undelivered(store).length, 1);
+    assert.include(undelivered(store)[0]?.text, "the task moved to another machine");
+    // Told once more before it is given up, in case the engine took it before a crash.
+    assert.equal(engine.requests.filter((r) => r.path.endsWith("/steer")).length, 2);
+  }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-steer-moved-")));
+});
+
+it.effect("never mirrors a person's words the steer ledger could not save", () => {
+  const engine = board();
+  engine.addTask({ id: "task-7", run: { id: "run-1" } });
+  const store = threadStore();
+  return Effect.gen(function* () {
+    const fileSystem = yield* FileSystem.FileSystem;
+    const { stateDir } = yield* ServerConfig.ServerConfig;
+    const ledger = `${stateDir}/delivery-thread-steers.json`;
+    yield* (yield* service(store)).reconcile();
+    store.say(THREAD, "m-1", "Use the other API", "user");
+    // A directory where the ledger goes: every write of it fails.
+    yield* fileSystem.remove(ledger, { force: true });
+    yield* fileSystem.makeDirectory(ledger, { recursive: true });
+    yield* (yield* service(store)).reconcile();
+    assert.equal(engine.activityOf("task-7").length, 0);
+    assert.equal(engine.steeredOf("task-7").length, 0);
+    // Writable again, a restarted server finds the words, tells them and mirrors them.
+    yield* fileSystem.remove(ledger, { recursive: true });
+    const restarted = yield* service(store);
+    yield* restarted.reconcile();
+    assert.deepEqual(
+      engine.steeredOf("task-7").map(({ text }) => text),
+      ["Use the other API"],
+    );
+    assert.deepEqual(
+      engine.activityOf("task-7").map((row) => row.kind),
+      ["steer"],
+    );
+  }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-steer-ledger-fails-")));
 });

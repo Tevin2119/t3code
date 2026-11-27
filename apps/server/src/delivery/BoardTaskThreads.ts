@@ -53,6 +53,8 @@ const Card = Schema.Struct({
   set: Schema.optional(Schema.NullOr(Schema.String)),
   // Absent on an engine without the link: such an engine is never written to.
   boardThread: Schema.optional(Schema.NullOr(BoardThreadLink)),
+  // A task split into parts: its parts get threads, never the parent (engine slice E1).
+  split: readOrNull(Schema.Boolean),
   // Read only to make a thread: without them a task is held as `unreadable-card`.
   title: readOrNull(Schema.String),
   team: readOrNull(Schema.String),
@@ -675,6 +677,8 @@ export const make = Effect.gen(function* () {
       const environmentId = yield* identity.getEnvironmentId;
       const lanes = yield* engine(delivery.read({ path: LANES_PATH })).pipe(
         Effect.flatMap((response) => engine(decodeLanes(response.body))),
+        // Unread lanes leave every task unknown: steers wait out their window, notices post.
+        Effect.tapError(() => conversation.settleSteers({ standings: new Map(), environmentId })),
       );
       const cards = new Map<string, Card>();
       const unread = new Map<string, string>();
@@ -696,8 +700,13 @@ export const make = Effect.gen(function* () {
       }
       toldUnread.clear();
       for (const [card, why] of unread) toldUnread.set(card, why);
-      // An engine that serves no `boardThread` has no link to write to. Nothing is made for it.
-      if ([...cards.values()].some((card) => card.boardThread === undefined)) return holds;
+      // An engine that serves no `boardThread` has no link to write to. Nothing is made for it,
+      // but the steers of the tasks that do show a link are still settled.
+      if ([...cards.values()].some((card) => card.boardThread === undefined)) {
+        const linked = [...cards].filter(([, card]) => card.boardThread !== undefined);
+        yield* conversation.settleSteers({ standings: new Map(linked), environmentId });
+        return holds;
+      }
       const starting = [...cards.values()].filter(awaitsThread);
       const key = hostEnvironment[DeliveryService.BOARD_THREAD_KEY_VARIABLE] || undefined;
       // Read at most once a pass, and only by a pass that needs the seats.
@@ -733,6 +742,8 @@ export const make = Effect.gen(function* () {
       }
       const openThreads = yield* local(rows.list({ archived: false }));
       const standings = yield* standingsOf(cards, openThreads);
+      // The steer ledger is settled for every thread, before any card is filtered out.
+      yield* conversation.settleSteers({ standings, environmentId });
       const steering = new Set<string>();
       for (const [taskId, task] of standings) {
         if (task === "deleted") continue;
@@ -751,6 +762,8 @@ export const make = Effect.gen(function* () {
       const mirrored = [...cards.values()].filter((card) => !MOVED.has(card.state));
       if (key !== undefined)
         yield* conversation.sync({ cards: mirrored, steering, environmentId, key });
+      // Again, so words the mirror saw this pass are told in it.
+      yield* conversation.settleSteers({ standings, environmentId });
       for (const [task, hold] of holds) {
         if (told.get(task) === hold) continue;
         yield* Effect.logWarning("A started board task has no conversation yet.", { task, hold });
