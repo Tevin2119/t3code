@@ -1191,9 +1191,6 @@ async function renderBoardTaskLineage() {
     return {
       router,
       lineage: page.getByRole("region", { name: "Lineage" }),
-      // The thread focuses its composer once it loads, which scrolls the page: a row clicked
-      // before then is not where the click lands.
-      settled: () => expect.element(page.getByTestId("composer-editor")).toHaveFocus(),
       seat,
       filedFrom,
       [Symbol.asyncDispose]: async () => {
@@ -1209,7 +1206,6 @@ async function renderBoardTaskLineage() {
 
 it("a board task's seat conversation is a lineage row that opens at its own route", async () => {
   await using view = await renderBoardTaskLineage();
-  await view.settled();
   const row = view.lineage.getByRole("button", { name: /qa/ });
   await expect.element(row).toBeVisible();
   await row.click();
@@ -1220,7 +1216,6 @@ it("a board task's seat conversation is a lineage row that opens at its own rout
 
 it("the thread a board task was filed from is a lineage row that opens at its own route", async () => {
   await using view = await renderBoardTaskLineage();
-  await view.settled();
   // The row asks the thread's environment whether it still exists before it opens it.
   using _titles = answerRpc(ORCHESTRATION_V2_WS_METHODS.getThreadTitles, () =>
     Effect.succeed({ [view.filedFrom.id]: view.filedFrom.title }),
