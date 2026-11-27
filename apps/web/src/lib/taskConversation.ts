@@ -71,9 +71,6 @@ export function conversationState(
     : { kind: "waiting", why: conversation.why };
 }
 
-export const sameThread = (a: ScopedThreadRef | null, b: ScopedThreadRef | null): boolean =>
-  a !== null && b !== null && a.environmentId === b.environmentId && a.threadId === b.threadId;
-
 /** A seat's conversation, in the shape every agent row opens: see `subagentThreadTarget`. */
 export type SeatThread = SubagentThreadTarget;
 
@@ -192,85 +189,29 @@ const isChildThread = (conversation: ScopedThreadRef, child: SeatChild, thread: 
     : child.remoteChild?.threadId === thread.threadId &&
       child.remoteChild.environmentId === thread.environmentId;
 
-/**
- * The seat a child thread was given, for the line above a seat conversation. A thread the engine
- * names for a seat, in the task's environment, is that seat's as much as one T3 spawned.
- */
-export function seatOfThread(
-  conversation: ScopedThreadRef | null,
-  children: ReadonlyArray<SeatChild>,
-  thread: ScopedThreadRef | null,
-  engineSeats: ReadonlyArray<{ readonly seat: string; readonly threadId: string | null }> = [],
-): string | null {
-  if (!conversation || !thread) return null;
-  const spawned = children.findLast((child) => isChildThread(conversation, child, thread))?.teamChat
-    ?.seat;
-  if (spawned) return spawned;
-  if (thread.environmentId !== conversation.environmentId) return null;
-  return engineSeats.find((item) => item.threadId === thread.threadId)?.seat ?? null;
-}
-
-/** How an open thread is reached now, so a connection made or lost while it is open shows. */
-export function openSeatThread(
-  conversation: ScopedThreadRef | null,
-  children: ReadonlyArray<SeatChild>,
-  thread: ScopedThreadRef | null,
-  reach: SeatReach,
-): SeatThread | null {
-  if (!conversation || !thread) return thread;
-  const child = children.findLast((child) => isChildThread(conversation, child, thread));
-  const target =
-    child &&
-    subagentThreadTarget(child, conversation.environmentId, reach.ownConnection, reach.isLinked);
-  return target ?? thread;
-}
-
-/** Whether the open seat reads through a link (`linked`) or in its own environment (`direct`). */
-const seatMode = (seat: SeatThread) => (seat.linked === undefined ? "direct" : "linked");
-
-/** Two targets that draw the same view: swapping one for the other remounts nothing. */
-export const sameSeatView = (a: SeatThread | null, b: SeatThread | null): boolean =>
-  a === b ||
-  (sameThread(a, b) &&
-    a?.linked?.viaEnvironmentId === b?.linked?.viaEnvironmentId &&
-    a?.linked?.label === b?.linked?.label);
-
-/** What the centre does with the seat a person opened. */
-export type SteadySeat =
-  | { readonly kind: "none" }
-  /** Opened, but how to reach it is not known yet. Nothing is mounted, so nothing is swapped. */
-  | { readonly kind: "resolving" }
-  /**
-   * `later` is the read-only view to move to if this client's connection stays down. Until
-   * then the direct view stays, which says it is offline and keeps its composer and scroll.
-   */
-  | { readonly kind: "shown"; readonly seat: SeatThread; readonly later?: SeatThread };
-
-/** What decides whether an open seat's view may change now. */
-export interface SeatCertainty {
-  /** The answer does not rest on links that have not loaded yet. */
-  readonly certain: boolean;
-  /** This client's own connection to the seat's environment is up. */
-  readonly connected: boolean;
+/** A seat's conversation as a row of the task thread's lineage: the seat, its work, where it opens. */
+export interface SeatThreadRow {
+  readonly seat: string;
+  readonly activity: string;
+  readonly target: SeatThread;
 }
 
 /**
- * Holds an open seat's view steady: the direct and the linked view are two components, so a swap
- * remounts the conversation. `resolved` is what `openSeatThread` says now, which changes while
- * links load and during a reconnect; `shown` is what the centre shows.
+ * The seats whose conversations the task thread's lineage does not list itself. A child T3 spawned
+ * is already a subagent row of the thread, so only the engine's own seat threads are added.
  */
-export function steadySeatThread(
-  shown: SeatThread | null,
-  resolved: SeatThread | null,
-  reach: SeatCertainty,
-): SteadySeat {
-  if (resolved === null) return { kind: "none" };
-  if (shown === null || !sameThread(shown, resolved)) {
-    return reach.certain ? { kind: "shown", seat: resolved } : { kind: "resolving" };
-  }
-  if (seatMode(shown) === seatMode(resolved)) return { kind: "shown", seat: resolved };
-  if (seatMode(shown) === "direct") return { kind: "shown", seat: shown, later: resolved };
-  return { kind: "shown", seat: reach.connected || reach.certain ? resolved : shown };
+export function seatThreadRows(
+  conversation: ScopedThreadRef | null,
+  listed: ReadonlyArray<SeatChild>,
+  seats: ReadonlyArray<Pick<CouncilSeat, "seat" | "activity">>,
+  thread: (seat: string) => SeatThread | null,
+): ReadonlyArray<SeatThreadRow> {
+  if (!conversation) return [];
+  return seats.flatMap(({ seat, activity }) => {
+    const target = thread(seat);
+    if (!target || listed.some((child) => isChildThread(conversation, child, target))) return [];
+    return [{ seat, activity, target }];
+  });
 }
 
 /**

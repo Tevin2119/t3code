@@ -1,4 +1,5 @@
 import type { TaskBrief, TaskView } from "../../lib/delivery";
+import type { BoardTask } from "./BoardTaskContext";
 
 export function relatedTaskGroups(tasks: ReadonlyArray<TaskBrief>) {
   const historical = tasks.filter(
@@ -20,3 +21,7 @@ export const taskHasRelatedTasks = (task: Pick<TaskView, "parent" | "followUps" 
 export const taskHasRelatedWork = (
   task: Pick<TaskView, "parent" | "followUps" | "card" | "source">,
 ) => taskHasRelatedTasks(task) || task.source !== null;
+
+/** Whether a board task adds anything to its thread's lineage: `TaskLineage` renders nothing otherwise. */
+export const taskHasLineage = (board: BoardTask | null): board is BoardTask & { task: TaskView } =>
+  board?.task != null && (board.seats.rows.length > 0 || taskHasRelatedWork(board.task));
