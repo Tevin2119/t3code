@@ -400,11 +400,11 @@ describe("DeliveryService", () => {
     const variable = { [DeliveryService.BOARD_THREAD_KEY_VARIABLE]: "from the variable" };
     expect(DeliveryService.resolveBoardApprovalKey(variable, "saved")).toEqual({
       key: "from the variable",
-      status: { source: "environment" },
+      status: { source: "environment", stored: true },
     });
     expect(DeliveryService.resolveBoardApprovalKey({}, "saved")).toEqual({
       key: "saved",
-      status: { source: "settings" },
+      status: { source: "settings", stored: true },
     });
     // An empty variable is no key, as it was before Settings could hold one.
     expect(
@@ -412,15 +412,18 @@ describe("DeliveryService", () => {
         { [DeliveryService.BOARD_THREAD_KEY_VARIABLE]: "" },
         undefined,
       ),
-    ).toEqual({ key: undefined, status: { source: "none" } });
+    ).toEqual({ key: undefined, status: { source: "none", stored: false } });
   });
 
   it.effect("saves, replaces and clears the board approval key, and a variable still wins", () =>
     Effect.gen(function* () {
       const delivery = yield* DeliveryService.DeliveryService;
-      expect(yield* delivery.boardApprovalKeyStatus).toEqual({ source: "none" });
+      expect(yield* delivery.boardApprovalKeyStatus).toEqual({ source: "none", stored: false });
       expect(yield* delivery.boardApprovalKey).toBeUndefined();
-      expect(yield* delivery.setBoardApprovalKey("first")).toEqual({ source: "settings" });
+      expect(yield* delivery.setBoardApprovalKey("first")).toEqual({
+        source: "settings",
+        stored: true,
+      });
       yield* delivery.setBoardApprovalKey("second");
       expect(yield* delivery.boardApprovalKey).toBe("second");
       // The key is kept in the secret store, never in settings.json.
@@ -432,9 +435,16 @@ describe("DeliveryService", () => {
       yield* Effect.gen(function* () {
         const overridden = yield* DeliveryService.DeliveryService;
         expect(yield* overridden.boardApprovalKey).toBe("from the variable");
-        expect(yield* overridden.boardApprovalKeyStatus).toEqual({ source: "environment" });
-        // Clearing the saved key leaves the variable in force.
-        expect(yield* overridden.setBoardApprovalKey(null)).toEqual({ source: "environment" });
+        expect(yield* overridden.boardApprovalKeyStatus).toEqual({
+          source: "environment",
+          stored: true,
+        });
+        // A saved key can be cleared while the variable overrides it, which stays in force.
+        expect(yield* overridden.setBoardApprovalKey(null)).toEqual({
+          source: "environment",
+          stored: false,
+        });
+        expect(yield* overridden.boardApprovalKey).toBe("from the variable");
       }).pipe(
         Effect.provide(
           layer(engine(), {
@@ -444,7 +454,8 @@ describe("DeliveryService", () => {
           }),
         ),
       );
-      expect(yield* delivery.setBoardApprovalKey(null)).toEqual({ source: "none" });
+      expect(yield* delivery.setBoardApprovalKey(null)).toEqual({ source: "none", stored: false });
+      expect((yield* store.get(DeliveryService.BOARD_APPROVAL_KEY_SECRET))._tag).toBe("None");
       expect(yield* delivery.boardApprovalKey).toBeUndefined();
     }).pipe(Effect.provide(layer(engine(), { prefix: "board-approval-key-" }))),
   );

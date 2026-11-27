@@ -37,27 +37,36 @@ import { useSettingsScope } from "./SettingsScopeContext";
 import { useSearchableSetting } from "./settingsSearch";
 import { SettingsRow, SettingsSection } from "./settingsLayout";
 
-/** The engine's approval key, saved on the selected environment's server. Shown only when delivery is on there. */
+/**
+ * The engine's approval key, one row per environment in scope that runs delivery. Each row names
+ * its server, so a key is never saved on one a person did not pick.
+ */
 export function BoardApprovalKeySettings() {
-  const { environment } = useSettingsScope();
-  const connected =
-    environment?.connection.phase === "connected" && environment.serverConfig !== null;
-  if (!connected) return null;
-  return (
+  const { connectedEnvironments } = useSettingsScope();
+  const named = connectedEnvironments.length > 1;
+  return connectedEnvironments.map((environment, index) => (
     <EnvironmentBoardApprovalKey
       key={environment.environmentId}
       environmentId={environment.environmentId}
       label={environment.label}
+      named={named}
+      anchored={index === 0}
     />
-  );
+  ));
 }
 
 function EnvironmentBoardApprovalKey({
   environmentId,
   label,
+  named,
+  anchored,
 }: {
   readonly environmentId: EnvironmentId;
   readonly label: string;
+  /** Several environments are in scope, so the section names this one. */
+  readonly named: boolean;
+  /** Search lands on the first row; the others keep their own anchors. */
+  readonly anchored: boolean;
 }) {
   const gt = useGT();
   const setting = useSearchableSetting();
@@ -76,6 +85,12 @@ function EnvironmentBoardApprovalKey({
   if (!enabled) return null;
 
   const source = status.data?.source ?? null;
+  const stored = status.data?.stored === true;
+  const typed = draft.trim();
+  const closeEditor = () => {
+    setEditing(false);
+    setDraft("");
+  };
   const write = async (key: string | null) => {
     setBusy(true);
     const result = await save({ environmentId, input: { key } });
@@ -109,18 +124,26 @@ function EnvironmentBoardApprovalKey({
   };
 
   return (
-    <SettingsSection id="board" title={gt("Board")}>
+    <SettingsSection
+      id={anchored ? "board" : `board-${environmentId}`}
+      title={named ? gt("Board on {environment}", { environment: label }) : gt("Board")}
+    >
       <SettingsRow
         serverScoped
         {...setting("board-approval-key")}
+        {...(anchored ? {} : { id: `board-approval-key-${environmentId}` })}
         description={gt(
           "The delivery engine's approval passphrase. T3 uses it to link board tasks to their threads and run their steps. It is kept in this server's secret store and never shown again.",
         )}
         status={
           source === "environment"
-            ? gt(
-                "Set by the server's T3_DELIVERY_BOARD_THREAD_KEY, which wins over a key saved here.",
-              )
+            ? stored
+              ? gt(
+                  "Stored key is overridden by the environment variable T3_DELIVERY_BOARD_THREAD_KEY.",
+                )
+              : gt(
+                  "Set by the server's T3_DELIVERY_BOARD_THREAD_KEY, which wins over a key saved here.",
+                )
             : status.error
               ? status.error
               : undefined
@@ -143,9 +166,9 @@ function EnvironmentBoardApprovalKey({
               title={canSet ? undefined : gt("Only an environment maintainer can change this key.")}
               onClick={() => setEditing(true)}
             >
-              {source === "settings" ? gt("Replace") : gt("Set key")}
+              {stored ? gt("Replace") : gt("Set key")}
             </Button>
-            {source === "settings" ? (
+            {stored ? (
               <Button
                 size="xs"
                 variant="ghost"
@@ -162,16 +185,14 @@ function EnvironmentBoardApprovalKey({
         open={editing}
         onOpenChange={(open) => {
           if (busy) return;
-          setEditing(open);
-          if (!open) setDraft("");
+          if (open) setEditing(true);
+          else closeEditor();
         }}
       >
         <DialogPopup>
           <DialogHeader>
             <DialogTitle>
-              {source === "settings"
-                ? gt("Replace board approval key")
-                : gt("Set board approval key")}
+              {stored ? gt("Replace board approval key") : gt("Set board approval key")}
             </DialogTitle>
             <DialogDescription>
               {gt(
@@ -190,16 +211,16 @@ function EnvironmentBoardApprovalKey({
               value={draft}
               onChange={(event) => setDraft(event.target.value)}
               onKeyDown={(event) => {
-                if (event.key === "Enter" && draft) void write(draft);
+                if (event.key === "Enter" && typed) void write(typed);
               }}
               disabled={busy}
             />
           </DialogPanel>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setEditing(false)} disabled={busy}>
+            <Button variant="outline" onClick={closeEditor} disabled={busy}>
               {gt("Cancel")}
             </Button>
-            <Button onClick={() => void write(draft)} disabled={busy || !draft}>
+            <Button onClick={() => void write(typed)} disabled={busy || !typed}>
               {gt("Save")}
             </Button>
           </DialogFooter>

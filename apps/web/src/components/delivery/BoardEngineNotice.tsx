@@ -43,7 +43,11 @@ export function BoardApprovalKeyNotice(props: { readonly environmentId: Environm
         data-board-approval-key-missing
       >
         <span>{gt("Board approval key not set: tasks can't run in T3.")}</span>
-        <Button size="xs" variant="link" render={<Link to="/settings/threads" hash="board" />}>
+        <Button
+          size="xs"
+          variant="link"
+          render={<Link to="/settings/threads" search={{ machine: props.environmentId }} />}
+        >
           {gt("Set it in Settings")}
         </Button>
       </p>

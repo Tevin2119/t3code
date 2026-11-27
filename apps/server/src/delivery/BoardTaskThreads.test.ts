@@ -1285,22 +1285,37 @@ it.effect("writes no link without the approval key, and none on a wrong one", ()
   }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-key-")));
 });
 
-it.effect("links a task once its approval key is saved in Settings, with no restart", () => {
-  const engine = board();
-  engine.addTask({ id: "task-7" });
-  const store = threadStore();
-  return Effect.gen(function* () {
-    const threads = yield* service(store, { key: "settings" });
-    assert.deepEqual([...(yield* threads.reconcile())], [["task-7", "no-key"]]);
-    assert.isNull(engine.linkOf("task-7"));
-    const delivery = yield* DeliveryService.DeliveryService;
-    assert.deepEqual(yield* delivery.setBoardApprovalKey("scratch approval passphrase"), {
-      source: "settings",
-    });
-    assert.deepEqual([...(yield* threads.reconcile())], []);
-    assert.equal(engine.linkOf("task-7")?.threadId, THREAD);
-  }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-saved-key-")));
-});
+it.effect(
+  "links a task once its approval key is saved in Settings, and none once it is cleared",
+  () => {
+    const engine = board();
+    engine.addTask({ id: "task-7" });
+    const store = threadStore();
+    return Effect.gen(function* () {
+      const threads = yield* service(store, { key: "settings" });
+      assert.deepEqual([...(yield* threads.reconcile())], [["task-7", "no-key"]]);
+      assert.isNull(engine.linkOf("task-7"));
+      const delivery = yield* DeliveryService.DeliveryService;
+      assert.deepEqual(yield* delivery.setBoardApprovalKey("scratch approval passphrase"), {
+        source: "settings",
+        stored: true,
+      });
+      assert.deepEqual([...(yield* threads.reconcile())], []);
+      assert.equal(engine.linkOf("task-7")?.threadId, THREAD);
+
+      // Cleared, the key leaves the store and the next task waits for one again.
+      assert.deepEqual(yield* delivery.setBoardApprovalKey(null), {
+        source: "none",
+        stored: false,
+      });
+      const secrets = yield* ServerSecretStore.ServerSecretStore;
+      assert.isTrue(Option.isNone(yield* secrets.get(DeliveryService.BOARD_APPROVAL_KEY_SECRET)));
+      engine.addTask({ id: "task-8" });
+      assert.deepEqual([...(yield* threads.reconcile())], [["task-8", "no-key"]]);
+      assert.isNull(engine.linkOf("task-8"));
+    }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-saved-key-")));
+  },
+);
 
 it.effect(
   "archives the thread of a task that was deleted, and leaves a finished task's open",

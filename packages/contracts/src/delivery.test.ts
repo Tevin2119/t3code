@@ -9,22 +9,26 @@ const decodeStatus = Schema.decodeUnknownSync(DeliveryBoardApprovalKeyStatus);
 const decodeStatusExit = Schema.decodeUnknownExit(DeliveryBoardApprovalKeyStatus);
 
 describe("board approval key", () => {
-  it("takes a key to save as typed, or null to clear it", () => {
-    expect(decodeSet({ key: " pass " })).toEqual({ key: " pass " });
+  it("takes a key to save, trimmed, or null to clear it", () => {
+    expect(decodeSet({ key: " pass phrase " })).toEqual({ key: "pass phrase" });
     expect(decodeSet({ key: null })).toEqual({ key: null });
   });
 
-  it("refuses an empty, overlong or missing key", () => {
+  it("refuses an empty, whitespace-only, overlong or missing key", () => {
     expect(decodeSetExit({ key: "" })._tag).toBe("Failure");
+    expect(decodeSetExit({ key: " \t\n " })._tag).toBe("Failure");
     expect(decodeSetExit({ key: "k".repeat(1_025) })._tag).toBe("Failure");
     expect(decodeSetExit({})._tag).toBe("Failure");
   });
 
   it("reports where the key comes from and never carries it", () => {
     for (const source of ["environment", "settings", "none"]) {
-      expect(decodeStatusExit({ source })._tag).toBe("Success");
+      expect(decodeStatusExit({ source, stored: false })._tag).toBe("Success");
     }
-    expect(decodeStatusExit({ source: "elsewhere" })._tag).toBe("Failure");
-    expect(decodeStatus({ source: "settings", key: "x" })).toEqual({ source: "settings" });
+    expect(decodeStatusExit({ source: "elsewhere", stored: false })._tag).toBe("Failure");
+    expect(decodeStatus({ source: "settings", stored: true, key: "x" })).toEqual({
+      source: "settings",
+      stored: true,
+    });
   });
 });

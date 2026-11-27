@@ -148,7 +148,7 @@ export const BOARD_THREAD_KEY_VARIABLE = "T3_DELIVERY_BOARD_THREAD_KEY";
 /** Where Settings saves the board approval key in the server's secret store. */
 export const BOARD_APPROVAL_KEY_SECRET = "delivery-board-approval-key";
 export const NO_BOARD_APPROVAL_KEY =
-  "This server has no board approval key configured. Set it in Settings, under Integrations.";
+  "This server has no board approval key configured. Set it in Settings → Threads → Board.";
 
 /** The key a keyed board write uses: the server's variable when it is set, else the saved one. */
 export function resolveBoardApprovalKey(
@@ -156,9 +156,11 @@ export function resolveBoardApprovalKey(
   stored: string | undefined,
 ): { readonly key: string | undefined; readonly status: DeliveryBoardApprovalKeyStatus } {
   const fromEnvironment = environment[BOARD_THREAD_KEY_VARIABLE];
-  if (fromEnvironment) return { key: fromEnvironment, status: { source: "environment" } };
-  if (stored) return { key: stored, status: { source: "settings" } };
-  return { key: undefined, status: { source: "none" } };
+  const saved = Boolean(stored);
+  if (fromEnvironment)
+    return { key: fromEnvironment, status: { source: "environment", stored: saved } };
+  if (stored) return { key: stored, status: { source: "settings", stored: true } };
+  return { key: undefined, status: { source: "none", stored: false } };
 }
 export const BoardThreadLink = Schema.Struct({
   environmentId: Schema.String,
@@ -322,7 +324,7 @@ export const layerTest = Layer.succeed(
     nativeIntakeAct: disabled,
     boardThreadConfiguration: Effect.succeed("test"),
     boardApprovalKey: Effect.undefined,
-    boardApprovalKeyStatus: Effect.succeed({ source: "none" }),
+    boardApprovalKeyStatus: Effect.succeed({ source: "none", stored: false }),
     setBoardApprovalKey: disabled,
     boardThreadAct: disabled,
     bindThread: disabled,

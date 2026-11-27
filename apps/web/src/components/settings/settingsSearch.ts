@@ -499,6 +499,7 @@ export const SETTINGS_SEARCH_ITEMS = [
     title: msg("Board approval key"),
     to: "/settings/threads",
     environmentOnly: true,
+    scope: "environment-defaults",
     searchTerms: [msg("delivery engine board tasks passphrase secret approval key")],
   },
   {

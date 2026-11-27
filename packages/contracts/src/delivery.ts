@@ -340,16 +340,18 @@ export type DeliveryThreadState = typeof DeliveryThreadState.Type;
 
 /**
  * Whether this server holds the engine's board approval key, never the key itself. `environment`
- * is the server's `T3_DELIVERY_BOARD_THREAD_KEY`, which wins over one saved in Settings.
+ * is the server's `T3_DELIVERY_BOARD_THREAD_KEY`, which wins over one saved in Settings; `stored`
+ * says a saved key exists, also while the variable overrides it.
  */
 export const DeliveryBoardApprovalKeyStatus = Schema.Struct({
   source: Schema.Literals(["environment", "settings", "none"]),
+  stored: Schema.Boolean,
 });
 export type DeliveryBoardApprovalKeyStatus = typeof DeliveryBoardApprovalKeyStatus.Type;
 
 /** Saves the board approval key in this server's secret store; `null` clears it. */
 export const DeliverySetBoardApprovalKeyInput = Schema.Struct({
-  key: Schema.NullOr(Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(1_024))),
+  key: Schema.NullOr(TrimmedNonEmptyString.check(Schema.isMaxLength(1_024))),
 });
 export type DeliverySetBoardApprovalKeyInput = typeof DeliverySetBoardApprovalKeyInput.Type;
 
