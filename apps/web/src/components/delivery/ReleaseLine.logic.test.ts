@@ -1,17 +1,24 @@
 import type {
   DeploymentCandidate,
   DeploymentProject,
+  DeploymentPromotion,
   RepositoryIdentity,
 } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
+import { parseDeployments } from "../../lib/deployments";
 import recorded from "./ReleaseLine.fixtures.json";
+import promotions from "./ReleaseLine.promotions.json";
 import {
   instanceFacts,
   parseDeploymentCompare,
+  promoteConfirm,
   promotesInto,
+  promotionActionConfirm,
+  promotionView,
   pullRequestUrl,
   releaseLinesOf,
   repositoryIdentityFor,
+  stripPromotion,
   taskInstancesSummary,
 } from "./ReleaseLine.logic";
 
@@ -196,5 +203,95 @@ describe("taskInstancesSummary", () => {
       ]),
     ).toBe("Merged, waiting on qa, not on app");
     expect(taskInstancesSummary([])).toBeNull();
+  });
+});
+
+describe("promotions on the strip", () => {
+  const states = promotions.states as unknown as Record<string, DeploymentPromotion>;
+  const compare = parseDeploymentCompare(recorded.withHotfix)!;
+  const inSync = parseDeploymentCompare(recorded.inSync)!;
+
+  it("decodes every recorded state, and shows each engine reason as it wrote it", () => {
+    const snapshot = parseDeployments({
+      version: 1,
+      projects: [],
+      candidates: [],
+      repositories: [],
+      capabilities: { engine: false, command: true, "firebase-hosting": false },
+      promotions: Object.values(states),
+    });
+    expect(snapshot?.promotions).toHaveLength(Object.keys(states).length);
+    expect(promotionView(states["conflicted"]!).reason).toBe(states["conflicted"]!.problem);
+    expect(promotionView(states["blocked"]!).reason).toBe(states["blocked"]!.problem);
+    expect(promotionView(states["awaiting-qa"]!).reason).toBe(states["awaiting-qa"]!.waiting);
+    expect(promotionView(states["ready"]!).reason).toBeNull();
+  });
+
+  it("offers the actions the engine takes in each state", () => {
+    const offered = Object.fromEntries(
+      Object.entries(states).map(([name, promotion]) => [name, promotionView(promotion).actions]),
+    );
+    expect(offered).toEqual({
+      planned: ["cancel"],
+      syncing: [],
+      "awaiting-qa": ["cancel"],
+      ready: ["advance", "cancel"],
+      advancing: [],
+      promoted: [],
+      conflicted: ["retry", "cancel"],
+      cancelled: [],
+      blocked: ["retry", "cancel"],
+    });
+  });
+
+  it("shows a state it does not know by name, with its reason and a way out", () => {
+    const view = promotionView({
+      ...states["conflicted"]!,
+      state: "awaiting-merge",
+      problem: "Sync PR #7 waits for review.",
+    });
+    expect(view).toEqual({
+      label: "awaiting-merge",
+      tone: "unknown",
+      reason: "Sync PR #7 waits for review.",
+      actions: ["cancel"],
+      open: true,
+    });
+  });
+
+  it("shows the open promotion into an instance, else the pair's latest", () => {
+    const old = { ...states["promoted"]!, id: "old", createdAt: "2026-01-01T00:00:00Z" };
+    const open = { ...states["blocked"]!, id: "open", createdAt: "2025-01-01T00:00:00Z" };
+    const cancelled = { ...states["cancelled"]!, id: "new", createdAt: "2026-02-01T00:00:00Z" };
+    expect(stripPromotion([old, open, cancelled], "t3code-qa", "t3code-app")?.id).toBe("open");
+    expect(stripPromotion([old, cancelled], "t3code-qa", "t3code-app")?.id).toBe("new");
+    expect(stripPromotion([old], "t3code-app", "t3code-qa")).toBeNull();
+    expect(stripPromotion(undefined, "t3code-qa", "t3code-app")).toBeNull();
+  });
+
+  it("says what moves: from which commit to which branch", () => {
+    const sync = promoteConfirm(compare, { mode: "manual" });
+    expect(sync.path).toBe("/api/deployments/promotions");
+    expect(sync.body).toEqual({ from: "t3code-qa", to: "t3code-app" });
+    expect(sync.moves).toContain(`Merges main (${compare.points.toTip!.slice(0, 12)}`);
+    expect(sync.moves).toContain(`into qa (${compare.points.fromTip!.slice(0, 12)})`);
+    expect(sync.moves).toContain("waits, ready, for a named person to advance main");
+    expect(promoteConfirm(compare, { mode: "full-auto" }).moves).toContain(
+      "app is full auto, so main then moves on its own",
+    );
+    const plain = promoteConfirm(inSync, { mode: "manual" });
+    expect(plain.title).toBe("Promote qa into release");
+    expect(plain.moves).toBe(
+      `Moves release to qa's verified live commit ${inSync.points.fromLive!.slice(0, 12)}, with a plain push that is never forced.`,
+    );
+    const ready = states["ready"]!;
+    const advance = promotionActionConfirm(ready, "advance", {
+      from: "qa",
+      to: "app",
+      toBranch: "main",
+    });
+    expect(advance.path).toBe(`/api/deployments/promotions/${ready.id}/action`);
+    expect(advance.body).toEqual({ action: "advance" });
+    expect(advance.moves).toContain(`Moves main to ${ready.source!.slice(0, 12)}`);
   });
 });

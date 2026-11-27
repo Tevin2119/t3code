@@ -4,6 +4,8 @@ import {
   DeploymentDiscoverInput,
   DeploymentActionInput,
   DeploymentDependenciesInput,
+  DeploymentPromotionActionInput,
+  DeploymentPromotionInput,
   DeploymentsSnapshot,
   type DeploymentAction,
   type DeploymentCandidate,
@@ -162,6 +164,8 @@ const decodeProject = Schema.decodeUnknownSync(DeploymentProjectInput);
 const decodeDiscover = Schema.decodeUnknownSync(DeploymentDiscoverInput);
 const decodeAction = Schema.decodeUnknownSync(DeploymentActionInput);
 const decodeDependencies = Schema.decodeUnknownSync(DeploymentDependenciesInput);
+const decodePromotion = Schema.decodeUnknownSync(DeploymentPromotionInput);
+const decodePromotionAction = Schema.decodeUnknownSync(DeploymentPromotionActionInput);
 
 export function deploymentRequestBody(path: string, body: unknown): unknown {
   if (path === "/api/deployments/projects") return decodeProject(body);
@@ -170,5 +174,8 @@ export function deploymentRequestBody(path: string, body: unknown): unknown {
     return decodeAction(body);
   if (/^\/api\/deployments\/candidates\/[A-Za-z0-9_-]+\/dependencies$/.test(path))
     return decodeDependencies(body);
+  if (path === "/api/deployments/promotions") return decodePromotion(body);
+  if (/^\/api\/deployments\/promotions\/[\w-]+\/action$/.test(path))
+    return decodePromotionAction(body);
   throw new Error("Unsupported deployment action");
 }

@@ -5,6 +5,7 @@ import type {
   DeploymentCompareRange,
   DeploymentCompareTask,
   DeploymentProject,
+  DeploymentPromotion,
   EnvironmentId,
   RepositoryIdentity,
 } from "@t3tools/contracts";
@@ -15,6 +16,8 @@ import { useOpenLink } from "../../browser/useOpenLink";
 import { useOpenPrLink } from "../../lib/openPullRequestLink";
 import { useDeliveryRead } from "../../state/delivery";
 import { Badge } from "../ui/badge";
+import type { DeploymentRequest } from "./DeploymentInstance";
+import { PromotionControls } from "./ReleaseLine.promote";
 import {
   comparePath,
   parseDeploymentCompare,
@@ -213,17 +216,25 @@ function FolderFlag({ compare }: { compare: DeploymentCompare }) {
   );
 }
 
-/** What lies between one instance and the one it promotes into, read only from the engine. */
+/** What lies between one instance and the one it promotes into, and its promotion. */
 export function DifferenceStrip({
   environmentId,
   from,
   to,
   identity,
+  promotion,
+  unavailable,
+  disabled,
+  onRequest,
 }: {
   environmentId: EnvironmentId;
   from: DeploymentProject;
   to: DeploymentProject;
   identity: RepositoryIdentity | null;
+  promotion: DeploymentPromotion | null;
+  unavailable: boolean;
+  disabled: boolean;
+  onRequest: (request: DeploymentRequest) => void;
 }) {
   const read = useDeliveryRead(environmentId, comparePath(from.id, to.id), { pollMs: 30_000 });
   const compare = parseDeploymentCompare(read.body);
@@ -238,6 +249,15 @@ export function DifferenceStrip({
         <ArrowDownIcon aria-hidden className="size-3.5" />
         {from.environment} promotes into {to.environment}
       </p>
+      <PromotionControls
+        compare={compare}
+        from={from}
+        to={to}
+        promotion={promotion}
+        unavailable={unavailable}
+        disabled={disabled}
+        onRequest={onRequest}
+      />
       {read.error ? (
         <p role="alert" className="break-words text-xs text-warning-foreground">
           The difference could not be read. {read.error}

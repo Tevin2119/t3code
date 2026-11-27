@@ -5,6 +5,8 @@ import {
   type DeploymentCandidate,
   type DeploymentComparePullRequest,
   type DeploymentProject,
+  type DeploymentPromotion,
+  type DeploymentPromotionAction,
   type DeploymentsSnapshot,
   type RepositoryIdentity,
   type TaskDeploymentPublication,
@@ -210,4 +212,149 @@ export function taskInstancesSummary(
   ].filter((part): part is string => part !== null);
   const text = parts.join(", ");
   return text ? `${text[0]!.toUpperCase()}${text.slice(1)}` : null;
+}
+
+const PROMOTIONS_PATH = "/api/deployments/promotions";
+const promotionActionPath = (id: string) => `${PROMOTIONS_PATH}/${encodeURIComponent(id)}/action`;
+
+const FINISHED = new Set(["promoted", "cancelled"]);
+
+/** The promotion the strip shows: the open one into `to`, else the latest from `from` into it. */
+export function stripPromotion(
+  promotions: ReadonlyArray<DeploymentPromotion> | undefined,
+  from: string,
+  to: string,
+): DeploymentPromotion | null {
+  const pair = (promotions ?? [])
+    .filter((promotion) => promotion.to === to && promotion.from === from)
+    .toSorted((a, b) => (b.createdAt ?? "").localeCompare(a.createdAt ?? ""));
+  return pair.find((promotion) => !FINISHED.has(promotion.state)) ?? pair[0] ?? null;
+}
+
+const STATE_VIEWS: Record<
+  string,
+  { label: string; tone: InstanceTone; actions: ReadonlyArray<DeploymentPromotionAction> }
+> = {
+  planned: { label: "Planned", tone: "waiting", actions: ["cancel"] },
+  syncing: { label: "Syncing hotfixes", tone: "busy", actions: [] },
+  conflicted: { label: "Conflicted", tone: "problem", actions: ["retry", "cancel"] },
+  "awaiting-qa": { label: "Awaiting QA", tone: "waiting", actions: ["cancel"] },
+  ready: { label: "Ready to advance", tone: "waiting", actions: ["advance", "cancel"] },
+  advancing: { label: "Advancing", tone: "busy", actions: [] },
+  promoted: { label: "Promoted", tone: "live", actions: [] },
+  blocked: { label: "Blocked", tone: "problem", actions: ["retry", "cancel"] },
+  cancelled: { label: "Cancelled", tone: "unknown", actions: [] },
+};
+
+export type PromotionView = {
+  label: string;
+  tone: InstanceTone;
+  /** The engine's words, as it wrote them. */
+  reason: string | null;
+  actions: ReadonlyArray<DeploymentPromotionAction>;
+  open: boolean;
+};
+
+/**
+ * What the strip shows for a promotion. A state this T3 does not know shows by its name; it is
+ * offered cancel as its way out, which the engine refuses if that state cannot be cancelled.
+ */
+export function promotionView(promotion: DeploymentPromotion): PromotionView {
+  const known = Object.hasOwn(STATE_VIEWS, promotion.state)
+    ? STATE_VIEWS[promotion.state]
+    : undefined;
+  const open = !FINISHED.has(promotion.state);
+  return {
+    label: known?.label ?? promotion.state,
+    tone: known?.tone ?? "unknown",
+    reason: promotion.problem ?? promotion.waiting ?? null,
+    actions: known?.actions ?? (open ? ["cancel"] : []),
+    open,
+  };
+}
+
+const short12 = (commit: string | null | undefined) => (commit ? commit.slice(0, 12) : null);
+
+export type PromotionConfirm = {
+  title: string;
+  /** What moves: from which commit to which branch. */
+  moves: string;
+  submit: string;
+  path: string;
+  body: Record<string, unknown>;
+};
+
+/** Promote, or sync hotfixes first: one request, whose plan the engine makes from fresh reads. */
+export function promoteConfirm(
+  compare: DeploymentCompare,
+  to: Pick<DeploymentProject, "mode">,
+): PromotionConfirm {
+  const { from, to: target, points } = compare;
+  const body = { from: from.id, to: target.id };
+  if (compare.promote === "sync-hotfixes-first") {
+    const count = compare.hotfixes.count;
+    const then =
+      to.mode === "full-auto"
+        ? `${target.environment} is full auto, so ${target.branch} then moves on its own.`
+        : `Then it waits, ready, for a named person to advance ${target.branch}.`;
+    return {
+      title: `Sync hotfixes into ${from.environment} first`,
+      moves: `Merges ${target.branch} (${short12(points.toTip) ?? "its tip"}, ${count === 1 ? "1 commit" : `${count} commits`} ${from.environment} lacks) into ${from.branch} (${short12(points.fromTip) ?? "its tip"}) and pushes the merge to ${from.branch}. ${target.branch} moves only once ${from.environment} runs and verifies that sync. ${then}`,
+      submit: "Sync first",
+      path: PROMOTIONS_PATH,
+      body,
+    };
+  }
+  const live = short12(points.fromLive);
+  return {
+    title: `Promote ${from.environment} into ${target.environment}`,
+    moves: live
+      ? `Moves ${target.branch} to ${from.environment}'s verified live commit ${live}, with a plain push that is never forced.`
+      : `${from.environment} has no verified live commit yet. The promotion waits until it has one, then moves ${target.branch} to it.`,
+    submit: "Promote",
+    path: PROMOTIONS_PATH,
+    body,
+  };
+}
+
+const ACTION_LABELS: Record<DeploymentPromotionAction, string> = {
+  advance: "Advance",
+  retry: "Retry",
+  cancel: "Cancel promotion",
+};
+export const promotionActionLabel = (action: DeploymentPromotionAction) => ACTION_LABELS[action];
+
+/** An action the engine offers on an open promotion. */
+export function promotionActionConfirm(
+  promotion: DeploymentPromotion,
+  action: DeploymentPromotionAction,
+  names: { from: string; to: string; toBranch: string },
+): PromotionConfirm {
+  const path = promotionActionPath(promotion.id);
+  const body = { action };
+  if (action === "advance") {
+    return {
+      title: `Advance ${names.to}`,
+      moves: `Moves ${names.toBranch} to ${short12(promotion.source) ?? "the verified commit"}, ${names.from}'s verified live commit, with a plain push that is never forced.`,
+      submit: "Advance",
+      path,
+      body,
+    };
+  }
+  if (action === "retry") {
+    return {
+      title: "Retry the promotion",
+      moves: `Reads ${names.from} and ${names.to} again. Nothing is pushed until the checks pass.`,
+      submit: "Retry",
+      path,
+      body,
+    };
+  }
+  return {
+    title: "Cancel the promotion",
+    moves: `Withdraws the promotion of ${names.from} into ${names.to}. Nothing already pushed is undone.`,
+    submit: "Cancel promotion",
+    path,
+    body,
+  };
 }
