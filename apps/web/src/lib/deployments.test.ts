@@ -141,6 +141,16 @@ describe("deployment contract", () => {
         key: "passphrase",
       }),
     ).toEqual({ action: "approve", head, by: "Sam", key: "passphrase" });
+    // A SHA-256 repository's head, as the engine's COMMIT accepts.
+    const sha256 = "a".repeat(64);
+    expect(
+      deploymentRequestBody("/api/deployments/promotions/promo-1a2b/action", {
+        action: "approve",
+        head: sha256,
+        by: "Sam",
+        key: "passphrase",
+      }),
+    ).toEqual({ action: "approve", head: sha256, by: "Sam", key: "passphrase" });
     expect(() =>
       deploymentRequestBody("/api/deployments/promotions/promo-1a2b/action", {
         action: "approve",

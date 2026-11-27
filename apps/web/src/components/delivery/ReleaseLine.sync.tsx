@@ -99,7 +99,7 @@ const SURVIVAL_TEXT: Record<SurvivalTone, string> = {
   other: "text-muted-foreground",
 };
 
-function SurvivalReport({
+export function SurvivalReport({
   resolution,
 }: {
   resolution: NonNullable<DeploymentPromotion["resolution"]>;
@@ -143,7 +143,7 @@ function SurvivalReport({
                 <span className={`w-20 shrink-0 font-medium ${SURVIVAL_TEXT[row.tone]}`}>
                   {row.status}
                 </span>
-                <code className="min-w-0 flex-1 truncate font-mono">{row.path}</code>
+                <code className="min-w-0 truncate font-mono">{row.path}</code>
                 <code className="shrink-0 font-mono text-3xs text-muted-foreground">
                   {row.commit.slice(0, 7)}
                 </code>
