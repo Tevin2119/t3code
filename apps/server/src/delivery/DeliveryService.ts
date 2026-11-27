@@ -2,6 +2,7 @@
 // Refuse to start if a binding cannot be read, saved, set up, or matched to its session.
 import {
   DELIVERY_HARNESS_BY_DRIVER,
+  type DeliveryBoardApprovalKeyStatus,
   DeliveryError,
   DeliveryOrchestrationConfig,
   DeliveryRememberedLineup,
@@ -29,6 +30,7 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
@@ -37,6 +39,7 @@ import { HttpClient, HttpClientRequest, HttpIncomingMessage } from "effect/http"
 
 import { writeFileStringAtomically } from "@t3tools/shared/atomicWrite";
 import { ServerConfig } from "../config.ts";
+import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import type { deriveProviderInstanceConfigMap } from "../provider/ProviderInstanceRegistryHydration.ts";
 import type * as DeliveryEffective from "./DeliveryEffective.ts";
@@ -140,8 +143,23 @@ const decodeDeliveryRequest = Schema.decodeUnknownEffect(
 
 /** The engine writes for a board task's conversation; only the server makes them. */
 const BOARD_THREAD_LINK = /^\/api\/tasks\/[\w-]+\/board-thread$/;
-/** The engine's approval key for server-owned board writes. */
+/** The engine's approval key for server-owned board writes. Wins over the one saved in Settings. */
 export const BOARD_THREAD_KEY_VARIABLE = "T3_DELIVERY_BOARD_THREAD_KEY";
+/** Where Settings saves the board approval key in the server's secret store. */
+export const BOARD_APPROVAL_KEY_SECRET = "delivery-board-approval-key";
+export const NO_BOARD_APPROVAL_KEY =
+  "This server has no board approval key configured. Set it in Settings, under Integrations.";
+
+/** The key a keyed board write uses: the server's variable when it is set, else the saved one. */
+export function resolveBoardApprovalKey(
+  environment: NodeJS.ProcessEnv,
+  stored: string | undefined,
+): { readonly key: string | undefined; readonly status: DeliveryBoardApprovalKeyStatus } {
+  const fromEnvironment = environment[BOARD_THREAD_KEY_VARIABLE];
+  if (fromEnvironment) return { key: fromEnvironment, status: { source: "environment" } };
+  if (stored) return { key: stored, status: { source: "settings" } };
+  return { key: undefined, status: { source: "none" } };
+}
 export const BoardThreadLink = Schema.Struct({
   environmentId: Schema.String,
   threadId: Schema.String,
@@ -202,6 +220,16 @@ export class DeliveryService extends Context.Service<
       input: DeliveryActInput,
     ) => Effect.Effect<DeliveryResponse, DeliveryError>;
     readonly boardThreadConfiguration: Effect.Effect<string>;
+    /**
+     * The engine's approval key for keyed board writes, read on each use so a key saved in
+     * Settings applies at once. Undefined when neither the variable nor Settings has one.
+     */
+    readonly boardApprovalKey: Effect.Effect<string | undefined>;
+    readonly boardApprovalKeyStatus: Effect.Effect<DeliveryBoardApprovalKeyStatus, DeliveryError>;
+    /** Saves the key in the server's secret store, or clears it with `null`. */
+    readonly setBoardApprovalKey: (
+      key: string | null,
+    ) => Effect.Effect<DeliveryBoardApprovalKeyStatus, DeliveryError>;
     /**
      * Server-owned board writes. The generic `act` relay refuses them.
      */
@@ -293,6 +321,9 @@ export const layerTest = Layer.succeed(
     nativeBuildAct: disabled,
     nativeIntakeAct: disabled,
     boardThreadConfiguration: Effect.succeed("test"),
+    boardApprovalKey: Effect.undefined,
+    boardApprovalKeyStatus: Effect.succeed({ source: "none" }),
+    setBoardApprovalKey: disabled,
     boardThreadAct: disabled,
     bindThread: disabled,
     refreshThread: disabled,
@@ -319,6 +350,28 @@ const make = Effect.fn("DeliveryService.make")(function* (
   const config = yield* ServerConfig;
   const settingsService = yield* ServerSettings.ServerSettingsService;
   const httpClient = yield* HttpClient.HttpClient;
+  const secretStore = yield* ServerSecretStore.ServerSecretStore;
+  const processEnvironment = yield* HostProcess.Environment;
+
+  // Only this service writes the saved key, so it is read from the store once.
+  let savedKey: Option.Option<string> | undefined;
+  const keyStorageError = (detail: string) => () =>
+    new DeliveryError({ reason: "storage", detail });
+  const readSavedKey = Effect.suspend(() =>
+    savedKey !== undefined
+      ? Effect.succeed(savedKey)
+      : secretStore.get(BOARD_APPROVAL_KEY_SECRET).pipe(
+          Effect.map(Option.map((bytes) => new TextDecoder().decode(bytes))),
+          Effect.tap((read) => Effect.sync(() => (savedKey = read))),
+          Effect.mapError(keyStorageError("The saved board approval key could not be read.")),
+        ),
+  );
+  const readBoardApprovalKey = readSavedKey.pipe(
+    Effect.map((saved) =>
+      resolveBoardApprovalKey(processEnvironment, Option.getOrUndefined(saved)),
+    ),
+  );
+  const boardKeyWrites = yield* Semaphore.make(1);
 
   const bindingsPath = path.join(config.stateDir, "delivery-threads.json");
   const bindings = new Map<string, DeliveryThreadBinding>();
@@ -1758,6 +1811,33 @@ const make = Effect.fn("DeliveryService.make")(function* (
           ),
     ),
     boardThreadConfiguration: readConfiguration(),
+    boardApprovalKey: readBoardApprovalKey.pipe(
+      Effect.map((resolved) => resolved.key),
+      Effect.catch((error) =>
+        // A variable still wins when the store cannot be read.
+        Effect.logWarning("The saved board approval key could not be read.", {
+          why: error.detail,
+        }).pipe(Effect.as(processEnvironment[BOARD_THREAD_KEY_VARIABLE] || undefined)),
+      ),
+      Effect.withSpan("DeliveryService.boardApprovalKey"),
+    ),
+    boardApprovalKeyStatus: readBoardApprovalKey.pipe(
+      Effect.map((resolved) => resolved.status),
+      Effect.withSpan("DeliveryService.boardApprovalKeyStatus"),
+    ),
+    setBoardApprovalKey: Effect.fn("DeliveryService.setBoardApprovalKey")((key: string | null) =>
+      boardKeyWrites.withPermit(
+        (key === null
+          ? secretStore.remove(BOARD_APPROVAL_KEY_SECRET)
+          : secretStore.set(BOARD_APPROVAL_KEY_SECRET, new TextEncoder().encode(key))
+        ).pipe(
+          Effect.ensuring(Effect.sync(() => (savedKey = undefined))),
+          Effect.mapError(keyStorageError("The board approval key could not be saved.")),
+          Effect.andThen(readBoardApprovalKey),
+          Effect.map((resolved) => resolved.status),
+        ),
+      ),
+    ),
     boardThreadAct: Effect.fn("DeliveryService.boardThreadAct")(function* (input) {
       const allowed =
         input.method === "POST"

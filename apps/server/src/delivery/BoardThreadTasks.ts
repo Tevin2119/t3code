@@ -13,7 +13,6 @@ import {
   type BoardTaskResolution,
   type DeliveryError,
 } from "@t3tools/contracts";
-import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Context from "effect/Context";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Deferred from "effect/Deferred";
@@ -98,7 +97,6 @@ const make = Effect.gen(function* () {
   const threads = yield* Threads.ThreadManagementService;
   const orchestrator = yield* Orchestrator.OrchestratorV2;
   const random = yield* SecureRandom.SecureRandom;
-  const hostEnvironment = yield* HostProcess.Environment;
   const pending = new Map<
     TurnItemId,
     (input: BoardTaskAnswerInput) => Effect.Effect<void, OrchestratorMcpFailure>
@@ -145,8 +143,8 @@ const make = Effect.gen(function* () {
     if (isReservedBoardTaskBoard(board))
       return yield* invalidRequest("Choose a custom board to file on.");
     if (from === to) return yield* invalidRequest("Port between two different instances.");
-    const key = hostEnvironment[Delivery.BOARD_THREAD_KEY_VARIABLE];
-    if (!key) return yield* invalidRequest("This server has no board approval key configured.");
+    const key = yield* delivery.boardApprovalKey;
+    if (!key) return yield* invalidRequest(Delivery.NO_BOARD_APPROVAL_KEY);
     const configuration = yield* delivery.boardThreadConfiguration;
     // The engine's reading, not the client's, says what is ported and what each commit is.
     const reading = yield* delivery
@@ -201,8 +199,8 @@ const make = Effect.gen(function* () {
     if (isReservedBoardTaskBoard(board))
       return yield* invalidRequest("Choose a custom board to file on.");
 
-    const key = hostEnvironment[Delivery.BOARD_THREAD_KEY_VARIABLE];
-    if (!key) return yield* invalidRequest("This server has no board approval key configured.");
+    const key = yield* delivery.boardApprovalKey;
+    if (!key) return yield* invalidRequest(Delivery.NO_BOARD_APPROVAL_KEY);
     const origin = threadOrigin(caller.environmentId, threadId);
     const afterSequence = yield* orchestrator
       .getThreadEventSequence(threadId)

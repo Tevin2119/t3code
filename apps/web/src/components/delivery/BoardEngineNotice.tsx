@@ -1,7 +1,10 @@
+import { Link } from "@tanstack/react-router";
 import type { EnvironmentId } from "@t3tools/contracts";
+import { useGT } from "gt-react";
 import type { ComponentProps, ReactNode } from "react";
 import { useState } from "react";
-import { useDeliveryAct, usePersonName } from "../../state/delivery";
+import { deliveryEnvironment, useDeliveryAct, usePersonName } from "../../state/delivery";
+import { useEnvironmentQuery } from "../../state/query";
 import { Button } from "../ui/button";
 import {
   Dialog,
@@ -18,6 +21,32 @@ export function BoardEngineNotice(props: ComponentProps<typeof EngineDownNotice>
   return (
     <BoardNotice summary="Delivery engine not reachable. Tap for details.">
       <EngineDownNotice {...props} />
+    </BoardNotice>
+  );
+}
+
+/**
+ * Says so when this server holds no board approval key: without it no task links to a thread and
+ * no step runs here. Silent on a server too old to tell.
+ */
+export function BoardApprovalKeyNotice(props: { readonly environmentId: EnvironmentId }) {
+  const gt = useGT();
+  const status = useEnvironmentQuery(
+    deliveryEnvironment.boardApprovalKey({ environmentId: props.environmentId, input: {} }),
+  );
+  if (status.data?.source !== "none") return null;
+  return (
+    <BoardNotice summary={gt("Board approval key not set: tasks can't run in T3.")}>
+      <p
+        role="status"
+        className="flex flex-wrap items-baseline gap-x-2 px-4 pt-2 text-sm text-warning"
+        data-board-approval-key-missing
+      >
+        <span>{gt("Board approval key not set: tasks can't run in T3.")}</span>
+        <Button size="xs" variant="link" render={<Link to="/settings/threads" hash="board" />}>
+          {gt("Set it in Settings")}
+        </Button>
+      </p>
     </BoardNotice>
   );
 }

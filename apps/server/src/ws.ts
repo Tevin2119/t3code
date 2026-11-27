@@ -3902,6 +3902,9 @@ const layerForkWsRpc = (currentSession: EnvironmentAuth.AuthenticatedSession) =>
                 }),
             ),
           ),
+        [WS_METHODS.deliveryBoardApprovalKey]: () => delivery.boardApprovalKeyStatus,
+        [WS_METHODS.deliverySetBoardApprovalKey]: (input) =>
+          delivery.setBoardApprovalKey(input.key),
         [WS_METHODS.deliveryReleaseThread]: (input) => delivery.releaseThread(input.threadId),
         [WS_METHODS.deliverySetThreadLineup]: (input) =>
           refuseServerOwnedTeam(input.threadId, threadManagement.getThreadShell).pipe(

@@ -495,6 +495,13 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: [msg("usage quota rate limit reset wake recover continue")],
   },
   {
+    id: "board-approval-key",
+    title: msg("Board approval key"),
+    to: "/settings/threads",
+    environmentOnly: true,
+    searchTerms: [msg("delivery engine board tasks passphrase secret approval key")],
+  },
+  {
     id: "auto-resume-limited-threads",
     title: msg("Resume after usage limits"),
     to: "/settings/threads",

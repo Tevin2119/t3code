@@ -75,6 +75,8 @@ import {
   DeliveryThreadBindingInput,
   DeliveryThreadState,
   DeliveryArchivedBoardThreads,
+  DeliveryBoardApprovalKeyStatus,
+  DeliverySetBoardApprovalKeyInput,
 } from "./delivery.ts";
 import {
   AcpRegistryAcceptUrlAuthInput,
@@ -673,6 +675,8 @@ export const WS_METHODS = {
   deliveryBindThread: "delivery.bindThread",
   deliveryThreadBinding: "delivery.threadBinding",
   deliveryArchivedBoardThreads: "delivery.archivedBoardThreads",
+  deliveryBoardApprovalKey: "delivery.boardApprovalKey",
+  deliverySetBoardApprovalKey: "delivery.setBoardApprovalKey",
   deliveryReleaseThread: "delivery.releaseThread",
   deliverySetThreadLineup: "delivery.setThreadLineup",
   deliveryLimitedSeats: "delivery.limitedSeats",
@@ -1264,6 +1268,20 @@ const WsDeliveryBindThreadRpc = Rpc.make(WS_METHODS.deliveryBindThread, {
 const WsDeliveryArchivedBoardThreadsRpc = Rpc.make(WS_METHODS.deliveryArchivedBoardThreads, {
   payload: Schema.Struct({}),
   success: DeliveryArchivedBoardThreads,
+  error: Schema.Union([EnvironmentAuthorizationError, DeliveryError]),
+});
+
+/** Whether the board approval key is set, and by what. The key itself never leaves the server. */
+const WsDeliveryBoardApprovalKeyRpc = Rpc.make(WS_METHODS.deliveryBoardApprovalKey, {
+  payload: Schema.Struct({}),
+  success: DeliveryBoardApprovalKeyStatus,
+  error: Schema.Union([EnvironmentAuthorizationError, DeliveryError]),
+});
+
+/** Sets, replaces or clears the board approval key saved on this server. */
+const WsDeliverySetBoardApprovalKeyRpc = Rpc.make(WS_METHODS.deliverySetBoardApprovalKey, {
+  payload: DeliverySetBoardApprovalKeyInput,
+  success: DeliveryBoardApprovalKeyStatus,
   error: Schema.Union([EnvironmentAuthorizationError, DeliveryError]),
 });
 
@@ -2903,6 +2921,8 @@ export const ForkWsRpcGroup = RpcGroup.make(
   WsDeliveryBindThreadRpc,
   WsDeliveryThreadBindingRpc,
   WsDeliveryArchivedBoardThreadsRpc,
+  WsDeliveryBoardApprovalKeyRpc,
+  WsDeliverySetBoardApprovalKeyRpc,
   WsDeliveryReleaseThreadRpc,
   WsDeliverySetThreadLineupRpc,
   WsDeliveryLimitedSeatsRpc,

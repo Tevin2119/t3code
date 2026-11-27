@@ -10,7 +10,6 @@ import {
   type EnvironmentId,
   type ThreadId,
 } from "@t3tools/contracts";
-import * as HostProcess from "@t3tools/shared/HostProcess";
 import { limitedLeadHandoffThreadId } from "@t3tools/shared/limitedSeat";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -256,7 +255,6 @@ export const make = Effect.gen(function* () {
   const rows = yield* BoardThreadRows.BoardThreadRows;
   const conversation = yield* BoardConversation.BoardConversation;
   const swaps = yield* LimitedSeatSwap.LimitedSeatSwap;
-  const hostEnvironment = yield* HostProcess.Environment;
   const lock = yield* Semaphore.make(1);
   // The token of each claim this server holds. It is kept in memory only: after a restart the
   // old lease lapses within its window and the task is claimed again, still by the same thread.
@@ -708,7 +706,7 @@ export const make = Effect.gen(function* () {
         return holds;
       }
       const starting = [...cards.values()].filter(awaitsThread);
-      const key = hostEnvironment[DeliveryService.BOARD_THREAD_KEY_VARIABLE] || undefined;
+      const key = yield* delivery.boardApprovalKey;
       // Read at most once a pass, and only by a pass that needs the seats.
       const teamsOf = yield* Effect.cached(
         engine(delivery.read({ path: "/api/teams" })).pipe(

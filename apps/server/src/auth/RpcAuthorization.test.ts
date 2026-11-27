@@ -65,6 +65,15 @@ describe("RPC authorization scopes", () => {
     }
   });
 
+  it("lets only an environment maintainer set the board approval key, and readers see if it is set", () => {
+    expect(requiredScopeForRpcMethod(WS_METHODS.deliverySetBoardApprovalKey)).toBe(
+      AuthEnvironmentMaintainScope,
+    );
+    expect(requiredScopeForRpcMethod(WS_METHODS.deliveryBoardApprovalKey)).toBe(
+      AuthOrchestrationReadScope,
+    );
+  });
+
   it("keeps triage, which seeds an agent that reads logs and the database, behind operate scope", () => {
     expect(requiredScopeForRpcMethod(WS_METHODS.serverPrepareTriage)).toBe(
       AuthOrchestrationOperateScope,

@@ -352,7 +352,7 @@ const layerUsage = UsageService.layer.pipe(
 
 const layerDelivery = DeliveryService.layer(
   ProviderInstanceRegistryHydration.deriveProviderInstanceConfigMap,
-).pipe(Layer.provide(layerServerSettings));
+).pipe(Layer.provide(layerServerSettings), Layer.provide(ServerSecretStore.layer));
 
 const layerResourceDiagnostics = Layer.mergeAll(
   HostResources.layer,

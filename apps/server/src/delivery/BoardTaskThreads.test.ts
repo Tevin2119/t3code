@@ -20,6 +20,7 @@ import { assert, it } from "@effect/vitest";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import { limitedLeadHandoffThreadId } from "@t3tools/shared/limitedSeat";
 import * as DateTime from "effect/DateTime";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -29,6 +30,7 @@ import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 
 import * as ServerConfig from "../config.ts";
+import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as EventStore from "../orchestration-v2/EventStore.ts";
 import { OrchestratorCommandRejectedError } from "../orchestration-v2/Orchestrator.ts";
@@ -58,6 +60,16 @@ import {
 import * as DeliveryService from "./DeliveryService.ts";
 import * as LimitedSeats from "./LimitedSeats.ts";
 import * as LimitedSeatSwap from "./LimitedSeatSwap.ts";
+
+/** The delivery service the case runs on, holding the board approval key a server would. */
+const withBoardApprovalKey = (key: string | undefined) =>
+  Effect.provideServiceEffect(
+    DeliveryService.DeliveryService,
+    Effect.gen(function* () {
+      const delivery = yield* DeliveryService.DeliveryService;
+      return { ...delivery, boardApprovalKey: Effect.succeed(key) };
+    }),
+  );
 
 // Every case here runs against the scratch engine of boardThreadEngine.testkit.ts, through the
 // delivery service's real request path. BoardTaskThreads.engine.test.ts runs the real engine.
@@ -226,7 +238,8 @@ const INSTANCES = [
 function service(
   store: ThreadStore,
   options: {
-    readonly key?: string | null;
+    /** `"settings"` reads the key the delivery service holds, as a server does. */
+    readonly key?: string | null | "settings";
     readonly instances?: ReadonlyArray<(typeof INSTANCES)[number]>;
     readonly projects?: ReadonlyArray<string>;
   } = {},
@@ -252,15 +265,11 @@ function service(
           ),
         ),
     } as unknown as EventStore.EventStoreV2["Service"]),
-    Effect.provideService(
-      HostProcess.Environment,
-      options.key === null
-        ? {}
-        : {
-            [DeliveryService.BOARD_THREAD_KEY_VARIABLE]:
-              options.key ?? "scratch approval passphrase",
-          },
-    ),
+    options.key === "settings"
+      ? (effect) => effect
+      : withBoardApprovalKey(
+          options.key === null ? undefined : (options.key ?? "scratch approval passphrase"),
+        ),
     Effect.provideService(ServerEnvironment.ServerEnvironmentIdentity, {
       getEnvironmentId: Effect.succeed(ENVIRONMENT),
     }),
@@ -368,6 +377,7 @@ const deliveryLayer = (engine: ScratchEngine, prefix: string, legacyStore?: unkn
             }).pipe(Effect.orDie),
           ),
     ),
+    Layer.provideMerge(ServerSecretStore.layer.pipe(Layer.provide(SecureRandom.layerWebCrypto))),
     Layer.provideMerge(Layer.succeed(HostProcess.Environment, {})),
     Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix })),
     Layer.provideMerge(NodeServices.layer),
@@ -1273,6 +1283,23 @@ it.effect("writes no link without the approval key, and none on a wrong one", ()
     assert.equal(engine.linkOf("task-7")?.threadId, THREAD);
     assert.equal(store.threads.size, 1);
   }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-key-")));
+});
+
+it.effect("links a task once its approval key is saved in Settings, with no restart", () => {
+  const engine = board();
+  engine.addTask({ id: "task-7" });
+  const store = threadStore();
+  return Effect.gen(function* () {
+    const threads = yield* service(store, { key: "settings" });
+    assert.deepEqual([...(yield* threads.reconcile())], [["task-7", "no-key"]]);
+    assert.isNull(engine.linkOf("task-7"));
+    const delivery = yield* DeliveryService.DeliveryService;
+    assert.deepEqual(yield* delivery.setBoardApprovalKey("scratch approval passphrase"), {
+      source: "settings",
+    });
+    assert.deepEqual([...(yield* threads.reconcile())], []);
+    assert.equal(engine.linkOf("task-7")?.threadId, THREAD);
+  }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-saved-key-")));
 });
 
 it.effect(

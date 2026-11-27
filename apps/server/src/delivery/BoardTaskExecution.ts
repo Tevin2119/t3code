@@ -17,7 +17,6 @@ import {
   ThreadId,
 } from "@t3tools/contracts";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
-import * as HostProcess from "@t3tools/shared/HostProcess";
 import { createModelSelection } from "@t3tools/shared/model";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -155,7 +154,6 @@ export const make = Effect.gen(function* () {
   const rows = yield* BoardThreadRows.BoardThreadRows;
   const launch = yield* ThreadLaunchService.ThreadLaunchService;
   const ids = yield* IdAllocator.IdAllocatorV2;
-  const hostEnvironment = yield* HostProcess.Environment;
   const lock = yield* Semaphore.make(1);
   // The identity each step was attested with, kept in memory: after a restart each attached step
   // is attested once more.
@@ -399,7 +397,7 @@ export const make = Effect.gen(function* () {
     ) {
       const identity = `${model}/${harness}`;
       if (attested.get(record.id) === identity || model === null) return;
-      const result = yield* attestSeatWith(delivery, hostEnvironment, {
+      const result = yield* attestSeatWith(delivery, {
         environmentId,
         run: record.run,
         seat: record.seat,

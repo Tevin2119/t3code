@@ -339,6 +339,21 @@ export const DeliveryThreadState = Schema.Struct({
 export type DeliveryThreadState = typeof DeliveryThreadState.Type;
 
 /**
+ * Whether this server holds the engine's board approval key, never the key itself. `environment`
+ * is the server's `T3_DELIVERY_BOARD_THREAD_KEY`, which wins over one saved in Settings.
+ */
+export const DeliveryBoardApprovalKeyStatus = Schema.Struct({
+  source: Schema.Literals(["environment", "settings", "none"]),
+});
+export type DeliveryBoardApprovalKeyStatus = typeof DeliveryBoardApprovalKeyStatus.Type;
+
+/** Saves the board approval key in this server's secret store; `null` clears it. */
+export const DeliverySetBoardApprovalKeyInput = Schema.Struct({
+  key: Schema.NullOr(Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(1_024))),
+});
+export type DeliverySetBoardApprovalKeyInput = typeof DeliverySetBoardApprovalKeyInput.Type;
+
+/**
  * The archived conversations of board tasks. A task that ended (deleted, its project removed, or
  * held by another conversation) leaves its thread archived, and no thread list shows it: this is
  * how the board reaches them.

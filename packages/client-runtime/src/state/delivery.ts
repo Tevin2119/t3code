@@ -140,6 +140,18 @@ export function createDeliveryEnvironmentAtoms<R, E>(
       label: "environment-data:delivery:fetch-archived-board-threads",
       tag: WS_METHODS.deliveryArchivedBoardThreads,
     }),
+    /** Whether the server holds the board approval key, and from where. Never the key itself. */
+    boardApprovalKey: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:delivery:board-approval-key",
+      tag: WS_METHODS.deliveryBoardApprovalKey,
+      staleTimeMs: 30_000,
+    }),
+    /** Sets, replaces or clears the saved key. The key is sent once and never read back. */
+    setBoardApprovalKey: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:delivery:set-board-approval-key",
+      tag: WS_METHODS.deliverySetBoardApprovalKey,
+      concurrency: { mode: "serial", key: ({ environmentId }) => environmentId },
+    }),
     /** A thread's team, or the team choice that is still held. Cheap, and read often. */
     threadBinding,
     /** Query families include the environment and thread; previous query values never carry over. */
