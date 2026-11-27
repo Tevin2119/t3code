@@ -1,4 +1,5 @@
 import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
+import { useGT } from "gt-react";
 import { LockIcon, UsersIcon } from "lucide-react";
 
 import { describeEffective, parseSessionEffective } from "../../lib/deliverySeats";
@@ -19,6 +20,7 @@ export function TeamBadge(props: {
   /** A board task's conversation: the board picks its seats, and the engine still does the work. */
   readonly boardOwned?: boolean | undefined;
 }) {
+  const gt = useGT();
   const enabled = useDeliveryEnabled(props.environmentId);
   const state = useEnvironmentQuery(
     enabled && props.environmentId
@@ -61,7 +63,10 @@ export function TeamBadge(props: {
                 className="min-w-0"
                 aria-label={
                   props.boardOwned
-                    ? `${lineup.participants.length === 1 ? "1 seat" : `${lineup.participants.length} seats`} in this task's team`
+                    ? gt(
+                        "{count, plural, =1 {1 seat in this task's team} other {{count} seats in this task's team}}",
+                        { count: lineup.participants.length },
+                      )
                     : `${lineup.participants.length} participants receive the next message`
                 }
                 data-delivery-team-badge="participants"
@@ -80,10 +85,11 @@ export function TeamBadge(props: {
           <PopoverPopup align="start" className="w-[min(36rem,calc(100vw-2rem))]">
             {props.boardOwned ? (
               <>
-                <PopoverTitle>This task&apos;s team</PopoverTitle>
+                <PopoverTitle>{gt("This task's team")}</PopoverTitle>
                 <p className="mt-1 text-xs text-muted-foreground">
-                  The board picks these seats and their models. While the engine does the
-                  task&apos;s work, your messages here go to the task&apos;s lead alone.
+                  {gt(
+                    "The board picks these seats and their models. While the engine does the task's work, your messages here go to the task's lead alone.",
+                  )}
                 </p>
               </>
             ) : (
