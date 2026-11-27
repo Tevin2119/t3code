@@ -3,6 +3,7 @@
 // one as a turn or a subagent of the thread and reports its answer. Nothing here decides a step or
 // switches a board's execution.
 import {
+  CommandId,
   DELIVERY_HARNESS_BY_DRIVER,
   type EnvironmentId,
   latestProviderTurnForAttempt,
@@ -31,6 +32,7 @@ import * as Stream from "effect/Stream";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
+import * as ThreadLaunchService from "../orchestration-v2/ThreadLaunchService.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
 import * as ServerSettings from "../serverSettings.ts";
@@ -148,6 +150,7 @@ export const make = Effect.gen(function* () {
   const instances = yield* ProviderInstanceRegistry.ProviderInstanceRegistry;
   const boardThreads = yield* BoardTaskThreads.BoardTaskThreads;
   const rows = yield* BoardThreadRows.BoardThreadRows;
+  const launch = yield* ThreadLaunchService.ThreadLaunchService;
   const ids = yield* IdAllocator.IdAllocatorV2;
   const hostEnvironment = yield* HostProcess.Environment;
   const lock = yield* Semaphore.make(1);
@@ -235,15 +238,32 @@ export const make = Effect.gen(function* () {
     } as Plan;
   });
 
+  /**
+   * A run's final answer: its last completed assistant item, as a child's final answer is read
+   * for a native build, else its last assistant message.
+   */
   const lastReply = Effect.fn("BoardTaskExecution.lastReply")(function* (
     threadId: ThreadId,
     runId: OrchestrationV2Run["id"],
   ) {
-    const { messages } = yield* local(
-      projections.getThreadRecords(threadId, ["messages"], { messageRunIds: [runId] }),
+    const records = yield* local(
+      projections.getThreadRecords(threadId, ["turnItems", "messages"], {
+        turnItemRunId: runId,
+        messageRunIds: [runId],
+      }),
     );
+    const item = (records.turnItems ?? [])
+      .filter(
+        (candidate) =>
+          candidate.type === "assistant_message" &&
+          candidate.runId === runId &&
+          candidate.status === "completed",
+      )
+      .toSorted((a, b) => a.ordinal - b.ordinal)
+      .at(-1);
+    if (item?.type === "assistant_message" && item.text.trim()) return item.text;
     return (
-      messages
+      records.messages
         .filter(
           (message) =>
             message.role === "assistant" && message.runId === runId && !message.streaming,
@@ -559,6 +579,51 @@ export const make = Effect.gen(function* () {
       );
     });
 
+    /**
+     * Stops a seat's child as task_cancel stops a delegated task: the child thread and every task
+     * under it, then the child's queued turns, which a stop keeps for a resume.
+     */
+    const stopSeat = Effect.fn("BoardTaskExecution.stopSeat")(function* (
+      record: NativeAttempt,
+      task: OrchestrationV2Subagent,
+      childThreadId: ThreadId,
+    ) {
+      const commandId = stopCommandId(record.id, "stop-seat");
+      const reason = "The delivery engine asked to stop this step.";
+      yield* local(
+        threads.cancelDelegatedTask({
+          parentThreadId: threadId,
+          taskId: task.id,
+          command: {
+            type: "thread.stop",
+            commandId,
+            threadId: childThreadId,
+            stopDelegatedTasks: false,
+            reason,
+          },
+          stopDescendants: (remoteDispatch) =>
+            threads.stopDelegatedTasks({
+              threadId: childThreadId,
+              commandId,
+              reason,
+              remoteDispatch,
+            }),
+        }),
+      );
+      const child = yield* local(projections.getThreadRecords(childThreadId, ["runs"]));
+      for (const run of child.runs) {
+        if (run.status !== "queued" || run.delegatedTaskId !== task.id) continue;
+        yield* local(
+          threads.dispatch({
+            type: "queued-run.cancel",
+            commandId: CommandId.make(`${commandId}:queued:${run.id}`),
+            threadId: childThreadId,
+            runId: run.id,
+          }),
+        );
+      }
+    });
+
     /** Every other step: subagents of one system turn per batch, in the engine's worktree. */
     const stepSeats = Effect.fn("BoardTaskExecution.stepSeats")(function* (
       entries: ReadonlyArray<{ readonly record: NativeAttempt; readonly plan: Plan }>,
@@ -694,17 +759,24 @@ export const make = Effect.gen(function* () {
         const child = childOf(record);
         const task = shell.subagents.find((candidate) => candidate.childThreadId === child);
         if (task !== undefined) {
-          if (record.cancelRequested && !terminalTask(task) && task.runId !== null) {
-            yield* local(
-              threads.dispatch({
-                type: "subagent.stop",
-                commandId: stopCommandId(record.id, "stop-seat"),
-                threadId,
-                runId: task.runId,
-                subagentId: task.id,
-              }),
-            );
+          if (record.cancelRequested && !terminalTask(task) && task.childThreadId !== null) {
+            yield* stopSeat(record, task, task.childThreadId);
             continue;
+          }
+          if (!terminalTask(task) && task.childThreadId !== null) {
+            // The child waits in the engine's worktree until its run is prepared, which the
+            // delegate tool asks of the launch service too. Asked on every pass, so a restart
+            // between the dispatch and the preparation leaves no child waiting.
+            const childRuns = yield* local(
+              projections.getThreadRecords(task.childThreadId, ["runs"]),
+            );
+            for (const childRun of childRuns.runs)
+              if (childRun.status === "preparing" && childRun.workspacePreparation !== undefined)
+                yield* launch.prepareRun({
+                  commandId: seatCommandId(threadId, record.id),
+                  threadId: task.childThreadId,
+                  runId: childRun.id,
+                });
           }
           if (!terminalTask(task)) continue;
           const outcome = yield* childOutcome(task);

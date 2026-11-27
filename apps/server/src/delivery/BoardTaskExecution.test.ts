@@ -22,6 +22,7 @@ import * as ServerConfig from "../config.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
+import * as ThreadLaunchService from "../orchestration-v2/ThreadLaunchService.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
 import { deriveProviderInstanceConfigMap } from "../provider/ProviderInstanceRegistryHydration.ts";
@@ -344,8 +345,24 @@ function service(store: ThreadStore, claims: ReturnType<typeof boardClaims>) {
     }),
     Effect.provideService(ThreadManagementService.ThreadManagementService, {
       dispatch: store.dispatch,
+      // task_cancel's own stop: the child thread, as the orchestrator stops a delegated task.
+      cancelDelegatedTask: (input: {
+        readonly taskId: string;
+        readonly command: OrchestrationV2ServerCommand;
+      }) =>
+        store.dispatch(input.command).pipe(
+          Effect.tap(() =>
+            Effect.sync(() => {
+              store.subagents.find((task) => task.id === input.taskId)!.status = "cancelled";
+            }),
+          ),
+        ),
+      stopDelegatedTasks: () => Effect.void,
       hasReceipt: (commandId: string) => Effect.sync(() => store.receipts.has(commandId)),
     } as unknown as ThreadManagementService.ThreadManagementService["Service"]),
+    Effect.provideService(ThreadLaunchService.ThreadLaunchService, {
+      prepareRun: () => Effect.void,
+    } as unknown as ThreadLaunchService.ThreadLaunchService["Service"]),
     Effect.provideService(BoardThreadRows.BoardThreadRows, {
       list: () => Effect.succeed([{ threadId: THREAD }]),
     } as unknown as BoardThreadRows.BoardThreadRows["Service"]),
@@ -859,9 +876,9 @@ it.effect("stops held steps the engine cancels after its own restart", () => {
     // child is stopped, and QA's queued stage turn is cancelled before it starts any child.
     for (const id of ["att-plan", "att-build", "att-qa"]) engine.cancelAttempt(id);
     yield* execution.reconcile();
-    assert.deepEqual(store.kinds("run.interrupt", "subagent.stop", "queued-run.cancel"), [
+    assert.deepEqual(store.kinds("run.interrupt", "thread.stop", "queued-run.cancel"), [
       "run.interrupt",
-      "subagent.stop",
+      "thread.stop",
       "queued-run.cancel",
     ]);
     yield* execution.reconcile();

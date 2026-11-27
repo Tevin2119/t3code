@@ -174,6 +174,7 @@ export const make = Effect.gen(function* () {
     const started: Array<OrchestrationV2Subagent> = [];
     let waiting = false;
     for (const seat of stage.seats) {
+      const commandId = seatCommandId(input.threadId, seat.attemptId);
       const task = subagents.find((candidate) => candidate.childThreadId === seat.childThreadId);
       if (task !== undefined) {
         started.push(task);
@@ -189,12 +190,15 @@ export const make = Effect.gen(function* () {
         continue;
       yield* threads.dispatch({
         type: "delegated_task.request",
-        commandId: seatCommandId(input.threadId, seat.attemptId),
+        commandId,
         createdBy: "system",
         creationSource: "server",
         parentThreadId: input.threadId,
         parentRunId: input.runId,
         parentNodeId: run.rootNodeId,
+        // A seat of the turn's own round: the orchestrator resumes the turn held at its start
+        // once the seat ends, as for a team's seats, and holds steers meanwhile.
+        teamChat: { sourceRunId: input.runId, stage: "engine", seat: seat.seat },
         title: `${seat.seat} · ${stage.stage}`,
         task: attempt.prompt,
         modelSelection: seat.modelSelection,
@@ -204,6 +208,7 @@ export const make = Effect.gen(function* () {
         workspaceStrategy: { type: "existing_worktree", worktreePath: seat.worktreePath },
         completionWake: "settled_only",
       });
+      // Its child waits in the engine's worktree until BoardTaskExecution prepares its run.
       waiting = true;
     }
     if (waiting) return { ready: false, context: "" };
@@ -387,8 +392,12 @@ export const make = Effect.gen(function* () {
           (seat) =>
             skipped.has(seat.seat) || round.some((task) => task.teamChat?.seat === seat.seat),
         );
+      // An engine stage's seats are the engine's steps, never an earlier round of this team.
       const followUp = parent.subagents.some(
-        (task) => task.teamChat !== undefined && task.teamChat.sourceRunId !== input.runId,
+        (task) =>
+          task.teamChat !== undefined &&
+          task.teamChat.stage !== "engine" &&
+          task.teamChat.sourceRunId !== input.runId,
       );
       // Read-only by default: a participant asks before it changes anything, and
       // TeamChatReadOnlyReactor declines what it asks.

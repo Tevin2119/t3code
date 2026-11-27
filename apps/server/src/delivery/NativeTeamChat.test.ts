@@ -1257,15 +1257,15 @@ it.effect("starts an engine stage's seats as children of its turn, with or witho
       workspaceStrategy: { type: "existing_worktree", worktreePath: "/work/qa-1" },
       completionWake: "settled_only",
     });
-    // Not a team discussion: no critique round, and no follow-up for a later one.
-    expect(started?.teamChat).toBeUndefined();
+    // A seat of the turn's own round, which the orchestrator wakes the turn for when it ends.
+    expect(started?.teamChat).toEqual({ sourceRunId: runId, stage: "engine", seat: "qa" });
     fixture.tasks[0]!.childThreadId = seat.childThreadId;
     expect((yield* service.prepareTurn({ threadId: board, runId })).ready).toBe(false);
     expect(fixture.admissions.size).toBe(1);
     Object.assign(fixture.tasks[0]!, { status: "completed", result: "All items pass." });
     const done = yield* service.prepareTurn({ threadId: board, runId });
     expect(done.ready).toBe(true);
-    expect(done.context).toContain("qa · qa (codex-work/codex-model, completed");
+    expect(done.context).toContain("qa (codex-work/codex-model, completed");
     expect(done.context).toContain("All items pass.");
     expect(fixture.admissions.size).toBe(1);
   }),

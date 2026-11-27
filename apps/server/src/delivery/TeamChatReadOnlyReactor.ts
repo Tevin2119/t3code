@@ -103,7 +103,10 @@ const make = Effect.gen(function* () {
         const task = parent.subagents.find((candidate) => candidate.childThreadId === child.id);
         if (task === undefined) return;
         const seat = task.teamChat?.seat;
-        if (seat !== undefined) {
+        // An engine stage's seat holds the access its stage turn gave it, not the team's.
+        if (task.teamChat?.stage === "engine") {
+          if (!(yield* engineReadOnlySeat(parentThreadId, task.runId, child.id))) return;
+        } else if (seat !== undefined) {
           const { lineup } = yield* delivery.threadState(parentThreadId);
           if (lineup === undefined || deliveryParticipantAccess(lineup, seat) !== "read-only")
             return;

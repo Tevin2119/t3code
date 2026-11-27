@@ -25,6 +25,8 @@ import * as SqlitePersistence from "../../persistence/Sqlite.ts";
 import * as ServerSettings from "../../serverSettings.ts";
 import * as ManagedPolicy from "../../policy/ManagedPolicy.ts";
 import * as ThreadManagementService from "../ThreadManagementService.ts";
+import * as DeliveryService from "../../delivery/DeliveryService.ts";
+import * as NativeTeamChat from "../../delivery/NativeTeamChat.ts";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 import * as McpSessionRegistryTestkit from "../../mcp/McpSessionRegistry.testkit.ts";
 import * as VcsDriverRegistry from "../../vcs/VcsDriverRegistry.ts";
@@ -306,6 +308,14 @@ export function layerWithRegistry<Error>(
     readonly providerInstances?: Partial<
       ProviderInstanceRegistry.ProviderInstanceRegistry["Service"]
     >;
+    /**
+     * Runs the real NativeTeamChat at each turn's start, over this harness's orchestrator, with
+     * the delivery and launch services a case gives it: a team round or an engine stage then
+     * runs as it does in the server.
+     */
+    readonly teamChat?: Layer.Layer<
+      DeliveryService.DeliveryService | ProviderInstanceRegistry.ProviderInstanceRegistry
+    >;
   } = {},
 ): Layer.Layer<
   | Orchestrator.OrchestratorV2
@@ -314,6 +324,7 @@ export function layerWithRegistry<Error>(
   | EventSink.EventSinkV2
   | ProviderSessionManager.ProviderSessionManagerV2
   | CommandOutputRecorder.CommandOutputRecorder
+  | CommandReceiptStore.CommandReceiptStoreV2
   | ThreadCommandExecutor.ThreadCommandExecutor,
   Error | MigrationError | PlatformError.PlatformError | SqlError
 > {
@@ -479,25 +490,6 @@ export function layerWithRegistry<Error>(
       ),
     ),
   );
-  const layerProviderTurnStartServiceProvided = ProviderTurnStartService.layer.pipe(
-    Layer.provide(
-      Layer.mergeAll(
-        layerContextHandoffServiceProvided,
-        layerEventSinkProvided,
-        IdAllocator.layer,
-        layerStores,
-        layerProviderSessionManagerProvided,
-        Layer.mock(ProviderAuthService.ProviderAuthService)({
-          tryHandlePromptCommand: () => Effect.succeed(false),
-        }),
-        layerRunExecutionServiceProvided,
-        layerRuntime,
-        layerServerConfig,
-        layerServerSettings,
-        Layer.mock(ThreadWorktreeRestore)({ takeRecreated: () => Effect.undefined }),
-      ),
-    ),
-  );
   const layerProviderTurnControlServiceProvided = ProviderTurnControlService.layer.pipe(
     Layer.provide(
       Layer.mergeAll(
@@ -581,6 +573,42 @@ export function layerWithRegistry<Error>(
       });
     }),
   ).pipe(Layer.provide(layerOrchestratorProvided));
+  const layerNativeTeamChat =
+    options.teamChat === undefined
+      ? Layer.empty
+      : NativeTeamChat.layer.pipe(
+          Layer.provide(
+            Layer.mergeAll(
+              options.teamChat,
+              layerEventSinkProvided,
+              layerThreadManagementProvided,
+              layerStores,
+              IdAllocator.layer,
+              layerProvidedRegistry,
+              layerServerConfig,
+            ),
+          ),
+        );
+  const layerProviderTurnStartServiceProvided = ProviderTurnStartService.layer.pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        layerContextHandoffServiceProvided,
+        layerEventSinkProvided,
+        IdAllocator.layer,
+        layerStores,
+        layerProviderSessionManagerProvided,
+        Layer.mock(ProviderAuthService.ProviderAuthService)({
+          tryHandlePromptCommand: () => Effect.succeed(false),
+        }),
+        layerRunExecutionServiceProvided,
+        layerRuntime,
+        layerServerConfig,
+        layerServerSettings,
+        Layer.mock(ThreadWorktreeRestore)({ takeRecreated: () => Effect.undefined }),
+        layerNativeTeamChat,
+      ),
+    ),
+  );
   const layerContinuationWorkerProvided =
     options.runContinuationWorker === true
       ? ProviderContinuationService.layer.pipe(
@@ -624,6 +652,7 @@ export function layerWithRegistry<Error>(
     layerEventSinkProvided,
     layerContinuationWorkerProvided,
     layerCommandOutputHubProvided,
+    layerCommandReceiptStoreProvided,
     ThreadCommandExecutor.layer,
   ).pipe(
     Layer.provide(ProviderTurnStartServiceTestkit.layer),

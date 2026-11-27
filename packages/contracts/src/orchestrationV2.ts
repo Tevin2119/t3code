@@ -1048,7 +1048,8 @@ export type OrchestrationV2RemoteTaskChild = typeof OrchestrationV2RemoteTaskChi
 
 const TeamChatParticipation = Schema.Struct({
   sourceRunId: RunId,
-  stage: Schema.Literals(["contribution", "critique"]),
+  /** `engine`: a board task's engine stage, whose seat is the engine's step, not a view. */
+  stage: Schema.Literals(["contribution", "critique", "engine"]),
   seat: TrimmedNonEmptyString,
   /** The seat's own model, when this turn runs on a substitute because that one was limited. */
   substituteFor: Schema.optional(
