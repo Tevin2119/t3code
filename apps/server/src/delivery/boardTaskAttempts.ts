@@ -78,6 +78,9 @@ const STAGE_PREFIX = "message:board-stage:";
 export const briefMessageId = (attemptId: string) => MessageId.make(`${BRIEF_PREFIX}${attemptId}`);
 export const isBoardBriefMessageId = (id: string | null | undefined) =>
   typeof id === "string" && id.startsWith(BRIEF_PREFIX);
+/** The team plan a brief was sent for, read back from the brief's own id. */
+export const briefAttemptOf = (id: string | null | undefined) =>
+  isBoardBriefMessageId(id) ? id!.slice(BRIEF_PREFIX.length) : null;
 
 /** The system turn that starts one batch of seats, named by its first attempt. */
 export const stageMessageId = (firstAttemptId: string) =>

@@ -36,6 +36,7 @@ import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.
 import * as ServerSettings from "../serverSettings.ts";
 import { forkParked } from "../serverActivation.ts";
 import {
+  briefAttemptOf,
   briefMessageId,
   briefSetupCommandId,
   engineStageNotice,
@@ -51,6 +52,7 @@ import {
   turnCommandId,
 } from "./boardTaskAttempts.ts";
 import * as BoardTaskThreads from "./BoardTaskThreads.ts";
+import * as BoardThreadRows from "./boardThreadRows.ts";
 import { boardTaskOfMarker, isBoardTaskThreadId } from "./boardThreadMarker.ts";
 import * as DeliveryService from "./DeliveryService.ts";
 import { attestSeatWith } from "./SeatHandoffs.ts";
@@ -145,6 +147,7 @@ export const make = Effect.gen(function* () {
   const orchestrator = yield* Orchestrator.OrchestratorV2;
   const instances = yield* ProviderInstanceRegistry.ProviderInstanceRegistry;
   const boardThreads = yield* BoardTaskThreads.BoardTaskThreads;
+  const rows = yield* BoardThreadRows.BoardThreadRows;
   const ids = yield* IdAllocator.IdAllocatorV2;
   const hostEnvironment = yield* HostProcess.Environment;
   const lock = yield* Semaphore.make(1);
@@ -285,6 +288,49 @@ export const make = Effect.gen(function* () {
       model,
       harness: model === null ? null : yield* harnessOfInstance(latest?.providerInstanceId),
     };
+  });
+
+  /**
+   * Gives a task thread back the folder and mode it was made with, once no run is active in it.
+   * What is owed is the thread's own record: a brief that moved it left its setup command's
+   * receipt and no matching give-back. That record outlives the attempt, which the engine stops
+   * listing once it is complete, and a restart of this server; so every pass retries it here.
+   */
+  const restoreThread = Effect.fn("BoardTaskExecution.restoreThread")(function* (
+    threadId: ThreadId,
+  ) {
+    const records = yield* local(projections.getThreadRecords(threadId, ["runs"]));
+    const { thread, runs } = records;
+    if (thread.worktreePath === null && thread.runtimeMode === "full-access") return;
+    // Moving a thread's folder ends its provider sessions, so it waits for an idle thread.
+    if (runs.some((run) => ACTIVE_RUN.has(run.status))) return;
+    for (const run of runs) {
+      const attemptId = briefAttemptOf(run.userMessageId);
+      if (attemptId === null || !terminalRun(run)) continue;
+      const owed = (step: "folder" | "mode", back: "folder-back" | "mode-back") =>
+        Effect.all([
+          threads.hasReceipt(briefSetupCommandId(attemptId, step)),
+          threads.hasReceipt(briefSetupCommandId(attemptId, back)),
+        ]).pipe(Effect.map(([set, given]) => set && !given));
+      if (yield* owed("folder", "folder-back"))
+        yield* local(
+          threads.dispatch({
+            type: "thread.metadata.update",
+            commandId: briefSetupCommandId(attemptId, "folder-back"),
+            threadId,
+            worktreePath: null,
+          }),
+        );
+      if (yield* owed("mode", "mode-back"))
+        yield* local(
+          threads.dispatch({
+            type: "thread.runtime-mode.set",
+            commandId: briefSetupCommandId(attemptId, "mode-back"),
+            threadId,
+            runtimeMode: "full-access",
+          }),
+        );
+    }
   });
 
   const reconcileTask = Effect.fn("BoardTaskExecution.reconcileTask")(function* (
@@ -497,6 +543,9 @@ export const make = Effect.gen(function* () {
           text: outcome.text.slice(0, 25_000),
         });
       }
+      // The thread is given back its folder and mode before the plan is told: now if it is
+      // idle, else by a later pass, which reads what is owed from the thread itself.
+      yield* restoreThread(threadId);
       yield* complete(
         current,
         { threadId },
@@ -508,26 +557,6 @@ export const make = Effect.gen(function* () {
           contributions: contributions.slice(0, 32),
         },
       );
-      // The thread goes back to the folder and mode it was made with, once nothing runs in it.
-      if (!idle()) return;
-      if (shell.thread.worktreePath === current.worktree)
-        yield* local(
-          threads.dispatch({
-            type: "thread.metadata.update",
-            commandId: briefSetupCommandId(current.id, "folder-back"),
-            threadId,
-            worktreePath: null,
-          }),
-        );
-      if (current.access === "read-only")
-        yield* local(
-          threads.dispatch({
-            type: "thread.runtime-mode.set",
-            commandId: briefSetupCommandId(current.id, "mode-back"),
-            threadId,
-            runtimeMode: "full-access",
-          }),
-        );
     });
 
     /** Every other step: subagents of one system turn per batch, in the engine's worktree. */
@@ -734,6 +763,15 @@ export const make = Effect.gen(function* () {
 
   const reconcile = Effect.fn("BoardTaskExecution.reconcile")(
     function* () {
+      // Before the engine is asked anything: a thread is given back even while it is away.
+      for (const row of yield* local(rows.list({ archived: false }))) {
+        const restored = yield* restoreThread(row.threadId).pipe(Effect.result);
+        if (restored._tag === "Failure")
+          yield* Effect.logWarning("A board task thread was not given back its folder yet.", {
+            thread: row.threadId,
+            cause: restored.failure.message,
+          });
+      }
       const config = yield* settings.getSettings.pipe(Effect.orElseSucceed(() => null));
       if (config === null || !config.delivery.enabled) return;
       const environmentId = yield* identity.getEnvironmentId;

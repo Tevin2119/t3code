@@ -34,6 +34,7 @@ import * as ServerSettings from "../serverSettings.ts";
 import { briefMessageId, stageMessageId } from "./boardTaskAttempts.ts";
 import * as BoardTaskExecution from "./BoardTaskExecution.ts";
 import * as BoardTaskThreads from "./BoardTaskThreads.ts";
+import * as BoardThreadRows from "./boardThreadRows.ts";
 import { scratchEngine, scratchEngineHttp } from "./boardThreadEngine.testkit.ts";
 import {
   boardTaskOf,
@@ -170,7 +171,12 @@ const execution = () =>
     return yield* BoardTaskExecution.make.pipe(
       Effect.provideService(ThreadManagementService.ThreadManagementService, {
         dispatch: orchestrator.dispatch,
+        // The give-back is covered on the store; here the brief stays where it was sent.
+        hasReceipt: () => Effect.succeed(false),
       } as unknown as ThreadManagementService.ThreadManagementService["Service"]),
+      Effect.provideService(BoardThreadRows.BoardThreadRows, {
+        list: () => Effect.succeed([{ threadId: THREAD }]),
+      } as unknown as BoardThreadRows.BoardThreadRows["Service"]),
       Effect.provideService(ProjectionStore.ProjectionStoreV2, {
         getThreadRecords: orchestrator.getThreadRecords,
         getMessagesById: orchestrator.getMessagesById,

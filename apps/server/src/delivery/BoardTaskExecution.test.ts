@@ -29,6 +29,7 @@ import * as ServerSettings from "../serverSettings.ts";
 import { briefMessageId, seatCommandId } from "./boardTaskAttempts.ts";
 import * as BoardTaskExecution from "./BoardTaskExecution.ts";
 import * as BoardTaskThreads from "./BoardTaskThreads.ts";
+import * as BoardThreadRows from "./boardThreadRows.ts";
 import {
   scratchEngine,
   scratchEngineHttp,
@@ -343,7 +344,11 @@ function service(store: ThreadStore, claims: ReturnType<typeof boardClaims>) {
     }),
     Effect.provideService(ThreadManagementService.ThreadManagementService, {
       dispatch: store.dispatch,
+      hasReceipt: (commandId: string) => Effect.sync(() => store.receipts.has(commandId)),
     } as unknown as ThreadManagementService.ThreadManagementService["Service"]),
+    Effect.provideService(BoardThreadRows.BoardThreadRows, {
+      list: () => Effect.succeed([{ threadId: THREAD }]),
+    } as unknown as BoardThreadRows.BoardThreadRows["Service"]),
     Effect.provideService(ProjectionStore.ProjectionStoreV2, {
       getThreadRecords: (
         threadId: string,
@@ -559,6 +564,48 @@ it.effect("sends the brief in the engine's worktree, then reports the plan and t
     assert.equal(store.threads.get(THREAD)!.runtimeMode, "full-access");
   }).pipe(Effect.provide(deliveryLayer(engine, "board-execution-brief-")));
 });
+
+it.effect.each(["a run that holds it ends", "this server restarts"] as const)(
+  "gives the thread back its folder and mode once %s, after the plan was told",
+  (after) => {
+    const engine = board();
+    engine.queueAttempt({
+      id: "att-plan",
+      task: "task-7",
+      stage: "plan",
+      kind: "team-plan",
+      seat: "developer",
+      lead: true,
+      access: "read-only",
+    });
+    const store = threadStore();
+    const claims = boardClaims(engine);
+    return Effect.gen(function* () {
+      const execution = yield* service(store, claims);
+      yield* execution.reconcile();
+      const plan = store.runOf(briefMessageId("att-plan"));
+      store.ranOn(THREAD, plan, "claude-fable-5-1");
+      store.reply(briefMessageId("att-plan"), '{"approach":"Ship it"}');
+      // A person's turn starts as the plan ends: the thread cannot move while it runs.
+      const person = store.personTurn("And the tests?");
+      yield* execution.reconcile();
+      assert.equal(engine.attempts.get("att-plan")!.state, "completed");
+      assert.equal(store.threads.get(THREAD)!.worktreePath, "/work/run-1");
+      assert.equal(store.threads.get(THREAD)!.runtimeMode, "approval-required");
+      person.status = "completed";
+      // The engine lists no finished attempt: what is owed is read from the thread alone.
+      engine.attempts.clear();
+      const next = after === "this server restarts" ? yield* service(store, claims) : execution;
+      yield* next.reconcile();
+      assert.isNull(store.threads.get(THREAD)!.worktreePath);
+      assert.equal(store.threads.get(THREAD)!.runtimeMode, "full-access");
+      // Given back once: a later pass owes nothing.
+      const sent = store.commands.length;
+      yield* next.reconcile();
+      assert.lengthOf(store.commands, sent);
+    }).pipe(Effect.provide(deliveryLayer(engine, "board-execution-give-back-")));
+  },
+);
 
 it.effect.each([
   { model: "claude-sonnet-5-5", runsOn: "claude-sonnet-5-5" },
