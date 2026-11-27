@@ -29,9 +29,7 @@ export interface TaskChrome {
   readonly notices: ReactNode;
   /** The native panel toggles on a page; none with a thread, whose view has its own. */
   readonly panelControls: ReactNode;
-  /** Takes the page header a page's details card hangs from. */
-  readonly panelAnchor?: ((element: HTMLDivElement | null) => void) | undefined;
-  /** Opens the native details card at the engine's log, for a page with no thread. */
+  /** Shows the engine's log among the task's facts in the board's left column. */
   readonly showLog: () => void;
   /** Takes a message the task no longer takes as a turn; true when the engine took it. */
   readonly steer?: ((text: string) => Promise<boolean>) | undefined;
@@ -203,21 +201,17 @@ function SteerComposer(props: { readonly steer: (text: string) => Promise<boolea
  * The native page for the task when no thread view stands in the centre: the task's title, its
  * menu and the native panel toggles in the header, and the notices under it.
  */
-function TaskPage({
-  anchor,
-  ...props
-}: {
+function TaskPage(props: {
   readonly title: string;
   readonly actions: ReactNode;
   readonly controls: ReactNode;
-  readonly anchor?: ((element: HTMLDivElement | null) => void) | undefined;
   readonly banner: ReactNode;
   readonly children: ReactNode;
 }) {
   const gt = useGT();
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-background" data-task-page>
-      <div ref={anchor} className="shrink-0">
+      <div className="shrink-0">
         <WorkspacePageHeader electron={isElectron}>
           <WorkspaceBreadcrumb ariaLabel={gt("Thread breadcrumb")} className="min-w-0 flex-1">
             <WorkspaceBreadcrumbItem current className="min-w-10 flex-1">
@@ -239,7 +233,8 @@ function TaskPage({
 /**
  * The task's conversation as the native thread view, composer included, titled by the thread
  * itself with the task's menu in its header. Its panels are the task thread's own: the right
- * panel with the task's tabs, and the details card with the Task item and the task's lineage.
+ * panel with the task's tabs, and the details card, collapsed until the person opens it, with the
+ * thread's own items. The task's facts are in the board's left column.
  */
 function OpenConversation(props: {
   readonly task: TaskView;
@@ -341,7 +336,6 @@ export function TaskConversation(props: {
       title={task.title}
       actions={chrome.actions}
       controls={chrome.panelControls}
-      anchor={chrome.panelAnchor}
       banner={
         <>
           {chrome.notices}

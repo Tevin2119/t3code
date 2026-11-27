@@ -14,6 +14,7 @@ import { Popover, PopoverPopup, PopoverCreateHandle } from "../ui/popover";
 import { selectThreadPanelOpen, useRightPanelStore } from "../../rightPanelStore";
 import { useChatCanvas } from "./ChatCanvasContext";
 import { useThreadPanelHost } from "./ThreadPanelHostContext";
+import { useThreadPanelFallback } from "../delivery/BoardTaskContext";
 import {
   THREAD_DETAILS_CARD_GAP,
   resolveThreadDetailsCardDensity,
@@ -46,11 +47,12 @@ export function ThreadDetailsCard({
   const topInset = canvas?.detailsCardTopInset ?? 0;
   // Whether it shows is the host's, as ChatView reads it, when a workspace hosts this thread.
   const panelThread = useThreadPanelHost() ?? threadRef;
+  const fallback = useThreadPanelFallback(panelThread);
   const inlineOpen = useRightPanelStore((state) =>
-    selectThreadPanelOpen(state.threadPanelVisibilityByThreadKey, panelThread, "inline"),
+    selectThreadPanelOpen(state.threadPanelVisibilityByThreadKey, panelThread, "inline", fallback),
   );
   const popoverOpen = useRightPanelStore((state) =>
-    selectThreadPanelOpen(state.threadPanelVisibilityByThreadKey, panelThread, "popover"),
+    selectThreadPanelOpen(state.threadPanelVisibilityByThreadKey, panelThread, "popover", fallback),
   );
   const measurementKey = `${threadRef.environmentId}:${threadRef.threadId}:${preferredPlacement?.width ?? "popup"}:${contentKey}`;
   const [measurements, setMeasurements] = useState({
@@ -70,8 +72,8 @@ export function ThreadDetailsCard({
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- closes the popover flag in the right panel store when the derived mode turns inline
   useLayoutEffect(() => {
     if (mode === "inline" && popoverOpen)
-      useRightPanelStore.getState().setThreadPanelOpen(panelThread, "popover", false);
-  }, [mode, popoverOpen, panelThread]);
+      useRightPanelStore.getState().setThreadPanelOpen(panelThread, "popover", false, fallback);
+  }, [mode, popoverOpen, panelThread, fallback]);
   const [contentElement, setContentElement] = useState<HTMLDivElement | null>(null);
   const { environmentId, threadId } = threadRef;
   // Re-measures when the density or measurement key changes, so each density's
@@ -149,7 +151,7 @@ export function ThreadDetailsCard({
           details.cancel();
           return;
         }
-        useRightPanelStore.getState().setThreadPanelOpen(panelThread, "popover", open);
+        useRightPanelStore.getState().setThreadPanelOpen(panelThread, "popover", open, fallback);
       }}
     >
       {placement && inlineOpen ? (

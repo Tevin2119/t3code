@@ -51,16 +51,10 @@ import {
 } from "./threadDetailsPanelStyles";
 import { Menu, MenuPopup } from "../ui/menu";
 
-// Board code loads only where a board task's view hosts the thread. Both parts wait for both
-// modules, and one boundary holds every section until they arrive: the Task item sits above the
-// rest, and arriving after them would push every row below it down.
-const boardTaskModules = () =>
-  Promise.all([import("../delivery/TaskDetails"), import("../delivery/TaskLineage")]);
-const TaskDetailsItem = lazy(() =>
-  boardTaskModules().then(([details]) => ({ default: details.TaskDetailsItem })),
-);
+// Board code loads only where a board task's view hosts the thread. The task's own facts are in
+// the board's left column; only its seats' threads join the lineage here.
 const TaskLineage = lazy(() =>
-  boardTaskModules().then(([, lineage]) => ({ default: lineage.TaskLineage })),
+  import("../delivery/TaskLineage").then((lineage) => ({ default: lineage.TaskLineage })),
 );
 
 interface ThreadDetailsPanelProps extends Pick<
@@ -114,9 +108,8 @@ interface ThreadDetailsPanelProps extends Pick<
 export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
   const visible = useClientSettings(resolveThreadDetailsVisibility);
   const gt = useGT();
-  // The Task item and the task's lineage come from the board task whose view hosts this thread.
+  // The task's lineage comes from the board task whose view hosts this thread.
   const board = useBoardTask();
-  const taskShown = (board?.task ?? null) !== null && visible.task;
   const boardLineage = taskHasLineage(board);
   const [menuPosition, setMenuPosition] = useState<{ x: number; y: number } | null>(null);
   const t3File = useT3ProjectFileState(
@@ -222,13 +215,11 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
           <>
             <Suspense fallback={null}>
               <div className="group/details-items">
-                {taskShown ? <TaskDetailsItem /> : null}
-
                 {show.environment || show.openIn || show.scripts ? (
                   <ThreadDetailsSection
                     headingId="thread-details-workspace-heading"
                     title={gt("Workspace")}
-                    separated={taskShown}
+                    separated={false}
                     showHeading={false}
                   >
                     <div className="flex flex-col">

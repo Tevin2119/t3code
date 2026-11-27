@@ -10,7 +10,6 @@ import {
 
 const usage = THREAD_DETAILS_ITEMS.find((item) => item.id === "usage")!;
 const servers = THREAD_DETAILS_ITEMS.find((item) => item.id === "servers")!;
-const task = THREAD_DETAILS_ITEMS.find((item) => item.id === "task")!;
 
 describe("thread details items", () => {
   it.each([
@@ -37,20 +36,10 @@ describe("thread details items", () => {
     expect(setThreadDetailsItem(hidden, servers, true)).toEqual({});
   });
 
-  it("shows the Task item by default, keeps it off once switched off, and resets it to on", () => {
-    const fresh = { threadDetailsItems: {}, threadDetailsUsageEnabled: false };
-    expect(resolveThreadDetailsVisibility(fresh).task).toBe(true);
-    expect(isDefaultThreadDetailsVisibility(resolveThreadDetailsVisibility(fresh))).toBe(true);
-
-    const off = setThreadDetailsItem(fresh, task, false);
-    expect(off).toEqual({ task: false });
-    const switchedOff = { threadDetailsItems: off, threadDetailsUsageEnabled: false };
-    expect(resolveThreadDetailsVisibility(switchedOff).task).toBe(false);
-    expect(isDefaultThreadDetailsVisibility(resolveThreadDetailsVisibility(switchedOff))).toBe(
-      false,
-    );
-    expect(setThreadDetailsItem(switchedOff, task, true)).toEqual({});
-
-    expect(resolveThreadDetailsVisibility(RESET_THREAD_DETAILS_ITEMS).task).toBe(true);
+  it("offers no Task item, and ignores a stored choice for the retired one", () => {
+    expect(THREAD_DETAILS_ITEMS.some((item) => (item.id as string) === "task")).toBe(false);
+    const stored = { threadDetailsItems: { task: false }, threadDetailsUsageEnabled: false };
+    expect(isDefaultThreadDetailsVisibility(resolveThreadDetailsVisibility(stored))).toBe(true);
+    expect(resolveThreadDetailsVisibility(RESET_THREAD_DETAILS_ITEMS).servers).toBe(true);
   });
 });

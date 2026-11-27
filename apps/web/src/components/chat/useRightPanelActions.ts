@@ -28,6 +28,7 @@ import { requestWorkspaceContentFocus, requestWorkspaceFocus } from "../../lib/w
 import { setActivePreviewTab } from "../../previewStateStore";
 import { isBrowserSettingsReadError } from "../../browser/openFileInPreview";
 import { addBrowserSurface } from "../preview/addBrowserSurface";
+import { useThreadPanelFallback } from "../delivery/BoardTaskContext";
 import { focusActivePanelTerminal, focusTerminal } from "../../lib/terminalFocus";
 import { subscribePreviewAction } from "../preview/previewActionBus";
 import { floatDeviceSurface } from "../preview/agentOpenedPreviews";
@@ -99,6 +100,7 @@ export function useRightPanelActions(input: RightPanelActionsInput) {
     activeProjectCwd,
     onDiffPanelOpen,
   } = input;
+  const threadPanelFallback = useThreadPanelFallback(activeThreadRef);
 
   const openPreview = useAtomCommand(previewEnvironment.open, { reportFailure: false });
   const onToggleDiff = () => {
@@ -255,12 +257,13 @@ export function useRightPanelActions(input: RightPanelActionsInput) {
         store.threadPanelVisibilityByThreadKey,
         activeThreadRef,
         "inline",
+        threadPanelFallback,
       );
       if (!open) requestWorkspaceFocus({ area: "details" });
       else if (document.activeElement?.closest('[data-workspace-area="details"]'))
         requestWorkspaceContentFocus();
     }
-    store.toggleThreadPanel(activeThreadRef, threadPanelPresentation);
+    store.toggleThreadPanel(activeThreadRef, threadPanelPresentation, threadPanelFallback);
   };
   const toggleThreadPanelStable = useStableCallback(toggleThreadPanel);
   const toggleRightPanelMaximized = () => {

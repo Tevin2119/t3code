@@ -63,7 +63,7 @@ vi.mock("./TaskEditor", () => ({
 // The task's page and its centre, as the task view hands them what they draw.
 vi.mock("./TaskWorkspacePanels", () => ({
   TaskWorkspacePanels: (props: { readonly renderConversation: (panel: object) => ReactNode }) =>
-    props.renderConversation({ controls: null, anchor: () => {} }),
+    props.renderConversation({ controls: null }),
 }));
 vi.mock("./TaskConversation", () => ({
   TaskConversation: (props: {
@@ -90,6 +90,7 @@ vi.mock("../ui/dialog", () => ({
 }));
 vi.mock("../ui/sidebar", () => ({
   SidebarInset: (props: { children: ReactNode }) => props.children,
+  useSidebar: () => ({ isMobile: false, setOpen: () => {}, setOpenMobile: () => {} }),
 }));
 
 let renderer: ReactTestRenderer;

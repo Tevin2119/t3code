@@ -543,6 +543,20 @@ describe("MessagesTimeline work rows", () => {
 });
 
 describe("MessagesTimeline messages", () => {
+  it("shows a board task's team in place of the empty thread's placeholder", async () => {
+    await using screen = await renderTimeline([]);
+    expect(screen.text()).toContain("Send a message to start the conversation.");
+    await screen.rerender(
+      <MessagesTimeline
+        {...baseProps()}
+        timelineEntries={[]}
+        emptyState={<section aria-label="Team development">Lead, then seats</section>}
+      />,
+    );
+    await expect.element(screen.getByRole("region", { name: "Team development" })).toBeVisible();
+    expect(screen.text()).not.toContain("Send a message to start the conversation.");
+  });
+
   it("settles when equally long messages have very different rendered heights", async () => {
     const props = baseProps();
     const tall = message("a\n\n".repeat(6000), { role: "assistant" }, "tall");

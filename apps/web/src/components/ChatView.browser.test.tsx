@@ -42,7 +42,11 @@ import { environmentContextRecord } from "~/lib/composerContextRecords";
 import { startWorkspaceFocus } from "~/lib/workspaceFocus";
 import { usePreviewMiniPlayerStore } from "~/previewMiniPlayerStore";
 import { usePromptStashStore } from "~/promptStashStore";
-import { selectThreadRightPanelState, useRightPanelStore } from "~/rightPanelStore";
+import {
+  BOARD_TASK_THREAD_PANEL_VISIBILITY,
+  selectThreadRightPanelState,
+  useRightPanelStore,
+} from "~/rightPanelStore";
 import { getRouter } from "~/router";
 import { appAtomRegistry } from "~/rpc/atomRegistry";
 import { environmentShell } from "~/state/shell";
@@ -1187,7 +1191,9 @@ async function renderBoardTaskLineage() {
         router: false,
       },
     );
-    useRightPanelStore.getState().setThreadPanelOpen(leadRef, "inline", true);
+    useRightPanelStore
+      .getState()
+      .setThreadPanelOpen(leadRef, "inline", true, BOARD_TASK_THREAD_PANEL_VISIBILITY);
     return {
       router,
       lineage: page.getByRole("region", { name: "Lineage" }),
@@ -1298,7 +1304,9 @@ it("a thread a board task's view shows in its own thread's place keeps the task'
   const leadRef = scopeThreadRef(ENVIRONMENT_ID, lead.id);
   // The task's tabs and its details are open on the task thread's panels; the seat's are empty.
   useRightPanelStore.getState().open(leadRef, "task-evidence");
-  useRightPanelStore.getState().setThreadPanelOpen(leadRef, "inline", true);
+  useRightPanelStore
+    .getState()
+    .setThreadPanelOpen(leadRef, "inline", true, BOARD_TASK_THREAD_PANEL_VISIBILITY);
   const router = getRouter(
     createMemoryHistory({ initialEntries: [`/${ENVIRONMENT_ID}/${seat.id}`] }),
   );
@@ -1322,9 +1330,11 @@ it("a thread a board task's view shows in its own thread's place keeps the task'
     .element(screen.getByRole("button", { name: "Task evidence", exact: true }))
     .toBeVisible();
   await expect.element(screen.getByText("Execution and checkpoints")).toBeVisible();
-  // So are the details, whose Task item reads the board's task.
-  const taskItem = page.getByRole("region", { name: "Task #7", exact: true });
-  await expect.element(taskItem.getByText("Make the sync stop dropping rows.")).toBeVisible();
+  // So are the details, opened on the task thread; the task's facts are in the board's column.
+  await expect.element(page.getByRole("region", { name: "Workspace" })).toBeVisible();
+  await expect
+    .element(page.getByRole("region", { name: "Task #7", exact: true }))
+    .not.toBeInTheDocument();
 });
 
 it("a board task's thread opened by its own route keeps the task's tabs saved for its task view, out of sight", async () => {
