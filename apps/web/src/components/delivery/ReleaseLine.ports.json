@@ -1,0 +1,104 @@
+{
+  "recordedWith": "Operation-PaperClip eec6041d delivery/lib/deployment-compare.mjs, run against a scratch repository: qa (serves sandbox/) promotes into app (serves app/), with one of its two sandbox-only commits already filed as a Port to app task.",
+  "lines": [
+    {
+      "repository": "payoutlab",
+      "instances": ["payoutlab-qa", "payoutlab-app"],
+      "problem": null
+    }
+  ],
+  "withPorts": {
+    "version": 1,
+    "repository": "payoutlab",
+    "from": {
+      "id": "payoutlab-qa",
+      "environment": "qa",
+      "branch": "qa",
+      "servedFolder": "sandbox"
+    },
+    "to": {
+      "id": "payoutlab-app",
+      "environment": "app",
+      "branch": "main",
+      "servedFolder": "app"
+    },
+    "points": {
+      "fromLive": "5633613a1ccabf0f370198d413253aecda78419e",
+      "toLive": "52e1caa6c66dbf726653cb4eb5df5a679743c632",
+      "fromTip": "5633613a1ccabf0f370198d413253aecda78419e",
+      "toTip": "52e1caa6c66dbf726653cb4eb5df5a679743c632"
+    },
+    "remote": "origin",
+    "limit": 500,
+    "ahead": {
+      "prs": [
+        {
+          "number": 127,
+          "url": null,
+          "title": "fix: rounding in totals",
+          "commit": "6c8458b1734b16322ffdaaf10b742d5d4572a2c1",
+          "kind": "fix",
+          "source": "squash-subject",
+          "task": null,
+          "run": null
+        }
+      ],
+      "loose": [
+        {
+          "commit": "5633613a1ccabf0f370198d413253aecda78419e",
+          "subject": "style(sandbox): payout colours"
+        },
+        {
+          "commit": "66b12484edfe1ba0bdd5d60b37269509f829b58d",
+          "subject": "feat(sandbox): payout preview page"
+        }
+      ],
+      "tasks": [],
+      "count": 3,
+      "truncated": false,
+      "ports": [
+        {
+          "commit": "66b12484edfe1ba0bdd5d60b37269509f829b58d",
+          "task": "task-62e4320127",
+          "number": 1001,
+          "title": "Port to app: 1 sandbox commit",
+          "state": "draft",
+          "by": "Tevin",
+          "filed": "2026-11-27T13:00:00.000Z"
+        }
+      ]
+    },
+    "hotfixes": {
+      "prs": [],
+      "loose": [],
+      "tasks": [],
+      "count": 0,
+      "truncated": false
+    },
+    "waiting": {
+      "prs": [],
+      "loose": [],
+      "tasks": [],
+      "count": 0,
+      "truncated": false
+    },
+    "folders": {
+      "to": "app",
+      "from": "sandbox",
+      "touchesTo": 1,
+      "onlyFrom": 2,
+      "untouched": 2,
+      "commits": {
+        "touchesTo": ["6c8458b1734b16322ffdaaf10b742d5d4572a2c1"],
+        "onlyFrom": [
+          "5633613a1ccabf0f370198d413253aecda78419e",
+          "66b12484edfe1ba0bdd5d60b37269509f829b58d"
+        ]
+      },
+      "truncated": false,
+      "text": "2 commits change only sandbox/. Promoting them changes nothing on app."
+    },
+    "promote": "promote",
+    "problem": null
+  }
+}

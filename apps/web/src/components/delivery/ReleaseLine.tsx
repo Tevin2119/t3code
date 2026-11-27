@@ -121,10 +121,13 @@ export function ReleaseLines({
   environmentId,
   snapshot,
   projects,
+  board = null,
   ...actions
 }: InstanceActions & {
   environmentId: EnvironmentId | null;
   snapshot: DeploymentsSnapshot;
+  /** The board being viewed, which a Port to app files on first. */
+  board?: string | null;
   /** The projects to show; a board passes its repository's only. */
   projects?: ReadonlyArray<DeploymentProject>;
 }) {
@@ -159,6 +162,8 @@ export function ReleaseLines({
                       environmentId={environmentId}
                       from={project}
                       to={next}
+                      repositoryTitle={line.title}
+                      board={board}
                       identity={identity}
                       checkout={checkout}
                       promotion={stripPromotion(snapshot.promotions, project.id, next.id)}

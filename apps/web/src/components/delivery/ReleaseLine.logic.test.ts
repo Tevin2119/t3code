@@ -8,11 +8,14 @@ import { describe, expect, it } from "vite-plus/test";
 import { parseDeployments } from "../../lib/deployments";
 import recorded from "./ReleaseLine.fixtures.json";
 import promotions from "./ReleaseLine.promotions.json";
+import ports from "./ReleaseLine.ports.json";
 import syncConflicts from "./ReleaseLine.syncConflicts.json";
 import {
   compareReadingProblem,
   instanceFacts,
   parseDeploymentCompare,
+  portableCommitsOf,
+  portRowsOf,
   promoteBlocked,
   promoteConfirm,
   promotesInto,
@@ -575,5 +578,40 @@ describe("a sync conflict through the sync PR (D3b)", () => {
     expect(repositoryProjectFor("/repo", projects, "host")?.id).toBe("p1");
     expect(repositoryProjectFor("/repo", projects, "desk")).toBeNull();
     expect(repositoryProjectFor("/elsewhere", projects, "host")).toBeNull();
+  });
+});
+
+describe("Port to app on the release line (D5)", () => {
+  const compare = parseDeploymentCompare(ports.withPorts)!;
+  const [unported, ported] = compare.folders!.commits!.onlyFrom;
+
+  it("reads the recorded compare's ports and offers only the sandbox commit without one", () => {
+    expect(compare.ahead.ports).toHaveLength(1);
+    const rows = portRowsOf(compare);
+    expect(rows.get(ported!)).toEqual({ kind: "filed", port: compare.ahead.ports![0] });
+    expect(rows.get(unported!)).toEqual({ kind: "portable" });
+    // The PR that changes what app serves is promoted, not ported.
+    expect(rows.has(compare.ahead.prs[0]!.commit)).toBe(false);
+    expect(portableCommitsOf(compare)).toEqual([
+      { commit: unported, subject: "style(sandbox): payout colours" },
+    ]);
+  });
+
+  it("offers nothing on an engine that cannot read ports back, or while the split is unknown", () => {
+    const { ports: _ports, ...olderAhead } = compare.ahead;
+    expect(portRowsOf({ ...compare, ahead: olderAhead }).size).toBe(0);
+    const unknown = { ...compare, folders: { ...compare.folders!, unknown: true } };
+    expect([...portRowsOf(unknown).values()].map((row) => row.kind)).toEqual(["filed"]);
+  });
+
+  it("names a sandbox PR by its number and title", () => {
+    const pr = { ...compare.ahead.prs[0]!, commit: unported!, number: 129, title: "feat: sandbox" };
+    const withPr = {
+      ...compare,
+      ahead: { ...compare.ahead, prs: [pr], loose: [] },
+    };
+    expect(portableCommitsOf(withPr)).toEqual([
+      { commit: unported, subject: "#129 feat: sandbox" },
+    ]);
   });
 });

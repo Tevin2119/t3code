@@ -59,6 +59,7 @@ describe("RPC authorization scopes", () => {
     for (const method of [
       WS_METHODS.agentFeedbackAnswerRequest,
       WS_METHODS.deliveryAnswerBoardTask,
+      WS_METHODS.deliveryFilePort,
     ]) {
       expect(requiredScopeForRpcMethod(method)).toBe(AuthOrchestrationOperateScope);
     }

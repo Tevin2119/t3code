@@ -11,17 +11,19 @@ import type {
 } from "@t3tools/contracts";
 import { useNavigate } from "@tanstack/react-router";
 import { ArrowDownIcon, ArrowUpRightIcon, FolderIcon, SquareKanbanIcon } from "lucide-react";
-import type { MouseEvent } from "react";
+import { useState, type MouseEvent, type ReactNode } from "react";
 import { useOpenLink } from "../../browser/useOpenLink";
 import { useOpenPrLink } from "../../lib/openPullRequestLink";
 import { useDeliveryRead, useStaleReading } from "../../state/delivery";
 import { Badge } from "../ui/badge";
 import type { DeploymentRequest } from "./DeploymentInstance";
+import { PortDialog, PortSlot } from "./ReleaseLine.port";
 import { PromotionControls } from "./ReleaseLine.promote";
 import type { SyncCheckout } from "./ReleaseLine.sync";
 import {
   comparePath,
   parseDeploymentCompare,
+  portRowsOf,
   pullRequestUrl,
   shownRows,
 } from "./ReleaseLine.logic";
@@ -40,10 +42,12 @@ function PullRequestRow({
   pr,
   identity,
   onTask,
+  extra,
 }: {
   pr: DeploymentComparePullRequest;
   identity: RepositoryIdentity | null;
   onTask: (task: string) => void;
+  extra: ReactNode;
 }) {
   const openPrLink = useOpenPrLink();
   const url = pullRequestUrl(pr, identity);
@@ -74,6 +78,7 @@ function PullRequestRow({
           Task
         </button>
       ) : null}
+      {extra}
     </li>
   );
 }
@@ -82,10 +87,12 @@ function CommitRow({
   commit,
   subject,
   identity,
+  extra,
 }: {
   commit: string;
   subject: string;
   identity: RepositoryIdentity | null;
+  extra: ReactNode;
 }) {
   const openLink = useOpenLink(null);
   const url = projectCommitUrl(identity, commit);
@@ -110,6 +117,7 @@ function CommitRow({
           <ArrowUpRightIcon aria-hidden className="size-3" />
         </a>
       ) : null}
+      {extra}
     </li>
   );
 }
@@ -142,12 +150,15 @@ function RangeSection({
   limit,
   identity,
   onTask,
+  rowExtra = () => null,
 }: {
   title: string;
   range: DeploymentCompareRange;
   limit: number;
   identity: RepositoryIdentity | null;
   onTask: (task: string) => void;
+  /** What a commit's row adds at its end: Port to app, on the ahead range. */
+  rowExtra?: (commit: string) => ReactNode;
 }) {
   const prs = shownRows(range.prs);
   const loose = shownRows(range.loose);
@@ -167,7 +178,13 @@ function RangeSection({
       ) : (
         <ul className="mt-1 flex min-w-0 flex-col">
           {prs.rows.map((pr) => (
-            <PullRequestRow key={pr.commit} pr={pr} identity={identity} onTask={onTask} />
+            <PullRequestRow
+              key={pr.commit}
+              pr={pr}
+              identity={identity}
+              onTask={onTask}
+              extra={rowExtra(pr.commit)}
+            />
           ))}
           {loose.rows.map((row) => (
             <CommitRow
@@ -175,6 +192,7 @@ function RangeSection({
               commit={row.commit}
               subject={row.subject}
               identity={identity}
+              extra={rowExtra(row.commit)}
             />
           ))}
           {tasks.rows.map((task) => (
@@ -222,6 +240,8 @@ export function DifferenceStrip({
   environmentId,
   from,
   to,
+  repositoryTitle,
+  board,
   identity,
   checkout,
   promotion,
@@ -232,6 +252,9 @@ export function DifferenceStrip({
   environmentId: EnvironmentId;
   from: DeploymentProject;
   to: DeploymentProject;
+  repositoryTitle: string;
+  /** The board being viewed, which a Port to app files on first. */
+  board: string | null;
   identity: RepositoryIdentity | null;
   checkout: SyncCheckout | null;
   promotion: DeploymentPromotion | null;
@@ -244,6 +267,14 @@ export function DifferenceStrip({
   const compare = parseDeploymentCompare(read.body);
   const stale = useStaleReading(read.readAt);
   const onTask = useOpenTask(environmentId);
+  const [porting, setPorting] = useState(false);
+  const ports = compare ? portRowsOf(compare) : null;
+  const portSlot = (commit: string) => {
+    const row = ports?.get(commit);
+    return row ? (
+      <PortSlot row={row} to={to.environment} onPort={() => setPorting(true)} onTask={onTask} />
+    ) : null;
+  };
   return (
     <div
       className="ml-4 flex min-w-0 flex-col gap-3 border-l-2 border-border py-2 pl-4"
@@ -294,6 +325,7 @@ export function DifferenceStrip({
               limit={compare.limit}
               identity={identity}
               onTask={onTask}
+              rowExtra={portSlot}
             />
             <RangeSection
               title={`On ${to.environment}, not in ${from.environment}`}
@@ -312,6 +344,16 @@ export function DifferenceStrip({
           </div>
           {compare.problem ? (
             <p className="break-words text-xs text-muted-foreground">{compare.problem}</p>
+          ) : null}
+          {porting ? (
+            <PortDialog
+              environmentId={environmentId}
+              compare={compare}
+              repositoryTitle={repositoryTitle}
+              board={board}
+              onClose={() => setPorting(false)}
+              onFiled={read.refresh}
+            />
           ) : null}
         </>
       )}

@@ -16,6 +16,7 @@ import { ReleaseLines } from "./ReleaseLine";
  */
 export function BoardDeployments(props: {
   environmentId: EnvironmentId;
+  board?: string;
   target: DeliveryTarget | null;
 }) {
   const repository = props.target?.repository ?? null;
@@ -89,6 +90,7 @@ export function BoardDeployments(props: {
             environmentId={props.environmentId}
             snapshot={snapshot}
             projects={projects}
+            board={props.board ?? null}
             unavailable={unavailable}
             disabled={disabled}
             onRequest={setRequest}

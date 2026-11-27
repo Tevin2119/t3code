@@ -29,6 +29,7 @@ import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as Threads from "../orchestration-v2/ThreadManagementService.ts";
 import * as BoardTasks from "./BoardThreadTasks.ts";
 import * as Delivery from "./DeliveryService.ts";
+import { APP_FIX, SANDBOX_A, SANDBOX_B, compareWithPorts } from "./deploymentPort.fixture.ts";
 
 const scope = {
   environmentId: EnvironmentId.make("environment-test"),
@@ -74,6 +75,7 @@ const harness = Effect.fn("BoardThreadTasks.testHarness")(function* (
   file: Act = () => Effect.die("Unexpected filing"),
   probe: DeliveryError = refusal(400, "Missing request ID", "invalid-field"),
   failFiledRecord = false,
+  compare: unknown = null,
 ) {
   const cards = yield* Queue.unbounded<Card>();
   const events = yield* Queue.unbounded<OrchestrationV2StoredEvent>();
@@ -102,6 +104,7 @@ const harness = Effect.fn("BoardThreadTasks.testHarness")(function* (
       Layer.mergeAll(
         Layer.mock(Delivery.DeliveryService)({
           boardThreadConfiguration: Effect.succeed("engine-test"),
+          read: () => Effect.succeed({ readAt: "2026-11-27T12:00:00Z", body: compare }),
           boardThreadAct: (input) =>
             Effect.suspend((): ReturnType<Act> => {
               calls.push(input);
@@ -329,6 +332,85 @@ it.effect("returns the filed outcome when recording the card fails", () =>
       yield* service.answer({ threadId, turnItemId, answer: "file" });
       assert.deepStrictEqual(yield* Fiber.join(call), { status: "filed", filing: receipt });
       assert.strictEqual(calls.length, 2);
+    }).pipe(Effect.provide(layer));
+  }),
+);
+
+const portInput = {
+  board: "work",
+  from: "payoutlab-qa",
+  to: "payoutlab-app",
+  by: "Tevin",
+  commits: [SANDBOX_B, SANDBOX_A],
+};
+const portOrigin = "deployment:environment-test/payoutlab-qa..payoutlab-app";
+const portFiled: Act = () =>
+  Effect.succeed({
+    readAt: "2026-11-27T12:00:01Z",
+    body: { created: true, task: { ...task, origin: portOrigin }, port: {} },
+  });
+const bodyOf = (call: Parameters<Act>[0]) => call.body as Record<string, unknown>;
+
+it.effect("files a port for the page with the stamped origin and the engine's own subjects", () =>
+  Effect.gen(function* () {
+    const { calls, layer } = yield* harness(portFiled, undefined, false, compareWithPorts);
+    yield* Effect.gen(function* () {
+      const service = yield* BoardTasks.BoardThreadTasks;
+      const environmentId = EnvironmentId.make("environment-test");
+      const filing = yield* service.filePort(environmentId, portInput);
+      assert.strictEqual(filing.task.origin, portOrigin);
+      yield* service.filePort(environmentId, { ...portInput, commits: [SANDBOX_A, SANDBOX_B] });
+      assert.strictEqual(calls.length, 2);
+      const [first, second] = calls.map(bodyOf);
+      assert.strictEqual(calls[0]!.path, path);
+      assert.strictEqual(calls[0]!.configuration, "engine-test");
+      assert.deepInclude(first, {
+        origin: portOrigin,
+        key,
+        by: "Tevin",
+        title: "Port to app: 2 sandbox commits",
+      });
+      assert.deepStrictEqual(first!.commits, [SANDBOX_A, SANDBOX_B]);
+      assert.include(String(first!.body), `- ${SANDBOX_B} #129 feat: sandbox payout`);
+      // The same port in any order is one request, so filing it twice replays the first.
+      assert.match(String(first!.requestId), /^port-[a-f0-9]{64}$/);
+      assert.strictEqual(second!.requestId, first!.requestId);
+    }).pipe(Effect.provide(layer));
+  }),
+);
+
+it.effect("refuses a commit the release line does not offer to port, before writing", () =>
+  Effect.gen(function* () {
+    const { calls, layer } = yield* harness(portFiled, undefined, false, compareWithPorts);
+    yield* Effect.gen(function* () {
+      const service = yield* BoardTasks.BoardThreadTasks;
+      const environmentId = EnvironmentId.make("environment-test");
+      for (const input of [
+        { ...portInput, commits: [APP_FIX] },
+        { ...portInput, board: "unsorted" },
+        { ...portInput, from: "payoutlab-staging" },
+      ]) {
+        const error = yield* Effect.flip(service.filePort(environmentId, input));
+        assert.strictEqual(error.code, "invalid_request");
+      }
+      assert.deepStrictEqual(calls, []);
+    }).pipe(Effect.provide(layer));
+  }),
+);
+
+it.effect("files anew under a new request ID once the earlier port's task was discarded", () =>
+  Effect.gen(function* () {
+    let attempts = 0;
+    const discardedOnce: Act = (input) =>
+      attempts++ === 0 ? Effect.fail(refusal(410, "discarded", "gone")) : portFiled(input);
+    const { calls, layer } = yield* harness(discardedOnce, undefined, false, compareWithPorts);
+    yield* Effect.gen(function* () {
+      const service = yield* BoardTasks.BoardThreadTasks;
+      yield* service.filePort(EnvironmentId.make("environment-test"), portInput);
+      const [first, retry] = calls.map((call) => String(bodyOf(call).requestId));
+      assert.strictEqual(calls.length, 2);
+      assert.notStrictEqual(retry, first);
+      assert.match(retry!, /^port-[a-f0-9]{55}-[0-9a-f-]{36}$/);
     }).pipe(Effect.provide(layer));
   }),
 );

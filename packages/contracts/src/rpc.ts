@@ -479,7 +479,8 @@ import {
 } from "./scheduledTask.ts";
 import { SecretRequestAnswerInput, SecretRequestError } from "./secretRequest.ts";
 import { OrchestratorMcpFailure } from "./orchestratorMcp.ts";
-import { BoardTaskAnswerInput } from "./boardThreadTasks.ts";
+import { BoardTaskAnswerInput, BoardTaskFiling } from "./boardThreadTasks.ts";
+import { DeploymentPortInput } from "./deployments.ts";
 import { AgentFeedbackAnswerInput, AgentFeedbackRequestError } from "./agentFeedback.ts";
 import {
   ProjectCloneActionInput,
@@ -667,6 +668,7 @@ export const WS_METHODS = {
 
   deliveryRead: "delivery.read",
   deliveryAnswerBoardTask: "delivery.answerBoardTask",
+  deliveryFilePort: "delivery.filePort",
   deliveryAct: "delivery.act",
   deliveryBindThread: "delivery.bindThread",
   deliveryThreadBinding: "delivery.threadBinding",
@@ -1227,6 +1229,13 @@ const WsServerRetryResourceTelemetryRpc = Rpc.make(WS_METHODS.serverRetryResourc
 
 const WsDeliveryAnswerBoardTaskRpc = Rpc.make(WS_METHODS.deliveryAnswerBoardTask, {
   payload: BoardTaskAnswerInput,
+  error: Schema.Union([OrchestratorMcpFailure, EnvironmentAuthorizationError]),
+});
+
+/** Port to app: files a release-line draft; the server stamps its origin and composes it. */
+const WsDeliveryFilePortRpc = Rpc.make(WS_METHODS.deliveryFilePort, {
+  payload: DeploymentPortInput,
+  success: BoardTaskFiling,
   error: Schema.Union([OrchestratorMcpFailure, EnvironmentAuthorizationError]),
 });
 
@@ -2889,6 +2898,7 @@ export const CoreWsRpcGroup = RpcGroup.make(
 export const ForkWsRpcGroup = RpcGroup.make(
   WsDeliveryReadRpc,
   WsDeliveryAnswerBoardTaskRpc,
+  WsDeliveryFilePortRpc,
   WsDeliveryActRpc,
   WsDeliveryBindThreadRpc,
   WsDeliveryThreadBindingRpc,
