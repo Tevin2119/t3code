@@ -12,21 +12,25 @@ import {
   type OrchestrationV2StoredEvent,
   type ThreadId,
 } from "@t3tools/contracts";
+import { writeFileStringAtomically } from "@t3tools/shared/atomicWrite";
 import { modelAccountFamily } from "@t3tools/shared/limitedSeat";
 import { createModelSelection } from "@t3tools/shared/model";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 
+import { ServerConfig } from "../config.ts";
 import * as EventStore from "../orchestration-v2/EventStore.ts";
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
-import { boardTaskFinishedBy } from "./boardTaskWork.ts";
+import { boardTaskFinishedBy, boardTaskInWork, MOVED } from "./boardTaskWork.ts";
 import { boardTaskOf, boardTaskThreadMarker, type BoardTask } from "./boardThreadMarker.ts";
 import * as DeliveryService from "./DeliveryService.ts";
 import { BoardLeadSeat, boardLeadSeat, resolveSeatProvider } from "./seatProvider.ts";
@@ -47,10 +51,16 @@ interface Activity {
   readonly at: string;
   readonly kind: ActivityKind;
   readonly excerpt: string | null;
+  /** A person's words typed in this conversation, told to the engine as its steer once. */
+  readonly steer: { readonly messageId: string; readonly text: string } | null;
 }
 
 const STEER_MESSAGE_PREFIX = "message:board-steer:";
 const HANDOFF_NOTICE_PREFIX = "message:board-handoff:";
+const UNDELIVERED_NOTICE_PREFIX = "message:board-steer-undelivered:";
+/** How long a thread steer the engine cannot take is tried: the board's default hand-off wait. */
+const STEER_RETRY_MINUTES = 30;
+const STEER_RETRY_MS = STEER_RETRY_MINUTES * 60 * 1000;
 
 /** The message a queued steer is delivered as: one per steer, on every attempt. */
 export const steerMessageId = (task: BoardTask, steerId: number) =>
@@ -118,15 +128,18 @@ function scanActivity(
       }
       if (message.role !== "user" || state.messages.has(message.id)) continue;
       state.messages.add(message.id);
+      const typed = message.createdBy === "user";
       const steer =
         message.id.startsWith(STEER_MESSAGE_PREFIX) ||
         message.id.startsWith(HANDOFF_NOTICE_PREFIX) ||
-        message.createdBy === "user";
+        message.id.startsWith(UNDELIVERED_NOTICE_PREFIX) ||
+        typed;
       found.push({
         seq: stored.sequence,
         at: DateTime.formatIso(event.occurredAt),
         kind: steer ? "steer" : "message",
         excerpt: steer ? null : excerptOf(message.text),
+        steer: typed && message.text.trim() ? { messageId: message.id, text: message.text } : null,
       });
       continue;
     }
@@ -142,6 +155,7 @@ function scanActivity(
         at: DateTime.formatIso(event.occurredAt),
         kind: "summary",
         excerpt: excerptOf(reply),
+        steer: null,
       });
     }
   }
@@ -200,6 +214,51 @@ const codeOf = (error: DeliveryError) => {
   return Option.isSome(decoded) ? (decoded.value.code ?? null) : null;
 };
 
+/** Thread steers this server has told, kept across restarts; the oldest are forgotten past it. */
+const STEERED_KEPT = 2000;
+/** A notice owed to the thread for a person's words that never reached the team. */
+const OwedNotice = Schema.Struct({
+  board: Schema.String,
+  task: Schema.String,
+  threadId: Schema.String,
+  messageId: Schema.String,
+  quoted: Schema.String,
+  reason: Schema.String,
+});
+type OwedNotice = typeof OwedNotice.Type;
+/** A person's words seen in a task's conversation and not yet settled as a steer. */
+const PendingSteer = Schema.Struct({
+  board: Schema.String,
+  task: Schema.String,
+  threadId: Schema.String,
+  messageId: Schema.String,
+  text: Schema.String,
+  typedAt: Schema.String,
+});
+type PendingSteer = typeof PendingSteer.Type;
+const SteeredFile = Schema.fromJsonString(
+  Schema.Struct({
+    steered: Schema.Array(Schema.String),
+    pending: Schema.optional(Schema.Record(Schema.String, PendingSteer)),
+    owed: Schema.optional(Schema.Record(Schema.String, OwedNotice)),
+  }),
+);
+
+/** Where a task stands for its steers, from its card or, off the lanes, its own detail. */
+export type SteerStanding =
+  | {
+      readonly state: string;
+      readonly lane?: string | null | undefined;
+      readonly split?: boolean | null | undefined;
+      readonly boardThread?:
+        | { readonly environmentId: string; readonly threadId: string }
+        | null
+        | undefined;
+    }
+  | "deleted";
+const decodeSteered = Schema.decodeUnknownOption(SteeredFile);
+const encodeSteered = Schema.encodeEffect(SteeredFile);
+
 const ACTIVE_RUN_STATUSES = ["preparing", "queued", "starting", "running", "waiting"] as const;
 
 /** Refusals that never pass: the steer is told failed. Any other failure is tried next pass. */
@@ -224,6 +283,16 @@ export class BoardConversation extends Context.Service<
       readonly environmentId: EnvironmentId;
       readonly key: string;
     }) => Effect.Effect<void>;
+    /**
+     * Settles the steer ledger, every pass and for every thread whatever its task's card says:
+     * owed notices are posted, and each pending steer is told, retried within its window, or
+     * given up with a notice owed. `standings` holds every task the lanes or a detail read show;
+     * a task not in it is unknown, and its steers wait out their window.
+     */
+    readonly settleSteers: (input: {
+      readonly standings: ReadonlyMap<string, SteerStanding>;
+      readonly environmentId: EnvironmentId;
+    }) => Effect.Effect<void>;
   }
 >()("t3/delivery/BoardConversation") {}
 
@@ -233,6 +302,44 @@ export const make = Effect.gen(function* () {
   const projections = yield* ProjectionStore.ProjectionStoreV2;
   const threads = yield* ThreadManagementService.ThreadManagementService;
   const instances = yield* ProviderInstanceRegistry.ProviderInstanceRegistry;
+  const fileSystem = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const config = yield* ServerConfig;
+  // The engine's steer route takes no key to dedupe on, so which person's words were told is
+  // kept here: a mirror lost after its steer, then a restart, must not tell them twice.
+  const steeredPath = path.join(config.stateDir, "delivery-thread-steers.json");
+  const saved = yield* fileSystem.readFileString(steeredPath).pipe(
+    Effect.map((text) => decodeSteered(text)),
+    Effect.orElseSucceed(() => Option.none()),
+  );
+  const steered = new Set(Option.isSome(saved) ? saved.value.steered : []);
+  // Saved before the words are mirrored, so a steer is settled whatever happens to the scan.
+  const pendingSteers = new Map(
+    Object.entries(Option.isSome(saved) ? (saved.value.pending ?? {}) : {}),
+  );
+  // Kept until posted: the steer is settled first, so a notice never sends the steer again.
+  const owed = new Map(Object.entries(Option.isSome(saved) ? (saved.value.owed ?? {}) : {}));
+  const saveSteers = Effect.fn("BoardConversation.saveSteers")(function* () {
+    for (const old of steered) {
+      if (steered.size <= STEERED_KEPT) break;
+      steered.delete(old);
+    }
+    return yield* encodeSteered({
+      steered: [...steered],
+      pending: Object.fromEntries(pendingSteers),
+      owed: Object.fromEntries(owed),
+    }).pipe(
+      Effect.flatMap((contents) => writeFileStringAtomically({ filePath: steeredPath, contents })),
+      Effect.provideService(FileSystem.FileSystem, fileSystem),
+      Effect.provideService(Path.Path, path),
+      Effect.as(true),
+      Effect.catchCause((cause) =>
+        Effect.logWarning("Which thread steers were told could not be saved.", { cause }).pipe(
+          Effect.as(false),
+        ),
+      ),
+    );
+  });
   // Kept in memory: after a restart each task starts again from the engine's highest seq.
   const scans = new Map<string, ScanState>();
   const floors = new Map<string, number>();
@@ -275,6 +382,130 @@ export const make = Effect.gen(function* () {
       : createModelSelection(next.instanceId, published.model);
   });
 
+  /**
+   * Posts every owed notice. One that cannot be posted now stays owed and is tried on the next
+   * pass; only a refusal that never passes drops it, which is logged.
+   */
+  const postOwedNotices = Effect.fn("BoardConversation.postOwedNotices")(function* () {
+    for (const [key, notice] of owed) {
+      const posted = yield* noticeUndelivered(notice);
+      if (posted === "later") continue;
+      if (posted === "refused")
+        yield* Effect.logWarning("A notice of an undelivered message could not be posted.", {
+          task: notice.task,
+          message: notice.messageId,
+        });
+      owed.delete(key);
+      yield* saveSteers();
+    }
+  });
+
+  const noticeUndelivered = Effect.fn("BoardConversation.noticeUndelivered")(function* (
+    notice: OwedNotice,
+  ) {
+    const task = boardTaskOf(notice.board, notice.task);
+    if (task === null) return "refused" as const;
+    const threadId = notice.threadId as ThreadId;
+    const messageId = MessageId.make(
+      `${UNDELIVERED_NOTICE_PREFIX}${task.board}:${task.id}:${notice.messageId}`,
+    );
+    const present = yield* projections.getMessagesById(threadId, [messageId]).pipe(Effect.result);
+    if (present._tag === "Failure") return "later" as const;
+    if (present.success.has(messageId)) return "posted" as const;
+    const text = `This message didn't reach the team: ${notice.reason}. Send it again when the task is running.\n\n> ${notice.quoted}`;
+    const sent = yield* threads
+      .dispatch({
+        type: "message.dispatch",
+        commandId: CommandId.make(`${boardTaskThreadMarker(task)}:undelivered:${notice.messageId}`),
+        threadId,
+        messageId,
+        text,
+        notification: engineNotice("A message didn't reach the team", text),
+        attachments: [],
+        dispatchMode: { type: "queue_after_active" },
+        createdBy: "agent",
+        creationSource: "server",
+      })
+      .pipe(Effect.result);
+    if (sent._tag === "Success") return "posted" as const;
+    return FINAL_REFUSALS.has(sent.failure._tag) ? ("refused" as const) : ("later" as const);
+  });
+
+  /** Settles a steer that never reached the team, and owes the thread a notice of it. */
+  const giveUp = (key: string, steer: PendingSteer, reason: string) => {
+    pendingSteers.delete(key);
+    steered.add(key);
+    owed.set(key, {
+      board: steer.board,
+      task: steer.task,
+      threadId: steer.threadId,
+      messageId: steer.messageId,
+      quoted: excerptOf(steer.text)?.slice(0, 80) ?? "",
+      reason,
+    });
+  };
+
+  /** Why a task cannot take a steer from this thread now, or `null` when it can. */
+  const steerRefusedBy = (standing: SteerStanding, steer: PendingSteer, environmentId: string) => {
+    if (standing === "deleted") return "the task was deleted";
+    if (MOVED.has(standing.state)) return "the task moved to another machine";
+    const link = standing.boardThread;
+    if (link?.environmentId !== environmentId || link.threadId !== steer.threadId)
+      return "this conversation no longer holds the task";
+    return boardTaskInWork(standing) ? null : "the task is no longer in work";
+  };
+
+  const settleSteers = Effect.fn("BoardConversation.settleSteers")(
+    function* (input: {
+      readonly standings: ReadonlyMap<string, SteerStanding>;
+      readonly environmentId: EnvironmentId;
+    }) {
+      const now = DateTime.toEpochMillis(yield* DateTime.now);
+      const expired = `the engine could not take it for ${STEER_RETRY_MINUTES} minutes`;
+      for (const [key, steer] of pendingSteers) {
+        if (steered.has(key)) {
+          pendingSteers.delete(key);
+          continue;
+        }
+        const late = now - Date.parse(steer.typedAt) >= STEER_RETRY_MS;
+        const standing = input.standings.get(steer.task);
+        const refused =
+          standing === undefined ? null : steerRefusedBy(standing, steer, input.environmentId);
+        // Stale words never reach a live run; unknown ones wait out their window.
+        if (late && refused === null) {
+          giveUp(key, steer, expired);
+          continue;
+        }
+        if (standing === undefined) continue;
+        // Told once more even when refused: one the engine took before a crash settles as taken.
+        const told = yield* post(`/api/tasks/${steer.task}/steer`, {
+          text: steer.text,
+          by: "person",
+          from: "thread",
+          // Stable per message: the engine applies a steer once per `ref`, so a retry is safe.
+          ref: `thread:${steer.threadId}:${steer.messageId}`,
+        });
+        if (told._tag === "Success") {
+          pendingSteers.delete(key);
+          steered.add(key);
+          continue;
+        }
+        const status = told.failure.status;
+        if (refused !== null) giveUp(key, steer, refused);
+        else if (status !== undefined && status < 500)
+          giveUp(key, steer, told.failure.detail.replace(/\s+/g, " ").slice(0, 200));
+      }
+      if (!(yield* saveSteers())) return;
+      yield* postOwedNotices();
+    },
+    (effect) =>
+      effect.pipe(
+        Effect.catchCause(() =>
+          Effect.logDebug("Thread steers were not settled; the next pass carries on."),
+        ),
+      ),
+  );
+
   const mirror = Effect.fn("BoardConversation.mirror")(function* (
     card: ConversationCard,
     threadId: ThreadId,
@@ -313,9 +544,30 @@ export const make = Effect.gen(function* () {
       ...(pending.get(scanKey) ?? []),
       ...scanActivity(scan, read.success).filter((item) => item.seq > known),
     ];
+    const task = card.set ? boardTaskOf(card.set, card.id) : null;
     let sent = 0;
-    for (const item of queued) {
+    for (const [index, item] of queued.entries()) {
       if (sent >= INGESTS_PER_PASS) break;
+      // Saved to the steer ledger before the item is mirrored; `settleSteers` tells it.
+      if (item.steer !== null) {
+        const key = `${threadId}\u0000${item.steer.messageId}`;
+        if (task && !steered.has(key) && !pendingSteers.has(key)) {
+          pendingSteers.set(key, {
+            board: task.board,
+            task: task.id,
+            threadId,
+            messageId: item.steer.messageId,
+            text: item.steer.text,
+            typedAt: item.at,
+          });
+          // Never mirrored unsaved: the mirror stops here and sees it again next pass.
+          if (!(yield* saveSteers())) {
+            pendingSteers.delete(key);
+            break;
+          }
+        }
+        queued[index] = { ...item, steer: null };
+      }
       const answer = yield* post(`/api/tasks/${card.id}/activity`, {
         at: item.at,
         kind: item.kind,
@@ -517,7 +769,7 @@ export const make = Effect.gen(function* () {
       ),
   );
 
-  return BoardConversation.of({ sync });
+  return BoardConversation.of({ sync, settleSteers });
 });
 
 export const layer = Layer.effect(BoardConversation, make);

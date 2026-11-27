@@ -1078,7 +1078,14 @@ export interface DeliveryCard {
   readonly proposals: number;
   readonly waitsFor: ReadonlyArray<TaskBrief>;
   /** For a part of a split task: the task it is a part of. Its decision is made there. */
-  readonly partOf: { readonly id: string; readonly number: number; readonly title: string } | null;
+  readonly partOf: {
+    readonly id: string;
+    /** Null for a part that came from another engine without its parent's number or title. */
+    readonly number: number | null;
+    readonly title: string | null;
+    /** Its parent is on this engine and has not moved: only then is it reviewed as a part. */
+    readonly here: boolean;
+  } | null;
   /** For a part: who reviewed it as it stands. A review of a part does not approve the whole. */
   readonly reviewedBy: string | null;
   readonly messages: number;
@@ -1349,8 +1356,9 @@ export const parseCard = (value: Json): DeliveryCard => {
     partOf: isRecord(value.partOf)
       ? {
           id: text(value.partOf.id),
-          number: count(value.partOf.number),
-          title: text(value.partOf.title),
+          number: Number.isInteger(value.partOf.number) ? (value.partOf.number as number) : null,
+          title: textOrNull(value.partOf.title),
+          here: flag(value.partOf.here),
         }
       : null,
     reviewedBy: typeof value.reviewedBy === "string" && value.reviewedBy ? value.reviewedBy : null,

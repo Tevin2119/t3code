@@ -15,6 +15,7 @@ export const MOVED = new Set(["moved", "moving"]);
 interface TaskStanding {
   readonly lane?: string | null | undefined;
   readonly state: string;
+  readonly split?: boolean | null | undefined;
 }
 
 /** What finished the task, its lane or else its state; `null` while it is not finished. */
@@ -25,9 +26,13 @@ export const boardTaskFinishedBy = (task: TaskStanding) =>
       ? task.state
       : null;
 
-/** A task in work: it holds a conversation and a claim. A split parent's parts are its work. */
+/**
+ * A task in work: it holds a conversation and a claim. A split parent's parts are its work, so a
+ * parent is never in work, also while the whole is put together (`split` on its card).
+ */
 export const boardTaskInWork = (task: TaskStanding) =>
   !NOT_STARTED.has(task.lane ?? "") &&
   boardTaskFinishedBy(task) === null &&
   !MOVED.has(task.state) &&
-  task.state !== "split";
+  task.state !== "split" &&
+  task.split !== true;

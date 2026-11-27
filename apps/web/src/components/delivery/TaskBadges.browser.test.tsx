@@ -132,12 +132,9 @@ it("leads with what the person owes, and opens the conversation the task came fr
   expect(sections[0]?.textContent).toBe("Needs you");
   await expect.element(screen.getByText("Choose how the sync recovers")).toBeVisible();
   await expect.element(screen.getByText("Make the sync stop dropping rows.")).toBeVisible();
-  await screen.getByRole("button", { name: "Linked conversations" }).click();
-  await screen.getByRole("button", { name: "the conversation it came from" }).click();
-  expect(value.openThread).toHaveBeenCalledWith({
-    environmentId: "env-source",
-    threadId: "filed-from",
-  });
+  // The conversation it came from is a lineage row of its own, never opened in the task's centre.
+  expect(screen.container.textContent).not.toContain("the conversation it came from");
+  expect(value.openThread).not.toHaveBeenCalled();
 });
 
 it("lists the parent and the parts as rows that each open their task", async () => {
@@ -151,4 +148,9 @@ it("lists the parent and the parts as rows that each open their task", async () 
   expect(value.openTask).toHaveBeenLastCalledWith("t2");
   await screen.getByRole("button", { name: /Rework the sync/ }).click();
   expect(value.openTask).toHaveBeenLastCalledWith("t0");
+  // The conversation it was made from is the lineage's related-thread row, at its own route.
+  const source = screen.container.querySelector("[data-task-related-source]");
+  expect(source?.textContent).toContain("Made from");
+  expect(source?.querySelector("li")?.textContent).toContain("The conversation it came from");
+  expect(value.openThread).not.toHaveBeenCalled();
 });

@@ -24,6 +24,7 @@ import {
 } from "../ui/dialog";
 import { Input } from "../ui/input";
 import { Textarea } from "../ui/textarea";
+import { reviewedAsPart, wholeName } from "./partOf.logic";
 
 const ACTION_HELP: Record<string, string> = {
   "accept-artifacts":
@@ -55,17 +56,20 @@ export function actionLabel(
   card: Pick<DeliveryCard, "partOf" | "publication"> | null,
 ): string {
   if (action === "publish" && card?.publication?.state === "failed") return "Try publishing again";
-  if (card?.partOf && action === "approve") return "Mark part as reviewed";
-  if (card?.partOf && action === "reject") return "Send part back";
+  if (reviewedAsPart(card) && action === "approve") return "Mark part as reviewed";
+  if (reviewedAsPart(card) && action === "reject") return "Send part back";
   return ACTION_LABEL[action] ?? action;
 }
 
 /** What an action does, said for this task. */
 export function actionHelp(action: string, card: Pick<DeliveryCard, "partOf"> | null): string {
-  if (card?.partOf && action === "approve")
-    return `Records that you reviewed this part as it stands. It does not approve the whole, #${card.partOf.number}, which is decided on its own.`;
-  if (card?.partOf && action === "reject")
-    return `Sends this part back to be built again. The whole, #${card.partOf.number}, is put together and tested again after it.`;
+  if (!reviewedAsPart(card) || !card?.partOf) return ACTION_HELP[action] ?? "";
+  const name = wholeName(card.partOf);
+  const whole = name === null ? "The whole" : `The whole, ${name},`;
+  if (action === "approve")
+    return `Records that you reviewed this part as it stands. It does not approve the whole${name === null ? "" : `, ${name}`}, which is decided on its own.`;
+  if (action === "reject")
+    return `Sends this part back to be built again. ${whole} is put together and tested again after it.`;
   return ACTION_HELP[action] ?? "";
 }
 
@@ -310,7 +314,11 @@ function DecisionDialog(props: {
   const accepting = decision === "accept-artifacts";
   const approving = decision === "approve" || accepting;
   const publishing = decision === "publish";
-  const whole = card.partOf;
+  const whole = reviewedAsPart(card) ? card.partOf : null;
+  const wholeNamed = whole ? wholeName(whole) : null;
+  const partOfWords = wholeNamed
+    ? `This is a part of ${wholeNamed}.`
+    : "This is a part of a larger task.";
   const parts = card.parts.length;
   const verb = accepting
     ? "Accept deliverables"
@@ -339,8 +347,8 @@ function DecisionDialog(props: {
                 data-delivery-decision-part
               >
                 {approving
-                  ? `This is a part of #${whole.number} ${whole.title}. Marking it as reviewed does not approve the whole. The whole is decided on its own, when every part is built and they were tested together.`
-                  : `This is a part of #${whole.number} ${whole.title}. Sent back, this part is built again, and the whole is put together and tested again after it.`}
+                  ? `${partOfWords} Marking it as reviewed does not approve the whole. The whole is decided on its own, when every part is built and they were tested together.`
+                  : `${partOfWords} Sent back, this part is built again, and the whole is put together and tested again after it.`}
               </p>
             ) : parts > 0 ? (
               <p
