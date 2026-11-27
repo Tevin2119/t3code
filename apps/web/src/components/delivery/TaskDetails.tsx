@@ -10,6 +10,7 @@ import {
   parseTarget,
   repeatKeys,
   seatSettingsToSend,
+  stepsCutByT3,
   TASK_PRIORITIES,
   targetLine,
   type TaskBrief,
@@ -40,6 +41,7 @@ import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../
 import { useBoardTask, type BoardTask } from "./BoardTaskContext";
 import { ReworkCount, WaitKinds } from "./BoardLaneCards";
 import { SeatSettingsPanel } from "./SeatSettingsPanel";
+import { StepsCutByT3 } from "./StepsCutByT3";
 import { TaskDisclosure } from "./TaskDisclosure";
 import { TaskEngineLog } from "./TaskEngineLog";
 import { TaskFileList } from "./taskFiles";
@@ -451,6 +453,7 @@ function TaskDetailsBody(props: { readonly board: BoardTask; readonly task: Task
   // The engine's own questions are answered here; a question the lead asks in the conversation
   // is answered there, as any thread's request is.
   const asks = environmentId !== null && task.questions.length > 0;
+  const cut = stepsCutByT3(task);
 
   return (
     <div ref={container} className="flex min-w-0 flex-col gap-2 px-2.5" data-task-details>
@@ -464,9 +467,10 @@ function TaskDetailsBody(props: { readonly board: BoardTask; readonly task: Task
         </p>
       ) : null}
       {board.decisions}
-      {card.waitingOn === "person" || asks ? (
+      {card.waitingOn === "person" || asks || cut.length > 0 ? (
         <TaskDisclosure title={gt("Needs you")}>
           <WaitKinds card={card} />
+          <StepsCutByT3 steps={cut} className="text-xs" />
           {asks && environmentId !== null ? (
             <ThreadTaskQuestions
               environmentId={environmentId}

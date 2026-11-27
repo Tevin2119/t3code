@@ -1,6 +1,7 @@
 import { useThreadInspection } from "./chat/ThreadInspectionContext";
 import { useThreadPanelHost } from "./chat/ThreadPanelHostContext";
 import { useBoardTask } from "./delivery/BoardTaskContext";
+import { StepsCutByT3 } from "./delivery/StepsCutByT3";
 import {
   deriveEngineStageLabel,
   deriveTeamChatPhase,
@@ -11,7 +12,7 @@ import { useGT, useMessages } from "gt-react";
 import { ChildThreadApprovals } from "./chat/ChildThreadApprovals";
 import { ChevronDownIcon, ChevronUpIcon, SquareKanbanIcon } from "lucide-react";
 import { SessionStatusFooter } from "./chat/SessionStatusFooter";
-import { resolveDraftTeam, selectableTeams, teamListStatus } from "../lib/delivery";
+import { resolveDraftTeam, selectableTeams, stepsCutByT3, teamListStatus } from "../lib/delivery";
 import {
   deliveryEnvironment,
   useDeliveryDraftStore,
@@ -1281,7 +1282,10 @@ export default function ChatView(props: ChatViewProps) {
   const savedRightPanelState = useRightPanelStore((state) =>
     selectThreadRightPanelState(state.byThreadKey, panelThreadRef),
   );
-  const boardTaskInView = useBoardTask() !== null;
+  const boardTask = useBoardTask();
+  const boardTaskInView = boardTask !== null;
+  // A step T3's restart cut short needs a person even while the engine runs it again.
+  const cutSteps = stepsCutByT3(boardTask?.task ?? null);
   const rightPanelState = shownRightPanelState(savedRightPanelState, boardTaskInView);
   const activeRightPanelSurface = rightPanelState.isOpen
     ? (rightPanelState.surfaces.find((surface) => surface.id === rightPanelState.activeSurfaceId) ??
@@ -3662,7 +3666,11 @@ export default function ChatView(props: ChatViewProps) {
   const queuedRunsControl =
     isServerThread && activeThread ? (
       <>
-        {teamSeatsWorking ? (
+        <StepsCutByT3
+          steps={cutSteps}
+          className="mx-auto w-full max-w-(--chat-content-max-width) pb-3 text-sm"
+        />
+        {teamSeatsWorking && !(cutSteps.length > 0 && engineStageLabel !== null) ? (
           <p
             className="mx-auto w-full max-w-(--chat-content-max-width) pb-3 text-sm text-muted-foreground"
             role="status"

@@ -18,6 +18,13 @@ const state = vi.hoisted(() => ({
   configLoaded: true,
 }));
 
+// The Task item's module, held back as a slow runner holds it; resolved unless a case holds it.
+const taskDetailsModule = vi.hoisted(() => ({ loaded: Promise.resolve() }));
+vi.mock(import("../delivery/TaskDetails"), async (importOriginal) => {
+  await taskDetailsModule.loaded;
+  return importOriginal();
+});
+
 // The read of t3.json is a cache: a re-read is the only way to see what is on disk now.
 const t3File = vi.hoisted(() => ({
   disk: "",
@@ -285,6 +292,52 @@ it("shows a linked pull request in a folder that is not a git repository", async
   await expect.element(page.getByRole("region", { name: "Workspace" })).toBeVisible();
   await expect.element(page.getByText("#27513")).toBeVisible();
   await expect.element(page.getByRole("button", { name: "Initialize Git" })).toBeVisible();
+});
+
+// First of the board cases: the panel loads the board modules once, so only the first can hold them.
+it("shows no section above where the Task item lands until it has loaded", async () => {
+  using fixture = setup({ workspaceRoot: "/work/plain", folder: "/work/plain" });
+  const held = Promise.withResolvers<void>();
+  taskDetailsModule.loaded = held.promise;
+  // Released however the case ends, so the cases after it get the module.
+  using _released = { [Symbol.dispose]: () => held.resolve() };
+  const task = parseTask({
+    id: "t1",
+    number: 12,
+    title: "Fix the sync",
+    body: "Make the sync stop dropping rows.",
+    state: "in-work",
+    lane: "implementation",
+    card: { id: "t1", number: 12, title: "Fix the sync", lane: "implementation" },
+  });
+  await using _screen = await render(
+    <BoardTaskContext
+      value={{
+        environmentId: null,
+        taskId: "t1",
+        task,
+        stale: false,
+        refresh: () => {},
+        openTask: () => {},
+        openTab: () => {},
+        decisions: null,
+        thread: null,
+        seats: { thread: () => null, rows: [] },
+      }}
+    >
+      <Panel fixture={fixture} />
+    </BoardTaskContext>,
+  );
+  // Held back: no section shows yet, so none is there to be pushed down when the Task item lands.
+  expect(document.querySelector("[data-thread-details-panel] section")).toBeNull();
+  held.resolve();
+  const taskItem = page.getByRole("region", { name: "Task #12" });
+  await expect.element(taskItem).toBeVisible();
+  const workspace = page.getByRole("region", { name: "Workspace" });
+  await expect.element(workspace).toBeVisible();
+  expect(workspace.element().getBoundingClientRect().top).toBeGreaterThanOrEqual(
+    taskItem.element().getBoundingClientRect().bottom,
+  );
 });
 
 it("shows the Task item only where a board task's view hosts the thread, with its number, decisions and lineage", async () => {

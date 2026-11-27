@@ -1462,6 +1462,8 @@ export interface CouncilSeat {
   readonly stage: string | null;
   readonly verdict: string | null;
   readonly attempts: number;
+  /** The stage of a step T3's own restart cut short and that has not ended since; null otherwise. */
+  readonly cutByT3: string | null;
   /** What it is doing now, from its own output, while it works; null otherwise. */
   readonly live: SeatLive | null;
   readonly threadId: string | null;
@@ -1915,6 +1917,29 @@ const parseAttestedModel = (value: unknown): NonNullable<CouncilSeat["attestedMo
   return model ? { model, harness: textOrNull(value.harness) } : null;
 };
 
+/**
+ * The stage of a seat's step T3's restart cut short, until an attempt of that stage has ended
+ * since. The engine runs such a step once more, so a re-run still going is owed too. The engine
+ * marks the cut attempt `stopped` with this reason (Operation-PaperClip `engine.mjs`).
+ */
+const stepCutByT3 = (attempts: ReadonlyArray<Json>): string | null => {
+  const index = attempts.findLastIndex(
+    (attempt) => attempt.state === "stopped" && text(attempt.reason).startsWith("interrupted: T3 "),
+  );
+  if (index < 0) return null;
+  const stage = text(attempts[index]!.stage);
+  const ended = attempts
+    .slice(index + 1)
+    .some((attempt) => text(attempt.stage) === stage && textOrNull(attempt.ended) !== null);
+  return ended ? null : stage;
+};
+
+/** The seats whose step T3's restart cut short: each needs a person, whatever ran after. */
+export const stepsCutByT3 = (task: Pick<TaskView, "council"> | null) =>
+  (task?.council?.seats ?? []).flatMap((seat) =>
+    seat.cutByT3 === null ? [] : [{ seat: seat.seat, stage: seat.cutByT3 }],
+  );
+
 const parseCouncil = (council: Json): TaskCouncil => {
   const concurrency = isRecord(council.concurrency) ? council.concurrency : {};
   return {
@@ -1942,6 +1967,7 @@ const parseCouncil = (council: Json): TaskCouncil => {
       stage: textOrNull(seat.stage),
       verdict: textOrNull(seat.verdict),
       attempts: list(seat.attempts).length,
+      cutByT3: stepCutByT3(records(seat.attempts)),
       live: parseSeatLive(seat.live),
       // Blank is none: `ThreadId` refuses a blank id.
       threadId: text(seat.threadId).trim() || null,
