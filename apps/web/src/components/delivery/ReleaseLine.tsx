@@ -17,6 +17,7 @@ import {
   promotesInto,
   releaseLinesOf,
   repositoryIdentityFor,
+  repositoryProjectFor,
   stripPromotion,
 } from "./ReleaseLine.logic";
 import { TaskDisclosure } from "./TaskDisclosure";
@@ -134,6 +135,7 @@ export function ReleaseLines({
       {lines.map((line) => {
         const path = snapshot.repositories.find((entry) => entry.id === line.repository)?.path;
         const identity: RepositoryIdentity | null = repositoryIdentityFor(path, t3Projects);
+        const checkout = repositoryProjectFor(path, t3Projects, environmentId);
         return (
           <section
             key={line.repository}
@@ -158,6 +160,7 @@ export function ReleaseLines({
                       from={project}
                       to={next}
                       identity={identity}
+                      checkout={checkout}
                       promotion={stripPromotion(snapshot.promotions, project.id, next.id)}
                       unavailable={actions.unavailable}
                       disabled={actions.disabled}

@@ -154,25 +154,39 @@ export function instanceFacts(
   };
 }
 
-/** The T3 project that has the engine repository's folder checked out, if T3 knows one. */
-export function repositoryIdentityFor(
+type CheckedOutProject = {
+  workspaceRoot: string;
+  repositoryIdentity?: RepositoryIdentity | null | undefined;
+};
+
+/**
+ * The T3 project that has the engine repository's folder checked out, if T3 knows one. The folder
+ * is a path on the engine's host, so a given environment's projects only are searched.
+ */
+export function repositoryProjectFor<
+  Project extends CheckedOutProject & { environmentId?: string },
+>(
   path: string | null | undefined,
-  projects: ReadonlyArray<{
-    workspaceRoot: string;
-    repositoryIdentity?: RepositoryIdentity | null | undefined;
-  }>,
-): RepositoryIdentity | null {
+  projects: ReadonlyArray<Project>,
+  environmentId?: string | null,
+): Project | null {
   if (!path) return null;
   const clean = (value: string) => value.replace(/\/+$/, "");
   const target = clean(path);
   for (const project of projects) {
+    if (environmentId !== undefined && project.environmentId !== environmentId) continue;
     const identity = project.repositoryIdentity;
     if (!identity) continue;
     if (clean(project.workspaceRoot) === target || clean(identity.rootPath ?? "") === target)
-      return identity;
+      return project;
   }
   return null;
 }
+
+export const repositoryIdentityFor = (
+  path: string | null | undefined,
+  projects: ReadonlyArray<CheckedOutProject>,
+): RepositoryIdentity | null => repositoryProjectFor(path, projects)?.repositoryIdentity ?? null;
 
 /**
  * The PR's own URL from the engine, else the one its repository's host gives for its number.
@@ -237,7 +251,18 @@ const STATE_VIEWS: Record<
 > = {
   planned: { label: "Planned", tone: "waiting", actions: ["cancel"] },
   syncing: { label: "Syncing hotfixes", tone: "busy", actions: [] },
+  opening: { label: "Opening the sync PR", tone: "busy", actions: [] },
   conflicted: { label: "Conflicted", tone: "problem", actions: ["retry", "cancel"] },
+  resolved: {
+    label: "Resolved, awaiting approval",
+    tone: "waiting",
+    actions: ["approve", "retry", "cancel"],
+  },
+  "awaiting-merge": {
+    label: "Awaiting the host merge",
+    tone: "waiting",
+    actions: ["retry", "cancel"],
+  },
   "awaiting-qa": { label: "Awaiting QA", tone: "waiting", actions: ["cancel"] },
   ready: { label: "Ready to advance", tone: "waiting", actions: ["advance", "cancel"] },
   advancing: { label: "Advancing", tone: "busy", actions: [] },
@@ -362,6 +387,7 @@ export function promoteConfirm(
 
 const ACTION_LABELS: Record<DeploymentPromotionAction, string> = {
   advance: "Advance",
+  approve: "Approve sync",
   retry: "Retry",
   cancel: "Cancel promotion",
 };
@@ -371,7 +397,7 @@ export const promotionActionLabel = (action: DeploymentPromotionAction) => ACTIO
 export function promotionActionConfirm(
   promotion: DeploymentPromotion,
   action: DeploymentPromotionAction,
-  names: { from: string; to: string; toBranch: string },
+  names: { from: string; fromBranch: string; to: string; toBranch: string },
 ): PromotionConfirm {
   const path = promotionActionPath(promotion.id);
   const body = { action };
@@ -382,6 +408,25 @@ export function promotionActionConfirm(
       submit: "Advance",
       path,
       body,
+    };
+  }
+  if (action === "approve") {
+    const resolution = promotion.resolution;
+    const counts = resolution?.report?.counts;
+    const kept = counts
+      ? `${counts.present} present, ${counts.changed} changed, ${counts.missing} missing`
+      : "no report";
+    const lost = counts ? counts.changed + counts.missing : 0;
+    return {
+      title: `Approve the sync into ${names.from}`,
+      moves: `${
+        resolution?.merged
+          ? `${names.fromBranch} already has the sync head ${short12(resolution.head)}; approving lets the promotion go on.`
+          : `Fast-forwards ${names.fromBranch} to the sync head ${short12(resolution?.head)} with a plain push that is never forced. If ${names.fromBranch} is protected, the sync PR then waits for a merge on the host.`
+      } Hotfix hunks: ${kept}.${lost ? ` ${lost === 1 ? "1 hunk is" : `${lost} hunks are`} approved as ${lost === 1 ? "it stands" : "they stand"}.` : ""}`,
+      submit: "Approve sync",
+      path,
+      body: { action, head: resolution?.head },
     };
   }
   if (action === "retry") {
@@ -404,11 +449,19 @@ export function promotionActionConfirm(
 
 export type PendingConfirm =
   | { kind: "promote"; openedAt: string | null }
-  | { kind: "action"; action: DeploymentPromotionAction; openedAt: string | null };
+  | {
+      kind: "action";
+      action: DeploymentPromotionAction;
+      openedAt: string | null;
+      /** For approve: the sync head whose survival report the person was shown. */
+      head?: string | null;
+    };
 
 export type ConfirmationState =
   | { state: "reading" }
   | { state: "problem"; why: string }
+  /** The sync branch moved while the approval was open: its report is for another head. */
+  | { state: "moved"; why: string; head: string }
   | { state: "ready"; confirm: PromotionConfirm };
 
 /**
@@ -422,11 +475,27 @@ export function promotionConfirmation(input: {
   compare: DeploymentCompare | null;
   promotion: DeploymentPromotion | null;
   to: Pick<DeploymentProject, "mode" | "environment" | "branch">;
-  from: Pick<DeploymentProject, "environment">;
+  from: Pick<DeploymentProject, "environment" | "branch">;
 }): ConfirmationState {
   const { pending, compare, promotion } = input;
   if (pending.kind === "action" && !promotion)
     return { state: "problem", why: "This promotion is no longer listed." };
+  if (pending.kind === "action" && pending.action === "approve") {
+    const resolution = promotion!.resolution;
+    if (promotion!.state !== "resolved" || !resolution?.head)
+      return { state: "problem", why: "This promotion is no longer waiting for an approval." };
+    if (!resolution.report || resolution.report.problem)
+      return {
+        state: "problem",
+        why: `The survival report could not be made, so there is nothing to approve${resolution.report?.problem ? `: ${resolution.report.problem}` : "."}`,
+      };
+    if (pending.head !== resolution.head)
+      return {
+        state: "moved",
+        head: resolution.head,
+        why: `The sync branch moved: the report shown was for ${short12(pending.head) ?? "another head"}, and the engine now reports on ${short12(resolution.head)}. Read the new report on the card, then approve again.`,
+      };
+  }
   const movesBranch = pending.kind === "promote" || pending.action === "advance";
   if (movesBranch) {
     if (input.error)
@@ -443,8 +512,70 @@ export function promotionConfirmation(input: {
     state: "ready",
     confirm: promotionActionConfirm(promotion!, pending.action, {
       from: input.from.environment,
+      fromBranch: input.from.branch,
       to: input.to.environment,
       toBranch: input.to.branch,
     }),
   };
+}
+
+export type SurvivalTone = "kept" | "changed" | "missing" | "other";
+
+export type SurvivalRow = {
+  key: string;
+  path: string;
+  header: string;
+  commit: string;
+  /** The engine's status, or "superseded" for a hunk the promoted-into tip no longer has. */
+  status: string;
+  tone: SurvivalTone;
+  excerpt: ReadonlyArray<string>;
+};
+
+const SURVIVAL_TONES: Record<string, SurvivalTone> = {
+  present: "kept",
+  changed: "changed",
+  missing: "missing",
+};
+
+/**
+ * The survival report's hunks, missing and changed first so they are read before an approve. A
+ * superseded hunk is not counted against the resolution, so it reads as superseded, not missing.
+ */
+export function survivalRows(
+  report: NonNullable<NonNullable<DeploymentPromotion["resolution"]>["report"]>,
+): SurvivalRow[] {
+  const order: Record<SurvivalTone, number> = { missing: 0, changed: 1, other: 2, kept: 3 };
+  return report.hunks
+    .map((hunk, index) => {
+      const status = hunk.superseded ? "superseded" : hunk.status;
+      return {
+        key: `${hunk.commit}:${hunk.path}:${hunk.header}:${index}`,
+        path: hunk.path,
+        header: hunk.header,
+        commit: hunk.commit,
+        status,
+        tone: hunk.superseded ? "other" : (SURVIVAL_TONES[hunk.status] ?? "other"),
+        excerpt: hunk.excerpt ?? [],
+      } satisfies SurvivalRow;
+    })
+    .toSorted((a, b) => order[a.tone] - order[b.tone]);
+}
+
+/** The hotfix rows a sync must keep, PRs first, as the engine listed them. */
+export function hotfixRows(hotfixes: NonNullable<DeploymentPromotion["hotfixes"]>) {
+  return [
+    ...hotfixes.prs.map((pr) => ({
+      commit: pr.commit,
+      number: pr.number,
+      url: pr.url ?? null,
+      label: pr.title ?? pr.commit.slice(0, 12),
+    })),
+    ...hotfixes.loose.map((commit) => ({
+      commit: commit.commit,
+      number: null,
+      url: null,
+      label: commit.subject ?? commit.commit.slice(0, 12),
+    })),
+  ];
 }

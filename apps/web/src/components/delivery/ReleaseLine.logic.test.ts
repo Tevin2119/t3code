@@ -8,6 +8,7 @@ import { describe, expect, it } from "vite-plus/test";
 import { parseDeployments } from "../../lib/deployments";
 import recorded from "./ReleaseLine.fixtures.json";
 import promotions from "./ReleaseLine.promotions.json";
+import syncConflicts from "./ReleaseLine.syncConflicts.json";
 import {
   compareReadingProblem,
   instanceFacts,
@@ -21,7 +22,9 @@ import {
   pullRequestUrl,
   releaseLinesOf,
   repositoryIdentityFor,
+  repositoryProjectFor,
   stripPromotion,
+  survivalRows,
   taskInstancesSummary,
 } from "./ReleaseLine.logic";
 
@@ -250,11 +253,11 @@ describe("promotions on the strip", () => {
   it("shows a state it does not know by name, with its reason and a way out", () => {
     const view = promotionView({
       ...states["conflicted"]!,
-      state: "awaiting-merge",
+      state: "awaiting-checks",
       problem: "Sync PR #7 waits for review.",
     });
     expect(view).toEqual({
-      label: "awaiting-merge",
+      label: "awaiting-checks",
       tone: "unknown",
       reason: "Sync PR #7 waits for review.",
       actions: ["cancel"],
@@ -290,6 +293,7 @@ describe("promotions on the strip", () => {
     const ready = states["ready"]!;
     const advance = promotionActionConfirm(ready, "advance", {
       from: "qa",
+      fromBranch: "qa",
       to: "app",
       toBranch: "main",
     });
@@ -354,7 +358,7 @@ describe("the confirmation shows what the engine will read", () => {
   const withHotfix = parseDeploymentCompare(recorded.withHotfix)!;
   const afterPromoted = parseDeploymentCompare(promotions.compareAfterPromoted)!;
   const sides = {
-    from: { environment: "qa" },
+    from: { environment: "qa", branch: "qa" },
     to: { environment: "app", branch: "main", mode: "manual" as const },
   };
   const opened = "2026-11-27T05:00:00.000Z";
@@ -429,5 +433,147 @@ describe("the confirmation shows what the engine will read", () => {
       state: "problem",
       why: "This promotion is no longer listed.",
     });
+  });
+});
+
+describe("a sync conflict through the sync PR (D3b)", () => {
+  // Recorded from the engine's promotions.mjs at 0cef3352, through the same snapshot decoder.
+  const recordedSync = parseDeployments({
+    version: 1,
+    problem: null,
+    projects: [],
+    candidates: [],
+    repositories: [],
+    capabilities: { engine: false, command: true, "firebase-hosting": false },
+    promotions: Object.values(syncConflicts.states),
+  })!.promotions!;
+  const sync = Object.fromEntries(
+    recordedSync.map((p, i) => [Object.keys(syncConflicts.states)[i]!, p]),
+  );
+  const names = { from: "qa", fromBranch: "qa", to: "app", toBranch: "main" };
+  const qa = { environment: "qa", branch: "qa" };
+  const app = { environment: "app", branch: "main", mode: "manual" as const };
+
+  it("decodes the recorded promotions with their sync PR, hotfixes and report", () => {
+    expect(recordedSync).toHaveLength(Object.keys(syncConflicts.states).length);
+    const conflicted = sync["conflicted"]!;
+    expect(conflicted.syncPr?.url).toBe("https://github.com/Tevin2119/t3code-fixture/pull/7");
+    expect(conflicted.syncPr?.head).toBe(`paperclip/sync/${conflicted.id}`);
+    expect(conflicted.hotfixes?.count).toBe(3);
+    expect(conflicted.conflict?.files).toEqual(["app/banner.txt", "app/price.txt"]);
+    expect(sync["resolved"]!.resolution?.report?.counts).toEqual({
+      present: 1,
+      changed: 1,
+      missing: 1,
+      superseded: 1,
+    });
+  });
+
+  it("offers approve only when resolved, and a way out in every sync state", () => {
+    expect(
+      Object.fromEntries(Object.entries(sync).map(([name, p]) => [name, promotionView(p).actions])),
+    ).toEqual({
+      opening: [],
+      conflicted: ["retry", "cancel"],
+      resolved: ["approve", "retry", "cancel"],
+      resolvedNewer: ["approve", "retry", "cancel"],
+      "awaiting-merge": ["retry", "cancel"],
+    });
+  });
+
+  it("lists missing and changed hunks first, and a superseded one as superseded", () => {
+    const rows = survivalRows(sync["resolved"]!.resolution!.report!);
+    expect(rows.map((row) => [row.path, row.status, row.tone])).toEqual([
+      ["app/price.txt", "missing", "missing"],
+      ["app/banner.txt", "changed", "changed"],
+      ["app/hotfix.js", "superseded", "other"],
+      ["app/hotfix.js", "present", "kept"],
+    ]);
+  });
+
+  it("approves the head whose report was shown, keyed and named by the approval dialog", () => {
+    const resolved = sync["resolved"]!;
+    const head = resolved.resolution!.head;
+    const approve = promotionActionConfirm(resolved, "approve", names);
+    expect(approve.path).toBe(`/api/deployments/promotions/${resolved.id}/action`);
+    expect(approve.body).toEqual({ action: "approve", head });
+    expect(approve.moves).toContain(`Fast-forwards qa to the sync head ${head.slice(0, 12)}`);
+    expect(approve.moves).toContain("1 present, 1 changed, 1 missing");
+    expect(approve.moves).toContain("2 hunks are approved as they stand.");
+    const shown = promotionConfirmation({
+      pending: { kind: "action", action: "approve", openedAt: null, head },
+      readAt: null,
+      error: null,
+      compare: null,
+      promotion: resolved,
+      to: app,
+      from: qa,
+    });
+    expect(shown).toEqual({ state: "ready", confirm: approve });
+  });
+
+  it("says the head moved when a refresh reports on a newer push, and asks again", () => {
+    const shownHead = sync["resolved"]!.resolution!.head;
+    const newer = sync["resolvedNewer"]!;
+    const moved = promotionConfirmation({
+      pending: { kind: "action", action: "approve", openedAt: null, head: shownHead },
+      readAt: null,
+      error: null,
+      compare: null,
+      promotion: newer,
+      to: app,
+      from: qa,
+    });
+    expect(moved).toEqual({
+      state: "moved",
+      head: newer.resolution!.head,
+      why: `The sync branch moved: the report shown was for ${shownHead.slice(0, 12)}, and the engine now reports on ${newer.resolution!.head.slice(0, 12)}. Read the new report on the card, then approve again.`,
+    });
+    // The engine refuses the old head the same way (recorded): 400, read the report again.
+    expect(syncConflicts.approveStaleHead.status).toBe(400);
+    expect(syncConflicts.approveNoHead.status).toBe(400);
+  });
+
+  it("refuses an approve once the promotion left resolved, or its report failed", () => {
+    const pending = {
+      kind: "action",
+      action: "approve",
+      openedAt: null,
+      head: "a".repeat(40),
+    } as const;
+    const base = { pending, readAt: null, error: null, compare: null, to: app, from: qa };
+    expect(promotionConfirmation({ ...base, promotion: sync["awaiting-merge"]! }).state).toBe(
+      "problem",
+    );
+    const failed = {
+      ...sync["resolved"]!,
+      resolution: {
+        ...sync["resolved"]!.resolution!,
+        report: { ...sync["resolved"]!.resolution!.report!, problem: "A file could not be read." },
+      },
+    };
+    expect(promotionConfirmation({ ...base, promotion: failed })).toEqual({
+      state: "problem",
+      why: "The survival report could not be made, so there is nothing to approve: A file could not be read.",
+    });
+  });
+
+  it("finds the T3 project that has the engine repository checked out", () => {
+    const identity = {
+      canonicalKey: "k",
+      locator: { source: "git-remote", remoteName: "origin", remoteUrl: "u" },
+    } as never;
+    const projects = [
+      {
+        id: "other",
+        environmentId: "laptop",
+        workspaceRoot: "/repo",
+        repositoryIdentity: identity,
+      },
+      { id: "p1", environmentId: "host", workspaceRoot: "/repo/", repositoryIdentity: identity },
+    ];
+    expect(repositoryProjectFor("/repo", projects, "host")?.id).toBe("p1");
+    expect(repositoryProjectFor("/repo", projects, "desk")).toBeNull();
+    expect(repositoryProjectFor("/elsewhere", projects, "host")).toBeNull();
   });
 });

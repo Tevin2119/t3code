@@ -132,9 +132,26 @@ describe("deployment contract", () => {
         key: "passphrase",
       }),
     ).toEqual({ action: "retry", by: "Sam", key: "passphrase" });
+    const head = "fcd36174a8d4b2989eea474a0e25bd553272dc5d";
+    expect(
+      deploymentRequestBody("/api/deployments/promotions/promo-1a2b/action", {
+        action: "approve",
+        head,
+        by: "Sam",
+        key: "passphrase",
+      }),
+    ).toEqual({ action: "approve", head, by: "Sam", key: "passphrase" });
     expect(() =>
       deploymentRequestBody("/api/deployments/promotions/promo-1a2b/action", {
         action: "approve",
+        head: "not a commit",
+        by: "Sam",
+        key: "passphrase",
+      }),
+    ).toThrow();
+    expect(() =>
+      deploymentRequestBody("/api/deployments/promotions/promo-1a2b/action", {
+        action: "merge",
         by: "Sam",
         key: "passphrase",
       }),

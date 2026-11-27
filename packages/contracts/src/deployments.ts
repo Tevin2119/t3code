@@ -148,6 +148,76 @@ export const DeploymentReleaseLine = Schema.Struct({
   problem: Schema.NullOr(Schema.String),
 });
 export type DeploymentReleaseLine = typeof DeploymentReleaseLine.Type;
+/** The hotfixes on `to`'s branch that a sync must keep: compare's `fromTip..toTip` range. */
+export const DeploymentPromotionHotfixes = Schema.Struct({
+  count: Schema.Number,
+  truncated: Schema.optional(Schema.Boolean),
+  prs: Schema.Array(
+    Schema.Struct({
+      number: Schema.NullOr(Schema.Number),
+      url: OptionalText,
+      title: OptionalText,
+      commit: Schema.String,
+    }),
+  ),
+  loose: Schema.Array(Schema.Struct({ commit: Schema.String, subject: OptionalText })),
+});
+export type DeploymentPromotionHotfixes = typeof DeploymentPromotionHotfixes.Type;
+/** The sync pull request: head `paperclip/sync/<id>`, base `from`'s branch. */
+// Every field is optional: a sync PR the engine half-records must not drop the whole snapshot.
+export const DeploymentPromotionSyncPr = Schema.Struct({
+  host: OptionalText,
+  repository: OptionalText,
+  number: Schema.optional(Schema.NullOr(Schema.Number)),
+  url: OptionalText,
+  head: OptionalText,
+  base: OptionalText,
+  state: OptionalText,
+  reason: OptionalText,
+});
+export type DeploymentPromotionSyncPr = typeof DeploymentPromotionSyncPr.Type;
+/** One hotfix hunk against the resolved tree. Status is any string, so a newer one shows by name. */
+export const DeploymentSurvivalHunk = Schema.Struct({
+  commit: Schema.String,
+  path: Schema.String,
+  header: Schema.String,
+  status: Schema.String,
+  superseded: Schema.optional(Schema.Boolean),
+  excerpt: Schema.optional(Schema.Array(Schema.String)),
+});
+export type DeploymentSurvivalHunk = typeof DeploymentSurvivalHunk.Type;
+/** The hotfix survival report, made for exactly one sync branch head. */
+export const DeploymentSurvivalReport = Schema.Struct({
+  head: Schema.String,
+  commits: Schema.optional(
+    Schema.Array(
+      Schema.Struct({
+        commit: Schema.String,
+        subject: OptionalText,
+        pr: Schema.optional(Schema.NullOr(Schema.Number)),
+      }),
+    ),
+  ),
+  hunks: Schema.Array(DeploymentSurvivalHunk),
+  counts: Schema.Struct({
+    present: Schema.Number,
+    changed: Schema.Number,
+    missing: Schema.Number,
+    superseded: Schema.Number,
+  }),
+  truncated: Schema.optional(Schema.Boolean),
+  problem: OptionalText,
+});
+export type DeploymentSurvivalReport = typeof DeploymentSurvivalReport.Type;
+export const DeploymentPromotionResolution = Schema.Struct({
+  head: Schema.String,
+  report: Schema.optional(Schema.NullOr(DeploymentSurvivalReport)),
+  merged: Schema.optional(Schema.Boolean),
+  approved: Schema.optional(
+    Schema.NullOr(Schema.Struct({ by: Schema.String, head: Schema.String })),
+  ),
+});
+export type DeploymentPromotionResolution = typeof DeploymentPromotionResolution.Type;
 /**
  * A promotion of one instance's verified live commit into the instance it promotes into.
  * State is any string: a newer engine adds states, which are shown by name with their reason.
@@ -163,6 +233,17 @@ export const DeploymentPromotion = Schema.Struct({
   waiting: OptionalText,
   source: OptionalText,
   sync: Schema.optional(Schema.NullOr(Schema.Struct({ commit: OptionalText }))),
+  // A conflicted sync (D3b): what must survive, the sync branch and PR, and the survival report.
+  conflict: Schema.optional(
+    Schema.NullOr(Schema.Struct({ files: Schema.optional(Schema.Array(Schema.String)) })),
+  ),
+  hotfixes: Schema.optional(Schema.NullOr(DeploymentPromotionHotfixes)),
+  syncBranch: Schema.optional(
+    Schema.NullOr(Schema.Struct({ name: Schema.String, commit: OptionalText })),
+  ),
+  syncPr: Schema.optional(Schema.NullOr(DeploymentPromotionSyncPr)),
+  hostProblem: OptionalText,
+  resolution: Schema.optional(Schema.NullOr(DeploymentPromotionResolution)),
   events: Schema.optional(Schema.Array(Schema.Struct({ at: Schema.String, type: Schema.String }))),
   createdAt: OptionalText,
   updatedAt: OptionalText,
@@ -324,7 +405,7 @@ export const DeploymentDependenciesInput = Schema.Struct({
   ...Approval,
 });
 
-export const DeploymentPromotionAction = Schema.Literals(["advance", "retry", "cancel"]);
+export const DeploymentPromotionAction = Schema.Literals(["advance", "approve", "retry", "cancel"]);
 export type DeploymentPromotionAction = typeof DeploymentPromotionAction.Type;
 export const DeploymentPromotionInput = Schema.Struct({
   from: TrimmedNonEmptyString,
@@ -333,5 +414,7 @@ export const DeploymentPromotionInput = Schema.Struct({
 });
 export const DeploymentPromotionActionInput = Schema.Struct({
   action: DeploymentPromotionAction,
+  // Approve names the sync branch head whose survival report was shown; the engine refuses another.
+  head: Schema.optional(Schema.String.check(Schema.isPattern(/^[0-9a-f]{40}$/))),
   ...Approval,
 });
