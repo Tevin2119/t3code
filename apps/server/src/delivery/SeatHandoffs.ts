@@ -159,6 +159,38 @@ const checklistChanged = (items: ReadonlyArray<string>) =>
       : `Check the current acceptance items before filing again. Use a zero-based acceptanceIndex (item 1 is index 0).\n${items.map((item, index) => `${index + 1}. ${item}`).join("\n")}`,
   );
 
+/**
+ * Attests a seat of a run as the thread T3 runs it in. The engine keeps QA independence: it
+ * refuses a QA receipt from a seat it has not attested for the current run.
+ */
+export const attestSeatWith = Effect.fn("SeatHandoffs.attestSeatAs")(function* (
+  delivery: DeliveryService.DeliveryService["Service"],
+  hostEnvironment: NodeJS.ProcessEnv,
+  input: {
+    readonly environmentId: EnvironmentId;
+    readonly run: string;
+    readonly seat: string;
+    readonly threadId: ThreadId;
+    readonly model: string;
+    readonly harness?: string;
+  },
+) {
+  const key = hostEnvironment[DeliveryService.BOARD_THREAD_KEY_VARIABLE];
+  if (!key) return yield* missingKey();
+  const { environmentId, run, seat, threadId, model, harness } = input;
+  const response = yield* delivery
+    .boardThreadAct({
+      method: "POST",
+      path: `/api/runs/${run}/seat-attestations`,
+      body: { seat, environmentId, threadId, model, harness, setBy: environmentId, key },
+    })
+    .pipe(Effect.mapError((error) => engineFailure(error, "attest the seat")));
+  const { attestation } = yield* decodeAttestation(response.body).pipe(
+    Effect.mapError(() => invalidRequest("The engine did not return a seat attestation.")),
+  );
+  return attestation;
+});
+
 export class SeatHandoffs extends Context.Service<
   SeatHandoffs,
   {
@@ -200,28 +232,22 @@ const make = Effect.gen(function* () {
     );
   });
 
-  const attestSeatAs = Effect.fn("SeatHandoffs.attestSeatAs")(function* (
+  const attestSeatAs = (
     environmentId: EnvironmentId,
     run: string,
     seat: string,
     threadId: ThreadId,
     model: string,
     harness?: string,
-  ) {
-    const key = hostEnvironment[DeliveryService.BOARD_THREAD_KEY_VARIABLE];
-    if (!key) return yield* missingKey();
-    const response = yield* delivery
-      .boardThreadAct({
-        method: "POST",
-        path: `/api/runs/${run}/seat-attestations`,
-        body: { seat, environmentId, threadId, model, harness, setBy: environmentId, key },
-      })
-      .pipe(Effect.mapError((error) => engineFailure(error, "attest the seat")));
-    const { attestation } = yield* decodeAttestation(response.body).pipe(
-      Effect.mapError(() => invalidRequest("The engine did not return a seat attestation.")),
-    );
-    return attestation;
-  });
+  ) =>
+    attestSeatWith(delivery, hostEnvironment, {
+      environmentId,
+      run,
+      seat,
+      threadId,
+      model,
+      ...(harness === undefined ? {} : { harness }),
+    });
 
   const findThread = Effect.fn("SeatHandoffs.findThread")((threadId: ThreadId) =>
     threads.getThreadShell(threadId).pipe(

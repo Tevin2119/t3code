@@ -226,6 +226,12 @@ export class BoardTaskThreads extends Context.Service<
       ReadonlyMap<string, BoardThreadHold>,
       BoardTaskThreadsError
     >;
+    /**
+     * Claims a task for its conversation here, or renews the claim this server holds: whether it
+     * holds it now. A step T3 runs for the engine keeps its task's claim alive with this, so the
+     * engine never takes the step for abandoned while T3 works it.
+     */
+    readonly holdTask: (taskId: string, threadId: ThreadId) => Effect.Effect<boolean>;
     readonly start: () => Effect.Effect<void, never, Scope.Scope>;
   }
 >()("t3/delivery/BoardTaskThreads") {}
@@ -781,7 +787,14 @@ export const make = Effect.gen(function* () {
       ),
     );
   });
-  return BoardTaskThreads.of({ reconcile, start });
+  const holdTask = Effect.fn("BoardTaskThreads.holdTask")(function* (
+    taskId: string,
+    threadId: ThreadId,
+  ) {
+    yield* holdClaim(taskId, yield* identity.getEnvironmentId, threadId);
+    return holders.has(taskId);
+  });
+  return BoardTaskThreads.of({ reconcile, holdTask, start });
 });
 
 export const layer = Layer.effect(BoardTaskThreads, make);

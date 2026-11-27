@@ -1048,7 +1048,8 @@ export type OrchestrationV2RemoteTaskChild = typeof OrchestrationV2RemoteTaskChi
 
 const TeamChatParticipation = Schema.Struct({
   sourceRunId: RunId,
-  stage: Schema.Literals(["contribution", "critique"]),
+  /** `engine`: a board task's engine stage, whose seat is the engine's step, not a view. */
+  stage: Schema.Literals(["contribution", "critique", "engine"]),
   seat: TrimmedNonEmptyString,
   /** The seat's own model, when this turn runs on a substitute because that one was limited. */
   substituteFor: Schema.optional(
@@ -1477,6 +1478,22 @@ const SubagentNotificationSource = Schema.Struct({
   childThreadId: Schema.optional(ThreadId),
 });
 const CommandNotificationSource = Schema.Struct({ kind: Schema.Literal("command") });
+/** One seat of an engine stage: a board task's native attempt, run as a child of the task thread. */
+export const OrchestrationV2EngineStageSeat = Schema.Struct({
+  attemptId: TrimmedNonEmptyString,
+  seat: TrimmedNonEmptyString,
+  childThreadId: ThreadId,
+  modelSelection: ModelSelection,
+  access: Schema.Literals(["read-only", "full"]),
+  worktreePath: TrimmedNonEmptyString,
+});
+export type OrchestrationV2EngineStageSeat = typeof OrchestrationV2EngineStageSeat.Type;
+/** A system turn of a board task's thread that starts the engine's seats for one stage. */
+const EngineStageNotificationSource = Schema.Struct({
+  kind: Schema.Literal("engine_stage"),
+  stage: TrimmedNonEmptyString,
+  seats: Schema.Array(OrchestrationV2EngineStageSeat).check(Schema.isMaxLength(32)),
+});
 const OrchestrationV2NotificationOutcome = Schema.Literals([
   "completed",
   "failed",
@@ -1537,6 +1554,7 @@ export const OrchestrationV2NotificationSource = kindUnionWithFallback(
     }),
     Schema.Struct({ kind: Schema.Literal("background_task") }),
     Schema.Struct({ kind: Schema.Literal("system") }),
+    EngineStageNotificationSource,
   ],
   (kind) => Schema.Struct({ kind }),
   () => ({ kind: "background_task" }),

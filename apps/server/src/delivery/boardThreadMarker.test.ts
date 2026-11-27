@@ -89,10 +89,10 @@ const BOARD_TASK_READS = [
     file: "apps/server/src/delivery/BoardTaskThreads.ts",
     line: "const stamped = boardTaskOfMarker(created.thread.lineage.engineIntake);",
   },
-  // A board task's conversation starts no team round while the engine does the task's work.
+  // A board task's conversation starts no team round but for the engine's brief.
   {
     file: "apps/server/src/delivery/NativeTeamChat.ts",
-    line: "if (boardTaskOfMarker(parent.thread.lineage.engineIntake) !== null)",
+    line: "boardTaskOfMarker(parent.thread.lineage.engineIntake) !== null &&",
   },
   {
     file: "apps/server/src/delivery/SeatHandoffs.ts",
@@ -106,6 +106,16 @@ const BOARD_TASK_READS = [
   {
     file: "apps/server/src/delivery/SeatHandoffs.ts",
     line: "const task = boardTaskOfMarker(lead?.lineage.engineIntake);",
+  },
+  // A board task's read-only brief is declined every change, like a read-only participant.
+  {
+    file: "apps/server/src/delivery/TeamChatReadOnlyReactor.ts",
+    line: "if (!(yield* readOnlyBrief(child.id, child.lineage.engineIntake, event.runId))) return;",
+  },
+  // A step the engine queued runs only in the thread made for its task.
+  {
+    file: "apps/server/src/delivery/BoardTaskExecution.ts",
+    line: "const marked = boardTaskOfMarker(records.value.thread.lineage.engineIntake);",
   },
 ];
 

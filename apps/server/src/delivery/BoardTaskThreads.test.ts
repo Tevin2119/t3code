@@ -132,7 +132,11 @@ function threadStore() {
     const message = { id: `reply:${runId}`, role: "assistant", runId, createdBy: "agent" };
     commit(threadId, "message.updated", { ...message, text: text.slice(0, 5), streaming: true });
     commit(threadId, "message.updated", { ...message, text, streaming: false });
-    commit(threadId, "run.updated", { id: runId, status: "completed" });
+    commit(threadId, "run.updated", {
+      id: runId,
+      status: "completed",
+      userMessageId: runId.slice("run:".length),
+    });
     active.delete(threadId);
   };
   const dispatch = (command: OrchestrationV2ServerCommand) =>
@@ -1389,9 +1393,12 @@ it.effect("mirrors each conversation event once, across a restart and a replaced
     store.say(THREAD, "m-1", "Build the  thing\nplease", "system");
     store.reply(THREAD, "x".repeat(300));
     store.say(THREAD, "m-2", "a person's words", "user");
+    store.say(THREAD, "message:board-brief:att-plan", "The engine's brief", "system");
+    store.reply(THREAD, "The engine's plan");
     yield* first.reconcile();
     // Each seq is the event store's own; a streamed reply counts once, when its run completes. A
-    // person's words are a steer with no excerpt, so they never reach the card.
+    // person's words are a steer with no excerpt, so they never reach the card. An engine step and
+    // its answer are left out whole: the engine has its own record of both.
     assert.deepEqual(
       engine.activityOf("task-7").map((row) => [row.seq, row.kind, row.excerpt, row.setBy]),
       [
@@ -1417,14 +1424,14 @@ it.effect("mirrors each conversation event once, across a restart and a replaced
     yield* after.reconcile();
     assert.deepEqual(
       engine.activityOf("task-7").map((row) => row.seq),
-      [1, 4, 5, 6],
+      [1, 4, 5, 10],
     );
     const delivery = yield* DeliveryService.DeliveryService;
     yield* delivery.boardThreadAct({
       method: "POST",
       path: "/api/tasks/task-7/activity",
       body: {
-        seq: 7,
+        seq: 11,
         at: "2026-11-23T00:00:00.000Z",
         kind: "message",
         setBy: "previous-environment",

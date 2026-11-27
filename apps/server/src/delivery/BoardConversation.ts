@@ -13,8 +13,6 @@ import {
   type ThreadId,
 } from "@t3tools/contracts";
 import { writeFileStringAtomically } from "@t3tools/shared/atomicWrite";
-import { modelAccountFamily } from "@t3tools/shared/limitedSeat";
-import { createModelSelection } from "@t3tools/shared/model";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -31,10 +29,11 @@ import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
 import { boardTaskFinishedBy } from "@t3tools/shared/boardTaskFinished";
+import { isEngineMessageId } from "./boardTaskAttempts.ts";
 import { boardTaskInWork, MOVED } from "./boardTaskWork.ts";
 import { boardTaskOf, boardTaskThreadMarker, type BoardTask } from "./boardThreadMarker.ts";
 import * as DeliveryService from "./DeliveryService.ts";
-import { BoardLeadSeat, boardLeadSeat, resolveSeatProvider } from "./seatProvider.ts";
+import { BoardLeadSeat, boardLeadSeat, turnSelection as pickSelection } from "./seatProvider.ts";
 
 /** The engine's bound on an excerpt. Over it an ingest is refused whole. */
 const EXCERPT_LIMIT = 200;
@@ -129,6 +128,8 @@ function scanActivity(
       }
       if (message.role !== "user" || state.messages.has(message.id)) continue;
       state.messages.add(message.id);
+      // The engine's own steps are its record, not the card's, and never a steer.
+      if (isEngineMessageId(message.id)) continue;
       const typed = message.createdBy === "user";
       const steer =
         message.id.startsWith(STEER_MESSAGE_PREFIX) ||
@@ -150,7 +151,8 @@ function scanActivity(
       state.runs.add(run.id);
       const reply = state.lastReply.get(run.id);
       state.lastReply.delete(run.id);
-      if (reply === undefined) continue;
+      // An engine step's answer is the engine's to record, as its prompt is.
+      if (reply === undefined || isEngineMessageId(run.userMessageId)) continue;
       found.push({
         seq: stored.sequence,
         at: DateTime.formatIso(event.occurredAt),
@@ -364,23 +366,10 @@ export const make = Effect.gen(function* () {
     // No pick, one this build cannot read, or a lead picked only when it runs: the thread keeps
     // the model it has.
     if (!published || published.model === null) return undefined;
-    const providers = yield* instances.listInstances;
-    const existing = providers.find((provider) => provider.instanceId === current.instanceId);
-    const next = resolveSeatProvider(
-      providers.filter((provider) => provider.enabled),
-      published.harness,
-      (provider) => provider.instanceId,
-      current.instanceId,
-    );
-    if (
-      typeof next === "string" ||
-      modelAccountFamily(existing?.driverKind, current.model) !==
-        modelAccountFamily(next.driverKind, published.model)
-    )
-      return undefined;
-    return next.instanceId === current.instanceId && published.model === current.model
-      ? current
-      : createModelSelection(next.instanceId, published.model);
+    return pickSelection(yield* instances.listInstances, current, {
+      harness: published.harness,
+      model: published.model,
+    });
   });
 
   /**

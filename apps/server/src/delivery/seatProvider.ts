@@ -1,9 +1,12 @@
 import {
   defaultInstanceIdForDriver,
   DELIVERY_HARNESS_BY_DRIVER,
+  type ModelSelection,
   type ProviderDriverKind,
   type ProviderInstanceId,
 } from "@t3tools/contracts";
+import { modelAccountFamily } from "@t3tools/shared/limitedSeat";
+import { createModelSelection } from "@t3tools/shared/model";
 import * as Schema from "effect/Schema";
 
 export const BoardLeadSeat = Schema.Struct({
@@ -36,4 +39,36 @@ export function resolveSeatProvider<T extends { readonly driverKind: ProviderDri
         (preferredInstanceId ?? defaultInstanceIdForDriver(candidate.driverKind)),
     ) ?? "ambiguous-provider"
   );
+}
+
+/**
+ * The selection a thread's next turn takes for an engine pick: the pick itself when it is a model
+ * of the same account family the thread runs on, so the turn switches model in place. Undefined
+ * when the pick names no provider here, or another family: the thread cannot switch to it.
+ */
+export function turnSelection(
+  providers: ReadonlyArray<{
+    readonly instanceId: ProviderInstanceId;
+    readonly driverKind: ProviderDriverKind;
+    readonly enabled: boolean;
+  }>,
+  current: ModelSelection,
+  pick: { readonly harness: string; readonly model: string },
+): ModelSelection | undefined {
+  const existing = providers.find((provider) => provider.instanceId === current.instanceId);
+  const next = resolveSeatProvider(
+    providers.filter((provider) => provider.enabled),
+    pick.harness,
+    (provider) => provider.instanceId,
+    current.instanceId,
+  );
+  if (
+    typeof next === "string" ||
+    modelAccountFamily(existing?.driverKind, current.model) !==
+      modelAccountFamily(next.driverKind, pick.model)
+  )
+    return undefined;
+  return next.instanceId === current.instanceId && pick.model === current.model
+    ? current
+    : createModelSelection(next.instanceId, pick.model);
 }

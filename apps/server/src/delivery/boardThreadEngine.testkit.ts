@@ -59,6 +59,41 @@ export interface ScratchSteer {
   failure: string | null;
 }
 
+/**
+ * A native attempt v2 as the engine's native-builds.mjs keeps it: the engine's step
+ * of a run on a board with "t3" execution, claimed, attached and completed by T3.
+ */
+export interface ScratchAttempt {
+  readonly version: 2;
+  readonly id: string;
+  readonly run: string;
+  readonly task: string;
+  readonly stage: string;
+  readonly kind: string;
+  readonly seat: string;
+  readonly role: string | null;
+  readonly lead: boolean;
+  readonly access: "full" | "workspace" | "read-only";
+  readonly contract: string;
+  readonly participants?: ReadonlyArray<{
+    seat: string;
+    role: string | null;
+    harness: string;
+    model: string | null;
+  }>;
+  readonly worktree: string;
+  readonly harness: string;
+  readonly model: string | null;
+  readonly prompt: string;
+  state: string;
+  owner: string | null;
+  native: Record<string, string | null> | null;
+  cancelRequested: boolean;
+  result: Record<string, unknown> | null;
+}
+
+const TERMINAL_ATTEMPT = ["completed", "failed", "cancelled", "interrupted"];
+
 interface Answer {
   readonly status: number;
   readonly body: unknown;
@@ -115,6 +150,8 @@ export function scratchEngine(
   const drops: Array<RegExp> = [];
   /** Requests whose path matches are answered with this instead, once each, before routing. */
   const answers: Array<{ readonly path: RegExp; readonly answer: Answer }> = [];
+  const attempts = new Map<string, ScratchAttempt>();
+  const attestations: Array<Record<string, unknown>> = [];
   let teams: unknown = [];
   let clock = Date.parse("2026-11-22T10:00:00.000Z");
   let holderSeq = 0;
@@ -356,11 +393,122 @@ export function scratchEngine(
     return then(lease);
   };
 
-  const handle = (method: string, pathname: string, raw: unknown): Answer => {
+  /** The v2 rules of native-builds.mjs: owner, receipt and immutability. */
+  const attemptAct = (id: string, action: string, body: Record<string, unknown>): Answer => {
+    const record = attempts.get(id);
+    if (!record) return refused(404, "No native build has this attempt id.");
+    if (action === "claim") {
+      if (typeof body.owner !== "string" || !body.owner.trim())
+        return refused(400, "A native coordinator identity is required.");
+      if (body.worktree !== record.worktree)
+        return refused(400, "Attach the native coordinator to this build's existing worktree.");
+      if (record.owner && record.owner !== body.owner)
+        return refused(409, "This native attempt already has a coordinator.");
+      if (!TERMINAL_ATTEMPT.includes(record.state)) {
+        record.owner = body.owner;
+        record.state = "claimed";
+        events.push({ kind: "native.claimed", task: record.task, data: { attempt: id } });
+      }
+      return { status: 200, body: record };
+    }
+    if (!record.owner || record.owner !== body.owner)
+      return refused(409, "This native attempt belongs to another coordinator.");
+    if (action === "attach") {
+      if (typeof body.environmentId !== "string")
+        return refused(400, "A native attempt receipt names the T3 environment it runs in.");
+      const native = record.lead
+        ? typeof body.threadId === "string"
+          ? {
+              environmentId: body.environmentId,
+              threadId: body.threadId,
+              runId: typeof body.runId === "string" ? body.runId : null,
+            }
+          : null
+        : typeof body.childThreadId === "string"
+          ? { environmentId: body.environmentId, childThreadId: body.childThreadId }
+          : null;
+      if (native === null) return refused(400, "The native attempt receipt is incomplete.");
+      if (record.native && JSON.stringify(record.native) !== JSON.stringify(native))
+        return refused(400, "A native attempt cannot change its thread.");
+      if (!record.native)
+        events.push({ kind: "native.attached", task: record.task, data: { attempt: id, native } });
+      record.native = native;
+      return { status: 200, body: record };
+    }
+    const thread = record.lead ? record.native?.threadId : record.native?.childThreadId;
+    const given = record.lead ? body.threadId : body.childThreadId;
+    if (!record.native || !thread || given !== thread)
+      return refused(400, "Native completion does not match the attached thread.");
+    if (!TERMINAL_ATTEMPT.includes(body.state as string) || typeof body.text !== "string")
+      return refused(400, "Invalid native terminal result.");
+    if (TERMINAL_ATTEMPT.includes(record.state)) {
+      if (record.state !== body.state || record.result?.text !== body.text)
+        return refused(400, "Native terminal results are immutable.");
+      return { status: 200, body: record };
+    }
+    const contributions = (body.contributions ?? []) as ReadonlyArray<Record<string, unknown>>;
+    if (contributions.length > 0 && record.kind !== "team-plan")
+      return refused(400, "Only a team plan carries contributions.");
+    const seats = new Set((record.participants ?? []).map((item) => item.seat));
+    if (contributions.some((item) => !seats.has(item.seat as string)))
+      return refused(400, "Each contribution names a participant of the team plan.");
+    record.state = body.state as string;
+    record.result = {
+      text: body.text,
+      reason: body.reason ?? null,
+      contributions,
+      model: body.model ?? null,
+      harness: body.harness ?? null,
+    };
+    events.push({ kind: "native.completed", task: record.task, data: { attempt: id } });
+    return { status: 200, body: record };
+  };
+
+  const handle = (
+    method: string,
+    pathname: string,
+    raw: unknown,
+    search: URLSearchParams = new URLSearchParams(),
+  ): Answer => {
     const body = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
     requests.push({ method, path: pathname, body: raw });
     const forced = answers.findIndex((entry) => entry.path.test(pathname));
     if (forced >= 0) return answers.splice(forced, 1)[0]!.answer;
+    if (method === "GET" && pathname === "/api/native-builds") {
+      const pending = [...attempts.values()]
+        .filter((record) => !TERMINAL_ATTEMPT.includes(record.state))
+        .map(({ prompt: _prompt, ...record }) => record);
+      // Version 1 is what coordinators decode; v2 records are listed with ?version=2 only.
+      return search.get("version") === "2"
+        ? { status: 200, body: { version: 2, access: ["full", "read-only"], pending } }
+        : { status: 200, body: { version: 1, enabled: false, access: ["full"], pending: [] } };
+    }
+    const attempt = /^\/api\/native-builds\/(att-[\w-]+)(?:\/(claim|attach|complete))?$/.exec(
+      pathname,
+    );
+    if (attempt && method === "GET" && attempt[2] === undefined) {
+      const record = attempts.get(attempt[1]!);
+      return record ? { status: 200, body: record } : refused(404, "No native build here.");
+    }
+    if (attempt && method === "POST" && attempt[2] !== undefined)
+      return attemptAct(attempt[1]!, attempt[2], body);
+    const attest = /^\/api\/runs\/([\w-]+)\/seat-attestations$/.exec(pathname);
+    if (attest && method === "POST") {
+      if (body.key !== key)
+        return refused(403, "the approval key is wrong or missing", { code: "refused" });
+      const attestation = {
+        environmentId: body.environmentId,
+        threadId: body.threadId,
+        run: attest[1],
+        seat: body.seat,
+        model: body.model,
+        harness: body.harness ?? null,
+        setBy: body.setBy,
+      };
+      attestations.push(attestation);
+      events.push({ kind: "run.seat-attested", task: "", data: attestation });
+      return { status: 200, body: { attestation } };
+    }
     if (method === "GET" && pathname === "/api/lanes") {
       // A task that moved away has no lane and is on no board; one on its way keeps its lane.
       const cards = [...tasks.values()].filter((task) => task.state !== "moved").map(cardOf);
@@ -512,6 +660,40 @@ export function scratchEngine(
       return added;
     },
     task: (id: string) => tasks.get(id)!,
+    attempts,
+    attestations,
+    /** A step the engine queues for T3, as develop() queues it under "t3" execution. */
+    queueAttempt: (
+      attempt: Pick<ScratchAttempt, "id" | "task" | "stage" | "kind" | "seat"> &
+        Partial<ScratchAttempt>,
+    ) => {
+      const record: ScratchAttempt = {
+        version: 2,
+        run: "run-1",
+        role: null,
+        lead: false,
+        access: "full",
+        contract: attempt.kind,
+        worktree: "/work/run-1",
+        harness: "claude",
+        model: "claude-fable-5-1",
+        prompt: `Do the ${attempt.kind} step.`,
+        state: "queued",
+        owner: null,
+        native: null,
+        cancelRequested: false,
+        result: null,
+        ...attempt,
+      };
+      attempts.set(record.id, record);
+      return record;
+    },
+    /** The engine's cancel: an unclaimed step ends here, a claimed one is asked to stop. */
+    cancelAttempt: (id: string) => {
+      const record = attempts.get(id)!;
+      record.cancelRequested = true;
+      if (!record.owner) record.state = "cancelled";
+    },
     removeTask: (id: string) => {
       tasks.delete(id);
       links.delete(id);
@@ -596,7 +778,12 @@ export const scratchEngineHttp = (engine: ScratchEngine) =>
             ? decodeJson(new TextDecoder().decode(request.body.body))
             : undefined;
         const answer = () => {
-          const { status, body: answered } = engine.handle(request.method, url.pathname, body);
+          const { status, body: answered } = engine.handle(
+            request.method,
+            url.pathname,
+            body,
+            url.searchParams,
+          );
           return HttpClientResponse.fromWeb(
             request,
             status === 204

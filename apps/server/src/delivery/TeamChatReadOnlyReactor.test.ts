@@ -9,6 +9,8 @@ import * as Stream from "effect/Stream";
 
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
+import { briefMessageId, engineStageNotice, stageMessageId } from "./boardTaskAttempts.ts";
+import { boardTaskOf, boardTaskThreadId } from "./boardThreadMarker.ts";
 import * as DeliveryService from "./DeliveryService.ts";
 import * as TeamChatReadOnlyReactor from "./TeamChatReadOnlyReactor.ts";
 
@@ -124,5 +126,79 @@ it.effect("declines what a read-only participant asks to change, and nothing els
     const other = setup({ participant: false });
     yield* (yield* other.reactor).handle(request("command"));
     expect(other.dispatched).toEqual([]);
+  }),
+);
+
+it.effect("declines the engine's read-only brief and seats, and nothing a person runs", () =>
+  Effect.gen(function* () {
+    const board = boardTaskThreadId(boardTaskOf("work", "task-7")!);
+    const child = ThreadId.make("engine-seat");
+    const run = (id: string, userMessageId: string) => ({ id, userMessageId });
+    const dispatched: Array<OrchestrationV2Command> = [];
+    const runtimeMode = { current: "approval-required" };
+    const seat = (access: "read-only" | "full") => ({
+      attemptId: "att-qa",
+      seat: "qa",
+      childThreadId: child,
+      modelSelection: { instanceId: "codex", model: "gpt-6-astra" },
+      access,
+      worktreePath: "/work/qa",
+    });
+    const stageAccess = { current: "read-only" as "read-only" | "full" };
+    const reactor = yield* TeamChatReadOnlyReactor.TeamChatReadOnlyReactor.pipe(
+      Effect.provide(TeamChatReadOnlyReactor.layer),
+      Effect.provideService(Orchestrator.OrchestratorV2, {
+        dispatch: (command: OrchestrationV2Command) =>
+          Effect.sync(() => {
+            dispatched.push(command);
+            return {};
+          }),
+        streamDomainEvents: Stream.empty,
+      } as unknown as Orchestrator.OrchestratorV2["Service"]),
+      Effect.provideService(ProjectionStore.ProjectionStoreV2, {
+        getThread: (threadId: ThreadId) =>
+          Effect.succeed(
+            threadId === board
+              ? { id: board, lineage: { parentThreadId: null, engineIntake: board } }
+              : { id: child, lineage: { parentThreadId: board } },
+          ),
+        getThreadRecords: () =>
+          Effect.succeed({
+            thread: { runtimeMode: runtimeMode.current },
+            runs: [
+              run("brief", briefMessageId("att-plan")),
+              run("person", "message:person"),
+              run("stage", stageMessageId("att-qa")),
+            ],
+            subagents: [{ childThreadId: child, runId: "stage" }],
+          }),
+        getMessagesById: () =>
+          Effect.succeed(
+            new Map([
+              [
+                stageMessageId("att-qa"),
+                { notification: engineStageNotice("qa", [seat(stageAccess.current)] as never) },
+              ],
+            ]),
+          ),
+      } as unknown as ProjectionStore.ProjectionStoreV2["Service"]),
+      Effect.provideService(DeliveryService.DeliveryService, {} as never),
+    );
+    const on = (threadId: ThreadId, runId: string) =>
+      ({ ...request("file-change"), threadId, runId }) as unknown as OrchestrationV2DomainEvent;
+    yield* reactor.handle(on(board, "brief"));
+    expect(dispatched).toMatchObject([{ threadId: board, decision: "decline" }]);
+    // A person's own turn in the task thread is theirs to answer.
+    yield* reactor.handle(on(board, "person"));
+    // A thread back in full access asks nothing to decline.
+    runtimeMode.current = "full-access";
+    yield* reactor.handle(on(board, "brief"));
+    expect(dispatched).toHaveLength(1);
+    // An engine stage's read-only seat is declined; a full-access one answers its own requests.
+    yield* reactor.handle(on(child, "stage"));
+    expect(dispatched[1]).toMatchObject({ threadId: child, decision: "decline" });
+    stageAccess.current = "full";
+    yield* reactor.handle(on(child, "stage"));
+    expect(dispatched).toHaveLength(2);
   }),
 );
