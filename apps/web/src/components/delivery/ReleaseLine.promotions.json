@@ -1,8 +1,8 @@
 {
-  "recordedWith": "Operation-PaperClip df20024e delivery/lib/promotions.mjs through createDeployments, run against scratch repositories with a bare remote: qa (branch qa) promotes into app (branch main). Instance ids are renamed to the release-line fixtures' t3code-qa and t3code-app.",
+  "recordedWith": "Operation-PaperClip df20024e delivery/lib/promotions.mjs through createDeployments, run against scratch repositories with a bare remote: qa (branch qa) promotes into app (branch main). Instance ids are renamed to the release-line fixtures' t3code-qa and t3code-app. compareAfterPromoted is deployment-compare.mjs's read once main moved and app has not deployed it.",
   "states": {
     "planned": {
-      "id": "promo-e24296c17566",
+      "id": "promo-68044225f9bc",
       "from": "t3code-qa",
       "to": "t3code-app",
       "repository": "t3code",
@@ -15,9 +15,9 @@
       "need": null,
       "waiting": null,
       "consent": {
-        "source": "7ff3f37663ce0ed3ea81b120cb07668136b44814",
+        "source": "cff45f28ef58f1b535c2b298514a0b6a4a628f09",
         "by": "Ana",
-        "at": "2026-11-27T05:38:40.573Z"
+        "at": "2026-11-27T08:25:58.566Z"
       },
       "candidate": null,
       "protected": null,
@@ -26,17 +26,17 @@
       "problem": null,
       "events": [
         {
-          "at": "2026-11-27T05:38:40.574Z",
+          "at": "2026-11-27T08:25:58.566Z",
           "type": "planned",
           "by": "Ana",
-          "seen": "7ff3f37663ce0ed3ea81b120cb07668136b44814"
+          "seen": "cff45f28ef58f1b535c2b298514a0b6a4a628f09"
         }
       ],
-      "createdAt": "2026-11-27T05:38:40.573Z",
-      "updatedAt": "2026-11-27T05:38:40.573Z"
+      "createdAt": "2026-11-27T08:25:58.566Z",
+      "updatedAt": "2026-11-27T08:25:58.566Z"
     },
     "syncing": {
-      "id": "promo-e24296c17566",
+      "id": "promo-68044225f9bc",
       "from": "t3code-qa",
       "to": "t3code-app",
       "repository": "t3code",
@@ -49,9 +49,9 @@
       "need": null,
       "waiting": null,
       "consent": {
-        "source": "7ff3f37663ce0ed3ea81b120cb07668136b44814",
+        "source": "cff45f28ef58f1b535c2b298514a0b6a4a628f09",
         "by": "Ana",
-        "at": "2026-11-27T05:38:40.573Z"
+        "at": "2026-11-27T08:25:58.566Z"
       },
       "candidate": null,
       "protected": null,
@@ -60,24 +60,24 @@
       "problem": null,
       "events": [
         {
-          "at": "2026-11-27T05:38:40.574Z",
+          "at": "2026-11-27T08:25:58.566Z",
           "type": "planned",
           "by": "Ana",
-          "seen": "7ff3f37663ce0ed3ea81b120cb07668136b44814"
+          "seen": "cff45f28ef58f1b535c2b298514a0b6a4a628f09"
         },
         {
-          "at": "2026-11-27T05:38:40.616Z",
+          "at": "2026-11-27T08:25:58.625Z",
           "type": "syncing",
-          "fromTip": "7ff3f37663ce0ed3ea81b120cb07668136b44814",
-          "toTip": "98ba5c64213345088830b6cb8f7557b5f46dc28e",
+          "fromTip": "cff45f28ef58f1b535c2b298514a0b6a4a628f09",
+          "toTip": "3eca546fe22362150085c7b440281a05cf7ba627",
           "hotfixes": 1
         }
       ],
-      "createdAt": "2026-11-27T05:38:40.573Z",
-      "updatedAt": "2026-11-27T05:38:40.616Z"
+      "createdAt": "2026-11-27T08:25:58.566Z",
+      "updatedAt": "2026-11-27T08:25:58.625Z"
     },
     "awaiting-qa": {
-      "id": "promo-e24296c17566",
+      "id": "promo-68044225f9bc",
       "from": "t3code-qa",
       "to": "t3code-app",
       "repository": "t3code",
@@ -86,18 +86,18 @@
       "by": "Ana",
       "state": "awaiting-qa",
       "sync": {
-        "commit": "81e12ffb99efee419748b01c3ab273da0f42386e",
-        "fromTip": "7ff3f37663ce0ed3ea81b120cb07668136b44814",
-        "toTip": "98ba5c64213345088830b6cb8f7557b5f46dc28e",
-        "at": "2026-11-27T05:38:40.799Z"
+        "commit": "43425a5aa3816428008abc65ef77a4a232ce9b2e",
+        "fromTip": "cff45f28ef58f1b535c2b298514a0b6a4a628f09",
+        "toTip": "3eca546fe22362150085c7b440281a05cf7ba627",
+        "at": "2026-11-27T08:25:58.828Z"
       },
       "source": null,
-      "need": "81e12ffb99efee419748b01c3ab273da0f42386e",
-      "waiting": "qa runs 7ff3f37663ce, which does not contain the sync 81e12ffb99ef yet.",
+      "need": "43425a5aa3816428008abc65ef77a4a232ce9b2e",
+      "waiting": "qa runs cff45f28ef58, which does not contain the sync 43425a5aa381 yet.",
       "consent": {
-        "source": "7ff3f37663ce0ed3ea81b120cb07668136b44814",
+        "source": "cff45f28ef58f1b535c2b298514a0b6a4a628f09",
         "by": "Ana",
-        "at": "2026-11-27T05:38:40.573Z"
+        "at": "2026-11-27T08:25:58.566Z"
       },
       "candidate": null,
       "protected": null,
@@ -106,34 +106,34 @@
       "problem": null,
       "events": [
         {
-          "at": "2026-11-27T05:38:40.574Z",
+          "at": "2026-11-27T08:25:58.566Z",
           "type": "planned",
           "by": "Ana",
-          "seen": "7ff3f37663ce0ed3ea81b120cb07668136b44814"
+          "seen": "cff45f28ef58f1b535c2b298514a0b6a4a628f09"
         },
         {
-          "at": "2026-11-27T05:38:40.616Z",
+          "at": "2026-11-27T08:25:58.625Z",
           "type": "syncing",
-          "fromTip": "7ff3f37663ce0ed3ea81b120cb07668136b44814",
-          "toTip": "98ba5c64213345088830b6cb8f7557b5f46dc28e",
+          "fromTip": "cff45f28ef58f1b535c2b298514a0b6a4a628f09",
+          "toTip": "3eca546fe22362150085c7b440281a05cf7ba627",
           "hotfixes": 1
         },
         {
-          "at": "2026-11-27T05:38:40.799Z",
+          "at": "2026-11-27T08:25:58.828Z",
           "type": "awaiting-qa",
-          "sync": "81e12ffb99efee419748b01c3ab273da0f42386e"
+          "sync": "43425a5aa3816428008abc65ef77a4a232ce9b2e"
         },
         {
-          "at": "2026-11-27T05:38:41.009Z",
+          "at": "2026-11-27T08:25:59.052Z",
           "type": "awaiting-qa",
-          "need": "81e12ffb99efee419748b01c3ab273da0f42386e"
+          "need": "43425a5aa3816428008abc65ef77a4a232ce9b2e"
         }
       ],
-      "createdAt": "2026-11-27T05:38:40.573Z",
-      "updatedAt": "2026-11-27T05:38:41.009Z"
+      "createdAt": "2026-11-27T08:25:58.566Z",
+      "updatedAt": "2026-11-27T08:25:59.052Z"
     },
     "ready": {
-      "id": "promo-e24296c17566",
+      "id": "promo-68044225f9bc",
       "from": "t3code-qa",
       "to": "t3code-app",
       "repository": "t3code",
@@ -142,18 +142,18 @@
       "by": "Ana",
       "state": "ready",
       "sync": {
-        "commit": "81e12ffb99efee419748b01c3ab273da0f42386e",
-        "fromTip": "7ff3f37663ce0ed3ea81b120cb07668136b44814",
-        "toTip": "98ba5c64213345088830b6cb8f7557b5f46dc28e",
-        "at": "2026-11-27T05:38:40.799Z"
+        "commit": "43425a5aa3816428008abc65ef77a4a232ce9b2e",
+        "fromTip": "cff45f28ef58f1b535c2b298514a0b6a4a628f09",
+        "toTip": "3eca546fe22362150085c7b440281a05cf7ba627",
+        "at": "2026-11-27T08:25:58.828Z"
       },
-      "source": "81e12ffb99efee419748b01c3ab273da0f42386e",
+      "source": "43425a5aa3816428008abc65ef77a4a232ce9b2e",
       "need": null,
       "waiting": null,
       "consent": {
-        "source": "7ff3f37663ce0ed3ea81b120cb07668136b44814",
+        "source": "cff45f28ef58f1b535c2b298514a0b6a4a628f09",
         "by": "Ana",
-        "at": "2026-11-27T05:38:40.573Z"
+        "at": "2026-11-27T08:25:58.566Z"
       },
       "candidate": null,
       "protected": null,
@@ -162,40 +162,40 @@
       "problem": null,
       "events": [
         {
-          "at": "2026-11-27T05:38:40.574Z",
+          "at": "2026-11-27T08:25:58.566Z",
           "type": "planned",
           "by": "Ana",
-          "seen": "7ff3f37663ce0ed3ea81b120cb07668136b44814"
+          "seen": "cff45f28ef58f1b535c2b298514a0b6a4a628f09"
         },
         {
-          "at": "2026-11-27T05:38:40.616Z",
+          "at": "2026-11-27T08:25:58.625Z",
           "type": "syncing",
-          "fromTip": "7ff3f37663ce0ed3ea81b120cb07668136b44814",
-          "toTip": "98ba5c64213345088830b6cb8f7557b5f46dc28e",
+          "fromTip": "cff45f28ef58f1b535c2b298514a0b6a4a628f09",
+          "toTip": "3eca546fe22362150085c7b440281a05cf7ba627",
           "hotfixes": 1
         },
         {
-          "at": "2026-11-27T05:38:40.799Z",
+          "at": "2026-11-27T08:25:58.828Z",
           "type": "awaiting-qa",
-          "sync": "81e12ffb99efee419748b01c3ab273da0f42386e"
+          "sync": "43425a5aa3816428008abc65ef77a4a232ce9b2e"
         },
         {
-          "at": "2026-11-27T05:38:41.009Z",
+          "at": "2026-11-27T08:25:59.052Z",
           "type": "awaiting-qa",
-          "need": "81e12ffb99efee419748b01c3ab273da0f42386e"
+          "need": "43425a5aa3816428008abc65ef77a4a232ce9b2e"
         },
         {
-          "at": "2026-11-27T05:38:41.371Z",
+          "at": "2026-11-27T08:25:59.419Z",
           "type": "ready",
-          "source": "81e12ffb99efee419748b01c3ab273da0f42386e",
-          "toTip": "98ba5c64213345088830b6cb8f7557b5f46dc28e"
+          "source": "43425a5aa3816428008abc65ef77a4a232ce9b2e",
+          "toTip": "3eca546fe22362150085c7b440281a05cf7ba627"
         }
       ],
-      "createdAt": "2026-11-27T05:38:40.573Z",
-      "updatedAt": "2026-11-27T05:38:41.371Z"
+      "createdAt": "2026-11-27T08:25:58.566Z",
+      "updatedAt": "2026-11-27T08:25:59.419Z"
     },
     "advancing": {
-      "id": "promo-e24296c17566",
+      "id": "promo-68044225f9bc",
       "from": "t3code-qa",
       "to": "t3code-app",
       "repository": "t3code",
@@ -204,18 +204,18 @@
       "by": "Ana",
       "state": "advancing",
       "sync": {
-        "commit": "81e12ffb99efee419748b01c3ab273da0f42386e",
-        "fromTip": "7ff3f37663ce0ed3ea81b120cb07668136b44814",
-        "toTip": "98ba5c64213345088830b6cb8f7557b5f46dc28e",
-        "at": "2026-11-27T05:38:40.799Z"
+        "commit": "43425a5aa3816428008abc65ef77a4a232ce9b2e",
+        "fromTip": "cff45f28ef58f1b535c2b298514a0b6a4a628f09",
+        "toTip": "3eca546fe22362150085c7b440281a05cf7ba627",
+        "at": "2026-11-27T08:25:58.828Z"
       },
-      "source": "81e12ffb99efee419748b01c3ab273da0f42386e",
+      "source": "43425a5aa3816428008abc65ef77a4a232ce9b2e",
       "need": null,
       "waiting": null,
       "consent": {
-        "source": "81e12ffb99efee419748b01c3ab273da0f42386e",
+        "source": "43425a5aa3816428008abc65ef77a4a232ce9b2e",
         "by": "Ben",
-        "at": "2026-11-27T05:38:41.381Z"
+        "at": "2026-11-27T08:25:59.432Z"
       },
       "candidate": null,
       "protected": null,
@@ -224,52 +224,52 @@
       "problem": null,
       "events": [
         {
-          "at": "2026-11-27T05:38:40.574Z",
+          "at": "2026-11-27T08:25:58.566Z",
           "type": "planned",
           "by": "Ana",
-          "seen": "7ff3f37663ce0ed3ea81b120cb07668136b44814"
+          "seen": "cff45f28ef58f1b535c2b298514a0b6a4a628f09"
         },
         {
-          "at": "2026-11-27T05:38:40.616Z",
+          "at": "2026-11-27T08:25:58.625Z",
           "type": "syncing",
-          "fromTip": "7ff3f37663ce0ed3ea81b120cb07668136b44814",
-          "toTip": "98ba5c64213345088830b6cb8f7557b5f46dc28e",
+          "fromTip": "cff45f28ef58f1b535c2b298514a0b6a4a628f09",
+          "toTip": "3eca546fe22362150085c7b440281a05cf7ba627",
           "hotfixes": 1
         },
         {
-          "at": "2026-11-27T05:38:40.799Z",
+          "at": "2026-11-27T08:25:58.828Z",
           "type": "awaiting-qa",
-          "sync": "81e12ffb99efee419748b01c3ab273da0f42386e"
+          "sync": "43425a5aa3816428008abc65ef77a4a232ce9b2e"
         },
         {
-          "at": "2026-11-27T05:38:41.009Z",
+          "at": "2026-11-27T08:25:59.052Z",
           "type": "awaiting-qa",
-          "need": "81e12ffb99efee419748b01c3ab273da0f42386e"
+          "need": "43425a5aa3816428008abc65ef77a4a232ce9b2e"
         },
         {
-          "at": "2026-11-27T05:38:41.371Z",
+          "at": "2026-11-27T08:25:59.419Z",
           "type": "ready",
-          "source": "81e12ffb99efee419748b01c3ab273da0f42386e",
-          "toTip": "98ba5c64213345088830b6cb8f7557b5f46dc28e"
+          "source": "43425a5aa3816428008abc65ef77a4a232ce9b2e",
+          "toTip": "3eca546fe22362150085c7b440281a05cf7ba627"
         },
         {
-          "at": "2026-11-27T05:38:41.381Z",
+          "at": "2026-11-27T08:25:59.432Z",
           "type": "consent",
           "by": "Ben",
-          "source": "81e12ffb99efee419748b01c3ab273da0f42386e"
+          "source": "43425a5aa3816428008abc65ef77a4a232ce9b2e"
         },
         {
-          "at": "2026-11-27T05:38:41.429Z",
+          "at": "2026-11-27T08:25:59.487Z",
           "type": "advancing",
-          "source": "81e12ffb99efee419748b01c3ab273da0f42386e",
+          "source": "43425a5aa3816428008abc65ef77a4a232ce9b2e",
           "branch": "main"
         }
       ],
-      "createdAt": "2026-11-27T05:38:40.573Z",
-      "updatedAt": "2026-11-27T05:38:41.429Z"
+      "createdAt": "2026-11-27T08:25:58.566Z",
+      "updatedAt": "2026-11-27T08:25:59.487Z"
     },
     "promoted": {
-      "id": "promo-e24296c17566",
+      "id": "promo-68044225f9bc",
       "from": "t3code-qa",
       "to": "t3code-app",
       "repository": "t3code",
@@ -278,18 +278,18 @@
       "by": "Ana",
       "state": "promoted",
       "sync": {
-        "commit": "81e12ffb99efee419748b01c3ab273da0f42386e",
-        "fromTip": "7ff3f37663ce0ed3ea81b120cb07668136b44814",
-        "toTip": "98ba5c64213345088830b6cb8f7557b5f46dc28e",
-        "at": "2026-11-27T05:38:40.799Z"
+        "commit": "43425a5aa3816428008abc65ef77a4a232ce9b2e",
+        "fromTip": "cff45f28ef58f1b535c2b298514a0b6a4a628f09",
+        "toTip": "3eca546fe22362150085c7b440281a05cf7ba627",
+        "at": "2026-11-27T08:25:58.828Z"
       },
-      "source": "81e12ffb99efee419748b01c3ab273da0f42386e",
+      "source": "43425a5aa3816428008abc65ef77a4a232ce9b2e",
       "need": null,
       "waiting": null,
       "consent": {
-        "source": "81e12ffb99efee419748b01c3ab273da0f42386e",
+        "source": "43425a5aa3816428008abc65ef77a4a232ce9b2e",
         "by": "Ben",
-        "at": "2026-11-27T05:38:41.381Z"
+        "at": "2026-11-27T08:25:59.432Z"
       },
       "candidate": null,
       "protected": null,
@@ -298,60 +298,60 @@
       "problem": null,
       "events": [
         {
-          "at": "2026-11-27T05:38:40.574Z",
+          "at": "2026-11-27T08:25:58.566Z",
           "type": "planned",
           "by": "Ana",
-          "seen": "7ff3f37663ce0ed3ea81b120cb07668136b44814"
+          "seen": "cff45f28ef58f1b535c2b298514a0b6a4a628f09"
         },
         {
-          "at": "2026-11-27T05:38:40.616Z",
+          "at": "2026-11-27T08:25:58.625Z",
           "type": "syncing",
-          "fromTip": "7ff3f37663ce0ed3ea81b120cb07668136b44814",
-          "toTip": "98ba5c64213345088830b6cb8f7557b5f46dc28e",
+          "fromTip": "cff45f28ef58f1b535c2b298514a0b6a4a628f09",
+          "toTip": "3eca546fe22362150085c7b440281a05cf7ba627",
           "hotfixes": 1
         },
         {
-          "at": "2026-11-27T05:38:40.799Z",
+          "at": "2026-11-27T08:25:58.828Z",
           "type": "awaiting-qa",
-          "sync": "81e12ffb99efee419748b01c3ab273da0f42386e"
+          "sync": "43425a5aa3816428008abc65ef77a4a232ce9b2e"
         },
         {
-          "at": "2026-11-27T05:38:41.009Z",
+          "at": "2026-11-27T08:25:59.052Z",
           "type": "awaiting-qa",
-          "need": "81e12ffb99efee419748b01c3ab273da0f42386e"
+          "need": "43425a5aa3816428008abc65ef77a4a232ce9b2e"
         },
         {
-          "at": "2026-11-27T05:38:41.371Z",
+          "at": "2026-11-27T08:25:59.419Z",
           "type": "ready",
-          "source": "81e12ffb99efee419748b01c3ab273da0f42386e",
-          "toTip": "98ba5c64213345088830b6cb8f7557b5f46dc28e"
+          "source": "43425a5aa3816428008abc65ef77a4a232ce9b2e",
+          "toTip": "3eca546fe22362150085c7b440281a05cf7ba627"
         },
         {
-          "at": "2026-11-27T05:38:41.381Z",
+          "at": "2026-11-27T08:25:59.432Z",
           "type": "consent",
           "by": "Ben",
-          "source": "81e12ffb99efee419748b01c3ab273da0f42386e"
+          "source": "43425a5aa3816428008abc65ef77a4a232ce9b2e"
         },
         {
-          "at": "2026-11-27T05:38:41.429Z",
+          "at": "2026-11-27T08:25:59.487Z",
           "type": "advancing",
-          "source": "81e12ffb99efee419748b01c3ab273da0f42386e",
+          "source": "43425a5aa3816428008abc65ef77a4a232ce9b2e",
           "branch": "main"
         },
         {
-          "at": "2026-11-27T05:38:41.494Z",
+          "at": "2026-11-27T08:25:59.553Z",
           "type": "promoted",
-          "source": "81e12ffb99efee419748b01c3ab273da0f42386e",
+          "source": "43425a5aa3816428008abc65ef77a4a232ce9b2e",
           "branch": "main",
           "alreadyAtSource": true
         }
       ],
-      "createdAt": "2026-11-27T05:38:40.573Z",
-      "updatedAt": "2026-11-27T05:38:41.494Z",
-      "promotedAt": "2026-11-27T05:38:41.494Z"
+      "createdAt": "2026-11-27T08:25:58.566Z",
+      "updatedAt": "2026-11-27T08:25:59.553Z",
+      "promotedAt": "2026-11-27T08:25:59.553Z"
     },
     "conflicted": {
-      "id": "promo-651e43d8829c",
+      "id": "promo-827cfbc56a88",
       "from": "t3code-qa",
       "to": "t3code-app",
       "repository": "t3code",
@@ -364,44 +364,44 @@
       "need": null,
       "waiting": null,
       "consent": {
-        "source": "a2943e0fddb33deb79619338f9db9c44b32edcf6",
+        "source": "6bd9f7ee7d9c6bbcfceb07be96bf3d81d6dbea9f",
         "by": "Ana",
-        "at": "2026-11-27T05:38:42.511Z"
+        "at": "2026-11-27T08:26:00.832Z"
       },
       "candidate": null,
       "protected": null,
       "conflict": {
         "files": ["app/index.html"],
-        "fromTip": "a2943e0fddb33deb79619338f9db9c44b32edcf6",
-        "toTip": "41bd5a766a901dab479123f4c24069b679b97a94"
+        "fromTip": "6bd9f7ee7d9c6bbcfceb07be96bf3d81d6dbea9f",
+        "toTip": "a50999606249f8669f49853161cbd22fe9a6dd2a"
       },
       "interrupted": null,
-      "problem": "Merging main (41bd5a766a90) into qa (a2943e0fddb3) conflicts in app/index.html. A resolved sync commit is needed.",
+      "problem": "Merging main (a50999606249) into qa (6bd9f7ee7d9c) conflicts in app/index.html. A resolved sync commit is needed.",
       "events": [
         {
-          "at": "2026-11-27T05:38:42.511Z",
+          "at": "2026-11-27T08:26:00.832Z",
           "type": "planned",
           "by": "Ana",
-          "seen": "a2943e0fddb33deb79619338f9db9c44b32edcf6"
+          "seen": "6bd9f7ee7d9c6bbcfceb07be96bf3d81d6dbea9f"
         },
         {
-          "at": "2026-11-27T05:38:42.548Z",
+          "at": "2026-11-27T08:26:00.870Z",
           "type": "syncing",
-          "fromTip": "a2943e0fddb33deb79619338f9db9c44b32edcf6",
-          "toTip": "41bd5a766a901dab479123f4c24069b679b97a94",
+          "fromTip": "6bd9f7ee7d9c6bbcfceb07be96bf3d81d6dbea9f",
+          "toTip": "a50999606249f8669f49853161cbd22fe9a6dd2a",
           "hotfixes": 1
         },
         {
-          "at": "2026-11-27T05:38:42.681Z",
+          "at": "2026-11-27T08:26:01.017Z",
           "type": "conflicted",
           "files": ["app/index.html"]
         }
       ],
-      "createdAt": "2026-11-27T05:38:42.511Z",
-      "updatedAt": "2026-11-27T05:38:42.681Z"
+      "createdAt": "2026-11-27T08:26:00.832Z",
+      "updatedAt": "2026-11-27T08:26:01.017Z"
     },
     "cancelled": {
-      "id": "promo-651e43d8829c",
+      "id": "promo-827cfbc56a88",
       "from": "t3code-qa",
       "to": "t3code-app",
       "repository": "t3code",
@@ -414,49 +414,49 @@
       "need": null,
       "waiting": null,
       "consent": {
-        "source": "a2943e0fddb33deb79619338f9db9c44b32edcf6",
+        "source": "6bd9f7ee7d9c6bbcfceb07be96bf3d81d6dbea9f",
         "by": "Ana",
-        "at": "2026-11-27T05:38:42.511Z"
+        "at": "2026-11-27T08:26:00.832Z"
       },
       "candidate": null,
       "protected": null,
       "conflict": {
         "files": ["app/index.html"],
-        "fromTip": "a2943e0fddb33deb79619338f9db9c44b32edcf6",
-        "toTip": "41bd5a766a901dab479123f4c24069b679b97a94"
+        "fromTip": "6bd9f7ee7d9c6bbcfceb07be96bf3d81d6dbea9f",
+        "toTip": "a50999606249f8669f49853161cbd22fe9a6dd2a"
       },
       "interrupted": null,
       "problem": "Cancelled by Ana.",
       "events": [
         {
-          "at": "2026-11-27T05:38:42.511Z",
+          "at": "2026-11-27T08:26:00.832Z",
           "type": "planned",
           "by": "Ana",
-          "seen": "a2943e0fddb33deb79619338f9db9c44b32edcf6"
+          "seen": "6bd9f7ee7d9c6bbcfceb07be96bf3d81d6dbea9f"
         },
         {
-          "at": "2026-11-27T05:38:42.548Z",
+          "at": "2026-11-27T08:26:00.870Z",
           "type": "syncing",
-          "fromTip": "a2943e0fddb33deb79619338f9db9c44b32edcf6",
-          "toTip": "41bd5a766a901dab479123f4c24069b679b97a94",
+          "fromTip": "6bd9f7ee7d9c6bbcfceb07be96bf3d81d6dbea9f",
+          "toTip": "a50999606249f8669f49853161cbd22fe9a6dd2a",
           "hotfixes": 1
         },
         {
-          "at": "2026-11-27T05:38:42.681Z",
+          "at": "2026-11-27T08:26:01.017Z",
           "type": "conflicted",
           "files": ["app/index.html"]
         },
         {
-          "at": "2026-11-27T05:38:42.694Z",
+          "at": "2026-11-27T08:26:01.030Z",
           "type": "cancelled",
           "by": "Ana"
         }
       ],
-      "createdAt": "2026-11-27T05:38:42.511Z",
-      "updatedAt": "2026-11-27T05:38:42.694Z"
+      "createdAt": "2026-11-27T08:26:00.832Z",
+      "updatedAt": "2026-11-27T08:26:01.030Z"
     },
     "blocked": {
-      "id": "promo-132da48af3af",
+      "id": "promo-f34e372ddb94",
       "from": "t3code-qa",
       "to": "t3code-app",
       "repository": "t3code",
@@ -465,49 +465,115 @@
       "by": "Ana",
       "state": "blocked",
       "sync": null,
-      "source": "3e03017823c90f5b2037272ca3381cfa0799cb63",
+      "source": "48eda23f75d8a45c59090d57d3ab059eff44fb17",
       "need": null,
       "waiting": null,
       "consent": {
-        "source": "3e03017823c90f5b2037272ca3381cfa0799cb63",
+        "source": "48eda23f75d8a45c59090d57d3ab059eff44fb17",
         "by": "Ana",
-        "at": "2026-11-27T05:38:43.502Z"
+        "at": "2026-11-27T08:26:01.908Z"
       },
       "candidate": null,
       "protected": {
         "branch": "main",
-        "at": "2026-11-27T05:38:43.679Z"
+        "at": "2026-11-27T08:26:02.271Z"
       },
       "conflict": null,
       "interrupted": null,
       "problem": "main: branch protected; a PR is needed. The push was refused as protected: remote: error: GH006: Protected branch update failed for refs/heads/main. error: failed to push some refs to '/work/remote.git'",
       "events": [
         {
-          "at": "2026-11-27T05:38:43.502Z",
+          "at": "2026-11-27T08:26:01.908Z",
           "type": "planned",
           "by": "Ana",
-          "seen": "3e03017823c90f5b2037272ca3381cfa0799cb63"
+          "seen": "48eda23f75d8a45c59090d57d3ab059eff44fb17"
         },
         {
-          "at": "2026-11-27T05:38:43.572Z",
+          "at": "2026-11-27T08:26:01.988Z",
           "type": "ready",
-          "source": "3e03017823c90f5b2037272ca3381cfa0799cb63",
-          "toTip": "19b1edbaea6c439f8ff5a0427b1004fe3c26fb2d"
+          "source": "48eda23f75d8a45c59090d57d3ab059eff44fb17",
+          "toTip": "378e99b09c34947cc53105db070b6346a3be65c5"
         },
         {
-          "at": "2026-11-27T05:38:43.589Z",
+          "at": "2026-11-27T08:26:01.999Z",
           "type": "advancing",
-          "source": "3e03017823c90f5b2037272ca3381cfa0799cb63",
+          "source": "48eda23f75d8a45c59090d57d3ab059eff44fb17",
           "branch": "main"
         },
         {
-          "at": "2026-11-27T05:38:43.679Z",
+          "at": "2026-11-27T08:26:02.271Z",
           "type": "blocked",
           "problem": "main: branch protected; a PR is needed. The push was refused as protected: remote: error: GH006: Protected branch update failed for refs/heads/main. error: failed to push some refs to '/work/remote.git'"
         }
       ],
-      "createdAt": "2026-11-27T05:38:43.502Z",
-      "updatedAt": "2026-11-27T05:38:43.679Z"
+      "createdAt": "2026-11-27T08:26:01.908Z",
+      "updatedAt": "2026-11-27T08:26:02.271Z"
     }
+  },
+  "compareAfterPromoted": {
+    "version": 1,
+    "repository": "t3code",
+    "from": {
+      "id": "t3code-qa",
+      "environment": "qa",
+      "branch": "qa",
+      "servedFolder": null
+    },
+    "to": {
+      "id": "t3code-app",
+      "environment": "app",
+      "branch": "main",
+      "servedFolder": null
+    },
+    "points": {
+      "fromLive": "43425a5aa3816428008abc65ef77a4a232ce9b2e",
+      "toLive": "3eca546fe22362150085c7b440281a05cf7ba627",
+      "fromTip": "43425a5aa3816428008abc65ef77a4a232ce9b2e",
+      "toTip": "43425a5aa3816428008abc65ef77a4a232ce9b2e"
+    },
+    "remote": "origin",
+    "limit": 500,
+    "ahead": {
+      "prs": [],
+      "loose": [
+        {
+          "commit": "43425a5aa3816428008abc65ef77a4a232ce9b2e",
+          "subject": "Merge main into qa"
+        },
+        {
+          "commit": "cff45f28ef58f1b535c2b298514a0b6a4a628f09",
+          "subject": "feat: feature"
+        }
+      ],
+      "tasks": [],
+      "count": 2,
+      "truncated": false
+    },
+    "hotfixes": {
+      "prs": [],
+      "loose": [],
+      "tasks": [],
+      "count": 0,
+      "truncated": false
+    },
+    "waiting": {
+      "prs": [],
+      "loose": [
+        {
+          "commit": "43425a5aa3816428008abc65ef77a4a232ce9b2e",
+          "subject": "Merge main into qa"
+        },
+        {
+          "commit": "cff45f28ef58f1b535c2b298514a0b6a4a628f09",
+          "subject": "feat: feature"
+        }
+      ],
+      "tasks": [],
+      "count": 2,
+      "truncated": false
+    },
+    "folders": null,
+    "promote": "promote",
+    "problem": null
   }
 }

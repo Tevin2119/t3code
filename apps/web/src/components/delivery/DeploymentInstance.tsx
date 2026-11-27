@@ -47,7 +47,13 @@ export const MODE_LABELS = {
 const short = (commit: string | null) => commit?.slice(0, 10) ?? "None";
 export const when = (iso: string) =>
   Number.isFinite(Date.parse(iso)) ? new Date(iso).toLocaleString() : "Unknown time";
-export type DeploymentRequest = { title: string; path: string; body: Record<string, unknown> };
+export type DeploymentRequest = {
+  title: string;
+  path: string;
+  body: Record<string, unknown>;
+  /** Run once the engine accepted it, for reads the request changed beyond the snapshot. */
+  after?: () => void;
+};
 
 export function DeploymentApproval({
   environmentId,
@@ -89,6 +95,7 @@ export function DeploymentApproval({
           description: "The engine accepted the request.",
           type: "success",
         });
+        request.after?.();
         onDone();
       }}
       onClose={onClose}

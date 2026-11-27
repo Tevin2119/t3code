@@ -14,7 +14,7 @@ import { ArrowDownIcon, ArrowUpRightIcon, FolderIcon, SquareKanbanIcon } from "l
 import type { MouseEvent } from "react";
 import { useOpenLink } from "../../browser/useOpenLink";
 import { useOpenPrLink } from "../../lib/openPullRequestLink";
-import { useDeliveryRead } from "../../state/delivery";
+import { useDeliveryRead, useStaleReading } from "../../state/delivery";
 import { Badge } from "../ui/badge";
 import type { DeploymentRequest } from "./DeploymentInstance";
 import { PromotionControls } from "./ReleaseLine.promote";
@@ -236,8 +236,10 @@ export function DifferenceStrip({
   disabled: boolean;
   onRequest: (request: DeploymentRequest) => void;
 }) {
-  const read = useDeliveryRead(environmentId, comparePath(from.id, to.id), { pollMs: 30_000 });
+  // Read often enough to stay fresh: promoting is offered only on a fresh difference.
+  const read = useDeliveryRead(environmentId, comparePath(from.id, to.id), { pollMs: 15_000 });
   const compare = parseDeploymentCompare(read.body);
+  const stale = useStaleReading(read.readAt);
   const onTask = useOpenTask(environmentId);
   return (
     <div
@@ -251,6 +253,7 @@ export function DifferenceStrip({
       </p>
       <PromotionControls
         compare={compare}
+        reading={{ readAt: read.readAt, error: read.error, stale, refresh: read.refresh }}
         from={from}
         to={to}
         promotion={promotion}

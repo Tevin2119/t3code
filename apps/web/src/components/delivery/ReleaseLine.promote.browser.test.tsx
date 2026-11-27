@@ -18,8 +18,21 @@ import promotions from "./ReleaseLine.promotions.json";
 const PERMISSION = Symbol("permission");
 const mock = vi.hoisted(() => ({
   compare: null as unknown,
+  /** What the next refresh reads, when it differs from what is shown. */
+  next: undefined as unknown,
+  readAt: "",
+  error: null as string | null,
+  refreshes: 0,
+  listeners: new Set<() => void>(),
   acts: [] as Array<{ path: string; body: unknown }>,
 }));
+// A refresh is a new reading, as the engine query gives: a later readAt, maybe a new body.
+const refresh = () => {
+  mock.refreshes += 1;
+  mock.readAt = new Date(Date.parse(mock.readAt) + 1_000).toISOString();
+  if (mock.next !== undefined) mock.compare = mock.next;
+  for (const listener of mock.listeners) listener();
+};
 vi.mock(import("@effect/atom-react"), async (importOriginal) => {
   const original = await importOriginal();
   return {
@@ -30,6 +43,11 @@ vi.mock(import("@effect/atom-react"), async (importOriginal) => {
 });
 vi.mock(import("../../state/delivery"), async (importOriginal) => {
   const original = await importOriginal();
+  const { useSyncExternalStore } = await import("react");
+  const subscribe = (listener: () => void) => {
+    mock.listeners.add(listener);
+    return () => mock.listeners.delete(listener);
+  };
   return {
     ...original,
     deliveryEnvironment: {
@@ -41,15 +59,19 @@ vi.mock(import("../../state/delivery"), async (importOriginal) => {
       mock.acts.push({ path, body });
       return { ok: true, body: {} };
     },
-    useDeliveryRead: (_env: unknown, path: string | null) =>
-      ({
-        body: path?.startsWith("/api/deployments/compare") ? mock.compare : null,
-        error: null,
+    useDeliveryRead: (_env: unknown, path: string | null) => {
+      const readAt = useSyncExternalStore(subscribe, () => mock.readAt);
+      const body = useSyncExternalStore(subscribe, () => mock.compare);
+      const compare = path?.startsWith("/api/deployments/compare");
+      return {
+        body: compare ? body : null,
+        error: compare ? mock.error : null,
         isPending: false,
-        readAt: "2026-11-27T02:00:00Z",
+        readAt,
         failure: null,
-        refresh: () => {},
-      }) as never,
+        refresh,
+      } as never;
+    },
   };
 });
 
@@ -120,8 +142,13 @@ function Harness({
   );
 }
 
-function setup(compare: unknown) {
+function setup(compare: unknown, options: { readAt?: string; error?: string } = {}) {
   mock.compare = compare;
+  mock.next = undefined;
+  // A fixed epoch ahead of any runner's clock reads as fresh.
+  mock.readAt = options.readAt ?? "2999-01-01T00:00:00.000Z";
+  mock.error = options.error ?? null;
+  mock.refreshes = 0;
   mock.acts = [];
 }
 
@@ -254,5 +281,58 @@ it("disables promoting on a stale reading, and says so", async () => {
   await expect.element(screen.getByRole("button", { name: "Sync hotfixes first" })).toBeDisabled();
   await expect
     .element(screen.getByText("This reading is stale or unavailable. Refresh before promoting."))
+    .toBeVisible();
+});
+
+it("re-reads the difference when the dialog opens and shows the commits it read", async () => {
+  setup(recorded.withHotfix);
+  const moved = "a".repeat(40);
+  mock.next = { ...recorded.withHotfix, points: { ...points, toTip: moved } };
+  await using screen = await render(<Harness promotion={null} />);
+  await screen.getByRole("button", { name: "Sync hotfixes first" }).click();
+  await expect
+    .element(
+      page.getByText(`Merges main (${moved.slice(0, 12)}, 1 commit qa lacks)`, { exact: false }),
+    )
+    .toBeVisible();
+  expect(mock.refreshes).toBe(1);
+  await page.getByRole("button", { name: "Sync first…" }).click();
+  await sign();
+  // The engine accepted it: the difference is read again.
+  expect(mock.refreshes).toBe(2);
+});
+
+it("refuses in the dialog when the fresh read shows the tip already holds the commit", async () => {
+  setup(recorded.inSync);
+  mock.next = promotions.compareAfterPromoted;
+  await using screen = await render(<Harness promotion={null} />);
+  await screen.getByRole("button", { name: /^Promote to/ }).click();
+  const dialog = page.getByRole("alertdialog");
+  await expect.element(dialog.getByText(/Waiting for app to deploy it\.$/)).toBeVisible();
+  await expect.element(dialog.getByRole("button", { name: /^Promote/ })).toBeDisabled();
+});
+
+it("after a recorded promotion, waits for the instance to deploy instead of promoting again", async () => {
+  setup(promotions.compareAfterPromoted);
+  await using screen = await render(<Harness promotion={states["promoted"]!} />);
+  await expect.element(screen.getByRole("button", { name: "Promote to app" })).toBeDisabled();
+  await expect.element(screen.getByText(/^main already holds qa's live commit/)).toBeVisible();
+});
+
+it("disables promoting and advancing while the difference is stale or failed, and says why", async () => {
+  setup(recorded.withHotfix, { readAt: "2026-01-01T00:00:00.000Z" });
+  {
+    await using screen = await render(<Harness promotion={null} />);
+    await expect
+      .element(screen.getByRole("button", { name: "Sync hotfixes first" }))
+      .toBeDisabled();
+    await expect.element(screen.getByText(/The difference is out of date/)).toBeVisible();
+  }
+  setup(recorded.withHotfix, { error: "The engine did not answer." });
+  await using screen = await render(<Harness promotion={states["ready"]!} />);
+  await expect.element(screen.getByRole("button", { name: "Advance" })).toBeDisabled();
+  await expect.element(screen.getByRole("button", { name: "Cancel promotion" })).toBeEnabled();
+  await expect
+    .element(screen.getByText("The difference could not be read: The engine did not answer."))
     .toBeVisible();
 });

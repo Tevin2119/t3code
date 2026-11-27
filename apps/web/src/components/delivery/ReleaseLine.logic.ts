@@ -284,6 +284,49 @@ export type PromotionConfirm = {
   body: Record<string, unknown>;
 };
 
+const rangeCommits = (range: DeploymentCompare["ahead"]) => {
+  const commits = [...range.prs, ...range.loose].map((row) => row.commit);
+  // Only a complete range answers "is every commit there"; a truncated one is not trusted.
+  return !range.truncated && commits.length === range.count ? new Set(commits) : null;
+};
+
+/**
+ * Why a new promotion would be refused now, or null. The engine moves `to`'s branch tip, not
+ * what runs there: once that tip holds `from`'s live commit there is nothing to promote until
+ * `to` deploys it, even though compare's ahead range (against `to`'s live) still lists it.
+ */
+export function promoteBlocked(compare: DeploymentCompare): string | null {
+  if (compare.promote === "sync-hotfixes-first") return null;
+  const { from, to, points } = compare;
+  const waiting = `${to.branch} already holds ${from.environment}'s live commit ${short12(points.fromLive)}. Waiting for ${to.environment} to deploy it.`;
+  if (points.fromLive && points.fromLive === points.toTip) return waiting;
+  if (compare.ahead.count === 0)
+    return `Nothing on ${from.environment} is missing from ${to.environment}.`;
+  const ahead = rangeCommits(compare.ahead);
+  const onTip = rangeCommits(compare.waiting);
+  if (ahead && onTip && [...ahead].every((commit) => onTip.has(commit))) return waiting;
+  return null;
+}
+
+/** Why the difference cannot back a promotion right now, or null when it is fresh. */
+export function compareReadingProblem(reading: {
+  error: string | null;
+  stale: boolean;
+  hasCompare: boolean;
+}): string | null {
+  if (reading.error) return `The difference could not be read: ${reading.error}`;
+  if (!reading.hasCompare) return "The difference has not been read yet.";
+  if (reading.stale) return "The difference is out of date. It is read again shortly.";
+  return null;
+}
+
+/**
+ * Whether a confirmation shows a reading taken after it opened: the engine takes no expected
+ * commits, so what the dialog shows must be what it will read.
+ */
+const readAfterOpening = (openedAt: string | null, readAt: string | null) =>
+  !!readAt && readAt !== openedAt && (!openedAt || readAt > openedAt);
+
 /** Promote, or sync hotfixes first: one request, whose plan the engine makes from fresh reads. */
 export function promoteConfirm(
   compare: DeploymentCompare,
@@ -356,5 +399,52 @@ export function promotionActionConfirm(
     submit: "Cancel promotion",
     path,
     body,
+  };
+}
+
+export type PendingConfirm =
+  | { kind: "promote"; openedAt: string | null }
+  | { kind: "action"; action: DeploymentPromotionAction; openedAt: string | null };
+
+export type ConfirmationState =
+  | { state: "reading" }
+  | { state: "problem"; why: string }
+  | { state: "ready"; confirm: PromotionConfirm };
+
+/**
+ * What an open confirmation shows. Anything that moves a branch waits for the difference read
+ * after the dialog opened and is built from it; retry and cancel do not rest on it.
+ */
+export function promotionConfirmation(input: {
+  pending: PendingConfirm;
+  readAt: string | null;
+  error: string | null;
+  compare: DeploymentCompare | null;
+  promotion: DeploymentPromotion | null;
+  to: Pick<DeploymentProject, "mode" | "environment" | "branch">;
+  from: Pick<DeploymentProject, "environment">;
+}): ConfirmationState {
+  const { pending, compare, promotion } = input;
+  if (pending.kind === "action" && !promotion)
+    return { state: "problem", why: "This promotion is no longer listed." };
+  const movesBranch = pending.kind === "promote" || pending.action === "advance";
+  if (movesBranch) {
+    if (input.error)
+      return { state: "problem", why: `The difference could not be read: ${input.error}` };
+    if (!readAfterOpening(pending.openedAt, input.readAt) || !compare) return { state: "reading" };
+  }
+  if (pending.kind === "promote") {
+    const why = promoteBlocked(compare!);
+    return why
+      ? { state: "problem", why }
+      : { state: "ready", confirm: promoteConfirm(compare!, input.to) };
+  }
+  return {
+    state: "ready",
+    confirm: promotionActionConfirm(promotion!, pending.action, {
+      from: input.from.environment,
+      to: input.to.environment,
+      toBranch: input.to.branch,
+    }),
   };
 }
