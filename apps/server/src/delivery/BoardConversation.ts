@@ -324,7 +324,7 @@ export const make = Effect.gen(function* () {
       if (steered.size <= STEERED_KEPT) break;
       steered.delete(old);
     }
-    yield* encodeSteered({
+    return yield* encodeSteered({
       steered: [...steered],
       pending: Object.fromEntries(pendingSteers),
       owed: Object.fromEntries(owed),
@@ -332,8 +332,11 @@ export const make = Effect.gen(function* () {
       Effect.flatMap((contents) => writeFileStringAtomically({ filePath: steeredPath, contents })),
       Effect.provideService(FileSystem.FileSystem, fileSystem),
       Effect.provideService(Path.Path, path),
+      Effect.as(true),
       Effect.catchCause((cause) =>
-        Effect.logWarning("Which thread steers were told could not be saved.", { cause }),
+        Effect.logWarning("Which thread steers were told could not be saved.", { cause }).pipe(
+          Effect.as(false),
+        ),
       ),
     );
   });
@@ -466,15 +469,15 @@ export const make = Effect.gen(function* () {
         }
         const late = now - Date.parse(steer.typedAt) >= STEER_RETRY_MS;
         const standing = input.standings.get(steer.task);
-        if (standing === undefined) {
-          if (late) giveUp(key, steer, expired);
+        const refused =
+          standing === undefined ? null : steerRefusedBy(standing, steer, input.environmentId);
+        // Stale words never reach a live run; unknown ones wait out their window.
+        if (late && refused === null) {
+          giveUp(key, steer, expired);
           continue;
         }
-        const refused = steerRefusedBy(standing, steer, input.environmentId);
-        if (refused !== null) {
-          giveUp(key, steer, refused);
-          continue;
-        }
+        if (standing === undefined) continue;
+        // Told once more even when refused: one the engine took before a crash settles as taken.
         const told = yield* post(`/api/tasks/${steer.task}/steer`, {
           text: steer.text,
           by: "person",
@@ -488,11 +491,11 @@ export const make = Effect.gen(function* () {
           continue;
         }
         const status = told.failure.status;
-        if (status !== undefined && status < 500)
+        if (refused !== null) giveUp(key, steer, refused);
+        else if (status !== undefined && status < 500)
           giveUp(key, steer, told.failure.detail.replace(/\s+/g, " ").slice(0, 200));
-        else if (late) giveUp(key, steer, expired);
       }
-      yield* saveSteers();
+      if (!(yield* saveSteers())) return;
       yield* postOwedNotices();
     },
     (effect) =>
@@ -557,7 +560,11 @@ export const make = Effect.gen(function* () {
             text: item.steer.text,
             typedAt: item.at,
           });
-          yield* saveSteers();
+          // Never mirrored unsaved: the mirror stops here and sees it again next pass.
+          if (!(yield* saveSteers())) {
+            pendingSteers.delete(key);
+            break;
+          }
         }
         queued[index] = { ...item, steer: null };
       }

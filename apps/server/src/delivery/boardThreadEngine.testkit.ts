@@ -453,6 +453,8 @@ export function scratchEngine(
       const from = body.from ?? "board";
       if (from !== "board" && from !== "thread")
         return refused(400, "from is board or thread", { code: "invalid-field", field: "from" });
+      if (["approved", "pr-open", "merged", "rejected", "closed"].includes(task.state))
+        return refused(409, `this task is ${task.state}; there is no run to steer`);
       if (!task.run) return refused(409, "no run is under way on this task");
       const text = String(body.text ?? "").trim();
       // A repeated `ref` is answered as the first steer and never applied again.

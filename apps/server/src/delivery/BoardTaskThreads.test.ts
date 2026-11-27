@@ -2492,7 +2492,8 @@ it.effect("gives up on a thread steer the engine keeps failing, and says so once
     yield* restarted.reconcile();
     yield* restarted.reconcile();
     assert.equal(undelivered(store).length, 1);
-    assert.equal(engine.requests.filter((r) => r.path.endsWith("/steer")).length, 2);
+    // Past the window it is given up without being sent again.
+    assert.equal(engine.requests.filter((r) => r.path.endsWith("/steer")).length, 1);
     // The notice is mirrored like the engine's other notices, with no excerpt.
     assert.deepEqual(
       engine.activityOf("task-7").map((row) => [row.kind, row.excerpt]),
@@ -2544,7 +2545,7 @@ it.effect("tells words still being retried as undelivered once their task leaves
     yield* threads.reconcile();
     assert.equal(undelivered(store).length, 1);
     assert.include(undelivered(store)[0]?.text, "the task is no longer in work");
-    assert.equal(engine.requests.filter((r) => r.path.endsWith("/steer")).length, 1);
+    assert.equal(engine.requests.filter((r) => r.path.endsWith("/steer")).length, 2);
     assert.equal(engine.activityOf("task-7")[0]?.kind, "steer");
   }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-steer-left-work-")));
 });
@@ -2558,9 +2559,13 @@ it.effect("gives up on a lost steer answer past the hand-off wait", () => {
     const threads = yield* service(store);
     yield* threads.reconcile();
     store.say(THREAD, "m-1", "Use the other API", "user");
-    yield* TestClock.adjust("31 minutes");
     engine.dropNext(/\/steer$/);
     yield* threads.reconcile();
+    assert.equal(undelivered(store).length, 0);
+    // Past the window it is given up without being sent again: stale words never reach a run.
+    yield* TestClock.adjust("31 minutes");
+    yield* threads.reconcile();
+    assert.equal(engine.requests.filter((r) => r.path.endsWith("/steer")).length, 0);
     assert.equal(undelivered(store).length, 1);
     assert.include(undelivered(store)[0]?.text, "could not take it for 30 minutes");
     assert.equal(engine.activityOf("task-7")[0]?.kind, "steer");
@@ -2618,7 +2623,7 @@ it.effect("posts a notice owed on an approved task after a restart", () => {
     );
     assert.equal(new Set(posted.map((command) => command.messageId)).size, 1);
     assert.include(posted[0]?.text, "the task is no longer in work");
-    assert.equal(engine.requests.filter((r) => r.path.endsWith("/steer")).length, 1);
+    assert.equal(engine.requests.filter((r) => r.path.endsWith("/steer")).length, 2);
   }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-steer-approved-restart-")));
 });
 
@@ -2640,6 +2645,38 @@ it.effect("gives up a steer still retried when its task moves, and says so once"
     yield* (yield* service(store)).reconcile();
     assert.equal(undelivered(store).length, 1);
     assert.include(undelivered(store)[0]?.text, "the task moved to another machine");
-    assert.equal(engine.requests.filter((r) => r.path.endsWith("/steer")).length, 1);
+    // Told once more before it is given up, in case the engine took it before a crash.
+    assert.equal(engine.requests.filter((r) => r.path.endsWith("/steer")).length, 2);
   }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-steer-moved-")));
+});
+
+it.effect("never mirrors a person's words the steer ledger could not save", () => {
+  const engine = board();
+  engine.addTask({ id: "task-7", run: { id: "run-1" } });
+  const store = threadStore();
+  return Effect.gen(function* () {
+    const fileSystem = yield* FileSystem.FileSystem;
+    const { stateDir } = yield* ServerConfig.ServerConfig;
+    const ledger = `${stateDir}/delivery-thread-steers.json`;
+    yield* (yield* service(store)).reconcile();
+    store.say(THREAD, "m-1", "Use the other API", "user");
+    // A directory where the ledger goes: every write of it fails.
+    yield* fileSystem.remove(ledger, { force: true });
+    yield* fileSystem.makeDirectory(ledger, { recursive: true });
+    yield* (yield* service(store)).reconcile();
+    assert.equal(engine.activityOf("task-7").length, 0);
+    assert.equal(engine.steeredOf("task-7").length, 0);
+    // Writable again, a restarted server finds the words, tells them and mirrors them.
+    yield* fileSystem.remove(ledger, { recursive: true });
+    const restarted = yield* service(store);
+    yield* restarted.reconcile();
+    assert.deepEqual(
+      engine.steeredOf("task-7").map(({ text }) => text),
+      ["Use the other API"],
+    );
+    assert.deepEqual(
+      engine.activityOf("task-7").map((row) => row.kind),
+      ["steer"],
+    );
+  }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-steer-ledger-fails-")));
 });

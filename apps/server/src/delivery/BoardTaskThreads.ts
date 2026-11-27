@@ -694,8 +694,13 @@ export const make = Effect.gen(function* () {
       }
       toldUnread.clear();
       for (const [card, why] of unread) toldUnread.set(card, why);
-      // An engine that serves no `boardThread` has no link to write to. Nothing is made for it.
-      if ([...cards.values()].some((card) => card.boardThread === undefined)) return holds;
+      // An engine that serves no `boardThread` has no link to write to. Nothing is made for it,
+      // but the steers of the tasks that do show a link are still settled.
+      if ([...cards.values()].some((card) => card.boardThread === undefined)) {
+        const linked = [...cards].filter(([, card]) => card.boardThread !== undefined);
+        yield* conversation.settleSteers({ standings: new Map(linked), environmentId });
+        return holds;
+      }
       const starting = [...cards.values()].filter(awaitsThread);
       const key = hostEnvironment[DeliveryService.BOARD_THREAD_KEY_VARIABLE] || undefined;
       // Read at most once a pass, and only by a pass that needs the seats.
