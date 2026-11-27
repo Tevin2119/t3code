@@ -233,7 +233,7 @@ it.effect("sends the brief, lead steps and seats as turns the orchestrator takes
     Effect.gen(function* () {
       const { cwd, layer } = yield* harness("board-execution-real-turns");
       const engine = board();
-      yield* Effect.gen(function* () {
+      const body = Effect.gen(function* () {
         const orchestrator = yield* Orchestrator.OrchestratorV2;
         const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
         yield* createThread;
@@ -287,7 +287,9 @@ it.effect("sends the brief, lead steps and seats as turns the orchestrator takes
           ),
           [true, true, true],
         );
-      }).pipe(Effect.provide(deliveryLayer(engine)), Effect.provide(layer));
+      }).pipe(Effect.provide(deliveryLayer(engine)));
+      // The orchestrator's layer around the case, the delivery service's within it.
+      yield* body.pipe(Effect.provide(layer));
     }),
   ),
 );
@@ -297,7 +299,7 @@ it.effect("cancels a stage turn still queued behind the brief", () =>
     Effect.gen(function* () {
       const { cwd, layer } = yield* harness("board-execution-real-stop");
       const engine = board();
-      yield* Effect.gen(function* () {
+      const body = Effect.gen(function* () {
         const orchestrator = yield* Orchestrator.OrchestratorV2;
         const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
         yield* createThread;
@@ -338,7 +340,9 @@ it.effect("cancels a stage turn still queued behind the brief", () =>
         // Nothing ran it, so it is told no model or harness.
         assert.isNull(engine.attempts.get("att-build")!.result?.model);
         assert.isNull(engine.attempts.get("att-build")!.result?.harness);
-      }).pipe(Effect.provide(deliveryLayer(engine)), Effect.provide(layer));
+      }).pipe(Effect.provide(deliveryLayer(engine)));
+      // The orchestrator's layer around the case, the delivery service's within it.
+      yield* body.pipe(Effect.provide(layer));
     }),
   ),
 );
