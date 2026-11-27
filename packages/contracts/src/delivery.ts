@@ -126,7 +126,8 @@ export const DeliveryEngineVersions = Schema.Struct({
       commit: Schema.NullOr(DeliveryCommit),
       at: Schema.String,
       snapshot: Schema.optional(Schema.NullOr(Schema.String)),
-      problem: Schema.optional(Schema.String),
+      // The engine writes null here when an explicit start clears an earlier failure.
+      problem: Schema.optional(Schema.NullOr(Schema.String)),
     }),
   ),
 });

@@ -113,6 +113,19 @@ describe("release facts and update receipts", () => {
     expect(parsed.commit).toBe(versions.installed.commit);
     expect(parsed.versions?.running?.commit).not.toBe(parsed.commit);
   });
+  it("reads release facts when a recovered update records a null problem", () => {
+    const update = {
+      id: "request",
+      phase: "complete" as const,
+      channel: "main" as const,
+      commit: "c".repeat(40),
+      at: "now",
+      problem: null,
+    };
+    const parsed = parseDeliveryEngineHealth({ versions: { ...versions, update } });
+    expect(parsed.versions?.update).toEqual(update);
+    expect(deliveryEngineUpdateStatus(parsed.versions, null).kind).not.toBe("unknown");
+  });
   it.each([
     { ...versions, channel: "personal" },
     { ...versions, updateAvailable: "true" },
