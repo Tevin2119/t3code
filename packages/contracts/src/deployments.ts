@@ -1,6 +1,7 @@
 import * as Schema from "effect/Schema";
 
 import { TrimmedNonEmptyString } from "./baseSchemas.ts";
+import { BoardTaskBoardId } from "./boardThreadTasks.ts";
 
 const DEPLOYMENT_STATES = [
   "merged",
@@ -299,12 +300,25 @@ const CompareTask = Schema.Struct({
   prs: Schema.Array(Schema.NullOr(Schema.Number)),
 });
 export type DeploymentCompareTask = typeof CompareTask.Type;
+/** A Port to app filing that names an ahead commit; one commit can have several. */
+const ComparePort = Schema.Struct({
+  commit: Schema.String,
+  task: Schema.String,
+  number: Schema.NullOr(Schema.Number),
+  title: Schema.String,
+  state: Schema.NullOr(Schema.String),
+  by: Schema.NullOr(Schema.String),
+  filed: Schema.String,
+});
+export type DeploymentComparePort = typeof ComparePort.Type;
 const CompareRange = Schema.Struct({
   prs: Schema.Array(ComparePullRequest),
   loose: Schema.Array(Schema.Struct({ commit: Schema.String, subject: Schema.String })),
   tasks: Schema.Array(CompareTask),
   count: Schema.Number,
   truncated: Schema.Boolean,
+  // Ahead only, and absent from an engine older than Port to app.
+  ports: Schema.optional(Schema.Array(ComparePort)),
 });
 export type DeploymentCompareRange = typeof CompareRange.Type;
 const CompareInstance = Schema.Struct({
@@ -338,6 +352,12 @@ export const DeploymentCompare = Schema.Struct({
       touchesTo: NullableCount,
       onlyFrom: NullableCount,
       untouched: NullableCount,
+      commits: Schema.optional(
+        Schema.Struct({
+          touchesTo: Schema.Array(Schema.String),
+          onlyFrom: Schema.Array(Schema.String),
+        }),
+      ),
       truncated: Schema.Boolean,
       text: Schema.NullOr(Schema.String),
       problem: Schema.optional(Schema.String),
@@ -347,6 +367,20 @@ export const DeploymentCompare = Schema.Struct({
   problem: Schema.NullOr(Schema.String),
 });
 export type DeploymentCompare = typeof DeploymentCompare.Type;
+
+/**
+ * Port to app: file one draft on a board asking to port sandbox-only commits of from into what
+ * to serves. The server stamps the origin and reads each commit's subject from the compare.
+ */
+export const DeploymentPortInput = Schema.Struct({
+  board: BoardTaskBoardId,
+  from: Identifier,
+  to: Identifier,
+  // Attribution in the task text only: the server files as this environment, never as this name.
+  requestedBy: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(60))),
+  commits: Schema.Array(Revision).check(Schema.isMinLength(1), Schema.isMaxLength(500)),
+});
+export type DeploymentPortInput = typeof DeploymentPortInput.Type;
 
 // Deployment mutations need the direct approval key; an open approval window is not enough.
 const Approval = { by: TrimmedNonEmptyString, key: Schema.String.check(Schema.isMinLength(1)) };

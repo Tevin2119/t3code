@@ -154,6 +154,16 @@ export function createDeliveryEnvironmentAtoms<R, E>(
       label: "environment-data:delivery:act",
       tag: WS_METHODS.deliveryAct,
     }),
+    /** Port to app from a release line. A second click while the first runs joins it. */
+    filePort: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:delivery:file-port",
+      tag: WS_METHODS.deliveryFilePort,
+      concurrency: {
+        mode: "singleFlight",
+        key: ({ environmentId, input }) =>
+          JSON.stringify([environmentId, input.board, input.from, input.to, input.commits]),
+      },
+    }),
     /** Gives up a team choice whose setup never completed. */
     releaseThread: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:delivery:release-thread",

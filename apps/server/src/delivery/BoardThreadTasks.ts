@@ -1,6 +1,9 @@
 import {
   BoardTaskFiling,
   CommandId,
+  DeploymentCompare,
+  type DeploymentPortInput,
+  type EnvironmentId,
   OrchestratorMcpFailure,
   TurnItemId,
   isReservedBoardTaskBoard,
@@ -27,14 +30,30 @@ import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as Threads from "../orchestration-v2/ThreadManagementService.ts";
 import * as Delivery from "./DeliveryService.ts";
 import { threadOrigin } from "./deliveryDiscovery.ts";
+import { portDraft, portRequestKey } from "./deploymentPort.ts";
 
 const decodeFiling = Schema.decodeUnknownEffect(BoardTaskFiling);
+const decodeCompare = Schema.decodeUnknownEffect(DeploymentCompare);
 const decodeRefusal = Schema.decodeUnknownOption(
   Schema.Struct({ code: Schema.optional(Schema.String) }),
 );
 const refusalOf = (error: DeliveryError) => Option.getOrUndefined(decodeRefusal(error.body));
 const invalidRequest = (message: string) =>
   new OrchestratorMcpFailure({ code: "invalid_request", message });
+const sha256 = (text: string) =>
+  Effect.tryPromise({
+    try: () => crypto.subtle.digest("SHA-256", new TextEncoder().encode(text)),
+    catch: () =>
+      new OrchestratorMcpFailure({
+        code: "orchestration_error",
+        message: "Could not derive the board filing request ID.",
+      }),
+  }).pipe(Effect.map((digest) => Hex.encode(new Uint8Array(digest))));
+const noReceipt = () =>
+  new OrchestratorMcpFailure({
+    code: "orchestration_error",
+    message: "The delivery engine did not return a filing receipt.",
+  });
 const recordFailure = () =>
   new OrchestratorMcpFailure({
     code: "orchestration_error",
@@ -66,6 +85,11 @@ export class BoardThreadTasks extends Context.Service<
       draft: BoardTaskDraft,
     ) => Effect.Effect<BoardTaskOutcome, OrchestratorMcpFailure>;
     readonly answer: (input: BoardTaskAnswerInput) => Effect.Effect<void, OrchestratorMcpFailure>;
+    /** Port to app from a release line: a draft filed for the page, not for a thread. */
+    readonly filePort: (
+      environmentId: EnvironmentId,
+      input: DeploymentPortInput,
+    ) => Effect.Effect<typeof BoardTaskFiling.Type, OrchestratorMcpFailure>;
   }
 >()("t3/delivery/BoardThreadTasks") {}
 
@@ -80,6 +104,22 @@ const make = Effect.gen(function* () {
     (input: BoardTaskAnswerInput) => Effect.Effect<void, OrchestratorMcpFailure>
   >();
 
+  // A transport failure can lose the receipt after commit. Replay the same request once.
+  const post = (board: string, body: Record<string, unknown>, configuration: string) => {
+    const write = delivery.boardThreadAct({
+      method: "POST",
+      path: `/api/boards/${board}/tasks`,
+      configuration,
+      body,
+    });
+    return write.pipe(
+      Effect.catchIf(
+        (error) => error.reason === "unreachable" || error.status === 500,
+        () => write,
+      ),
+    );
+  };
+
   const file = Effect.fn("BoardThreadTasks.file")(function* (
     draft: BoardTaskDraft,
     turnItemId: TurnItemId,
@@ -88,38 +128,67 @@ const make = Effect.gen(function* () {
     configuration: string,
   ) {
     const { board, title, body, context } = draft;
-    const digest = yield* Effect.tryPromise({
-      try: () => crypto.subtle.digest("SHA-256", new TextEncoder().encode(turnItemId)),
-      catch: () =>
-        new OrchestratorMcpFailure({
-          code: "orchestration_error",
-          message: "Could not derive the board filing request ID.",
-        }),
-    });
-    const requestId = Hex.encode(new Uint8Array(digest));
-    const post = delivery.boardThreadAct({
-      method: "POST",
-      path: `/api/boards/${board}/tasks`,
+    const requestId = yield* sha256(turnItemId);
+    const response = yield* post(
+      board,
+      { requestId, title, body, origin, key, ...(context === undefined ? {} : { context }) },
       configuration,
-      body: { requestId, title, body, origin, key, ...(context === undefined ? {} : { context }) },
-    });
-    // A transport failure can lose the receipt after commit. Replay the same request once.
-    const response = yield* post.pipe(
+    ).pipe(Effect.mapError(engineFailure));
+    return yield* decodeFiling(response.body).pipe(Effect.mapError(noReceipt));
+  });
+
+  const filePort = Effect.fn("BoardThreadTasks.filePort")(function* (
+    environmentId: EnvironmentId,
+    input: DeploymentPortInput,
+  ) {
+    const { board, from, to } = input;
+    if (isReservedBoardTaskBoard(board))
+      return yield* invalidRequest("Choose a custom board to file on.");
+    if (from === to) return yield* invalidRequest("Port between two different instances.");
+    const key = hostEnvironment[Delivery.BOARD_THREAD_KEY_VARIABLE];
+    if (!key) return yield* invalidRequest("This server has no board approval key configured.");
+    const configuration = yield* delivery.boardThreadConfiguration;
+    // The engine's reading, not the client's, says what is ported and what each commit is.
+    const reading = yield* delivery
+      .read({
+        path: `/api/deployments/compare?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`,
+      })
+      .pipe(Effect.mapError(engineFailure));
+    const compare = yield* decodeCompare(reading.body).pipe(
+      Effect.mapError(() =>
+        invalidRequest("This engine returned an unsupported compare. Update the engine."),
+      ),
+    );
+    if (compare.from.id !== from || compare.to.id !== to)
+      return yield* invalidRequest("The engine compared other instances. Read it again.");
+    const composed = portDraft(compare, input.commits, input.requestedBy);
+    if (!composed.ok) return yield* invalidRequest(composed.why);
+    const { title, body, commits } = composed.draft;
+    const origin = `deployment:${environmentId}/${from}..${to}`;
+    // One request per board, pair and commits: filing the same port twice replays it.
+    const requestId = `port-${yield* sha256(portRequestKey(board, origin, commits))}`;
+    const fresh = yield* random.uuidV4().pipe(Effect.mapError(recordFailure));
+    // The keyed actor is this environment, as for every server-keyed write: a name the client
+    // chose must not open that name's approval window.
+    const send = (id: string) =>
+      post(
+        board,
+        { requestId: id, title, body, origin, key, by: environmentId, commits },
+        configuration,
+      );
+    const response = yield* send(requestId).pipe(
+      // Its task was discarded since: the engine asks for a new request ID to file it anew.
       Effect.catchIf(
-        (error) => error.reason === "unreachable" || error.status === 500,
-        () => post,
+        (error) => refusalOf(error)?.code === "gone",
+        () => send(`${requestId.slice(0, 60)}-${fresh}`),
       ),
-      Effect.mapError(engineFailure),
-    );
-    return yield* decodeFiling(response.body).pipe(
-      Effect.mapError(
-        () =>
-          new OrchestratorMcpFailure({
-            code: "orchestration_error",
-            message: "The delivery engine did not return a filing receipt.",
-          }),
+      Effect.mapError((error) =>
+        refusalOf(error)?.code === "conflict"
+          ? invalidRequest("Someone else already filed this port. Read the release line again.")
+          : engineFailure(error),
       ),
     );
+    return yield* decodeFiling(response.body).pipe(Effect.mapError(noReceipt));
   });
 
   const request = Effect.fn("BoardThreadTasks.request")(function* (
@@ -273,6 +342,7 @@ const make = Effect.gen(function* () {
 
   return BoardThreadTasks.of({
     request,
+    filePort,
     answer: Effect.fn("BoardThreadTasks.answer")(function* (input) {
       const respond = pending.get(input.turnItemId);
       if (respond === undefined)
@@ -289,5 +359,5 @@ const turnedOff = () => Effect.fail(invalidRequest("Delivery is turned off."));
 /** Inert service, for suites that only need the tool surface to resolve. */
 export const layerTest = Layer.succeed(
   BoardThreadTasks,
-  BoardThreadTasks.of({ request: turnedOff, answer: turnedOff }),
+  BoardThreadTasks.of({ request: turnedOff, answer: turnedOff, filePort: turnedOff }),
 );

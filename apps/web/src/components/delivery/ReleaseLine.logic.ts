@@ -3,6 +3,7 @@ import { sourceControlClients } from "@t3tools/client-runtime/source-control-cli
 import {
   DeploymentCompare,
   type DeploymentCandidate,
+  type DeploymentComparePort,
   type DeploymentComparePullRequest,
   type DeploymentProject,
   type DeploymentPromotion,
@@ -12,6 +13,7 @@ import {
   type TaskDeploymentPublication,
 } from "@t3tools/contracts";
 import * as Option from "effect/Option";
+import { parseTarget } from "../../lib/delivery";
 import * as Schema from "effect/Schema";
 
 const decodeCompare = Schema.decodeUnknownOption(DeploymentCompare);
@@ -578,4 +580,59 @@ export function hotfixRows(hotfixes: NonNullable<DeploymentPromotion["hotfixes"]
       label: commit.subject ?? commit.commit.slice(0, 12),
     })),
   ];
+}
+
+/** What a row of "on from, not on to" offers for Port to app. */
+export type PortRow =
+  | { readonly kind: "filed"; readonly port: DeploymentComparePort }
+  | { readonly kind: "portable" };
+
+/**
+ * Port to app, per ahead commit: a commit with a filed port shows its task; one that changes only
+ * the folder from serves and has none can be ported. An engine that cannot read ports back offers
+ * none, since it could not show a filed one and so could not keep it from being filed twice.
+ */
+export function portRowsOf(compare: DeploymentCompare): ReadonlyMap<string, PortRow> {
+  const rows = new Map<string, PortRow>();
+  const ports = compare.ahead.ports;
+  if (!ports) return rows;
+  for (const port of ports)
+    if (!rows.has(port.commit)) rows.set(port.commit, { kind: "filed", port });
+  const folders = compare.folders;
+  if (!folders || folders.unknown || !folders.from || !folders.to) return rows;
+  for (const commit of folders.commits?.onlyFrom ?? [])
+    if (!rows.has(commit)) rows.set(commit, { kind: "portable" });
+  return rows;
+}
+
+/** The commits a Port to app can still name, newest first, each with what its row shows. */
+export function portableCommitsOf(
+  compare: DeploymentCompare,
+): ReadonlyArray<{ readonly commit: string; readonly subject: string }> {
+  const rows = portRowsOf(compare);
+  return [...rows].flatMap(([commit, row]) => {
+    if (row.kind !== "portable") return [];
+    const pr = compare.ahead.prs.find((entry) => entry.commit === commit);
+    const subject = pr
+      ? `${pr.number === null ? "" : `#${pr.number} `}${pr.title}`
+      : (compare.ahead.loose.find((entry) => entry.commit === commit)?.subject ?? "");
+    return [{ commit, subject }];
+  });
+}
+
+/** The boards a port of `repository` can be filed on: those whose work is done in it. */
+export function portBoardsOf(
+  body: unknown,
+  repository: string,
+): ReadonlyArray<{ readonly id: string; readonly title: string }> {
+  return (Array.isArray(body) ? body : []).flatMap((item: unknown) =>
+    item &&
+    typeof item === "object" &&
+    "id" in item &&
+    typeof item.id === "string" &&
+    "target" in item &&
+    parseTarget(item.target)?.repository === repository
+      ? [{ id: item.id, title: "title" in item ? String(item.title) : item.id }]
+      : [],
+  );
 }

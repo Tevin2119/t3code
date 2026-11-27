@@ -954,7 +954,11 @@ function EnvironmentBoardPage({ environmentId }: { readonly environmentId: Envir
                   </div>
                   {settingsOpen ? (
                     <div className="mt-4 max-h-[60vh] min-w-0 overflow-y-auto border-t border-border pt-4">
-                      <BoardDeployments environmentId={environmentId} target={chosenBoard.target} />
+                      <BoardDeployments
+                        environmentId={environmentId}
+                        board={chosenBoard.id}
+                        target={chosenBoard.target}
+                      />
                     </div>
                   ) : null}
                 </TaskDisclosure>
