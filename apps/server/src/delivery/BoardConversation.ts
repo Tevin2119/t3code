@@ -127,13 +127,13 @@ function scanActivity(
       }
       if (message.role !== "user" || state.messages.has(message.id)) continue;
       state.messages.add(message.id);
+      // The engine's own steps are its record, not the card's, and never a steer.
+      if (isEngineMessageId(message.id)) continue;
       const typed = message.createdBy === "user";
-      // The engine's own steps are its record, not the card's: kept off it like a steer.
       const steer =
         message.id.startsWith(STEER_MESSAGE_PREFIX) ||
         message.id.startsWith(HANDOFF_NOTICE_PREFIX) ||
         message.id.startsWith(UNDELIVERED_NOTICE_PREFIX) ||
-        isEngineMessageId(message.id) ||
         typed;
       found.push({
         seq: stored.sequence,
@@ -150,12 +150,13 @@ function scanActivity(
       state.runs.add(run.id);
       const reply = state.lastReply.get(run.id);
       state.lastReply.delete(run.id);
-      if (reply === undefined) continue;
+      // An engine step's answer is the engine's to record, as its prompt is.
+      if (reply === undefined || isEngineMessageId(run.userMessageId)) continue;
       found.push({
         seq: stored.sequence,
         at: DateTime.formatIso(event.occurredAt),
         kind: "summary",
-        excerpt: isEngineMessageId(run.userMessageId) ? null : excerptOf(reply),
+        excerpt: excerptOf(reply),
         steer: null,
       });
     }

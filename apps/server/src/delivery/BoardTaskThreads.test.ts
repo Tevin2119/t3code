@@ -1397,24 +1397,22 @@ it.effect("mirrors each conversation event once, across a restart and a replaced
     store.reply(THREAD, "The engine's plan");
     yield* first.reconcile();
     // Each seq is the event store's own; a streamed reply counts once, when its run completes. A
-    // person's words are a steer with no excerpt, so they never reach the card, and nor does an
-    // engine step or its answer: the engine has its own record of both.
+    // person's words are a steer with no excerpt, so they never reach the card. An engine step and
+    // its answer are left out whole: the engine has its own record of both.
     assert.deepEqual(
       engine.activityOf("task-7").map((row) => [row.seq, row.kind, row.excerpt, row.setBy]),
       [
         [1, "message", "Build the thing please", ENVIRONMENT],
         [4, "summary", `${"x".repeat(199)}…`, ENVIRONMENT],
         [5, "steer", null, ENVIRONMENT],
-        [6, "steer", null, ENVIRONMENT],
-        [9, "summary", null, ENVIRONMENT],
       ],
     );
     yield* first.reconcile();
-    assert.equal(ingests(engine), 5);
+    assert.equal(ingests(engine), 3);
     // A restarted server starts from the engine's highest seq and sends nothing it already has.
     const after = yield* service(store);
     yield* after.reconcile();
-    assert.equal(ingests(engine), 5);
+    assert.equal(ingests(engine), 3);
     // A replacing conversation's events come later in the one sequence, so no seq is reused.
     const replacement = ThreadId.make("board-task:work:task-7:replacement");
     engine.writeLink("task-7", {
@@ -1426,7 +1424,7 @@ it.effect("mirrors each conversation event once, across a restart and a replaced
     yield* after.reconcile();
     assert.deepEqual(
       engine.activityOf("task-7").map((row) => row.seq),
-      [1, 4, 5, 6, 9, 10],
+      [1, 4, 5, 10],
     );
     const delivery = yield* DeliveryService.DeliveryService;
     yield* delivery.boardThreadAct({
