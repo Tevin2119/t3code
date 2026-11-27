@@ -489,7 +489,8 @@ it.effect("stops a running seat the engine cancels, as a delegated task is cance
         const [task] = (yield* orchestrator.getThreadProjection(THREAD)).subagents;
         assert.include(["cancelled", "interrupted"], task?.status);
         yield* service.reconcile();
-        assert.include(["cancelled", "interrupted"], engine.attempts.get("att-build")!.state);
+        // The child ended interrupted, but the engine asked: it is told its own cancel.
+        assert.equal(engine.attempts.get("att-build")!.state, "cancelled");
       }).pipe(Effect.provide(deliveryLayer(engine, "board-execution-real-cancel-")));
       yield* body.pipe(Effect.provide(layer));
     }),
@@ -666,7 +667,7 @@ it.effect(
           yield* settle;
           yield* service.reconcile();
           const build = engine.attempts.get("att-build")!;
-          // The engine never asked: a step T3 could not finish, run again or fallen back from.
+          // The engine never asked: a step T3 could not finish, reported as interrupted.
           assert.equal(build.state, "interrupted");
           assert.isNull(build.result?.model);
           assert.isNull(build.result?.harness);

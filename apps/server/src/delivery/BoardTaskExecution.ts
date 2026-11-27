@@ -417,9 +417,9 @@ export const make = Effect.gen(function* () {
 
     /**
      * A terminal step's report. No model or harness known is none reported: the engine decides.
-     * Only a stop the engine asked for is reported cancelled. A cancel it never asked for, as T3's
-     * restart recovery makes, is a step T3 could not finish: interrupted, which the engine runs
-     * again or falls back from, with no identity, since nothing finished on it.
+     * Reported with the true reason: a step the engine asked to stop that neither completed nor
+     * failed is cancelled, however T3 stopped it. A cancel it never asked for, as T3's restart
+     * recovery makes, is interrupted, with no identity, since nothing finished on it.
      */
     const complete = (
       record: NativeAttempt,
@@ -434,7 +434,11 @@ export const make = Effect.gen(function* () {
       },
     ) => {
       const unasked = unaskedCancel(record, result.state);
-      const state = unasked ? "interrupted" : result.state;
+      const state = unasked
+        ? "interrupted"
+        : record.cancelRequested && result.state !== "completed" && result.state !== "failed"
+          ? "cancelled"
+          : result.state;
       return act(record, "complete", {
         owner,
         ...receipt,
