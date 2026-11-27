@@ -254,7 +254,8 @@ export function DifferenceStrip({
             <p className="text-xs text-warning-foreground" data-release-promote="sync">
               Sync hotfixes first: {to.environment} has{" "}
               {compare.hotfixes.count === 1 ? "1 commit" : `${compare.hotfixes.count} commits`} that{" "}
-              {from.environment} lacks. Bring them into {from.environment} before promoting.
+              {from.environment} lacks. Bring {compare.hotfixes.count === 1 ? "it" : "them"} into{" "}
+              {from.environment} before promoting.
             </p>
           ) : null}
           <FolderFlag compare={compare} />
