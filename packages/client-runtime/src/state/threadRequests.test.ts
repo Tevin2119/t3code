@@ -922,7 +922,6 @@ it("bounds the parts of a megabyte of approval text and still shows what it ends
   }
 });
 
-// oxlint-disable-next-line t3code/no-test-timeout-or-unreasoned-skip -- CPU-bound split of a megabyte, not a hidden wait; it passes 5 s only on an idle runner.
 it("splits a megabyte of approval text the same way as a short one", () => {
   const size = 1 << 20;
   const fill = (unit: string) => unit.repeat(size / unit.length);
@@ -946,4 +945,4 @@ it("splits a megabyte of approval text the same way as a short one", () => {
   // Every other character named: one run each.
   expect(count(fill("a\r"))).toEqual([size, size / 2]);
   expect(count(fill("a"))).toEqual([1, 0]);
-}, 30_000);
+});
