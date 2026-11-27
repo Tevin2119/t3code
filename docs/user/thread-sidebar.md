@@ -98,19 +98,24 @@ only.
 
 The **Task** item holds what is asked, the plan, who owns the task, its seat
 settings and the engine's log. To change the work, write in the task's thread
-like any other. A steer sent from the board joins the conversation when its
+like any other: what you write there is also given to the run under way, as a
+steer from the board would be. A steer sent from the board joins the conversation when its
 current turn ends, never in the middle of one; until then **Where it stands**
 shows it waiting, or why it did not arrive. The engine's own questions are
 answered under **Needs you**, and a proposed change is confirmed or declined on
-its entry in the log, which **Needs you** links to while it waits. A closed task
-keeps its composer: what you write goes to the engine, and its refusal shows as a
-notice.
+its entry in the log, which **Needs you** links to while it waits. A finished
+task keeps a composer, with or without a thread: what you write goes to the
+engine, and its refusal shows as a notice.
 
-The card's lineage lists the conversation the task was filed from, the seats' own
-conversations, and the task's parent, parts and follow-ups. A seat's conversation
-opens like a subagent's: beside the task's thread or at its own route, as your click
-asks. A seat on another machine opens there when you are connected to it, or
-read-only through the link. Select a task to open it.
+The card's lineage lists the seats' own conversations, **Made from**, the
+conversation that created the task, and the task's parent, parts and follow-ups.
+A seat's conversation opens like a subagent's: beside the task's thread or at its
+own route, as your click asks. A seat on another machine opens there when you are
+connected to it, or read-only through the link. **Made from** opens as its own
+thread; a task with no source conversation has none. Select a task to open it.
+Each part of a split task has a thread of its own; the task that was split has
+none, and its lineage lists its parts. Forking into new work, opening a citation
+or following an explicit Open link still uses its ordinary destination.
 
 A task with no conversation yet has its own page, with the same thread details and
 right panel toggles in its header: a saved draft opens there with its editor, a
@@ -119,8 +124,8 @@ links to the engine's log.
 
 While a task is open, the Board's sidebar column switches between tasks. The
 open task is highlighted, with its parent above it and its parts, follow-ups and
-seat conversations nested under it; select a seat to open its conversation in
-the task. Search there narrows only this list. **Back to board** returns to the
+seat conversations nested under it; select a seat to open its conversation as
+its lineage row does. Search there narrows only this list. **Back to board** returns to the
 board with its filters as you left them. On a phone, the arrow at the start of
 the task's bar also goes back to the board.
 

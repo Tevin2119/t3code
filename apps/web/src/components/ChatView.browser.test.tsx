@@ -1216,9 +1216,13 @@ it("a board task's seat conversation is a lineage row that opens at its own rout
 
 it("the thread a board task was filed from is a lineage row that opens at its own route", async () => {
   await using view = await renderBoardTaskLineage();
+  // The row asks the thread's environment whether it still exists before it opens it.
+  using _titles = answerRpc(ORCHESTRATION_V2_WS_METHODS.getThreadTitles, () =>
+    Effect.succeed({ [view.filedFrom.id]: view.filedFrom.title }),
+  );
   // Named by the thread's title once the shell has it, else by what it is.
   const row = view.lineage.getByRole("button", {
-    name: new RegExp(`${view.filedFrom.title}|The conversation this task came from`),
+    name: new RegExp(`${view.filedFrom.title}|The conversation it came from`),
   });
   await expect.element(row).toBeVisible();
   await row.click();

@@ -103,8 +103,18 @@ export function scratchEngine(
   const sets = new Map<string, { path: string | null }>();
   const activity = new Map<string, Array<Activity>>();
   const steers: Array<ScratchSteer & { readonly task: string }> = [];
+  /** Every steer the run under way took, as the engine's steer route records it (slice E1). */
+  const steered: Array<{
+    task: string;
+    text: string;
+    by: string;
+    from: string;
+    ref: string | null;
+  }> = [];
   /** Requests whose path matches are lost on the way, once each, as a dropped connection. */
   const drops: Array<RegExp> = [];
+  /** Requests whose path matches are answered with this instead, once each, before routing. */
+  const answers: Array<{ readonly path: RegExp; readonly answer: Answer }> = [];
   let teams: unknown = [];
   let clock = Date.parse("2026-11-22T10:00:00.000Z");
   let holderSeq = 0;
@@ -349,6 +359,8 @@ export function scratchEngine(
   const handle = (method: string, pathname: string, raw: unknown): Answer => {
     const body = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
     requests.push({ method, path: pathname, body: raw });
+    const forced = answers.findIndex((entry) => entry.path.test(pathname));
+    if (forced >= 0) return answers.splice(forced, 1)[0]!.answer;
     if (method === "GET" && pathname === "/api/lanes") {
       // A task that moved away has no lane and is on no board; one on its way keeps its lane.
       const cards = [...tasks.values()].filter((task) => task.state !== "moved").map(cardOf);
@@ -434,6 +446,34 @@ export function scratchEngine(
         ? ingest(keyed[1]!, body)
         : settle(keyed[1]!, Number(keyed[3]), keyed[4]!, body);
     }
+    const steerRoute = /^\/api\/tasks\/([\w-]+)\/steer$/.exec(pathname);
+    if (steerRoute && method === "POST") {
+      const task = tasks.get(steerRoute[1]!);
+      if (!task) return refused(404, `no task ${steerRoute[1]}`, { code: "not-found" });
+      const from = body.from ?? "board";
+      if (from !== "board" && from !== "thread")
+        return refused(400, "from is board or thread", { code: "invalid-field", field: "from" });
+      if (["approved", "pr-open", "merged", "rejected", "closed"].includes(task.state))
+        return refused(409, `this task is ${task.state}; there is no run to steer`);
+      if (!task.run) return refused(409, "no run is under way on this task");
+      const text = String(body.text ?? "").trim();
+      // A repeated `ref` is answered as the first steer and never applied again.
+      const ref = typeof body.ref === "string" ? body.ref : null;
+      if (ref !== null && steered.some((entry) => entry.task === task.id && entry.ref === ref))
+        return { status: 200, body: { task: task.id } };
+      steered.push({ task: task.id, text, by: String(body.by ?? ""), from, ref });
+      // A steer typed in the thread is already there: it is never queued back to it.
+      if (from === "board")
+        steers.push({
+          id: steers.length + 1,
+          task: task.id,
+          author: String(body.by ?? ""),
+          text,
+          state: "pending",
+          failure: null,
+        });
+      return { status: 200, body: { task: task.id } };
+    }
     const lease = /^\/api\/orchestration\/tasks\/([\w-]+)\/(claim|ack|release)$/.exec(pathname);
     if (lease && method === "POST") {
       const id = lease[1]!;
@@ -514,6 +554,7 @@ export function scratchEngine(
       return steer.id;
     },
     steer: (id: number) => steers.find((steer) => steer.id === id)!,
+    steeredOf: (task: string) => steered.filter((entry) => entry.task === task),
     activityOf: (task: string) => activity.get(task) ?? [],
     /** Another source's ingest, as its own server would send it. */
     ingestFrom: (task: string, row: { seq: number; setBy: string; kind?: string }) =>
@@ -524,6 +565,10 @@ export function scratchEngine(
     },
     dropNext: (path: RegExp) => {
       drops.push(path);
+    },
+    /** The next request to `path` is answered so, as a failing engine would answer it. */
+    answerNext: (path: RegExp, status: number, body: unknown) => {
+      answers.push({ path, answer: { status, body } });
     },
     /** Whether this request is lost on the way: true once for each drop that matches it. */
     drops: (path: string) => {

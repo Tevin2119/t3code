@@ -158,6 +158,9 @@ const BOARD_THREAD_CONVERSATION =
 const BOARD_SEAT_POST =
   /^\/api\/(?:tasks\/[\w-]+\/(?:qa-receipts|lead-pick)|runs\/[\w-]+\/(?:seat-attestations|handoffs(?:\/qa\/(?:delivered|fallback))?))$/;
 const BOARD_TASK_POST = /^\/api\/boards\/[^/]+\/tasks$/;
+// A person's words typed in a task's conversation (`from: "thread"`). A client steers on the same
+// route through `act`, so it is the server's to use but not refused to the relay.
+const BOARD_THREAD_STEER = /^\/api\/tasks\/[\w-]+\/steer$/;
 const BOARD_THREAD_POST = new RegExp(
   `${BOARD_THREAD_CLAIM.source}|${BOARD_THREAD_CONVERSATION.source}|${BOARD_SEAT_POST.source}|${BOARD_TASK_POST.source}`,
 );
@@ -1756,7 +1759,11 @@ const make = Effect.fn("DeliveryService.make")(function* (
     ),
     boardThreadConfiguration: readConfiguration(),
     boardThreadAct: Effect.fn("DeliveryService.boardThreadAct")(function* (input) {
-      if (!(input.method === "POST" ? BOARD_THREAD_POST : BOARD_THREAD_LINK).test(input.path))
+      const allowed =
+        input.method === "POST"
+          ? BOARD_THREAD_POST.test(input.path) || BOARD_THREAD_STEER.test(input.path)
+          : BOARD_THREAD_LINK.test(input.path);
+      if (!allowed)
         return yield* new DeliveryError({
           reason: "invalid",
           detail: "Invalid board thread mutation path.",

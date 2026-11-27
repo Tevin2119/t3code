@@ -83,6 +83,7 @@ import { HowItFits } from "./HowItFits";
 import { SharedBoard } from "./SharedBoard";
 
 import { BoardDeploymentControls, BoardDeploymentSummary } from "./BoardDeploymentControls";
+import { BoardDeployments } from "./BoardDeployments";
 import { MergePermissionControls, MergePermissionSummary } from "./MergePermissionControls";
 import { DeploymentSnapshotStale } from "./TaskDeploymentStatus";
 import { CardDeliveryStatus } from "./CardDeliveryStatus";
@@ -551,6 +552,8 @@ function EnvironmentBoardPage({ environmentId }: { readonly environmentId: Envir
     readonly editing: PickerItem | null;
   } | null>(null);
   const [dialogBusy, setDialogBusy] = useState(false);
+  // The deployments section reads the engine only while the settings are open.
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [seatsFor, setSeatsFor] = useState<{ readonly id: string; readonly title: string } | null>(
     null,
   );
@@ -929,7 +932,8 @@ function EnvironmentBoardPage({ environmentId }: { readonly environmentId: Envir
                       <BoardDeploymentSummary link={chosenBoard.deployment} />
                     </>
                   }
-                  defaultOpen={false}
+                  open={settingsOpen}
+                  onOpenChange={setSettingsOpen}
                 >
                   <div className="mt-3 grid max-h-80 min-w-0 gap-4 overflow-y-auto md:grid-cols-2">
                     <BoardDeploymentControls
@@ -948,6 +952,11 @@ function EnvironmentBoardPage({ environmentId }: { readonly environmentId: Envir
                       onDone={board.refresh}
                     />
                   </div>
+                  {settingsOpen ? (
+                    <div className="mt-4 max-h-[60vh] min-w-0 overflow-y-auto border-t border-border pt-4">
+                      <BoardDeployments environmentId={environmentId} target={chosenBoard.target} />
+                    </div>
+                  ) : null}
                 </TaskDisclosure>
               </div>
             ) : chosenBoard?.mergePermission ? (

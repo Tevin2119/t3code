@@ -1,3 +1,4 @@
+import { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import { ChevronDownIcon, ListTreeIcon } from "lucide-react";
 import { useState, type ReactNode } from "react";
 
@@ -6,13 +7,14 @@ import type { TaskBrief } from "../../lib/delivery";
 import { LANE_TITLE } from "../../lib/deliveryBoard";
 import { cn } from "../../lib/utils";
 import { ThreadDetailsControl } from "../chat/ThreadDetailsControl";
+import { SourceThreadRow } from "../chat/ThreadRelationshipsControl";
 import {
   THREAD_DETAILS_PANEL_CHEVRON_CLASS,
   THREAD_DETAILS_PANEL_ICON_CLASS,
   THREAD_DETAILS_PANEL_LABEL_CLASS,
 } from "../chat/threadDetailsPanelStyles";
 import { useBoardTask } from "./BoardTaskContext";
-import { relatedTaskGroups, taskHasRelatedWork } from "./relatedTaskGroups";
+import { relatedTaskGroups, taskHasRelatedTasks, taskHasRelatedWork } from "./relatedTaskGroups";
 import { laneTone } from "./taskParts";
 
 /** A folding group in the look of the lineage's own groups. */
@@ -78,7 +80,8 @@ function RelatedRows(props: {
 }
 
 /**
- * The board tasks around this one, from the board's own read: its parent, its current parts and QA
+ * The conversation the task was made from, as the lineage's own row, then the board tasks around
+ * this one, from the board's own read: its parent, its current parts and QA
  * follow-ups, then completed and earlier work folded. Child tasks are board tasks, not agents, so
  * the lineage shows them as a group of its own. Dependencies are not children; the Task item has them.
  */
@@ -92,27 +95,40 @@ export function TaskRelatedWork() {
   const historical = parts.historical.length + followUps.historical.length;
   return (
     <div data-task-related-work>
-      <RelatedGroup
-        label={`Related work (${parts.current.length} current parts, ${followUps.current.length} QA follow-ups)`}
-        expanded
-      >
-        {task.card.blocker ? (
-          <p className="px-2.5 text-xs text-muted-foreground">{task.card.blocker}</p>
-        ) : null}
-        {task.parent ? (
-          <RelatedRows title="Parent task" tasks={[task.parent]} onOpen={board.openTask} />
-        ) : null}
-        <RelatedRows
-          title={`Current parts (${parts.current.length})`}
-          tasks={parts.current}
-          onOpen={board.openTask}
-        />
-        <RelatedRows
-          title={`QA follow-ups (${followUps.current.length})`}
-          tasks={followUps.current}
-          onOpen={board.openTask}
-        />
-      </RelatedGroup>
+      {task.source ? (
+        <div data-task-related-source>
+          <p className="px-2.5 pt-1 text-2xs text-muted-foreground">Made from</p>
+          <SourceThreadRow
+            thread={{
+              environmentId: EnvironmentId.make(task.source.environmentId),
+              threadId: ThreadId.make(task.source.threadId),
+            }}
+          />
+        </div>
+      ) : null}
+      {taskHasRelatedTasks(task) ? (
+        <RelatedGroup
+          label={`Related work (${parts.current.length} current parts, ${followUps.current.length} QA follow-ups)`}
+          expanded
+        >
+          {task.card.blocker ? (
+            <p className="px-2.5 text-xs text-muted-foreground">{task.card.blocker}</p>
+          ) : null}
+          {task.parent ? (
+            <RelatedRows title="Parent task" tasks={[task.parent]} onOpen={board.openTask} />
+          ) : null}
+          <RelatedRows
+            title={`Current parts (${parts.current.length})`}
+            tasks={parts.current}
+            onOpen={board.openTask}
+          />
+          <RelatedRows
+            title={`QA follow-ups (${followUps.current.length})`}
+            tasks={followUps.current}
+            onOpen={board.openTask}
+          />
+        </RelatedGroup>
+      ) : null}
       {completed > 0 ? (
         <RelatedGroup label={`Completed related work (${completed})`} expanded={false}>
           <RelatedRows title="Completed parts" tasks={parts.completed} onOpen={board.openTask} />

@@ -403,6 +403,8 @@ function DelegatedFromRow(props: {
   readonly delegatedFrom: OrchestrationV2DelegatedFrom;
   readonly fallbackLabel: string | undefined;
   readonly anyInstanceBadge: boolean;
+  /** The conversation a board task was made from, rather than a delegating agent. */
+  readonly source?: boolean;
 }) {
   const gt = useGT();
   const navigate = useNavigate();
@@ -431,12 +433,22 @@ function DelegatedFromRow(props: {
     // The read can outlast the user's stay on this thread; a late answer must not pull them back.
     if (router.latestLocation !== location) return;
     if (result._tag === "Failure") {
-      toastManager.add({ type: "error", title: gt("Could not open the parent thread") });
+      toastManager.add({
+        type: "error",
+        title: props.source
+          ? gt("Could not open the conversation this task came from")
+          : gt("Could not open the parent thread"),
+      });
       return;
     }
     // Deleted and unknown threads are absent from the titles.
     if (result.value[delegatedFrom.threadId] === undefined) {
-      toastManager.add({ type: "info", title: gt("The parent thread was deleted") });
+      toastManager.add({
+        type: "info",
+        title: props.source
+          ? gt("The conversation this task came from was deleted")
+          : gt("The parent thread was deleted"),
+      });
       return;
     }
     void navigate({
@@ -488,20 +500,39 @@ function DelegatedFromRow(props: {
           <LineageTooltipContent
             title={title}
             hint={
-              environment === null
-                ? label
-                  ? gt("Delegated from {label}. Connect to it to open the parent thread.", {
-                      label,
-                    })
-                  : gt(
-                      "Delegated from a linked environment. Connect to it to open the parent thread.",
-                    )
-                : gt("Open parent agent on {label}", { label: environment.label })
+              props.source
+                ? environment === null
+                  ? gt("Made on another environment. Connect to it to open the conversation.")
+                  : gt("Open the conversation this task came from")
+                : environment === null
+                  ? label
+                    ? gt("Delegated from {label}. Connect to it to open the parent thread.", {
+                        label,
+                      })
+                    : gt(
+                        "Delegated from a linked environment. Connect to it to open the parent thread.",
+                      )
+                  : gt("Open parent agent on {label}", { label: environment.label })
             }
           />
         </TooltipPopup>
       </Tooltip>
     </li>
+  );
+}
+
+/** The conversation a board task was made from, as a lineage row that opens at its own route. */
+export function SourceThreadRow(props: { readonly thread: ScopedThreadRef }) {
+  const gt = useGT();
+  return (
+    <ThreadLineageRowList hiddenCount={0} onShowMore={() => {}}>
+      <DelegatedFromRow
+        delegatedFrom={{ ...props.thread, title: gt("The conversation it came from") }}
+        fallbackLabel={undefined}
+        anyInstanceBadge={false}
+        source
+      />
+    </ThreadLineageRowList>
   );
 }
 

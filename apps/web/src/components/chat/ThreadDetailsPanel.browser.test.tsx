@@ -327,7 +327,7 @@ it("shows the Task item only where a board task's view hosts the thread, with it
   await expect.element(page.getByText("This is closed. What was said is kept.")).toBeVisible();
   // The thread it was filed from is a row of the lineage, not a link in the Task item.
   await expect
-    .element(page.getByRole("button", { name: /The conversation this task came from/ }))
+    .element(page.getByRole("button", { name: /The conversation it came from/ }))
     .toBeVisible();
 });
 
@@ -365,7 +365,7 @@ it("keeps a board task's lineage, where its seats and source open, when the card
     .poll(() => document.querySelector("[data-thread-details-panel]")?.getAttribute("data-density"))
     .not.toBe("full");
   await expect
-    .element(page.getByRole("button", { name: /The conversation this task came from/ }))
+    .element(page.getByRole("button", { name: /The conversation it came from/ }))
     .toBeInTheDocument();
 });
 
