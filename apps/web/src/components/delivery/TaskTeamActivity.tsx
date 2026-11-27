@@ -146,7 +146,7 @@ export function SeatThreadRow(props: {
           <span className="min-w-0 flex-1 truncate text-left text-sm font-medium leading-4 text-foreground/85">
             {seat.seat}
           </span>
-          <span className="sr-only">{seat.activity}</span>
+          <span className="sr-only">{seat.cutByT3 ? status : seat.activity}</span>
           <span
             className={cn(
               // At most half the row, so a long detail ellipsizes and the seat name keeps the rest.

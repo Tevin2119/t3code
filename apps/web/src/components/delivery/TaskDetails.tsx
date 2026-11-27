@@ -316,7 +316,10 @@ function TeamRows(props: { readonly task: TaskView }) {
   const gt = useGT();
   const now = useMinuteClock();
   const { task } = props;
-  const running = (task.council?.seats ?? []).filter((seat) => seat.activity === "active").length;
+  // A cut step's re-run is not counted as running: it needs a person first.
+  const running = (task.council?.seats ?? []).filter(
+    (seat) => seat.activity === "active" && seat.cutByT3 === null,
+  ).length;
   return (
     <>
       <Row label={gt("Team")}>

@@ -1204,6 +1204,61 @@ async function renderBoardTaskLineage() {
   }
 }
 
+it("a board task's step a T3 restart cut short shows its line in the thread with no run", async () => {
+  await page.viewport(1400, 900);
+  const lead = threadWithHistory("task-cut-lead", 1);
+  using _environment = installFakeEnvironment([lead]);
+  __setClientSettingsForTests({
+    ...DEFAULT_CLIENT_SETTINGS,
+    onboardingCompletedAt: "2026-01-01T00:00:00.000Z",
+  });
+  const task = parseTask({
+    id: "t7",
+    number: 7,
+    title: "Fix the sync",
+    state: "in-work",
+    lane: "implementation",
+    council: {
+      seats: [
+        {
+          seat: "builder",
+          activity: "stopped",
+          attempts: [
+            {
+              stage: "build",
+              state: "stopped",
+              reason: "interrupted: T3 restarted and cut this step short",
+              ended: "2026-11-27T10:00:00Z",
+            },
+          ],
+        },
+      ],
+    },
+    card: { id: "t7", number: 7, title: "Fix the sync", lane: "implementation" },
+  });
+  const router = getRouter(
+    createMemoryHistory({ initialEntries: [`/${ENVIRONMENT_ID}/${lead.id}`] }),
+  );
+  await router.load();
+  await using _screen = await render(
+    <BoardTaskContext value={{ ...boardTask(), task }}>
+      <AppRoot router={router} />
+    </BoardTaskContext>,
+    { router: false },
+  );
+  await expect.element(page.getByTestId("composer-editor")).toBeVisible();
+  // The thread's own line, not the Task item's copy of it in the details panel.
+  await expect
+    .poll(() =>
+      [...document.querySelectorAll("[data-steps-cut-by-t3]")]
+        .filter((line) => line.closest("[data-thread-details-panel]") === null)
+        .map((line) => line.textContent),
+    )
+    .toEqual([
+      "T3 restarted and cut builder's build step short. It needs a person to check it before the work goes on.",
+    ]);
+});
+
 it("a board task's seat conversation is a lineage row that opens at its own route", async () => {
   await using view = await renderBoardTaskLineage();
   const row = view.lineage.getByRole("button", { name: /qa/ });

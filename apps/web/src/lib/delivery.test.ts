@@ -798,6 +798,9 @@ describe("parseTask", () => {
       { seat: "qa", stage: "qa" },
       { seat: "lead", stage: "build" },
     ]);
+    // A finished task asks nothing of anyone.
+    expect(stepsCutByT3(task && { ...task, lane: "completed" })).toEqual([]);
+    expect(stepsCutByT3(task && { ...task, state: "closed" })).toEqual([]);
   });
 
   it("keeps hand-off, receipt, and model facts from the engine", () => {

@@ -13,6 +13,7 @@ import {
   type MergePermissionView,
   type TaskDeployment,
 } from "@t3tools/contracts";
+import { boardTaskFinishedBy } from "@t3tools/shared/boardTaskFinished";
 import * as Schema from "effect/Schema";
 import { parseSuggestedBoard, type SuggestedBoard } from "./deliveryMove";
 import { parseBoardDeployment, parseMergePermission, parseTaskDeployment } from "./boardDelivery";
@@ -1934,11 +1935,13 @@ const stepCutByT3 = (attempts: ReadonlyArray<Json>): string | null => {
   return ended ? null : stage;
 };
 
-/** The seats whose step T3's restart cut short: each needs a person, whatever ran after. */
-export const stepsCutByT3 = (task: Pick<TaskView, "council"> | null) =>
-  (task?.council?.seats ?? []).flatMap((seat) =>
-    seat.cutByT3 === null ? [] : [{ seat: seat.seat, stage: seat.cutByT3 }],
-  );
+/** The seats whose step T3's restart cut short: each needs a person until the task is finished. */
+export const stepsCutByT3 = (task: Pick<TaskView, "council" | "lane" | "state"> | null) =>
+  task === null || boardTaskFinishedBy(task) !== null
+    ? []
+    : (task.council?.seats ?? []).flatMap((seat) =>
+        seat.cutByT3 === null ? [] : [{ seat: seat.seat, stage: seat.cutByT3 }],
+      );
 
 const parseCouncil = (council: Json): TaskCouncil => {
   const concurrency = isRecord(council.concurrency) ? council.concurrency : {};

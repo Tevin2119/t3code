@@ -3666,10 +3666,6 @@ export default function ChatView(props: ChatViewProps) {
   const queuedRunsControl =
     isServerThread && activeThread ? (
       <>
-        <StepsCutByT3
-          steps={cutSteps}
-          className="mx-auto w-full max-w-(--chat-content-max-width) pb-3 text-sm"
-        />
         {teamSeatsWorking && !(cutSteps.length > 0 && engineStageLabel !== null) ? (
           <p
             className="mx-auto w-full max-w-(--chat-content-max-width) pb-3 text-sm text-muted-foreground"
@@ -3777,12 +3773,14 @@ export default function ChatView(props: ChatViewProps) {
       .filter((part) => part !== null)
       .join(" · ") || null;
   // The end of the timeline holds the thread's present and next turns: what it is doing now,
-  // its lifecycle status, guest messages awaiting you, then your queued messages.
+  // its lifecycle status, guest messages awaiting you, a board step that needs a person, then your
+  // queued messages.
   const timelineFooter =
     pendingHandoff === null &&
     !hasThreadNow &&
     threadStatusLine === null &&
     pendingGuestMessageCount === 0 &&
+    cutSteps.length === 0 &&
     !hasQueuedTurns &&
     !hasTeamChatActivity ? null : (
       <>
@@ -3809,6 +3807,13 @@ export default function ChatView(props: ChatViewProps) {
             threadRef={scopeThreadRef(activeThread.environmentId, activeThread.id)}
             onImageExpand={onExpandTimelineImageStable}
             onFileOpen={openFileAttachmentStable}
+          />
+        ) : null}
+        {/* Outside the run's controls: a cut step needs a person with no run here at all. */}
+        {isServerThread ? (
+          <StepsCutByT3
+            steps={cutSteps}
+            className="mx-auto w-full max-w-(--chat-content-max-width) pb-3 text-sm"
           />
         ) : null}
         {hasQueuedTurns || hasTeamChatActivity ? queuedRunsControl : null}
