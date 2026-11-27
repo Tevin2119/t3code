@@ -116,6 +116,50 @@ describe("deployment contract", () => {
     ).toThrow();
     expect(() => deploymentRequestBody("/api/tasks", {})).toThrow();
   });
+  it("decodes promotion requests and their actions", () => {
+    expect(
+      deploymentRequestBody("/api/deployments/promotions", {
+        from: "t3code-qa",
+        to: "t3code-app",
+        by: "Sam",
+        key: "passphrase",
+      }),
+    ).toEqual({ from: "t3code-qa", to: "t3code-app", by: "Sam", key: "passphrase" });
+    expect(
+      deploymentRequestBody("/api/deployments/promotions/promo-1a2b/action", {
+        action: "retry",
+        by: "Sam",
+        key: "passphrase",
+      }),
+    ).toEqual({ action: "retry", by: "Sam", key: "passphrase" });
+    expect(() =>
+      deploymentRequestBody("/api/deployments/promotions/promo-1a2b/action", {
+        action: "approve",
+        by: "Sam",
+        key: "passphrase",
+      }),
+    ).toThrow();
+    expect(() =>
+      deploymentRequestBody("/api/deployments/promotions", { from: "t3code-qa", by: "Sam" }),
+    ).toThrow();
+  });
+  it("keeps a snapshot whose promotions carry states and fields this T3 does not know", () => {
+    const parsed = parseDeployments({
+      ...snapshot,
+      promotions: [
+        {
+          id: "promo-1",
+          from: "qa",
+          to: "app",
+          by: "Ana",
+          state: "awaiting-merge",
+          problem: "Waiting for the sync PR to merge.",
+          syncPr: { number: 7 },
+        },
+      ],
+    });
+    expect(parsed?.promotions?.[0]).toMatchObject({ state: "awaiting-merge" });
+  });
   it("accepts repositories whose default branch is unknown", () => {
     expect(
       parseDeployments({

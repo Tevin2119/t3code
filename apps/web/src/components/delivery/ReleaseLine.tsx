@@ -4,59 +4,24 @@ import type {
   EnvironmentId,
   RepositoryIdentity,
 } from "@t3tools/contracts";
-import {
-  CircleCheckIcon,
-  CircleDashedIcon,
-  ClockIcon,
-  GitBranchIcon,
-  RefreshCwIcon,
-  ServerIcon,
-  TriangleAlertIcon,
-} from "lucide-react";
+import { GitBranchIcon, ServerIcon } from "lucide-react";
 import type { ComponentProps } from "react";
 import { useProjects } from "../../state/entities";
 import { RelativeTime } from "../RelativeTime";
 import { Badge } from "../ui/badge";
 import { DeploymentInstances, MODE_LABELS } from "./DeploymentInstance";
+import { InstanceChip } from "./ReleaseLine.chip";
 import { DifferenceStrip } from "./ReleaseLine.compare";
 import {
   instanceFacts,
-  type InstanceTone,
   promotesInto,
   releaseLinesOf,
   repositoryIdentityFor,
+  stripPromotion,
 } from "./ReleaseLine.logic";
 import { TaskDisclosure } from "./TaskDisclosure";
 
-// The v2 sidebar update pills' tones (SidebarCheckoutUpdatePill), so an instance reads the same.
-const CHIP_TONES: Record<InstanceTone, string> = {
-  live: "bg-sidebar-control-surface text-sidebar-foreground",
-  waiting: "bg-sidebar-control-surface text-sidebar-foreground",
-  unknown: "bg-sidebar-control-surface text-sidebar-foreground",
-  busy: "bg-sidebar-control-surface text-sidebar-foreground",
-  problem: "bg-destructive/12 text-destructive",
-};
-const CHIP_ICONS = {
-  live: CircleCheckIcon,
-  waiting: ClockIcon,
-  unknown: CircleDashedIcon,
-  busy: RefreshCwIcon,
-  problem: TriangleAlertIcon,
-} as const;
 const short = (commit: string) => commit.slice(0, 10);
-
-function InstanceChip({ tone, label }: { tone: InstanceTone; label: string }) {
-  const Icon = CHIP_ICONS[tone];
-  return (
-    <span
-      className={`inline-flex shrink-0 items-center gap-1.5 rounded-lg px-2 py-0.5 text-2xs leading-4 font-medium ${CHIP_TONES[tone]}`}
-      data-instance-state={tone}
-    >
-      <Icon aria-hidden className="size-3.5 shrink-0" />
-      {label}
-    </span>
-  );
-}
 
 type InstanceActions = Omit<ComponentProps<typeof DeploymentInstances>, "snapshot" | "projects">;
 
@@ -148,8 +113,8 @@ function InstanceCard({
 
 /**
  * One release line per repository: its instances in promotion order, and between each instance
- * and the one it promotes into, what lies on one and not the other. Read only; actions stay in
- * each instance's detail, the cards Deployments has always shown.
+ * and the one it promotes into, what lies on one and not the other, with its promotion. Release
+ * actions stay in each instance's detail, the cards Deployments has always shown.
  */
 export function ReleaseLines({
   environmentId,
@@ -193,6 +158,10 @@ export function ReleaseLines({
                       from={project}
                       to={next}
                       identity={identity}
+                      promotion={stripPromotion(snapshot.promotions, project.id, next.id)}
+                      unavailable={actions.unavailable}
+                      disabled={actions.disabled}
+                      onRequest={actions.onRequest}
                     />
                   ) : null}
                 </div>

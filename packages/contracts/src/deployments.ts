@@ -148,6 +148,26 @@ export const DeploymentReleaseLine = Schema.Struct({
   problem: Schema.NullOr(Schema.String),
 });
 export type DeploymentReleaseLine = typeof DeploymentReleaseLine.Type;
+/**
+ * A promotion of one instance's verified live commit into the instance it promotes into.
+ * State is any string: a newer engine adds states, which are shown by name with their reason.
+ */
+export const DeploymentPromotion = Schema.Struct({
+  id: Schema.String,
+  from: Schema.String,
+  to: Schema.String,
+  by: Schema.String,
+  state: Schema.String,
+  // The engine's reason: why it is blocked or conflicted, or what it waits for.
+  problem: OptionalText,
+  waiting: OptionalText,
+  source: OptionalText,
+  sync: Schema.optional(Schema.NullOr(Schema.Struct({ commit: OptionalText }))),
+  events: Schema.optional(Schema.Array(Schema.Struct({ at: Schema.String, type: Schema.String }))),
+  createdAt: OptionalText,
+  updatedAt: OptionalText,
+});
+export type DeploymentPromotion = typeof DeploymentPromotion.Type;
 export const DeploymentsSnapshot = Schema.Struct({
   problem: Problem,
   version: Schema.Literal(1),
@@ -155,6 +175,8 @@ export const DeploymentsSnapshot = Schema.Struct({
   candidates: Schema.Array(DeploymentCandidate),
   // Absent from an engine older than release lines.
   lines: Schema.optional(Schema.Array(DeploymentReleaseLine)),
+  // Absent from an engine older than promotions.
+  promotions: Schema.optional(Schema.Array(DeploymentPromotion)),
   repositories: Schema.Array(
     Schema.Struct({
       id: TrimmedNonEmptyString,
@@ -299,5 +321,17 @@ export const DeploymentActionInput = Schema.Struct({
 
 export const DeploymentDependenciesInput = Schema.Struct({
   dependencies: Schema.Array(Identifier),
+  ...Approval,
+});
+
+export const DeploymentPromotionAction = Schema.Literals(["advance", "retry", "cancel"]);
+export type DeploymentPromotionAction = typeof DeploymentPromotionAction.Type;
+export const DeploymentPromotionInput = Schema.Struct({
+  from: TrimmedNonEmptyString,
+  to: Schema.optional(TrimmedNonEmptyString),
+  ...Approval,
+});
+export const DeploymentPromotionActionInput = Schema.Struct({
+  action: DeploymentPromotionAction,
   ...Approval,
 });
