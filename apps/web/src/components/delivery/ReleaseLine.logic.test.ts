@@ -1,17 +1,27 @@
 import type {
   DeploymentCandidate,
   DeploymentProject,
+  DeploymentPromotion,
   RepositoryIdentity,
 } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
+import { parseDeployments } from "../../lib/deployments";
 import recorded from "./ReleaseLine.fixtures.json";
+import promotions from "./ReleaseLine.promotions.json";
 import {
+  compareReadingProblem,
   instanceFacts,
   parseDeploymentCompare,
+  promoteBlocked,
+  promoteConfirm,
   promotesInto,
+  promotionActionConfirm,
+  promotionConfirmation,
+  promotionView,
   pullRequestUrl,
   releaseLinesOf,
   repositoryIdentityFor,
+  stripPromotion,
   taskInstancesSummary,
 } from "./ReleaseLine.logic";
 
@@ -196,5 +206,228 @@ describe("taskInstancesSummary", () => {
       ]),
     ).toBe("Merged, waiting on qa, not on app");
     expect(taskInstancesSummary([])).toBeNull();
+  });
+});
+
+describe("promotions on the strip", () => {
+  const states = promotions.states as unknown as Record<string, DeploymentPromotion>;
+  const compare = parseDeploymentCompare(recorded.withHotfix)!;
+  const inSync = parseDeploymentCompare(recorded.inSync)!;
+
+  it("decodes every recorded state, and shows each engine reason as it wrote it", () => {
+    const snapshot = parseDeployments({
+      version: 1,
+      projects: [],
+      candidates: [],
+      repositories: [],
+      capabilities: { engine: false, command: true, "firebase-hosting": false },
+      promotions: Object.values(states),
+    });
+    expect(snapshot?.promotions).toHaveLength(Object.keys(states).length);
+    expect(promotionView(states["conflicted"]!).reason).toBe(states["conflicted"]!.problem);
+    expect(promotionView(states["blocked"]!).reason).toBe(states["blocked"]!.problem);
+    expect(promotionView(states["awaiting-qa"]!).reason).toBe(states["awaiting-qa"]!.waiting);
+    expect(promotionView(states["ready"]!).reason).toBeNull();
+  });
+
+  it("offers the actions the engine takes in each state", () => {
+    const offered = Object.fromEntries(
+      Object.entries(states).map(([name, promotion]) => [name, promotionView(promotion).actions]),
+    );
+    expect(offered).toEqual({
+      planned: ["cancel"],
+      syncing: [],
+      "awaiting-qa": ["cancel"],
+      ready: ["advance", "cancel"],
+      advancing: [],
+      promoted: [],
+      conflicted: ["retry", "cancel"],
+      cancelled: [],
+      blocked: ["retry", "cancel"],
+    });
+  });
+
+  it("shows a state it does not know by name, with its reason and a way out", () => {
+    const view = promotionView({
+      ...states["conflicted"]!,
+      state: "awaiting-merge",
+      problem: "Sync PR #7 waits for review.",
+    });
+    expect(view).toEqual({
+      label: "awaiting-merge",
+      tone: "unknown",
+      reason: "Sync PR #7 waits for review.",
+      actions: ["cancel"],
+      open: true,
+    });
+  });
+
+  it("shows the open promotion into an instance, else the pair's latest", () => {
+    const old = { ...states["promoted"]!, id: "old", createdAt: "2026-01-01T00:00:00Z" };
+    const open = { ...states["blocked"]!, id: "open", createdAt: "2025-01-01T00:00:00Z" };
+    const cancelled = { ...states["cancelled"]!, id: "new", createdAt: "2026-02-01T00:00:00Z" };
+    expect(stripPromotion([old, open, cancelled], "t3code-qa", "t3code-app")?.id).toBe("open");
+    expect(stripPromotion([old, cancelled], "t3code-qa", "t3code-app")?.id).toBe("new");
+    expect(stripPromotion([old], "t3code-app", "t3code-qa")).toBeNull();
+    expect(stripPromotion(undefined, "t3code-qa", "t3code-app")).toBeNull();
+  });
+
+  it("says what moves: from which commit to which branch", () => {
+    const sync = promoteConfirm(compare, { mode: "manual" });
+    expect(sync.path).toBe("/api/deployments/promotions");
+    expect(sync.body).toEqual({ from: "t3code-qa", to: "t3code-app" });
+    expect(sync.moves).toContain(`Merges main (${compare.points.toTip!.slice(0, 12)}`);
+    expect(sync.moves).toContain(`into qa (${compare.points.fromTip!.slice(0, 12)})`);
+    expect(sync.moves).toContain("waits, ready, for a named person to advance main");
+    expect(promoteConfirm(compare, { mode: "full-auto" }).moves).toContain(
+      "app is full auto, so main then moves on its own",
+    );
+    const plain = promoteConfirm(inSync, { mode: "manual" });
+    expect(plain.title).toBe("Promote qa into release");
+    expect(plain.moves).toBe(
+      `Moves release to qa's verified live commit ${inSync.points.fromLive!.slice(0, 12)}, with a plain push that is never forced.`,
+    );
+    const ready = states["ready"]!;
+    const advance = promotionActionConfirm(ready, "advance", {
+      from: "qa",
+      to: "app",
+      toBranch: "main",
+    });
+    expect(advance.path).toBe(`/api/deployments/promotions/${ready.id}/action`);
+    expect(advance.body).toEqual({ action: "advance" });
+    expect(advance.moves).toContain(`Moves main to ${ready.source!.slice(0, 12)}`);
+  });
+});
+
+describe("promoting only what the engine will move", () => {
+  const afterPromoted = parseDeploymentCompare(promotions.compareAfterPromoted)!;
+  const inSync = parseDeploymentCompare(recorded.inSync)!;
+
+  it("waits for the instance to deploy once its branch tip holds from's live commit", () => {
+    // Recorded: main moved to qa's live commit; app still runs the old one, so ahead is not empty.
+    expect(afterPromoted.promote).toBe("promote");
+    expect(afterPromoted.ahead.count).toBeGreaterThan(0);
+    expect(promoteBlocked(afterPromoted)).toBe(
+      `main already holds qa's live commit ${afterPromoted.points.fromLive!.slice(0, 12)}. Waiting for app to deploy it.`,
+    );
+  });
+
+  it("waits too when the tip is past from's live commit, read from compare's ranges", () => {
+    const later = {
+      ...afterPromoted,
+      points: { ...afterPromoted.points, toTip: "f".repeat(40) },
+      waiting: {
+        ...afterPromoted.waiting,
+        loose: [...afterPromoted.waiting.loose, { commit: "f".repeat(40), subject: "later" }],
+        count: afterPromoted.waiting.count + 1,
+      },
+    };
+    expect(promoteBlocked(later)).toMatch(/Waiting for app to deploy it\.$/);
+    // A truncated range cannot show every commit is on the tip, so the engine decides.
+    expect(promoteBlocked({ ...later, waiting: { ...later.waiting, truncated: true } })).toBeNull();
+  });
+
+  it("offers promote when from has work the tip lacks, and never blocks a sync", () => {
+    expect(promoteBlocked(inSync)).toBeNull();
+    expect(promoteBlocked(parseDeploymentCompare(recorded.withHotfix)!)).toBeNull();
+    expect(promoteBlocked({ ...inSync, ahead: { ...inSync.ahead, count: 0 } })).toBe(
+      "Nothing on qa is missing from release.",
+    );
+  });
+
+  it("says why a stale or failed difference cannot back a promotion", () => {
+    expect(compareReadingProblem({ error: "engine offline", stale: false, hasCompare: true })).toBe(
+      "The difference could not be read: engine offline",
+    );
+    expect(compareReadingProblem({ error: null, stale: true, hasCompare: true })).toMatch(
+      /out of date/,
+    );
+    expect(compareReadingProblem({ error: null, stale: false, hasCompare: false })).toMatch(
+      /not been read yet/,
+    );
+    expect(compareReadingProblem({ error: null, stale: false, hasCompare: true })).toBeNull();
+  });
+});
+
+describe("the confirmation shows what the engine will read", () => {
+  const states = promotions.states as unknown as Record<string, DeploymentPromotion>;
+  const withHotfix = parseDeploymentCompare(recorded.withHotfix)!;
+  const afterPromoted = parseDeploymentCompare(promotions.compareAfterPromoted)!;
+  const sides = {
+    from: { environment: "qa" },
+    to: { environment: "app", branch: "main", mode: "manual" as const },
+  };
+  const opened = "2026-11-27T05:00:00.000Z";
+  const later = "2026-11-27T05:00:02.000Z";
+
+  it("waits for a read taken after it opened, then builds the text from it", () => {
+    const promote = { kind: "promote" as const, openedAt: opened };
+    expect(
+      promotionConfirmation({
+        ...sides,
+        pending: promote,
+        readAt: opened,
+        error: null,
+        compare: withHotfix,
+        promotion: null,
+      }),
+    ).toEqual({ state: "reading" });
+    const ready = promotionConfirmation({
+      ...sides,
+      pending: promote,
+      readAt: later,
+      error: null,
+      compare: withHotfix,
+      promotion: null,
+    });
+    expect(ready.state === "ready" && ready.confirm.moves).toContain(
+      withHotfix.points.toTip!.slice(0, 12),
+    );
+  });
+
+  it("refuses when the fresh read shows the promotion already happened, or failed", () => {
+    const promote = { kind: "promote" as const, openedAt: opened };
+    expect(
+      promotionConfirmation({
+        ...sides,
+        pending: promote,
+        readAt: later,
+        error: null,
+        compare: afterPromoted,
+        promotion: null,
+      }),
+    ).toEqual({ state: "problem", why: promoteBlocked(afterPromoted) });
+    expect(
+      promotionConfirmation({
+        ...sides,
+        pending: promote,
+        readAt: later,
+        error: "502",
+        compare: withHotfix,
+        promotion: null,
+      }),
+    ).toEqual({ state: "problem", why: "The difference could not be read: 502" });
+  });
+
+  it("advance waits for the fresh read; retry and cancel do not rest on it", () => {
+    const at = (action: "advance" | "retry" | "cancel") => ({
+      kind: "action" as const,
+      action,
+      openedAt: opened,
+    });
+    const base = {
+      ...sides,
+      readAt: opened,
+      error: "502",
+      compare: withHotfix,
+      promotion: states["ready"]!,
+    };
+    expect(promotionConfirmation({ ...base, pending: at("advance") }).state).toBe("problem");
+    expect(promotionConfirmation({ ...base, pending: at("cancel") }).state).toBe("ready");
+    expect(promotionConfirmation({ ...base, pending: at("retry") }).state).toBe("ready");
+    expect(promotionConfirmation({ ...base, pending: at("cancel"), promotion: null })).toEqual({
+      state: "problem",
+      why: "This promotion is no longer listed.",
+    });
   });
 });
