@@ -353,6 +353,23 @@ it("shows the Task item only where a board task's view hosts the thread, with it
     state: "closed",
     lane: "completed",
     source: { kind: "thread", ref: "env-elsewhere/filed-from" },
+    // Cut short by a T3 restart before it closed: nothing is owed on a closed task.
+    council: {
+      seats: [
+        {
+          seat: "builder",
+          activity: "stopped",
+          attempts: [
+            {
+              stage: "build",
+              state: "stopped",
+              reason: "interrupted: T3 restarted and cut this step short",
+              ended: "2026-11-27T10:00:00Z",
+            },
+          ],
+        },
+      ],
+    },
     card: { id: "t1", number: 12, title: "Fix the sync", lane: "completed" },
   });
   await screen.rerender(
@@ -367,7 +384,10 @@ it("shows the Task item only where a board task's view hosts the thread, with it
         openTab: () => {},
         decisions: <p>Your decision</p>,
         thread: null,
-        seats: { thread: () => null, rows: [] },
+        seats: {
+          thread: () => null,
+          rows: [{ seat: "builder", activity: "stopped", target: threadRef }],
+        },
       }}
     >
       <Panel fixture={fixture} />
@@ -378,6 +398,12 @@ it("shows the Task item only where a board task's view hosts the thread, with it
   await expect.element(page.getByText("Make the sync stop dropping rows.")).toBeVisible();
   await expect.element(page.getByText("Your decision")).toBeVisible();
   await expect.element(page.getByText("This is closed. What was said is kept.")).toBeVisible();
+  const builder = page.getByRole("button", { name: /builder/ });
+  await expect.element(builder).toBeVisible();
+  expect(
+    document.querySelector("[data-task-seat='builder']")?.hasAttribute("data-seat-cut-by-t3"),
+  ).toBe(false);
+  expect(document.querySelector("[data-steps-cut-by-t3]")).toBeNull();
   // The thread it was filed from is a row of the lineage, not a link in the Task item.
   await expect
     .element(page.getByRole("button", { name: /The conversation it came from/ }))

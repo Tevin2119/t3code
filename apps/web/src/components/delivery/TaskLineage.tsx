@@ -1,3 +1,5 @@
+import { boardTaskFinishedBy } from "@t3tools/shared/boardTaskFinished";
+
 import { useBoardTask } from "./BoardTaskContext";
 import { taskHasLineage } from "./relatedTaskGroups";
 import { useSeatCatalog } from "./SeatSettingsPanel";
@@ -16,9 +18,11 @@ export function TaskLineage() {
   if (!taskHasLineage(board)) return null;
   const { task } = board;
   const seats = task.council?.seats ?? [];
+  // A finished task asks nothing of anyone, so a step cut short there is no longer owed.
+  const finished = boardTaskFinishedBy(task) !== null;
   const rows = board.seats.rows.flatMap((row) => {
     const seat = seats.find((item) => item.seat === row.seat);
-    return seat ? [{ ...row, council: seat }] : [];
+    return seat ? [{ ...row, council: finished ? { ...seat, cutByT3: null } : seat }] : [];
   });
   return (
     <div data-task-lineage>
