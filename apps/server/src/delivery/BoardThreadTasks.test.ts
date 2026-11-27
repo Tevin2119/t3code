@@ -80,6 +80,7 @@ const harness = Effect.fn("BoardThreadTasks.testHarness")(function* (
   const cards = yield* Queue.unbounded<Card>();
   const events = yield* Queue.unbounded<OrchestrationV2StoredEvent>();
   const calls: Array<Parameters<Act>[0]> = [];
+  const reads: Array<string> = [];
   const now = DateTime.makeUnsafe("2026-11-24T00:00:00Z");
   const run = {
     id: RunId.make("run:test"),
@@ -103,8 +104,15 @@ const harness = Effect.fn("BoardThreadTasks.testHarness")(function* (
     Layer.provide(
       Layer.mergeAll(
         Layer.mock(Delivery.DeliveryService)({
-          boardThreadConfiguration: Effect.succeed("engine-test"),
-          read: () => Effect.succeed({ readAt: "2026-11-27T12:00:00Z", body: compare }),
+          boardThreadConfiguration: Effect.sync(() => {
+            reads.push("configuration");
+            return "engine-test";
+          }),
+          read: ({ path }) =>
+            Effect.sync(() => {
+              reads.push(path);
+              return { readAt: "2026-11-27T12:00:00Z", body: compare };
+            }),
           boardThreadAct: (input) =>
             Effect.suspend((): ReturnType<Act> => {
               calls.push(input);
@@ -142,6 +150,7 @@ const harness = Effect.fn("BoardThreadTasks.testHarness")(function* (
   return {
     cards,
     calls,
+    reads,
     layer,
     activeRun,
     endRun: Queue.offer(events, {
@@ -340,7 +349,7 @@ const portInput = {
   board: "work",
   from: "payoutlab-qa",
   to: "payoutlab-app",
-  by: "Tevin",
+  requestedBy: "Tevin",
   commits: [SANDBOX_B, SANDBOX_A],
 };
 const portOrigin = "deployment:environment-test/payoutlab-qa..payoutlab-app";
@@ -353,25 +362,32 @@ const bodyOf = (call: Parameters<Act>[0]) => call.body as Record<string, unknown
 
 it.effect("files a port for the page with the stamped origin and the engine's own subjects", () =>
   Effect.gen(function* () {
-    const { calls, layer } = yield* harness(portFiled, undefined, false, compareWithPorts);
+    const { calls, reads, layer } = yield* harness(portFiled, undefined, false, compareWithPorts);
     yield* Effect.gen(function* () {
       const service = yield* BoardTasks.BoardThreadTasks;
       const environmentId = EnvironmentId.make("environment-test");
       const filing = yield* service.filePort(environmentId, portInput);
+      // The engine configuration is fixed before the reading the filing rests on, as for a thread.
+      assert.deepStrictEqual(reads, [
+        "configuration",
+        "/api/deployments/compare?from=payoutlab-qa&to=payoutlab-app",
+      ]);
       assert.strictEqual(filing.task.origin, portOrigin);
       yield* service.filePort(environmentId, { ...portInput, commits: [SANDBOX_A, SANDBOX_B] });
       assert.strictEqual(calls.length, 2);
       const [first, second] = calls.map(bodyOf);
       assert.strictEqual(calls[0]!.path, path);
       assert.strictEqual(calls[0]!.configuration, "engine-test");
+      // The keyed actor is this environment; the person's name is attribution in the text only.
       assert.deepInclude(first, {
         origin: portOrigin,
         key,
-        by: "Tevin",
+        by: "environment-test",
         title: "Port to app: 2 sandbox commits",
       });
       assert.deepStrictEqual(first!.commits, [SANDBOX_A, SANDBOX_B]);
-      assert.include(String(first!.body), `- ${SANDBOX_B} #129 feat: sandbox payout`);
+      assert.include(String(first!.body), "- Requested by: Tevin");
+      assert.include(String(first!.body), `- ${SANDBOX_B} "#129 feat: sandbox payout"`);
       // The same port in any order is one request, so filing it twice replays the first.
       assert.match(String(first!.requestId), /^port-[a-f0-9]{64}$/);
       assert.strictEqual(second!.requestId, first!.requestId);

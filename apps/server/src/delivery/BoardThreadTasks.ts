@@ -141,12 +141,13 @@ const make = Effect.gen(function* () {
     environmentId: EnvironmentId,
     input: DeploymentPortInput,
   ) {
-    const { board, from, to, by } = input;
+    const { board, from, to } = input;
     if (isReservedBoardTaskBoard(board))
       return yield* invalidRequest("Choose a custom board to file on.");
     if (from === to) return yield* invalidRequest("Port between two different instances.");
     const key = hostEnvironment[Delivery.BOARD_THREAD_KEY_VARIABLE];
     if (!key) return yield* invalidRequest("This server has no board approval key configured.");
+    const configuration = yield* delivery.boardThreadConfiguration;
     // The engine's reading, not the client's, says what is ported and what each commit is.
     const reading = yield* delivery
       .read({
@@ -160,16 +161,21 @@ const make = Effect.gen(function* () {
     );
     if (compare.from.id !== from || compare.to.id !== to)
       return yield* invalidRequest("The engine compared other instances. Read it again.");
-    const composed = portDraft(compare, input.commits);
+    const composed = portDraft(compare, input.commits, input.requestedBy);
     if (!composed.ok) return yield* invalidRequest(composed.why);
     const { title, body, commits } = composed.draft;
     const origin = `deployment:${environmentId}/${from}..${to}`;
     // One request per board, pair and commits: filing the same port twice replays it.
     const requestId = `port-${yield* sha256(portRequestKey(board, origin, commits))}`;
     const fresh = yield* random.uuidV4().pipe(Effect.mapError(recordFailure));
-    const configuration = yield* delivery.boardThreadConfiguration;
+    // The keyed actor is this environment, as for every server-keyed write: a name the client
+    // chose must not open that name's approval window.
     const send = (id: string) =>
-      post(board, { requestId: id, title, body, origin, key, by, commits }, configuration);
+      post(
+        board,
+        { requestId: id, title, body, origin, key, by: environmentId, commits },
+        configuration,
+      );
     const response = yield* send(requestId).pipe(
       // Its task was discarded since: the engine asks for a new request ID to file it anew.
       Effect.catchIf(

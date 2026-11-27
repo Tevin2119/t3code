@@ -376,7 +376,8 @@ export const DeploymentPortInput = Schema.Struct({
   board: BoardTaskBoardId,
   from: Identifier,
   to: Identifier,
-  by: TrimmedNonEmptyString.check(Schema.isMaxLength(60)),
+  // Attribution in the task text only: the server files as this environment, never as this name.
+  requestedBy: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(60))),
   commits: Schema.Array(Revision).check(Schema.isMinLength(1), Schema.isMaxLength(500)),
 });
 export type DeploymentPortInput = typeof DeploymentPortInput.Type;

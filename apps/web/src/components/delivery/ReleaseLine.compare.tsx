@@ -267,12 +267,12 @@ export function DifferenceStrip({
   const compare = parseDeploymentCompare(read.body);
   const stale = useStaleReading(read.readAt);
   const onTask = useOpenTask(environmentId);
-  const [porting, setPorting] = useState(false);
+  const [porting, setPorting] = useState<string | null>(null);
   const ports = compare ? portRowsOf(compare) : null;
   const portSlot = (commit: string) => {
     const row = ports?.get(commit);
     return row ? (
-      <PortSlot row={row} to={to.environment} onPort={() => setPorting(true)} onTask={onTask} />
+      <PortSlot row={row} to={to.environment} onPort={() => setPorting(commit)} onTask={onTask} />
     ) : null;
   };
   return (
@@ -351,7 +351,8 @@ export function DifferenceStrip({
               compare={compare}
               repositoryTitle={repositoryTitle}
               board={board}
-              onClose={() => setPorting(false)}
+              commit={porting}
+              onClose={() => setPorting(null)}
               onFiled={read.refresh}
             />
           ) : null}

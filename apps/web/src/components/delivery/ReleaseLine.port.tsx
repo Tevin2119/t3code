@@ -1,7 +1,6 @@
 import type { DeploymentCompare, EnvironmentId } from "@t3tools/contracts";
 import { CopyPlusIcon, SquareKanbanIcon } from "lucide-react";
 import { useState } from "react";
-import { useBoardStore } from "../../state/deliveryBoard";
 import { useDeliveryRead, useFilePort, usePersonName } from "../../state/delivery";
 import {
   AlertDialog,
@@ -14,7 +13,6 @@ import {
 } from "../ui/alert-dialog";
 import { Button } from "../ui/button";
 import { Checkbox } from "../ui/checkbox";
-import { Input } from "../ui/input";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { toastManager } from "../ui/toast";
 import { portableCommitsOf, portBoardsOf, type PortRow } from "./ReleaseLine.logic";
@@ -64,6 +62,7 @@ export function PortDialog({
   compare,
   repositoryTitle,
   board: preferredBoard,
+  commit,
   onClose,
   onFiled,
 }: {
@@ -72,14 +71,14 @@ export function PortDialog({
   repositoryTitle: string;
   /** The board being viewed, when the release line sits on one. */
   board: string | null;
+  /** The row the dialog was opened from: the one commit ticked at first. */
+  commit: string;
   onClose: () => void;
   onFiled: () => void;
 }) {
   const { from, to, folders } = compare;
   const offered = portableCommitsOf(compare);
-  const [chosen, setChosen] = useState<ReadonlySet<string>>(
-    () => new Set(offered.map((row) => row.commit)),
-  );
+  const [chosen, setChosen] = useState<ReadonlySet<string>>(() => new Set([commit]));
   const boardsRead = useDeliveryRead(environmentId, "/api/boards");
   const boards = portBoardsOf(boardsRead.body, compare.repository);
   const [pickedBoard, setPickedBoard] = useState<string | null>(null);
@@ -90,24 +89,28 @@ export function PortDialog({
       (boards.length === 1 ? boards[0] : null)
     )?.id ??
     null;
+  // Attribution only: the server files as this environment, never under this name.
   const person = usePersonName();
-  const [by, setBy] = useState(person);
-  const setPerson = useBoardStore((state) => state.setPerson);
   const port = useFilePort(environmentId);
   const [busy, setBusy] = useState(false);
   const commits = offered.filter((row) => chosen.has(row.commit)).map((row) => row.commit);
-  const blocked = !port.allowed || busy || !board || commits.length === 0 || !by.trim();
+  const blocked = !port.allowed || busy || !board || commits.length === 0;
 
   const submit = async () => {
     if (blocked) return;
     setBusy(true);
-    const result = await port.file({ board, from: from.id, to: to.id, by: by.trim(), commits });
+    const result = await port.file({
+      board,
+      from: from.id,
+      to: to.id,
+      ...(person ? { requestedBy: person } : {}),
+      commits,
+    });
     setBusy(false);
     if (!result.ok) {
       toastManager.add({ type: "error", title: "Port not filed", description: result.why });
       return;
     }
-    setPerson(by.trim());
     const { task, created } = result.filing;
     toastManager.add({
       type: "success",
@@ -144,6 +147,12 @@ export function PortDialog({
               <dd className="min-w-0 break-words">
                 {to.environment} · {to.branch} · serves {folders?.to}/
               </dd>
+              {person ? (
+                <>
+                  <dt className="text-muted-foreground">Requested by</dt>
+                  <dd className="min-w-0 break-words">{person}</dd>
+                </>
+              ) : null}
             </dl>
             <fieldset className="flex min-w-0 flex-col gap-1">
               <legend className="mb-1 text-xs font-medium">Commits</legend>
@@ -197,16 +206,6 @@ export function PortDialog({
                 </Select>
               )}
             </div>
-            <label className="flex min-w-0 flex-col gap-1">
-              <span className="text-xs font-medium">Your name</span>
-              <Input
-                value={by}
-                maxLength={60}
-                disabled={busy}
-                onChange={(event) => setBy(event.target.value)}
-                aria-label="Your name"
-              />
-            </label>
             {!port.allowed ? (
               <p role="status" className="text-xs text-muted-foreground">
                 This connection does not have permission to file board tasks.

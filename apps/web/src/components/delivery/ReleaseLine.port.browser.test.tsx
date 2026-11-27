@@ -4,16 +4,17 @@ import type { DeploymentProject, DeploymentsSnapshot } from "@t3tools/contracts"
 import { expect, it, vi } from "vite-plus/test";
 
 import { render } from "../../../test/render";
+import { useBoardStore } from "../../state/deliveryBoard";
 import { ReleaseLines } from "./ReleaseLine";
 import recorded from "./ReleaseLine.ports.json";
 
-const mock = vi.hoisted(() => ({ file: vi.fn(), toast: vi.fn() }));
+const mock = vi.hoisted(() => ({ file: vi.fn(), toast: vi.fn(), compare: null as unknown }));
 vi.mock(import("../../state/delivery"), async (importOriginal) => ({
   ...(await importOriginal()),
   useDeliveryRead: (_env: unknown, path: string | null) =>
     ({
       body: path?.startsWith("/api/deployments/compare")
-        ? recorded.withPorts
+        ? mock.compare
         : path === "/api/boards"
           ? [
               { id: "payoutlab-work", title: "PayoutLab", target: { repository: "payoutlab" } },
@@ -90,6 +91,8 @@ it("offers Port to app on the sandbox-only row without a port, files it, and sho
       },
     },
   });
+  mock.compare = recorded.withPorts;
+  useBoardStore.getState().setPerson("Tevin");
   await using screen = await render(
     <ReleaseLines
       environmentId={"host" as never}
@@ -125,13 +128,15 @@ it("offers Port to app on the sandbox-only row without a port, files it, and sho
     .toHaveTextContent("PayoutLab");
   expect(dialog.element().textContent).not.toContain(ported!.slice(0, 7));
 
-  await dialog.getByRole("textbox", { name: "Your name" }).fill("Tevin");
+  // Who asked is shown, not typed: the server files as this environment.
+  await expect.element(dialog.getByText("Requested by")).toBeVisible();
+  expect(dialog.getByRole("textbox").elements()).toHaveLength(0);
   await dialog.getByRole("button", { name: "File port task" }).click();
   expect(mock.file).toHaveBeenCalledWith({
     board: "payoutlab-work",
     from: "payoutlab-qa",
     to: "payoutlab-app",
-    by: "Tevin",
+    requestedBy: "Tevin",
     commits: [unported],
   });
   // The dialog closes once the filing is answered, after its toast.
@@ -145,4 +150,36 @@ it("offers Port to app on the sandbox-only row without a port, files it, and sho
     environment: "host",
     task: ahead.ports[0]!.task,
   });
+});
+
+it("ticks only the row it was opened from; the other unported commits stay listed, unticked", async () => {
+  mock.file.mockReset();
+  mock.file.mockResolvedValue({ ok: false, why: "not now" });
+  // The recorded compare with its port withdrawn: both sandbox commits are offered.
+  mock.compare = { ...recorded.withPorts, ahead: { ...ahead, ports: [] } };
+  await using screen = await render(
+    <ReleaseLines
+      environmentId={"host" as never}
+      snapshot={snapshot}
+      unavailable={false}
+      disabled
+      onRequest={() => {}}
+      onConfigure={() => {}}
+    />,
+  );
+  const region = screen.getByRole("region", { name: "On qa, not on app" });
+  const offers = [
+    ...region.element().querySelectorAll<HTMLButtonElement>('[data-release-port="offer"]'),
+  ];
+  expect(offers).toHaveLength(2);
+  // The older commit's row, the second listed.
+  offers[1]!.click();
+  const dialog = screen.getByRole("alertdialog");
+  const ticks = dialog.getByRole("checkbox");
+  await expect.element(ticks.nth(0)).not.toBeChecked();
+  await expect.element(ticks.nth(1)).toBeChecked();
+  await expect.element(dialog.getByText(unported!.slice(0, 7))).toBeVisible();
+  await expect.element(dialog.getByText(ported!.slice(0, 7))).toBeVisible();
+  await dialog.getByRole("button", { name: "File port task" }).click();
+  expect(mock.file).toHaveBeenCalledWith(expect.objectContaining({ commits: [ported] }));
 });
