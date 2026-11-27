@@ -102,6 +102,29 @@ describe("instanceFacts", () => {
     });
   });
 
+  it("reads the newest candidate first, as the engine lists them, when none is live", () => {
+    const tip = "c".repeat(40);
+    const app = project("app", { liveCommit: live, latestCommit: tip });
+    const facts = instanceFacts(app, [
+      candidate({
+        id: "new",
+        seq: 3,
+        commit: tip,
+        state: "ready",
+        evidence: { servedFolder: "dist" },
+      }),
+      candidate({
+        id: "old",
+        seq: 1,
+        commit: tip,
+        state: "superseded",
+        evidence: { servedFolder: "public" },
+      }),
+    ]);
+    expect(facts.servedFolder).toBe("dist");
+    expect(facts.waiting).toEqual({ commit: tip, state: "ready" });
+  });
+
   it("names an adoption only for the commit it adopted, and a problem before anything else", () => {
     const adopted = project("app", { liveCommit: live, liveAdoptedBy: "Ana" });
     expect(instanceFacts(adopted, []).live.by).toEqual({ name: "Ana", how: "adopted" });

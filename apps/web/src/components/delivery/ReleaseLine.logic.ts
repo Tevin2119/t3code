@@ -87,10 +87,8 @@ export type InstanceFacts = {
 
 function servedFolderOf(candidates: ReadonlyArray<DeploymentCandidate>, live: string | null) {
   // The live candidate's qualification names the folder it serves; else the newest candidate's.
-  const ordered = [
-    ...candidates.filter((candidate) => candidate.id === live),
-    ...candidates.toReversed(),
-  ];
+  // The engine lists an instance's candidates newest first.
+  const ordered = [...candidates.filter((candidate) => candidate.id === live), ...candidates];
   for (const candidate of ordered) {
     const folder = (candidate.evidence as { servedFolder?: unknown } | null)?.servedFolder;
     if (typeof folder === "string") return folder;
@@ -128,7 +126,7 @@ export function instanceFacts(
       ? {
           commit: project.latestCommit,
           state:
-            candidates.findLast((candidate) => candidate.commit === project.latestCommit)?.state ??
+            candidates.find((candidate) => candidate.commit === project.latestCommit)?.state ??
             null,
         }
       : null;
