@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vite-plus/test";
-import type { OrchestrationV2ThreadProjection } from "@t3tools/contracts";
+import { type OrchestrationV2ThreadProjection, RunId } from "@t3tools/contracts";
 
 import {
   canForkProjectedAssistantItem,
+  deriveEngineStageLabel,
   deriveTeamChatPhase,
   deriveThreadQueueWorkflowState,
   getUserQueuedThreadRuns,
@@ -479,3 +480,32 @@ it.each(["contribution", "critique"] as const)(
     ).toBe("lead");
   },
 );
+
+it("labels an engine stage's seats by the stage, and leaves a team round's to the team", () => {
+  const notice = (stage: string) => ({
+    id: "stage-message",
+    notification: { source: { kind: "engine_stage", stage, seats: [] } },
+  });
+  const projection = (stage: "engine" | "contribution", messages: ReadonlyArray<unknown>) =>
+    ({
+      runs: [{ id: "stage", status: "starting", userMessageId: "stage-message" }],
+      subagents: [{ teamChat: { sourceRunId: "stage", stage, seat: "qa-1" }, status: "running" }],
+      messages,
+    }) as unknown as OrchestrationV2ThreadProjection;
+  expect(deriveEngineStageLabel(projection("engine", [notice("qa")]), RunId.make("stage"))).toBe(
+    "Engine: QA is running",
+  );
+  expect(deriveEngineStageLabel(projection("engine", [notice("build")]), RunId.make("stage"))).toBe(
+    "Engine: build is running",
+  );
+  // The notice is not loaded yet: still the engine's, never the team's.
+  expect(deriveEngineStageLabel(projection("engine", []), RunId.make("stage"))).toBe(
+    "Engine: a stage is running",
+  );
+  expect(
+    deriveEngineStageLabel(projection("contribution", [notice("qa")]), RunId.make("stage")),
+  ).toBeNull();
+  expect(
+    deriveEngineStageLabel(projection("engine", [notice("qa")]), RunId.make("other")),
+  ).toBeNull();
+});

@@ -19,14 +19,18 @@ import { checkpointWorkspace } from "@t3tools/provider-testing/replayWorkspace";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Path from "effect/Path";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
+import type * as SqlClient from "effect/sql/SqlClient";
 
 import * as ServerConfig from "../config.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
+import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import { CodexProviderCapabilitiesV2 } from "../orchestration-v2/Adapters/CodexAdapterV2.ts";
 import * as CommandReceiptStore from "../orchestration-v2/CommandReceiptStore.ts";
 import * as EffectWorker from "../orchestration-v2/EffectWorker.ts";
@@ -94,7 +98,15 @@ const instances = {
  * reports the model it ran on. Its runs are prepared as the launch service prepares a delegated
  * task in a worktree that exists: released, once its folder is ready.
  */
-const harness = Effect.fn("harness")(function* (name: string, engine: ScratchEngine) {
+const harness = Effect.fn("harness")(function* (
+  name: string,
+  engine: ScratchEngine,
+  /** A database the case keeps across a restart, and whether the next build is that restart. */
+  restart?: {
+    readonly databaseLayer: Layer.Layer<SqlClient.SqlClient>;
+    readonly restarted: () => boolean;
+  },
+) {
   const cwd = yield* checkpointWorkspace(name);
   const sessions = new Map<string, Queue.Queue<ProviderAdapter.ProviderAdapterV2Event>>();
   const started: Array<ProviderAdapter.ProviderAdapterV2TurnInput> = [];
@@ -256,16 +268,23 @@ const harness = Effect.fn("harness")(function* (name: string, engine: ScratchEng
         };
       }),
   };
-  const layer = ProviderReplayHarness.layerWithRegistry(
-    { name },
-    ProviderAdapterRegistry.layerSingle(adapter),
-    {
-      runEffectWorker: false,
-      teamChat: Layer.mergeAll(
-        deliveryLayer(engine, `${name}-team-`),
-        Layer.succeed(ProviderInstanceRegistry.ProviderInstanceRegistry, instances),
-      ).pipe(Layer.orDie),
-    },
+  const teamChat = Layer.mergeAll(
+    deliveryLayer(engine, `${name}-team-`),
+    Layer.succeed(ProviderInstanceRegistry.ProviderInstanceRegistry, instances),
+  ).pipe(Layer.orDie);
+  // Each build is a server; once restarted, one on the same database that runs startup recovery.
+  const layer = Layer.suspend(() =>
+    ProviderReplayHarness.layerWithRegistry(
+      { name },
+      ProviderAdapterRegistry.layerSingle(adapter),
+      restart?.restarted()
+        ? { databaseLayer: restart.databaseLayer, recoverOnStartup: true, teamChat }
+        : {
+            ...(restart === undefined ? {} : { databaseLayer: restart.databaseLayer }),
+            runEffectWorker: false,
+            teamChat,
+          },
+    ),
   );
   const turnsOf = (threadId: ThreadId) => started.filter((turn) => turn.threadId === threadId);
   const seatTurns = () => started.filter((turn) => turn.threadId !== THREAD);
@@ -470,7 +489,8 @@ it.effect("stops a running seat the engine cancels, as a delegated task is cance
         const [task] = (yield* orchestrator.getThreadProjection(THREAD)).subagents;
         assert.include(["cancelled", "interrupted"], task?.status);
         yield* service.reconcile();
-        assert.include(["cancelled", "interrupted"], engine.attempts.get("att-build")!.state);
+        // The child ended interrupted, but the engine asked: it is told its own cancel.
+        assert.equal(engine.attempts.get("att-build")!.state, "cancelled");
       }).pipe(Effect.provide(deliveryLayer(engine, "board-execution-real-cancel-")));
       yield* body.pipe(Effect.provide(layer));
     }),
@@ -593,4 +613,67 @@ it.effect("cancels a stage turn still queued behind the brief", () =>
       yield* body.pipe(Effect.provide(layer));
     }),
   ),
+);
+
+it.effect(
+  "reports a step a T3 restart cut as interrupted, and an engine's cancel as cancelled",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const engine = board();
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const directory = yield* fs.makeTempDirectoryScoped({ prefix: "t3-board-restart-" });
+        const databaseLayer = SqlitePersistence.layerFromPath(
+          path.join(directory, "state.sqlite"),
+        ).pipe(Layer.provide(NodeServices.layer), Layer.orDie);
+        yield* Effect.provide(Effect.void, databaseLayer);
+        let restarted = false;
+        const { cwd, layer, seatTurns } = yield* harness("board-execution-real-restart", engine, {
+          databaseLayer,
+          restarted: () => restarted,
+        });
+        const step = { task: "task-7", worktree: cwd, harness: "codex", model: "test-model" };
+        engine.queueAttempt({
+          ...step,
+          id: "att-build",
+          stage: "build",
+          kind: "build",
+          seat: "dev",
+        });
+        engine.queueAttempt({ ...step, id: "att-qa", stage: "qa", kind: "qa", seat: "qa" });
+        const beforeRestart = Effect.gen(function* () {
+          yield* createThread;
+          const service = yield* execution();
+          yield* service.reconcile();
+          yield* settle;
+          yield* service.reconcile();
+          yield* settle;
+          assert.lengthOf(seatTurns(), 1, "the build's seat runs; QA's stage turn waits behind it");
+          // The engine stops QA before T3 restarts.
+          engine.cancelAttempt("att-qa");
+          yield* service.reconcile();
+          yield* settle;
+        }).pipe(Effect.provide(deliveryLayer(engine, "board-execution-real-restart-")));
+        yield* beforeRestart.pipe(Effect.provide(layer));
+        restarted = true;
+        // Boot recovery cancels the build's child and the stage turn held at its start.
+        const afterRestart = Effect.gen(function* () {
+          const orchestrator = yield* Orchestrator.OrchestratorV2;
+          yield* settle;
+          yield* orchestrator.recoverDelegatedTasks;
+          const service = yield* execution();
+          yield* service.reconcile();
+          yield* settle;
+          yield* service.reconcile();
+          const build = engine.attempts.get("att-build")!;
+          // The engine never asked: a step T3 could not finish, reported as interrupted.
+          assert.equal(build.state, "interrupted");
+          assert.isNull(build.result?.model);
+          assert.isNull(build.result?.harness);
+          assert.equal(engine.attempts.get("att-qa")!.state, "cancelled");
+        }).pipe(Effect.provide(deliveryLayer(engine, "board-execution-real-restart-2-")));
+        yield* afterRestart.pipe(Effect.provide(layer));
+      }),
+    ).pipe(Effect.provide(NodeServices.layer)),
 );

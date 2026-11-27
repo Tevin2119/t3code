@@ -58,6 +58,28 @@ export function deriveTeamChatPhase(
   return "lead";
 }
 
+const ENGINE_STAGE_NAMES: Readonly<Record<string, string>> = { qa: "QA" };
+
+/**
+ * What a turn's engine seats are running, as "Engine: QA is running", by the stage its turn's
+ * notice names. Null for a team round, whose seats keep the team's wording, or a turn with none.
+ */
+export function deriveEngineStageLabel(
+  projection: Pick<Projection, "runs" | "subagents" | "messages"> | null | undefined,
+  runId: Run["id"] | null | undefined,
+) {
+  if (runId == null || projection == null) return null;
+  const engineSeats = projection.subagents.some(
+    (task) => task.teamChat?.sourceRunId === runId && task.teamChat.stage === "engine",
+  );
+  if (!engineSeats) return null;
+  const run = projection.runs.find((candidate) => candidate.id === runId);
+  const source = projection.messages.find((message) => message.id === run?.userMessageId)
+    ?.notification?.source;
+  if (source?.kind !== "engine_stage") return "Engine: a stage is running";
+  return `Engine: ${ENGINE_STAGE_NAMES[source.stage] ?? source.stage} is running`;
+}
+
 export function resolveActiveThreadRun(projection: Pick<Projection, "runs">): Run | null {
   return projection.runs.findLast((run) => ACTIVE_RUN_STATUSES.has(run.status)) ?? null;
 }

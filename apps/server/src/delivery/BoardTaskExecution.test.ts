@@ -874,6 +874,7 @@ it.effect("stops held steps the engine cancels after its own restart", () => {
     store.startSeats(store.stages()[0]!);
     // recover() asks every claimed step to stop. The running brief is interrupted, the build's
     // child is stopped, and QA's queued stage turn is cancelled before it starts any child.
+    // Each is reported cancelled: the engine asked.
     for (const id of ["att-plan", "att-build", "att-qa"]) engine.cancelAttempt(id);
     yield* execution.reconcile();
     assert.deepEqual(store.kinds("run.interrupt", "thread.stop", "queued-run.cancel"), [
@@ -882,7 +883,7 @@ it.effect("stops held steps the engine cancels after its own restart", () => {
       "queued-run.cancel",
     ]);
     yield* execution.reconcile();
-    assert.equal(engine.attempts.get("att-plan")!.state, "interrupted");
+    assert.equal(engine.attempts.get("att-plan")!.state, "cancelled");
     assert.equal(engine.attempts.get("att-build")!.state, "cancelled");
     assert.equal(engine.attempts.get("att-qa")!.state, "cancelled");
     assert.equal(resultOf(engine, "att-qa")?.reason, "Stopped before its subagent started.");
