@@ -1,5 +1,5 @@
 import { EnvironmentId, ThreadId } from "@t3tools/contracts";
-import { useState, type ReactNode } from "react";
+import type { ReactNode } from "react";
 import { beforeEach, expect, it } from "vite-plus/test";
 import { page } from "vite-plus/test/browser";
 import { act, render } from "../../../test/render";
@@ -15,25 +15,25 @@ beforeEach(async () => {
   await page.viewport(1400, 900);
 });
 
-// The centre puts the task's toggles under its header, as the task view does.
+// The centre puts the native toggles in its header, which the details card hangs from.
 const centre =
   (label: string) =>
-  ({ controls }: { readonly controls: ReactNode }) => (
+  (panel: {
+    readonly controls: ReactNode;
+    readonly anchor: (element: HTMLDivElement | null) => void;
+  }) => (
     <div>
-      {controls}
+      <div ref={panel.anchor}>{panel.controls}</div>
       <textarea aria-label={label} />
     </div>
   );
 
 function TaskExample({ owner }: { owner: string }) {
-  const [details, setDetails] = useState(false);
   return (
     <div style={{ height: 700 }}>
       <TaskWorkspacePanels
         owner={owner}
         thread={null}
-        detailsOpen={details}
-        onDetailsOpenChange={setDetails}
         details={<p>TaskExample configuration</p>}
         renderConversation={centre("TaskExample reply")}
         evidence={<p>Candidate evidence for {owner}</p>}
@@ -91,19 +91,6 @@ it("remembers the evidence panel width per task, not across tasks", async () => 
   }
 });
 
-it("holds the task's details in the sheet only while it is open, and never a lineage of its own", async () => {
-  await using screen = await render(<TaskExample owner="originless" />);
-  expect(document.body.textContent).not.toContain("TaskExample configuration");
-  await screen.getByRole("button", { name: "Toggle task details panel", exact: true }).click();
-  await expect.element(page.getByText("TaskExample configuration")).toBeVisible();
-  expect(
-    document.querySelector("[data-task-details-sheet] [data-thread-relationships-panel]"),
-  ).toBe(null);
-  await page.getByRole("button", { name: "Close task details", exact: true }).click();
-  await expect.element(page.getByText("TaskExample configuration")).not.toBeInTheDocument();
-  await expect.element(screen.getByRole("textbox", { name: "TaskExample reply" })).toBeVisible();
-});
-
 const taskThread = (name: string) => ({
   environmentId: EnvironmentId.make("env-panels"),
   threadId: ThreadId.make(name),
@@ -111,62 +98,46 @@ const taskThread = (name: string) => ({
 const threadPanel = (name: string) =>
   selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, taskThread(name));
 
-function ThreadTask(props: { readonly name: string; readonly openFirst?: boolean }) {
+function ThreadTask(props: { readonly name: string }) {
   return (
     <TaskWorkspacePanels
       owner={`owner-${props.name}`}
       thread={taskThread(props.name)}
-      openFirst={props.openFirst === true}
-      detailsOpen={false}
-      onDetailsOpenChange={() => {}}
       details={<p>Configuration</p>}
       evidence={<p>Evidence rows</p>}
       deployments={<p>Deployment rows</p>}
-      renderConversation={({ controls, openTab }) => (
-        <div>
-          {controls}
-          <button onClick={() => openTab("task-deployments")}>Open the deployments</button>
-        </div>
-      )}
+      renderConversation={centre("Thread reply")}
     />
   );
 }
 
-it("gives a task with a thread no panel or toggles of its own, and opens its tabs on the thread's", async () => {
+it("gives a task with a thread no panel, toggles or details of its own, and opens nothing on it", async () => {
   await using screen = await render(<ThreadTask name="tabs-thread" />);
   await expect
     .element(screen.getByRole("button", { name: "Toggle right panel" }))
     .not.toBeInTheDocument();
   await expect
-    .element(screen.getByRole("button", { name: "Toggle task details panel" }))
+    .element(screen.getByRole("button", { name: /Toggle thread details/ }))
     .not.toBeInTheDocument();
-  await screen.getByRole("button", { name: "Open the deployments" }).click();
-  expect(threadPanel("tabs-thread")).toMatchObject({
-    isOpen: true,
-    activeSurfaceId: "task-deployments",
-    surfaces: [{ kind: "task-evidence" }, { kind: "task-deployments" }],
-  });
-  // The thread view draws them; nothing here does.
-  expect(page.getByText("Deployment rows").query()).toBeNull();
+  expect(document.querySelector("[data-thread-details-card]")).toBeNull();
+  // The thread view has the task's tabs behind its own + menu; nothing opens them unasked.
+  expect(threadPanel("tabs-thread").isOpen).toBe(false);
+  expect(threadPanel("tabs-thread").surfaces).toEqual([]);
 });
 
-it("opens a task thread's panel at its tabs on the task's first visit, once", async () => {
-  localStorage.removeItem("t3code:task-panel-first-open:owner-first-thread");
-  await using screen = await render(<ThreadTask key="a" name="first-thread" openFirst />);
-  await expect.poll(() => threadPanel("first-thread").isOpen).toBe(true);
-  expect(threadPanel("first-thread").activeSurfaceId).toBe("task-evidence");
-  await act(() => useRightPanelStore.getState().closeAllSurfaces(taskThread("first-thread")));
-  await screen.rerender(<ThreadTask key="b" name="first-thread" openFirst />);
-  expect(threadPanel("first-thread").surfaces).toEqual([]);
-});
-
-it("opens the task details as a sheet at desktop width, and closes them", async () => {
-  await using screen = await render(<TaskExample owner="details-sheet" />);
+it("opens a page's details in the native details card from the native toggle, and closes them", async () => {
+  await using screen = await render(<TaskExample owner="details-card" />);
   await screen.getByRole("textbox", { name: "TaskExample reply" }).fill("Keep details draft");
-  await screen.getByRole("button", { name: "Toggle task details panel", exact: true }).click();
-  await expect.element(page.getByRole("dialog")).toBeVisible();
+  expect(document.body.textContent).not.toContain("TaskExample configuration");
+  const toggle = screen.getByRole("button", { name: "Toggle thread details panel", exact: true });
+  await toggle.click();
   await expect.element(page.getByText("TaskExample configuration")).toBeVisible();
-  await page.getByRole("button", { name: "Close task details", exact: true }).click();
+  expect(document.querySelector("[data-thread-details-card]")?.textContent).toContain(
+    "TaskExample configuration",
+  );
+  // No sheet of its own: the native card is the only one.
+  expect(document.querySelector("[data-task-details-sheet]")).toBeNull();
+  await toggle.click();
   await expect.element(page.getByText("TaskExample configuration")).not.toBeInTheDocument();
   await expect
     .element(screen.getByRole("textbox", { name: "TaskExample reply" }))
@@ -210,39 +181,36 @@ it("hosts evidence and deployments as native right-panel tabs with native maximi
   await expect.element(page.getByText("Deployment rows for native-tabs")).toBeVisible();
 });
 
-it("opens the right panel on a task's first visit only when asked, and not again once closed", async () => {
+it("opens no panel on a page unasked, and brings both tabs back after every one was closed", async () => {
   const panel = (key: string) => (
     <TaskWorkspacePanels
       key={key}
       owner="first-visit-task"
       thread={null}
-      openFirst
-      detailsOpen={false}
-      onDetailsOpenChange={() => {}}
       details={<p>Details</p>}
-      renderConversation={({ controls }) => (
-        <div>
-          {controls}
-          <p>Centre</p>
-        </div>
-      )}
+      renderConversation={centre("Centre")}
       evidence={<p>Engine facts</p>}
       deployments={<p>Deployments</p>}
     />
   );
   await using screen = await render(panel("a"));
-  await expect.element(page.getByText("Engine facts")).toBeVisible();
-  await page.getByRole("button", { name: "Close evidence", exact: true }).click();
-  await screen.rerender(panel("b"));
   const toggle = page.getByRole("button", { name: "Toggle right panel", exact: true });
   await expect.element(toggle).toHaveAttribute("aria-pressed", "false");
-  // Closing every tab empties the panel, which is not a first visit either.
+  expect(page.getByText("Engine facts").query()).toBeNull();
   await toggle.click();
   await expect.element(page.getByText("Engine facts")).toBeVisible();
+  // Every tab closed: the toggle is still the way back, with both tabs.
   await act(() => useRightPanelStore.getState().closeAllSurfaces(taskPanelRef("first-visit-task")));
-  await screen.rerender(panel("c"));
+  await screen.rerender(panel("b"));
   await expect.element(toggle).toHaveAttribute("aria-pressed", "false");
-  expect(page.getByText("Engine facts").query()).toBeNull();
+  await toggle.click();
+  await expect.element(page.getByText("Engine facts")).toBeVisible();
+  expect(
+    selectThreadRightPanelState(
+      useRightPanelStore.getState().byThreadKey,
+      taskPanelRef("first-visit-task"),
+    ).surfaces.map(({ kind }) => kind),
+  ).toEqual(["task-evidence", "task-deployments"]);
 });
 
 it("offers its tabs on an empty panel and in the + menu, adding only the one picked", async () => {

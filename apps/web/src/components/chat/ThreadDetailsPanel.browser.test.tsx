@@ -181,12 +181,15 @@ function Panel({
   draftEnvMode,
   onMachines = false,
   withScripts = false,
+  cardHeight = placement.height,
 }: {
   fixture: ReturnType<typeof setup>;
   /** Renders an unsent draft in this mode instead of a started thread. */
   draftEnvMode?: "local" | "worktree";
   onMachines?: boolean;
   withScripts?: boolean;
+  /** The room the canvas gives the card; a short one drops it below full density. */
+  cardHeight?: number;
 }) {
   const noop = () => {};
   const scriptResult = async () => ({ ok: true }) as never;
@@ -200,8 +203,8 @@ function Panel({
         registerTimeline: noop,
         measureDetailsCard: noop,
         detailsCardTopInset: 0,
-        preferredDetailsCard: placement,
-        detailsCardPlacement: placement,
+        preferredDetailsCard: { ...placement, height: cardHeight },
+        detailsCardPlacement: { ...placement, height: cardHeight },
       }}
     >
       <ThreadDetailsPanel
@@ -284,7 +287,7 @@ it("shows a linked pull request in a folder that is not a git repository", async
   await expect.element(page.getByRole("button", { name: "Initialize Git" })).toBeVisible();
 });
 
-it("shows the Task item only where a board task's view hosts the thread, with the item on", async () => {
+it("shows the Task item only where a board task's view hosts the thread, with its number, decisions and lineage", async () => {
   using fixture = setup({ workspaceRoot: "/work/plain", folder: "/work/plain" });
   await using screen = await render(<Panel fixture={fixture} />);
   await expect.element(page.getByRole("region", { name: "Workspace" })).toBeVisible();
@@ -296,6 +299,7 @@ it("shows the Task item only where a board task's view hosts the thread, with th
     body: "Make the sync stop dropping rows.",
     state: "closed",
     lane: "completed",
+    source: { kind: "thread", ref: "env-elsewhere/filed-from" },
     card: { id: "t1", number: 12, title: "Fix the sync", lane: "completed" },
   });
   await screen.rerender(
@@ -307,15 +311,62 @@ it("shows the Task item only where a board task's view hosts the thread, with th
         stale: false,
         refresh: () => {},
         openTask: () => {},
-        openThread: () => {},
-        seats: { thread: () => null, current: null, open: () => {} },
+        openTab: () => {},
+        decisions: <p>Your decision</p>,
+        thread: null,
+        seats: { thread: () => null, rows: [] },
       }}
     >
       <Panel fixture={fixture} />
     </BoardTaskContext>,
   );
-  await expect.element(page.getByRole("region", { name: "Task" })).toBeVisible();
+  // The number is the Task item's, the card's title the thread's.
+  await expect.element(page.getByRole("region", { name: "Task #12" })).toBeVisible();
   await expect.element(page.getByText("Make the sync stop dropping rows.")).toBeVisible();
+  await expect.element(page.getByText("Your decision")).toBeVisible();
+  await expect.element(page.getByText("This is closed. What was said is kept.")).toBeVisible();
+  // The thread it was filed from is a row of the lineage, not a link in the Task item.
+  await expect
+    .element(page.getByRole("button", { name: /The conversation it came from/ }))
+    .toBeVisible();
+});
+
+it("keeps a board task's lineage, where its seats and source open, when the card leaves full density", async () => {
+  using fixture = setup({ workspaceRoot: "/work/plain", folder: "/work/plain" });
+  const task = parseTask({
+    id: "t1",
+    number: 12,
+    title: "Fix the sync",
+    body: "Make the sync stop dropping rows.",
+    state: "in-work",
+    lane: "implementation",
+    source: { kind: "thread", ref: "env-elsewhere/filed-from" },
+    card: { id: "t1", number: 12, title: "Fix the sync", lane: "implementation" },
+  });
+  await using _screen = await render(
+    <BoardTaskContext
+      value={{
+        environmentId: null,
+        taskId: "t1",
+        task,
+        stale: false,
+        refresh: () => {},
+        openTask: () => {},
+        openTab: () => {},
+        decisions: null,
+        thread: null,
+        seats: { thread: () => null, rows: [] },
+      }}
+    >
+      <Panel fixture={fixture} cardHeight={120} />
+    </BoardTaskContext>,
+  );
+  await expect
+    .poll(() => document.querySelector("[data-thread-details-panel]")?.getAttribute("data-density"))
+    .not.toBe("full");
+  await expect
+    .element(page.getByRole("button", { name: /The conversation it came from/ }))
+    .toBeInTheDocument();
 });
 
 it("offers no Initialize Git before the server config says where No project lives", async () => {

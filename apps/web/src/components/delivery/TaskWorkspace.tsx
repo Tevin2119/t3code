@@ -1,11 +1,11 @@
-import { EnvironmentId, ThreadId, type ScopedThreadRef } from "@t3tools/contracts";
+import type { EnvironmentId } from "@t3tools/contracts";
+import { boardTaskFinishedBy } from "@t3tools/shared/boardTaskFinished";
+import { useGT } from "gt-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import { isElectron } from "../../env";
-import { useMediaQuery } from "../../hooks/useMediaQuery";
 import { parseTask } from "../../lib/delivery";
 import { deliveryReadDiagnostic } from "../../lib/deliveryStates";
-import { RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY } from "../../rightPanelLayout";
 import { taskPanelRef, useRightPanelStore } from "../../rightPanelStore";
 import {
   useDeliveryAct,
@@ -18,27 +18,29 @@ import { Dialog, DialogHeader, DialogPanel, DialogPopup, DialogTitle } from "../
 import { Empty, EmptyHeader, EmptyTitle } from "../ui/empty";
 import { SidebarInset } from "../ui/sidebar";
 import { Textarea } from "../ui/textarea";
+import { toastManager } from "../ui/toast";
 import { WorkspacePageHeader } from "../WorkspacePageHeader";
+import { ThreadDetailsSection } from "../chat/ThreadDetailsSection";
 import { BoardTaskContext, type BoardTask } from "./BoardTaskContext";
 import { DecisionBar } from "./DecisionBar";
 import { DeliveryDiagnosticNotice } from "./DeliveryDiagnosticNotice";
 import { SharedTaskAllocation } from "./SharedBoard";
 import { useTaskActions } from "./taskActions";
-import { TaskBadges } from "./TaskBadges";
 import { TaskConversation } from "./TaskConversation";
 import { TaskDetailsItem } from "./TaskDetails";
 import { TaskEditor } from "./TaskEditor";
 import { TaskMenu } from "./TaskMenu";
 import { TaskPanelTab } from "./TaskPanelTab";
-import { TaskRelatedWork } from "./TaskRelatedWork";
+import { TaskLineage } from "./TaskLineage";
+import { taskHasLineage } from "./relatedTaskGroups";
 import { TaskWorkspacePanels } from "./TaskWorkspacePanels";
-import { forgetOpenSeat, useTaskConversation } from "./useTaskConversation";
+import { useTaskConversation } from "./useTaskConversation";
 
 /**
  * A board task opened as its native thread: the thread view T3 shows any thread in, with the
- * task's number, title and actions in its header, or the native page with the task's words while
- * it has no thread. A draft has the same page, with the task editor as its centre. The board's own
- * read is the only source.
+ * task's menu in its header and its facts in the thread's details, or the native page with the
+ * task's words while it has no thread. A draft has the same page, with the task editor as its
+ * centre. The board's own read is the only source.
  */
 export function TaskWorkspace(props: {
   readonly environmentId: EnvironmentId | null;
@@ -47,6 +49,7 @@ export function TaskWorkspace(props: {
   readonly onClose: () => void;
   readonly onOpenTask: (taskId: string | null) => void;
 }) {
+  const gt = useGT();
   const person = usePersonName();
   const read = useDeliveryRead(props.environmentId, `/api/tasks/${props.taskId}`, {
     pollMs: 3_000,
@@ -54,36 +57,20 @@ export function TaskWorkspace(props: {
   const task = parseTask(read.body);
   const stale = useStaleReading(read.readAt);
   const act = useDeliveryAct(props.environmentId, "task seen");
+  const steerAct = useDeliveryAct(props.environmentId, "steer");
   const actions = useTaskActions(props.environmentId, {
     onDone: read.refresh,
     onDiscarded: () => props.onClose(),
   });
-  const narrow = useMediaQuery(RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY);
-  // A thread view keeps the task's details in its own panel. Where none stands they are a sheet,
-  // closed until asked for, and fresh each time something points into them.
-  const [detailsOpen, setDetailsOpen] = useState(false);
-  const [detailsMount, setDetailsMount] = useState(0);
   const [taskBrief, setTaskBrief] = useState<string | null>(null);
   const [creatingTask, setCreatingTask] = useState(false);
   const [createProblem, setCreateProblem] = useState<string | null>(null);
   const [allocatingTask, setAllocatingTask] = useState<string | null>(null);
   const [menuProblem, setMenuProblem] = useState<string | null>(null);
-  const conversation = useTaskConversation(props.environmentId, task);
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- clears the seat this task left open in the shared store, so it opens on its own conversation next time
-  useEffect(
-    () => () => forgetOpenSeat(props.environmentId, props.taskId),
-    [props.environmentId, props.taskId],
-  );
-  // A thread opened from a panel appears in the centre, so the details sheet over it closes, and a
-  // panel that fills the width gives way. The right panel stays on the task otherwise.
-  const openInCentre = (thread: ScopedThreadRef) => {
-    conversation.open(thread);
-    const panel =
-      conversation.ref ?? taskPanelRef(JSON.stringify([props.environmentId, props.taskId]));
-    useRightPanelStore.getState().setMaximized(panel, false);
-    setDetailsOpen(false);
-    if (narrow) useRightPanelStore.getState().close(panel);
-  };
+  const conversation = useTaskConversation(task);
+  const owner = JSON.stringify([props.environmentId, props.taskId]);
+  // The task's tabs live on its thread's right panel, or on its own while it has no thread.
+  const panelRef = conversation.ref ?? taskPanelRef(owner);
 
   // Opened and looked at, what the team said is read.
   const unread = task?.card.unread ?? 0;
@@ -97,6 +84,10 @@ export function TaskWorkspace(props: {
     void act(`/api/tasks/${task.id}/seen`, { by: person });
   }, [act, person, task, unread]);
 
+  const primary = task?.actions.filter((action) =>
+    ["approve", "reject", "publish", "submit", "deliver", "accept-artifacts"].includes(action),
+  );
+  const others = task?.actions.filter((action) => !primary?.includes(action)) ?? [];
   // Provided where the task view mounts: what it hosts reads the board's task from here.
   const board: BoardTask = {
     environmentId: props.environmentId,
@@ -105,20 +96,34 @@ export function TaskWorkspace(props: {
     stale: stale || !!read.error,
     refresh: read.refresh,
     openTask: props.onOpenTask,
-    openThread: openInCentre,
-    seats: { ...conversation.seats, open: openInCentre },
+    openTab: (tab) => useRightPanelStore.getState().open(panelRef, tab),
+    // A draft's editor carries its own controls, so it has no decisions.
+    decisions:
+      task && !task.isDraft ? (
+        <DecisionBar
+          task={task}
+          actions={primary ?? []}
+          busy={actions.busy}
+          onAction={(action) => actions.run(task.card, action)}
+        />
+      ) : null,
+    thread: conversation.ref,
+    seats: conversation.seats,
   };
-
-  const primary = task?.actions.filter((action) =>
-    ["approve", "reject", "publish", "submit", "deliver", "accept-artifacts"].includes(action),
-  );
-  const others = task?.actions.filter((action) => !primary?.includes(action)) ?? [];
-  const source = task?.source
-    ? {
-        environmentId: EnvironmentId.make(task.source.environmentId),
-        threadId: ThreadId.make(task.source.threadId),
-      }
-    : null;
+  // A finished task takes no turns. What is written to it goes to the engine, which says why not.
+  const finished = task !== null && boardTaskFinishedBy(task) !== null;
+  const steer = async (text: string) => {
+    if (!task) return false;
+    const result = await steerAct(`/api/tasks/${task.id}/steer`, { text, seat: null, by: person });
+    if (result.ok) read.refresh();
+    else
+      toastManager.add({
+        type: "error",
+        title: gt("The task did not take your message"),
+        description: result.why,
+      });
+    return result.ok;
+  };
   const problem = actions.problem ?? menuProblem;
   // Under the native header: the engine's notices and the last refusal.
   const notices = (
@@ -155,30 +160,28 @@ export function TaskWorkspace(props: {
           {task ? (
             <TaskWorkspacePanels
               key={`${props.environmentId}:${task.id}`}
-              owner={JSON.stringify([props.environmentId, task.id])}
+              owner={owner}
               thread={conversation.ref}
-              detailsOpen={detailsOpen}
-              onDetailsOpenChange={setDetailsOpen}
-              openFirst
               details={
-                <div key={detailsMount} className="flex flex-col gap-2 py-2">
-                  <div className="px-2">
-                    <TaskRelatedWork />
-                  </div>
+                <>
                   <TaskDetailsItem />
-                </div>
+                  {taskHasLineage(board) ? (
+                    <ThreadDetailsSection
+                      headingId={`task-lineage-${task.id}`}
+                      title={gt("Lineage", {
+                        $context: "thread details section: parent and child agents",
+                      })}
+                    >
+                      <TaskLineage />
+                    </ThreadDetailsSection>
+                  ) : null}
+                </>
               }
               renderConversation={(panel) => (
                 <TaskConversation
                   key={task.id}
                   task={task}
                   state={conversation.state}
-                  seat={conversation.seat}
-                  seatResolving={conversation.seatResolving}
-                  seatName={conversation.seatName}
-                  source={source}
-                  onOpenThread={openInCentre}
-                  onBackToTask={conversation.backToTask}
                   draft={
                     task.isDraft ? (
                       <TaskEditor
@@ -192,7 +195,6 @@ export function TaskWorkspace(props: {
                     ) : undefined
                   }
                   chrome={{
-                    title: `#${task.number} ${task.title}`,
                     actions: (
                       <TaskMenu
                         environmentId={props.environmentId}
@@ -210,34 +212,17 @@ export function TaskWorkspace(props: {
                     ),
                     notices,
                     panelControls: panel.controls,
-                    openTab: panel.openTab,
+                    panelAnchor: panel.anchor,
                     showLog: () => {
-                      // The log is in the details, which a page holds in the sheet.
-                      panel.showDetails();
-                      setDetailsMount((count) => count + 1);
+                      // The log is in the Task item, which a page holds in the details card.
+                      useRightPanelStore.getState().setThreadPanelOpen(panelRef, "popover", true);
                       requestAnimationFrame(() =>
                         document
-                          .querySelector('[data-task-details-sheet] [data-task-section="log"]')
+                          .querySelector('[data-thread-details-card] [data-task-section="log"]')
                           ?.scrollIntoView({ block: "start", behavior: "smooth" }),
                       );
                     },
-                    decisions: (
-                      <DecisionBar
-                        task={task}
-                        actions={primary ?? []}
-                        busy={actions.busy}
-                        onAction={(action) => actions.run(task.card, action)}
-                      />
-                    ),
-                    renderBadges: (openDetails, wrap) => (
-                      <TaskBadges
-                        className={wrap ? "flex-wrap" : "shrink-0"}
-                        onOpenDetails={openDetails}
-                        onOpenTab={panel.openTab}
-                      />
-                    ),
-                    narrow: panel.narrow,
-                    showDetails: panel.showDetails,
+                    steer: finished ? steer : undefined,
                     backToBoard: props.onClose,
                   }}
                 />

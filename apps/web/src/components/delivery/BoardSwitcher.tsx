@@ -1,4 +1,4 @@
-import type { ScopedThreadRef } from "@t3tools/contracts";
+import type { SideThreadOpenIntent } from "@t3tools/client-runtime/side-thread";
 import { useGT, useMessages } from "gt-react";
 import { CornerDownRightIcon } from "lucide-react";
 import type { KeyboardEvent } from "react";
@@ -6,7 +6,8 @@ import type { KeyboardEvent } from "react";
 import { BOARD_LANE, boardLaneOf, boardLaneTitle } from "../../lib/boardLanes";
 import { WORK_STAGE_TITLE, workStageOf } from "../../lib/boardLaneCards";
 import { LANE_TITLE } from "../../lib/deliveryBoard";
-import { sameThread } from "../../lib/taskConversation";
+import type { SeatThread } from "../../lib/taskConversation";
+import { useSideThreadTrigger } from "../../hooks/useSideThreadTrigger";
 import { SidebarRowShell } from "../sidebar/SidebarThreadRow";
 import type { SwitcherRow } from "./BoardSidebarPanel.logic";
 
@@ -57,29 +58,31 @@ function TaskRow(props: {
 
 function SeatRow(props: {
   readonly row: Extract<SwitcherRow, { kind: "seat" }>;
-  readonly open: boolean;
-  readonly onOpen: (thread: ScopedThreadRef) => void;
+  readonly onOpen: (thread: SeatThread, title: string, intent: SideThreadOpenIntent) => void;
 }) {
   const gt = useGT();
-  const open = () => props.onOpen(props.row.thread);
+  const trigger = useSideThreadTrigger();
+  const title = gt("Seat {seat}", { seat: props.row.seat });
+  const open = (intent: SideThreadOpenIntent) => props.onOpen(props.row.thread, title, intent);
+  const handlers = trigger(open);
   return (
     <li>
       <SidebarRowShell
         role="button"
         tabIndex={0}
-        aria-current={props.open ? "true" : undefined}
         indent={props.row.depth}
-        onClick={open}
-        onKeyDown={pressed(open)}
+        {...handlers}
+        onKeyDown={(event) => {
+          handlers.onKeyDown?.(event);
+          if (!event.defaultPrevented) pressed(() => open("primary"))(event);
+        }}
         data-board-switcher-seat={props.row.seat}
       >
         <CornerDownRightIcon
           aria-hidden
           className="size-3.5 shrink-0 text-sidebar-muted-foreground"
         />
-        <span className="min-w-0 flex-1 truncate text-sm">
-          {gt("Seat {seat}", { seat: props.row.seat })}
-        </span>
+        <span className="min-w-0 flex-1 truncate text-sm">{title}</span>
         <span className="shrink-0 text-3xs text-sidebar-muted-foreground">
           {props.row.activity}
         </span>
@@ -91,13 +94,12 @@ function SeatRow(props: {
 /**
  * The board's tasks as rows on the thread row's shell, while a task is open: the open one is the
  * page, and its family is nested under its root. A task row opens its task; a seat row opens its
- * conversation in the centre, and the task stays the page.
+ * conversation as the task thread's lineage row for it does.
  */
 export function BoardSwitcherRows(props: {
   readonly rows: ReadonlyArray<SwitcherRow>;
-  readonly openSeat: ScopedThreadRef | null;
   readonly onOpenTask: (taskId: string) => void;
-  readonly onOpenSeat: (thread: ScopedThreadRef) => void;
+  readonly onOpenSeat: (thread: SeatThread, title: string, intent: SideThreadOpenIntent) => void;
 }) {
   return (
     <ul className="flex flex-col" data-board-switcher>
@@ -105,12 +107,7 @@ export function BoardSwitcherRows(props: {
         row.kind === "task" ? (
           <TaskRow key={`task:${row.brief.id}`} row={row} onOpen={props.onOpenTask} />
         ) : (
-          <SeatRow
-            key={`seat:${row.seat}`}
-            row={row}
-            open={sameThread(row.thread, props.openSeat)}
-            onOpen={props.onOpenSeat}
-          />
+          <SeatRow key={`seat:${row.seat}`} row={row} onOpen={props.onOpenSeat} />
         ),
       )}
     </ul>
