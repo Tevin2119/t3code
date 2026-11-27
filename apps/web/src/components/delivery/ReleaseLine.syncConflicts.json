@@ -1,0 +1,720 @@
+{
+  "recordedWith": "Operation-PaperClip 0cef3352 delivery/lib/promotions.mjs through createDeployments and the publisher's GitHub sync PR path with a stub gh (as the engine's own test does), run against scratch repositories with a bare remote: qa (branch qa) promotes into app (branch main). Instance ids are renamed to the release-line fixtures' t3code-qa and t3code-app, the repository to t3code. resolvedNewer is the same promotion after a newer push to its sync branch; approveStaleHead and approveNoHead are the engine's refusals.",
+  "states": {
+    "opening": {
+      "id": "promo-42ec521bec62",
+      "from": "t3code-qa",
+      "to": "t3code-app",
+      "repository": "t3code",
+      "fromEnvironment": "qa",
+      "toEnvironment": "app",
+      "by": "Ana",
+      "state": "opening",
+      "sync": null,
+      "source": null,
+      "need": null,
+      "waiting": null,
+      "consent": {
+        "source": "b7b89cdd12b6e96d7d28ea50475a63f679466806",
+        "by": "Ana",
+        "at": "2026-11-27T10:09:37.754Z"
+      },
+      "candidate": null,
+      "protected": null,
+      "conflict": {
+        "files": ["app/banner.txt", "app/price.txt"],
+        "fromTip": "b7b89cdd12b6e96d7d28ea50475a63f679466806",
+        "toTip": "22410e1db605565e67b9cbdfbe64d88f4f80d918"
+      },
+      "hotfixes": {
+        "count": 3,
+        "truncated": false,
+        "prs": [
+          {
+            "number": 41,
+            "url": null,
+            "title": "fix: pause refunds",
+            "commit": "d3ebff00c5586961c3960888c63a6fa23a2e4638"
+          }
+        ],
+        "loose": [
+          {
+            "commit": "22410e1db605565e67b9cbdfbe64d88f4f80d918",
+            "subject": "fix: strict guard"
+          },
+          {
+            "commit": "f5022b4c1d303ef808934eccaac7c85ced53e57f",
+            "subject": "fix: price rounding"
+          }
+        ]
+      },
+      "syncBranch": null,
+      "syncPr": null,
+      "resolution": null,
+      "resolver": null,
+      "hostProblem": null,
+      "interrupted": null,
+      "problem": null,
+      "events": [
+        {
+          "at": "2026-11-27T10:09:37.754Z",
+          "type": "planned",
+          "by": "Ana",
+          "seen": "b7b89cdd12b6e96d7d28ea50475a63f679466806"
+        },
+        {
+          "at": "2026-11-27T10:09:37.797Z",
+          "type": "syncing",
+          "fromTip": "b7b89cdd12b6e96d7d28ea50475a63f679466806",
+          "toTip": "22410e1db605565e67b9cbdfbe64d88f4f80d918",
+          "hotfixes": 3
+        },
+        {
+          "at": "2026-11-27T10:09:37.938Z",
+          "type": "opening",
+          "branch": "paperclip/sync/promo-42ec521bec62",
+          "reason": "conflict",
+          "commit": "22410e1db605565e67b9cbdfbe64d88f4f80d918"
+        }
+      ],
+      "createdAt": "2026-11-27T10:09:37.754Z",
+      "updatedAt": "2026-11-27T10:09:37.938Z"
+    },
+    "conflicted": {
+      "id": "promo-42ec521bec62",
+      "from": "t3code-qa",
+      "to": "t3code-app",
+      "repository": "t3code",
+      "fromEnvironment": "qa",
+      "toEnvironment": "app",
+      "by": "Ana",
+      "state": "conflicted",
+      "sync": null,
+      "source": null,
+      "need": null,
+      "waiting": "The sync branch paperclip/sync/promo-42ec521bec62 (22410e1db605) does not contain qa's tip b7b89cdd12b6 yet.",
+      "consent": {
+        "source": "b7b89cdd12b6e96d7d28ea50475a63f679466806",
+        "by": "Ana",
+        "at": "2026-11-27T10:09:37.754Z"
+      },
+      "candidate": null,
+      "protected": null,
+      "conflict": {
+        "files": ["app/banner.txt", "app/price.txt"],
+        "fromTip": "b7b89cdd12b6e96d7d28ea50475a63f679466806",
+        "toTip": "22410e1db605565e67b9cbdfbe64d88f4f80d918"
+      },
+      "hotfixes": {
+        "count": 3,
+        "truncated": false,
+        "prs": [
+          {
+            "number": 41,
+            "url": null,
+            "title": "fix: pause refunds",
+            "commit": "d3ebff00c5586961c3960888c63a6fa23a2e4638"
+          }
+        ],
+        "loose": [
+          {
+            "commit": "22410e1db605565e67b9cbdfbe64d88f4f80d918",
+            "subject": "fix: strict guard"
+          },
+          {
+            "commit": "f5022b4c1d303ef808934eccaac7c85ced53e57f",
+            "subject": "fix: price rounding"
+          }
+        ]
+      },
+      "syncBranch": {
+        "name": "paperclip/sync/promo-42ec521bec62",
+        "commit": "22410e1db605565e67b9cbdfbe64d88f4f80d918",
+        "at": "2026-11-27T10:09:38.007Z"
+      },
+      "syncPr": {
+        "host": "github",
+        "repository": "Tevin2119/t3code-fixture",
+        "number": 7,
+        "url": "https://github.com/Tevin2119/t3code-fixture/pull/7",
+        "head": "paperclip/sync/promo-42ec521bec62",
+        "base": "qa",
+        "state": "open",
+        "reason": "conflict",
+        "at": "2026-11-27T10:09:38.008Z"
+      },
+      "resolution": null,
+      "resolver": {
+        "kind": "person",
+        "task": null
+      },
+      "hostProblem": null,
+      "interrupted": null,
+      "problem": "Merging main (22410e1db605) into qa (b7b89cdd12b6) conflicts in app/banner.txt, app/price.txt. A resolved sync commit is needed.",
+      "events": [
+        {
+          "at": "2026-11-27T10:09:37.754Z",
+          "type": "planned",
+          "by": "Ana",
+          "seen": "b7b89cdd12b6e96d7d28ea50475a63f679466806"
+        },
+        {
+          "at": "2026-11-27T10:09:37.797Z",
+          "type": "syncing",
+          "fromTip": "b7b89cdd12b6e96d7d28ea50475a63f679466806",
+          "toTip": "22410e1db605565e67b9cbdfbe64d88f4f80d918",
+          "hotfixes": 3
+        },
+        {
+          "at": "2026-11-27T10:09:37.938Z",
+          "type": "opening",
+          "branch": "paperclip/sync/promo-42ec521bec62",
+          "reason": "conflict",
+          "commit": "22410e1db605565e67b9cbdfbe64d88f4f80d918"
+        },
+        {
+          "at": "2026-11-27T10:09:38.008Z",
+          "type": "conflicted",
+          "branch": "paperclip/sync/promo-42ec521bec62",
+          "files": ["app/banner.txt", "app/price.txt"],
+          "pr": "https://github.com/Tevin2119/t3code-fixture/pull/7"
+        }
+      ],
+      "createdAt": "2026-11-27T10:09:37.754Z",
+      "updatedAt": "2026-11-27T10:09:38.257Z"
+    },
+    "resolved": {
+      "id": "promo-42ec521bec62",
+      "from": "t3code-qa",
+      "to": "t3code-app",
+      "repository": "t3code",
+      "fromEnvironment": "qa",
+      "toEnvironment": "app",
+      "by": "Ana",
+      "state": "resolved",
+      "sync": null,
+      "source": null,
+      "need": null,
+      "waiting": "A named person approves fcd36174a8d4 (1 present, 1 changed, 1 missing). qa is then fast-forwarded to it.",
+      "consent": {
+        "source": "b7b89cdd12b6e96d7d28ea50475a63f679466806",
+        "by": "Ana",
+        "at": "2026-11-27T10:09:37.754Z"
+      },
+      "candidate": null,
+      "protected": null,
+      "conflict": {
+        "files": ["app/banner.txt", "app/price.txt"],
+        "fromTip": "b7b89cdd12b6e96d7d28ea50475a63f679466806",
+        "toTip": "22410e1db605565e67b9cbdfbe64d88f4f80d918"
+      },
+      "hotfixes": {
+        "count": 3,
+        "truncated": false,
+        "prs": [
+          {
+            "number": 41,
+            "url": null,
+            "title": "fix: pause refunds",
+            "commit": "d3ebff00c5586961c3960888c63a6fa23a2e4638"
+          }
+        ],
+        "loose": [
+          {
+            "commit": "22410e1db605565e67b9cbdfbe64d88f4f80d918",
+            "subject": "fix: strict guard"
+          },
+          {
+            "commit": "f5022b4c1d303ef808934eccaac7c85ced53e57f",
+            "subject": "fix: price rounding"
+          }
+        ]
+      },
+      "syncBranch": {
+        "name": "paperclip/sync/promo-42ec521bec62",
+        "commit": "22410e1db605565e67b9cbdfbe64d88f4f80d918",
+        "at": "2026-11-27T10:09:38.007Z"
+      },
+      "syncPr": {
+        "host": "github",
+        "repository": "Tevin2119/t3code-fixture",
+        "number": 7,
+        "url": "https://github.com/Tevin2119/t3code-fixture/pull/7",
+        "head": "paperclip/sync/promo-42ec521bec62",
+        "base": "qa",
+        "state": "open",
+        "reason": "conflict",
+        "at": "2026-11-27T10:09:38.008Z"
+      },
+      "resolution": {
+        "head": "fcd36174a8d4b2989eea474a0e25bd553272dc5d",
+        "fromTip": "b7b89cdd12b6e96d7d28ea50475a63f679466806",
+        "toTip": "22410e1db605565e67b9cbdfbe64d88f4f80d918",
+        "report": {
+          "head": "fcd36174a8d4b2989eea474a0e25bd553272dc5d",
+          "toTip": "22410e1db605565e67b9cbdfbe64d88f4f80d918",
+          "commits": [
+            {
+              "commit": "f5022b4c1d303ef808934eccaac7c85ced53e57f",
+              "subject": "fix: price rounding",
+              "pr": null,
+              "files": 1
+            },
+            {
+              "commit": "22410e1db605565e67b9cbdfbe64d88f4f80d918",
+              "subject": "fix: strict guard",
+              "pr": null,
+              "files": 1
+            },
+            {
+              "commit": "d3ebff00c5586961c3960888c63a6fa23a2e4638",
+              "subject": "fix: pause refunds",
+              "pr": 41,
+              "files": 2
+            }
+          ],
+          "hunks": [
+            {
+              "commit": "f5022b4c1d303ef808934eccaac7c85ced53e57f",
+              "path": "app/price.txt",
+              "header": "@@ -1 +1 @@",
+              "status": "missing",
+              "excerpt": ["-price = 10", "+price = 11"]
+            },
+            {
+              "commit": "22410e1db605565e67b9cbdfbe64d88f4f80d918",
+              "path": "app/hotfix.js",
+              "header": "@@ -1 +1 @@",
+              "status": "present",
+              "excerpt": ["-export const fixed = true;", "+export const fixed = \"strict\";"]
+            },
+            {
+              "commit": "d3ebff00c5586961c3960888c63a6fa23a2e4638",
+              "path": "app/banner.txt",
+              "header": "@@ -1 +1,2 @@",
+              "status": "changed",
+              "excerpt": ["-welcome", "+refunds paused", "+see status page"]
+            },
+            {
+              "commit": "d3ebff00c5586961c3960888c63a6fa23a2e4638",
+              "path": "app/hotfix.js",
+              "header": "new file",
+              "status": "missing",
+              "superseded": true,
+              "excerpt": ["+export const fixed = true;"]
+            }
+          ],
+          "counts": {
+            "present": 1,
+            "changed": 1,
+            "missing": 1,
+            "superseded": 1
+          },
+          "truncated": false,
+          "problem": null
+        },
+        "at": "2026-11-27T10:09:39.158Z",
+        "approved": null
+      },
+      "resolver": {
+        "kind": "person",
+        "task": null
+      },
+      "hostProblem": null,
+      "interrupted": null,
+      "problem": null,
+      "events": [
+        {
+          "at": "2026-11-27T10:09:37.754Z",
+          "type": "planned",
+          "by": "Ana",
+          "seen": "b7b89cdd12b6e96d7d28ea50475a63f679466806"
+        },
+        {
+          "at": "2026-11-27T10:09:37.797Z",
+          "type": "syncing",
+          "fromTip": "b7b89cdd12b6e96d7d28ea50475a63f679466806",
+          "toTip": "22410e1db605565e67b9cbdfbe64d88f4f80d918",
+          "hotfixes": 3
+        },
+        {
+          "at": "2026-11-27T10:09:37.938Z",
+          "type": "opening",
+          "branch": "paperclip/sync/promo-42ec521bec62",
+          "reason": "conflict",
+          "commit": "22410e1db605565e67b9cbdfbe64d88f4f80d918"
+        },
+        {
+          "at": "2026-11-27T10:09:38.008Z",
+          "type": "conflicted",
+          "branch": "paperclip/sync/promo-42ec521bec62",
+          "files": ["app/banner.txt", "app/price.txt"],
+          "pr": "https://github.com/Tevin2119/t3code-fixture/pull/7"
+        },
+        {
+          "at": "2026-11-27T10:09:39.158Z",
+          "type": "resolved",
+          "head": "fcd36174a8d4b2989eea474a0e25bd553272dc5d",
+          "present": 1,
+          "changed": 1,
+          "missing": 1,
+          "superseded": 1
+        }
+      ],
+      "createdAt": "2026-11-27T10:09:37.754Z",
+      "updatedAt": "2026-11-27T10:09:39.158Z"
+    },
+    "resolvedNewer": {
+      "id": "promo-42ec521bec62",
+      "from": "t3code-qa",
+      "to": "t3code-app",
+      "repository": "t3code",
+      "fromEnvironment": "qa",
+      "toEnvironment": "app",
+      "by": "Ana",
+      "state": "resolved",
+      "sync": null,
+      "source": null,
+      "need": null,
+      "waiting": "A named person approves 3e67be64e56e (3 present, 0 changed, 0 missing). qa is then fast-forwarded to it.",
+      "consent": {
+        "source": "b7b89cdd12b6e96d7d28ea50475a63f679466806",
+        "by": "Ana",
+        "at": "2026-11-27T10:09:37.754Z"
+      },
+      "candidate": null,
+      "protected": null,
+      "conflict": {
+        "files": ["app/banner.txt", "app/price.txt"],
+        "fromTip": "b7b89cdd12b6e96d7d28ea50475a63f679466806",
+        "toTip": "22410e1db605565e67b9cbdfbe64d88f4f80d918"
+      },
+      "hotfixes": {
+        "count": 3,
+        "truncated": false,
+        "prs": [
+          {
+            "number": 41,
+            "url": null,
+            "title": "fix: pause refunds",
+            "commit": "d3ebff00c5586961c3960888c63a6fa23a2e4638"
+          }
+        ],
+        "loose": [
+          {
+            "commit": "22410e1db605565e67b9cbdfbe64d88f4f80d918",
+            "subject": "fix: strict guard"
+          },
+          {
+            "commit": "f5022b4c1d303ef808934eccaac7c85ced53e57f",
+            "subject": "fix: price rounding"
+          }
+        ]
+      },
+      "syncBranch": {
+        "name": "paperclip/sync/promo-42ec521bec62",
+        "commit": "22410e1db605565e67b9cbdfbe64d88f4f80d918",
+        "at": "2026-11-27T10:09:38.007Z"
+      },
+      "syncPr": {
+        "host": "github",
+        "repository": "Tevin2119/t3code-fixture",
+        "number": 7,
+        "url": "https://github.com/Tevin2119/t3code-fixture/pull/7",
+        "head": "paperclip/sync/promo-42ec521bec62",
+        "base": "qa",
+        "state": "open",
+        "reason": "conflict",
+        "at": "2026-11-27T10:09:38.008Z"
+      },
+      "resolution": {
+        "head": "3e67be64e56e5fd52adb0a6d21ac02fadc574358",
+        "fromTip": "b7b89cdd12b6e96d7d28ea50475a63f679466806",
+        "toTip": "22410e1db605565e67b9cbdfbe64d88f4f80d918",
+        "report": {
+          "head": "3e67be64e56e5fd52adb0a6d21ac02fadc574358",
+          "toTip": "22410e1db605565e67b9cbdfbe64d88f4f80d918",
+          "commits": [
+            {
+              "commit": "f5022b4c1d303ef808934eccaac7c85ced53e57f",
+              "subject": "fix: price rounding",
+              "pr": null,
+              "files": 1
+            },
+            {
+              "commit": "22410e1db605565e67b9cbdfbe64d88f4f80d918",
+              "subject": "fix: strict guard",
+              "pr": null,
+              "files": 1
+            },
+            {
+              "commit": "d3ebff00c5586961c3960888c63a6fa23a2e4638",
+              "subject": "fix: pause refunds",
+              "pr": 41,
+              "files": 2
+            }
+          ],
+          "hunks": [
+            {
+              "commit": "f5022b4c1d303ef808934eccaac7c85ced53e57f",
+              "path": "app/price.txt",
+              "header": "@@ -1 +1 @@",
+              "status": "present",
+              "excerpt": ["-price = 10", "+price = 11"]
+            },
+            {
+              "commit": "22410e1db605565e67b9cbdfbe64d88f4f80d918",
+              "path": "app/hotfix.js",
+              "header": "@@ -1 +1 @@",
+              "status": "present",
+              "excerpt": ["-export const fixed = true;", "+export const fixed = \"strict\";"]
+            },
+            {
+              "commit": "d3ebff00c5586961c3960888c63a6fa23a2e4638",
+              "path": "app/banner.txt",
+              "header": "@@ -1 +1,2 @@",
+              "status": "present",
+              "excerpt": ["-welcome", "+refunds paused", "+see status page"]
+            },
+            {
+              "commit": "d3ebff00c5586961c3960888c63a6fa23a2e4638",
+              "path": "app/hotfix.js",
+              "header": "new file",
+              "status": "missing",
+              "superseded": true,
+              "excerpt": ["+export const fixed = true;"]
+            }
+          ],
+          "counts": {
+            "present": 3,
+            "changed": 0,
+            "missing": 0,
+            "superseded": 1
+          },
+          "truncated": false,
+          "problem": null
+        },
+        "at": "2026-11-27T10:09:39.930Z",
+        "approved": null
+      },
+      "resolver": {
+        "kind": "person",
+        "task": null
+      },
+      "hostProblem": null,
+      "interrupted": null,
+      "problem": null,
+      "events": [
+        {
+          "at": "2026-11-27T10:09:37.754Z",
+          "type": "planned",
+          "by": "Ana",
+          "seen": "b7b89cdd12b6e96d7d28ea50475a63f679466806"
+        },
+        {
+          "at": "2026-11-27T10:09:37.797Z",
+          "type": "syncing",
+          "fromTip": "b7b89cdd12b6e96d7d28ea50475a63f679466806",
+          "toTip": "22410e1db605565e67b9cbdfbe64d88f4f80d918",
+          "hotfixes": 3
+        },
+        {
+          "at": "2026-11-27T10:09:37.938Z",
+          "type": "opening",
+          "branch": "paperclip/sync/promo-42ec521bec62",
+          "reason": "conflict",
+          "commit": "22410e1db605565e67b9cbdfbe64d88f4f80d918"
+        },
+        {
+          "at": "2026-11-27T10:09:38.008Z",
+          "type": "conflicted",
+          "branch": "paperclip/sync/promo-42ec521bec62",
+          "files": ["app/banner.txt", "app/price.txt"],
+          "pr": "https://github.com/Tevin2119/t3code-fixture/pull/7"
+        },
+        {
+          "at": "2026-11-27T10:09:39.158Z",
+          "type": "resolved",
+          "head": "fcd36174a8d4b2989eea474a0e25bd553272dc5d",
+          "present": 1,
+          "changed": 1,
+          "missing": 1,
+          "superseded": 1
+        }
+      ],
+      "createdAt": "2026-11-27T10:09:37.754Z",
+      "updatedAt": "2026-11-27T10:09:39.930Z"
+    },
+    "awaiting-merge": {
+      "id": "promo-93fb1fd0d8a5",
+      "from": "t3code-qa",
+      "to": "t3code-app",
+      "repository": "t3code",
+      "fromEnvironment": "qa",
+      "toEnvironment": "app",
+      "by": "Ana",
+      "state": "awaiting-merge",
+      "sync": null,
+      "source": null,
+      "need": null,
+      "waiting": "qa is protected: merge the sync pull request https://github.com/Tevin2119/t3code-fixture/pull/7 on the host, with a merge commit. Only the approved head d132696cc0a1 is accepted.",
+      "consent": {
+        "source": "a75e864a371f796622673ca33735bd1e12b5b013",
+        "by": "Ana",
+        "at": "2026-11-27T10:09:40.906Z"
+      },
+      "candidate": null,
+      "protected": {
+        "branch": "qa",
+        "at": "2026-11-27T10:09:41.634Z"
+      },
+      "conflict": null,
+      "hotfixes": {
+        "count": 1,
+        "truncated": false,
+        "prs": [
+          {
+            "number": 42,
+            "url": null,
+            "title": "fix: hotfix",
+            "commit": "360cb5ef1d7f3e61e7fc24a9c82244df3b0d2148"
+          }
+        ],
+        "loose": []
+      },
+      "syncBranch": {
+        "name": "paperclip/sync/promo-93fb1fd0d8a5",
+        "commit": "d132696cc0a12f47b06fccfb69743d915e4ddfdb",
+        "at": "2026-11-27T10:09:41.212Z"
+      },
+      "syncPr": {
+        "host": "github",
+        "repository": "Tevin2119/t3code-fixture",
+        "number": 7,
+        "url": "https://github.com/Tevin2119/t3code-fixture/pull/7",
+        "head": "paperclip/sync/promo-93fb1fd0d8a5",
+        "base": "qa",
+        "state": "open",
+        "reason": "protected",
+        "at": "2026-11-27T10:09:41.212Z"
+      },
+      "resolution": {
+        "head": "d132696cc0a12f47b06fccfb69743d915e4ddfdb",
+        "fromTip": "a75e864a371f796622673ca33735bd1e12b5b013",
+        "toTip": "360cb5ef1d7f3e61e7fc24a9c82244df3b0d2148",
+        "report": {
+          "head": "d132696cc0a12f47b06fccfb69743d915e4ddfdb",
+          "toTip": "360cb5ef1d7f3e61e7fc24a9c82244df3b0d2148",
+          "commits": [
+            {
+              "commit": "360cb5ef1d7f3e61e7fc24a9c82244df3b0d2148",
+              "subject": "fix: hotfix",
+              "pr": 42,
+              "files": 1
+            }
+          ],
+          "hunks": [
+            {
+              "commit": "360cb5ef1d7f3e61e7fc24a9c82244df3b0d2148",
+              "path": "app/hotfix.html",
+              "header": "new file",
+              "status": "present",
+              "excerpt": ["+hotfix"]
+            }
+          ],
+          "counts": {
+            "present": 1,
+            "changed": 0,
+            "missing": 0,
+            "superseded": 0
+          },
+          "truncated": false,
+          "problem": null
+        },
+        "at": "2026-11-27T10:09:41.504Z",
+        "approved": {
+          "by": "Ana",
+          "at": "2026-11-27T10:09:41.515Z",
+          "head": "d132696cc0a12f47b06fccfb69743d915e4ddfdb",
+          "changed": 0,
+          "missing": 0
+        }
+      },
+      "resolver": {
+        "kind": "person",
+        "task": null
+      },
+      "hostProblem": null,
+      "interrupted": null,
+      "problem": null,
+      "events": [
+        {
+          "at": "2026-11-27T10:09:40.906Z",
+          "type": "planned",
+          "by": "Ana",
+          "seen": "a75e864a371f796622673ca33735bd1e12b5b013"
+        },
+        {
+          "at": "2026-11-27T10:09:40.948Z",
+          "type": "syncing",
+          "fromTip": "a75e864a371f796622673ca33735bd1e12b5b013",
+          "toTip": "360cb5ef1d7f3e61e7fc24a9c82244df3b0d2148",
+          "hotfixes": 1
+        },
+        {
+          "at": "2026-11-27T10:09:41.141Z",
+          "type": "opening",
+          "branch": "paperclip/sync/promo-93fb1fd0d8a5",
+          "reason": "protected",
+          "commit": "d132696cc0a12f47b06fccfb69743d915e4ddfdb"
+        },
+        {
+          "at": "2026-11-27T10:09:41.212Z",
+          "type": "awaiting-merge",
+          "branch": "paperclip/sync/promo-93fb1fd0d8a5",
+          "pr": "https://github.com/Tevin2119/t3code-fixture/pull/7"
+        },
+        {
+          "at": "2026-11-27T10:09:41.504Z",
+          "type": "resolved",
+          "head": "d132696cc0a12f47b06fccfb69743d915e4ddfdb",
+          "present": 1,
+          "changed": 0,
+          "missing": 0,
+          "superseded": 0
+        },
+        {
+          "at": "2026-11-27T10:09:41.515Z",
+          "type": "approved",
+          "by": "Ana",
+          "head": "d132696cc0a12f47b06fccfb69743d915e4ddfdb",
+          "changed": 0,
+          "missing": 0
+        },
+        {
+          "at": "2026-11-27T10:09:41.571Z",
+          "type": "syncing",
+          "head": "d132696cc0a12f47b06fccfb69743d915e4ddfdb",
+          "branch": "qa",
+          "resolved": true
+        },
+        {
+          "at": "2026-11-27T10:09:41.634Z",
+          "type": "awaiting-merge",
+          "branch": "qa",
+          "head": "d132696cc0a12f47b06fccfb69743d915e4ddfdb"
+        }
+      ],
+      "createdAt": "2026-11-27T10:09:40.906Z",
+      "updatedAt": "2026-11-27T10:09:41.634Z"
+    }
+  },
+  "approveStaleHead": {
+    "status": 400,
+    "message": "The sync branch is at 3e67be64e56e now, not the head named. Read its report again."
+  },
+  "approveNoHead": {
+    "status": 400,
+    "message": "Name the head approved: the sync branch head whose survival report was read."
+  }
+}

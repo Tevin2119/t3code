@@ -14,8 +14,35 @@ import { DeploymentApproval, type DeploymentRequest } from "./DeploymentInstance
 import { ReleaseLines } from "./ReleaseLine";
 import recorded from "./ReleaseLine.fixtures.json";
 import promotions from "./ReleaseLine.promotions.json";
+import syncConflicts from "./ReleaseLine.syncConflicts.json";
+import { buildSyncConflictsPrompt } from "../pullRequest/pullRequestDetail.logic";
 
 const PERMISSION = Symbol("permission");
+const handoffs = vi.hoisted(() => ({
+  details: [] as unknown[],
+  started: [] as Array<{ kind: string; task: unknown }>,
+}));
+// T3's own PR hand-off: the card must hand it the sync PR and the sync prompt, nothing else.
+vi.mock(import("../pullRequest/usePullRequestActions"), async (importOriginal) => {
+  const original = await importOriginal();
+  return {
+    ...original,
+    usePullRequestHandoffs: ({ detail }: { detail: unknown }) => {
+      handoffs.details.push(detail);
+      return {
+        handoff: null,
+        startHandoff: async (kind: string, task: unknown) => {
+          handoffs.started.push({ kind, task });
+        },
+      } as never;
+    },
+  };
+});
+const checkedOut = vi.hoisted(() => ({ projects: [] as unknown[] }));
+vi.mock(import("../../state/entities"), async (importOriginal) => {
+  const original = await importOriginal();
+  return { ...original, useProjects: () => checkedOut.projects as never };
+});
 const mock = vi.hoisted(() => ({
   compare: null as unknown,
   /** What the next refresh reads, when it differs from what is shown. */
@@ -104,7 +131,17 @@ const snapshotWith = (promotion: DeploymentPromotion | null): DeploymentsSnapsho
   candidates: [],
   lines: recorded.lines,
   promotions: promotion ? [promotion] : [],
-  repositories: [],
+  repositories: [
+    {
+      id: "t3code",
+      title: "T3 Code",
+      path: "/work/t3code",
+      defaultBase: "main",
+      branches: ["main", "qa"],
+      kind: "git",
+      ok: true,
+    },
+  ],
   capabilities: { engine: false, command: true, "firebase-hosting": true },
 });
 
@@ -150,6 +187,9 @@ function setup(compare: unknown, options: { readAt?: string; error?: string } = 
   mock.error = options.error ?? null;
   mock.refreshes = 0;
   mock.acts = [];
+  handoffs.details = [];
+  handoffs.started = [];
+  checkedOut.projects = [];
 }
 
 async function sign() {
@@ -247,14 +287,14 @@ it("offers a new promotion again once the last one was promoted or cancelled", a
 
 it("shows a state this T3 does not know by its name and reason, with cancel as its way out", async () => {
   setup(recorded.withHotfix);
-  // D3b adds states; this one is the recorded conflicted promotion renamed.
+  // A later engine may add states; this one is the recorded conflicted promotion renamed.
   const later = {
     ...states["conflicted"]!,
-    state: "awaiting-merge",
+    state: "awaiting-checks",
     problem: "Sync PR #7 waits for its checks.",
   };
   await using screen = await render(<Harness promotion={later} />);
-  await expect.element(screen.getByText("awaiting-merge")).toBeVisible();
+  await expect.element(screen.getByText("awaiting-checks")).toBeVisible();
   await expect.element(screen.getByText("Sync PR #7 waits for its checks.")).toBeVisible();
   await screen.getByRole("button", { name: "Cancel promotion" }).click();
   await page.getByRole("button", { name: "Cancel promotion…" }).click();
@@ -335,4 +375,166 @@ it("disables promoting and advancing while the difference is stale or failed, an
   await expect
     .element(screen.getByText("The difference could not be read: The engine did not answer."))
     .toBeVisible();
+});
+
+// D3b: recorded from the engine's promotions.mjs at 0cef3352 (ReleaseLine.syncConflicts.json).
+const sync = syncConflicts.states as unknown as Record<string, DeploymentPromotion>;
+const T3_PROJECT = {
+  id: "project-t3code",
+  environmentId: "host",
+  workspaceRoot: "/work/t3code",
+  repositoryIdentity: {
+    canonicalKey: "github.com/tevin2119/t3code-fixture",
+    locator: {
+      source: "git-remote",
+      remoteName: "origin",
+      remoteUrl: "git@github.com:Tevin2119/t3code-fixture.git",
+    },
+    provider: "github",
+    rootPath: "/work/t3code",
+  },
+};
+
+it("hands a conflicted sync PR to T3's own Resolve conflicts, naming the hotfixes that must survive", async () => {
+  setup(recorded.withHotfix);
+  checkedOut.projects = [T3_PROJECT];
+  const conflicted = sync["conflicted"]!;
+  await using screen = await render(<Harness promotion={conflicted} />);
+  await expect.element(screen.getByText("Conflicted")).toBeVisible();
+  await expect.element(screen.getByRole("link", { name: "Sync PR #7" })).toBeVisible();
+  await expect.element(screen.getByText("Hotfixes that must survive (3)")).toBeVisible();
+  await expect.element(screen.getByText("#41 fix: pause refunds")).toBeVisible();
+  await expect.element(screen.getByText("fix: price rounding")).toBeVisible();
+  await expect.element(screen.getByText("app/price.txt", { exact: true })).toBeVisible();
+  await screen.getByRole("button", { name: "Resolve conflicts" }).click();
+  expect(handoffs.details.at(-1)).toEqual({
+    projectId: "project-t3code",
+    workspaceRoot: "/work/t3code",
+    url: conflicted.syncPr!.url,
+  });
+  expect(handoffs.started).toEqual([
+    {
+      kind: "conflicts",
+      task: {
+        prompt: buildSyncConflictsPrompt({
+          number: 7,
+          url: conflicted.syncPr!.url!,
+          headBranch: `paperclip/sync/${conflicted.id}`,
+          baseBranch: "qa",
+          promotionId: conflicted.id,
+          fromBranch: "qa",
+          toBranch: "main",
+          hotfixes: conflicted.hotfixes!,
+        }),
+      },
+    },
+  ]);
+  // The promotion's own way out stays.
+  await expect.element(screen.getByRole("button", { name: "Cancel promotion" })).toBeEnabled();
+  expect(mock.acts).toEqual([]);
+});
+
+it("says why Resolve conflicts is unavailable when T3 has no project for the repository", async () => {
+  setup(recorded.withHotfix);
+  await using screen = await render(<Harness promotion={sync["conflicted"]!} />);
+  await expect.element(screen.getByRole("button", { name: "Resolve conflicts" })).toBeDisabled();
+  await expect
+    .element(screen.getByText(/^Add this repository's folder as a T3 project/))
+    .toBeVisible();
+});
+
+it("shows the survival report with missing and changed hunks first, and approves its head", async () => {
+  setup(recorded.withHotfix);
+  const resolved = sync["resolved"]!;
+  const head = resolved.resolution!.head;
+  await using screen = await render(<Harness promotion={resolved} />);
+  await expect.element(screen.getByText("Resolved, awaiting approval")).toBeVisible();
+  const statuses = [...screen.container.querySelectorAll("[data-survival-status]")].map((row) =>
+    row.getAttribute("data-survival-status"),
+  );
+  expect(statuses).toEqual(["missing", "changed", "superseded", "present"]);
+  const missing = screen.container.querySelector('[data-survival-status="missing"]')!;
+  expect(missing.textContent).toContain("app/price.txt");
+  expect(missing.querySelector("pre")?.textContent).toBe("-price = 10\n+price = 11");
+  expect(missing.querySelector(".text-destructive")).not.toBeNull();
+  const changed = screen.container.querySelector('[data-survival-status="changed"]')!;
+  expect(changed.querySelector(".text-warning-foreground")).not.toBeNull();
+  expect(screen.container.querySelector('[data-survival-status="present"] pre')).toBeNull();
+  await screen.getByRole("button", { name: "Approve sync" }).click();
+  const dialog = page.getByRole("alertdialog");
+  await expect
+    .element(
+      dialog.getByText(new RegExp(`^Fast-forwards qa to the sync head ${head.slice(0, 12)}`)),
+    )
+    .toBeVisible();
+  await expect.element(dialog.getByText(/1 present, 1 changed, 1 missing/)).toBeVisible();
+  await dialog.getByRole("button", { name: "Approve sync…" }).click();
+  await sign();
+  expect(mock.acts).toEqual([
+    {
+      path: `/api/deployments/promotions/${resolved.id}/action`,
+      body: { action: "approve", head, by: "Ben", key: "passphrase" },
+    },
+  ]);
+});
+
+it("says so when a refresh reports on a newer sync head, and asks again before approving it", async () => {
+  setup(recorded.withHotfix);
+  const resolved = sync["resolved"]!;
+  const newer = sync["resolvedNewer"]!;
+  const newHead = newer.resolution!.head;
+  await using screen = await render(<Harness promotion={resolved} />);
+  await screen.getByRole("button", { name: "Approve sync" }).click();
+  await screen.rerender(<Harness promotion={newer} />);
+  const dialog = page.getByRole("alertdialog");
+  await expect.element(dialog.getByText(/^The sync branch moved/)).toBeVisible();
+  await expect
+    .element(dialog.getByRole("button", { name: /^Approve sync/ }))
+    .not.toBeInTheDocument();
+  await dialog.getByRole("button", { name: `Review ${newHead.slice(0, 12)}` }).click();
+  await expect.element(dialog.getByText(/3 present, 0 changed, 0 missing/)).toBeVisible();
+  await dialog.getByRole("button", { name: "Approve sync…" }).click();
+  await sign();
+  expect(mock.acts).toEqual([
+    {
+      path: `/api/deployments/promotions/${newer.id}/action`,
+      body: { action: "approve", head: newHead, by: "Ben", key: "passphrase" },
+    },
+  ]);
+});
+
+it("cancels out of an approval without sending anything", async () => {
+  setup(recorded.withHotfix);
+  await using screen = await render(<Harness promotion={sync["resolved"]!} />);
+  await screen.getByRole("button", { name: "Approve sync" }).click();
+  await page.getByRole("alertdialog").getByRole("button", { name: "Cancel" }).click();
+  await expect.element(page.getByRole("alertdialog")).not.toBeInTheDocument();
+  expect(mock.acts).toEqual([]);
+});
+
+it("in awaiting-merge links the sync PR and says the host must merge it", async () => {
+  setup(recorded.withHotfix);
+  const waiting = sync["awaiting-merge"]!;
+  await using screen = await render(<Harness promotion={waiting} />);
+  await expect.element(screen.getByText("Awaiting the host merge")).toBeVisible();
+  await expect
+    .element(screen.getByRole("link", { name: "Sync PR #7" }))
+    .toHaveAttribute("href", waiting.syncPr!.url!);
+  await expect
+    .element(screen.getByText(/^qa is protected, so the engine cannot push the sync/))
+    .toBeVisible();
+  expect(screen.container.querySelector("[data-promotion-host-merge]")?.textContent).toContain(
+    `only the approved head ${waiting.resolution!.approved!.head.slice(0, 12)} is accepted`,
+  );
+  const buttons = [...screen.container.querySelectorAll("[data-release-promotion] button")].map(
+    (node) => node.textContent,
+  );
+  expect(buttons).toEqual(["Retry", "Cancel promotion"]);
+});
+
+it("shows opening as in flight, with nothing to press", async () => {
+  setup(recorded.withHotfix);
+  await using screen = await render(<Harness promotion={sync["opening"]!} />);
+  await expect.element(screen.getByText("Opening the sync PR")).toBeVisible();
+  expect(screen.container.querySelectorAll("[data-release-promotion] button")).toHaveLength(0);
 });

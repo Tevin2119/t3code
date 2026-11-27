@@ -18,6 +18,7 @@ import { useDeliveryRead, useStaleReading } from "../../state/delivery";
 import { Badge } from "../ui/badge";
 import type { DeploymentRequest } from "./DeploymentInstance";
 import { PromotionControls } from "./ReleaseLine.promote";
+import type { SyncCheckout } from "./ReleaseLine.sync";
 import {
   comparePath,
   parseDeploymentCompare,
@@ -222,6 +223,7 @@ export function DifferenceStrip({
   from,
   to,
   identity,
+  checkout,
   promotion,
   unavailable,
   disabled,
@@ -231,6 +233,7 @@ export function DifferenceStrip({
   from: DeploymentProject;
   to: DeploymentProject;
   identity: RepositoryIdentity | null;
+  checkout: SyncCheckout | null;
   promotion: DeploymentPromotion | null;
   unavailable: boolean;
   disabled: boolean;
@@ -252,6 +255,8 @@ export function DifferenceStrip({
         {from.environment} promotes into {to.environment}
       </p>
       <PromotionControls
+        environmentId={environmentId}
+        checkout={checkout}
         compare={compare}
         reading={{ readAt: read.readAt, error: read.error, stale, refresh: read.refresh }}
         from={from}

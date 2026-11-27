@@ -3,6 +3,7 @@ import type {
   DeploymentProject,
   DeploymentPromotion,
   DeploymentPromotionAction,
+  EnvironmentId,
 } from "@t3tools/contracts";
 import { ArrowUpIcon } from "lucide-react";
 import { useState } from "react";
@@ -20,6 +21,7 @@ import { PullRequestGlyph } from "../pullRequest/pullRequestIcons";
 import { Button } from "../ui/button";
 import type { DeploymentRequest } from "./DeploymentInstance";
 import { InstanceChip } from "./ReleaseLine.chip";
+import { PromotionSync, type SyncCheckout } from "./ReleaseLine.sync";
 import {
   compareReadingProblem,
   promoteBlocked,
@@ -46,6 +48,8 @@ export type CompareReading = {
  * it is then signed in the deployment approval dialog.
  */
 export function PromotionControls({
+  environmentId,
+  checkout,
   compare,
   reading,
   from,
@@ -55,6 +59,8 @@ export function PromotionControls({
   disabled,
   onRequest,
 }: {
+  environmentId: EnvironmentId;
+  checkout: SyncCheckout | null;
   /** Null until the difference is read: an open promotion still shows, with its actions. */
   compare: DeploymentCompare | null;
   reading: CompareReading;
@@ -128,6 +134,13 @@ export function PromotionControls({
               {view.reason}
             </p>
           ) : null}
+          <PromotionSync
+            environmentId={environmentId}
+            promotion={promotion}
+            checkout={checkout}
+            from={from}
+            to={to}
+          />
         </div>
       ) : null}
       {actions.length || offerPromote ? (
@@ -138,7 +151,15 @@ export function PromotionControls({
               size="xs"
               variant={action === "advance" ? "default" : "outline"}
               disabled={disabled || (movesBranch(action) && !!readingProblem)}
-              onClick={() => open({ kind: "action", action, openedAt: reading.readAt })}
+              onClick={() =>
+                open({
+                  kind: "action",
+                  action,
+                  openedAt: reading.readAt,
+                  // Approve is for the head whose survival report the card shows now.
+                  ...(action === "approve" ? { head: promotion?.resolution?.head ?? null } : {}),
+                })
+              }
             >
               {promotionActionLabel(action)}
             </Button>
@@ -168,7 +189,7 @@ export function PromotionControls({
               <AlertDialogTitle>{confirm?.title ?? title}</AlertDialogTitle>
               <AlertDialogDescription data-promotion-moves>
                 {confirm?.moves ??
-                  (shown?.state === "problem"
+                  (shown?.state === "problem" || shown?.state === "moved"
                     ? shown.why
                     : `Reading ${from.environment} and ${to.environment} again…`)}
               </AlertDialogDescription>
@@ -179,21 +200,27 @@ export function PromotionControls({
                   ? "Keep promotion"
                   : "Cancel"}
               </AlertDialogClose>
-              <Button
-                disabled={!confirm || disabled}
-                onClick={() => {
-                  if (!confirm) return;
-                  onRequest({
-                    title: confirm.title,
-                    path: confirm.path,
-                    body: confirm.body,
-                    after,
-                  });
-                  setPending(null);
-                }}
-              >
-                {(confirm?.submit ?? title).replace(/…$/, "")}…
-              </Button>
+              {shown?.state === "moved" && pending.kind === "action" ? (
+                <Button onClick={() => setPending({ ...pending, head: shown.head })}>
+                  Review {shown.head.slice(0, 12)}
+                </Button>
+              ) : (
+                <Button
+                  disabled={!confirm || disabled}
+                  onClick={() => {
+                    if (!confirm) return;
+                    onRequest({
+                      title: confirm.title,
+                      path: confirm.path,
+                      body: confirm.body,
+                      after,
+                    });
+                    setPending(null);
+                  }}
+                >
+                  {(confirm?.submit ?? title).replace(/…$/, "")}…
+                </Button>
+              )}
             </AlertDialogFooter>
           </AlertDialogPopup>
         ) : null}
