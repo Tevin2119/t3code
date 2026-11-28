@@ -545,6 +545,7 @@ export const make = Effect.gen(function* () {
       readonly folders: ReadonlyMap<string, string>;
       readonly key: string | undefined;
       readonly revisions: ReadonlyMap<string, number>;
+      readonly linked: Map<string, Card>;
     },
   ) {
     if (!card.set) return "no-board" as const;
@@ -595,6 +596,7 @@ export const make = Effect.gen(function* () {
       environmentId: context.environmentId,
       key: context.key,
     });
+    if (boardThread) context.linked.set(card.id, { ...card, boardThread });
     // A task waiting for a slot holds no claim and is sent nothing: its thread stays idle until
     // the engine's brief, sent in the task's worktree, once it is in work.
     if (
@@ -739,16 +741,10 @@ export const make = Effect.gen(function* () {
   });
 
   /**
-   * The thread heartbeat (slice S2): every task whose board thread is linked from here, unfinished
-   * and not moved, renews it on every pass, a few at a time. It takes no lease and no slot. No
-   * answer leaves a task's last heartbeat to lapse, and fails nothing.
+   * The board threads linked from here whose heartbeat is renewed (slice S2): unfinished and not
+   * moved. Heartbeats and refusals of any other task are forgotten.
    */
-  const ackThreads = Effect.fn("BoardTaskThreads.ackThreads")(function* (input: {
-    readonly cards: ReadonlyMap<string, Card>;
-    readonly environmentId: EnvironmentId;
-    readonly key: string;
-  }) {
-    const { cards, environmentId, key } = input;
+  const beating = (cards: ReadonlyMap<string, Card>, environmentId: EnvironmentId) => {
     const linked = new Map<string, { readonly threadId: string; readonly mark: string }>();
     for (const [taskId, card] of cards) {
       const link = card.boardThread;
@@ -763,6 +759,19 @@ export const make = Effect.gen(function* () {
     for (const taskId of beats.keys()) if (!linked.has(taskId)) beats.delete(taskId);
     for (const [taskId, mark] of unbeaten)
       if (linked.get(taskId)?.mark !== mark) unbeaten.delete(taskId);
+    return linked;
+  };
+
+  /**
+   * Renews the heartbeat of each thread given, a few at a time. It takes no lease and no slot. No
+   * answer leaves a task's last heartbeat to lapse, and fails nothing.
+   */
+  const ackThreads = Effect.fn("BoardTaskThreads.ackThreads")(function* (input: {
+    readonly linked: ReadonlyMap<string, { readonly threadId: string; readonly mark: string }>;
+    readonly environmentId: EnvironmentId;
+    readonly key: string;
+  }) {
+    const { linked, environmentId, key } = input;
     const due = [...linked].filter(([taskId]) => !unbeaten.has(taskId));
     let refused = 0;
     yield* Effect.forEach(
@@ -843,6 +852,10 @@ export const make = Effect.gen(function* () {
       }
       const starting = [...cards.values()].filter((card) => awaitsThread(card, since));
       const key = yield* delivery.boardApprovalKey;
+      // Every pass renews each heartbeat first, so after a restart the threads beat again before
+      // this pass or a step's pass decides anything on them.
+      const linked = beating(cards, environmentId);
+      if (key !== undefined) yield* ackThreads({ linked, environmentId, key });
       // Read at most once a pass, and only by a pass that needs the seats.
       const teamsOf = yield* Effect.cached(
         engine(delivery.read({ path: "/api/teams" })).pipe(
@@ -850,6 +863,7 @@ export const make = Effect.gen(function* () {
         ),
       );
       if (starting.length > 0) {
+        const newLinks = new Map<string, Card>();
         const revisions = new Map(
           (yield* local(rows.list({ archived: false }))).map((row) => [row.threadId, row.revision]),
         );
@@ -870,9 +884,18 @@ export const make = Effect.gen(function* () {
                   folders,
                   key,
                   revisions,
+                  linked: newLinks,
                 });
           if (hold !== null) holds.set(card.id, hold);
         }
+        // A thread linked in this pass beats in it, not a pass later.
+        const linkedNow = new Map(
+          [...beating(new Map([...cards, ...newLinks]), environmentId)].filter(
+            ([taskId]) => !linked.has(taskId),
+          ),
+        );
+        if (key !== undefined && linkedNow.size > 0)
+          yield* ackThreads({ linked: linkedNow, environmentId, key });
       }
       const openThreads = yield* local(rows.list({ archived: false }));
       const standings = yield* standingsOf(cards, openThreads);
@@ -891,7 +914,6 @@ export const make = Effect.gen(function* () {
         yield* holdClaim(taskId, environmentId, link.threadId);
       }
       yield* settleEnded({ cards, standings, openThreads, environmentId });
-      if (key !== undefined) yield* ackThreads({ cards, environmentId, key });
       yield* refreshTeams({ cards, openThreads, teams: teamsOf });
       // Moved tasks are worked on another machine: their conversation is not told from here.
       const mirrored = [...cards.values()].filter((card) => !MOVED.has(card.state));

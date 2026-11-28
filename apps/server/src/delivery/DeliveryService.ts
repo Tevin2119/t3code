@@ -392,6 +392,9 @@ const make = Effect.fn("DeliveryService.make")(function* (
   let boardLineupsUnsaved = false;
   const boardSeatWrites = yield* Semaphore.make(1);
   const boardLinkWrites = yield* Semaphore.make(1);
+  // The engine checks at most two approval keys at once and refuses a third with 403, so every
+  // keyed board write of this server (heartbeats, links, seats, filings) shares two slots.
+  const boardKeyChecks = yield* Semaphore.make(2);
 
   // Only a file that is not there means that no thread is bound. A file that
   // is there and cannot be read or understood holds bindings this service
@@ -1855,7 +1858,7 @@ const make = Effect.fn("DeliveryService.make")(function* (
           reason: "invalid",
           detail: "Invalid board thread mutation path.",
         });
-      const write = request(
+      const sent = request(
         input.method,
         input.path,
         input.body,
@@ -1863,6 +1866,8 @@ const make = Effect.fn("DeliveryService.make")(function* (
         undefined,
         input.configuration,
       );
+      const keyed = typeof input.body === "object" && input.body !== null && "key" in input.body;
+      const write = keyed ? boardKeyChecks.withPermit(sent) : sent;
       if (input.method !== "POST") return yield* boardLinkWrites.withPermit(write);
       // Serialize keyed seat writes and filings so they share the engine’s approval throttle.
       return yield* BOARD_SEAT_POST.test(input.path) || BOARD_TASK_POST.test(input.path)

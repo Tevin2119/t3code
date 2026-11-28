@@ -953,6 +953,37 @@ it.effect("advances no step without a live claim on its task, after a restart to
   }).pipe(Effect.provide(deliveryLayer(engine, "board-execution-unheld-")));
 });
 
+it.effect("takes no lease for a waiting task's read-only step, after a restart too", () => {
+  // A board with a free slot: a claim would be granted, and must never be asked for.
+  const engine = scratchEngine();
+  engine.setBoard("work", "/work/repo");
+  engine.addTask({ id: "task-7", title: "Ship the export", lane: "queue", state: "queued" });
+  engine.writeLink("task-7", { environmentId: ENVIRONMENT, threadId: THREAD, setBy: ENVIRONMENT });
+  engine.queueAttempt({
+    id: "att-triage",
+    task: "task-7",
+    stage: "triage",
+    kind: "comment",
+    seat: "triage",
+    access: "read-only",
+  });
+  const store = threadStore();
+  const claims = boardClaims(engine);
+  return Effect.gen(function* () {
+    // Just restarted: no heartbeat has landed yet, so the step waits, unclaimed.
+    yield* (yield* service(store, claims)).reconcile();
+    assert.deepEqual(claims.calls, []);
+    assert.isNull(engine.leaseOf("task-7"));
+    assert.deepEqual(order(engine, "att-triage"), []);
+    // The board pass's ack lands: the step advances, still with no lease.
+    claims.beating.add("task-7");
+    yield* (yield* service(store, claims)).reconcile();
+    assert.deepEqual(order(engine, "att-triage"), ["native.claimed", "native.attached"]);
+    assert.deepEqual(claims.calls, []);
+    assert.isNull(engine.leaseOf("task-7"));
+  }).pipe(Effect.provide(deliveryLayer(engine, "board-execution-heartbeat-restart-")));
+});
+
 it.effect("runs a read-only step under a live heartbeat with no lease, and no writer", () => {
   // A task waiting for a slot: the engine takes no claim from it (the cap is reached).
   const engine = scratchEngine({ cap: 0 });

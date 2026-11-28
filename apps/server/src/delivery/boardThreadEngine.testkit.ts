@@ -171,6 +171,8 @@ export function scratchEngine(
   let sourceScoped = options.sourceScoped === true;
   /** Link writes the engine is answering now, and the most it ever answered at once. */
   const linkWrites = { inFlight: 0, most: 0 };
+  /** Approval keys the engine is checking now; past two at once it refuses with 403, as approval.mjs does. */
+  const keyChecks = { inFlight: 0, most: 0, refused: 0 };
   /** Runs once, just before the next link write is admitted: another writer getting in first. */
   let beforeNextPut: (() => void) | null = null;
   /** Runs once, just before the next task detail is answered: the task changing mid-pass. */
@@ -858,6 +860,7 @@ export function scratchEngine(
     },
     isDown: () => down,
     linkWrites,
+    keyChecks,
     /** A person's steer, queued the way the engine's steer route queues it. */
     queueSteer: (task: string, text: string) => {
       const steer = {
@@ -927,15 +930,32 @@ export const scratchEngineHttp = (engine: ScratchEngine) =>
               : Response.json(answered, { status }),
           );
         };
-        if (request.method !== "PUT") return Effect.sync(answer);
-        // A link write takes a turn of the scheduler, so two sent at once would be seen together.
-        engine.linkWrites.inFlight += 1;
+        const keyed = typeof body === "object" && body !== null && "key" in body;
+        if (request.method !== "PUT" && !keyed) return Effect.sync(answer);
+        const put = request.method === "PUT";
+        // A keyed write or a link write takes a turn of the scheduler, so two sent at once would be
+        // seen together.
+        if (put) engine.linkWrites.inFlight += 1;
         engine.linkWrites.most = Math.max(engine.linkWrites.most, engine.linkWrites.inFlight);
+        if (keyed) engine.keyChecks.inFlight += 1;
+        engine.keyChecks.most = Math.max(engine.keyChecks.most, engine.keyChecks.inFlight);
+        const overCap = keyed && engine.keyChecks.inFlight > 2;
         return Effect.yieldNow.pipe(
-          Effect.map(answer),
+          Effect.map(() => {
+            if (!overCap) return answer();
+            engine.keyChecks.refused += 1;
+            return HttpClientResponse.fromWeb(
+              request,
+              Response.json(
+                { error: "the approval key is wrong or missing", code: "refused" },
+                { status: 403 },
+              ),
+            );
+          }),
           Effect.ensuring(
             Effect.sync(() => {
-              engine.linkWrites.inFlight -= 1;
+              if (put) engine.linkWrites.inFlight -= 1;
+              if (keyed) engine.keyChecks.inFlight -= 1;
             }),
           ),
         );

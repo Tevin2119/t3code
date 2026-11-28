@@ -373,12 +373,12 @@ export const make = Effect.gen(function* () {
       local(projections.getThreadRecords(threadId, ["runs", "subagents", "providerTurns"])),
     ).pipe(Effect.tap((records) => Effect.sync(() => (shell = records))));
     // The claim on the task keeps a step T3 works from the engine's fallback. A read-only step is
-    // kept by the thread's heartbeat alone, so a task waiting for a slot takes no lease for it.
+    // kept by the thread's heartbeat alone: a task holding only such steps never takes a lease
+    // for them, also before its first heartbeat lands, when they wait.
     const beating = yield* boardThreads.heartbeatLive(taskId, threadId);
-    const held =
-      beating && records.every(runsOnHeartbeat)
-        ? false
-        : yield* boardThreads.holdTask(taskId, threadId);
+    const held = records.every(runsOnHeartbeat)
+      ? false
+      : yield* boardThreads.holdTask(taskId, threadId);
     const lineup =
       (yield* delivery.threadState(threadId).pipe(Effect.option)).pipe(
         Option.flatMap((state) => Option.fromNullishOr(state.lineup)),
