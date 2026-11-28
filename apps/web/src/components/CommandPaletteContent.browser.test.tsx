@@ -1,3 +1,5 @@
+import "~/index.css";
+
 import { FolderIcon } from "lucide-react";
 import { useState } from "react";
 import { describe, expect, it } from "vite-plus/test";
@@ -9,6 +11,21 @@ import type { CommandPaletteGroup } from "./CommandPalette.logic";
 import { CommandPaletteContent } from "./CommandPaletteContent";
 import { CommandPaletteResults } from "./CommandPaletteResults";
 import { CommandDialog, CommandDialogPopup, CommandItem, CommandList } from "./ui/command";
+
+function LongPalette() {
+  const items = Array.from({ length: 40 }, (_, index) => `Project ${index}`);
+  return (
+    <CommandDialog open>
+      <CommandDialogPopup aria-label="Command palette">
+        <CommandPaletteContent items={items} inputProps={{ placeholder: "Search projects" }}>
+          <CommandList>
+            {(item: string) => <CommandItem value={item}>{item}</CommandItem>}
+          </CommandList>
+        </CommandPaletteContent>
+      </CommandDialogPopup>
+    </CommandDialog>
+  );
+}
 
 function SubmenuPalette() {
   const [open, setOpen] = useState(false);
@@ -105,5 +122,26 @@ describe("CommandPaletteContent", () => {
     expect(last.getBoundingClientRect().bottom).toBeLessThanOrEqual(
       viewport.getBoundingClientRect().bottom + 1,
     );
+  });
+
+  it.each([
+    { height: 900, top: 225 },
+    { height: 620, top: 138 },
+  ])("sits low without shrinking in a $height px tall window", async ({ height, top }) => {
+    const viewport = { width: window.innerWidth, height: window.innerHeight };
+    await page.viewport(1440, height);
+    await using _viewport = {
+      [Symbol.asyncDispose]: () => page.viewport(viewport.width, viewport.height),
+    };
+    await using _screen = await render(<LongPalette />);
+
+    const popup = page.getByRole("dialog", { name: "Command palette" });
+    await expect.element(popup).toBeVisible();
+    await expect
+      .poll(() => {
+        const bounds = popup.element().getBoundingClientRect();
+        return { top: Math.round(bounds.top), height: Math.round(bounds.height) };
+      })
+      .toEqual({ top, height: 420 });
   });
 });

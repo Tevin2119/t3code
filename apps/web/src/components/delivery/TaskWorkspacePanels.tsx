@@ -122,6 +122,7 @@ export function TaskWorkspacePanels(props: {
             <RightPanelMaximizeControl
               maximized={maximized}
               onToggle={() => setMaximized(!maximized)}
+              shortcutLabel={null}
             />
           ) : null}
           <Button size="xs" variant="ghost" onClick={closeEvidence}>
@@ -138,10 +139,18 @@ export function TaskWorkspacePanels(props: {
       terminalLabelsById={NO_TERMINAL_LABELS}
       onActivate={(surface: RightPanelSurface) => store().activateSurface(panelRef, surface.id)}
       onCloseSurface={(surface) => store().closeSurface(panelRef, surface.id)}
+      onCloseSelectedSurfaces={(surfaces) =>
+        store().closeSurfaces(
+          panelRef,
+          surfaces.map((surface) => surface.id),
+        )
+      }
       onCloseOtherSurfaces={(surface) => store().closeOtherSurfaces(panelRef, surface.id)}
       onCloseSurfacesToRight={(surface) => store().closeSurfacesToRight(panelRef, surface.id)}
       onCloseAllSurfaces={() => store().closeAllSurfaces(panelRef)}
-      onMoveSurface={(surfaceId, toIndex) => store().moveSurface(panelRef, surfaceId, toIndex)}
+      onMoveSurfaces={(surfaceIds, targetId) =>
+        store().moveSurfaces(panelRef, surfaceIds, targetId)
+      }
       onCopyFilePath={NOTHING}
       onAddBrowser={NOTHING}
       onAddBrowserInProfile={NOTHING}

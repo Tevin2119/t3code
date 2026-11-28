@@ -31,8 +31,9 @@ import { addBrowserSurface } from "../preview/addBrowserSurface";
 import { useThreadPanelFallback } from "../delivery/BoardTaskContext";
 import { focusActivePanelTerminal, focusTerminal } from "../../lib/terminalFocus";
 import { subscribePreviewAction } from "../preview/previewActionBus";
-import { floatDeviceSurface } from "../preview/agentOpenedPreviews";
-import { browserMiniPlayerSource, usePreviewMiniPlayerStore } from "../../previewMiniPlayerStore";
+import { floatPanelSurfaceOnClose } from "../preview/agentOpenedPreviews";
+import { getClientSettings } from "../../hooks/useSettings";
+import { browserMiniPlayerSource } from "../../previewMiniPlayerStore";
 import type { threadPullRequestPanelTarget } from "../pullRequest/pullRequestDetail.logic";
 import type { useDeviceState } from "../../state/device";
 import { stackedThreadToast, toastManager } from "../ui/toast";
@@ -66,7 +67,6 @@ interface RightPanelActionsInput {
   readonly gitCwd: string | null;
   readonly activeProjectCwd: string | null;
   readonly onDiffPanelOpen: (() => void) | undefined;
-  readonly closeRightPanelSurface: (surface: RightPanelSurface) => void;
 }
 
 /**
@@ -75,7 +75,6 @@ interface RightPanelActionsInput {
  */
 export function useRightPanelActions(input: RightPanelActionsInput) {
   const {
-    closeRightPanelSurface,
     activeThreadRef,
     activeProject,
     activeRightPanelSurface,
@@ -104,9 +103,6 @@ export function useRightPanelActions(input: RightPanelActionsInput) {
 
   const openPreview = useAtomCommand(previewEnvironment.open, { reportFailure: false });
   const onToggleDiff = () => {
-    if (!isServerThread) {
-      return;
-    }
     if (!diffOpen) {
       onDiffPanelOpen?.();
     }
@@ -144,7 +140,7 @@ export function useRightPanelActions(input: RightPanelActionsInput) {
   const duplicateBrowserSurfaceStable = useStableCallback(duplicateBrowserSurface);
   const createBrowserSurfaceStable = useStableCallback(createBrowserSurface);
   const addDiffSurface = () => {
-    if (!activeThreadRef || !isServerThread || !diffAvailable) return;
+    if (!activeThreadRef || !diffAvailable) return;
     useDiffPanelStore.getState().selectGitScope(activeThreadRef, "branch");
     useRightPanelStore.getState().open(activeThreadRef, "diff");
     onDiffPanelOpen?.();
@@ -180,16 +176,18 @@ export function useRightPanelActions(input: RightPanelActionsInput) {
   const openFileSurfaceStable = useStableCallback(openFileSurface);
   const closePreviewPanel = () => {
     if (activeThreadRef) {
-      if (activeRightPanelSurface?.kind === "preview" && activeRightPanelSurface.resourceId) {
-        usePreviewMiniPlayerStore
-          .getState()
-          .open(activeThreadRef, browserMiniPlayerSource(activeRightPanelSurface.resourceId));
-      } else if (activeRightPanelSurface?.kind === "device" && activeRightPanelSurface.target) {
-        floatDeviceSurface(
-          activeThreadRef,
-          { kind: "device", ...activeRightPanelSurface.target },
-          deviceStateLoaded ? deviceState : null,
-        );
+      const source =
+        activeRightPanelSurface?.kind === "preview" && activeRightPanelSurface.resourceId
+          ? browserMiniPlayerSource(activeRightPanelSurface.resourceId)
+          : activeRightPanelSurface?.kind === "device" && activeRightPanelSurface.target
+            ? ({ kind: "device", ...activeRightPanelSurface.target } as const)
+            : null;
+      if (source) {
+        floatPanelSurfaceOnClose(activeThreadRef, source, {
+          autoShowFloatingPreview: getClientSettings().browserAutoShowFloatingPreview,
+          previewState: activePreviewState,
+          deviceState: deviceStateLoaded ? deviceState : null,
+        });
       }
       useRightPanelStore.getState().setMaximized(activeThreadRef, false);
       useRightPanelStore.getState().close(activeThreadRef);
@@ -267,16 +265,24 @@ export function useRightPanelActions(input: RightPanelActionsInput) {
   };
   const toggleThreadPanelStable = useStableCallback(toggleThreadPanel);
   const toggleRightPanelMaximized = () => {
-    if (!canMaximizeRightPanel || !activeThreadRef) return;
+    if (!activeThreadRef) return;
+    if (!rightPanelOpen) {
+      // A closed panel opens straight into maximized.
+      requestWorkspaceFocus({ area: "panel" });
+      useRightPanelStore.getState().requestMaximize(activeThreadRef);
+      toggleRightPanel();
+      return;
+    }
+    if (!canMaximizeRightPanel) return;
     if (!rightPanelMaximized) requestWorkspaceFocus({ area: "panel" });
     useRightPanelStore.getState().setMaximized(activeThreadRef, !rightPanelMaximized);
   };
   const toggleRightPanelMaximizedStable = useStableCallback(toggleRightPanelMaximized);
-  const moveRightPanelSurface = (surfaceId: string, toIndex: number) => {
+  const moveRightPanelSurfaces = (surfaceIds: readonly string[], targetId: string) => {
     if (activeThreadRef)
-      useRightPanelStore.getState().moveSurface(activeThreadRef, surfaceId, toIndex);
+      useRightPanelStore.getState().moveSurfaces(activeThreadRef, surfaceIds, targetId);
   };
-  const moveRightPanelSurfaceStable = useStableCallback(moveRightPanelSurface);
+  const moveRightPanelSurfacesStable = useStableCallback(moveRightPanelSurfaces);
   const copyRightPanelFilePath = (relativePath: string) => {
     if (typeof window === "undefined" || !navigator.clipboard?.writeText) {
       toastManager.add(
@@ -333,10 +339,6 @@ export function useRightPanelActions(input: RightPanelActionsInput) {
       if (!event.repeat) toggleRightPanelMaximized();
     },
     "threadPanel.toggle": () => toggleThreadPanel(),
-    "rightPanel.close": ({ event }) => {
-      if (!activeRightPanelSurface) return false;
-      if (!event.repeat) closeRightPanelSurface(activeRightPanelSurface);
-    },
     "diff.toggle": () => onToggleDiff(),
   } satisfies ChatShortcutCommands;
 
@@ -353,7 +355,7 @@ export function useRightPanelActions(input: RightPanelActionsInput) {
     createBrowserSurface,
     createBrowserSurfaceStable,
     duplicateBrowserSurfaceStable,
-    moveRightPanelSurfaceStable,
+    moveRightPanelSurfacesStable,
     onOpenToolDiffStable,
     onToggleDiffStable,
     openChangesFromThreadPanelStable,

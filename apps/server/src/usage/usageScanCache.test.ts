@@ -154,6 +154,7 @@ describe("scan cache round trip", () => {
     { layout: "upstream", version: 14, malformedRecords: [1, 2], reparse: true, resumes: false },
     { layout: "upstream", version: 17, malformedRecords: [1, 2], reparse: false, resumes: true },
     { layout: "fork", version: 18, malformedRecords: [1, 2], reparse: false, resumes: true },
+    { layout: "fork", version: 19, malformedRecords: [1, 2], reparse: false, resumes: true },
   ])(
     "preserves $layout v$version history with $malformedRecords malformed records (reparse: $reparse)",
     ({ layout, version, malformedRecords, reparse, resumes }) => {
@@ -178,7 +179,7 @@ describe("scan cache round trip", () => {
         position: position({ state: initialCodexScanState() }),
       };
       const current = writtenCache(new Map([["/codex.jsonl", entry]]));
-      expect(current.version).toBe(18);
+      expect(current.version).toBe(19);
       const toLegacyRow = (row: unknown[]) => (layout === "upstream" ? upstreamRow(row) : row);
       const document = {
         ...current,
@@ -214,7 +215,7 @@ describe("scan cache round trip", () => {
       speed: "fast",
     });
     const current = writtenCache(cacheWith([["/legacy.jsonl", 100, [usage]]]));
-    expect(current.version).toBe(18);
+    expect(current.version).toBe(19);
     const fork = {
       ...current,
       version: 5,
@@ -285,7 +286,12 @@ describe("scan cache round trip", () => {
       mtimeMs: 300,
       provider: "grok",
       records: [
-        record({ provider: "grok", model: "grok-4.5-build", dedupeKey: "s:p:grok-4.5-build" }),
+        record({
+          provider: "grok",
+          model: "grok-4.5-build",
+          modelCalls: 8,
+          dedupeKey: "s:p:grok-4.5-build",
+        }),
         record({ provider: "grok", model: "<synthetic>", dedupeKey: "s:p:<synthetic>" }),
       ],
       tailRecords: [record({ provider: "grok", model: "<synthetic>", dedupeKey: null })],

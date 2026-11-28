@@ -3692,7 +3692,7 @@ describe("UsageService", () => {
             60 + 20 * (version === 4 ? 1 : 2),
           );
           yield* upgraded.awaitPersisted;
-          assert.strictEqual(SCAN_CACHE_FILE_NAME, "usage-scan-cache-v18.json");
+          assert.strictEqual(SCAN_CACHE_FILE_NAME, "usage-scan-cache-v19.json");
           assert.deepStrictEqual(
             (yield* Effect.promise(() => NodeFSP.readdir(stateDir)))
               .filter((name) => name.startsWith("usage-scan-cache"))

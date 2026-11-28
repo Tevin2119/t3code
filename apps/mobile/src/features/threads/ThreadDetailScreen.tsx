@@ -19,10 +19,12 @@ import { UsageLimitRecoveryCard } from "./UsageLimitRecoveryCard";
 import { HandedOnThreadCard, LimitedSeatNoticeCard } from "./LimitedSeatNoticeCard";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { deliveryEnvironment } from "../../state/delivery";
-import { useFocusEffect, useNavigation } from "@react-navigation/native";
+import { useFocusEffect, useIsFocused, useNavigation } from "@react-navigation/native";
+import { useAppActive } from "../../lib/appState";
 import {
   effectiveSnoozed,
   threadWokeAt,
+  isIndefiniteSnooze,
   isThreadWokeUnseen,
   snoozeWakeLabel,
 } from "@t3tools/client-runtime/state/thread-settled";
@@ -338,6 +340,15 @@ export interface ThreadDetailScreenProps {
 
 // iOS questions overlay the controls; Android questions stack with child approvals.
 const ComposerPanels = Platform.OS === "android" ? Animated.ScrollView : Animated.View;
+
+// A child, so focus and app state changes do not re-render the thread body.
+// The native stack keeps covered screens mounted, so gate on focus too.
+function ThreadStreamHaptics(props: { readonly threadRef: ScopedThreadRef | null }) {
+  const screenIsFocused = useIsFocused();
+  const appIsActive = useAppActive();
+  useAtomMount(threadStreamHaptics(screenIsFocused && appIsActive ? props.threadRef : null));
+  return null;
+}
 
 /**
  * Hands the feed the screen width measured for a native column; elsewhere keeps the inherited one.
@@ -796,6 +807,7 @@ function ThreadDetailBody(
     const wake =
       lifecycleSnoozed &&
       snoozedUntil !== null &&
+      !isIndefiniteSnooze(snoozedUntil) &&
       Date.parse(snoozedUntil) > Date.parse(lifecycleNow)
         ? snoozeWakeLabel(snoozedUntil, { now: lifecycleNow }, messages)
         : null;
@@ -1295,7 +1307,6 @@ function ThreadDetailBody(
       ? null
       : { width: Math.max(0, columnWidth - controlInsets.left - controlInsets.right) };
   const selectedInstanceId = props.selectedThread.modelSelection.instanceId;
-  useAtomMount(threadStreamHaptics(props.selectedThreadDetailRef));
   const selectedProviderSkills = (() => {
     const provider = props.serverConfig?.providers.find(
       (candidate) => candidate.instanceId === selectedInstanceId,
@@ -1513,6 +1524,7 @@ function ThreadDetailBody(
 
   return (
     <View className="flex-1" onLayout={handleScreenLayout}>
+      <ThreadStreamHaptics threadRef={props.selectedThreadDetailRef} />
       {!usesNativeWorkspaceColumns ? <NativeLayoutObserver onChange={setScreenMetrics} /> : null}
       {props.draftMode ? (
         props.draftMode.content(

@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, it } from "@effect/vitest";
 import { EventId, NodeId, RunId, TurnItemId } from "@t3tools/contracts";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
@@ -17,6 +18,7 @@ const infra = Layer.mergeAll(EventSink.layer, IdAllocator.layer).pipe(Layer.prov
 const layer = SendFailureNotice.layer.pipe(
   Layer.provideMerge(infra),
   Layer.provideMerge(SqlitePersistence.layerMemory),
+  Layer.provide(NodeCrypto.layerDigest),
 );
 
 it.layer(layer)("SendFailureNotice", (it) => {
