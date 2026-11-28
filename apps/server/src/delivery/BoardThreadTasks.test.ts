@@ -1,5 +1,6 @@
 import { assert, it } from "@effect/vitest";
 import {
+  CommandId,
   DeliveryError,
   EnvironmentId,
   EventId,
@@ -123,8 +124,18 @@ const harness = Effect.fn("BoardThreadTasks.testHarness")(function* (
             }),
         }),
         Layer.mock(Threads.ThreadManagementService)({
-          getThreadRecords: () =>
-            Ref.get(activeRun).pipe(Effect.map((run) => ({ runs: [run] }))) as never,
+          getThreadRecords: (threadId) =>
+            (threadId === scope.thread.threadId
+              ? Ref.get(activeRun).pipe(
+                  Effect.map((run) => ({ thread: { id: threadId, deletedAt: null }, runs: [run] })),
+                )
+              : Effect.fail(
+                  new Orchestrator.OrchestratorDispatchError({
+                    commandId: CommandId.make("thread-read"),
+                    commandType: "thread.read",
+                    cause: "No such thread",
+                  }),
+                )) as never,
           dispatch: (command) =>
             command.type !== "board_task_request.record"
               ? Effect.die("Unexpected dispatch")
@@ -426,6 +437,105 @@ it.effect("files anew under a new request ID once the earlier port's task was di
       assert.strictEqual(calls.length, 2);
       assert.notStrictEqual(retry, first);
       assert.match(retry!, /^port-[a-f0-9]{55}-[0-9a-f-]{36}$/);
+    }).pipe(Effect.provide(layer));
+  }),
+);
+
+const filing = {
+  threadId: scope.thread.threadId,
+  board: "work",
+  title: "From a thread",
+  body: "B",
+};
+const threadFiled: Act = () =>
+  Effect.succeed({ readAt: "2026-11-28T00:00:00Z", body: { created: true, task } });
+const environmentId = scope.environmentId;
+
+it.effect(
+  "files a person's draft through the same intake as the tool, stamped with the thread",
+  () =>
+    Effect.gen(function* () {
+      const { calls, cards, layer } = yield* harness(threadFiled);
+      yield* Effect.gen(function* () {
+        const service = yield* BoardTasks.BoardThreadTasks;
+        const tool = yield* service.request(scope, filing).pipe(Effect.forkChild);
+        const { threadId, turnItemId } = yield* Queue.take(cards);
+        yield* service.answer({ threadId, turnItemId, answer: "file" });
+        yield* Fiber.join(tool);
+        const filed = yield* service.fileThread(environmentId, filing);
+        assert.deepStrictEqual(filed, { created: true, task });
+        // The probe, the tool's filing, then the person's: one route, configuration and origin.
+        const [toolCall, personCall] = calls.slice(1);
+        const { requestId: toolRequest, ...toolBody } = bodyOf(toolCall!);
+        const { requestId: personRequest, ...personBody } = bodyOf(personCall!);
+        assert.deepStrictEqual(
+          { ...personCall, body: personBody },
+          { ...toolCall, body: toolBody },
+        );
+        assert.deepInclude(personBody, { origin, key, title: "From a thread", body: "B" });
+        assert.notStrictEqual(personRequest, toolRequest);
+        assert.match(String(personRequest), /^thread-[a-f0-9]{64}$/);
+        // Filing the thread on the board again is the same request, so the engine replays it.
+        yield* service.fileThread(environmentId, { ...filing, title: "Edited" });
+        assert.strictEqual(bodyOf(calls[3]!).requestId, personRequest);
+      }).pipe(Effect.provide(layer));
+    }),
+);
+
+it.effect(
+  "answers a refiling with the thread's live task, and files anew once it is discarded",
+  () =>
+    Effect.gen(function* () {
+      const { board: _board, ...card } = task;
+      const live = [{ ...card, set: "work", lane: "draft", title: "From a thread" }];
+      let refusals = [refusal(409, "different fields", "conflict"), refusal(410, "gone", "gone")];
+      const { calls, reads, layer } = yield* harness(
+        (input) => {
+          const next = refusals.shift();
+          return next ? Effect.fail(next) : threadFiled(input);
+        },
+        undefined,
+        false,
+        live,
+      );
+      yield* Effect.gen(function* () {
+        const service = yield* BoardTasks.BoardThreadTasks;
+        const originRead = `/api/tasks?origin=${encodeURIComponent(origin)}&set=all&limit=500`;
+        // Edited text conflicts with the kept receipt: the task already filed from here answers.
+        assert.deepStrictEqual(yield* service.fileThread(environmentId, filing), {
+          created: false,
+          task,
+        });
+        assert.include(reads, originRead);
+        // Discarded, with nothing else live from this thread: a new request ID files it again.
+        live.length = 0;
+        assert.deepStrictEqual(yield* service.fileThread(environmentId, filing), {
+          created: true,
+          task,
+        });
+        const ids = calls.map((call) => String(bodyOf(call).requestId));
+        assert.strictEqual(ids.length, 3);
+        assert.strictEqual(ids[1], ids[0]);
+        assert.match(ids[2]!, /^thread-[a-f0-9]{53}-[0-9a-f-]{36}$/);
+        refusals = [];
+      }).pipe(Effect.provide(layer));
+    }),
+);
+
+it.effect("refuses a reserved board, a board task's own thread, or an unknown thread", () =>
+  Effect.gen(function* () {
+    const { calls, layer } = yield* harness(threadFiled);
+    yield* Effect.gen(function* () {
+      const service = yield* BoardTasks.BoardThreadTasks;
+      for (const input of [
+        { ...filing, board: "unsorted" },
+        { ...filing, threadId: ThreadId.make("board-task:work:task-1") },
+        { ...filing, threadId: ThreadId.make("thread:missing") },
+      ]) {
+        const error = yield* Effect.flip(service.fileThread(environmentId, input));
+        assert.strictEqual(error.code, "invalid_request");
+      }
+      assert.deepStrictEqual(calls, []);
     }).pipe(Effect.provide(layer));
   }),
 );

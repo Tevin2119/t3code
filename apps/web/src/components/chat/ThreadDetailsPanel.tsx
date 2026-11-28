@@ -22,6 +22,8 @@ import ProjectScriptsControl, {
 import { T, useGT } from "gt-react";
 import { lazy, Suspense, useState, type ComponentProps } from "react";
 import { useBoardTask } from "../delivery/BoardTaskContext";
+import { ThreadFiledTasks } from "../delivery/FileThreadTask";
+import { useDeliveryEnabled } from "../../state/delivery";
 import { taskHasLineage } from "../delivery/relatedTaskGroups";
 import { ThreadDetailsCard } from "./ThreadDetailsCard";
 import { OpenInPicker } from "./OpenInPicker";
@@ -111,6 +113,8 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
   // The task's lineage comes from the board task whose view hosts this thread.
   const board = useBoardTask();
   const boardLineage = taskHasLineage(board);
+  // A board task's own thread is already a task; a plain thread can be filed as one.
+  const offersFiling = useDeliveryEnabled(props.environmentId) && board === null;
   const [menuPosition, setMenuPosition] = useState<{ x: number; y: number } | null>(null);
   const t3File = useT3ProjectFileState(
     props.environmentId,
@@ -349,6 +353,10 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
                     showSideChats={visible.sideChats}
                     extraGroup={boardLineage ? <TaskLineage /> : undefined}
                   />
+                ) : null}
+
+                {offersFiling && props.isServerThread && !props.draftId ? (
+                  <ThreadFiledTasks threadRef={activeThreadRef} />
                 ) : null}
 
                 {visible.usage ? <ThreadDetailsUsage {...props.usage} /> : null}

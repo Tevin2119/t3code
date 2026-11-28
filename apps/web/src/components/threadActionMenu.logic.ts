@@ -8,6 +8,7 @@ export type ThreadActionMenuId =
   | "find"
   | "new-thread-on-branch"
   | "create-task"
+  | "file-task"
   | "filter-by-project"
   | "turn-into-project"
   | "project-settings"
@@ -176,6 +177,8 @@ export function buildThreadActionMenuItems(
     // A thread is a conversation; it becomes work for a team only when a person makes a task of
     // it, which opens the task form written from the conversation, for review before saving.
     { id: "create-task", label: "Create task from conversation", icon: "square-kanban" },
+    // A quick draft on a board, linked to this thread; the full form above is for team and seats.
+    { id: "file-task", label: "File a task from this thread", icon: "square-kanban" },
     ...(state.supports.pinning
       ? [
           state.isPinned

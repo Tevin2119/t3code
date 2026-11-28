@@ -60,6 +60,7 @@ describe("RPC authorization scopes", () => {
       WS_METHODS.agentFeedbackAnswerRequest,
       WS_METHODS.deliveryAnswerBoardTask,
       WS_METHODS.deliveryFilePort,
+      WS_METHODS.deliveryFileThreadTask,
     ]) {
       expect(requiredScopeForRpcMethod(method)).toBe(AuthOrchestrationOperateScope);
     }

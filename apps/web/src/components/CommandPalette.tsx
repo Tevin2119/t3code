@@ -282,6 +282,7 @@ import { ProjectFilePicker } from "./files/ProjectFilePicker";
 import { openLinkPullRequestDialog } from "./pullRequest/LinkPullRequestDialog";
 import { canShareWithGuestAtom } from "./chat/guestShareAvailability";
 import { openGuestShareDialog } from "./chat/guestShareDialogState";
+import { openFileThreadTaskDialog } from "./delivery/fileThreadTaskDialogState";
 import { openUseInAnotherApp } from "./mcp/UseInAnotherAppDialog";
 import { ProjectContentSearchDialog } from "./search/ProjectContentSearchDialog";
 import { primaryServerKeybindingsAtom } from "../state/server";
@@ -536,6 +537,7 @@ function OpenCommandPaletteDialog(props: {
   const activeThreadServerConfig = useServerConfigs().get(
     activeThread?.environmentId ?? ("" as EnvironmentId),
   );
+  const activeThreadDeliveryEnabled = useDeliveryEnabled(activeThread?.environmentId ?? null);
   const canShareActiveThreadWithGuest = useAtomValue(
     canShareWithGuestAtom(activeThread?.environmentId ?? ("" as EnvironmentId)),
   );
@@ -1588,6 +1590,20 @@ function OpenCommandPaletteDialog(props: {
       icon: <UserPlusIcon className={ITEM_ICON_CLASS} />,
       run: async () => {
         openGuestShareDialog(threadRef);
+      },
+    });
+  }
+
+  if (activeThread !== null && activeThreadDeliveryEnabled) {
+    const threadRef = scopeThreadRef(activeThread.environmentId, activeThread.id);
+    actionItems.push({
+      kind: "action",
+      value: "action:file-thread-task",
+      searchTerms: ["file", "task", "board", "draft", "delivery", "link"],
+      title: "File a task from this thread",
+      icon: <SquareKanbanIcon className={ITEM_ICON_CLASS} />,
+      run: async () => {
+        openFileThreadTaskDialog(threadRef);
       },
     });
   }

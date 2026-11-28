@@ -176,6 +176,16 @@ export function createDeliveryEnvironmentAtoms<R, E>(
           JSON.stringify([environmentId, input.board, input.from, input.to, input.commits]),
       },
     }),
+    /** Files a draft from a thread. A second click while the first runs joins it. */
+    fileThreadTask: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:delivery:file-thread-task",
+      tag: WS_METHODS.deliveryFileThreadTask,
+      concurrency: {
+        mode: "singleFlight",
+        key: ({ environmentId, input }) =>
+          JSON.stringify([environmentId, input.threadId, input.board]),
+      },
+    }),
     /** Gives up a team choice whose setup never completed. */
     releaseThread: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:delivery:release-thread",

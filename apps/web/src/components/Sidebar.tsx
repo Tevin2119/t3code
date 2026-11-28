@@ -166,6 +166,7 @@ import { readEnvironmentScope, useEnvironmentScope } from "../state/session";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { canShareWithGuestAtom } from "./chat/guestShareAvailability";
 import { openGuestShareDialog } from "./chat/guestShareDialogState";
+import { openFileThreadTaskDialog } from "./delivery/fileThreadTaskDialogState";
 import {
   buildThreadRouteParams,
   resolveActiveThreadRouteRef,
@@ -2803,6 +2804,9 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
             });
             return;
           }
+          case "file-task":
+            openFileThreadTaskDialog(threadRef);
+            return;
 
           case "new-thread-on-branch": {
             const result = await settlePromise(() =>

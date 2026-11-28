@@ -4,6 +4,7 @@ import { useAtomValue } from "@effect/atom-react";
 import {
   DELIVERY_DEFAULT_TEAM,
   type BoardTaskFiling,
+  type BoardThreadFilingInput,
   type DeploymentPortInput,
   type EnvironmentId,
 } from "@t3tools/contracts";
@@ -174,6 +175,26 @@ export function useFilePort(environmentId: EnvironmentId) {
     allowed,
     file: async (
       input: DeploymentPortInput,
+    ): Promise<{ ok: true; filing: typeof BoardTaskFiling.Type } | { ok: false; why: string }> => {
+      const result = await file({ environmentId, input });
+      return result._tag === "Failure"
+        ? { ok: false, why: deliveryFailureText(squashAtomCommandFailure(result)) }
+        : { ok: true, filing: result.value };
+    },
+  };
+}
+
+/** File a task from a thread: whether this connection may, and the filing itself. */
+export function useFileThreadTask(environmentId: EnvironmentId) {
+  const allowed = useAtomValue(deliveryEnvironment.fileThreadTask.permissionAtom(environmentId));
+  const file = useAtomCommand(deliveryEnvironment.fileThreadTask, {
+    label: "file a task from this thread",
+    reportFailure: false,
+  });
+  return {
+    allowed,
+    file: async (
+      input: BoardThreadFilingInput,
     ): Promise<{ ok: true; filing: typeof BoardTaskFiling.Type } | { ok: false; why: string }> => {
       const result = await file({ environmentId, input });
       return result._tag === "Failure"

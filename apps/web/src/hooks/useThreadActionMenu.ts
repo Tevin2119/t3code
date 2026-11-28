@@ -2,6 +2,7 @@ import { thrownErrorMessage } from "@t3tools/client-runtime/errors";
 import { scopeProjectRef } from "@t3tools/client-runtime/environment";
 import { requestCustomSnooze } from "../components/CustomSnoozeDialog";
 import { openGuestShareDialog } from "../components/chat/guestShareDialogState";
+import { openFileThreadTaskDialog } from "../components/delivery/fileThreadTaskDialogState";
 import {
   type AtomCommandResult,
   isAtomCommandInterrupted,
@@ -347,6 +348,9 @@ export function useThreadActionMenu(input: {
           });
           return;
         }
+        case "file-task":
+          openFileThreadTaskDialog(threadRef);
+          return;
         case "delete": {
           if (confirmThreadDelete) {
             const confirmed = await settlePromise(() =>

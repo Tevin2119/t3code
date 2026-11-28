@@ -50,6 +50,7 @@ describe("buildThreadActionMenuItems", () => {
       const expected = reversed
         ? [
             "create-task",
+            "file-task",
             "unpin",
             "unsettle",
             "unsnooze",
@@ -61,6 +62,7 @@ describe("buildThreadActionMenuItems", () => {
           ]
         : [
             "create-task",
+            "file-task",
             "pin",
             "settle",
             "snooze",
@@ -104,6 +106,7 @@ describe("buildThreadActionMenuItems", () => {
       }),
     ).toEqual([
       "create-task",
+      "file-task",
       "rename",
       "mark-unread",
       "copy",
@@ -152,6 +155,7 @@ describe("buildThreadActionMenuItems", () => {
     expect(allIds(baseState)).not.toContain("new-thread-on-branch");
     // Making a task of a conversation is offered on every thread.
     expect(allIds(baseState)).toContain("create-task");
+    expect(allIds(baseState)).toContain("file-task");
     expect(allIds(baseState)).not.toContain("copy-branch");
   });
 
