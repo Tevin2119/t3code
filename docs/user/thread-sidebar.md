@@ -117,7 +117,8 @@ To talk about a task without writing to it, choose **Discuss in a thread** in th
 task's menu or on the **Task** item. It opens a side chat of the task's thread,
 with the conversation so far, on the thread's right panel and among its **Side
 chats** in the thread details card. What you write there stays in the side chat:
-it does not reach the task, its team or the engine. Closing or archiving the side
+it does not reach the task, its team or the engine, and a task's thread offers no
+**Merge back**. Closing or archiving the side
 chat leaves the task as it is.
 
 The task's lineage lists the seats' own conversations, **Made from**, the

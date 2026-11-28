@@ -49,63 +49,87 @@ const TASK = boardTaskOf("work", "task-9")!;
 const TASK_THREAD = boardTaskThreadId(TASK);
 const SIDE_CHAT = ThreadId.make("task-9-side-chat");
 
-it.effect("a side chat of a task thread carries no marker, is never bound, and leaves it be", () =>
-  Effect.gen(function* () {
-    const orchestrator = yield* Orchestrator.OrchestratorV2;
-    yield* orchestrator.dispatch(
-      createBoardTaskThread(TASK, {
-        commandId: boardTaskThreadCommandId(TASK),
-        threadId: TASK_THREAD,
-        projectId: ProjectId.make("board-task-side-chat-project"),
-        title: "Fix the sync",
-        modelSelection: { instanceId, model: "test-model" },
-      }),
-    );
-    yield* orchestrator.dispatch({
-      type: "thread.fork",
-      commandId: CommandId.make("task-9-discuss"),
-      sourceThreadId: TASK_THREAD,
-      targetThreadId: SIDE_CHAT,
-      sourcePoint: { type: "latest_stable" },
-      title: "Side chat",
-      sideChat: true,
-      createdBy: "user",
-      creationSource: "web",
-    });
-
-    const fork = (yield* orchestrator.getThreadProjection(SIDE_CHAT)).thread;
-    assert.deepStrictEqual(fork.lineage, {
-      parentThreadId: TASK_THREAD,
-      relationshipToParent: "fork",
-      rootThreadId: TASK_THREAD,
-      sideChat: true,
-    });
-    assert.isNull(boardTaskOfMarker(fork.lineage.engineIntake));
-    assert.isFalse(isBoardTaskThreadId(fork.id));
-    // The board finds its task threads by marker alone: the task's thread, not its side chat.
-    const listed = () =>
-      listBoardThreadRows({ archived: false }).pipe(
-        Effect.map((rows) => rows.map((row) => [row.threadId, row.task.id])),
+it.effect(
+  "a side chat of a task thread carries no marker, is never bound or merged back, and leaves it be",
+  () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      yield* orchestrator.dispatch(
+        createBoardTaskThread(TASK, {
+          commandId: boardTaskThreadCommandId(TASK),
+          threadId: TASK_THREAD,
+          projectId: ProjectId.make("board-task-side-chat-project"),
+          title: "Fix the sync",
+          modelSelection: { instanceId, model: "test-model" },
+        }),
       );
-    assert.deepStrictEqual(yield* listed(), [[TASK_THREAD, TASK.id]]);
-    assert.deepStrictEqual(yield* listBoardThreadRows({ archived: true }), []);
+      yield* orchestrator.dispatch({
+        type: "thread.fork",
+        commandId: CommandId.make("task-9-discuss"),
+        sourceThreadId: TASK_THREAD,
+        targetThreadId: SIDE_CHAT,
+        sourcePoint: { type: "latest_stable" },
+        title: "Side chat",
+        sideChat: true,
+        createdBy: "user",
+        creationSource: "web",
+      });
 
-    // Archiving or closing the side chat never changes the task's thread.
-    yield* orchestrator.dispatch({
-      type: "thread.archive",
-      commandId: CommandId.make("task-9-side-chat-archive"),
-      threadId: SIDE_CHAT,
-    });
-    yield* orchestrator.dispatch({
-      type: "thread.delete",
-      commandId: CommandId.make("task-9-side-chat-close"),
-      threadId: SIDE_CHAT,
-      onlyIfUnused: true,
-    });
-    const task = (yield* orchestrator.getThreadProjection(TASK_THREAD)).thread;
-    assert.isNull(task.archivedAt);
-    assert.isNull(task.deletedAt);
-    assert.deepStrictEqual(boardTaskOfMarker(task.lineage.engineIntake), TASK);
-    assert.deepStrictEqual(yield* listed(), [[TASK_THREAD, TASK.id]]);
-  }).pipe(Effect.provide(layer)),
+      const fork = (yield* orchestrator.getThreadProjection(SIDE_CHAT)).thread;
+      assert.deepStrictEqual(fork.lineage, {
+        parentThreadId: TASK_THREAD,
+        relationshipToParent: "fork",
+        rootThreadId: TASK_THREAD,
+        sideChat: true,
+      });
+      assert.isNull(boardTaskOfMarker(fork.lineage.engineIntake));
+      assert.isFalse(isBoardTaskThreadId(fork.id));
+      // The board finds its task threads by marker alone: the task's thread, not its side chat.
+      const listed = () =>
+        listBoardThreadRows({ archived: false }).pipe(
+          Effect.map((rows) => rows.map((row) => [row.threadId, row.task.id])),
+        );
+      assert.deepStrictEqual(yield* listed(), [[TASK_THREAD, TASK.id]]);
+      assert.deepStrictEqual(yield* listBoardThreadRows({ archived: true }), []);
+
+      // What is said in the side chat never reaches the task: its thread takes no merge-back.
+      const transfersBefore = (yield* orchestrator.getThreadProjection(TASK_THREAD))
+        .contextTransfers;
+      const mergeBack = yield* orchestrator
+        .dispatch({
+          type: "thread.merge_back",
+          commandId: CommandId.make("task-9-side-chat-merge-back"),
+          sourceThreadId: SIDE_CHAT,
+          targetThreadId: TASK_THREAD,
+          sourcePoint: { type: "latest_stable" },
+          createdBy: "user",
+          creationSource: "web",
+        })
+        .pipe(Effect.flip);
+      assert.include(
+        String(mergeBack.cause),
+        "A task thread takes no merge-back; side chats about a task stay separate.",
+      );
+      const after = yield* orchestrator.getThreadProjection(TASK_THREAD);
+      assert.deepStrictEqual(after.contextTransfers, transfersBefore);
+      assert.isFalse(after.contextTransfers.some((transfer) => transfer.type === "merge_back"));
+
+      // Archiving or closing the side chat never changes the task's thread.
+      yield* orchestrator.dispatch({
+        type: "thread.archive",
+        commandId: CommandId.make("task-9-side-chat-archive"),
+        threadId: SIDE_CHAT,
+      });
+      yield* orchestrator.dispatch({
+        type: "thread.delete",
+        commandId: CommandId.make("task-9-side-chat-close"),
+        threadId: SIDE_CHAT,
+        onlyIfUnused: true,
+      });
+      const task = (yield* orchestrator.getThreadProjection(TASK_THREAD)).thread;
+      assert.isNull(task.archivedAt);
+      assert.isNull(task.deletedAt);
+      assert.deepStrictEqual(boardTaskOfMarker(task.lineage.engineIntake), TASK);
+      assert.deepStrictEqual(yield* listed(), [[TASK_THREAD, TASK.id]]);
+    }).pipe(Effect.provide(layer)),
 );

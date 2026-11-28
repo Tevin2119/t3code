@@ -95,7 +95,10 @@ import { useSelectedThreadGitState } from "../../state/use-selected-thread-git-s
 import { useSelectedThreadRequests } from "../../state/use-selected-thread-requests";
 import { useSelectedThreadWorktree } from "../../state/use-selected-thread-worktree";
 import { useThreadComposerState } from "../../state/use-thread-composer-state";
-import { resolveMergeBackTargetThreadId } from "@t3tools/client-runtime/state/thread-relationships";
+import {
+  mergeBackAcceptedBy,
+  resolveMergeBackTargetThreadId,
+} from "@t3tools/client-runtime/state/thread-relationships";
 import { resolveLatestMergeBackRun } from "@t3tools/client-runtime/state/thread-workflows";
 import { threadEnvironment } from "../../state/threads";
 import {
@@ -467,7 +470,16 @@ function ThreadRouteContent(
   const selectDetail = useSelectWorkspaceDetail();
   const openPullRequest = useOpenPullRequest();
   const mergeBack = useAtomCommand(threadEnvironment.mergeBack, "merge thread back");
-  const mergeBackTargetThreadId = resolveMergeBackTargetThreadId(selectedThreadDetail);
+  const forkedFromThreadId = resolveMergeBackTargetThreadId(selectedThreadDetail);
+  const forkedFromThread = useThreadShell(
+    selectedThread === null || forkedFromThreadId === null
+      ? null
+      : scopeThreadRef(selectedThread.environmentId, forkedFromThreadId),
+  );
+  const mergeBackTargetThreadId =
+    forkedFromThreadId !== null && mergeBackAcceptedBy(forkedFromThread)
+      ? forkedFromThreadId
+      : null;
   const mergeBackRun =
     selectedThreadDetail === null ? null : resolveLatestMergeBackRun(selectedThreadDetail);
   const mergeBackBusyRef = useRef(false);

@@ -539,6 +539,38 @@ it("shows how long a running remote subagent has been running, as a local one do
   expect(row.element().textContent).toContain("12m");
 });
 
+it("offers no Merge back into a board task's thread, and keeps opening it", async () => {
+  setup();
+  const taskThread = {
+    ...(state.projection as { thread: Record<string, unknown> }).thread,
+    id: "source",
+    title: "Fix the sync",
+    lineage: {
+      parentThreadId: null,
+      relationshipToParent: null,
+      engineIntake: "board-task:work:t1",
+    },
+  };
+  state.relatedShells = [taskThread];
+  await using screen = await render(
+    <ThreadRelationshipsPanel
+      environmentId={environmentId}
+      threadId={threadId}
+      showLineage
+      showSideChats
+    />,
+    { router: "/environment/fork" },
+  );
+
+  const parent = screen.getByRole("button", { name: /^Fix the sync/ });
+  await expect.element(parent).toBeVisible();
+  await expect.element(screen.getByRole("button", { name: /^Merge back/ })).not.toBeInTheDocument();
+  await parent.click();
+  await vi.waitFor(() =>
+    expect(screen.router?.state.location.pathname).toBe("/environment/source"),
+  );
+});
+
 it("explains why Merge back is unavailable before the fork completes a run", async () => {
   setup();
   state.projection = { ...(state.projection as Record<string, unknown>), runs: [] };
