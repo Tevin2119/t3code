@@ -4,7 +4,14 @@ import { useRef, useState } from "react";
 import { minutesLeft, parseDeliveryEngineHealth } from "../../lib/deliveryEngineControl";
 import type { DeliveryCard } from "../../lib/delivery";
 import { boardLaneOf } from "../../lib/boardLanes";
-import { ACTION_LABEL, LANE_TITLE, moveIntent } from "../../lib/deliveryBoard";
+import {
+  ACTION_LABEL,
+  CLOSE_REASON_LIMIT,
+  closeKindOf,
+  isCloseReasonRefusal,
+  LANE_TITLE,
+  moveIntent,
+} from "../../lib/deliveryBoard";
 
 import {
   useBoardStore,
@@ -24,6 +31,7 @@ import {
 } from "../ui/dialog";
 import { Input } from "../ui/input";
 import { Textarea } from "../ui/textarea";
+import { toastManager } from "../ui/toast";
 import { reviewedAsPart, wholeName } from "./partOf.logic";
 
 const ACTION_HELP: Record<string, string> = {
@@ -75,7 +83,7 @@ export function actionHelp(action: string, card: Pick<DeliveryCard, "partOf"> | 
 
 type Target = Pick<
   DeliveryCard,
-  "id" | "title" | "number" | "run" | "partOf" | "parts" | "publication"
+  "id" | "title" | "number" | "run" | "partOf" | "parts" | "publication" | "state" | "flow"
 >;
 type Decision = {
   readonly card: Target;
@@ -109,6 +117,7 @@ export function useTaskActions(
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
   const [confirming, setConfirming] = useState<Confirming | null>(null);
+  const [closing, setClosing] = useState<Target | null>(null);
   const { onDone, onDiscarded } = options;
   // One request at a time. A second press while one is out is dropped, not queued: the state it
   // was pressed against may be gone by the time the first returns. A lost answer is not sent again.
@@ -117,7 +126,7 @@ export function useTaskActions(
   const sendDecision = async (path: string, body: Record<string, unknown>) => {
     if (inFlight.current) {
       setProblem("Another step is being sent. Wait for it, then try again.");
-      return { ok: false, status: null };
+      return { ok: false, status: null, why: null };
     }
     inFlight.current = true;
     setBusy(true);
@@ -130,9 +139,9 @@ export function useTaskActions(
     onDone();
     if (!result.ok) {
       setProblem(result.why);
-      return { ok: false, status: result.status };
+      return { ok: false, status: result.status, why: result.why };
     }
-    return { ok: true, status: null };
+    return { ok: true, status: null, why: null };
   };
 
   const send = async (path: string, body: Record<string, unknown>) =>
@@ -141,6 +150,23 @@ export function useTaskActions(
     const result = await sendDecision(path, body);
     if (!result.ok && result.status === 403 && !Object.hasOwn(body, "key")) setRequireKey(true);
     return result.ok;
+  };
+
+  const openClose = (card: Target) => {
+    setProblem(null);
+    setClosing(card);
+  };
+
+  const closeWithReason = async (card: Target, reason: string) => {
+    const result = await sendDecision(`/api/tasks/${card.id}/control`, {
+      action: "close",
+      reason,
+      by: person,
+    });
+    if (result.ok) return setClosing(null);
+    // The dialog stays open with the reason, so it can be changed and sent again.
+    setProblem(null);
+    toastManager.add({ type: "error", title: "The task was not closed", description: result.why });
   };
 
   const run = (card: Target, action: string) => {
@@ -157,8 +183,14 @@ export function useTaskActions(
       setDecision({ card, decision: action });
       return;
     }
-    if (action === "submit") void send(`/api/tasks/${card.id}/submit`, { by: person });
-    else if (action === "deliver" || action === "close") {
+    if (action === "close") {
+      // Work closed before it is done needs a reason, so it is asked for before anything is sent.
+      if (closeKindOf(card) === "unfinished") return openClose(card);
+      void sendDecision(`/api/tasks/${card.id}/control`, { action, by: person }).then((result) => {
+        if (result.why !== null && isCloseReasonRefusal(result.why)) openClose(card);
+      });
+    } else if (action === "submit") void send(`/api/tasks/${card.id}/submit`, { by: person });
+    else if (action === "deliver") {
       void send(`/api/tasks/${card.id}/control`, { action, by: person });
     } else if (action === "discard") {
       void send(`/api/tasks/${card.id}/discard`, {}).then((done) => done && onDiscarded?.(card.id));
@@ -186,6 +218,8 @@ export function useTaskActions(
     const intent = moveIntent(card, lane);
     if (intent.kind === "move") return void move(card, lane, before);
     if (intent.kind === "refused") return setProblem(intent.why);
+    // The reason dialog is itself the confirmation.
+    if (intent.action === "close" && closeKindOf(card) === "unfinished") return openClose(card);
     if (ASKED_FIRST.has(intent.action)) {
       setProblem(null);
       setConfirming({ card, action: intent.action, lane });
@@ -201,7 +235,14 @@ export function useTaskActions(
     run,
     move,
     moveTo,
-    dialog: confirming ? (
+    dialog: closing ? (
+      <CloseReasonDialog
+        card={closing}
+        busy={busy}
+        onCancel={() => setClosing(null)}
+        onClose={(reason) => void closeWithReason(closing, reason)}
+      />
+    ) : confirming ? (
       <Dialog open onOpenChange={(open) => !open && !busy && setConfirming(null)}>
         <DialogPopup className="max-w-md" data-delivery-move-confirm={confirming.action}>
           <DialogHeader>
@@ -280,6 +321,54 @@ export function useTaskActions(
       />
     ) : null,
   };
+}
+
+function CloseReasonDialog(props: {
+  readonly card: Target;
+  readonly busy: boolean;
+  readonly onCancel: () => void;
+  readonly onClose: (reason: string) => void;
+}) {
+  const [reason, setReason] = useState("");
+  const trimmed = reason.trim();
+  return (
+    <Dialog open onOpenChange={(open) => !open && !props.busy && props.onCancel()}>
+      <DialogPopup className="max-w-md" data-delivery-close-reason>
+        <DialogHeader>
+          <DialogTitle>
+            Close without it being done: #{props.card.number} {props.card.title}
+          </DialogTitle>
+        </DialogHeader>
+        <DialogPanel>
+          <div className="flex flex-col gap-6 text-sm">
+            <p className="text-muted-foreground">
+              Nothing more is done for it. What was said and found is kept, along with its branch.
+              Say why it is closed; the reason is kept with the task.
+            </p>
+            <Textarea
+              aria-label="Why it is closed"
+              placeholder="Why it is closed"
+              maxLength={CLOSE_REASON_LIMIT}
+              value={reason}
+              onChange={(event) => setReason(event.target.value)}
+            />
+          </div>
+        </DialogPanel>
+        <DialogFooter>
+          <Button variant="outline" disabled={props.busy} onClick={props.onCancel}>
+            Keep it open
+          </Button>
+          <Button
+            variant="destructive"
+            disabled={props.busy || !trimmed}
+            onClick={() => props.onClose(trimmed)}
+          >
+            Close task
+          </Button>
+        </DialogFooter>
+      </DialogPopup>
+    </Dialog>
+  );
 }
 
 function DecisionDialog(props: {

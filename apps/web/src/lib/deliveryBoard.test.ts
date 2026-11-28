@@ -3,6 +3,8 @@ import { describe, expect, it } from "vite-plus/test";
 import { parseCard } from "./delivery";
 import type { BoardFilters } from "./deliveryBoard";
 import {
+  closeKindOf,
+  isCloseReasonRefusal,
   sectionOf,
   isConversationRef,
   taskFromConversation,
@@ -719,5 +721,28 @@ describe("boardAttentionCount", () => {
         ]),
       ),
     ).toBe(3);
+  });
+});
+
+describe("closeKindOf", () => {
+  it.each([
+    [{ state: "planned", flow: "plan" }, "done"],
+    [{ state: "reviewed", flow: "review" }, "done"],
+    [{ state: "chat", flow: "chat" }, "done"],
+    [{ state: "reviewed", flow: "non-code" }, "unfinished"],
+    [{ state: "doing", flow: "standard" }, "unfinished"],
+    [{ state: "triage", flow: "standard" }, "unfinished"],
+    [{ state: "", flow: "standard" }, null],
+  ] as const)("%j closes as %s", (card, kind) => {
+    expect(closeKindOf(card)).toBe(kind);
+  });
+
+  it("recognises the engine's refusal of a close without a reason", () => {
+    expect(
+      isCloseReasonRefusal(
+        "a close needs a reason: say why the task is closed without being done.",
+      ),
+    ).toBe(true);
+    expect(isCloseReasonRefusal("this task cannot be closed now")).toBe(false);
   });
 });

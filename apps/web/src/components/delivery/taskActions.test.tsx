@@ -210,3 +210,27 @@ it.each([{}, openWindow])("polls faster only with an open sign-off dialog: %j", 
   await act(() => renderer.root.findByType("dialog").props.onOpenChange(false));
   expect(mock.read.mock.lastCall?.[2]?.pollMs).toBeUndefined();
 });
+
+it("closes a plan, review or chat as done without asking for a reason", async () => {
+  await act(() => {
+    renderer = create(<Probe />);
+  });
+  await act(async () => actions.run({ ...target, state: "planned", flow: "plan" }, "close"));
+  expect(mock.action).toHaveBeenCalledWith("/api/tasks/task-1/control", {
+    action: "close",
+    by: "Sam",
+  });
+  expect(renderer.root.findAllByType("textarea")).toHaveLength(0);
+});
+it("asks for the reason once the engine refuses a close without one", async () => {
+  mock.action.mockResolvedValueOnce({
+    ok: false,
+    status: 400,
+    why: "a close needs a reason: say why the task is closed without being done.",
+  });
+  await act(() => {
+    renderer = create(<Probe />);
+  });
+  await act(async () => actions.run({ ...target, state: "", flow: "standard" }, "close"));
+  expect(renderer.root.findAllByType("textarea")).toHaveLength(1);
+});

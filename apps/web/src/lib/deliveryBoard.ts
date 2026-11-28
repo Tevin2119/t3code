@@ -786,3 +786,23 @@ export function boardMoveIntent(
   }));
   return tries.find((attempt) => attempt.intent.kind !== "refused") ?? tries[0]!;
 }
+
+/** The longest close reason the engine keeps; it cuts what is longer. */
+export const CLOSE_REASON_LIMIT = 500;
+
+/**
+ * How Close ends a task, mirroring the engine's `closeOf`: a plan, a review or a chat ends as done
+ * and takes no reason; submitted work closed before it is done needs one. Null when the card does
+ * not say, so the reason is asked for only once the engine refuses without one.
+ */
+export function closeKindOf(
+  card: Pick<DeliveryCard, "state" | "flow">,
+): "done" | "unfinished" | null {
+  if (!card.state) return null;
+  if (card.flow === "non-code" && card.state === "reviewed") return "unfinished";
+  if (["planned", "reviewed", "chat"].includes(card.state)) return "done";
+  return "unfinished";
+}
+
+/** The engine's refusal of a close sent without a reason. */
+export const isCloseReasonRefusal = (why: string) => /a close needs a reason/i.test(why);
