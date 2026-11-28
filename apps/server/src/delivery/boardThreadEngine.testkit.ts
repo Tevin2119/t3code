@@ -724,6 +724,13 @@ export function scratchEngine(
         ? ingest(keyed[1]!, body)
         : settle(keyed[1]!, Number(keyed[3]), keyed[4]!, body);
     }
+    // A person's keyed decision, as a client relays it through `act` (an approval dialog).
+    const decision = /^\/api\/tasks\/([\w-]+)\/approve$/.exec(pathname);
+    if (decision && method === "POST") {
+      if (body.key !== key)
+        return refused(403, "the approval key is wrong or missing", { code: "refused" });
+      return { status: 200, body: { task: decision[1], approved: true } };
+    }
     const steerRoute = /^\/api\/tasks\/([\w-]+)\/steer$/.exec(pathname);
     if (steerRoute && method === "POST") {
       const task = tasks.get(steerRoute[1]!);

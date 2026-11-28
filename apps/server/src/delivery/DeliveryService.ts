@@ -395,6 +395,9 @@ const make = Effect.fn("DeliveryService.make")(function* (
   // The engine checks at most two approval keys at once and refuses a third with 403, so every
   // keyed board write of this server (heartbeats, links, seats, filings) shares two slots.
   const boardKeyChecks = yield* Semaphore.make(2);
+  const hasKey = (body: unknown) => typeof body === "object" && body !== null && "key" in body;
+  const keyChecked = <A, E, R>(body: unknown, effect: Effect.Effect<A, E, R>) =>
+    hasKey(body) ? boardKeyChecks.withPermit(effect) : effect;
 
   // Only a file that is not there means that no thread is bound. A file that
   // is there and cannot be read or understood holds bindings this service
@@ -1794,21 +1797,26 @@ const make = Effect.fn("DeliveryService.make")(function* (
                   "Board filings, conversation and seat records can only be written by the server.",
               }),
             )
-          : new URL(input.path, "http://delivery.invalid").pathname === "/api/delivery/requests"
-            ? preflightDeliveryRequest(input.body).pipe(
-                Effect.flatMap(({ configuration, observedHealth, dispatchDeadline }) =>
-                  request(
-                    "POST",
-                    input.path,
-                    input.body,
-                    false,
-                    observedHealth,
-                    configuration,
-                    dispatchDeadline,
-                  ),
-                ),
-              )
-            : request("POST", input.path, input.body),
+          : // A relayed keyed write shares the server's key checks. A launch takes its slot before
+            // its dispatch deadline starts, so waiting for one never spends that deadline.
+            keyChecked(
+              input.body,
+              new URL(input.path, "http://delivery.invalid").pathname === "/api/delivery/requests"
+                ? preflightDeliveryRequest(input.body).pipe(
+                    Effect.flatMap(({ configuration, observedHealth, dispatchDeadline }) =>
+                      request(
+                        "POST",
+                        input.path,
+                        input.body,
+                        false,
+                        observedHealth,
+                        configuration,
+                        dispatchDeadline,
+                      ),
+                    ),
+                  )
+                : request("POST", input.path, input.body),
+            ),
     ),
     nativeBuildAct: Effect.fn("DeliveryService.nativeBuildAct")((input) =>
       /^\/api\/native-builds\/att-[A-Za-z0-9-]+\/(claim|attach|complete)$/.test(input.path)
@@ -1866,8 +1874,7 @@ const make = Effect.fn("DeliveryService.make")(function* (
         undefined,
         input.configuration,
       );
-      const keyed = typeof input.body === "object" && input.body !== null && "key" in input.body;
-      const write = keyed ? boardKeyChecks.withPermit(sent) : sent;
+      const write = keyChecked(input.body, sent);
       if (input.method !== "POST") return yield* boardLinkWrites.withPermit(write);
       // Serialize keyed seat writes and filings so they share the engine’s approval throttle.
       return yield* BOARD_SEAT_POST.test(input.path) || BOARD_TASK_POST.test(input.path)

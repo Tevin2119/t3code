@@ -671,6 +671,35 @@ it.effect("shares the engine's two key checks: a link write waits behind two hea
   }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-key-checks-")));
 });
 
+it.effect("makes a person's relayed keyed write wait behind two heartbeats, never refused", () => {
+  const engine = board();
+  for (const id of ["task-7", "task-8"]) {
+    engine.addTask({ id });
+    engine.writeLink(id, { environmentId: ENVIRONMENT, threadId: `t-${id}`, setBy: ENVIRONMENT });
+  }
+  const key = engine.key;
+  return Effect.gen(function* () {
+    const delivery = yield* DeliveryService.DeliveryService;
+    const ack = (id: string) =>
+      delivery.boardThreadAct({
+        method: "POST",
+        path: `/api/tasks/${id}/board-thread/ack`,
+        body: { environmentId: ENVIRONMENT, threadId: `t-${id}`, setBy: ENVIRONMENT, key },
+      });
+    const approved = yield* Effect.all(
+      [
+        ack("task-7"),
+        ack("task-8"),
+        delivery.act({ path: "/api/tasks/task-7/approve", body: { by: "Tevin", key } }),
+      ],
+      { concurrency: "unbounded" },
+    );
+    assert.deepEqual(approved[2].body, { task: "task-7", approved: true });
+    assert.equal(engine.keyChecks.most, 2);
+    assert.equal(engine.keyChecks.refused, 0);
+  }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-relayed-key-")));
+});
+
 it.effect.each([
   [409, "conflict"],
   [409, "moved"],
