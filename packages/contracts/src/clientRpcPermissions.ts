@@ -22,6 +22,7 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   [WS_METHODS.deliveryAct]: AuthOrchestrationOperateScope,
   // Files a board draft with the server's own approval key, as an answered thread filing does.
   [WS_METHODS.deliveryFilePort]: AuthOrchestrationOperateScope,
+  [WS_METHODS.deliveryFileThreadTask]: AuthOrchestrationOperateScope,
   // The board approval key lets this server write to the board for everyone who uses it.
   [WS_METHODS.deliverySetBoardApprovalKey]: AuthEnvironmentMaintainScope,
   [WS_METHODS.providerAuthRemoveMethod]: AuthProvidersManageScope,

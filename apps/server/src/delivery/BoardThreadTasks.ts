@@ -11,6 +11,7 @@ import {
   type BoardTaskDraft,
   type BoardTaskOutcome,
   type BoardTaskResolution,
+  type BoardThreadFilingInput,
   type DeliveryError,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
@@ -29,10 +30,26 @@ import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as Threads from "../orchestration-v2/ThreadManagementService.ts";
 import * as Delivery from "./DeliveryService.ts";
 import { threadOrigin } from "./deliveryDiscovery.ts";
+import { isBoardTaskThreadId } from "./boardThreadMarker.ts";
 import { portDraft, portRequestKey } from "./deploymentPort.ts";
 
 const decodeFiling = Schema.decodeUnknownEffect(BoardTaskFiling);
 const decodeCompare = Schema.decodeUnknownEffect(DeploymentCompare);
+// How many discarded drafts of one thread on one board a new filing walks past, at most.
+const FILING_GENERATIONS = 20;
+const decodeTaskFields = Schema.decodeUnknownOption(
+  Schema.Struct({ title: Schema.String, body: Schema.String }),
+);
+// The card fields that name a task filed from an origin, from `/api/tasks?origin=`.
+const decodeOriginCards = Schema.decodeUnknownOption(
+  Schema.Array(
+    Schema.Struct({
+      id: Schema.String,
+      set: Schema.NullOr(Schema.String),
+      origin: Schema.String,
+    }),
+  ),
+);
 const decodeRefusal = Schema.decodeUnknownOption(
   Schema.Struct({ code: Schema.optional(Schema.String) }),
 );
@@ -88,6 +105,11 @@ export class BoardThreadTasks extends Context.Service<
     readonly filePort: (
       environmentId: EnvironmentId,
       input: DeploymentPortInput,
+    ) => Effect.Effect<typeof BoardTaskFiling.Type, OrchestratorMcpFailure>;
+    /** A person files a draft from a thread: the same intake as `request`, with no confirmation turn. */
+    readonly fileThread: (
+      environmentId: EnvironmentId,
+      input: BoardThreadFilingInput,
     ) => Effect.Effect<typeof BoardTaskFiling.Type, OrchestratorMcpFailure>;
   }
 >()("t3/delivery/BoardThreadTasks") {}
@@ -187,6 +209,75 @@ const make = Effect.gen(function* () {
       ),
     );
     return yield* decodeFiling(response.body).pipe(Effect.mapError(noReceipt));
+  });
+
+  /** The live task a thread already filed on this board, if the engine lists one. */
+  /** The board's tasks filed from this origin, as candidates for one receipt. */
+  const filedFrom = (board: string, origin: string) =>
+    delivery
+      .read({ path: `/api/tasks?origin=${encodeURIComponent(origin)}&set=all&limit=500` })
+      .pipe(
+        Effect.mapError(engineFailure),
+        Effect.map((reading) =>
+          Option.getOrElse(decodeOriginCards(reading.body), () => []).filter(
+            (card) => card.origin === origin && card.set === board,
+          ),
+        ),
+      );
+  const fieldsOf = (task: string) =>
+    delivery.read({ path: `/api/tasks/${encodeURIComponent(task)}` }).pipe(
+      Effect.mapError(engineFailure),
+      Effect.map((reading) => Option.getOrUndefined(decodeTaskFields(reading.body))),
+    );
+
+  const fileThread = Effect.fn("BoardThreadTasks.fileThread")(function* (
+    environmentId: EnvironmentId,
+    input: BoardThreadFilingInput,
+  ) {
+    const { threadId, board } = input;
+    // Sent as the engine keeps them, so a replay of a kept draft's own fields matches its receipt.
+    const title = input.title.trim();
+    const body = input.body.trim();
+    if (isReservedBoardTaskBoard(board))
+      return yield* invalidRequest("Choose a custom board to file on.");
+    if (isBoardTaskThreadId(threadId))
+      return yield* invalidRequest("This thread is already a board task's own thread.");
+    const records = yield* threads.getThreadRecords(threadId, []).pipe(Effect.option);
+    if (Option.isNone(records) || records.value.thread.deletedAt !== null)
+      return yield* invalidRequest("No such thread in this environment.");
+    const key = yield* delivery.boardApprovalKey;
+    if (!key) return yield* invalidRequest(Delivery.NO_BOARD_APPROVAL_KEY);
+    const configuration = yield* delivery.boardThreadConfiguration;
+    const origin = threadOrigin(environmentId, threadId);
+    const send = (requestId: string, fields: { readonly title: string; readonly body: string }) =>
+      post(board, { requestId, ...fields, origin, key }, configuration);
+    const receiptOf = (response: { readonly body: unknown }) =>
+      decodeFiling(response.body).pipe(Effect.mapError(noReceipt));
+    // One request per thread and board, and a numbered one after each discard: filing the thread
+    // there again replays its live task's receipt, and a discarded draft files anew.
+    const base = `thread-${yield* sha256(`${board}\n${origin}`)}`;
+    for (let generation = 0; generation < FILING_GENERATIONS; generation++) {
+      const requestId = generation === 0 ? base : `${base.slice(0, 60)}-${generation}`;
+      const sent = yield* send(requestId, { title, body }).pipe(Effect.result);
+      if (sent._tag === "Success") return yield* receiptOf(sent.success);
+      const code = refusalOf(sent.failure)?.code;
+      if (code === "gone") continue;
+      if (code !== "conflict") return yield* engineFailure(sent.failure);
+      // The receipt's task is live with other text. Only that receipt replays its own fields, so
+      // each task filed from here is asked under this request ID with what it says.
+      for (const card of yield* filedFrom(board, origin)) {
+        const fields = yield* fieldsOf(card.id);
+        if (fields === undefined) continue;
+        const replay = yield* send(requestId, fields).pipe(Effect.result);
+        if (replay._tag === "Success") return yield* receiptOf(replay.success);
+        if (refusalOf(replay.failure)?.code !== "conflict")
+          return yield* engineFailure(replay.failure);
+      }
+      return yield* invalidRequest(
+        "This thread already filed a task on this board, edited since. Open it from the thread.",
+      );
+    }
+    return yield* invalidRequest("This thread's drafts on this board were discarded too often.");
   });
 
   const request = Effect.fn("BoardThreadTasks.request")(function* (
@@ -341,6 +432,7 @@ const make = Effect.gen(function* () {
   return BoardThreadTasks.of({
     request,
     filePort,
+    fileThread,
     answer: Effect.fn("BoardThreadTasks.answer")(function* (input) {
       const respond = pending.get(input.turnItemId);
       if (respond === undefined)
@@ -357,5 +449,10 @@ const turnedOff = () => Effect.fail(invalidRequest("Delivery is turned off."));
 /** Inert service, for suites that only need the tool surface to resolve. */
 export const layerTest = Layer.succeed(
   BoardThreadTasks,
-  BoardThreadTasks.of({ request: turnedOff, answer: turnedOff, filePort: turnedOff }),
+  BoardThreadTasks.of({
+    request: turnedOff,
+    answer: turnedOff,
+    filePort: turnedOff,
+    fileThread: turnedOff,
+  }),
 );

@@ -15,6 +15,7 @@ import {
   PinIcon,
   PinOffIcon,
   RefreshCwIcon,
+  SquareKanbanIcon,
   TimerIcon,
   Trash2Icon,
 } from "lucide-react";
@@ -43,6 +44,7 @@ const ICONS: Record<string, LucideIcon> = {
   pin: PinIcon,
   "pin-off": PinOffIcon,
   "refresh-cw": RefreshCwIcon,
+  "square-kanban": SquareKanbanIcon,
   timer: TimerIcon,
   trash: Trash2Icon,
 };
