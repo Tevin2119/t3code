@@ -126,7 +126,7 @@ export const DeliveryEngineVersions = Schema.Struct({
       commit: Schema.NullOr(DeliveryCommit),
       at: Schema.String,
       snapshot: Schema.optional(Schema.NullOr(Schema.String)),
-      problem: Schema.optional(Schema.String),
+      problem: Schema.optional(Schema.NullOr(Schema.String)),
     }),
   ),
 });

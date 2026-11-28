@@ -246,3 +246,27 @@ it("starts another task with no refusal, open decision or late answer from the o
   await act(() => renderer.update(<ScopedProbe scope="task-3" />));
   expect(renderer.toJSON()).toBeNull();
 });
+
+it("closes a plan, review or chat as done without asking for a reason", async () => {
+  await act(() => {
+    renderer = create(<Probe />);
+  });
+  await act(async () => actions.run({ ...target, state: "planned", flow: "plan" }, "close"));
+  expect(mock.action).toHaveBeenCalledWith("/api/tasks/task-1/control", {
+    action: "close",
+    by: "Sam",
+  });
+  expect(renderer.root.findAllByType("textarea")).toHaveLength(0);
+});
+it("asks for the reason once the engine refuses a close without one", async () => {
+  mock.action.mockResolvedValueOnce({
+    ok: false,
+    status: 400,
+    why: "a close needs a reason: say why the task is closed without being done.",
+  });
+  await act(() => {
+    renderer = create(<Probe />);
+  });
+  await act(async () => actions.run({ ...target, state: "", flow: "standard" }, "close"));
+  expect(renderer.root.findAllByType("textarea")).toHaveLength(1);
+});
