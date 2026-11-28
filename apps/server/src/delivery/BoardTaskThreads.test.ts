@@ -463,7 +463,6 @@ it.effect.each(["picked", "legacy"] as const)(
         : {}),
     });
     engine.addTask({ id: "draft-1", lane: "draft", state: "draft", submitted: false });
-    engine.addTask({ id: "queued-1", lane: "queue", state: "ready" });
     engine.addTask({ id: "done-1", lane: "completed", state: "completed" });
     // A split parent stands where its parts stand, and its parts are the work.
     engine.addTask({ id: "whole-1", lane: "child-work", state: "split" });
@@ -509,6 +508,93 @@ it.effect.each(["picked", "legacy"] as const)(
     }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-create-")));
   },
 );
+
+const QUEUED = boardTaskOf("work", "queued-1")!;
+const QUEUED_THREAD = boardTaskThreadId(QUEUED);
+const claims = (engine: ScratchEngine, id: string) =>
+  engine.requests.filter((request) => request.path === `/api/orchestration/tasks/${id}/claim`);
+
+const sends = (store: ThreadStore, threadId: string) =>
+  store.commands.filter(
+    (command) => command.type === "message.dispatch" && command.threadId === threadId,
+  );
+
+it.effect("gives a submitted task an idle thread, and claims it only in work", () => {
+  const engine = board();
+  const queued = engine.addTask({ id: "queued-1", lane: "queue", state: "ready" });
+  const store = threadStore();
+  return Effect.gen(function* () {
+    const threads = yield* service(store);
+    assert.deepEqual([...(yield* threads.reconcile())], []);
+    yield* threads.reconcile();
+    assert.deepEqual([...store.threads.keys()], [QUEUED_THREAD]);
+    assert.equal(engine.linkOf("queued-1")?.threadId, QUEUED_THREAD);
+    // Waiting for a slot takes no lease, so it never counts toward the board's task cap.
+    assert.isNull(engine.leaseOf("queued-1"));
+    assert.lengthOf(claims(engine, "queued-1"), 0);
+    // Every message starts a lead turn, so a waiting thread is sent none and runs nothing.
+    assert.lengthOf(sends(store, QUEUED_THREAD), 0);
+    assert.isFalse(store.active.has(QUEUED_THREAD));
+    assert.isFalse(store.events.some(({ event }) => event.threadId === QUEUED_THREAD));
+    queued.lane = "in-work";
+    queued.state = "triage";
+    yield* threads.reconcile();
+    yield* threads.reconcile();
+    // Admitted, the same thread claims it. The pass still sends nothing: the engine's brief, sent
+    // in the task's worktree (BoardTaskExecution), is the first message that starts a turn.
+    assert.equal(engine.leaseOf("queued-1")?.origin, `thread:${ENVIRONMENT}/${QUEUED_THREAD}`);
+    assert.lengthOf(creates(store), 1);
+    assert.lengthOf(linkWrites(engine), 1);
+    assert.lengthOf(sends(store, QUEUED_THREAD), 0);
+    assert.isFalse(store.active.has(QUEUED_THREAD));
+  }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-submit-")));
+});
+
+it.effect("gives no thread at submit to a draft, a finished task, or one submitted earlier", () => {
+  const engine = board();
+  engine.addTask({ id: "draft-1", lane: "draft", state: "draft", submitted: false });
+  const old = engine.addTask({ id: "queued-1", lane: "queue", state: "ready" });
+  engine.addTask({
+    id: "queued-2",
+    lane: "queue",
+    state: "intake",
+    served: { submitted: "2026-11-22T09:45:00.000Z" },
+  });
+  engine.addTask({
+    id: "closed-1",
+    lane: "queue",
+    state: "closed",
+    served: { submitted: "2026-11-22T09:45:00.000Z" },
+  });
+  const threadOf = (id: string) => boardTaskThreadId(boardTaskOf("work", id)!);
+  const store = threadStore();
+  return Effect.gen(function* () {
+    // This build first runs after queued-1 was submitted (09:00) and before queued-2 was.
+    yield* TestClock.setTime(Date.parse("2026-11-22T09:30:00.000Z"));
+    yield* (yield* service(store)).reconcile();
+    assert.deepEqual([...store.threads.keys()], [threadOf("queued-2")]);
+    // A restart keeps the line where this build first ran.
+    yield* TestClock.setTime(Date.parse("2026-11-22T10:30:00.000Z"));
+    engine.addTask({
+      id: "queued-3",
+      lane: "queue",
+      state: "ready",
+      served: { submitted: "2026-11-22T09:50:00.000Z" },
+    });
+    const restarted = yield* service(store);
+    yield* restarted.reconcile();
+    assert.isTrue(store.threads.has(threadOf("queued-3")));
+    // An open task submitted earlier is not backfilled: its thread comes once it is in work.
+    old.lane = "in-work";
+    old.state = "triage";
+    yield* restarted.reconcile();
+    yield* restarted.reconcile();
+    assert.isTrue(store.threads.has(QUEUED_THREAD));
+    assert.isNotNull(engine.leaseOf("queued-1"));
+    assert.isFalse(store.threads.has(threadOf("draft-1")));
+    assert.isFalse(store.threads.has(threadOf("closed-1")));
+  }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-no-backfill-")));
+});
 
 it.effect("links every task when a seat has no model yet or one card cannot be read", () => {
   const engine = board();
