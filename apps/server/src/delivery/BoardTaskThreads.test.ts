@@ -463,7 +463,6 @@ it.effect.each(["picked", "legacy"] as const)(
         : {}),
     });
     engine.addTask({ id: "draft-1", lane: "draft", state: "draft", submitted: false });
-    engine.addTask({ id: "queued-1", lane: "queue", state: "ready" });
     engine.addTask({ id: "done-1", lane: "completed", state: "completed" });
     // A split parent stands where its parts stand, and its parts are the work.
     engine.addTask({ id: "whole-1", lane: "child-work", state: "split" });
@@ -509,6 +508,95 @@ it.effect.each(["picked", "legacy"] as const)(
     }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-create-")));
   },
 );
+
+const QUEUED = boardTaskOf("work", "queued-1")!;
+const QUEUED_THREAD = boardTaskThreadId(QUEUED);
+const claims = (engine: ScratchEngine, id: string) =>
+  engine.requests.filter((request) => request.path === `/api/orchestration/tasks/${id}/claim`);
+
+it.effect("gives a submitted task its thread and first message, and claims it only in work", () => {
+  const engine = board();
+  const queued = engine.addTask({
+    id: "queued-1",
+    title: "Ship it",
+    lane: "queue",
+    state: "ready",
+  });
+  const store = threadStore();
+  return Effect.gen(function* () {
+    const threads = yield* service(store);
+    assert.deepEqual([...(yield* threads.reconcile())], []);
+    assert.deepEqual([...store.threads.keys()], [QUEUED_THREAD]);
+    assert.equal(engine.linkOf("queued-1")?.threadId, QUEUED_THREAD);
+    // Waiting for a slot takes no lease, so it never counts toward the board's task cap.
+    assert.isNull(engine.leaseOf("queued-1"));
+    assert.lengthOf(claims(engine, "queued-1"), 0);
+    const [first, ...rest] = store.commands.filter(
+      (command) => command.type === "message.dispatch" && command.threadId === QUEUED_THREAD,
+    );
+    assert.lengthOf(rest, 0);
+    if (first?.type !== "message.dispatch") throw new Error("Expected the task as filed");
+    assert.equal(first.text, "# Ship it\n\nComplete the task.");
+    // A system notice from the server, said by no person: `NativeTeamChat.prepareTurn` starts no
+    // team round for it.
+    assert.deepInclude(first, {
+      createdBy: "agent",
+      creationSource: "server",
+      dispatchMode: { type: "queue_after_active" },
+    });
+    assert.deepEqual(first.notification, {
+      source: { kind: "system" },
+      outcome: "updated",
+      summary: "The task as filed",
+      detail: first.text,
+    });
+    yield* threads.reconcile();
+    assert.isNull(engine.leaseOf("queued-1"));
+    queued.lane = "in-work";
+    queued.state = "triage";
+    yield* threads.reconcile();
+    // In work, the same thread claims it, and nothing new is made or said.
+    assert.equal(engine.leaseOf("queued-1")?.origin, `thread:${ENVIRONMENT}/${QUEUED_THREAD}`);
+    assert.lengthOf(creates(store), 1);
+    assert.lengthOf(linkWrites(engine), 1);
+    assert.lengthOf(
+      store.commands.filter(
+        (command) => command.type === "message.dispatch" && command.threadId === QUEUED_THREAD,
+      ),
+      1,
+    );
+  }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-submit-")));
+});
+
+it.effect("gives no thread at submit to a draft or a task submitted before the server", () => {
+  const engine = board();
+  engine.addTask({ id: "draft-1", lane: "draft", state: "draft", submitted: false });
+  const old = engine.addTask({ id: "queued-1", lane: "queue", state: "ready" });
+  engine.addTask({
+    id: "queued-2",
+    lane: "queue",
+    state: "intake",
+    served: { submitted: "2026-11-22T09:45:00.000Z" },
+  });
+  const store = threadStore();
+  return Effect.gen(function* () {
+    // The server starts after queued-1 was submitted (09:00) and before queued-2 was.
+    yield* TestClock.setTime(Date.parse("2026-11-22T09:30:00.000Z"));
+    const threads = yield* service(store);
+    yield* threads.reconcile();
+    assert.deepEqual(
+      [...store.threads.keys()],
+      [boardTaskThreadId(boardTaskOf("work", "queued-2")!)],
+    );
+    // An open task submitted earlier is not backfilled: its thread comes once it is in work.
+    old.lane = "in-work";
+    old.state = "triage";
+    yield* threads.reconcile();
+    assert.isTrue(store.threads.has(QUEUED_THREAD));
+    assert.isNotNull(engine.leaseOf("queued-1"));
+    assert.isFalse(store.threads.has(boardTaskThreadId(boardTaskOf("work", "draft-1")!)));
+  }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-no-backfill-")));
+});
 
 it.effect("links every task when a seat has no model yet or one card cannot be read", () => {
   const engine = board();
