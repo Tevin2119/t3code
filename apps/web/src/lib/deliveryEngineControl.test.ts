@@ -113,6 +113,23 @@ describe("release facts and update receipts", () => {
     expect(parsed.commit).toBe(versions.installed.commit);
     expect(parsed.versions?.running?.commit).not.toBe(parsed.commit);
   });
+  it("still offers the next update after a completed one recorded no problem", () => {
+    const completed = {
+      version: 1,
+      id: "request",
+      phase: "complete" as const,
+      channel: "qa" as const,
+      commit: "a".repeat(40),
+      at: "2026-11-26T23:51:41.797Z",
+      snapshot: "C:\\engine\\snapshots\\request",
+      problem: null,
+      pid: 15540,
+      recovered: true,
+    };
+    const parsed = parseDeliveryEngineHealth({ versions: { ...versions, update: completed } });
+    expect(parsed.versions?.update?.phase).toBe("complete");
+    expect(deliveryEngineUpdateStatus(parsed.versions, null).kind).toBe("available");
+  });
   it.each([
     { ...versions, channel: "personal" },
     { ...versions, updateAvailable: "true" },
