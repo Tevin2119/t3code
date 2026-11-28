@@ -5,6 +5,7 @@ import {
   DELIVERY_DEFAULT_TEAM,
   type BoardTaskFiling,
   type BoardThreadFilingInput,
+  type DeliveryEngineControlInput,
   type DeploymentPortInput,
   type EnvironmentId,
 } from "@t3tools/contracts";
@@ -165,25 +166,31 @@ export function useDeliveryAct(environmentId: EnvironmentId | null, label: strin
 }
 
 /**
- * Stop and restart with the approval key saved on the server, when one is saved and this
- * connection may use it. Otherwise `usable` is false and the panel asks for the passphrase.
+ * Keyed engine controls (stop, restart, update, defer, channel) with the approval key saved on
+ * the server, when one is saved and this connection may use it. Otherwise `usable` is false and
+ * the panel asks for the passphrase.
  */
-export function useSavedKeyEngineLifecycle(environmentId: EnvironmentId) {
-  const allowed = useAtomValue(deliveryEnvironment.engineLifecycle.permissionAtom(environmentId));
+export function useSavedKeyEngineControl(environmentId: EnvironmentId) {
+  const allowed = useAtomValue(deliveryEnvironment.engineControl.permissionAtom(environmentId));
   const status = useEnvironmentQuery(
     deliveryEnvironment.boardApprovalKey({ environmentId, input: {} }),
   );
-  const run = useAtomCommand(deliveryEnvironment.engineLifecycle, {
+  const run = useAtomCommand(deliveryEnvironment.engineControl, {
     label: "engine control",
     reportFailure: false,
   });
   return {
     usable: allowed && status.data != null && status.data.source !== "none",
-    run: async (action: "stop" | "restart") => {
-      const result = await run({ environmentId, input: { action } });
-      if (result._tag === "Failure")
-        throw new Error(deliveryFailureText(squashAtomCommandFailure(result)));
-      return result.value;
+    run: async (input: DeliveryEngineControlInput): Promise<DeliveryActResult> => {
+      const result = await run({ environmentId, input });
+      return result._tag === "Failure"
+        ? {
+            ok: false,
+            status: null,
+            why: deliveryFailureText(squashAtomCommandFailure(result)),
+            problems: [],
+          }
+        : { ok: true, body: result.value.body };
     },
   };
 }

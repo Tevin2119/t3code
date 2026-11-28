@@ -152,10 +152,10 @@ export function createDeliveryEnvironmentAtoms<R, E>(
       tag: WS_METHODS.deliverySetBoardApprovalKey,
       concurrency: { mode: "serial", key: ({ environmentId }) => environmentId },
     }),
-    /** Stops or restarts the engine with the saved approval key, which the client never sees. */
-    engineLifecycle: createEnvironmentRpcCommand(runtime, {
-      label: "environment-data:delivery:engine-lifecycle",
-      tag: WS_METHODS.deliveryEngineLifecycle,
+    /** A keyed engine control with the saved approval key, which the client never sees. */
+    engineControl: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:delivery:engine-control",
+      tag: WS_METHODS.deliveryEngineControl,
       concurrency: { mode: "serial", key: ({ environmentId }) => environmentId },
     }),
     /** A thread's team, or the team choice that is still held. Cheap, and read often. */

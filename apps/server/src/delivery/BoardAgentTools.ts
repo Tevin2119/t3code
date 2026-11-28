@@ -5,34 +5,23 @@ import {
   OrchestratorMcpFailure,
   isReservedBoardTaskBoard,
   type BoardAgentBoard,
-  type BoardAgentBoardCreateInput,
-  type BoardAgentBoardEditInput,
-  type BoardAgentBoardRemoveInput,
-  type BoardAgentBoardsResult,
-  type BoardAgentBulkCloseInput,
-  type BoardAgentBulkMoveInput,
-  type BoardAgentBulkResult,
-  type BoardAgentTask,
-  type BoardAgentTaskCloseInput,
-  type BoardAgentTaskDiscardInput,
-  type BoardAgentTaskEditInput,
-  type BoardAgentTaskFilter,
-  type BoardAgentTaskMoveInput,
-  type BoardAgentTaskRef,
-  type BoardAgentTaskSummary,
-  type BoardAgentTasksListInput,
-  type BoardAgentTasksListResult,
   type BoardAgentBoardToolInput,
   type BoardAgentBoardToolResult,
+  type BoardAgentTask,
+  type BoardAgentTaskFilter,
+  type BoardAgentTaskSummary,
   type BoardAgentTaskToolInput,
+  type BoardAgentTaskToolResult,
   type BoardAgentTasksToolInput,
   type BoardAgentTasksToolResult,
+  type DeliveryEngineControlInput,
   type DeliveryEngineLifecycleInput,
+  type DeliveryResponse,
 } from "@t3tools/contracts";
+import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
-import * as Hex from "effect/encoding/Hex";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 
@@ -86,15 +75,19 @@ const decodeRepositories = Schema.decodeUnknownEffect(
     }),
   ),
 );
-const decodeRemoved = Schema.decodeUnknownEffect(Schema.Struct({ removed: Schema.String }));
-const decodeDiscarded = Schema.decodeUnknownEffect(Schema.Struct({ discarded: Schema.String }));
+const decodeCreated = Schema.decodeUnknownEffect(Schema.Struct({ id: Schema.String }));
 const decodeLifecycle = Schema.decodeUnknownEffect(DeliveryEngineLifecycleReceipt);
 
-/** The engine's own cap on one task search. */
+/** The engine's own cap on one task search. It has no cursor. */
 const SEARCH_MAX = 500;
 /** States in which a close has nothing left to end. */
 const ENDED = ["closed", "rejected", "merged", "moved", "moving"];
 const LIVE_RUN = ["admitted", "running"];
+/** Repositories whose boards and tasks need `force`, deployment project or not (illusivetrading). */
+const PROTECTED_REPOSITORY = /illusivetrading/i;
+/** How long a dry run's token stands, and how many stand at once. */
+const PREVIEW_MS = 15 * 60 * 1_000;
+const PREVIEWS_MAX = 100;
 
 const invalid = (message: string) =>
   new OrchestratorMcpFailure({ code: "invalid_request", message });
@@ -103,6 +96,7 @@ const incompatible = () =>
     code: "orchestration_error",
     message: "The delivery engine answered in a shape this T3 does not read. Update the engine.",
   });
+const notFound = (error: DeliveryError) => error.reason === "refused" && error.status === 404;
 
 function engineFailure(error: DeliveryError): OrchestratorMcpFailure {
   switch (error.reason) {
@@ -131,7 +125,10 @@ export function actorOf(scope: McpInvocationScope): string {
   return name.replace(/\s+/g, " ").slice(0, 60);
 }
 
-const summaryOf = (card: Card, deploymentBoards: ReadonlySet<string>): BoardAgentTaskSummary => ({
+const protectedRepository = (repository: string | null | undefined) =>
+  repository != null && PROTECTED_REPOSITORY.test(repository);
+
+const summaryOf = (card: Card, protectedBoards: ReadonlySet<string>): BoardAgentTaskSummary => ({
   id: card.id,
   number: card.number,
   title: card.title,
@@ -144,16 +141,51 @@ const summaryOf = (card: Card, deploymentBoards: ReadonlySet<string>): BoardAgen
   held: card.held === true,
   run: card.run ? { id: card.run.id, state: card.run.state, stage: card.run.stage ?? null } : null,
   live: (card.run != null && LIVE_RUN.includes(card.run.state)) || (card.workers ?? []).length > 0,
-  deploymentLinked:
+  protected:
     (card.deployment !== undefined && card.deployment !== null) ||
-    (card.set != null && deploymentBoards.has(card.set)),
+    (card.set != null && protectedBoards.has(card.set)) ||
+    protectedRepository(card.target?.repository),
 });
 
+const queryMatches = (query: string, task: BoardAgentTaskSummary) => {
+  const number = /^#?(\d+)$/.exec(query.trim())?.[1];
+  if (number !== undefined) return String(task.number).includes(number);
+  const hay = `${task.number} ${task.id} ${task.title} ${task.team ?? ""}`.toLowerCase();
+  return query
+    .toLowerCase()
+    .split(/\s+/)
+    .filter(Boolean)
+    .every((word) => hay.includes(word.replace(/^#/, "")));
+};
+
+/** Every predicate, checked here: the engine's search answers `origin` alone, ignoring the rest. */
 const matches = (filter: BoardAgentTaskFilter) => (task: BoardAgentTaskSummary) =>
   (filter.board === undefined || task.board === filter.board) &&
+  (filter.lane === undefined || task.lane === filter.lane) &&
   (filter.state === undefined || task.state === filter.state) &&
+  (filter.origin === undefined || task.origin === filter.origin) &&
+  (filter.query === undefined || queryMatches(filter.query, task)) &&
   (filter.updatedBefore === undefined ||
     (task.updated !== null && task.updated < filter.updatedBefore));
+
+/** A filter as one key: fields sorted, blanks dropped, so two spellings of it bind the same. */
+const normalFilter = (filter: BoardAgentTaskFilter | undefined) =>
+  filter === undefined
+    ? null
+    : Object.fromEntries(
+        Object.entries(filter)
+          .filter((entry): entry is [string, string] => typeof entry[1] === "string")
+          .map(([key, value]) => [key, value.trim()] as const)
+          .filter(([, value]) => value !== "")
+          .sort(([a], [b]) => a.localeCompare(b)),
+      );
+
+/** One key for a list of plain values: what a dry run's token binds. */
+const keyOf = (parts: ReadonlyArray<unknown>) => JSON.stringify(parts);
+
+/** What decides whether an action may run on a task: it is bound by a dry run's token. */
+const eligibilityOf = (task: BoardAgentTaskSummary) =>
+  keyOf([task.state, task.lane, task.board, task.live, task.protected]);
 
 /** Why a guarded change is refused without `force`, or null. */
 const guardOf = (task: BoardAgentTaskSummary, force: boolean | undefined) =>
@@ -161,177 +193,104 @@ const guardOf = (task: BoardAgentTaskSummary, force: boolean | undefined) =>
     ? null
     : task.live
       ? `#${task.number} has a live run. Pass force only when the person asked to stop it.`
-      : task.deploymentLinked
-        ? `#${task.number} is on a deployment-linked board. Pass force only when the person asked.`
+      : task.protected
+        ? `#${task.number} is on a protected board or repository. Pass force only when the person asked.`
         : null;
 
-const sha256 = (text: string) =>
-  Effect.promise(() => crypto.subtle.digest("SHA-256", new TextEncoder().encode(text))).pipe(
-    Effect.map((digest) => Hex.encode(new Uint8Array(digest))),
-  );
+const closeSkip = (task: BoardAgentTaskSummary, force: boolean | undefined) =>
+  ENDED.includes(task.state)
+    ? `#${task.number} is ${task.state} already.`
+    : task.state === "draft"
+      ? `#${task.number} is a draft. Discard it instead.`
+      : guardOf(task, force);
 
-export class BoardAgentTools extends Context.Service<
-  BoardAgentTools,
-  {
-    readonly listBoards: Effect.Effect<BoardAgentBoardsResult, OrchestratorMcpFailure>;
-    readonly createBoard: (
-      scope: McpInvocationScope,
-      input: BoardAgentBoardCreateInput,
-    ) => Effect.Effect<BoardAgentBoard, OrchestratorMcpFailure>;
-    readonly editBoard: (
-      scope: McpInvocationScope,
-      input: BoardAgentBoardEditInput,
-    ) => Effect.Effect<BoardAgentBoard, OrchestratorMcpFailure>;
-    /** Keeps the board's tasks, on no board. The engine has no restore. */
-    readonly removeBoard: (
-      scope: McpInvocationScope,
-      input: BoardAgentBoardRemoveInput,
-    ) => Effect.Effect<
-      { removed: string; tasks: ReadonlyArray<string>; board: BoardAgentBoard },
-      OrchestratorMcpFailure
-    >;
-    readonly listTasks: (
-      input: BoardAgentTasksListInput,
-    ) => Effect.Effect<BoardAgentTasksListResult, OrchestratorMcpFailure>;
-    readonly getTask: (
-      input: BoardAgentTaskRef,
-    ) => Effect.Effect<BoardAgentTask, OrchestratorMcpFailure>;
-    readonly editTask: (
-      scope: McpInvocationScope,
-      input: BoardAgentTaskEditInput,
-    ) => Effect.Effect<BoardAgentTask, OrchestratorMcpFailure>;
-    readonly moveTask: (
-      scope: McpInvocationScope,
-      input: BoardAgentTaskMoveInput,
-    ) => Effect.Effect<BoardAgentTask, OrchestratorMcpFailure>;
-    readonly submitTask: (
-      scope: McpInvocationScope,
-      input: BoardAgentTaskRef,
-    ) => Effect.Effect<BoardAgentTask, OrchestratorMcpFailure>;
-    /** The engine has no reopen: a closed task stays closed. */
-    readonly closeTask: (
-      scope: McpInvocationScope,
-      input: BoardAgentTaskCloseInput,
-    ) => Effect.Effect<BoardAgentTask, OrchestratorMcpFailure>;
-    readonly discardTask: (
-      scope: McpInvocationScope,
-      input: BoardAgentTaskDiscardInput,
-    ) => Effect.Effect<{ discarded: string }, OrchestratorMcpFailure>;
-    /** A dry run unless confirmed with the token of a dry run of the same list. */
-    readonly closeTasks: (
-      scope: McpInvocationScope,
-      input: BoardAgentBulkCloseInput,
-    ) => Effect.Effect<BoardAgentBulkResult, OrchestratorMcpFailure>;
-    readonly moveTasks: (
-      scope: McpInvocationScope,
-      input: BoardAgentBulkMoveInput,
-    ) => Effect.Effect<BoardAgentBulkResult, OrchestratorMcpFailure>;
-    /**
-     * Stops or restarts the engine through its launcher with the approval key saved on this
-     * server. The key goes only to the engine; with none saved, nothing is sent.
-     */
-    readonly engineLifecycle: (
-      input: DeliveryEngineLifecycleInput,
-    ) => Effect.Effect<typeof DeliveryEngineLifecycleReceipt.Type, DeliveryError>;
-    /** The `delivery_board`, `delivery_task` and `delivery_tasks` tools: one action each call. */
-    readonly board: (
-      scope: McpInvocationScope,
-      input: BoardAgentBoardToolInput,
-    ) => Effect.Effect<BoardAgentBoardToolResult, OrchestratorMcpFailure>;
-    readonly task: (
-      scope: McpInvocationScope,
-      input: BoardAgentTaskToolInput,
-    ) => Effect.Effect<BoardAgentTask, OrchestratorMcpFailure>;
-    readonly tasks: (
-      scope: McpInvocationScope,
-      input: BoardAgentTasksToolInput,
-    ) => Effect.Effect<BoardAgentTasksToolResult, OrchestratorMcpFailure>;
-  }
->()("t3/delivery/BoardAgentTools") {}
+const discardSkip = (task: BoardAgentTaskSummary, force: boolean | undefined) =>
+  task.state !== "draft"
+    ? `#${task.number} was submitted. Only a draft is discarded; close it instead.`
+    : guardOf(task, force);
 
-type Actions = Omit<BoardAgentTools["Service"], "board" | "task" | "tasks">;
+/** What a dry run's answer tells the agent to do next: no undo follows the confirm. */
+const NEXT =
+  "Nothing was changed. Show this to the person; only if they agree, call again with the same fields, `confirm: true` and this `dryRunToken`. It cannot be undone.";
 
 const needs = <A>(value: A | undefined, what: string) =>
   value === undefined
     ? Effect.fail(invalid(`This action needs \`${what}\`.`))
     : Effect.succeed(value);
 
-/** Each folded tool's action, as the one method it stands for. */
-const folded = (
-  actions: Actions,
-): Pick<BoardAgentTools["Service"], "board" | "task" | "tasks"> => ({
-  board: Effect.fn("BoardAgentTools.board")(function* (scope, input) {
-    const { action, board, title, repository, force, ...fields } = input;
-    switch (action) {
-      case "list":
-        return yield* actions.listBoards;
-      case "create": {
-        const created = yield* actions.createBoard(scope, {
-          ...fields,
-          title: yield* needs(title, "title"),
-          repository: yield* needs(repository, "repository"),
-        });
-        return { boards: [created] };
-      }
-      case "edit": {
-        const edited = yield* actions.editBoard(scope, {
-          ...fields,
-          board: yield* needs(board, "board"),
-          title,
-          repository,
-        });
-        return { boards: [edited] };
-      }
-      case "remove": {
-        const removed = yield* actions.removeBoard(scope, {
-          board: yield* needs(board, "board"),
-          force,
-        });
-        return { boards: [removed.board], tasks: removed.tasks };
-      }
-    }
-  }),
-  task: Effect.fn("BoardAgentTools.task")(function* (scope, input) {
-    const { action, task, title, body, priority, tags, lane, board, base, reason, force } = input;
-    switch (action) {
-      case "get":
-        return yield* actions.getTask({ task });
-      case "edit":
-        return yield* actions.editTask(scope, { task, title, body, priority, tags });
-      case "move":
-        return yield* actions.moveTask(scope, { task, lane, board, base, force });
-      case "submit":
-        return yield* actions.submitTask(scope, { task });
-      case "close":
-        return yield* actions.closeTask(scope, {
-          task,
-          reason: yield* needs(reason, "reason"),
-          force,
-        });
-      case "discard": {
-        const before = yield* actions.getTask({ task });
-        yield* actions.discardTask(scope, { task, force });
-        return { ...before, state: "discarded", lane: null, live: false };
-      }
-    }
-  }),
-  tasks: Effect.fn("BoardAgentTools.tasks")(function* (scope, input) {
-    const { action, filter, tasks, limit, reason, lane, board, force, confirm, dryRunToken } =
-      input;
-    if (action === "list") return yield* actions.listTasks({ ...filter, limit });
-    const selection = { tasks, filter, force, confirm, dryRunToken };
-    const result =
-      action === "close"
-        ? yield* actions.closeTasks(scope, { ...selection, reason: yield* needs(reason, "reason") })
-        : yield* actions.moveTasks(scope, { ...selection, lane, board });
-    return { more: result.more, dryRunToken: result.dryRunToken, items: result.items };
-  }),
-});
+export class BoardAgentTools extends Context.Service<
+  BoardAgentTools,
+  {
+    /** `delivery_board`: list, create, edit, or remove after a dry run. */
+    readonly board: (
+      scope: McpInvocationScope,
+      input: BoardAgentBoardToolInput,
+    ) => Effect.Effect<BoardAgentBoardToolResult, OrchestratorMcpFailure>;
+    /** `delivery_task`: one action on one task; close and discard after a dry run. */
+    readonly task: (
+      scope: McpInvocationScope,
+      input: BoardAgentTaskToolInput,
+    ) => Effect.Effect<BoardAgentTaskToolResult, OrchestratorMcpFailure>;
+    /** `delivery_tasks`: list, or close or move many after a dry run of the same call. */
+    readonly tasks: (
+      scope: McpInvocationScope,
+      input: BoardAgentTasksToolInput,
+    ) => Effect.Effect<BoardAgentTasksToolResult, OrchestratorMcpFailure>;
+    /**
+     * A keyed engine control with the approval key saved on this server. The key goes only to
+     * the engine; with none saved, nothing is sent. Refusals are fixed text.
+     */
+    readonly engineControl: (
+      input: DeliveryEngineControlInput,
+    ) => Effect.Effect<DeliveryResponse, DeliveryError>;
+    readonly engineLifecycle: (
+      input: DeliveryEngineLifecycleInput,
+    ) => Effect.Effect<typeof DeliveryEngineLifecycleReceipt.Type, DeliveryError>;
+  }
+>()("t3/delivery/BoardAgentTools") {}
+
+interface Preview {
+  /** The call it previewed, so a confirm of another call is refused. */
+  readonly binding: string;
+  /** Each task or board as it stood, in the order the dry run listed them. */
+  readonly snapshots: ReadonlyArray<readonly [string, string]>;
+  readonly expires: number;
+}
 
 const make = Effect.gen(function* () {
   const delivery = yield* Delivery.DeliveryService;
-  // Tokens are this server's word for one previewed list; a restart asks for a new dry run.
-  const secret = yield* (yield* SecureRandom.SecureRandom).uuidV4().pipe(Effect.orDie);
+  const random = yield* SecureRandom.SecureRandom;
+  // A dry run's token stands for what it showed, held here: a restart asks for a new dry run.
+  const previews = new Map<string, Preview>();
+
+  const preview = Effect.fn("BoardAgentTools.preview")(function* (
+    binding: string,
+    snapshots: ReadonlyArray<readonly [string, string]>,
+  ) {
+    const now = yield* Clock.currentTimeMillis;
+    for (const [token, held] of previews) if (held.expires <= now) previews.delete(token);
+    while (previews.size >= PREVIEWS_MAX) previews.delete(previews.keys().next().value!);
+    const token = `dry-${yield* random.uuidV4().pipe(Effect.orDie)}`;
+    previews.set(token, { binding, snapshots, expires: now + PREVIEW_MS });
+    return token;
+  });
+  /** The dry run a confirm names, used once. Refused for any other call. */
+  const confirmed = Effect.fn("BoardAgentTools.confirmed")(function* (
+    token: string | undefined,
+    binding: string,
+  ) {
+    if (token === undefined)
+      return yield* invalid("`confirm` needs the `dryRunToken` of a dry run of this same call.");
+    const held = previews.get(token);
+    previews.delete(token);
+    if (held === undefined || held.expires <= (yield* Clock.currentTimeMillis))
+      return yield* invalid("This dry run is unknown or expired. Run it again without `confirm`.");
+    if (held.binding !== binding)
+      return yield* invalid(
+        "This confirm differs from its dry run. Run the dry run again with the same fields.",
+      );
+    return held.snapshots;
+  });
 
   const get = <A, E>(path: string, decode: (body: unknown) => Effect.Effect<A, E>) =>
     delivery.read({ path }).pipe(
@@ -348,19 +307,22 @@ const make = Effect.gen(function* () {
       Effect.flatMap((response) => decode(response.body).pipe(Effect.mapError(incompatible))),
     );
 
-  const rawBoards = get("/api/boards", decodeBoards);
-  const boardOf = (board: Effect.Success<typeof rawBoards>[number]): BoardAgentBoard => ({
-    id: board.id,
-    title: board.title,
-    description: board.description ?? "",
-    icon: board.icon ?? null,
-    repository: board.target?.repository ?? null,
-    base: board.target?.base ?? null,
-    deploymentLinked: board.deploymentProjectId != null,
-  });
-  const boards = rawBoards.pipe(Effect.map((all) => all.map(boardOf)));
-  const deploymentBoards = boards.pipe(
-    Effect.map((all) => new Set(all.filter((board) => board.deploymentLinked).map((b) => b.id))),
+  const boards = get("/api/boards", decodeBoards).pipe(
+    Effect.map((all) =>
+      all.map((board): BoardAgentBoard => ({
+        id: board.id,
+        title: board.title,
+        description: board.description ?? "",
+        icon: board.icon ?? null,
+        repository: board.target?.repository ?? null,
+        base: board.target?.base ?? null,
+        protected:
+          board.deploymentProjectId != null || protectedRepository(board.target?.repository),
+      })),
+    ),
+  );
+  const protectedBoards = boards.pipe(
+    Effect.map((all) => new Set(all.filter((board) => board.protected).map((board) => board.id))),
   );
   const boardNamed = Effect.fn("BoardAgentTools.boardNamed")(function* (id: string) {
     const found = (yield* boards).find((board) => board.id === id);
@@ -369,45 +331,49 @@ const make = Effect.gen(function* () {
     return found;
   });
 
+  /** One task as it stands, or null when the engine has none by that id. */
+  const lookup = Effect.fn("BoardAgentTools.lookup")(function* (id: string) {
+    const read = yield* delivery
+      .read({ path: `/api/tasks/${encodeURIComponent(id)}` })
+      .pipe(Effect.result);
+    if (read._tag === "Failure") {
+      if (notFound(read.failure)) return null;
+      return yield* engineFailure(read.failure);
+    }
+    const card = yield* decodeCard(read.success.body).pipe(Effect.mapError(incompatible));
+    return { card, summary: summaryOf(card, yield* protectedBoards) };
+  });
   const taskOf = Effect.fn("BoardAgentTools.taskOf")(function* (id: string) {
-    const card = yield* get(`/api/tasks/${encodeURIComponent(id)}`, decodeCard);
-    return { card, summary: summaryOf(card, yield* deploymentBoards) };
+    const found = yield* lookup(id);
+    if (found === null) return yield* invalid(`No task ${id}.`);
+    return found;
   });
-  const detailOf = (card: Card, summary: BoardAgentTaskSummary): BoardAgentTask => ({
-    ...summary,
-    body: card.body ?? null,
-  });
-  const reread = (id: string) =>
-    taskOf(id).pipe(Effect.map(({ card, summary }) => detailOf(card, summary)));
+  const detail = (id: string) =>
+    taskOf(id).pipe(
+      Effect.map(({ card, summary }): BoardAgentTask => ({ ...summary, body: card.body ?? null })),
+    );
 
   const search = Effect.fn("BoardAgentTools.search")(function* (
     filter: BoardAgentTaskFilter,
     limit: number,
   ) {
+    // The engine is asked for its newest tasks only to narrow the read; every predicate is
+    // checked again below.
     const params = new URLSearchParams({ set: filter.board ?? "all", limit: String(SEARCH_MAX) });
-    if (filter.query !== undefined) params.set("q", filter.query);
     if (filter.lane !== undefined) params.set("lane", filter.lane);
-    if (filter.origin !== undefined) params.set("origin", filter.origin);
     const cards = yield* get(`/api/tasks?${params.toString()}`, decodeCards);
-    const shown = yield* deploymentBoards;
+    const shown = yield* protectedBoards;
     const found = cards.map((card) => summaryOf(card, shown)).filter(matches(filter));
-    // A full engine page may hide older matches the client-side filters would keep.
     return {
       tasks: found.slice(0, limit),
-      more: found.length > limit || cards.length >= SEARCH_MAX,
+      more: found.length > limit,
+      truncated: cards.length >= SEARCH_MAX,
     };
-  });
-
-  const listTasks = Effect.fn("BoardAgentTools.listTasks")(function* (
-    input: BoardAgentTasksListInput,
-  ) {
-    const { limit, ...filter } = input;
-    return yield* search(filter, limit ?? 100);
   });
 
   const placeOnBoard = Effect.fn("BoardAgentTools.placeOnBoard")(function* (
     by: string,
-    task: { card: Card; summary: BoardAgentTaskSummary },
+    task: { card: Card },
     board: string | null,
     base: string | undefined,
   ) {
@@ -427,129 +393,335 @@ const make = Effect.gen(function* () {
     return yield* post(`/api/tasks/${id}/board`, { board, by }, Effect.succeed);
   });
 
+  /** `seen` makes the engine refuse a lane move of a card that moved since it was read. */
   const move = Effect.fn("BoardAgentTools.move")(function* (
     by: string,
     task: { card: Card; summary: BoardAgentTaskSummary },
-    input: {
-      lane?: string | undefined;
-      board?: string | null | undefined;
-      base?: string | undefined;
-    },
+    input: { lane?: string | undefined; board?: string | null | undefined; base?: string },
   ) {
     if (input.board !== undefined) yield* placeOnBoard(by, task, input.board, input.base);
     if (input.lane !== undefined)
       yield* post(
         `/api/tasks/${encodeURIComponent(task.card.id)}/move`,
-        { lane: input.lane, by },
+        {
+          lane: input.lane,
+          by,
+          ...(task.summary.lane === null ? {} : { seen: task.summary.lane }),
+        },
         Effect.succeed,
       );
   });
-
+  // The engine's close takes no expected state, so the re-read just before it is the check.
   const closeOne = (by: string, id: string, reason: string) =>
     post(
       `/api/tasks/${encodeURIComponent(id)}/control`,
       { action: "close", reason, by },
       Effect.succeed,
     );
+  const discardOne = (by: string, id: string) =>
+    post(`/api/tasks/${encodeURIComponent(id)}/discard`, { by }, Effect.succeed);
 
-  /** Why a close is skipped, before the engine is asked. */
-  const closeSkip = (task: BoardAgentTaskSummary, force: boolean | undefined) =>
-    ENDED.includes(task.state)
-      ? `#${task.number} is ${task.state} already.`
-      : task.state === "draft"
-        ? `#${task.number} is a draft. Discard it instead.`
-        : guardOf(task, force);
-
-  const selection = Effect.fn("BoardAgentTools.selection")(function* (input: {
-    readonly tasks?: ReadonlyArray<string> | undefined;
-    readonly filter?: BoardAgentTaskFilter | undefined;
-  }) {
-    if ((input.tasks === undefined) === (input.filter === undefined))
-      return yield* invalid("Give either `tasks` or `filter`.");
-    if (input.tasks !== undefined) {
-      const ids = [...new Set(input.tasks)];
-      const found = yield* Effect.forEach(
-        ids,
-        (id) => taskOf(id).pipe(Effect.map((t) => t.summary)),
-        {
-          concurrency: 4,
-        },
-      );
-      return { tasks: found, more: false };
-    }
-    return yield* search(input.filter ?? {}, BOARD_AGENT_BULK_MAX);
-  });
-
-  /** Binds the token to the action and to each task as it stands now. */
-  const tokenOf = (action: unknown, tasks: ReadonlyArray<BoardAgentTaskSummary>) =>
-    sha256(
-      `${secret}\n${JSON.stringify(action)}\n${JSON.stringify(
-        tasks.map((task) => [task.id, task.state, task.lane, task.board, task.updated]).sort(),
-      )}`,
-    ).pipe(Effect.map((digest) => `bulk-${digest.slice(0, 48)}`));
-
-  const bulk = Effect.fn("BoardAgentTools.bulk")(function* (
-    input: {
-      readonly tasks?: ReadonlyArray<string> | undefined;
-      readonly filter?: BoardAgentTaskFilter | undefined;
-      readonly confirm?: boolean | undefined;
-      readonly dryRunToken?: string | undefined;
-    },
-    action: unknown,
+  /**
+   * One task's irreversible action: a dry run returns its token; a confirm re-reads the task and
+   * acts only if what decides the action is as the dry run saw it.
+   */
+  const oneAfterDryRun = Effect.fn("BoardAgentTools.oneAfterDryRun")(function* (
+    input: BoardAgentTaskToolInput,
+    binding: string,
     skip: (task: BoardAgentTaskSummary) => string | null,
-    act: (task: BoardAgentTaskSummary) => Effect.Effect<unknown, OrchestratorMcpFailure>,
+    act: (task: {
+      card: Card;
+      summary: BoardAgentTaskSummary;
+    }) => Effect.Effect<unknown, OrchestratorMcpFailure>,
   ) {
-    const { tasks, more } = yield* selection(input);
-    const token = yield* tokenOf(action, tasks);
-    const skipped = new Map(tasks.map((task) => [task.id, skip(task)]));
-    const item = (
-      task: BoardAgentTaskSummary,
-      outcome: "would-act" | "done" | "skipped" | "failed",
-      message: string | null,
-    ) => ({
-      id: task.id,
-      number: task.number,
-      title: task.title,
-      outcome,
-      message,
-    });
-    if (input.confirm !== true)
-      return {
-        dryRun: true,
-        dryRunToken: token,
-        more,
-        items: tasks.map((task) => {
-          const why = skipped.get(task.id) ?? null;
-          return item(task, why === null ? "would-act" : "skipped", why);
-        }),
-      };
-    if (input.dryRunToken !== token)
+    const found = yield* taskOf(input.task);
+    if (input.confirm !== true) {
+      const why = skip(found.summary);
+      if (why !== null) return yield* invalid(why);
+      const token = yield* preview(binding, [[found.card.id, eligibilityOf(found.summary)]]);
+      return { ...found.summary, body: found.card.body ?? null, dryRunToken: token, next: NEXT };
+    }
+    const [[, before] = ["", ""]] = yield* confirmed(input.dryRunToken, binding);
+    if (eligibilityOf(found.summary) !== before)
       return yield* invalid(
-        "The tasks changed since the dry run, or no dry run was given. Run it again without `confirm` and check the list.",
+        `#${found.summary.number} changed since the dry run. Run it again and check it.`,
       );
-    const items = yield* Effect.forEach(tasks, (task) => {
-      const why = skipped.get(task.id) ?? null;
-      if (why !== null) return Effect.succeed(item(task, "skipped", why));
-      return act(task).pipe(
-        Effect.as(item(task, "done", null)),
-        Effect.catch((failure) => Effect.succeed(item(task, "failed", failure.message))),
-      );
-    });
-    return { dryRun: false, dryRunToken: null, more, items };
+    yield* act(found);
+    return found;
   });
 
-  const actions: Actions = {
-    engineLifecycle: Effect.fn("BoardAgentTools.engineLifecycle")(function* ({ action }) {
-      const key = yield* delivery.boardApprovalKey;
-      if (!key)
-        return yield* new DeliveryError({
-          reason: "refused",
-          detail: Delivery.NO_BOARD_APPROVAL_KEY,
-        });
-      const response = yield* delivery.act({
-        path: "/api/engine/lifecycle",
-        body: { key, action },
+  const board: BoardAgentTools["Service"]["board"] = Effect.fn("BoardAgentTools.board")(
+    function* (scope, input) {
+      const by = actorOf(scope);
+      switch (input.action) {
+        case "list": {
+          const repositories = yield* get("/api/repositories", decodeRepositories);
+          return {
+            boards: yield* boards,
+            repositories: repositories
+              .filter((repository) => repository.kind !== "qualification")
+              .map((repository) => ({ id: repository.id, title: repository.title ?? null })),
+          };
+        }
+        case "create": {
+          const created = yield* post(
+            "/api/boards",
+            {
+              title: yield* needs(input.title, "title"),
+              repository: yield* needs(input.repository, "repository"),
+              base: input.base ?? null,
+              description: input.description,
+              icon: input.icon,
+              by,
+            },
+            decodeCreated,
+          );
+          return { boards: [yield* boardNamed(created.id)] };
+        }
+        case "edit": {
+          const id = yield* needs(input.board, "board");
+          const found = yield* boardNamed(id);
+          if (found.protected && input.force !== true)
+            return yield* invalid(
+              `Board ${id} is protected. Pass force only when the person asked.`,
+            );
+          const { title, description, repository, base, icon } = input;
+          yield* post(
+            `/api/boards/${id}/edit`,
+            { title, description, repository, base, icon, by },
+            Effect.succeed,
+          );
+          return { boards: [yield* boardNamed(id)] };
+        }
+        case "remove": {
+          const id = yield* needs(input.board, "board");
+          const found = yield* boardNamed(id);
+          if (found.protected && input.force !== true)
+            return yield* invalid(
+              `Board ${id} is protected. Pass force only when the person asked.`,
+            );
+          const { tasks } = yield* search({ board: id }, SEARCH_MAX);
+          const kept = tasks.map((task) => task.id);
+          const standing = keyOf([found.protected, [...kept].sort()]);
+          const binding = keyOf(["board-remove", id, input.force === true]);
+          if (input.confirm !== true)
+            return {
+              boards: [found],
+              tasks: kept,
+              dryRunToken: yield* preview(binding, [[id, standing]]),
+              next: NEXT,
+            };
+          const [[, before] = ["", ""]] = yield* confirmed(input.dryRunToken, binding);
+          if (standing !== before)
+            return yield* invalid(
+              `Board ${id} or its tasks changed since the dry run. Run it again and check it.`,
+            );
+          yield* post(`/api/boards/${id}/remove`, { by }, Effect.succeed);
+          return { boards: [found], tasks: kept };
+        }
+      }
+    },
+  );
+
+  const task: BoardAgentTools["Service"]["task"] = Effect.fn("BoardAgentTools.task")(
+    function* (scope, input) {
+      const by = actorOf(scope);
+      const { task: id, force } = input;
+      switch (input.action) {
+        case "get":
+          return yield* detail(id);
+        case "edit": {
+          const { title, body, priority, tags } = input;
+          if ([title, body, priority, tags].every((value) => value === undefined))
+            return yield* invalid("Name at least one field to change.");
+          yield* post(
+            `/api/tasks/${encodeURIComponent(id)}/edit`,
+            { title, body, priority, tags, by },
+            Effect.succeed,
+          );
+          return yield* detail(id);
+        }
+        case "move": {
+          if (input.lane === undefined && input.board === undefined)
+            return yield* invalid("Give a `lane`, a `board`, or both.");
+          const found = yield* taskOf(id);
+          if (input.board !== undefined) {
+            const why = guardOf(found.summary, force);
+            if (why !== null) return yield* invalid(why);
+          }
+          yield* move(by, found, {
+            lane: input.lane,
+            board: input.board,
+            ...(input.base === undefined ? {} : { base: input.base }),
+          });
+          return yield* detail(id);
+        }
+        case "submit":
+          yield* post(`/api/tasks/${encodeURIComponent(id)}/submit`, { by }, Effect.succeed);
+          return yield* detail(id);
+        case "close": {
+          const reason = yield* needs(input.reason, "reason");
+          const done = yield* oneAfterDryRun(
+            input,
+            keyOf(["task-close", id, reason, force === true]),
+            (summary) => closeSkip(summary, force),
+            (found) => closeOne(by, found.card.id, reason),
+          );
+          return "dryRunToken" in done ? done : yield* detail(id);
+        }
+        case "discard": {
+          const done = yield* oneAfterDryRun(
+            input,
+            keyOf(["task-discard", id, force === true]),
+            (summary) => discardSkip(summary, force),
+            (found) => discardOne(by, found.card.id),
+          );
+          return "dryRunToken" in done
+            ? done
+            : { ...done.summary, body: done.card.body ?? null, state: "discarded", lane: null };
+        }
+      }
+    },
+  );
+
+  const tasks: BoardAgentTools["Service"]["tasks"] = Effect.fn("BoardAgentTools.tasks")(
+    function* (scope, input) {
+      if (input.action === "list") return yield* search(input.filter ?? {}, input.limit ?? 100);
+      const by = actorOf(scope);
+      const { force, lane, board } = input;
+      if ((input.tasks === undefined) === (input.filter === undefined))
+        return yield* invalid("Give either `tasks` or `filter`.");
+      const reason = input.action === "close" ? yield* needs(input.reason, "reason") : null;
+      if (input.action === "move" && lane === undefined && board === undefined)
+        return yield* invalid("Give a `lane`, a `board`, or both.");
+      const skip = (summary: BoardAgentTaskSummary) =>
+        reason !== null
+          ? closeSkip(summary, force)
+          : board === undefined
+            ? null
+            : guardOf(summary, force);
+      const act = (found: { card: Card; summary: BoardAgentTaskSummary }) =>
+        reason !== null ? closeOne(by, found.card.id, reason) : move(by, found, { lane, board });
+      const ids = input.tasks === undefined ? null : [...new Set(input.tasks)];
+      // What decides the action: the call itself, its filter or its ids, and each task's state.
+      const binding = keyOf([
+        input.action,
+        reason,
+        lane ?? null,
+        board === undefined ? "keep" : board,
+        force === true,
+        normalFilter(input.filter),
+        ids === null ? null : [...ids].sort(),
+      ]);
+      const item = (
+        id: string,
+        found: BoardAgentTaskSummary | null,
+        outcome: "would-act" | "done" | "skipped" | "failed" | "not-found",
+        message: string | null,
+      ) => ({
+        id,
+        number: found?.number ?? null,
+        title: found?.title ?? null,
+        outcome,
+        message,
       });
+
+      // The selection as it stands: by ids, each looked up; or the filter's matches.
+      const select = Effect.fn("BoardAgentTools.select")(function* () {
+        if (ids === null) {
+          const listed = yield* search(input.filter ?? {}, BOARD_AGENT_BULK_MAX);
+          return {
+            found: listed.tasks.map((summary) => [summary.id, summary] as const),
+            more: listed.more,
+            truncated: listed.truncated,
+          };
+        }
+        const found = yield* Effect.forEach(
+          ids,
+          (id) =>
+            lookup(id).pipe(Effect.map((hit) => [id, hit === null ? null : hit.summary] as const)),
+          { concurrency: 4 },
+        );
+        return { found, more: false, truncated: false };
+      });
+
+      const { found, more, truncated } = yield* select();
+      if (input.confirm !== true) {
+        const snapshots = found.flatMap(([id, summary]) =>
+          summary === null ? [] : [[id, eligibilityOf(summary)] as const],
+        );
+        return {
+          more,
+          truncated,
+          dryRunToken: yield* preview(binding, snapshots),
+          next: NEXT,
+          items: found.map(([id, summary]) => {
+            if (summary === null) return item(id, null, "not-found", `No task ${id}.`);
+            const why = skip(summary);
+            return item(id, summary, why === null ? "would-act" : "skipped", why);
+          }),
+        };
+      }
+      const snapshots = yield* confirmed(input.dryRunToken, binding);
+      if (
+        ids === null &&
+        keyOf(found.map(([id]) => id).sort()) !== keyOf(snapshots.map(([id]) => id).sort())
+      )
+        return yield* invalid(
+          "The tasks this filter matches changed since the dry run. Run it again and check the list.",
+        );
+      const seen = new Map(snapshots);
+      // Each task is read again just before its write, and acted on only as the dry run saw it.
+      const items = yield* Effect.forEach(ids ?? snapshots.map(([id]) => id), (id) =>
+        Effect.gen(function* () {
+          const before = seen.get(id);
+          const current = yield* lookup(id).pipe(Effect.result);
+          if (current._tag === "Failure") return item(id, null, "failed", current.failure.message);
+          if (current.success === null) return item(id, null, "not-found", `No task ${id}.`);
+          const { summary } = current.success;
+          if (before === undefined || eligibilityOf(summary) !== before)
+            return item(id, summary, "skipped", "changed since the dry run");
+          const why = skip(summary);
+          if (why !== null) return item(id, summary, "skipped", why);
+          return yield* act(current.success).pipe(
+            Effect.as(item(id, summary, "done", null)),
+            Effect.catch((failure) => Effect.succeed(item(id, summary, "failed", failure.message))),
+          );
+        }),
+      );
+      return { more, truncated, items };
+    },
+  );
+
+  const ENGINE_PATH: Record<DeliveryEngineControlInput["action"], string> = {
+    stop: "/api/engine/lifecycle",
+    restart: "/api/engine/lifecycle",
+    update: "/api/engine/update",
+    later: "/api/engine/update/later",
+    channel: "/api/engine/channel",
+  };
+  const engineControl: BoardAgentTools["Service"]["engineControl"] = Effect.fn(
+    "BoardAgentTools.engineControl",
+  )(function* ({ action, commit, channel }) {
+    const key = yield* delivery.boardApprovalKey;
+    if (!key)
+      return yield* new DeliveryError({
+        reason: "refused",
+        detail: Delivery.NO_BOARD_APPROVAL_KEY,
+      });
+    const body =
+      action === "stop" || action === "restart" ? { key, action } : { key, commit, channel };
+    // The relay already gives a keyed refusal in fixed words and drops the engine's answer.
+    return yield* delivery.act({ path: ENGINE_PATH[action], body });
+  });
+
+  return BoardAgentTools.of({
+    board,
+    task,
+    tasks,
+    engineControl,
+    engineLifecycle: Effect.fn("BoardAgentTools.engineLifecycle")(function* ({ action }) {
+      const response = yield* engineControl({ action });
       return yield* decodeLifecycle(response.body).pipe(
         Effect.mapError(
           () =>
@@ -560,137 +732,7 @@ const make = Effect.gen(function* () {
         ),
       );
     }),
-
-    listBoards: Effect.gen(function* () {
-      const all = yield* boards;
-      const repositories = yield* get("/api/repositories", decodeRepositories);
-      return {
-        boards: all,
-        repositories: repositories
-          .filter((repository) => repository.kind !== "qualification")
-          .map((repository) => ({ id: repository.id, title: repository.title ?? null })),
-      };
-    }).pipe(Effect.withSpan("BoardAgentTools.listBoards")),
-
-    createBoard: Effect.fn("BoardAgentTools.createBoard")(function* (scope, input) {
-      const created = yield* post(
-        "/api/boards",
-        { ...input, base: input.base ?? null, by: actorOf(scope) },
-        Schema.decodeUnknownEffect(Schema.Struct({ id: Schema.String })),
-      );
-      return yield* boardNamed(created.id);
-    }),
-
-    editBoard: Effect.fn("BoardAgentTools.editBoard")(function* (scope, { board, ...fields }) {
-      yield* boardNamed(board);
-      yield* post(`/api/boards/${board}/edit`, { ...fields, by: actorOf(scope) }, Effect.succeed);
-      return yield* boardNamed(board);
-    }),
-
-    removeBoard: Effect.fn("BoardAgentTools.removeBoard")(function* (scope, { board, force }) {
-      const found = yield* boardNamed(board);
-      if (found.deploymentLinked && force !== true)
-        return yield* invalid(
-          `Board ${board} is linked to a deployment project. Pass force only when the person asked.`,
-        );
-      const { tasks } = yield* search({ board }, SEARCH_MAX);
-      const removed = yield* post(
-        `/api/boards/${board}/remove`,
-        { by: actorOf(scope) },
-        decodeRemoved,
-      );
-      return { removed: removed.removed, tasks: tasks.map((task) => task.id), board: found };
-    }),
-
-    listTasks,
-
-    getTask: Effect.fn("BoardAgentTools.getTask")(function* ({ task }) {
-      return yield* reread(task);
-    }),
-
-    editTask: Effect.fn("BoardAgentTools.editTask")(function* (scope, { task, ...fields }) {
-      if (Object.values(fields).every((value) => value === undefined))
-        return yield* invalid("Name at least one field to change.");
-      yield* post(
-        `/api/tasks/${encodeURIComponent(task)}/edit`,
-        { ...fields, by: actorOf(scope) },
-        Effect.succeed,
-      );
-      return yield* reread(task);
-    }),
-
-    moveTask: Effect.fn("BoardAgentTools.moveTask")(function* (scope, input) {
-      if (input.lane === undefined && input.board === undefined)
-        return yield* invalid("Give a `lane`, a `board`, or both.");
-      const task = yield* taskOf(input.task);
-      if (input.board !== undefined) {
-        const why = guardOf(task.summary, input.force);
-        if (why !== null) return yield* invalid(why);
-      }
-      yield* move(actorOf(scope), task, input);
-      return yield* reread(input.task);
-    }),
-
-    submitTask: Effect.fn("BoardAgentTools.submitTask")(function* (scope, { task }) {
-      yield* post(
-        `/api/tasks/${encodeURIComponent(task)}/submit`,
-        { by: actorOf(scope) },
-        Effect.succeed,
-      );
-      return yield* reread(task);
-    }),
-
-    closeTask: Effect.fn("BoardAgentTools.closeTask")(function* (scope, { task, reason, force }) {
-      const found = yield* taskOf(task);
-      const why = closeSkip(found.summary, force);
-      if (why !== null) return yield* invalid(why);
-      yield* closeOne(actorOf(scope), found.card.id, reason);
-      return yield* reread(task);
-    }),
-
-    discardTask: Effect.fn("BoardAgentTools.discardTask")(function* (scope, { task, force }) {
-      const found = yield* taskOf(task);
-      if (found.summary.state !== "draft")
-        return yield* invalid(
-          `#${found.summary.number} was submitted. Only a draft is discarded; close it instead.`,
-        );
-      const why = guardOf(found.summary, force);
-      if (why !== null) return yield* invalid(why);
-      return yield* post(
-        `/api/tasks/${encodeURIComponent(found.card.id)}/discard`,
-        { by: actorOf(scope) },
-        decodeDiscarded,
-      );
-    }),
-
-    closeTasks: Effect.fn("BoardAgentTools.closeTasks")(function* (scope, input) {
-      const by = actorOf(scope);
-      return yield* bulk(
-        input,
-        { action: "close", reason: input.reason, force: input.force === true },
-        (task) => closeSkip(task, input.force),
-        (task) => closeOne(by, task.id, input.reason),
-      );
-    }),
-
-    moveTasks: Effect.fn("BoardAgentTools.moveTasks")(function* (scope, input) {
-      if (input.lane === undefined && input.board === undefined)
-        return yield* invalid("Give a `lane`, a `board`, or both.");
-      const by = actorOf(scope);
-      return yield* bulk(
-        input,
-        {
-          action: "move",
-          lane: input.lane ?? null,
-          board: input.board,
-          force: input.force === true,
-        },
-        (task) => (input.board === undefined ? null : guardOf(task, input.force)),
-        (task) => taskOf(task.id).pipe(Effect.flatMap((current) => move(by, current, input))),
-      );
-    }),
-  };
-  return BoardAgentTools.of({ ...actions, ...folded(actions) });
+  });
 });
 
 export const layer = Layer.effect(BoardAgentTools, make);
@@ -699,7 +741,6 @@ const turnedOff = () =>
   Effect.fail(
     new OrchestratorMcpFailure({ code: "unsupported", message: "Delivery is turned off." }),
   );
-
 const engineOff = () =>
   Effect.fail(new DeliveryError({ reason: "disabled", detail: "Delivery is turned off." }));
 
@@ -707,22 +748,10 @@ const engineOff = () =>
 export const layerTest = Layer.succeed(
   BoardAgentTools,
   BoardAgentTools.of({
-    listBoards: turnedOff(),
-    createBoard: turnedOff,
-    editBoard: turnedOff,
-    removeBoard: turnedOff,
-    listTasks: turnedOff,
-    getTask: turnedOff,
-    editTask: turnedOff,
-    moveTask: turnedOff,
-    submitTask: turnedOff,
-    closeTask: turnedOff,
-    discardTask: turnedOff,
-    closeTasks: turnedOff,
-    moveTasks: turnedOff,
-    engineLifecycle: engineOff,
     board: turnedOff,
     task: turnedOff,
     tasks: turnedOff,
+    engineControl: engineOff,
+    engineLifecycle: engineOff,
   }),
 );

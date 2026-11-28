@@ -9,10 +9,10 @@ import * as RemoteDelegation from "../../../peer/RemoteDelegation.ts";
 import { readCaller } from "../../threadAccess.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
-import { assertNotLinked } from "../../linkOrigin.ts";
 import * as OrchestratorMcpService from "../../OrchestratorMcpService.ts";
 import * as ThreadMetadataMcpService from "../../ThreadMetadataMcpService.ts";
 import * as BoardAgentTools from "../../../delivery/BoardAgentTools.ts";
+import * as DeliveryAgentAccess from "../../../delivery/deliveryAgentAccess.ts";
 import * as BoardThreadTasks from "../../../delivery/BoardThreadTasks.ts";
 import * as NativeBuildExecution from "../../../delivery/NativeBuildExecution.ts";
 import * as SeatHandoffs from "../../../delivery/SeatHandoffs.ts";
@@ -32,8 +32,12 @@ const boardRead = <P, A>(
       return yield* run(service, scope, params);
     }),
   );
-/** A board change, recorded as the calling thread's; a full-access link may make it here. */
+/**
+ * A board, task or engine change. `deliveryAgentAccess` decides it, as it does for the same
+ * actions over WebSocket; the change is recorded as the calling thread's.
+ */
 const boardWrite = <P, A>(
+  action: DeliveryAgentAccess.DeliveryAgentAction,
   run: (
     service: BoardAgentTools.BoardAgentTools["Service"],
     scope: McpInvocationContext.McpInvocationScope,
@@ -43,19 +47,25 @@ const boardWrite = <P, A>(
   McpToolAccess.writes(
     (params: P) =>
       Effect.gen(function* () {
-        yield* assertNotLinked(yield* readCaller(), "change this environment's boards");
-        const scope = yield* McpInvocationContext.McpInvocationContext;
+        const caller = yield* readCaller();
+        const missing = DeliveryAgentAccess.missingDeliveryScope(
+          DeliveryAgentAccess.mcpCallerScopes(caller),
+          action,
+        );
+        if (missing !== null)
+          return yield* new OrchestratorMcpFailure({
+            code: "capability_denied",
+            message: `This caller cannot ${action === "maintain" ? "stop or restart the engine" : "change boards or tasks"} here: it needs ${missing}.`,
+          });
         const service = yield* BoardAgentTools.BoardAgentTools;
-        return yield* run(service, scope, params);
+        return yield* run(service, caller.scope, params);
       }),
     { linkedCallers: "allowed" },
   );
 
 const handlers = {
-  // An environment change: full access, as for links. The saved key never reaches the caller.
-  delivery_engine_lifecycle: McpToolAccess.writesEnvironment((input) =>
-    BoardAgentTools.BoardAgentTools.pipe(
-      Effect.flatMap((service) => service.engineLifecycle({ action: input.action })),
+  delivery_engine_lifecycle: boardWrite("maintain", (service, _scope, input) =>
+    service.engineLifecycle({ action: input.action }).pipe(
       Effect.mapError(
         (error) =>
           new OrchestratorMcpFailure({
@@ -71,17 +81,17 @@ const handlers = {
   delivery_board: McpToolAccess.either(
     (input) => input.action === "list",
     boardRead((service, scope, input) => service.board(scope, input)),
-    boardWrite((service, scope, input) => service.board(scope, input)),
+    boardWrite("change", (service, scope, input) => service.board(scope, input)),
   ),
   delivery_task: McpToolAccess.either(
     (input) => input.action === "get",
     boardRead((service, scope, input) => service.task(scope, input)),
-    boardWrite((service, scope, input) => service.task(scope, input)),
+    boardWrite("change", (service, scope, input) => service.task(scope, input)),
   ),
   delivery_tasks: McpToolAccess.either(
     (input) => input.action === "list",
     boardRead((service, scope, input) => service.tasks(scope, input)),
-    boardWrite((service, scope, input) => service.tasks(scope, input)),
+    boardWrite("change", (service, scope, input) => service.tasks(scope, input)),
   ),
   delivery_read: McpToolAccess.reads(({ environmentId, ...input }) =>
     Effect.gen(function* () {

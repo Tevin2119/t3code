@@ -168,18 +168,21 @@ on the Old board that hasn't moved since October". The task's history records th
 thread as the one who made the change. An agent on another machine can do the same through a
 linked environment paired with full access.
 
-- **Bulk changes preview first.** Closing or moving many tasks (up to 200 per call) starts as
-  a dry run that lists exactly what would change. The agent acts only after that, and only
-  on the same list. If any task changed in between, it has to preview again.
+- **Anything that can't be undone previews first.** Removing a board, closing or discarding a
+  task, and closing or moving many tasks (up to 200 per call) start as a dry run that shows
+  exactly what would change. The agent acts only after you agree, and only on that same list.
+  Just before each change it reads the task again, and leaves alone any task that changed.
 - **Some things can't be undone.** A closed task stays closed: file a new one to restart the
   work. A discarded draft is gone. Removing a board keeps its tasks, which end up on no
   board, but loses the board's seats, mode and merge settings.
-- **Live work is protected.** An agent won't close, discard or re-board a task with a run in
-  progress, or touch a deployment-linked board, unless you tell it to.
-- **Engine stop and restart.** With the approval key saved in **Settings → Threads → Board**,
-  the Engine panel's Stop and Restart no longer ask for the passphrase, and an agent can
-  stop or restart the engine when you ask. Restarting pauses running seats until the engine
-  is back. The key stays on the server.
+- **Live and protected work needs your word.** An agent won't close, discard or re-board a
+  task with a run in progress, or change a deployment-linked board or one bound to a
+  protected repository, unless you tell it to.
+- **Engine controls.** With the approval key saved in **Settings → Threads → Board**, the
+  Engine panel's Stop, Restart, Update, Defer and release channel no longer ask for the
+  passphrase. An agent in a thread here, running with full access, can stop or restart the
+  engine when you ask; a linked machine or outside client can't. Restarting pauses running
+  seats until the engine is back. The key stays on the server.
 
 ## Fork baseline: nightly integration for delivery work
 

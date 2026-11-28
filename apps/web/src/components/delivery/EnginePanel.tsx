@@ -3,7 +3,12 @@ import { GlobalMergePermission } from "./MergePermissionControls";
 import { useAtomValue } from "@effect/atom-react";
 import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
-import { ThreadId, type EnvironmentId, type DeliveryReleaseChannel } from "@t3tools/contracts";
+import {
+  ThreadId,
+  type DeliveryEngineControlInput,
+  type DeliveryReleaseChannel,
+  type EnvironmentId,
+} from "@t3tools/contracts";
 import { useRef, useState } from "react";
 import { PowerIcon } from "lucide-react";
 import { useProjects } from "../../state/entities";
@@ -21,7 +26,7 @@ import {
   requireDeliveryUpdateReceipt,
 } from "../../lib/deliveryEngineControl";
 import { useEnvironment } from "../../state/environments";
-import { useDeliveryAct, useDeliveryRead, useSavedKeyEngineLifecycle } from "../../state/delivery";
+import { useDeliveryAct, useDeliveryRead, useSavedKeyEngineControl } from "../../state/delivery";
 import { primaryServerKeybindingsAtom, serverEnvironment } from "../../state/server";
 import { terminalEnvironment } from "../../state/terminal";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -195,13 +200,30 @@ function EngineControl(props: {
   );
   const health = useDeliveryRead(environmentId, "/api/health", { pollMs: 5000 });
   const act = useDeliveryAct(environmentId, "engine control");
-  const savedKey = useSavedKeyEngineLifecycle(environmentId);
+  const [approval, setApproval] = useState("");
+  const savedKey = useSavedKeyEngineControl(environmentId);
+  // Every keyed control: with the key saved on the server when there is one, else the one typed.
+  const keyed = (input: DeliveryEngineControlInput) =>
+    savedKey.usable
+      ? savedKey.run(input)
+      : act(
+          input.action === "stop" || input.action === "restart"
+            ? "/api/engine/lifecycle"
+            : input.action === "channel"
+              ? "/api/engine/channel"
+              : input.action === "later"
+                ? "/api/engine/update/later"
+                : "/api/engine/update",
+          input.action === "stop" || input.action === "restart"
+            ? { key: approval, action: input.action }
+            : { key: approval, commit: input.commit, channel: input.channel },
+        );
+  const keyReady = savedKey.usable || approval !== "";
   const configuration = useAtomValue(serverEnvironment.configValueAtom(environmentId));
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const terminalOpen = useAtomCommand(terminalEnvironment.open, { reportFailure: false });
   const terminalWrite = useAtomCommand(terminalEnvironment.write, { reportFailure: false });
   const threadRef = scopeThreadRef(environmentId, ENGINE_THREAD);
-  const [approval, setApproval] = useState("");
   const [busy, setBusy] = useState(false);
   const inFlight = useRef(false);
   const [problem, setProblem] = useState<string | null>(null);
@@ -225,14 +247,11 @@ function EngineControl(props: {
     setProblem(null);
     setNotice(null);
     // A promise chain instead of try/finally keeps this component compiled.
-    const problem = await act(
-      action === "channel"
-        ? "/api/engine/channel"
-        : action === "later"
-          ? "/api/engine/update/later"
-          : "/api/engine/update",
-      { key: approval, commit: versions.available?.commit, channel },
-    )
+    const problem = await keyed({
+      action,
+      ...(versions.available?.commit === undefined ? {} : { commit: versions.available.commit }),
+      ...(channel === undefined ? {} : { channel }),
+    })
       .then((result) => {
         if (!result.ok) return result.why;
         if (action === "update") {
@@ -270,8 +289,7 @@ function EngineControl(props: {
     const problem = await controlDeliveryEngine(action, {
       launcherOwned: summary.launcherOwned,
       lifecycle: async (action) => {
-        if (savedKey.usable) return savedKey.run(action);
-        const result = await act("/api/engine/lifecycle", { key: approval, action });
+        const result = await keyed({ action });
         if (!result.ok) throw new Error(result.why);
         return result.body;
       },
@@ -447,7 +465,7 @@ function EngineControl(props: {
                     : "Use the approval key printed in this engine's terminal."}{" "}
                   This is not a T3 pairing code.
                   {savedKey.usable
-                    ? " Stop and restart use the approval key saved in Settings, so they need no passphrase here."
+                    ? " Engine controls use the approval key saved in Settings, so they need no passphrase here."
                     : null}
                 </p>
                 <Input
@@ -493,11 +511,7 @@ function EngineControl(props: {
                     size="sm"
                     variant="outline"
                     disabled={
-                      busy ||
-                      awaitingUpdate ||
-                      stopping ||
-                      (!approval && !savedKey.usable) ||
-                      !summary.launcherOwned
+                      busy || awaitingUpdate || stopping || !keyReady || !summary.launcherOwned
                     }
                     onClick={() => void control("stop")}
                   >
@@ -507,11 +521,7 @@ function EngineControl(props: {
                     size="sm"
                     variant="outline"
                     disabled={
-                      busy ||
-                      awaitingUpdate ||
-                      stopping ||
-                      (!approval && !savedKey.usable) ||
-                      !summary.launcherOwned
+                      busy || awaitingUpdate || stopping || !keyReady || !summary.launcherOwned
                     }
                     onClick={() => void control("restart")}
                   >
@@ -536,7 +546,7 @@ function EngineControl(props: {
                     onValueChange={(value: DeliveryReleaseChannel | null) => {
                       if (value) void releaseAction("channel", value);
                     }}
-                    disabled={busy || awaitingUpdate || stopping || !approval}
+                    disabled={busy || awaitingUpdate || stopping || !keyReady}
                   >
                     <SelectTrigger size="sm" aria-label="Engine release channel">
                       <SelectValue />
@@ -573,7 +583,7 @@ function EngineControl(props: {
                       <Button
                         size="sm"
                         disabled={
-                          busy || awaitingUpdate || stopping || !approval || !versions.managed
+                          busy || awaitingUpdate || stopping || !keyReady || !versions.managed
                         }
                         onClick={() => void releaseAction("update")}
                       >
@@ -583,7 +593,7 @@ function EngineControl(props: {
                         size="sm"
                         variant="outline"
                         disabled={
-                          busy || awaitingUpdate || stopping || !approval || versions.deferred
+                          busy || awaitingUpdate || stopping || !keyReady || versions.deferred
                         }
                         onClick={() => void releaseAction("later")}
                       >

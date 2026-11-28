@@ -272,6 +272,7 @@ import { commandFeatureUsage, featureUsage } from "./telemetry/FeatureUsage.ts";
 import type { TelemetryOwner } from "./telemetry/Identify.ts";
 import * as UsageService from "./usage/UsageService.ts";
 import * as BoardAgentTools from "./delivery/BoardAgentTools.ts";
+import { missingDeliveryScope } from "./delivery/deliveryAgentAccess.ts";
 import * as BoardThreadTasks from "./delivery/BoardThreadTasks.ts";
 import * as DeliveryService from "./delivery/DeliveryService.ts";
 import * as LimitedSeatSwap from "./delivery/LimitedSeatSwap.ts";
@@ -3911,7 +3912,13 @@ const layerForkWsRpc = (currentSession: EnvironmentAuth.AuthenticatedSession) =>
         [WS_METHODS.deliveryBoardApprovalKey]: () => delivery.boardApprovalKeyStatus,
         [WS_METHODS.deliverySetBoardApprovalKey]: (input) =>
           delivery.setBoardApprovalKey(input.key),
-        [WS_METHODS.deliveryEngineLifecycle]: (input) => boardAgentTools.engineLifecycle(input),
+        // The same rule as the agent tools: the saved key is used only with maintain scope.
+        [WS_METHODS.deliveryEngineControl]: (input) => {
+          const missing = missingDeliveryScope(currentSession.scopes, "maintain");
+          return missing === null
+            ? boardAgentTools.engineControl(input)
+            : Effect.fail(rpcAuthorizationError(missing));
+        },
         [WS_METHODS.deliveryReleaseThread]: (input) => delivery.releaseThread(input.threadId),
         [WS_METHODS.deliverySetThreadLineup]: (input) =>
           refuseServerOwnedTeam(input.threadId, threadManagement.getThreadShell).pipe(

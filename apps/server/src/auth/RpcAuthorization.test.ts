@@ -69,7 +69,7 @@ describe("RPC authorization scopes", () => {
   it("lets only an environment maintainer set or use the board approval key, and readers see if it is set", () => {
     for (const method of [
       WS_METHODS.deliverySetBoardApprovalKey,
-      WS_METHODS.deliveryEngineLifecycle,
+      WS_METHODS.deliveryEngineControl,
     ]) {
       expect(requiredScopeForRpcMethod(method)).toBe(AuthEnvironmentMaintainScope);
     }

@@ -77,7 +77,6 @@ import {
   DeliveryArchivedBoardThreads,
   DeliveryBoardApprovalKeyStatus,
   DeliverySetBoardApprovalKeyInput,
-  DeliveryEngineLifecycleReceipt,
 } from "./delivery.ts";
 import {
   AcpRegistryAcceptUrlAuthInput,
@@ -487,7 +486,7 @@ import {
   BoardTaskFiling,
   BoardThreadFilingInput,
 } from "./boardThreadTasks.ts";
-import { DeliveryEngineLifecycleInput } from "./boardAgentTools.ts";
+import { DeliveryEngineControlInput } from "./boardAgentTools.ts";
 import { DeploymentPortInput } from "./deployments.ts";
 import { AgentFeedbackAnswerInput, AgentFeedbackRequestError } from "./agentFeedback.ts";
 import {
@@ -684,7 +683,7 @@ export const WS_METHODS = {
   deliveryArchivedBoardThreads: "delivery.archivedBoardThreads",
   deliveryBoardApprovalKey: "delivery.boardApprovalKey",
   deliverySetBoardApprovalKey: "delivery.setBoardApprovalKey",
-  deliveryEngineLifecycle: "delivery.engineLifecycle",
+  deliveryEngineControl: "delivery.engineControl",
   deliveryReleaseThread: "delivery.releaseThread",
   deliverySetThreadLineup: "delivery.setThreadLineup",
   deliveryLimitedSeats: "delivery.limitedSeats",
@@ -1300,10 +1299,10 @@ const WsDeliverySetBoardApprovalKeyRpc = Rpc.make(WS_METHODS.deliverySetBoardApp
   error: Schema.Union([EnvironmentAuthorizationError, DeliveryError]),
 });
 
-/** Stops or restarts the engine with the server's saved approval key, which never leaves it. */
-const WsDeliveryEngineLifecycleRpc = Rpc.make(WS_METHODS.deliveryEngineLifecycle, {
-  payload: DeliveryEngineLifecycleInput,
-  success: DeliveryEngineLifecycleReceipt,
+/** A keyed engine control with the server's saved approval key, which never leaves it. */
+const WsDeliveryEngineControlRpc = Rpc.make(WS_METHODS.deliveryEngineControl, {
+  payload: DeliveryEngineControlInput,
+  success: DeliveryResponse,
   error: Schema.Union([EnvironmentAuthorizationError, DeliveryError]),
 });
 
@@ -2946,7 +2945,7 @@ export const ForkWsRpcGroup = RpcGroup.make(
   WsDeliveryArchivedBoardThreadsRpc,
   WsDeliveryBoardApprovalKeyRpc,
   WsDeliverySetBoardApprovalKeyRpc,
-  WsDeliveryEngineLifecycleRpc,
+  WsDeliveryEngineControlRpc,
   WsDeliveryReleaseThreadRpc,
   WsDeliverySetThreadLineupRpc,
   WsDeliveryLimitedSeatsRpc,

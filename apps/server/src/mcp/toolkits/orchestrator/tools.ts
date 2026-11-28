@@ -2,7 +2,7 @@ import {
   EnvironmentId,
   BoardAgentBoardToolInput,
   BoardAgentBoardToolResult,
-  BoardAgentTask,
+  BoardAgentTaskToolResult,
   BoardAgentTaskToolInput,
   BoardAgentTasksToolInput,
   BoardAgentTasksToolResult,
@@ -473,7 +473,7 @@ const onBoard = <Fields extends Schema.Struct.Fields>(input: Schema.Struct<Field
 
 const BoardTool = Tool.make("delivery_board", {
   description:
-    "Boards: `list` (with repository ids), `create` (title, repository), `edit`, `remove`. Remove only when asked: tasks stay, on no board; its settings are lost, no restore. Deployment-linked boards need `force`.",
+    "Boards: `list` (with repository ids), `create` (title, repository), `edit`, `remove` (only when asked; its tasks stay, on no board). Protected boards need `force`.",
   parameters: onBoard(BoardAgentBoardToolInput),
   success: BoardAgentBoardToolResult,
   failure: OrchestratorMcpFailure,
@@ -486,9 +486,9 @@ const BoardTool = Tool.make("delivery_board", {
 
 const TaskTool = Tool.make("delivery_task", {
   description:
-    "One task: `get`, `edit` (body on drafts only), `move` to `lane` (e.g. queue, paused) or `board` (null: none; other repo needs `base`), `submit` a draft, `close` with `reason`, `discard` a draft. Close and discard only when asked: no undo, no reopen. Live or deployment-linked tasks need `force`.",
+    "One task: `get`, `edit` (body on drafts only), `move` to `lane` (e.g. queue, paused) or `board` (null: none; other repo needs `base`), `submit` a draft, `close` with `reason`, `discard` a draft; close and discard only when asked. Live or protected tasks need `force`.",
   parameters: onBoard(BoardAgentTaskToolInput),
-  success: BoardAgentTask,
+  success: BoardAgentTaskToolResult,
   failure: OrchestratorMcpFailure,
   failureMode: "return",
   dependencies: boardDependencies,
@@ -499,7 +499,7 @@ const TaskTool = Tool.make("delivery_task", {
 
 const TasksTool = Tool.make("delivery_tasks", {
   description:
-    "`list` tasks by `filter`, newest first; page with `filter.updatedBefore`. Only when asked, `close` (with `reason`) or `move` (to `lane`/`board`) up to 200 by `tasks` ids or `filter`: first a dry run of `items`; show it, then repeat with `confirm` and its `dryRunToken`.",
+    "`list` by `filter`, newest first; page with `filter.updatedBefore`. `close` (with `reason`) or `move` (to `lane`/`board`) up to 200 by `tasks` ids or `filter`, only when asked.",
   parameters: onBoard(BoardAgentTasksToolInput),
   success: BoardAgentTasksToolResult,
   failure: OrchestratorMcpFailure,
@@ -512,7 +512,7 @@ const TasksTool = Tool.make("delivery_tasks", {
 
 const EngineLifecycleTool = Tool.make("delivery_engine_lifecycle", {
   description:
-    "Only when asked: stop or restart the delivery engine with the saved approval key. Running seats pause until it is back; stop leaves it down. Returns acceptance, not completion.",
+    "Stop or restart the delivery engine with the saved approval key; owner only. Running seats pause until it is back. Returns acceptance, not completion.",
   parameters: onBoard(DeliveryEngineLifecycleInput),
   success: DeliveryEngineLifecycleReceipt,
   failure: OrchestratorMcpFailure,

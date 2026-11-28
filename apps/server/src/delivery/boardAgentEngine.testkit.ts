@@ -89,8 +89,16 @@ export function agentEngine() {
         return refuse(400, "That name is used by the engine. Sign with your own name.");
       writes.push({ path, body });
     }
+    if (method === "POST" && path === "/api/engine/update") {
+      if (body.key !== KEY) return refuse(403, `the approval key ${String(body.key)} is wrong`);
+      return {
+        status: 200,
+        body: { accepted: true, id: "update-1", commit: body.commit, channel: "qa" },
+      };
+    }
     if (method === "POST" && path === "/api/engine/lifecycle") {
-      if (body.key !== KEY) return refuse(403, "the approval key is wrong or missing");
+      // An engine that echoes what it was sent, which must never reach the caller.
+      if (body.key !== KEY) return refuse(403, `the approval key ${String(body.key)} is wrong`);
       return {
         status: 200,
         body: { accepted: true, id: "5f0c2b8e-0d7e-4f61-9d1e-2a4b6c8d0e1f", action: body.action },
@@ -188,6 +196,8 @@ export function agentEngine() {
         return { status: 200, body: cardOf(task) };
       case "move": {
         const to = String(body.lane);
+        if (body.seen !== undefined && body.seen !== task.lane)
+          return refuse(409, "this card has moved since you saw it");
         if (["closed", "rejected", "merged"].includes(task.state))
           return refuse(
             409,

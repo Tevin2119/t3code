@@ -1,21 +1,24 @@
 import * as Schema from "effect/Schema";
 
 import { BoardTaskBoardId } from "./boardThreadTasks.ts";
+import { DeliveryReleaseChannel } from "./delivery.ts";
 
-/** What agents do with boards and tasks over MCP, one engine route each (`BoardAgentTools`). */
+/**
+ * What agents do with boards and tasks over MCP (`BoardAgentTools`): three tools whose `action`
+ * picks one engine route. Fields the engine trims and caps itself carry no caps here, and lanes
+ * are a plain string the engine checks, so the schemas agents read stay small.
+ */
 
 const Id = Schema.String.check(Schema.isPattern(/^[\w-]{1,100}$/));
 const NonBlank = Schema.String.check(Schema.isNonEmpty(), Schema.isPattern(/\S/));
-const Force = Schema.optional(
-  Schema.Boolean.annotate({
-    description:
-      "Act on a task with a live run, or on a deployment-linked board. Only when the person asked.",
-  }),
-);
 
-/** A board lane id, e.g. `queue`, `paused`, `completed`; the engine refuses others with the list. */
-export const BoardAgentLane = Schema.String;
-export type BoardAgentLane = typeof BoardAgentLane.Type;
+export const BOARD_AGENT_BULK_MAX = 200;
+
+/** A dry run's token comes back with `confirm: true` to act on exactly what it showed. */
+const Confirmation = {
+  confirm: Schema.optional(Schema.Boolean),
+  dryRunToken: Schema.optional(Schema.String),
+};
 
 export const BoardAgentBoard = Schema.Struct({
   id: Schema.String,
@@ -24,52 +27,14 @@ export const BoardAgentBoard = Schema.Struct({
   icon: Schema.NullOr(Schema.String),
   repository: Schema.NullOr(Schema.String),
   base: Schema.NullOr(Schema.String),
-  /** Linked to a deployment project: removing it, or closing its tasks, needs `force`. */
-  deploymentLinked: Schema.Boolean,
+  /** Deployment-linked, or bound to a protected repository: changing it needs `force`. */
+  protected: Schema.Boolean,
 });
 export type BoardAgentBoard = typeof BoardAgentBoard.Type;
 
 export const BoardAgentRepository = Schema.Struct({
   id: Schema.String,
   title: Schema.NullOr(Schema.String),
-});
-
-export const BoardAgentBoardsResult = Schema.Struct({
-  boards: Schema.Array(BoardAgentBoard),
-  /** What a board can be bound to; pass one's `id` as `repository`. */
-  repositories: Schema.Array(BoardAgentRepository),
-});
-export type BoardAgentBoardsResult = typeof BoardAgentBoardsResult.Type;
-
-export const BoardAgentBoardCreateInput = Schema.Struct({
-  title: NonBlank,
-  repository: Id.annotate({ description: "A repository `id` from `delivery_board` `list`." }),
-  base: Schema.optional(
-    Schema.String.annotate({ description: "Base branch. Omit for its default." }),
-  ),
-  description: Schema.optional(Schema.String),
-  icon: Schema.optional(Schema.String),
-});
-export type BoardAgentBoardCreateInput = typeof BoardAgentBoardCreateInput.Type;
-
-export const BoardAgentBoardEditInput = Schema.Struct({
-  board: BoardTaskBoardId,
-  title: Schema.optional(NonBlank),
-  description: Schema.optional(Schema.String),
-  repository: Schema.optional(Id),
-  base: Schema.optional(Schema.String),
-  icon: Schema.optional(Schema.String),
-});
-export type BoardAgentBoardEditInput = typeof BoardAgentBoardEditInput.Type;
-
-export const BoardAgentBoardRemoveInput = Schema.Struct({ board: BoardTaskBoardId, force: Force });
-export type BoardAgentBoardRemoveInput = typeof BoardAgentBoardRemoveInput.Type;
-
-export const BoardAgentBoardRemoved = Schema.Struct({
-  removed: Schema.String,
-  /** The board's tasks, kept and now on no board. Recreate the board and move them back to undo. */
-  tasks: Schema.Array(Schema.String),
-  board: BoardAgentBoard,
 });
 
 export const BoardAgentRun = Schema.Struct({
@@ -90,45 +55,11 @@ export const BoardAgentTaskSummary = Schema.Struct({
   updated: Schema.NullOr(Schema.String),
   held: Schema.Boolean,
   run: Schema.NullOr(BoardAgentRun),
-  /** A run is working: closing, discarding or moving it needs `force`. */
+  /** A run is working: closing, discarding or re-boarding it needs `force`. */
   live: Schema.Boolean,
-  deploymentLinked: Schema.Boolean,
+  protected: Schema.Boolean,
 });
 export type BoardAgentTaskSummary = typeof BoardAgentTaskSummary.Type;
-
-/** `query` is words or `#12`; `updatedBefore` an ISO time, to page past the newest. */
-export const BoardAgentTaskFilter = Schema.Struct({
-  board: Schema.optional(BoardTaskBoardId),
-  lane: Schema.optional(BoardAgentLane),
-  state: Schema.optional(Schema.String),
-  query: Schema.optional(Schema.String),
-  origin: Schema.optional(Schema.String),
-  updatedBefore: Schema.optional(Schema.String),
-});
-export type BoardAgentTaskFilter = typeof BoardAgentTaskFilter.Type;
-
-export const BoardAgentTasksListInput = Schema.Struct({
-  ...BoardAgentTaskFilter.fields,
-  limit: Schema.optional(
-    Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 500 })).annotate({
-      description: "1 to 500; default 100. Newest first.",
-    }),
-  ),
-});
-export type BoardAgentTasksListInput = typeof BoardAgentTasksListInput.Type;
-
-export const BoardAgentTasksListResult = Schema.Struct({
-  tasks: Schema.Array(BoardAgentTaskSummary),
-  /**
-   * More may match. The engine has no cursor: page with `updatedBefore` set to the last
-   * task's `updated`.
-   */
-  more: Schema.Boolean,
-});
-export type BoardAgentTasksListResult = typeof BoardAgentTasksListResult.Type;
-
-export const BoardAgentTaskRef = Schema.Struct({ task: Id });
-export type BoardAgentTaskRef = typeof BoardAgentTaskRef.Type;
 
 export const BoardAgentTask = Schema.Struct({
   ...BoardAgentTaskSummary.fields,
@@ -136,137 +67,70 @@ export const BoardAgentTask = Schema.Struct({
 });
 export type BoardAgentTask = typeof BoardAgentTask.Type;
 
-export const BoardAgentTaskEditInput = Schema.Struct({
-  task: Id,
-  title: Schema.optional(NonBlank),
-  body: Schema.optional(NonBlank.annotate({ description: "Drafts only." })),
-  priority: Schema.optional(Schema.Literals(["low", "medium", "high", "urgent"])),
-  tags: Schema.optional(Schema.Array(Schema.String)),
+/** Every field is checked here, not left to the engine. `query` is words or `#12`. */
+export const BoardAgentTaskFilter = Schema.Struct({
+  board: Schema.optional(BoardTaskBoardId),
+  lane: Schema.optional(Schema.String),
+  state: Schema.optional(Schema.String),
+  query: Schema.optional(Schema.String),
+  origin: Schema.optional(Schema.String),
+  updatedBefore: Schema.optional(Schema.String),
 });
-export type BoardAgentTaskEditInput = typeof BoardAgentTaskEditInput.Type;
+export type BoardAgentTaskFilter = typeof BoardAgentTaskFilter.Type;
 
-export const BoardAgentTaskMoveInput = Schema.Struct({
-  task: Id,
-  lane: Schema.optional(BoardAgentLane),
-  board: Schema.optional(
-    Schema.NullOr(BoardTaskBoardId).annotate({ description: "A board id, or null for none." }),
-  ),
-  base: Schema.optional(
-    Schema.String.annotate({
-      description: "Base branch on the new board, when its repository differs.",
-    }),
-  ),
-  force: Force,
-});
-export type BoardAgentTaskMoveInput = typeof BoardAgentTaskMoveInput.Type;
-
-export const BoardAgentTaskCloseInput = Schema.Struct({
-  task: Id,
-  reason: NonBlank,
-  force: Force,
-});
-export type BoardAgentTaskCloseInput = typeof BoardAgentTaskCloseInput.Type;
-
-export const BoardAgentTaskDiscardInput = Schema.Struct({ task: Id, force: Force });
-export type BoardAgentTaskDiscardInput = typeof BoardAgentTaskDiscardInput.Type;
-
-export const BoardAgentTaskDiscarded = Schema.Struct({ discarded: Schema.String });
-
-export const BOARD_AGENT_BULK_MAX = 200;
-
-const BulkSelection = {
-  tasks: Schema.optional(
-    Schema.Array(Id)
-      .check(Schema.isMinLength(1), Schema.isMaxLength(BOARD_AGENT_BULK_MAX))
-      .annotate({ description: "Task ids. Or give `filter`." }),
-  ),
-  filter: Schema.optional(BoardAgentTaskFilter),
-  force: Force,
-  confirm: Schema.optional(
-    Schema.Boolean.annotate({ description: "true acts; omit for the dry run." }),
-  ),
-  dryRunToken: Schema.optional(
-    Schema.String.annotate({
-      description: "From the dry run; required with `confirm`.",
-    }),
-  ),
-};
-
-export const BoardAgentBulkCloseInput = Schema.Struct({
-  ...BulkSelection,
-  reason: NonBlank,
-});
-export type BoardAgentBulkCloseInput = typeof BoardAgentBulkCloseInput.Type;
-
-export const BoardAgentBulkMoveInput = Schema.Struct({
-  ...BulkSelection,
-  lane: Schema.optional(BoardAgentLane),
-  board: BoardAgentTaskMoveInput.fields.board,
-});
-export type BoardAgentBulkMoveInput = typeof BoardAgentBulkMoveInput.Type;
-
-export const BoardAgentBulkItem = Schema.Struct({
-  id: Schema.String,
-  number: Schema.Number,
-  title: Schema.String,
-  outcome: Schema.Literals(["would-act", "done", "skipped", "failed"]),
-  message: Schema.NullOr(Schema.String),
-});
-
-export const BoardAgentBulkResult = Schema.Struct({
-  dryRun: Schema.Boolean,
-  /** Pass back with `confirm: true` to act on exactly this list. */
-  dryRunToken: Schema.NullOr(Schema.String),
-  items: Schema.Array(BoardAgentBulkItem),
-  /** More tasks match than one call takes. Call again after this batch. */
-  more: Schema.Boolean,
-});
-export type BoardAgentBulkResult = typeof BoardAgentBulkResult.Type;
-
-/** Stop or restart the engine through its launcher, with the approval key saved on the server. */
-export const DeliveryEngineLifecycleInput = Schema.Struct({
-  action: Schema.Literals(["stop", "restart"]),
-});
-export type DeliveryEngineLifecycleInput = typeof DeliveryEngineLifecycleInput.Type;
-
-/** `delivery_board`: one tool, its action picks what the other fields mean. */
+/** `delivery_board`. */
 export const BoardAgentBoardToolInput = Schema.Struct({
   action: Schema.Literals(["list", "create", "edit", "remove"]),
   board: Schema.optional(BoardTaskBoardId),
-  title: BoardAgentBoardEditInput.fields.title,
+  title: Schema.optional(NonBlank),
   repository: Schema.optional(Id),
   base: Schema.optional(Schema.String),
   description: Schema.optional(Schema.String),
   icon: Schema.optional(Schema.String),
   force: Schema.optional(Schema.Boolean),
+  ...Confirmation,
 });
 export type BoardAgentBoardToolInput = typeof BoardAgentBoardToolInput.Type;
 
 export const BoardAgentBoardToolResult = Schema.Struct({
   boards: Schema.Array(BoardAgentBoard),
   repositories: Schema.optional(Schema.Array(BoardAgentRepository)),
-  /** After remove: the board's tasks, kept on no board. */
+  /** For remove: the board's tasks, kept on no board. */
   tasks: Schema.optional(Schema.Array(Schema.String)),
+  /** Set on a remove's dry run; nothing was removed yet. */
+  dryRunToken: Schema.optional(Schema.String),
+  /** On a dry run: what to do with it. */
+  next: Schema.optional(Schema.String),
 });
 export type BoardAgentBoardToolResult = typeof BoardAgentBoardToolResult.Type;
 
-/** `delivery_task`: one task, one action. */
+/** `delivery_task`. */
 export const BoardAgentTaskToolInput = Schema.Struct({
   action: Schema.Literals(["get", "edit", "move", "submit", "close", "discard"]),
   task: Id,
-  title: BoardAgentTaskEditInput.fields.title,
+  title: Schema.optional(NonBlank),
   body: Schema.optional(NonBlank),
-  priority: BoardAgentTaskEditInput.fields.priority,
-  tags: BoardAgentTaskEditInput.fields.tags,
-  lane: Schema.optional(BoardAgentLane),
+  priority: Schema.optional(Schema.Literals(["low", "medium", "high", "urgent"])),
+  tags: Schema.optional(Schema.Array(Schema.String)),
+  lane: Schema.optional(Schema.String),
   board: Schema.optional(Schema.NullOr(BoardTaskBoardId)),
   base: Schema.optional(Schema.String),
   reason: Schema.optional(NonBlank),
   force: Schema.optional(Schema.Boolean),
+  ...Confirmation,
 });
 export type BoardAgentTaskToolInput = typeof BoardAgentTaskToolInput.Type;
 
-/** `delivery_tasks`: list, or close or move many after a dry run. */
+export const BoardAgentTaskToolResult = Schema.Struct({
+  ...BoardAgentTask.fields,
+  /** Set on a close's or discard's dry run; nothing was changed yet. */
+  dryRunToken: Schema.optional(Schema.String),
+  /** On a dry run: what to do with it. */
+  next: Schema.optional(Schema.String),
+});
+export type BoardAgentTaskToolResult = typeof BoardAgentTaskToolResult.Type;
+
+/** `delivery_tasks`. */
 export const BoardAgentTasksToolInput = Schema.Struct({
   action: Schema.Literals(["list", "close", "move"]),
   filter: Schema.optional(BoardAgentTaskFilter),
@@ -275,19 +139,51 @@ export const BoardAgentTasksToolInput = Schema.Struct({
   ),
   limit: Schema.optional(Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 500 }))),
   reason: Schema.optional(NonBlank),
-  lane: Schema.optional(BoardAgentLane),
+  lane: Schema.optional(Schema.String),
   board: Schema.optional(Schema.NullOr(BoardTaskBoardId)),
   force: Schema.optional(Schema.Boolean),
-  confirm: Schema.optional(Schema.Boolean),
-  dryRunToken: Schema.optional(Schema.String),
+  ...Confirmation,
 });
 export type BoardAgentTasksToolInput = typeof BoardAgentTasksToolInput.Type;
 
+export const BoardAgentBulkItem = Schema.Struct({
+  id: Schema.String,
+  number: Schema.NullOr(Schema.Number),
+  title: Schema.NullOr(Schema.String),
+  outcome: Schema.Literals(["would-act", "done", "skipped", "failed", "not-found"]),
+  message: Schema.NullOr(Schema.String),
+});
+
 export const BoardAgentTasksToolResult = Schema.Struct({
   tasks: Schema.optional(Schema.Array(BoardAgentTaskSummary)),
+  /** More matches in this window: page with `filter.updatedBefore` set to the last `updated`. */
   more: Schema.Boolean,
-  /** A dry run's token; pass it back with `confirm`. Null once acted. */
-  dryRunToken: Schema.optional(Schema.NullOr(Schema.String)),
+  /**
+   * The engine answered its newest 500 tasks: older ones are not reachable here. It has no
+   * cursor, so paging ends at the window rather than claiming more.
+   */
+  truncated: Schema.Boolean,
+  /** Set on a bulk dry run; pass it back with `confirm: true`. */
+  dryRunToken: Schema.optional(Schema.String),
+  /** On a dry run: what to do with it. */
+  next: Schema.optional(Schema.String),
   items: Schema.optional(Schema.Array(BoardAgentBulkItem)),
 });
 export type BoardAgentTasksToolResult = typeof BoardAgentTasksToolResult.Type;
+
+/** `delivery_engine_lifecycle`: what an agent may ask of the engine's launcher. */
+export const DeliveryEngineLifecycleInput = Schema.Struct({
+  action: Schema.Literals(["stop", "restart"]),
+});
+export type DeliveryEngineLifecycleInput = typeof DeliveryEngineLifecycleInput.Type;
+
+/**
+ * Every keyed engine control the Engine panel takes, sent with the approval key saved on the
+ * server. The key never reaches the client, and refusals come back as fixed text.
+ */
+export const DeliveryEngineControlInput = Schema.Struct({
+  action: Schema.Literals(["stop", "restart", "update", "later", "channel"]),
+  commit: Schema.optional(Schema.String),
+  channel: Schema.optional(DeliveryReleaseChannel),
+});
+export type DeliveryEngineControlInput = typeof DeliveryEngineControlInput.Type;

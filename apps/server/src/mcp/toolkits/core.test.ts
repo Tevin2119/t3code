@@ -1865,14 +1865,21 @@ it.effect(
       held: false,
       run: null,
       live: false,
-      deploymentLinked: false,
+      protected: false,
     };
     const record = <A>(name: string, value: A) => Effect.sync(() => (reached.push(name), value));
     const boards = Layer.mock(BoardAgentTools.BoardAgentTools)({
       board: (_scope, input) => record(`board:${input.action}`, { boards: [] }),
       task: (scope, input) =>
         record(`task:${input.action}:${BoardAgentTools.actorOf(scope)}`, { ...task, body: null }),
-      tasks: (_scope, input) => record(`tasks:${input.action}`, { tasks: [task], more: false }),
+      tasks: (_scope, input) =>
+        record(`tasks:${input.action}`, { tasks: [task], more: false, truncated: false }),
+      engineLifecycle: (input) =>
+        record(`engine:${input.action}`, {
+          accepted: true as const,
+          id: "e-1",
+          action: input.action,
+        }),
     });
     return Effect.gen(function* () {
       const server = yield* McpServer.McpServer;
@@ -1916,13 +1923,23 @@ it.effect(
       expect(closed.isError).toBe(false);
       expect(reached.at(-1)).toBe("task:close:T3 client Claude Code");
 
-      // Stopping the engine is an environment change: below full access it is refused too.
-      const lifecycle = yield* call(
-        "delivery_engine_lifecycle",
-        { action: "stop" },
-        clientScope("auto"),
-      );
-      expect(declaredFailure(lifecycle)).toMatchObject({ code: "capability_denied" });
+      // Stopping the engine uses the saved key: maintain scope, which no client or link holds,
+      // even one paired with full access.
+      for (const invocation of [
+        clientScope("full-access"),
+        {
+          ...clientScope("full-access"),
+          client: {
+            sessionId: "peer",
+            label: "Laptop",
+            access: "full-access" as const,
+            linked: true,
+          },
+        },
+      ]) {
+        const lifecycle = yield* call("delivery_engine_lifecycle", { action: "stop" }, invocation);
+        expect(declaredFailure(lifecycle)).toMatchObject({ code: "capability_denied" });
+      }
       expect(reached.at(-1)).toBe("task:close:T3 client Claude Code");
 
       const off = yield* call(
