@@ -64,6 +64,7 @@ const board = (extra: Partial<BoardTask> = {}): BoardTask => ({
   openTask: vi.fn(),
   openTab: vi.fn(),
   decisions: null,
+  discuss: null,
   thread: { environmentId: EnvironmentId.make("env-1"), threadId: ThreadId.make("lead") },
   seats: {
     thread: (seat) => (seat === "builder" ? seatThread : null),
@@ -104,6 +105,26 @@ it("holds the engine's facts the header badges used to, and opens each tab from 
   expect(value.openTab).toHaveBeenLastCalledWith("task-evidence");
   await screen.getByRole("button", { name: /Deployments/ }).click();
   expect(value.openTab).toHaveBeenLastCalledWith("task-deployments");
+});
+
+it("offers a side chat of the task's thread only where one can start", async () => {
+  await using screen = await render(
+    <BoardTaskContext value={board()}>
+      <TaskDetailsItem />
+    </BoardTaskContext>,
+  );
+  await expect.element(screen.getByRole("button", { name: "Evidence" })).toBeVisible();
+  await expect
+    .element(screen.getByRole("button", { name: "Discuss in a thread" }))
+    .not.toBeInTheDocument();
+  const discuss = vi.fn();
+  await screen.rerender(
+    <BoardTaskContext value={board({ discuss })}>
+      <TaskDetailsItem />
+    </BoardTaskContext>,
+  );
+  await screen.getByRole("button", { name: "Discuss in a thread" }).click();
+  expect(discuss).toHaveBeenCalledOnce();
 });
 
 it("leads with what the person owes, and leaves the conversation it came from to the lineage", async () => {

@@ -8,6 +8,7 @@ import type { BoardTask } from "./BoardTaskContext";
 import { DecisionBar } from "./DecisionBar";
 import { useTaskActions } from "./taskActions";
 import { useTaskConversation } from "./useTaskConversation";
+import { useTaskSideChat } from "./useTaskSideChat";
 
 const PRIMARY_ACTIONS = ["approve", "reject", "publish", "submit", "deliver", "accept-artifacts"];
 
@@ -41,6 +42,7 @@ function useBoardTaskValue(
     scope: owner,
   });
   const conversation = useTaskConversation(task);
+  const discuss = useTaskSideChat(conversation.ref);
   // The task's tabs live on its thread's right panel, or on its own while it has no thread.
   const panelRef = conversation.ref ?? taskPanelRef(owner);
   const primary = task?.actions.filter((action) => PRIMARY_ACTIONS.includes(action)) ?? [];
@@ -66,9 +68,10 @@ function useBoardTaskValue(
           ) : null,
         thread: conversation.ref,
         seats: conversation.seats,
+        discuss,
       }
     : null;
-  return { board, task, read, actions, conversation, owner, panelRef, others };
+  return { board, task, read, actions, conversation, owner, panelRef, others, discuss };
 }
 
 export type OpenBoardTask = ReturnType<typeof useBoardTaskValue>;

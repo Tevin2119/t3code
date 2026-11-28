@@ -1130,6 +1130,7 @@ const boardTask = () => ({
   openTask: () => {},
   openTab: () => {},
   decisions: null,
+  discuss: null,
   thread: null,
   seats: { thread: () => null, rows: [] },
 });

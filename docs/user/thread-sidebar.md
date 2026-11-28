@@ -113,6 +113,13 @@ its entry in the log, which **Needs you** links to while it waits. A finished
 task keeps a composer, with or without a thread: what you write goes to the
 engine, and its refusal shows as a notice.
 
+To talk about a task without writing to it, choose **Discuss in a thread** in the
+task's menu or on the **Task** item. It opens a side chat of the task's thread,
+with the conversation so far, on the thread's right panel and among its **Side
+chats** in the thread details card. What you write there stays in the side chat:
+it does not reach the task, its team or the engine. Closing or archiving the side
+chat leaves the task as it is.
+
 The task's lineage lists the seats' own conversations, **Made from**, the
 conversation that created the task, and the task's parent, parts and follow-ups.
 A seat's conversation opens like a subagent's: beside the task's thread or at its
