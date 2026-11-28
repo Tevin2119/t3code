@@ -514,7 +514,12 @@ const QUEUED_THREAD = boardTaskThreadId(QUEUED);
 const claims = (engine: ScratchEngine, id: string) =>
   engine.requests.filter((request) => request.path === `/api/orchestration/tasks/${id}/claim`);
 
-it.effect("gives a submitted task its thread and first message, and claims it only in work", () => {
+const filedSends = (store: ThreadStore, threadId: string) =>
+  store.commands.filter(
+    (command) => command.type === "message.dispatch" && command.threadId === threadId,
+  );
+
+it.effect("gives a submitted task an idle thread, and its first message once claimed", () => {
   const engine = board();
   const queued = engine.addTask({
     id: "queued-1",
@@ -526,14 +531,24 @@ it.effect("gives a submitted task its thread and first message, and claims it on
   return Effect.gen(function* () {
     const threads = yield* service(store);
     assert.deepEqual([...(yield* threads.reconcile())], []);
+    yield* threads.reconcile();
     assert.deepEqual([...store.threads.keys()], [QUEUED_THREAD]);
     assert.equal(engine.linkOf("queued-1")?.threadId, QUEUED_THREAD);
     // Waiting for a slot takes no lease, so it never counts toward the board's task cap.
     assert.isNull(engine.leaseOf("queued-1"));
     assert.lengthOf(claims(engine, "queued-1"), 0);
-    const [first, ...rest] = store.commands.filter(
-      (command) => command.type === "message.dispatch" && command.threadId === QUEUED_THREAD,
-    );
+    // Every message starts a lead turn, so a waiting thread is sent none and runs nothing.
+    assert.lengthOf(filedSends(store, QUEUED_THREAD), 0);
+    assert.isFalse(store.active.has(QUEUED_THREAD));
+    assert.isFalse(store.events.some(({ event }) => event.threadId === QUEUED_THREAD));
+    queued.lane = "in-work";
+    queued.state = "triage";
+    yield* threads.reconcile();
+    // Admitted, the same thread claims it, then is told the task as filed.
+    assert.equal(engine.leaseOf("queued-1")?.origin, `thread:${ENVIRONMENT}/${QUEUED_THREAD}`);
+    assert.lengthOf(creates(store), 1);
+    assert.lengthOf(linkWrites(engine), 1);
+    const [first, ...rest] = filedSends(store, QUEUED_THREAD);
     assert.lengthOf(rest, 0);
     if (first?.type !== "message.dispatch") throw new Error("Expected the task as filed");
     assert.equal(first.text, "# Ship it\n\nComplete the task.");
@@ -551,24 +566,15 @@ it.effect("gives a submitted task its thread and first message, and claims it on
       detail: first.text,
     });
     yield* threads.reconcile();
-    assert.isNull(engine.leaseOf("queued-1"));
-    queued.lane = "in-work";
-    queued.state = "triage";
-    yield* threads.reconcile();
-    // In work, the same thread claims it, and nothing new is made or said.
-    assert.equal(engine.leaseOf("queued-1")?.origin, `thread:${ENVIRONMENT}/${QUEUED_THREAD}`);
-    assert.lengthOf(creates(store), 1);
-    assert.lengthOf(linkWrites(engine), 1);
-    assert.lengthOf(
-      store.commands.filter(
-        (command) => command.type === "message.dispatch" && command.threadId === QUEUED_THREAD,
-      ),
-      1,
+    assert.lengthOf(filedSends(store, QUEUED_THREAD), 1);
+    // The card counts it as a notice, not a message of the conversation.
+    assert.isTrue(
+      engine.activityOf("queued-1").some((row) => row.kind === "steer" && row.excerpt === null),
     );
   }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-submit-")));
 });
 
-it.effect("gives no thread at submit to a draft or a task submitted before the server", () => {
+it.effect("gives no thread at submit to a draft, a finished task, or one submitted earlier", () => {
   const engine = board();
   engine.addTask({ id: "draft-1", lane: "draft", state: "draft", submitted: false });
   const old = engine.addTask({ id: "queued-1", lane: "queue", state: "ready" });
@@ -578,23 +584,41 @@ it.effect("gives no thread at submit to a draft or a task submitted before the s
     state: "intake",
     served: { submitted: "2026-11-22T09:45:00.000Z" },
   });
+  engine.addTask({
+    id: "closed-1",
+    lane: "queue",
+    state: "closed",
+    served: { submitted: "2026-11-22T09:45:00.000Z" },
+  });
+  const threadOf = (id: string) => boardTaskThreadId(boardTaskOf("work", id)!);
   const store = threadStore();
   return Effect.gen(function* () {
-    // The server starts after queued-1 was submitted (09:00) and before queued-2 was.
+    // This build first runs after queued-1 was submitted (09:00) and before queued-2 was.
     yield* TestClock.setTime(Date.parse("2026-11-22T09:30:00.000Z"));
-    const threads = yield* service(store);
-    yield* threads.reconcile();
-    assert.deepEqual(
-      [...store.threads.keys()],
-      [boardTaskThreadId(boardTaskOf("work", "queued-2")!)],
-    );
-    // An open task submitted earlier is not backfilled: its thread comes once it is in work.
+    yield* (yield* service(store)).reconcile();
+    assert.deepEqual([...store.threads.keys()], [threadOf("queued-2")]);
+    // A restart keeps the line where this build first ran.
+    yield* TestClock.setTime(Date.parse("2026-11-22T10:30:00.000Z"));
+    engine.addTask({
+      id: "queued-3",
+      lane: "queue",
+      state: "ready",
+      served: { submitted: "2026-11-22T09:50:00.000Z" },
+    });
+    const restarted = yield* service(store);
+    yield* restarted.reconcile();
+    assert.isTrue(store.threads.has(threadOf("queued-3")));
+    // An open task submitted earlier is not backfilled: its thread comes once it is in work,
+    // with no first message.
     old.lane = "in-work";
     old.state = "triage";
-    yield* threads.reconcile();
+    yield* restarted.reconcile();
+    yield* restarted.reconcile();
     assert.isTrue(store.threads.has(QUEUED_THREAD));
     assert.isNotNull(engine.leaseOf("queued-1"));
-    assert.isFalse(store.threads.has(boardTaskThreadId(boardTaskOf("work", "draft-1")!)));
+    assert.lengthOf(filedSends(store, QUEUED_THREAD), 0);
+    assert.isFalse(store.threads.has(threadOf("draft-1")));
+    assert.isFalse(store.threads.has(threadOf("closed-1")));
   }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-no-backfill-")));
 });
 

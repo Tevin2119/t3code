@@ -87,10 +87,10 @@ phone the column is the sidebar sheet. The thread details card on the right star
 collapsed for a task's thread and keeps the thread's own items; open it with its
 toggle as on any thread, and it stays as you leave it.
 
-A task gets its thread when you submit it, even while it waits in the queue for a
-slot. Its first message is the task as you filed it, posted as a system notice. A
-draft has no thread, and a task submitted while T3 Code was not running gets its
-thread once work on it starts.
+A task gets its thread when you submit it. While it waits in the queue for a slot
+the thread stays idle; once work starts, its first message is the task as you filed
+it, posted as a system notice. A draft has no thread, and a task submitted before
+this version of T3 Code first ran gets its thread once work on it starts.
 
 Until its first message, a task's thread shows its team in place of the empty
 thread's prompt: the team, then its lead and seats.
