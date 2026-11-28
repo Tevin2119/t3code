@@ -20,7 +20,8 @@ import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { forkParked } from "../serverActivation.ts";
 import { MOVED } from "./boardTaskWork.ts";
-import { BOARD_TASK_MARKER_LIKE, boardTaskOfMarker, type BoardTask } from "./boardThreadMarker.ts";
+import { listBoardThreadRows } from "./boardThreadRows.ts";
+import type { BoardTask } from "./boardThreadMarker.ts";
 import * as DeliveryService from "./DeliveryService.ts";
 
 /** One of a task's related threads, as its lanes card and detail serve them. */
@@ -47,28 +48,35 @@ export interface BoardSideChat {
 export const sideChatKey = (environmentId: string, threadId: string) =>
   `side-${NodeCrypto.createHash("sha256").update(`${environmentId}/${threadId}`).digest("hex").slice(0, 40)}`;
 
-/** The side chats whose parent is a board task thread here, archived and deleted ones included. */
+/**
+ * The side chats whose parent is a board task thread here, archived and deleted ones included.
+ * Each parent's task comes from the board's own rows, the reader of a task thread's marker.
+ */
 const listSideChats = Effect.fn("BoardTaskSideChats.list")(function* (threadId?: ThreadId) {
   const sql = yield* SqlClient.SqlClient;
-  const only = threadId === undefined ? sql`` : sql`AND s.thread_id = ${threadId}`;
+  const only = threadId === undefined ? sql`` : sql`AND thread_id = ${threadId}`;
   const rows = yield* sql<{
     id: string;
+    parentId: string;
     archivedAt: string | null;
     deletedAt: string | null;
-    marker: string | null;
   }>`
-    SELECT s.thread_id AS id, s.archived_at AS "archivedAt", s.deleted_at AS "deletedAt",
-      json_extract(p.payload_json, '$.lineage.engineIntake') AS marker
-    FROM orchestration_v2_projection_threads AS s
-    JOIN orchestration_v2_projection_threads AS p
-      ON p.thread_id = json_extract(s.payload_json, '$.lineage.parentThreadId')
-    WHERE json_extract(s.payload_json, '$.lineage.sideChat') = 1
-      AND json_extract(p.payload_json, '$.lineage.engineIntake') LIKE ${BOARD_TASK_MARKER_LIKE}
+    SELECT thread_id AS id, archived_at AS "archivedAt", deleted_at AS "deletedAt",
+      json_extract(payload_json, '$.lineage.parentThreadId') AS "parentId"
+    FROM orchestration_v2_projection_threads
+    WHERE json_extract(payload_json, '$.lineage.sideChat') = 1
+      AND json_extract(payload_json, '$.lineage.parentThreadId') IS NOT NULL
       ${only}
   `.pipe(NodeSqliteClient.readOnly);
+  if (rows.length === 0) return [];
+  const taskThreads = [
+    ...(yield* listBoardThreadRows({ archived: false })),
+    ...(yield* listBoardThreadRows({ archived: true })),
+  ];
+  const taskOf = new Map(taskThreads.map((row) => [row.threadId as string, row.task]));
   return rows.flatMap((row): ReadonlyArray<BoardSideChat> => {
-    const task = boardTaskOfMarker(row.marker);
-    return task === null
+    const task = taskOf.get(row.parentId);
+    return task === undefined
       ? []
       : [
           {
