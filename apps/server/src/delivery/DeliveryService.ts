@@ -171,6 +171,42 @@ export const BOARD_APPROVAL_KEY_SECRET = "delivery-board-approval-key";
 export const NO_BOARD_APPROVAL_KEY =
   "This server has no board approval key configured. Set it in Settings → Threads → Board.";
 
+/**
+ * A refusal of a request that carried an approval key, in fixed words by status: what the engine
+ * said may echo what it was sent, so none of it goes on to a client or an agent.
+ */
+export function keyedRefusal(status: number | undefined): string {
+  switch (status) {
+    case 403:
+      return "The engine refused the approval key. Check it, or update the one saved in Settings → Threads → Board.";
+    case 409:
+      return "The engine cannot do that now. Check the Engine panel for its state, then try again.";
+    case 400:
+      return "The engine refused this request as it was sent.";
+    default:
+      return status === undefined
+        ? "The engine refused this request."
+        : `The engine refused this request (HTTP ${status}).`;
+  }
+}
+
+const withoutEngineWords =
+  (body: unknown) =>
+  <A, R>(effect: Effect.Effect<A, DeliveryError, R>): Effect.Effect<A, DeliveryError, R> =>
+    typeof body === "object" && body !== null && "key" in body
+      ? effect.pipe(
+          Effect.mapError((error) =>
+            error.reason === "refused"
+              ? new DeliveryError({
+                  reason: "refused",
+                  detail: keyedRefusal(error.status),
+                  ...(error.status === undefined ? {} : { status: error.status }),
+                })
+              : error,
+          ),
+        )
+      : effect;
+
 /** The key a keyed board write uses: the server's variable when it is set, else the saved one. */
 export function resolveBoardApprovalKey(
   environment: NodeJS.ProcessEnv,
@@ -193,6 +229,8 @@ export const BoardThreadLink = Schema.Struct({
 export const readOrNull = <S extends Schema.Top>(schema: S) =>
   Schema.optional(Schema.NullOr(schema).pipe(Schema.catchDecoding(() => Effect.succeedSome(null))));
 const BOARD_THREAD_CLAIM = /^\/api\/orchestration\/tasks\/[\w-]+\/(claim|ack|release)$/;
+// The board thread's heartbeat (slice S2), renewed by the board pass; not a lease.
+const BOARD_THREAD_HEARTBEAT = /^\/api\/tasks\/[\w-]+\/board-thread\/ack$/;
 // The conversation's mirror and the steer handshake (spec 6a, slice 5).
 const BOARD_THREAD_CONVERSATION =
   /^\/api\/tasks\/[\w-]+\/(activity|steers\/\d+\/(delivered|failed))$/;
@@ -203,7 +241,7 @@ const BOARD_TASK_POST = /^\/api\/boards\/[^/]+\/tasks$/;
 // route through `act`, so it is the server's to use but not refused to the relay.
 const BOARD_THREAD_STEER = /^\/api\/tasks\/[\w-]+\/steer$/;
 const BOARD_THREAD_POST = new RegExp(
-  `${BOARD_THREAD_CLAIM.source}|${BOARD_THREAD_CONVERSATION.source}|${BOARD_SEAT_POST.source}|${BOARD_TASK_POST.source}`,
+  `${BOARD_THREAD_CLAIM.source}|${BOARD_THREAD_HEARTBEAT.source}|${BOARD_THREAD_CONVERSATION.source}|${BOARD_SEAT_POST.source}|${BOARD_TASK_POST.source}`,
 );
 const BOARD_THREAD_WRITE = new RegExp(`${BOARD_THREAD_LINK.source}|${BOARD_THREAD_POST.source}`);
 
@@ -509,6 +547,12 @@ const make = Effect.fn("DeliveryService.make")(function* (
   let boardLineupsUnsaved = false;
   const boardSeatWrites = yield* Semaphore.make(1);
   const boardLinkWrites = yield* Semaphore.make(1);
+  // The engine checks at most two approval keys at once and refuses a third with 403, so every
+  // keyed board write of this server (heartbeats, links, seats, filings) shares two slots.
+  const boardKeyChecks = yield* Semaphore.make(2);
+  const hasKey = (body: unknown) => typeof body === "object" && body !== null && "key" in body;
+  const keyChecked = <A, E, R>(body: unknown, effect: Effect.Effect<A, E, R>) =>
+    hasKey(body) ? boardKeyChecks.withPermit(effect) : effect;
 
   // Only a file that is not there means that no thread is bound. A file that
   // is there and cannot be read or understood holds bindings this service
@@ -2428,22 +2472,29 @@ const make = Effect.fn("DeliveryService.make")(function* (
                       "Board filings, conversation and seat records can only be written by the server.",
                   }),
                 )
-              : new URL(input.path, "http://delivery.invalid").pathname === "/api/delivery/requests"
-                ? preflightDeliveryRequest(input.body).pipe(
-                    Effect.flatMap(({ configuration, observedHealth, dispatchDeadline }) =>
-                      request(
-                        "POST",
-                        input.path,
-                        input.body,
-                        false,
-                        observedHealth,
-                        configuration,
-                        dispatchDeadline,
-                      ),
-                    ),
-                  )
-                : request("POST", input.path, input.body),
+              : // A relayed keyed write shares the server's key checks. A launch takes its slot before
+                // its dispatch deadline starts, so waiting for one never spends that deadline.
+                keyChecked(
+                  input.body,
+                  new URL(input.path, "http://delivery.invalid").pathname ===
+                    "/api/delivery/requests"
+                    ? preflightDeliveryRequest(input.body).pipe(
+                        Effect.flatMap(({ configuration, observedHealth, dispatchDeadline }) =>
+                          request(
+                            "POST",
+                            input.path,
+                            input.body,
+                            false,
+                            observedHealth,
+                            configuration,
+                            dispatchDeadline,
+                          ),
+                        ),
+                      )
+                    : request("POST", input.path, input.body),
+                ),
         ),
+        withoutEngineWords(input.body),
       ),
     ),
     nativeBuildAct: Effect.fn("DeliveryService.nativeBuildAct")((input) =>
@@ -2499,7 +2550,7 @@ const make = Effect.fn("DeliveryService.make")(function* (
           reason: "invalid",
           detail: "Invalid board thread mutation path.",
         });
-      const write = request(
+      const sent = request(
         input.method,
         input.path,
         input.body,
@@ -2507,6 +2558,7 @@ const make = Effect.fn("DeliveryService.make")(function* (
         undefined,
         input.configuration,
       );
+      const write = keyChecked(input.body, sent);
       if (input.method !== "POST") return yield* boardLinkWrites.withPermit(write);
       // Serialize keyed seat writes and filings so they share the engine’s approval throttle.
       return yield* BOARD_SEAT_POST.test(input.path) || BOARD_TASK_POST.test(input.path)

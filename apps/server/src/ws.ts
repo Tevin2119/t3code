@@ -271,6 +271,8 @@ import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
 import { commandFeatureUsage, featureUsage } from "./telemetry/FeatureUsage.ts";
 import type { TelemetryOwner } from "./telemetry/Identify.ts";
 import * as UsageService from "./usage/UsageService.ts";
+import * as BoardAgentTools from "./delivery/BoardAgentTools.ts";
+import { missingDeliveryScope } from "./delivery/deliveryAgentAccess.ts";
 import * as BoardThreadTasks from "./delivery/BoardThreadTasks.ts";
 import * as PeerForwarding from "./peer/PeerForwarding.ts";
 import * as DeliveryService from "./delivery/DeliveryService.ts";
@@ -3856,6 +3858,7 @@ const layerForkWsRpc = (
       const checkoutUpdate = yield* CheckoutUpdate.CheckoutUpdate;
       const delivery = yield* DeliveryService.DeliveryService;
       const boardThreadTasks = yield* BoardThreadTasks.BoardThreadTasks;
+      const boardAgentTools = yield* BoardAgentTools.BoardAgentTools;
       const limitedSeatSwap = yield* Effect.serviceOption(LimitedSeatSwap.LimitedSeatSwap);
       const threadManagement = yield* ThreadManagementService.ThreadManagementService;
       const sql = yield* SqlClient.SqlClient;
@@ -3978,6 +3981,13 @@ const layerForkWsRpc = (
         [WS_METHODS.deliveryBoardApprovalKey]: () => delivery.boardApprovalKeyStatus,
         [WS_METHODS.deliverySetBoardApprovalKey]: (input) =>
           delivery.setBoardApprovalKey(input.key),
+        // The same rule as the agent tools: the saved key is used only with maintain scope.
+        [WS_METHODS.deliveryEngineControl]: (input) => {
+          const missing = missingDeliveryScope(currentSession.scopes, "maintain");
+          return missing === null
+            ? boardAgentTools.engineControl(input)
+            : Effect.fail(rpcAuthorizationError(missing));
+        },
         [WS_METHODS.deliveryReleaseThread]: (input) => delivery.releaseThread(input.threadId),
         [WS_METHODS.deliverySetThreadLineup]: (input) =>
           refuseServerOwnedTeam(input.threadId, threadManagement.getThreadShell).pipe(
@@ -4015,6 +4025,7 @@ export const layer = Layer.unwrap(
     const peerLinks = yield* PeerLinks.PeerLinks;
     const peerLinkRequests = yield* PeerLinkRequests.PeerLinkRequests;
     const boardThreadTasks = yield* BoardThreadTasks.BoardThreadTasks;
+    const boardAgentTools = yield* BoardAgentTools.BoardAgentTools;
     const peerThreadRelay = yield* PeerThreadRelay.PeerThreadRelay;
     const peerClientPairing = yield* PeerClientPairing.PeerClientPairing;
     const linkedDelivery = yield* PeerForwarding.PeerForwarding;
@@ -4128,7 +4139,12 @@ export const layer = Layer.unwrap(
               ),
               Layer.provide(Layer.succeed(PeerLinks.PeerLinks, peerLinks)),
               Layer.provide(Layer.succeed(PeerLinkRequests.PeerLinkRequests, peerLinkRequests)),
-              Layer.provide(Layer.succeed(BoardThreadTasks.BoardThreadTasks, boardThreadTasks)),
+              Layer.provide(
+                Layer.merge(
+                  Layer.succeed(BoardThreadTasks.BoardThreadTasks, boardThreadTasks),
+                  Layer.succeed(BoardAgentTools.BoardAgentTools, boardAgentTools),
+                ),
+              ),
               Layer.provide(Layer.succeed(PeerThreadRelay.PeerThreadRelay, peerThreadRelay)),
               Layer.provide(Layer.succeed(PeerClientPairing.PeerClientPairing, peerClientPairing)),
               Layer.provide(

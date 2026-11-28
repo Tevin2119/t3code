@@ -28,6 +28,7 @@ vi.mock("../../state/delivery", () => ({
   useDeliveryEnvironmentId: () => "host",
   useDeliveryEnabled: () => true,
   useDeliveryAct: () => mock.action,
+  useSavedKeyEngineControl: () => ({ usable: false, run: vi.fn() }),
   useDeliveryRead: (env: string, path: string | null, options: unknown) => {
     mock.reads(env, path, options);
     return {

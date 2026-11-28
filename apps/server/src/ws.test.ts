@@ -1,3 +1,4 @@
+import * as BoardAgentTools from "./delivery/BoardAgentTools.ts";
 import * as BoardThreadTasks from "./delivery/BoardThreadTasks.ts";
 import * as SecretResolver from "@t3tools/secret-provider-core/server/SecretResolver";
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
@@ -874,6 +875,7 @@ const layerUnusedConfigRpcServices = Layer.mergeAll(
   Layer.mock(PeerLinks.PeerLinks)({}),
   Layer.mock(PeerLinkRequests.PeerLinkRequests)({}),
   Layer.mock(BoardThreadTasks.BoardThreadTasks)({}),
+  Layer.mock(BoardAgentTools.BoardAgentTools)({}),
   Layer.mock(PeerThreadRelay.PeerThreadRelay)({}),
   Layer.mock(PeerForwarding.PeerForwarding)({}),
   Layer.mock(PeerClientPairing.PeerClientPairing)({}),

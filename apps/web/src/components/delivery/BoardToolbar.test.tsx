@@ -24,6 +24,8 @@ vi.mock("../../hooks/useHandleNewThread", () => ({ useNewThreadHandler: () => vi
 const mock = vi.hoisted(() => ({
   read: { body: null as unknown, error: null, isPending: false, refresh: vi.fn() },
   action: vi.fn(),
+  /** The approval key saved on the server: absent unless a case saves one. */
+  savedKey: { usable: false, run: vi.fn() },
   listeners: new Set<() => void>(),
   /** A reading changed under a mounted panel: as the real atom would, wake its subscribers. */
   notify: () => {
@@ -62,6 +64,7 @@ vi.mock("../../state/delivery", async () => {
     },
     useDeliveryAct: () => mock.action,
     useDeliveryEnabled: () => true,
+    useSavedKeyEngineControl: () => mock.savedKey,
   };
 });
 vi.mock("../../state/server", () => ({
@@ -78,6 +81,7 @@ let desktop = false;
 const mediaListeners = new Set<() => void>();
 
 beforeEach(() => {
+  mock.savedKey = { usable: false, run: vi.fn() };
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   Object.defineProperty(HTMLElement.prototype, "getAnimations", {
     configurable: true,
@@ -460,6 +464,60 @@ describe("responsive board control ownership", () => {
     expect(element('[data-slot="dialog-popup"]')).toBe(dialog);
     expect(document.body.textContent).not.toContain("Wait for the matching completion receipt");
     expect(mock.action).toHaveBeenCalledTimes(1);
+  });
+
+  it("with an approval key saved, engine controls use it and ask for no passphrase", async () => {
+    const commit = "d".repeat(40);
+    mock.read.body = {
+      approval: "passphrase",
+      capabilities: { launcherLifecycle: true },
+      versions: {
+        channel: "qa",
+        running: { commit: "a".repeat(40), changed: false },
+        installed: { commit: "a".repeat(40), changed: false },
+        available: { commit, at: "2026-10-16T12:00:00Z" },
+        updateAvailable: true,
+        restartRequired: false,
+        deferred: false,
+        managed: true,
+        pinned: true,
+        problem: null,
+        update: null,
+      },
+    };
+    mock.savedKey = {
+      usable: true,
+      run: vi.fn(async (input: { action: string }) =>
+        input.action === "stop"
+          ? { ok: true, body: { accepted: true, id: "stop-1", action: "stop" } }
+          : { ok: true, body: { accepted: true, id: "update-1", commit, channel: "qa" } },
+      ),
+    };
+    await toolbar(false);
+    await click("PaperClip engine controls");
+    expect(element<HTMLInputElement>('input[name="delivery-engine-approval"]').value).toBe("");
+    expect(button("Update now").disabled).toBe(false);
+    await click("Update now");
+    expect(mock.savedKey.run).toHaveBeenLastCalledWith({ action: "update", commit });
+    expect(mock.action).not.toHaveBeenCalled();
+  });
+
+  it("with an approval key saved, stop goes through the saved key", async () => {
+    mock.read.body = { approval: "passphrase", capabilities: { launcherLifecycle: true } };
+    mock.savedKey = {
+      usable: true,
+      run: vi.fn(async () => ({
+        ok: true,
+        body: { accepted: true, id: "stop-1", action: "stop" },
+      })),
+    };
+    await toolbar(false);
+    await click("PaperClip engine controls");
+    expect(button("Stop engine").disabled).toBe(false);
+    await click("Stop engine");
+    expect(mock.savedKey.run).toHaveBeenCalledWith({ action: "stop" });
+    expect(mock.action).not.toHaveBeenCalled();
+    expect(document.body.textContent).toContain("Launcher accepted the stop request");
   });
 
   it("expands one search input in place, retains its query and focus path through Escape and crossings", async () => {

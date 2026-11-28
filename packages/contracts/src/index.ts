@@ -71,6 +71,7 @@ export * from "./delivery.ts";
 export * from "./deliveryDiscovery.ts";
 export * from "./linkedDelivery.ts";
 export * from "./boardThreadTasks.ts";
+export * from "./boardAgentTools.ts";
 export * from "./deployments.ts";
 export * from "./boardDelivery.ts";
 export * from "./scheduledTask.ts";

@@ -1,3 +1,4 @@
+import * as BoardAgentTools from "../../apps/server/src/delivery/BoardAgentTools.ts";
 import * as BoardThreadTasks from "../../apps/server/src/delivery/BoardThreadTasks.ts";
 // @effect-diagnostics nodeBuiltinImport:off
 /**
@@ -104,6 +105,7 @@ export const makeBackgroundWait = Effect.fn("evaluateMcpToolUse.makeBackgroundWa
       Layer.provide(Layer.mock(ThreadMetadataMcpService.ThreadMetadataMcpService)({})),
       Layer.provide(threads),
       Layer.provide(Layer.mock(BoardThreadTasks.BoardThreadTasks)({})),
+      Layer.provide(Layer.mock(BoardAgentTools.BoardAgentTools)({})),
       Layer.provide(Layer.mock(PeerForwarding.PeerForwarding)({})),
       Layer.provide(Layer.mock(PeerLinkRequests.PeerLinkRequests)({})),
       Layer.provide(Layer.mock(PeerLinks.PeerLinks)({})),

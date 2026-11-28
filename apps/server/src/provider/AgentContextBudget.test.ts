@@ -1,3 +1,4 @@
+import { BoardAgentTools } from "../delivery/BoardAgentTools.ts";
 import { BoardThreadTasks } from "../delivery/BoardThreadTasks.ts";
 import * as DeliveryService from "../delivery/DeliveryService.ts";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
@@ -64,6 +65,7 @@ const toolHandlerServices = Layer.mergeAll(
   Layer.mock(AnalyticsService)({}),
   Layer.mock(AssetSigner)({}),
   Layer.mock(BoardThreadTasks)({}),
+  Layer.mock(BoardAgentTools)({}),
   Layer.mock(DeviceService)({}),
   Layer.mock(DocumentText)({}),
   Layer.mock(EnvironmentThemeService)({}),
@@ -143,7 +145,8 @@ it.effect("only request_secret and send_to_user ask Claude Code to load them up 
     const mcp = yield* McpServer.McpServer;
     const alwaysLoad = mcp.tools
       .filter(({ tool }) => tool._meta?.["anthropic/alwaysLoad"] !== undefined)
-      .map(({ tool }) => [tool.name, tool._meta]);
+      .map(({ tool }) => [tool.name, tool._meta])
+      .sort(([a], [b]) => String(a).localeCompare(String(b)));
     expect(alwaysLoad).toEqual([
       ["request_secret", { "anthropic/alwaysLoad": true }],
       ["send_to_user", { "anthropic/alwaysLoad": true }],

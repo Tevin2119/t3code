@@ -45,6 +45,7 @@ import {
 } from "./run.ts";
 import { briefRoute, gradeDevice, shellInvocations } from "./device-grading.ts";
 import * as DeliveryService from "../../apps/server/src/delivery/DeliveryService.ts";
+import * as BoardAgentTools from "../../apps/server/src/delivery/BoardAgentTools.ts";
 import * as BoardThreadTasks from "../../apps/server/src/delivery/BoardThreadTasks.ts";
 import * as SeatHandoffs from "../../apps/server/src/delivery/SeatHandoffs.ts";
 import { taskPrompt } from "../../apps/server/src/mcp/delegatedTaskModes.ts";
@@ -1881,6 +1882,7 @@ it.effect("seeds T3's error for a prior background wait whose IDs match nothing"
         DeliveryService.layerTest,
         SeatHandoffs.layerTest,
         BoardThreadTasks.layerTest,
+        BoardAgentTools.layerTest,
       ),
     ),
   ),

@@ -1,3 +1,4 @@
+import * as BoardAgentTools from "../delivery/BoardAgentTools.ts";
 import * as BoardThreadTasks from "../delivery/BoardThreadTasks.ts";
 import * as NodeURL from "node:url";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
@@ -60,6 +61,7 @@ import * as PeerLinks from "../peer/PeerLinks.ts";
 
 const layerOrchestratorToolkit = McpHttpServer.layerOrchestratorToolkit.pipe(
   Layer.provide(Layer.mock(BoardThreadTasks.BoardThreadTasks)({})),
+  Layer.provide(Layer.mock(BoardAgentTools.BoardAgentTools)({})),
   Layer.provide(DeliveryService.layerTest),
   Layer.provide(Layer.mock(ThreadLaunchService.ThreadLaunchService)({})),
   Layer.provide(Layer.mock(GitVcsDriver.GitVcsDriver)({})),

@@ -1,6 +1,14 @@
 import {
   EnvironmentId,
+  BoardAgentBoardToolInput,
+  BoardAgentBoardToolResult,
+  BoardAgentTaskToolResult,
+  BoardAgentTaskToolInput,
+  BoardAgentTasksToolInput,
+  BoardAgentTasksToolResult,
   BoardTaskDraft,
+  DeliveryEngineLifecycleInput,
+  DeliveryEngineLifecycleReceipt,
   BoardTaskOutcome,
   DeliveryDiscoveryInput,
   DeliveryDiscoverySnapshot,
@@ -50,6 +58,8 @@ import {
   TrimmedNonEmptyString,
 } from "@t3tools/contracts";
 import { McpSchema, Tool, Toolkit } from "effect/ai";
+import * as Context from "effect/Context";
+import * as Fiber from "effect/Fiber";
 import * as Schema from "effect/Schema";
 import * as Struct from "effect/Struct";
 
@@ -63,6 +73,7 @@ import * as OrchestratorMcpService from "../../OrchestratorMcpService.ts";
 import * as ThreadMetadataMcpService from "../../ThreadMetadataMcpService.ts";
 import { DeliveryService } from "../../../delivery/DeliveryService.ts";
 import { BoardThreadTasks } from "../../../delivery/BoardThreadTasks.ts";
+import { BoardAgentTools } from "../../../delivery/BoardAgentTools.ts";
 import { SeatHandoffs } from "../../../delivery/SeatHandoffs.ts";
 
 const dependencies = [
@@ -449,10 +460,77 @@ const SeatHandoffTool = Tool.make("delivery_seat_handoff", {
   .annotate(Tool.Destructive, true)
   .annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenWhileDeliveryOff);
 
+/** Board tools act for any caller, linked ones included, so only Delivery being off hides them. */
+const hiddenWhileDeliveryDisabled = (): boolean => {
+  const fiber = Fiber.getCurrent();
+  const scope =
+    fiber && Context.getOrUndefined(fiber.context, McpInvocationContext.McpInvocationContext);
+  return scope?.delivery !== false;
+};
+const boardDependencies = [...dependencies, BoardAgentTools];
+const onBoard = <Fields extends Schema.Struct.Fields>(input: Schema.Struct<Fields>) =>
+  Schema.Struct({ environmentId: OrchestratorMcpEnvironmentTarget, ...input.fields });
+
+const BoardTool = Tool.make("delivery_board", {
+  description:
+    "Boards: `list` (with repository ids), `create` (title, repository), `edit`, `remove` (only when asked; its tasks stay, on no board). Protected boards need `force`.",
+  parameters: onBoard(BoardAgentBoardToolInput),
+  success: BoardAgentBoardToolResult,
+  failure: OrchestratorMcpFailure,
+  failureMode: "return",
+  dependencies: boardDependencies,
+})
+  .annotate(Tool.Title, "Manage boards")
+  .annotate(Tool.Destructive, true)
+  .annotate(McpSchema.EnabledWhen, hiddenWhileDeliveryDisabled);
+
+const TaskTool = Tool.make("delivery_task", {
+  description:
+    "One task: `get`, `edit` (body on drafts only), `move` to `lane` (e.g. queue, paused) or `board` (null: none; other repo needs `base`), `submit` a draft, `close` with `reason`, `discard` a draft; close and discard only when asked. Live or protected tasks need `force`.",
+  parameters: onBoard(BoardAgentTaskToolInput),
+  success: BoardAgentTaskToolResult,
+  failure: OrchestratorMcpFailure,
+  failureMode: "return",
+  dependencies: boardDependencies,
+})
+  .annotate(Tool.Title, "Manage a board task")
+  .annotate(Tool.Destructive, true)
+  .annotate(McpSchema.EnabledWhen, hiddenWhileDeliveryDisabled);
+
+const TasksTool = Tool.make("delivery_tasks", {
+  description:
+    "`list` by `filter`, newest first; page with `filter.updatedBefore`. `close` (with `reason`) or `move` (to `lane`/`board`) up to 200 by `tasks` ids or `filter`, only when asked.",
+  parameters: onBoard(BoardAgentTasksToolInput),
+  success: BoardAgentTasksToolResult,
+  failure: OrchestratorMcpFailure,
+  failureMode: "return",
+  dependencies: boardDependencies,
+})
+  .annotate(Tool.Title, "List or change board tasks")
+  .annotate(Tool.Destructive, true)
+  .annotate(McpSchema.EnabledWhen, hiddenWhileDeliveryDisabled);
+
+const EngineLifecycleTool = Tool.make("delivery_engine_lifecycle", {
+  description:
+    "Stop or restart the delivery engine with the saved approval key; owner only. Running seats pause until it is back. Returns acceptance, not completion.",
+  parameters: onBoard(DeliveryEngineLifecycleInput),
+  success: DeliveryEngineLifecycleReceipt,
+  failure: OrchestratorMcpFailure,
+  failureMode: "return",
+  dependencies: boardDependencies,
+})
+  .annotate(Tool.Title, "Stop or restart the delivery engine")
+  .annotate(Tool.Destructive, true)
+  .annotate(McpSchema.EnabledWhen, hiddenWhileDeliveryDisabled);
+
 export const OrchestratorToolkit = Toolkit.make(
+  EngineLifecycleTool,
   DeliveryReadTool,
   NativeBuildStepTool,
   FileBoardTaskTool,
+  BoardTool,
+  TaskTool,
+  TasksTool,
   QaReceiptTool,
   SeatHandoffTool,
   OrchestratorCapabilitiesTool,

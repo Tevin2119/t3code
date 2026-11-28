@@ -40,6 +40,7 @@ import * as McpSchema from "effect/ai/McpSchema";
 import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/http";
 
 import * as DeliveryService from "../../apps/server/src/delivery/DeliveryService.ts";
+import * as BoardAgentTools from "../../apps/server/src/delivery/BoardAgentTools.ts";
 import * as BoardThreadTasks from "../../apps/server/src/delivery/BoardThreadTasks.ts";
 import * as SeatHandoffs from "../../apps/server/src/delivery/SeatHandoffs.ts";
 import { teamDiscussionContext } from "../../apps/server/src/delivery/teamDiscussionContext.ts";
@@ -3576,6 +3577,7 @@ if (import.meta.main) {
         DeliveryService.layerTest,
         SeatHandoffs.layerTest,
         BoardThreadTasks.layerTest,
+        BoardAgentTools.layerTest,
       ),
     ),
     NodeRuntime.runMain,
