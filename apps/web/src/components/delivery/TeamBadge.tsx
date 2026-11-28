@@ -1,4 +1,5 @@
 import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
+import { useGT } from "gt-react";
 import { LockIcon, UsersIcon } from "lucide-react";
 
 import { describeEffective, parseSessionEffective } from "../../lib/deliverySeats";
@@ -16,7 +17,10 @@ import { TeamProfilePanel } from "./TeamProfilePanel";
 export function TeamBadge(props: {
   readonly environmentId: EnvironmentId | null;
   readonly threadId: ThreadId;
+  /** A board task's conversation: the board picks its seats, and the engine still does the work. */
+  readonly boardOwned?: boolean | undefined;
 }) {
+  const gt = useGT();
   const enabled = useDeliveryEnabled(props.environmentId);
   const state = useEnvironmentQuery(
     enabled && props.environmentId
@@ -26,7 +30,7 @@ export function TeamBadge(props: {
         })
       : null,
   );
-  const session = state.data?.binding?.session ?? null;
+  const session = props.boardOwned ? null : (state.data?.binding?.session ?? null);
   const sessionRead = useDeliveryRead(
     enabled && session ? props.environmentId : null,
     `/api/sessions/${session ?? ""}`,
@@ -34,11 +38,11 @@ export function TeamBadge(props: {
     { pollMs: 15_000 },
   );
   if (!enabled) return null;
-  const binding = state.data?.binding ?? null;
+  const binding = props.boardOwned ? null : (state.data?.binding ?? null);
   // A thread that was sent with no team says so, where the team would stand.
   if (!binding) {
     if (state.data === undefined || state.data === null) return null;
-    const lineup = state.data.lineup;
+    const lineup = state.data.boardLineup ?? state.data.lineup;
     // A teamless conversation with participants: who receives the next message.
     if (lineup) {
       const rows = lineup.participants.map(
@@ -57,7 +61,14 @@ export function TeamBadge(props: {
                 size="xs"
                 variant="ghost"
                 className="min-w-0"
-                aria-label={`${lineup.participants.length} participants receive the next message`}
+                aria-label={
+                  props.boardOwned
+                    ? gt(
+                        "{count, plural, =1 {1 seat in this task's team} other {{count} seats in this task's team}}",
+                        { count: lineup.participants.length },
+                      )
+                    : `${lineup.participants.length} participants receive the next message`
+                }
                 data-delivery-team-badge="participants"
               />
             }
@@ -72,11 +83,24 @@ export function TeamBadge(props: {
             </span>
           </PopoverTrigger>
           <PopoverPopup align="start" className="w-[min(36rem,calc(100vw-2rem))]">
-            <PopoverTitle>Who receives the next message</PopoverTitle>
-            <p className="mt-1 text-xs text-muted-foreground">
-              They join from your next message. Change the lineup in the model picker&apos;s{" "}
-              Orchestrator panel.
-            </p>
+            {props.boardOwned ? (
+              <>
+                <PopoverTitle>{gt("This task's team")}</PopoverTitle>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  {gt(
+                    "The board picks these seats and their models. While the engine does the task's work, your messages here go to the task's lead alone.",
+                  )}
+                </p>
+              </>
+            ) : (
+              <>
+                <PopoverTitle>Who receives the next message</PopoverTitle>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  They join from your next message. Change the lineup in the model picker&apos;s{" "}
+                  Orchestrator panel.
+                </p>
+              </>
+            )}
             <dl
               className="mt-3 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs"
               data-delivery-team-badge-details
@@ -103,7 +127,7 @@ export function TeamBadge(props: {
     );
   }
   const seat = binding.seatSettings ?? null;
-  const lineup = state.data?.lineup;
+  const lineup = state.data?.boardLineup ?? state.data?.lineup;
   const effective = parseSessionEffective(sessionRead.body);
   const overrides = effective?.overrides ?? [];
   const rows: ReadonlyArray<readonly [string, string]> = [

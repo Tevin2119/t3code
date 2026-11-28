@@ -107,6 +107,10 @@
       "types": "./src/secretRequest.ts",
       "default": "./src/secretRequest.ts"
     },
+    "./board-task-in-play": {
+      "types": "./src/boardTaskInPlay.ts",
+      "default": "./src/boardTaskInPlay.ts"
+    },
     "./board-task-request": {
       "types": "./src/boardTaskRequest.ts",
       "default": "./src/boardTaskRequest.ts"

@@ -3,7 +3,12 @@ import { EnvironmentId, ProjectId, ThreadId, type ScopedThreadRef } from "@t3too
 import { expect, it, vi } from "vite-plus/test";
 import { page } from "vite-plus/test/browser";
 import { act, render } from "../../../test/render";
-import { selectThreadPanelOpen, useRightPanelStore } from "../../rightPanelStore";
+import {
+  BOARD_TASK_THREAD_PANEL_VISIBILITY,
+  selectThreadPanelOpen,
+  useRightPanelStore,
+} from "../../rightPanelStore";
+import { BoardTaskContext, type BoardTask } from "../delivery/BoardTaskContext";
 import { PopoverCreateHandle } from "../ui/popover";
 import { ChatCanvasContext } from "./ChatCanvasContext";
 import { resolveChatCanvasLayout } from "./chatCanvasLayout";
@@ -275,4 +280,45 @@ it("keeps the repository list reachable after Show more expands it", async () =>
   await expect
     .element(page.getByRole("region", { name: "Thread details" }))
     .not.toHaveAttribute("data-density", "essential");
+});
+
+it("starts collapsed for a board task's own thread, and keeps the person's toggle", async () => {
+  using fixture = setup();
+  const board: BoardTask = {
+    environmentId: threadA.environmentId,
+    taskId: "t1",
+    task: null,
+    stale: false,
+    refresh: () => {},
+    openTask: () => {},
+    openTab: () => {},
+    decisions: null,
+    discuss: null,
+    thread: threadA,
+    seats: { thread: () => null, rows: [] },
+  };
+  const taskCard = (key: string) => (
+    <BoardTaskContext key={key} value={board}>
+      <Card threadRef={threadA} inline fixture={fixture} />
+    </BoardTaskContext>
+  );
+  await using screen = await render(taskCard("first"));
+  await expect.element(page.getByText("Details for thread-a")).not.toBeInTheDocument();
+  // Any other thread in the same view keeps T3's default, open.
+  await screen.rerender(
+    <BoardTaskContext value={board}>
+      <Card threadRef={threadB} inline fixture={fixture} />
+    </BoardTaskContext>,
+  );
+  await expect.element(page.getByText("Details for thread-b")).toBeVisible();
+
+  await screen.rerender(taskCard("again"));
+  await act(() =>
+    useRightPanelStore
+      .getState()
+      .toggleThreadPanel(threadA, "inline", BOARD_TASK_THREAD_PANEL_VISIBILITY),
+  );
+  await expect.element(page.getByText("Details for thread-a")).toBeVisible();
+  await screen.rerender(taskCard("remounted"));
+  await expect.element(page.getByText("Details for thread-a")).toBeVisible();
 });

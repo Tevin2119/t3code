@@ -3,14 +3,12 @@ import "~/index.css";
 import { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import type { ReactNode } from "react";
 import { expect, it, vi } from "vite-plus/test";
-import { page } from "vite-plus/test/browser";
 
 import { render } from "../../../test/render";
 import { parseTask } from "../../lib/delivery";
 import { BoardTaskContext, type BoardTask } from "./BoardTaskContext";
-import { TaskBadges } from "./TaskBadges";
 import { TaskDetailsItem } from "./TaskDetails";
-import { TaskRelatedWork } from "./TaskRelatedWork";
+import { TaskLineage } from "./TaskLineage";
 
 vi.mock(import("../../state/delivery"), async (importOriginal) => ({
   ...(await importOriginal()),
@@ -64,59 +62,72 @@ const board = (extra: Partial<BoardTask> = {}): BoardTask => ({
   stale: false,
   refresh: () => {},
   openTask: vi.fn(),
-  openThread: vi.fn(),
+  openTab: vi.fn(),
+  decisions: null,
+  discuss: null,
+  thread: { environmentId: EnvironmentId.make("env-1"), threadId: ThreadId.make("lead") },
   seats: {
     thread: (seat) => (seat === "builder" ? seatThread : null),
-    current: null,
-    open: vi.fn(),
+    rows: [{ seat: "builder", activity: "active", target: seatThread }],
   },
   ...extra,
 });
 
 const everything = () => (
   <>
-    <TaskBadges onOpenDetails={() => {}} onOpenTab={() => {}} />
     <TaskDetailsItem />
-    <TaskRelatedWork />
+    <TaskLineage />
   </>
 );
 
-it("draws no badge, Task item or child task outside a board task's view, with the item on", async () => {
+it("draws no Task item or lineage rows outside a board task's view, with the item on", async () => {
   await using screen = await render(everything());
-  expect(screen.container.querySelector("[data-task-badges]")).toBeNull();
   expect(screen.container.querySelector("[data-thread-details-task]")).toBeNull();
-  expect(screen.container.querySelector("[data-task-related-work]")).toBeNull();
+  expect(screen.container.querySelector("[data-task-lineage]")).toBeNull();
   await screen.rerender(<BoardTaskContext value={board()}>{everything()}</BoardTaskContext>);
-  await expect.element(screen.getByRole("region", { name: "Task" })).toBeVisible();
-  await expect.element(screen.getByRole("button", { name: /^Stage: / })).toBeVisible();
+  await expect.element(screen.getByRole("region", { name: "Task #12" })).toBeVisible();
   await expect.element(screen.getByRole("button", { name: /Fix the cursor/ })).toBeVisible();
+  await expect.element(screen.getByRole("button", { name: /builder/ })).toBeVisible();
 });
 
-it("opens each badge's detail where it is, and says a reading is stale rather than drop it", async () => {
-  const onOpenDetails = vi.fn();
-  const onOpenTab = vi.fn();
+it("holds the engine's facts the header badges used to, and opens each tab from them", async () => {
   const value = board({ stale: true });
   await using screen = await render(
     <BoardTaskContext value={value}>
-      <TaskBadges onOpenDetails={onOpenDetails} onOpenTab={onOpenTab} />
+      <TaskDetailsItem />
     </BoardTaskContext>,
   );
-  await screen.getByRole("button", { name: /^Stage: / }).click();
-  expect(onOpenDetails).toHaveBeenCalledOnce();
-  await screen.getByRole("button", { name: "Task evidence" }).click();
-  expect(onOpenTab).toHaveBeenLastCalledWith("task-evidence");
-  await screen.getByRole("button", { name: "Deployments" }).click();
-  expect(onOpenTab).toHaveBeenLastCalledWith("task-deployments");
-  expect(screen.container.querySelectorAll("[data-task-badge-stale]")).toHaveLength(2);
-
-  // The team's rows: a seat with a conversation opens it in the centre, and the list gives way.
-  await screen.getByRole("button", { name: /^Team development/ }).click();
-  await page.getByText("builder", { exact: true }).click();
-  expect(value.seats.open).toHaveBeenCalledWith(seatThread);
-  await expect.element(page.getByText("builder", { exact: true })).not.toBeInTheDocument();
+  await expect
+    .element(screen.getByText("This is the last reading. The engine has not answered since."))
+    .toBeVisible();
+  expect(screen.container.querySelector("[data-task-team]")?.textContent).toContain("development");
+  await screen.getByRole("button", { name: "Evidence" }).click();
+  expect(value.openTab).toHaveBeenLastCalledWith("task-evidence");
+  await screen.getByRole("button", { name: /Deployments/ }).click();
+  expect(value.openTab).toHaveBeenLastCalledWith("task-deployments");
 });
 
-it("leads with what the person owes, and opens the conversation the task came from in the centre", async () => {
+it("offers a side chat of the task's thread only where one can start", async () => {
+  await using screen = await render(
+    <BoardTaskContext value={board()}>
+      <TaskDetailsItem />
+    </BoardTaskContext>,
+  );
+  await expect.element(screen.getByRole("button", { name: "Evidence" })).toBeVisible();
+  await expect
+    .element(screen.getByRole("button", { name: "Discuss in a thread" }))
+    .not.toBeInTheDocument();
+  const discuss = vi.fn();
+  await screen.rerender(
+    <BoardTaskContext value={board({ discuss })}>
+      <TaskDetailsItem />
+    </BoardTaskContext>,
+  );
+  await screen.getByRole("button", { name: "Discuss in a thread" }).click();
+  expect(discuss).toHaveBeenCalledOnce();
+});
+
+it("leads with what the person owes, and leaves the conversation it came from to the lineage", async () => {
   const value = board({
     task: task({
       brief: { headline: "Choose how the sync recovers" },
@@ -132,23 +143,24 @@ it("leads with what the person owes, and opens the conversation the task came fr
   expect(sections[0]?.textContent).toBe("Needs you");
   await expect.element(screen.getByText("Choose how the sync recovers")).toBeVisible();
   await expect.element(screen.getByText("Make the sync stop dropping rows.")).toBeVisible();
-  await screen.getByRole("button", { name: "Linked conversations" }).click();
-  await screen.getByRole("button", { name: "the conversation it came from" }).click();
-  expect(value.openThread).toHaveBeenCalledWith({
-    environmentId: "env-source",
-    threadId: "filed-from",
-  });
+  expect(screen.container.textContent).not.toContain("the conversation it came from");
 });
 
-it("lists the parent and the parts as rows that each open their task", async () => {
+it("lists the seats, the source and the related tasks as lineage rows", async () => {
   const value = board();
   await using screen = await render(
     <BoardTaskContext value={value}>
-      <TaskRelatedWork />
+      <TaskLineage />
     </BoardTaskContext>,
   );
   await screen.getByRole("button", { name: /Fix the cursor/ }).click();
   expect(value.openTask).toHaveBeenLastCalledWith("t2");
   await screen.getByRole("button", { name: /Rework the sync/ }).click();
   expect(value.openTask).toHaveBeenLastCalledWith("t0");
+  // The conversation it was made from is the lineage's related-thread row, at its own route.
+  const source = screen.container.querySelector("[data-task-related-source]");
+  expect(source?.textContent).toContain("Made from");
+  expect(source?.querySelector("li")?.textContent).toContain("The conversation it came from");
+  // A seat with a conversation is a row of its own, before the source and the tasks.
+  expect(screen.container.querySelector("[data-task-seat='builder']")).not.toBeNull();
 });

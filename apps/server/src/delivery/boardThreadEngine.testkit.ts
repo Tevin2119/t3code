@@ -16,6 +16,11 @@ export interface ScratchLink {
   readonly setAt: string;
 }
 
+export interface ScratchRelated extends ScratchLink {
+  readonly key: string;
+  readonly role: "side" | "linked";
+}
+
 export interface ScratchTask {
   readonly id: string;
   readonly number: number;
@@ -59,6 +64,41 @@ export interface ScratchSteer {
   failure: string | null;
 }
 
+/**
+ * A native attempt v2 as the engine's native-builds.mjs keeps it: the engine's step
+ * of a run on a board with "t3" execution, claimed, attached and completed by T3.
+ */
+export interface ScratchAttempt {
+  readonly version: 2;
+  readonly id: string;
+  readonly run: string;
+  readonly task: string;
+  readonly stage: string;
+  readonly kind: string;
+  readonly seat: string;
+  readonly role: string | null;
+  readonly lead: boolean;
+  readonly access: "full" | "workspace" | "read-only";
+  readonly contract: string;
+  readonly participants?: ReadonlyArray<{
+    seat: string;
+    role: string | null;
+    harness: string;
+    model: string | null;
+  }>;
+  readonly worktree: string;
+  readonly harness: string;
+  readonly model: string | null;
+  readonly prompt: string;
+  state: string;
+  owner: string | null;
+  native: Record<string, string | null> | null;
+  cancelRequested: boolean;
+  result: Record<string, unknown> | null;
+}
+
+const TERMINAL_ATTEMPT = ["completed", "failed", "cancelled", "interrupted"];
+
 interface Answer {
   readonly status: number;
   readonly body: unknown;
@@ -92,19 +132,36 @@ export function scratchEngine(
      * the legacy engine, which keys by `(task, seq)` and serves neither.
      */
     readonly sourceScoped?: boolean;
+    /** `false` models an engine before slice L2: no related threads and no routes for them. */
+    readonly servesRelated?: boolean;
   } = {},
 ) {
   const key = options.key ?? "scratch approval passphrase";
   const tasks = new Map<string, ScratchTask>();
   const links = new Map<string, ScratchLink>();
+  /** Each task's related threads by key, in the order they were first set (lib/related-threads.mjs). */
+  const related = new Map<string, Map<string, ScratchRelated>>();
+  const servesRelated = options.servesRelated !== false;
   const leases = new Map<string, Lease>();
   const events: Array<{ kind: string; task: string; data: unknown }> = [];
   const requests: Array<{ method: string; path: string; body: unknown }> = [];
   const sets = new Map<string, { path: string | null }>();
   const activity = new Map<string, Array<Activity>>();
   const steers: Array<ScratchSteer & { readonly task: string }> = [];
+  /** Every steer the run under way took, as the engine's steer route records it (slice E1). */
+  const steered: Array<{
+    task: string;
+    text: string;
+    by: string;
+    from: string;
+    ref: string | null;
+  }> = [];
   /** Requests whose path matches are lost on the way, once each, as a dropped connection. */
   const drops: Array<RegExp> = [];
+  /** Requests whose path matches are answered with this instead, once each, before routing. */
+  const answers: Array<{ readonly path: RegExp; readonly answer: Answer }> = [];
+  const attempts = new Map<string, ScratchAttempt>();
+  const attestations: Array<Record<string, unknown>> = [];
   let teams: unknown = [];
   let clock = Date.parse("2026-11-22T10:00:00.000Z");
   let holderSeq = 0;
@@ -114,6 +171,8 @@ export function scratchEngine(
   const linkWrites = { inFlight: 0, most: 0 };
   /** Runs once, just before the next link write is admitted: another writer getting in first. */
   let beforeNextPut: (() => void) | null = null;
+  /** Runs once, just before the next task detail is answered: the task changing mid-pass. */
+  let beforeNextDetail: (() => void) | null = null;
 
   const live = () => {
     for (const [task, lease] of leases) {
@@ -136,6 +195,7 @@ export function scratchEngine(
     hold: task.hold ?? null,
     ...(task.seatModels === undefined ? {} : { seatModels: task.seatModels }),
     ...(options.servesLink === false ? {} : { boardThread: links.get(task.id) ?? null }),
+    ...(servesRelated ? { relatedThreads: [...(related.get(task.id)?.values() ?? [])] } : {}),
     ...(conversing ? { conversation: mirrorOf(task.id), steers: steerCounts(task.id) } : {}),
     ...task.served,
   });
@@ -295,6 +355,70 @@ export function scratchEngine(
     return { status: 200, body: { task: id, number: task.number, boardThread } };
   };
 
+  const putRelated = (id: string, relatedKey: string, body: Record<string, unknown>): Answer => {
+    const task = tasks.get(id);
+    if (!task) return refused(404, `no task ${id.slice(0, 40)}`, { code: "not-found", task: null });
+    const { environmentId, threadId, role, setBy } = body;
+    if (
+      typeof environmentId !== "string" ||
+      !ENVIRONMENT_PART.test(environmentId) ||
+      typeof threadId !== "string" ||
+      !THREAD_PART.test(threadId) ||
+      (role !== "side" && role !== "linked") ||
+      typeof setBy !== "string" ||
+      !ENVIRONMENT_PART.test(setBy)
+    )
+      return refused(400, "a related thread reads as { environmentId, threadId, role, setBy }", {
+        code: "invalid-field",
+      });
+    const target = { environmentId, threadId };
+    if (sameTarget(links.get(id) ?? null, target))
+      return refused(400, "this is the task's own board thread", { code: "board-thread" });
+    const rows = related.get(id) ?? new Map<string, ScratchRelated>();
+    const elsewhere = [...rows.values()].find(
+      (link) => link.key !== relatedKey && sameTarget(link, target),
+    );
+    if (elsewhere) return refused(409, "already related", { code: "conflict", current: elsewhere });
+    const previous = rows.get(relatedKey) ?? null;
+    if (
+      previous &&
+      sameTarget(previous, target) &&
+      previous.role === role &&
+      previous.setBy === setBy
+    )
+      return {
+        status: 200,
+        body: { task: id, number: task.number, relatedThread: previous, unchanged: true },
+      };
+    const relatedThread = {
+      key: relatedKey,
+      environmentId,
+      threadId,
+      role,
+      setBy,
+      setAt: DateTime.formatIso(DateTime.makeUnsafe(clock)),
+    } as const;
+    rows.set(relatedKey, relatedThread);
+    related.set(id, rows);
+    events.push({ kind: "task.related-thread-set", task: id, data: { previous, relatedThread } });
+    return { status: 200, body: { task: id, number: task.number, relatedThread } };
+  };
+
+  const clearRelated = (id: string, relatedKey: string, body: Record<string, unknown>): Answer => {
+    if (!tasks.has(id))
+      return refused(404, `no task ${id.slice(0, 40)}`, { code: "not-found", task: null });
+    const previous = related.get(id)?.get(relatedKey) ?? null;
+    if (previous) {
+      related.get(id)!.delete(relatedKey);
+      events.push({
+        kind: "task.related-thread-cleared",
+        task: id,
+        data: { previous, by: body.setBy },
+      });
+    }
+    return { status: 204, body: null };
+  };
+
   const clearLink = (id: string): Answer => {
     if (!tasks.has(id))
       return refused(404, `no task ${id.slice(0, 40)}`, { code: "not-found", task: null });
@@ -344,9 +468,122 @@ export function scratchEngine(
     return then(lease);
   };
 
-  const handle = (method: string, pathname: string, raw: unknown): Answer => {
+  /** The v2 rules of native-builds.mjs: owner, receipt and immutability. */
+  const attemptAct = (id: string, action: string, body: Record<string, unknown>): Answer => {
+    const record = attempts.get(id);
+    if (!record) return refused(404, "No native build has this attempt id.");
+    if (action === "claim") {
+      if (typeof body.owner !== "string" || !body.owner.trim())
+        return refused(400, "A native coordinator identity is required.");
+      if (body.worktree !== record.worktree)
+        return refused(400, "Attach the native coordinator to this build's existing worktree.");
+      if (record.owner && record.owner !== body.owner)
+        return refused(409, "This native attempt already has a coordinator.");
+      if (!TERMINAL_ATTEMPT.includes(record.state)) {
+        record.owner = body.owner;
+        record.state = "claimed";
+        events.push({ kind: "native.claimed", task: record.task, data: { attempt: id } });
+      }
+      return { status: 200, body: record };
+    }
+    if (!record.owner || record.owner !== body.owner)
+      return refused(409, "This native attempt belongs to another coordinator.");
+    if (action === "attach") {
+      if (typeof body.environmentId !== "string")
+        return refused(400, "A native attempt receipt names the T3 environment it runs in.");
+      const native = record.lead
+        ? typeof body.threadId === "string"
+          ? {
+              environmentId: body.environmentId,
+              threadId: body.threadId,
+              runId: typeof body.runId === "string" ? body.runId : null,
+            }
+          : null
+        : typeof body.childThreadId === "string"
+          ? { environmentId: body.environmentId, childThreadId: body.childThreadId }
+          : null;
+      if (native === null) return refused(400, "The native attempt receipt is incomplete.");
+      if (record.native && JSON.stringify(record.native) !== JSON.stringify(native))
+        return refused(400, "A native attempt cannot change its thread.");
+      if (!record.native)
+        events.push({ kind: "native.attached", task: record.task, data: { attempt: id, native } });
+      record.native = native;
+      return { status: 200, body: record };
+    }
+    const thread = record.lead ? record.native?.threadId : record.native?.childThreadId;
+    const given = record.lead ? body.threadId : body.childThreadId;
+    if (!record.native || !thread || given !== thread)
+      return refused(400, "Native completion does not match the attached thread.");
+    if (!TERMINAL_ATTEMPT.includes(body.state as string) || typeof body.text !== "string")
+      return refused(400, "Invalid native terminal result.");
+    if (TERMINAL_ATTEMPT.includes(record.state)) {
+      if (record.state !== body.state || record.result?.text !== body.text)
+        return refused(400, "Native terminal results are immutable.");
+      return { status: 200, body: record };
+    }
+    const contributions = (body.contributions ?? []) as ReadonlyArray<Record<string, unknown>>;
+    if (contributions.length > 0 && record.kind !== "team-plan")
+      return refused(400, "Only a team plan carries contributions.");
+    const seats = new Set((record.participants ?? []).map((item) => item.seat));
+    if (contributions.some((item) => !seats.has(item.seat as string)))
+      return refused(400, "Each contribution names a participant of the team plan.");
+    record.state = body.state as string;
+    record.result = {
+      text: body.text,
+      reason: body.reason ?? null,
+      contributions,
+      model: body.model ?? null,
+      harness: body.harness ?? null,
+    };
+    events.push({ kind: "native.completed", task: record.task, data: { attempt: id } });
+    return { status: 200, body: record };
+  };
+
+  const handle = (
+    method: string,
+    pathname: string,
+    raw: unknown,
+    search: URLSearchParams = new URLSearchParams(),
+  ): Answer => {
     const body = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
     requests.push({ method, path: pathname, body: raw });
+    const forced = answers.findIndex((entry) => entry.path.test(pathname));
+    if (forced >= 0) return answers.splice(forced, 1)[0]!.answer;
+    if (method === "GET" && pathname === "/api/native-builds") {
+      const pending = [...attempts.values()]
+        .filter((record) => !TERMINAL_ATTEMPT.includes(record.state))
+        .map(({ prompt: _prompt, ...record }) => record);
+      // Version 1 is what coordinators decode; v2 records are listed with ?version=2 only.
+      return search.get("version") === "2"
+        ? { status: 200, body: { version: 2, access: ["full", "read-only"], pending } }
+        : { status: 200, body: { version: 1, enabled: false, access: ["full"], pending: [] } };
+    }
+    const attempt = /^\/api\/native-builds\/(att-[\w-]+)(?:\/(claim|attach|complete))?$/.exec(
+      pathname,
+    );
+    if (attempt && method === "GET" && attempt[2] === undefined) {
+      const record = attempts.get(attempt[1]!);
+      return record ? { status: 200, body: record } : refused(404, "No native build here.");
+    }
+    if (attempt && method === "POST" && attempt[2] !== undefined)
+      return attemptAct(attempt[1]!, attempt[2], body);
+    const attest = /^\/api\/runs\/([\w-]+)\/seat-attestations$/.exec(pathname);
+    if (attest && method === "POST") {
+      if (body.key !== key)
+        return refused(403, "the approval key is wrong or missing", { code: "refused" });
+      const attestation = {
+        environmentId: body.environmentId,
+        threadId: body.threadId,
+        run: attest[1],
+        seat: body.seat,
+        model: body.model,
+        harness: body.harness ?? null,
+        setBy: body.setBy,
+      };
+      attestations.push(attestation);
+      events.push({ kind: "run.seat-attested", task: "", data: attestation });
+      return { status: 200, body: { attestation } };
+    }
     if (method === "GET" && pathname === "/api/lanes") {
       // A task that moved away has no lane and is on no board; one on its way keeps its lane.
       const cards = [...tasks.values()].filter((task) => task.state !== "moved").map(cardOf);
@@ -365,6 +602,9 @@ export function scratchEngine(
     if (method === "GET" && pathname === "/api/teams") return { status: 200, body: teams };
     const detail = /^\/api\/tasks\/([\w-]+)$/.exec(pathname);
     if (method === "GET" && detail) {
+      const run = beforeNextDetail;
+      beforeNextDetail = null;
+      run?.();
       const task = tasks.get(detail[1]!);
       // `thread` keeps meaning the task id; the conversation is only ever `boardThread`. A moved
       // task is still answered for, with its state and no lane.
@@ -419,6 +659,16 @@ export function scratchEngine(
       before?.();
       return putLink(link[1]!, body);
     }
+    const relatedRoute = servesRelated
+      ? /^\/api\/tasks\/([\w-]+)\/threads\/([\w-]{1,80})$/.exec(pathname)
+      : null;
+    if (relatedRoute && (method === "PUT" || method === "DELETE")) {
+      if (body.key !== key)
+        return refused(403, "the approval key is wrong or missing", { code: "refused" });
+      return method === "DELETE"
+        ? clearRelated(relatedRoute[1]!, relatedRoute[2]!, body)
+        : putRelated(relatedRoute[1]!, relatedRoute[2]!, body);
+    }
     const keyed = conversing
       ? /^\/api\/tasks\/([\w-]+)\/(activity|steers\/(\d+)\/(delivered|failed))$/.exec(pathname)
       : null;
@@ -428,6 +678,34 @@ export function scratchEngine(
       return keyed[2] === "activity"
         ? ingest(keyed[1]!, body)
         : settle(keyed[1]!, Number(keyed[3]), keyed[4]!, body);
+    }
+    const steerRoute = /^\/api\/tasks\/([\w-]+)\/steer$/.exec(pathname);
+    if (steerRoute && method === "POST") {
+      const task = tasks.get(steerRoute[1]!);
+      if (!task) return refused(404, `no task ${steerRoute[1]}`, { code: "not-found" });
+      const from = body.from ?? "board";
+      if (from !== "board" && from !== "thread")
+        return refused(400, "from is board or thread", { code: "invalid-field", field: "from" });
+      if (["approved", "pr-open", "merged", "rejected", "closed"].includes(task.state))
+        return refused(409, `this task is ${task.state}; there is no run to steer`);
+      if (!task.run) return refused(409, "no run is under way on this task");
+      const text = String(body.text ?? "").trim();
+      // A repeated `ref` is answered as the first steer and never applied again.
+      const ref = typeof body.ref === "string" ? body.ref : null;
+      if (ref !== null && steered.some((entry) => entry.task === task.id && entry.ref === ref))
+        return { status: 200, body: { task: task.id } };
+      steered.push({ task: task.id, text, by: String(body.by ?? ""), from, ref });
+      // A steer typed in the thread is already there: it is never queued back to it.
+      if (from === "board")
+        steers.push({
+          id: steers.length + 1,
+          task: task.id,
+          author: String(body.by ?? ""),
+          text,
+          state: "pending",
+          failure: null,
+        });
+      return { status: 200, body: { task: task.id } };
     }
     const lease = /^\/api\/orchestration\/tasks\/([\w-]+)\/(claim|ack|release)$/.exec(pathname);
     if (lease && method === "POST") {
@@ -467,6 +745,40 @@ export function scratchEngine(
       return added;
     },
     task: (id: string) => tasks.get(id)!,
+    attempts,
+    attestations,
+    /** A step the engine queues for T3, as develop() queues it under "t3" execution. */
+    queueAttempt: (
+      attempt: Pick<ScratchAttempt, "id" | "task" | "stage" | "kind" | "seat"> &
+        Partial<ScratchAttempt>,
+    ) => {
+      const record: ScratchAttempt = {
+        version: 2,
+        run: "run-1",
+        role: null,
+        lead: false,
+        access: "full",
+        contract: attempt.kind,
+        worktree: "/work/run-1",
+        harness: "claude",
+        model: "claude-fable-5-1",
+        prompt: `Do the ${attempt.kind} step.`,
+        state: "queued",
+        owner: null,
+        native: null,
+        cancelRequested: false,
+        result: null,
+        ...attempt,
+      };
+      attempts.set(record.id, record);
+      return record;
+    },
+    /** The engine's cancel: an unclaimed step ends here, a claimed one is asked to stop. */
+    cancelAttempt: (id: string) => {
+      const record = attempts.get(id)!;
+      record.cancelRequested = true;
+      if (!record.owner) record.state = "cancelled";
+    },
     removeTask: (id: string) => {
       tasks.delete(id);
       links.delete(id);
@@ -477,6 +789,7 @@ export function scratchEngine(
       teams = value;
     },
     linkOf: (id: string) => links.get(id) ?? null,
+    relatedOf: (id: string) => [...(related.get(id)?.values() ?? [])],
     /** Another writer's link, written as the engine would write it. */
     writeLink: (id: string, link: { environmentId: string; threadId: string; setBy: string }) =>
       putLink(id, link),
@@ -486,6 +799,9 @@ export function scratchEngine(
     },
     beforeNextPut: (run: () => void) => {
       beforeNextPut = run;
+    },
+    beforeNextDetail: (run: () => void) => {
+      beforeNextDetail = run;
     },
     setDown: (value: boolean) => {
       down = value;
@@ -506,6 +822,7 @@ export function scratchEngine(
       return steer.id;
     },
     steer: (id: number) => steers.find((steer) => steer.id === id)!,
+    steeredOf: (task: string) => steered.filter((entry) => entry.task === task),
     activityOf: (task: string) => activity.get(task) ?? [],
     /** Another source's ingest, as its own server would send it. */
     ingestFrom: (task: string, row: { seq: number; setBy: string; kind?: string }) =>
@@ -516,6 +833,10 @@ export function scratchEngine(
     },
     dropNext: (path: RegExp) => {
       drops.push(path);
+    },
+    /** The next request to `path` is answered so, as a failing engine would answer it. */
+    answerNext: (path: RegExp, status: number, body: unknown) => {
+      answers.push({ path, answer: { status, body } });
     },
     /** Whether this request is lost on the way: true once for each drop that matches it. */
     drops: (path: string) => {
@@ -543,7 +864,12 @@ export const scratchEngineHttp = (engine: ScratchEngine) =>
             ? decodeJson(new TextDecoder().decode(request.body.body))
             : undefined;
         const answer = () => {
-          const { status, body: answered } = engine.handle(request.method, url.pathname, body);
+          const { status, body: answered } = engine.handle(
+            request.method,
+            url.pathname,
+            body,
+            url.searchParams,
+          );
           return HttpClientResponse.fromWeb(
             request,
             status === 204

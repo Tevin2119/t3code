@@ -26,6 +26,14 @@ import type { LimitedSeatFacts } from "@t3tools/shared/limitedSeat";
 import { createModelSelection } from "@t3tools/shared/model";
 import { ServerConfig } from "../config.ts";
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
+import { engineNotice } from "./BoardConversation.ts";
+import {
+  briefMessageId,
+  engineStageNotice,
+  seatCommandId,
+  stageMessageId,
+} from "./boardTaskAttempts.ts";
+import { boardTaskOf, boardTaskThreadId, boardTaskThreadMarker } from "./boardThreadMarker.ts";
 import * as DeliveryService from "./DeliveryService.ts";
 import * as LimitedSeats from "./LimitedSeats.ts";
 import * as EventSink from "../orchestration-v2/EventSink.ts";
@@ -68,6 +76,8 @@ function setup({
   /** What T3 knows about limits and Favorites; absent, no seat is ever treated as limited. */
   limitFacts = undefined as (() => LimitedSeatFacts) | undefined,
   boardOwned = false,
+  /** The server-owned marker the thread was made with, over `boardOwned`'s. */
+  engineIntake = undefined as string | undefined,
 } = {}) {
   const participants = [
     {
@@ -144,6 +154,8 @@ function setup({
   };
   const tasks: Array<{
     teamChat: Delegation["teamChat"];
+    title?: string;
+    childThreadId?: ThreadId;
     status: string;
     result: string | null;
     providerInstanceId: ProviderInstanceId;
@@ -153,7 +165,11 @@ function setup({
   const admissions = new Map<string, Delegation>();
   const bindings: Array<{ threadId: ThreadId; team: string; role?: string; driver: string }> = [];
   const refreshed: string[] = [];
+  /** The engine's native attempts, by id, as `GET /api/native-builds/:att` serves them. */
+  const attempts = new Map<string, unknown>();
   const delivery = {
+    read: ({ path }: { readonly path: string }) =>
+      Effect.succeed({ readAt: "", body: attempts.get(path.split("/").at(-1)!) }),
     refreshThread: (_id: ThreadId, configuration: string) =>
       Effect.sync(() => {
         refreshed.push(configuration);
@@ -192,13 +208,20 @@ function setup({
           projectId: ProjectId.make("project"),
           runtimeMode: threadAccess,
           modelSelection: createModelSelection(ProviderInstanceId.make("lead-work"), "lead-model"),
-          lineage: boardOwned ? { engineIntake: "task-1" } : {},
+          lineage:
+            engineIntake !== undefined
+              ? { engineIntake }
+              : boardOwned
+                ? { engineIntake: "task-1" }
+                : {},
         },
         runs: missingRun ? [] : [run],
         messages: [message],
         subagents: tasks,
         turnItems: notices,
       }),
+    getMessagesById: (_threadId: ThreadId, ids: ReadonlyArray<MessageId>) =>
+      Effect.succeed(new Map(ids.includes(message.id) ? [[message.id, message]] : [])),
   } as unknown as ProjectionStore.ProjectionStoreV2["Service"];
   const threads = {
     isProviderInstanceEnabledForProject: () => Effect.succeed(true),
@@ -211,6 +234,7 @@ function setup({
         }
         tasks.push({
           teamChat: command.teamChat,
+          ...(command.title === undefined ? {} : { title: command.title }),
           status: "running",
           result: null,
           providerInstanceId: command.modelSelection!.instanceId,
@@ -249,6 +273,7 @@ function setup({
   return {
     run,
     message,
+    attempts,
     tasks,
     admissions,
     notices,
@@ -1132,5 +1157,116 @@ it.effect("leaves a board task's conversation to its team's own setting", () =>
     yield* (yield* fixture.service).prepareTurn({ threadId, runId });
     expect(fixture.seatsOn()["contribution:researcher"]).toBe("claude-model");
     expect(fixture.notices).toHaveLength(0);
+  }),
+);
+
+it.effect("starts no team round for an engine notice, nor in a board task's conversation", () =>
+  Effect.gen(function* () {
+    const idle = { ready: true, context: "" };
+    const notice = setup();
+    Object.assign(notice.message, {
+      notification: engineNotice("A steer from the board", "Use the other API"),
+    });
+    expect(yield* (yield* notice.service).prepareTurn({ threadId, runId })).toEqual(idle);
+    expect(notice.admissions.size).toBe(0);
+    // While the engine's runners do a board task's work, a person's message goes to the lead alone.
+    const task = setup({ engineIntake: boardTaskThreadMarker(boardTaskOf("work", "task-7")!) });
+    expect(yield* (yield* task.service).prepareTurn({ threadId, runId })).toEqual(idle);
+    expect(task.admissions.size).toBe(0);
+    expect(task.notices).toHaveLength(0);
+  }),
+);
+
+it.effect("runs the team round for the engine's brief in a board task's conversation", () =>
+  Effect.gen(function* () {
+    const brief = setup({ engineIntake: boardTaskThreadMarker(boardTaskOf("work", "task-7")!) });
+    Object.assign(brief.message, { id: briefMessageId("att-plan") });
+    brief.run.userMessageId = brief.message.id;
+    expect((yield* (yield* brief.service).prepareTurn({ threadId, runId })).ready).toBe(false);
+    expect([...brief.admissions.values()].map((command) => command.teamChat?.seat)).toEqual([
+      "researcher",
+      "critic",
+    ]);
+  }),
+);
+
+it.effect("starts an engine stage's seats as children of its turn, with or without a team", () =>
+  Effect.gen(function* () {
+    // A task whose team has no seat but its lead's here has no lineup: its seats start all the same.
+    const board = boardTaskThreadId(boardTaskOf("work", "task-7")!);
+    const fixture = setup({
+      engineIntake: boardTaskThreadMarker(boardTaskOf("work", "task-7")!),
+      plain: true,
+    });
+    const seat = {
+      attemptId: "att-qa",
+      seat: "qa",
+      childThreadId: ThreadId.make("child-qa"),
+      modelSelection: createModelSelection(ProviderInstanceId.make("codex-work"), "codex-model"),
+      access: "read-only" as const,
+      worktreePath: "/work/qa-1",
+    };
+    Object.assign(fixture.message, {
+      id: stageMessageId("att-qa"),
+      notification: engineStageNotice("qa", [
+        seat,
+        { ...seat, attemptId: "att-stopped", seat: "qa-2", childThreadId: ThreadId.make("c-2") },
+      ]),
+    });
+    fixture.run.userMessageId = fixture.message.id;
+    fixture.attempts.set("att-qa", {
+      version: 2,
+      id: "att-qa",
+      run: "run-1",
+      task: "task-7",
+      stage: "qa",
+      kind: "qa",
+      seat: "qa",
+      lead: false,
+      access: "read-only",
+      worktree: "/work/qa-1",
+      harness: "codex",
+      model: "codex-model",
+      prompt: "Test the candidate.",
+      state: "claimed",
+      owner: "t3-board:here",
+      native: null,
+      cancelRequested: false,
+    });
+    // The engine stopped this seat, or T3 already reported it: it is read again, and never started.
+    fixture.attempts.set("att-stopped", {
+      ...(fixture.attempts.get("att-qa") as object),
+      id: "att-stopped",
+      seat: "qa-2",
+      state: "cancelled",
+      cancelRequested: true,
+    });
+    const service = yield* fixture.service;
+    expect(yield* service.prepareTurn({ threadId: board, runId })).toEqual({
+      ready: false,
+      context: "",
+    });
+    const [started] = [...fixture.admissions.values()];
+    expect(started).toMatchObject({
+      commandId: seatCommandId(board, "att-qa"),
+      parentRunId: runId,
+      title: "qa · qa",
+      task: "Test the candidate.",
+      modelSelection: seat.modelSelection,
+      runtimeMode: "approval-required",
+      workspaceStrategy: { type: "existing_worktree", worktreePath: "/work/qa-1" },
+      completionWake: "settled_only",
+    });
+    // A seat of the turn's own round, which the orchestrator wakes the turn for when it ends.
+    expect(started?.teamChat).toEqual({ sourceRunId: runId, stage: "engine", seat: "qa" });
+    fixture.tasks[0]!.childThreadId = seat.childThreadId;
+    expect((yield* service.prepareTurn({ threadId: board, runId })).ready).toBe(false);
+    expect(fixture.admissions.size).toBe(1);
+    Object.assign(fixture.tasks[0]!, { status: "completed", result: "All items pass." });
+    const done = yield* service.prepareTurn({ threadId: board, runId });
+    expect(done.ready).toBe(true);
+    expect(done.context).toContain("qa (codex-work/codex-model, completed");
+    expect(done.context).toContain("All items pass.");
+    expect(fixture.admissions.size).toBe(1);
   }),
 );

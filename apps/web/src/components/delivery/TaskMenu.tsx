@@ -53,6 +53,8 @@ export function TaskMenu(props: {
   readonly taskActions: Pick<ReturnType<typeof useTaskActions>, "busy" | "run" | "moveTo">;
   readonly onCreateTask: () => void;
   readonly onAllocate: () => void;
+  /** Opens a side chat of the task's thread; null where none can start. */
+  readonly onDiscuss: (() => void) | null;
   readonly onChanged: () => void;
   /** Why a board move was refused, for the line under the header; null clears it. */
   readonly onProblem: (why: string | null) => void;
@@ -124,6 +126,14 @@ export function TaskMenu(props: {
               onClick={props.onCreateTask}
               label="Create task from chat"
               help="Make this chat a task; nothing starts yet."
+            />
+          ) : null}
+          {props.onDiscuss ? (
+            <Action
+              onClick={props.onDiscuss}
+              label="Discuss in a thread"
+              help="A side chat of this task's thread. What is said there does not reach the task."
+              data-task-discuss
             />
           ) : null}
           <Action

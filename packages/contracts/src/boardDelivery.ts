@@ -117,6 +117,16 @@ export const TaskDeploymentPublication = Schema.Struct({
   previewUrl: Schema.optional(NullableText),
   deploymentId: Schema.optional(NullableText),
   logsUrl: Schema.optional(NullableText),
+  // The task on every instance of its repository, in release-line order; current status only.
+  instances: Schema.optional(
+    Schema.Array(
+      Schema.Struct({
+        projectId: Schema.String,
+        environment: Schema.String,
+        state: Schema.Literals(["live", "waiting", "absent"]),
+      }),
+    ),
+  ),
 });
 export type TaskDeploymentPublication = typeof TaskDeploymentPublication.Type;
 export const TaskDeployment = Schema.Struct({

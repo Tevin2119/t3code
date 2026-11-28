@@ -17,7 +17,6 @@ import {
   type RunId,
   ThreadId,
 } from "@t3tools/contracts";
-import * as HostProcess from "@t3tools/shared/HostProcess";
 import {
   agreedStandIn,
   firstFreeFavorite,
@@ -45,6 +44,7 @@ import * as ProviderAdapterRegistry from "../orchestration-v2/ProviderAdapterReg
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
 import { forkParked } from "../serverActivation.ts";
+import { engineNotice } from "./BoardConversation.ts";
 import { boardTaskInWork } from "./boardTaskWork.ts";
 import { createBoardTaskThread, type BoardTask } from "./boardThreadMarker.ts";
 import * as BoardThreadRows from "./boardThreadRows.ts";
@@ -188,7 +188,6 @@ const decodePickRefusal = Schema.decodeUnknownOption(Schema.Struct({ code: Schem
 const make = Effect.gen(function* () {
   const deliveryOption = yield* Effect.serviceOption(DeliveryService.DeliveryService);
   const identityOption = yield* Effect.serviceOption(ServerEnvironment.ServerEnvironmentIdentity);
-  const hostEnvironment = yield* HostProcess.Environment;
   const limitedSeats = yield* LimitedSeats.LimitedSeats;
   const rows = yield* BoardThreadRows.BoardThreadRows;
   const projections = yield* ProjectionStore.ProjectionStoreV2;
@@ -397,10 +396,10 @@ const make = Effect.gen(function* () {
     resetAt: string | null,
     resuming: boolean,
   ) {
-    const key = hostEnvironment[DeliveryService.BOARD_THREAD_KEY_VARIABLE];
-    if ((!key && !resuming) || Option.isNone(deliveryOption) || Option.isNone(identityOption))
-      return null;
+    if (Option.isNone(deliveryOption) || Option.isNone(identityOption)) return null;
     const delivery = deliveryOption.value;
+    const key = yield* delivery.boardApprovalKey;
+    if (!key && !resuming) return null;
     const environmentId = yield* identityOption.value.getEnvironmentId;
     const target = leadHandoffThreadId(runId);
     const path = `/api/tasks/${task.id}`;
@@ -476,6 +475,10 @@ const make = Effect.gen(function* () {
       );
     }
 
+    // The successor is the board's from its start, showing the team the board gave the lead: never
+    // a lineup a person set.
+    if ((yield* delivery.boardLineupOf(target)) === undefined)
+      yield* delivery.setBoardLineup(target, (yield* delivery.boardLineupOf(shell.id)) ?? null);
     const messageId = MessageId.make(`${identity}:continue`);
     const continuation =
       existing === null
@@ -506,15 +509,18 @@ const make = Effect.gen(function* () {
           : ["## Acceptance", acceptance.map((item) => `- ${item}`).join("\n")]),
         run ? `Engine run ${run.id}, stage ${run.stage}.` : "No current engine run.",
       ];
+      const text = summary.join("\n\n");
       yield* threads.dispatch({
         type: "message.dispatch",
         commandId: CommandId.make(`${identity}:continue`),
         messageId,
         threadId: target,
-        text: summary.join("\n\n"),
+        text,
+        notification: engineNotice("This board task continues after a usage limit", text),
         attachments: [],
         modelSelection,
-        dispatchMode: { type: "start_immediately" },
+        // A notice is queued; the new thread runs nothing else, so it starts at once.
+        dispatchMode: { type: "queue_after_active" },
         createdBy: "agent",
         creationSource: "server",
       });

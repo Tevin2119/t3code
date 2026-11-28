@@ -15,6 +15,8 @@ import { modelFamily } from "./OrchestratorSeatGlyphs";
 
 const testState = vi.hoisted(() => ({
   threadState: { data: null } as { data: unknown },
+  /** The teams the engine serves; null serves `TEAMS`. */
+  teams: null as unknown,
   // Like the server: a saved lineup is what the next render reads.
   setLineup: vi.fn(async (input: { input: { orchestration: unknown } }) => {
     testState.threadState.data = {
@@ -29,7 +31,7 @@ vi.mock("../../state/delivery", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../state/delivery")>()),
   useDeliveryEnabled: () => true,
   useDeliveryRead: (_environmentId: string | null, path: string) => ({
-    body: path === "/api/teams" ? TEAMS : null,
+    body: path === "/api/teams" ? (testState.teams ?? TEAMS) : null,
     readAt: null,
     isPending: false,
     error: null,
@@ -524,3 +526,180 @@ it.each([315, 300])(
     }
   },
 );
+
+it("shows a board task's team and models with no way to change them", async () => {
+  testState.threadState = {
+    data: { binding: null, lineup: { ...LINEUP, team: "research" }, pending: null },
+  };
+  testState.setLineup.mockClear();
+  const onFocusChat = vi.fn();
+  await using _screen = await render(
+    <OrchestratorLineup
+      environmentId={"env-a" as never}
+      threadId={"t1" as never}
+      driver={ProviderDriverKind.make("codex")}
+      entries={ENTRIES}
+      models={MODELS}
+      boardOwned
+      onFocusChat={onFocusChat}
+      onLeaveToSingle={() => {}}
+    />,
+  );
+
+  await expect.element(page.getByText("Team research")).toBeVisible();
+  await expect.element(page.getByText(/The board picks this task's team and models/)).toBeVisible();
+  const include = page.getByRole("checkbox", { name: "Include Scout" });
+  await expect.element(include).toBeChecked();
+  await expect.element(include).toBeDisabled();
+  await expect
+    .element(page.getByRole("button", { name: "Choose provider and model for Scout" }))
+    .toBeDisabled();
+  await expect.element(page.getByRole("combobox", { name: "Critique round" })).toBeDisabled();
+  await expect.element(page.getByRole("combobox", { name: "Participants' access" })).toBeDisabled();
+  for (const name of [
+    "Reset to team",
+    "Add participant",
+    "Use ordinary chat",
+    "Chat 1:1 with Scout",
+  ])
+    await expect.element(page.getByRole("button", { name })).not.toBeInTheDocument();
+  await expect
+    .element(page.getByRole("combobox", { name: "Team to bring in" }))
+    .not.toBeInTheDocument();
+  await include.click({ force: true });
+  expect(testState.setLineup).not.toHaveBeenCalled();
+});
+
+it("shows a board task's lead with the crown, on the model the lead runs now", async () => {
+  testState.teams = [
+    {
+      ...TEAMS[0],
+      team: "development",
+      seats: [
+        seat("lead", "team-lead", "claude", "Lead"),
+        seat("critic", "reviewer", "codex", "Critic"),
+      ],
+      settings: [],
+    },
+  ];
+  testState.threadState = {
+    data: {
+      binding: null,
+      boardLineup: { team: "development", participants: [LINEUP.participants[1]!] },
+      pending: null,
+    },
+  };
+  await using _screen = await render(
+    <OrchestratorLineup
+      environmentId={"env-a" as never}
+      threadId={"t1" as never}
+      driver={ProviderDriverKind.make("codex")}
+      entries={ENTRIES}
+      models={MODELS}
+      boardOwned
+      // A hand-off moved the lead off its roster model.
+      leadModelSelection={{
+        instanceId: ProviderInstanceId.make("codex"),
+        model: "codex-successor",
+      }}
+    />,
+  );
+
+  const lead = page.getByRole("group", { name: "Settings for Lead" });
+  await expect.element(lead.getByText(", orchestrator")).toBeInTheDocument();
+  await expect.element(lead.getByRole("checkbox")).not.toBeInTheDocument();
+  await expect
+    .element(lead.getByRole("button", { name: "Choose provider and model for Lead" }))
+    .toHaveTextContent("Codex · codex-successor");
+  // One seat besides the lead is still a team here: no "choose two" warning.
+  await expect.element(page.getByRole("alert")).not.toBeInTheDocument();
+  testState.teams = null;
+});
+
+it("shows a board task's team over a person's binding saved on its thread", async () => {
+  testState.teams = [
+    {
+      ...TEAMS[0],
+      team: "development",
+      seats: [
+        seat("lead", "team-lead", "claude", "Lead"),
+        seat("critic", "reviewer", "codex", "Critic"),
+      ],
+      settings: [],
+    },
+    TEAMS[0],
+  ];
+  testState.threadState = {
+    data: {
+      // Saved by a person before the upgrade: never the board's team.
+      binding: RESEARCH_BINDING,
+      boardLineup: { team: "development", participants: [LINEUP.participants[1]!] },
+      pending: null,
+    },
+  };
+  await using _screen = await render(
+    <OrchestratorLineup
+      environmentId={"env-a" as never}
+      threadId={"t1" as never}
+      driver={ProviderDriverKind.make("codex")}
+      entries={ENTRIES}
+      models={MODELS}
+      boardOwned
+      leadModelSelection={{
+        instanceId: ProviderInstanceId.make("claudeAgent"),
+        model: "claude-model",
+      }}
+    />,
+  );
+
+  await expect.element(page.getByText("Team development")).toBeVisible();
+  await expect.element(page.getByText("Team research")).not.toBeInTheDocument();
+  const lead = page.getByRole("group", { name: "Settings for Lead" });
+  await expect.element(lead.getByText(", orchestrator")).toBeInTheDocument();
+  testState.teams = null;
+});
+
+it("crowns a board task's lead by its seat when another seat shares its role and harness", async () => {
+  testState.teams = [
+    {
+      ...TEAMS[0],
+      team: "development",
+      seats: [
+        seat("reviewer-a", "reviewer", "claude", "First reviewer"),
+        seat("lead", "reviewer", "claude", "Lead"),
+        seat("critic", "reviewer", "codex", "Critic"),
+      ],
+      settings: [],
+    },
+  ];
+  testState.threadState = {
+    data: {
+      binding: null,
+      boardLineup: { team: "development", participants: [LINEUP.participants[1]!] },
+      pending: null,
+    },
+  };
+  await using _screen = await render(
+    <OrchestratorLineup
+      environmentId={"env-a" as never}
+      threadId={"t1" as never}
+      driver={ProviderDriverKind.make("codex")}
+      entries={ENTRIES}
+      models={MODELS}
+      boardOwned
+      leadModelSelection={{
+        instanceId: ProviderInstanceId.make("codex"),
+        model: "codex-successor",
+      }}
+    />,
+  );
+
+  const lead = page.getByRole("group", { name: "Settings for Lead" });
+  await expect.element(lead.getByText(", orchestrator")).toBeInTheDocument();
+  await expect
+    .element(lead.getByRole("button", { name: "Choose provider and model for Lead" }))
+    .toHaveTextContent("Codex · codex-successor");
+  const other = page.getByRole("group", { name: "Settings for First reviewer" });
+  await expect.element(other.getByText(", orchestrator")).not.toBeInTheDocument();
+  testState.teams = null;
+});

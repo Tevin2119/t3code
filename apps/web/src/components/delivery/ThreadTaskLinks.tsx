@@ -29,14 +29,19 @@ export function useThreadTasks(
   environmentId: EnvironmentId | null,
   threadId: ThreadId | null,
 ): ReadonlyArray<DeliveryCard> {
+  const read = useThreadTasksRead(environmentId, threadId);
+  return [...parseCards(read.body)].sort((a, b) => b.number - a.number);
+}
+
+/** The engine's reading of the tasks filed from this conversation, shared by all its views. */
+export function useThreadTasksRead(environmentId: EnvironmentId | null, threadId: ThreadId | null) {
   const enabled = useDeliveryEnabled(environmentId);
   const origin = environmentId && threadId ? `thread:${environmentId}/${threadId}` : null;
-  const read = useDeliveryRead(
+  return useDeliveryRead(
     enabled && origin ? environmentId : null,
     origin ? `/api/tasks?origin=${queryValue(origin)}&set=all&limit=500` : null,
     { pollMs: 5_000 },
   );
-  return [...parseCards(read.body)].sort((a, b) => b.number - a.number);
 }
 
 // Board lanes whose column names are too long for a one-word tag in a narrow row.
@@ -52,7 +57,3 @@ const SHORT_LANE: Readonly<Record<string, string>> = {
 /** Where a task stands on the board, in a word or two. */
 export const taskStandsIn = (task: Pick<DeliveryCard, "lane">): string =>
   SHORT_LANE[task.lane] ?? LANE_TITLE[task.lane] ?? (task.lane || "Task");
-
-/** A task the board has finished with: done, merged, closed or moved away. */
-export const taskIsDone = (task: Pick<DeliveryCard, "lane" | "state">): boolean =>
-  task.lane === "completed" || ["closed", "rejected", "merged", "moved"].includes(task.state);

@@ -6,6 +6,7 @@ import { useClosedViewStore } from "./closedViewStore";
 import { linkedThreadTitle } from "./linkedThreadSurface";
 import { reopenClosedView } from "./reopenClosedView";
 import {
+  BOARD_TASK_THREAD_PANEL_VISIBILITY,
   hostRightPanel,
   migratePersistedRightPanelState,
   pullRequestSurface,
@@ -813,6 +814,7 @@ describe("rightPanelStore", () => {
       migratePersistedRightPanelState({
         threadPanelVisibilityByThreadKey: {
           "env-1:thread-A": { inlineOpen: false, popoverOpen: true },
+          // An open choice is kept: a board task's thread starts collapsed without it.
           "env-1:thread-B": { inlineOpen: true, popoverOpen: true },
         },
       }),
@@ -820,8 +822,51 @@ describe("rightPanelStore", () => {
       byThreadKey: {},
       threadPanelVisibilityByThreadKey: {
         "env-1:thread-A": { inlineOpen: false, popoverOpen: false },
+        "env-1:thread-B": { inlineOpen: true, popoverOpen: false },
       },
     });
+  });
+
+  it("starts a board task's thread collapsed and keeps the person's own toggle", () => {
+    const visibility = (ref: typeof refA, fallback = BOARD_TASK_THREAD_PANEL_VISIBILITY) =>
+      selectThreadPanelVisibility(
+        useRightPanelStore.getState().threadPanelVisibilityByThreadKey,
+        ref,
+        fallback,
+      );
+    expect(visibility(refA)).toEqual({ inlineOpen: false, popoverOpen: false });
+    // Any other thread keeps T3's default.
+    expect(
+      selectThreadPanelVisibility(
+        useRightPanelStore.getState().threadPanelVisibilityByThreadKey,
+        refB,
+      ),
+    ).toEqual({ inlineOpen: true, popoverOpen: false });
+
+    const store = useRightPanelStore.getState();
+    store.toggleThreadPanel(refA, "inline", BOARD_TASK_THREAD_PANEL_VISIBILITY);
+    expect(visibility(refA)).toEqual({ inlineOpen: true, popoverOpen: false });
+    // Opening the right panel does not drop the choice.
+    store.open(refA, "diff");
+    store.close(refA);
+    expect(visibility(refA)).toEqual({ inlineOpen: true, popoverOpen: false });
+    // The choice survives a reload.
+    const persisted = migratePersistedRightPanelState(
+      JSON.parse(
+        JSON.stringify({
+          threadPanelVisibilityByThreadKey:
+            useRightPanelStore.getState().threadPanelVisibilityByThreadKey,
+        }),
+      ),
+    );
+    expect(persisted.threadPanelVisibilityByThreadKey["env-1:thread-A"]).toEqual({
+      inlineOpen: true,
+      popoverOpen: false,
+    });
+    // Closed again, it is the default once more and nothing is stored.
+    store.toggleThreadPanel(refA, "inline", BOARD_TASK_THREAD_PANEL_VISIBILITY);
+    expect(visibility(refA)).toEqual({ inlineOpen: false, popoverOpen: false });
+    expect(useRightPanelStore.getState().threadPanelVisibilityByThreadKey).toEqual({});
   });
 
   it("closes the popover atomically when the real right panel opens", () => {

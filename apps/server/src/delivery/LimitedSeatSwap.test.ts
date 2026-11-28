@@ -12,7 +12,6 @@ import {
   ThreadId,
 } from "@t3tools/contracts";
 import { expect, it } from "@effect/vitest";
-import * as HostProcess from "@t3tools/shared/HostProcess";
 import type { LimitedSeatFacts } from "@t3tools/shared/limitedSeat";
 import { createModelSelection } from "@t3tools/shared/model";
 import * as DateTime from "effect/DateTime";
@@ -58,6 +57,14 @@ const provider = (instanceId: string, driver: string): ServerProvider => ({
   skills: [],
 });
 
+const BOARD_LINEUP: DeliveryOrchestrationConfig = {
+  team: "development",
+  participants: [
+    { seat: "builder", role: "developer", modelSelection: model("kimi", "kimi-k3") },
+    { seat: "reviewer", role: "reviewer", modelSelection: model("codex", "gpt-astra") },
+  ],
+};
+
 function setup({
   policy = undefined as DeliveryOrchestrationConfig["limitedSeat"],
   favorites = [
@@ -89,6 +96,10 @@ function setup({
       ],
       ...(policy ? { limitedSeat: policy } : {}),
     });
+  // The board's team for its task's conversation, which a person's lineup above never replaces.
+  const boardLineups = new Map<string, DeliveryOrchestrationConfig | null>(
+    leadPick === undefined ? [] : [[threadId, BOARD_LINEUP]],
+  );
   const binding = { team: "research", role: "lead", workspace: "/repo" };
   const bindings = new Map<string, unknown>(bound ? [[threadId, binding]] : []);
   const shell = {
@@ -203,12 +214,19 @@ function setup({
         lineups.set(input.threadId, input.orchestration as DeliveryOrchestrationConfig);
         return binding;
       }),
+    setBoardLineup: (thread: ThreadId, lineup: DeliveryOrchestrationConfig | null) =>
+      Effect.sync(() => {
+        calls.push(`board-lineup:${thread}`);
+        boardLineups.set(thread, lineup);
+      }),
+    boardLineupOf: (thread: ThreadId) => Effect.sync(() => boardLineups.get(thread)),
     setThreadLineup: (input: { threadId: ThreadId; orchestration: DeliveryOrchestrationConfig }) =>
       Effect.sync(() => {
         calls.push(`lineup:${input.threadId}`);
         lineups.set(input.threadId, input.orchestration);
         return {};
       }),
+    boardApprovalKey: Effect.succeed(KEY),
   } as unknown as DeliveryService.DeliveryService["Service"];
   const projections = {
     getThreadShell: (thread: ThreadId) => Effect.succeed(thread === threadId ? shell : null),
@@ -281,9 +299,6 @@ function setup({
     Layer.provide(
       Layer.mergeAll(
         Layer.succeed(DeliveryService.DeliveryService, delivery),
-        Layer.succeed(HostProcess.Environment, {
-          [DeliveryService.BOARD_THREAD_KEY_VARIABLE]: KEY,
-        }),
         Layer.succeed(ServerEnvironment.ServerEnvironmentIdentity, {
           getEnvironmentId: Effect.succeed(ENVIRONMENT),
         }),
@@ -319,7 +334,7 @@ function setup({
       ),
     ),
   );
-  return { layer, shell, commands, calls, lineups, writes };
+  return { layer, shell, commands, calls, lineups, boardLineups, writes };
 }
 
 it.effect.each(["picked", "none-free", "moved", "refused", "not-found"] as const)(
@@ -349,6 +364,8 @@ it.effect.each(["picked", "none-free", "moved", "refused", "not-found"] as const
       expect(fixture.calls).toEqual([
         "POST",
         "thread.create",
+        // The successor is the board's from its start, with the board's team for the lead.
+        `board-lineup:${target}`,
         "thread.metadata.update",
         "message.dispatch",
         "PUT",
@@ -384,6 +401,10 @@ it.effect.each(["picked", "none-free", "moved", "refused", "not-found"] as const
           type: "message.dispatch",
           threadId: target,
           modelSelection: model("kimi", "kimi-k3"),
+          // An engine notice, so the successor's lineup starts no team round on it.
+          notification: { source: { kind: "system" }, outcome: "updated" },
+          createdBy: "agent",
+          dispatchMode: { type: "queue_after_active" },
           text: expect.stringMatching(
             /usage limit[\s\S]*Ship the migration[\s\S]*Keep the existing data[\s\S]*Existing records remain readable[\s\S]*engine-run[\s\S]*review/,
           ),
@@ -404,11 +425,15 @@ it.effect("retries an uncommitted board link move using the existing successor a
     expect(fixture.calls).toEqual([
       "POST",
       "thread.create",
+      `board-lineup:${target}`,
       "thread.metadata.update",
       "message.dispatch",
       "PUT",
       "PUT",
     ]);
+    // Only the board's lineup goes on: never the one a person saved on the lead's thread.
+    expect(fixture.boardLineups.get(target)).toEqual(BOARD_LINEUP);
+    expect(fixture.lineups.has(target)).toBe(false);
     expect(fixture.writes[2]).toEqual(fixture.writes[1]);
   }).pipe(Effect.provide(fixture.layer));
 });

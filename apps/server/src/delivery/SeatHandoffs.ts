@@ -12,7 +12,6 @@ import {
   OrchestratorMcpFailure,
   ThreadId,
 } from "@t3tools/contracts";
-import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Hex from "effect/encoding/Hex";
@@ -102,7 +101,7 @@ const decodeRefusal = Schema.decodeUnknownOption(
 const refusalOf = (error: DeliveryError) => Option.getOrUndefined(decodeRefusal(error.body));
 const invalidRequest = (message: string) =>
   new OrchestratorMcpFailure({ code: "invalid_request", message });
-const missingKey = () => invalidRequest("This server has no board approval key configured.");
+const missingKey = () => invalidRequest(DeliveryService.NO_BOARD_APPROVAL_KEY);
 const notQaSeat = () =>
   invalidRequest("File QA receipts from an attested QA seat thread for the task's current run.");
 const notLead = () => invalidRequest("Only this board task's lead thread can hand off QA.");
@@ -159,6 +158,37 @@ const checklistChanged = (items: ReadonlyArray<string>) =>
       : `Check the current acceptance items before filing again. Use a zero-based acceptanceIndex (item 1 is index 0).\n${items.map((item, index) => `${index + 1}. ${item}`).join("\n")}`,
   );
 
+/**
+ * Attests a seat of a run as the thread T3 runs it in. The engine keeps QA independence: it
+ * refuses a QA receipt from a seat it has not attested for the current run.
+ */
+export const attestSeatWith = Effect.fn("SeatHandoffs.attestSeatAs")(function* (
+  delivery: DeliveryService.DeliveryService["Service"],
+  input: {
+    readonly environmentId: EnvironmentId;
+    readonly run: string;
+    readonly seat: string;
+    readonly threadId: ThreadId;
+    readonly model: string;
+    readonly harness?: string;
+  },
+) {
+  const key = yield* delivery.boardApprovalKey;
+  if (!key) return yield* missingKey();
+  const { environmentId, run, seat, threadId, model, harness } = input;
+  const response = yield* delivery
+    .boardThreadAct({
+      method: "POST",
+      path: `/api/runs/${run}/seat-attestations`,
+      body: { seat, environmentId, threadId, model, harness, setBy: environmentId, key },
+    })
+    .pipe(Effect.mapError((error) => engineFailure(error, "attest the seat")));
+  const { attestation } = yield* decodeAttestation(response.body).pipe(
+    Effect.mapError(() => invalidRequest("The engine did not return a seat attestation.")),
+  );
+  return attestation;
+});
+
 export class SeatHandoffs extends Context.Service<
   SeatHandoffs,
   {
@@ -188,7 +218,6 @@ const make = Effect.gen(function* () {
   const delivery = yield* DeliveryService.DeliveryService;
   const threads = yield* ThreadManagementService.ThreadManagementService;
   const orchestrator = yield* OrchestratorMcpService.OrchestratorMcpService;
-  const hostEnvironment = yield* HostProcess.Environment;
   const handoffLock = yield* Semaphore.make(1);
 
   const readTask = Effect.fn("SeatHandoffs.readTask")(function* (path: string) {
@@ -200,28 +229,22 @@ const make = Effect.gen(function* () {
     );
   });
 
-  const attestSeatAs = Effect.fn("SeatHandoffs.attestSeatAs")(function* (
+  const attestSeatAs = (
     environmentId: EnvironmentId,
     run: string,
     seat: string,
     threadId: ThreadId,
     model: string,
     harness?: string,
-  ) {
-    const key = hostEnvironment[DeliveryService.BOARD_THREAD_KEY_VARIABLE];
-    if (!key) return yield* missingKey();
-    const response = yield* delivery
-      .boardThreadAct({
-        method: "POST",
-        path: `/api/runs/${run}/seat-attestations`,
-        body: { seat, environmentId, threadId, model, harness, setBy: environmentId, key },
-      })
-      .pipe(Effect.mapError((error) => engineFailure(error, "attest the seat")));
-    const { attestation } = yield* decodeAttestation(response.body).pipe(
-      Effect.mapError(() => invalidRequest("The engine did not return a seat attestation.")),
-    );
-    return attestation;
-  });
+  ) =>
+    attestSeatWith(delivery, {
+      environmentId,
+      run,
+      seat,
+      threadId,
+      model,
+      ...(harness === undefined ? {} : { harness }),
+    });
 
   const findThread = Effect.fn("SeatHandoffs.findThread")((threadId: ThreadId) =>
     threads.getThreadShell(threadId).pipe(
@@ -348,7 +371,7 @@ const make = Effect.gen(function* () {
         const lead = yield* findThread(threadId);
         const task = boardTaskOfMarker(lead?.lineage.engineIntake);
         if (!task) return yield* notLead();
-        const key = hostEnvironment[DeliveryService.BOARD_THREAD_KEY_VARIABLE];
+        const key = yield* delivery.boardApprovalKey;
         if (!key) return yield* missingKey();
 
         const path = `/api/tasks/${task.id}`;
@@ -540,7 +563,7 @@ const make = Effect.gen(function* () {
     fileQaReceipt: Effect.fn("SeatHandoffs.fileQaReceipt")(function* (scope, input) {
       const caller = yield* requireThreadScope(scope, "Filing a QA receipt");
       const environmentId = caller.environmentId;
-      const key = hostEnvironment[DeliveryService.BOARD_THREAD_KEY_VARIABLE];
+      const key = yield* delivery.boardApprovalKey;
       if (!key) return yield* missingKey();
 
       const thread = yield* findThread(caller.thread.threadId);

@@ -166,6 +166,7 @@ export function AccessGlyphs(props: {
   readonly label: string;
   readonly value: OrchestratorParticipantAccess;
   readonly onChange: (access: OrchestratorParticipantAccess) => void;
+  readonly disabled?: boolean | undefined;
 }) {
   const current = accessLevel(props.value);
   const CurrentIcon = current.icon;
@@ -192,9 +193,10 @@ export function AccessGlyphs(props: {
                   aria-checked={chosen}
                   aria-label={level.label}
                   tabIndex={chosen ? 0 : -1}
+                  disabled={props.disabled}
                   onClick={() => props.onChange(level.value)}
                   className={cn(
-                    "relative flex h-6 w-6 cursor-pointer items-center justify-center rounded-md text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring pointer-coarse:w-8 pointer-coarse:after:absolute pointer-coarse:after:size-full pointer-coarse:after:min-h-11",
+                    "relative flex h-6 w-6 cursor-pointer disabled:cursor-default items-center justify-center rounded-md text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring pointer-coarse:w-8 pointer-coarse:after:absolute pointer-coarse:after:size-full pointer-coarse:after:min-h-11",
                     chosen && "bg-background text-foreground shadow-xs/10 dark:bg-input/72",
                     chosen && level.value === "full-access" && "text-warning hover:text-warning",
                   )}
@@ -212,7 +214,14 @@ export function AccessGlyphs(props: {
             label={`${props.label}: ${current.label}`}
             render={
               <MenuTrigger
-                render={<Button size="icon-xs" variant="secondary" aria-label={props.label} />}
+                render={
+                  <Button
+                    size="icon-xs"
+                    variant="secondary"
+                    aria-label={props.label}
+                    disabled={props.disabled}
+                  />
+                }
               />
             }
           >

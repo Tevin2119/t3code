@@ -15,6 +15,7 @@ import {
   type TaskDeployment,
 } from "@t3tools/contracts";
 import * as Option from "effect/Option";
+import { boardTaskFinishedBy } from "@t3tools/shared/boardTaskFinished";
 import * as Schema from "effect/Schema";
 import { parseSuggestedBoard, type SuggestedBoard } from "./deliveryMove";
 import { parseBoardDeployment, parseMergePermission, parseTaskDeployment } from "./boardDelivery";
@@ -1082,7 +1083,14 @@ export interface DeliveryCard {
   readonly proposals: number;
   readonly waitsFor: ReadonlyArray<TaskBrief>;
   /** For a part of a split task: the task it is a part of. Its decision is made there. */
-  readonly partOf: { readonly id: string; readonly number: number; readonly title: string } | null;
+  readonly partOf: {
+    readonly id: string;
+    /** Null for a part that came from another engine without its parent's number or title. */
+    readonly number: number | null;
+    readonly title: string | null;
+    /** Its parent is on this engine and has not moved: only then is it reviewed as a part. */
+    readonly here: boolean;
+  } | null;
   /** For a part: who reviewed it as it stands. A review of a part does not approve the whole. */
   readonly reviewedBy: string | null;
   readonly messages: number;
@@ -1356,8 +1364,9 @@ export const parseCard = (value: Json): DeliveryCard => {
     partOf: isRecord(value.partOf)
       ? {
           id: text(value.partOf.id),
-          number: count(value.partOf.number),
-          title: text(value.partOf.title),
+          number: Number.isInteger(value.partOf.number) ? (value.partOf.number as number) : null,
+          title: textOrNull(value.partOf.title),
+          here: flag(value.partOf.here),
         }
       : null,
     reviewedBy: typeof value.reviewedBy === "string" && value.reviewedBy ? value.reviewedBy : null,
@@ -1462,6 +1471,8 @@ export interface CouncilSeat {
   readonly stage: string | null;
   readonly verdict: string | null;
   readonly attempts: number;
+  /** The stage of a step T3's own restart cut short and that has not ended since; null otherwise. */
+  readonly cutByT3: string | null;
   /** What it is doing now, from its own output, while it works; null otherwise. */
   readonly live: SeatLive | null;
   readonly threadId: string | null;
@@ -1839,6 +1850,18 @@ export interface TaskView {
   /** Whether machines linked to this one are kept from seeing the task. An engine that does not say shows it. */
   readonly linkedHidden: boolean;
   readonly linkedArrival: typeof LinkedArrival.Type | null;
+  /**
+   * Other conversations that belong with the task (engine slice L2): its side chats and threads
+   * linked to it, from any environment, oldest first. Older engines serve none.
+   */
+  readonly relatedThreads: ReadonlyArray<TaskRelatedThread>;
+}
+
+export interface TaskRelatedThread {
+  readonly key: string;
+  readonly environmentId: string;
+  readonly threadId: string;
+  readonly role: "side" | "linked";
 }
 
 export function parseSeatLive(value: unknown): SeatLive | null {
@@ -1918,6 +1941,31 @@ const parseAttestedModel = (value: unknown): NonNullable<CouncilSeat["attestedMo
   return model ? { model, harness: textOrNull(value.harness) } : null;
 };
 
+/**
+ * The stage of a seat's step T3's restart cut short, until an attempt of that stage has ended
+ * since. The engine runs such a step once more, so a re-run still going is owed too. The engine
+ * marks the cut attempt `stopped` with this reason (Operation-PaperClip `engine.mjs`).
+ */
+const stepCutByT3 = (attempts: ReadonlyArray<Json>): string | null => {
+  const index = attempts.findLastIndex(
+    (attempt) => attempt.state === "stopped" && text(attempt.reason).startsWith("interrupted: T3 "),
+  );
+  if (index < 0) return null;
+  const stage = text(attempts[index]!.stage);
+  const ended = attempts
+    .slice(index + 1)
+    .some((attempt) => text(attempt.stage) === stage && textOrNull(attempt.ended) !== null);
+  return ended ? null : stage;
+};
+
+/** The seats whose step T3's restart cut short: each needs a person until the task is finished. */
+export const stepsCutByT3 = (task: Pick<TaskView, "council" | "lane" | "state"> | null) =>
+  task === null || boardTaskFinishedBy(task) !== null
+    ? []
+    : (task.council?.seats ?? []).flatMap((seat) =>
+        seat.cutByT3 === null ? [] : [{ seat: seat.seat, stage: seat.cutByT3 }],
+      );
+
 const parseCouncil = (council: Json): TaskCouncil => {
   const concurrency = isRecord(council.concurrency) ? council.concurrency : {};
   return {
@@ -1945,6 +1993,7 @@ const parseCouncil = (council: Json): TaskCouncil => {
       stage: textOrNull(seat.stage),
       verdict: textOrNull(seat.verdict),
       attempts: list(seat.attempts).length,
+      cutByT3: stepCutByT3(records(seat.attempts)),
       live: parseSeatLive(seat.live),
       // Blank is none: `ThreadId` refuses a blank id.
       threadId: text(seat.threadId).trim() || null,
@@ -2151,6 +2200,14 @@ export function parseTask(body: unknown): TaskView | null {
     })(),
     linkedHidden: flag(body.linkedHidden),
     linkedArrival: Option.getOrNull(decodeLinkedArrival(body.linkedArrival)),
+    relatedThreads: records(body.relatedThreads).flatMap((link): Array<TaskRelatedThread> => {
+      const key = text(link.key);
+      const environmentId = text(link.environmentId);
+      const threadId = text(link.threadId);
+      return key && environmentId && threadId && (link.role === "side" || link.role === "linked")
+        ? [{ key, environmentId, threadId, role: link.role }]
+        : [];
+    }),
   };
 }
 
@@ -2270,6 +2327,8 @@ export type TeamSendDecision =
 export function decideTeamForSend(input: {
   readonly enabled: boolean;
   readonly isServerThread: boolean;
+  /** A board task's thread: its team is the board's, so a send never sets one up. */
+  readonly boardOwned?: boolean;
   readonly bound: boolean;
   readonly held: { readonly team: string; readonly role: string | null } | null;
   /** Set when the server could not say whether the thread belongs to a team. */
@@ -2283,7 +2342,7 @@ export function decideTeamForSend(input: {
   readonly teamsPending?: boolean;
   readonly driver: string | null;
 }): TeamSendDecision {
-  if (!input.enabled) return { action: "none" };
+  if (!input.enabled || input.boardOwned) return { action: "none" };
   if (input.stateError) {
     return {
       action: "blocked",

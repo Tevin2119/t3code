@@ -71,9 +71,20 @@ describe("RPC authorization scopes", () => {
       WS_METHODS.deliveryLinkedHandoffRetry,
       WS_METHODS.deliverySetBoardLinkedVisibility,
       WS_METHODS.deliverySetTaskLinkedHidden,
+      WS_METHODS.deliveryFilePort,
+      WS_METHODS.deliveryFileThreadTask,
     ]) {
       expect(requiredScopeForRpcMethod(method)).toBe(AuthOrchestrationOperateScope);
     }
+  });
+
+  it("lets only an environment maintainer set the board approval key, and readers see if it is set", () => {
+    expect(requiredScopeForRpcMethod(WS_METHODS.deliverySetBoardApprovalKey)).toBe(
+      AuthEnvironmentMaintainScope,
+    );
+    expect(requiredScopeForRpcMethod(WS_METHODS.deliveryBoardApprovalKey)).toBe(
+      AuthOrchestrationReadScope,
+    );
   });
 
   it("keeps triage, which seeds an agent that reads logs and the database, behind operate scope", () => {

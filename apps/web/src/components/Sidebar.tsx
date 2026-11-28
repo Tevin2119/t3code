@@ -167,6 +167,10 @@ import { appAtomRegistry } from "../rpc/atomRegistry";
 import { canShareWithGuestAtom } from "./chat/guestShareAvailability";
 import { openGuestShareDialog } from "./chat/guestShareDialogState";
 import {
+  openFileThreadTaskDialog,
+  readFileThreadTaskOffered,
+} from "./delivery/fileThreadTaskDialogState";
+import {
   buildThreadRouteParams,
   resolveActiveThreadRouteRef,
   resolveThreadRouteTarget,
@@ -2745,6 +2749,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                 canShareWithGuestAtom(threadRef.environmentId),
               ),
               canTurnIntoProject: canTurnThreadIntoProject(threadRef),
+              canFileTask: readFileThreadTaskOffered(threadRef),
               canRename: !fromSearch,
               supports: {
                 settlement: configLoaded,
@@ -2803,6 +2808,9 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
             });
             return;
           }
+          case "file-task":
+            openFileThreadTaskDialog(threadRef);
+            return;
 
           case "new-thread-on-branch": {
             const result = await settlePromise(() =>

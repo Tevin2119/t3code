@@ -3,6 +3,10 @@ import { scopeProjectRef } from "@t3tools/client-runtime/environment";
 import { requestCustomSnooze } from "../components/CustomSnoozeDialog";
 import { openGuestShareDialog } from "../components/chat/guestShareDialogState";
 import {
+  openFileThreadTaskDialog,
+  readFileThreadTaskOffered,
+} from "../components/delivery/fileThreadTaskDialogState";
+import {
   type AtomCommandResult,
   isAtomCommandInterrupted,
   settlePromise,
@@ -152,6 +156,7 @@ export function useThreadActionMenu(input: {
       snoozePresets,
       canShareWithGuest,
       canTurnIntoProject: canTurnThreadIntoProject(threadRef),
+      canFileTask: readFileThreadTaskOffered(threadRef),
     });
     const run = async (action: ThreadActionMenuId) => {
       const api = readLocalApi();
@@ -347,6 +352,9 @@ export function useThreadActionMenu(input: {
           });
           return;
         }
+        case "file-task":
+          openFileThreadTaskDialog(threadRef);
+          return;
         case "delete": {
           if (confirmThreadDelete) {
             const confirmed = await settlePromise(() =>

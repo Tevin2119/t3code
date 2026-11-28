@@ -4,6 +4,7 @@ import {
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
 import {
+  deriveEngineStageLabel,
   deriveTeamChatPhase,
   deriveThreadQueueWorkflowState,
 } from "@t3tools/client-runtime/state/thread-workflows";
@@ -133,11 +134,14 @@ export function QueuedRunsControl({
   const queued = workflow?.queuedRuns ?? [];
   const activeRun = workflow?.activeRun ?? null;
   const teamChatPhase = deriveTeamChatPhase(projection, activeRun?.id);
+  const engineStageLabel = deriveEngineStageLabel(projection, activeRun?.id);
   const steerBlockedReason =
-    teamChatPhase === "contribution" || teamChatPhase === "critique"
-      ? // oxlint-disable-next-line t3code/no-em-dash-copy -- Preserve the user's explicitly requested toast text.
-        "The team is still working — your message runs when this step finishes"
-      : null;
+    teamChatPhase !== "contribution" && teamChatPhase !== "critique"
+      ? null
+      : engineStageLabel !== null
+        ? `${engineStageLabel}. Your message runs when this step finishes.`
+        : // oxlint-disable-next-line t3code/no-em-dash-copy -- Preserve the user's explicitly requested toast text.
+          "The team is still working — your message runs when this step finishes";
   // A fresh message starts its own turn: it may skip compaction, but not steer into a turn.
   const canSendRun = (freshContext: boolean) =>
     workflow?.canSendNow === true ||

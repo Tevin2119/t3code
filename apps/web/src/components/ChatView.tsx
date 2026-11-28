@@ -1,14 +1,21 @@
 import { useThreadInspection } from "./chat/ThreadInspectionContext";
 import { useThreadPanelHost } from "./chat/ThreadPanelHostContext";
+import { useThreadPanelFallback } from "./delivery/BoardTaskContext";
 import { useBoardTask } from "./delivery/BoardTaskContext";
-import { deriveTeamChatPhase } from "@t3tools/client-runtime/state/thread-workflows";
+import { StepsCutByT3 } from "./delivery/StepsCutByT3";
+import { TaskTeamHeader } from "./delivery/TaskTeamHeader";
+import { getAppModelOptionsForInstance } from "../modelSelection";
+import {
+  deriveEngineStageLabel,
+  deriveTeamChatPhase,
+} from "@t3tools/client-runtime/state/thread-workflows";
 import { m } from "../i18n/messages";
 import { thrownErrorMessage } from "@t3tools/client-runtime/errors";
 import { useGT, useMessages } from "gt-react";
 import { ChildThreadApprovals } from "./chat/ChildThreadApprovals";
 import { ChevronDownIcon, ChevronUpIcon, SquareKanbanIcon } from "lucide-react";
 import { SessionStatusFooter } from "./chat/SessionStatusFooter";
-import { resolveDraftTeam, selectableTeams, teamListStatus } from "../lib/delivery";
+import { resolveDraftTeam, selectableTeams, stepsCutByT3, teamListStatus } from "../lib/delivery";
 import {
   deliveryEnvironment,
   useDeliveryDraftStore,
@@ -30,7 +37,10 @@ import {
   useChatViewComposerProviderSelection,
   useDeliveryThreadModelBinding,
 } from "../lib/deliveryComposerSelection";
-import { draftSupportedRuntimeModes } from "./chat/runtimeModeConfig";
+import {
+  draftRuntimeModeLimitsInstance,
+  draftSupportedRuntimeModes,
+} from "./chat/runtimeModeConfig";
 import { workspaceAreaProps } from "../lib/workspaceFocus";
 import { sourceControlClients } from "@t3tools/client-runtime/source-control-clients";
 import { resolveNewThreadModelSelection } from "@t3tools/shared/usageLimits";
@@ -125,6 +135,7 @@ import {
   ProviderInteractionMode,
   resolveIdleCompaction,
   RuntimeMode,
+  isServerOwnedThreadLineage,
 } from "@t3tools/contracts";
 import {
   canResumeThread,
@@ -241,7 +252,11 @@ import {
   ThreadPreviewMiniPlayer,
   useThreadPreviewCanvasSource,
 } from "./preview/ThreadPreviewMiniPlayer";
-import { createChatCanvasStore, resolveChatCanvasModel } from "./chat/canvasStore";
+import {
+  createChatCanvasStore,
+  resolveChatCanvasModel,
+  selectCanvasMeasurements,
+} from "./chat/canvasStore";
 import { usePreviewSession } from "./preview/usePreviewSession";
 import { getConfiguredPreviewUrls } from "./preview/previewEmptyStateLogic";
 
@@ -500,6 +515,8 @@ export interface ChatViewSlots {
   readonly composer?: boolean;
   /** The host's own tabs, which the right panel's + menu then offers. */
   readonly onAddTaskSurface?: (kind: "task-evidence" | "task-deployments") => void;
+  /** Takes the composer's text in place of a turn; true clears the composer. */
+  readonly sendInstead?: (text: string) => Promise<boolean>;
 }
 
 type ChatViewProps =
@@ -1269,7 +1286,10 @@ export default function ChatView(props: ChatViewProps) {
   const savedRightPanelState = useRightPanelStore((state) =>
     selectThreadRightPanelState(state.byThreadKey, panelThreadRef),
   );
-  const boardTaskInView = useBoardTask() !== null;
+  const boardTask = useBoardTask();
+  const boardTaskInView = boardTask !== null;
+  // A step T3's restart cut short needs a person even while the engine runs it again.
+  const cutSteps = stepsCutByT3(boardTask?.task ?? null);
   const rightPanelState = shownRightPanelState(savedRightPanelState, boardTaskInView);
   const activeRightPanelSurface = rightPanelState.isOpen
     ? (rightPanelState.surfaces.find((surface) => surface.id === rightPanelState.activeSurfaceId) ??
@@ -1581,6 +1601,27 @@ export default function ChatView(props: ChatViewProps) {
     deliveryBinding,
   });
   const selectedProvider = selectedProviderEntry?.driverKind ?? requestedDriverKind;
+  // A board task's thread is a team thread from the start: its team and lead stand where an empty
+  // thread asks for a first message.
+  // The timeline is handed it only while it is empty, so a thread with messages keeps its memo.
+  const taskTeamHeader =
+    activeThread && isServerOwnedThreadLineage(activeThread.lineage) ? (
+      <TaskTeamHeader
+        environmentId={activeThread.environmentId}
+        threadId={activeThread.id}
+        driver={selectedProvider}
+        entries={providerInstanceEntries}
+        models={
+          new Map(
+            providerInstanceEntries.map((entry) => [
+              entry.instanceId,
+              getAppModelOptionsForInstance(settings, entry),
+            ]),
+          )
+        }
+        leadModelSelection={activeThread.modelSelection}
+      />
+    ) : undefined;
   const activeProviderInstanceId = selectedProviderEntry?.instanceId ?? null;
   const activeProviderStatus = selectedProviderEntry?.snapshot ?? null;
   const activeUsageModel =
@@ -1748,6 +1789,7 @@ export default function ChatView(props: ChatViewProps) {
   });
   const teamChatPhase = deriveTeamChatPhase(serverProjection, activeActivityRun?.runId);
   const teamSeatsWorking = teamChatPhase === "contribution" || teamChatPhase === "critique";
+  const engineStageLabel = deriveEngineStageLabel(serverProjection, activeActivityRun?.runId);
   const teamLeadAnswering = teamChatPhase === "lead" && activeActivityRun?.status === "running";
   const hasTeamChatActivity = teamSeatsWorking || teamLeadAnswering;
   const isWorking =
@@ -2271,8 +2313,14 @@ export default function ChatView(props: ChatViewProps) {
       params: buildThreadRouteParams(activeThreadRef),
     });
   };
+  const threadPanelFallback = useThreadPanelFallback(panelThreadRef);
   const threadPanelInlineOpen = useRightPanelStore((state) =>
-    selectThreadPanelOpen(state.threadPanelVisibilityByThreadKey, panelThreadRef, "inline"),
+    selectThreadPanelOpen(
+      state.threadPanelVisibilityByThreadKey,
+      panelThreadRef,
+      "inline",
+      threadPanelFallback,
+    ),
   );
   // Selects only the mode, so canvas resizes rerender the chat view only when the
   // card switches presentation.
@@ -2280,7 +2328,7 @@ export default function ChatView(props: ChatViewProps) {
     chatCanvasStore,
     (state) =>
       resolveChatCanvasModel({
-        measurements: state.measurements,
+        measurements: selectCanvasMeasurements(state, rightPanelOpen),
         detailsCardMeasurement: state.detailsCardMeasurement,
         threadRef: activeThreadRef,
         preview: canvasPreview,
@@ -2292,6 +2340,7 @@ export default function ChatView(props: ChatViewProps) {
       state.threadPanelVisibilityByThreadKey,
       panelThreadRef,
       threadPanelPresentation,
+      threadPanelFallback,
     ),
   );
   const supportsThreadPullRequests = serverConfig !== null;
@@ -3592,7 +3641,18 @@ export default function ChatView(props: ChatViewProps) {
     });
   };
   const onWorktreeSetupWorkLocallyStable = useStableCallback(onWorktreeSetupWorkLocally);
-  const onComposerSendStable = useStableCallback(onSend);
+  const sendInstead = slots?.sendInstead;
+  const sendToHost = async (text: string, take: (text: string) => Promise<boolean>) => {
+    if (!text || !(await take(text))) return;
+    useComposerDraftStore.getState().clearComposerContent(composerDraftTarget);
+    if (currentRouteThreadKeyRef.current === routeThreadKey) {
+      promptRef.current = "";
+      composerRef.current?.resetCursorState();
+    }
+  };
+  const onComposerSendStable = useStableCallback((...args: Parameters<typeof onSend>) =>
+    sendInstead ? sendToHost(promptRef.current.trim(), sendInstead) : onSend(...args),
+  );
   const sendPreviewAnnotation = (
     annotation: PreviewAnnotationPayload,
     image: ComposerImageAttachment | null,
@@ -3638,14 +3698,16 @@ export default function ChatView(props: ChatViewProps) {
   const queuedRunsControl =
     isServerThread && activeThread ? (
       <>
-        {teamSeatsWorking ? (
+        {teamSeatsWorking && !(cutSteps.length > 0 && engineStageLabel !== null) ? (
           <p
             className="mx-auto w-full max-w-(--chat-content-max-width) pb-3 text-sm text-muted-foreground"
             role="status"
           >
-            {teamChatPhase === "critique"
-              ? "The team is reviewing its findings."
-              : "The team is gathering findings."}
+            {engineStageLabel !== null
+              ? `${engineStageLabel}.`
+              : teamChatPhase === "critique"
+                ? "The team is reviewing its findings."
+                : "The team is gathering findings."}
           </p>
         ) : teamLeadAnswering ? (
           <p className="mx-auto w-full max-w-(--chat-content-max-width) pb-3 text-sm text-muted-foreground">
@@ -3743,12 +3805,14 @@ export default function ChatView(props: ChatViewProps) {
       .filter((part) => part !== null)
       .join(" · ") || null;
   // The end of the timeline holds the thread's present and next turns: what it is doing now,
-  // its lifecycle status, guest messages awaiting you, then your queued messages.
+  // its lifecycle status, guest messages awaiting you, a board step that needs a person, then your
+  // queued messages.
   const timelineFooter =
     pendingHandoff === null &&
     !hasThreadNow &&
     threadStatusLine === null &&
     pendingGuestMessageCount === 0 &&
+    cutSteps.length === 0 &&
     !hasQueuedTurns &&
     !hasTeamChatActivity ? null : (
       <>
@@ -3775,6 +3839,13 @@ export default function ChatView(props: ChatViewProps) {
             threadRef={scopeThreadRef(activeThread.environmentId, activeThread.id)}
             onImageExpand={onExpandTimelineImageStable}
             onFileOpen={openFileAttachmentStable}
+          />
+        ) : null}
+        {/* Outside the run's controls: a cut step needs a person with no run here at all. */}
+        {isServerThread ? (
+          <StepsCutByT3
+            steps={cutSteps}
+            className="mx-auto w-full max-w-(--chat-content-max-width) pb-3 text-sm"
           />
         ) : null}
         {hasQueuedTurns || hasTeamChatActivity ? queuedRunsControl : null}
@@ -4018,6 +4089,7 @@ export default function ChatView(props: ChatViewProps) {
               enabled: threadFindEnabled,
             }}
             store={chatCanvasStore}
+            rightPanelOpen={rightPanelOpen}
             threadRef={activeThreadRef}
             preview={canvasPreview}
             detailsCardTopInset={isThreadFindActive ? THREAD_FIND_BAR_RESERVED_HEIGHT : 0}
@@ -4155,6 +4227,7 @@ export default function ChatView(props: ChatViewProps) {
                   onViewportAttach={attachTimelineViewport}
                   onFooterGrow={onTimelineFooterGrowStable}
                   hideEmptyPlaceholder={isDraftHeroState || threadDetailLoading}
+                  {...(taskTeamHeader && timelineEmpty ? { emptyState: taskTeamHeader } : {})}
                   emptyPlaceholderInset={composerReservedHeight}
                   topFadeEnabled={!hasTimelineTopBanner}
                   {...(threadHistoryControls === undefined
@@ -4484,6 +4557,11 @@ export default function ChatView(props: ChatViewProps) {
                                               multipleModelSelections,
                                               providerStatuses,
                                             )}
+                                            instanceId={draftRuntimeModeLimitsInstance(
+                                              activeProviderStatus?.instanceId,
+                                              multipleModelSelections,
+                                            )}
+                                            cwd={gitCwd}
                                             onRuntimeModeChange={handleRuntimeModeChangeStable}
                                           />
                                         ),

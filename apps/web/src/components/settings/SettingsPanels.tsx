@@ -1,6 +1,7 @@
 import { thrownErrorMessage } from "@t3tools/client-runtime/errors";
 import { m as resolveMessage } from "~/i18n/messages";
 import { useAtomValue } from "@effect/atom-react";
+import { BoardApprovalKeySettings } from "./BoardApprovalKeySettings";
 import { NotificationSettings } from "./NotificationSettings";
 import { PRIVACY_POLICY_URL } from "../../legalLinks";
 import { CheckIcon } from "lucide-react";
@@ -2117,6 +2118,8 @@ export function ThreadsSettingsPanel() {
           }
         />
       </SettingsSection>
+
+      {!isProjectScope ? <BoardApprovalKeySettings /> : null}
 
       {hasServerTargets ? (
         <SettingsSection id="auto-settle" title={gt("Auto-settle")}>

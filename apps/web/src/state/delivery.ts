@@ -3,12 +3,15 @@ import {
   squashAtomCommandFailure,
   type AtomCommandResult,
 } from "@t3tools/client-runtime/state/runtime";
+import { useAtomValue } from "@effect/atom-react";
 import {
   DELIVERY_DEFAULT_TEAM,
+  type BoardTaskFiling,
+  type BoardThreadFilingInput,
+  type DeploymentPortInput,
   type EnvironmentId,
   type LinkedDeliveryDiagnostic,
 } from "@t3tools/contracts";
-import { useAtomValue } from "@effect/atom-react";
 import { useEffect, useMemo, useState } from "react";
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
@@ -163,6 +166,46 @@ export function useDeliveryAct(environmentId: EnvironmentId | null, label: strin
       );
     }
     return { ok: true, body: result.value.body };
+  };
+}
+
+/** Port to app from a release line: whether this connection may, and the filing itself. */
+export function useFilePort(environmentId: EnvironmentId) {
+  const allowed = useAtomValue(deliveryEnvironment.filePort.permissionAtom(environmentId));
+  const file = useAtomCommand(deliveryEnvironment.filePort, {
+    label: "port to app",
+    reportFailure: false,
+  });
+  return {
+    allowed,
+    file: async (
+      input: DeploymentPortInput,
+    ): Promise<{ ok: true; filing: typeof BoardTaskFiling.Type } | { ok: false; why: string }> => {
+      const result = await file({ environmentId, input });
+      return result._tag === "Failure"
+        ? { ok: false, why: deliveryFailureText(squashAtomCommandFailure(result)) }
+        : { ok: true, filing: result.value };
+    },
+  };
+}
+
+/** File a task from a thread: whether this connection may, and the filing itself. */
+export function useFileThreadTask(environmentId: EnvironmentId) {
+  const allowed = useAtomValue(deliveryEnvironment.fileThreadTask.permissionAtom(environmentId));
+  const file = useAtomCommand(deliveryEnvironment.fileThreadTask, {
+    label: "file a task from this thread",
+    reportFailure: false,
+  });
+  return {
+    allowed,
+    file: async (
+      input: BoardThreadFilingInput,
+    ): Promise<{ ok: true; filing: typeof BoardTaskFiling.Type } | { ok: false; why: string }> => {
+      const result = await file({ environmentId, input });
+      return result._tag === "Failure"
+        ? { ok: false, why: deliveryFailureText(squashAtomCommandFailure(result)) }
+        : { ok: true, filing: result.value };
+    },
   };
 }
 

@@ -21,6 +21,7 @@ import {
   isParentThreadRelationship,
   threadRelationshipRowStatus,
   orderWebThreadLineageRows,
+  mergeBackAcceptedBy,
   resolveMergeBackTargetThreadId,
   type ThreadRelationshipEdge,
   type ThreadRelationshipWalkRow,
@@ -403,12 +404,17 @@ function DelegatedFromRow(props: {
   readonly delegatedFrom: OrchestrationV2DelegatedFrom;
   readonly fallbackLabel: string | undefined;
   readonly anyInstanceBadge: boolean;
+  /**
+   * A board task's conversation rather than a delegating agent: the one it was made from
+   * (`source`), or a side chat or linked thread the board lists with it.
+   */
+  readonly relation?: "source" | "side" | "linked";
 }) {
   const gt = useGT();
   const navigate = useNavigate();
   const router = useRouter();
   const inspectThread = useThreadInspection();
-  const { delegatedFrom } = props;
+  const { delegatedFrom, relation } = props;
   const environment = useEnvironment(delegatedFrom.environmentId);
   const parentRef = scopeThreadRef(delegatedFrom.environmentId, delegatedFrom.threadId);
   // The title it had at delegation, until this client sees the parent itself.
@@ -431,12 +437,28 @@ function DelegatedFromRow(props: {
     // The read can outlast the user's stay on this thread; a late answer must not pull them back.
     if (router.latestLocation !== location) return;
     if (result._tag === "Failure") {
-      toastManager.add({ type: "error", title: gt("Could not open the parent thread") });
+      toastManager.add({
+        type: "error",
+        title:
+          relation === "source"
+            ? gt("Could not open the conversation this task came from")
+            : relation !== undefined
+              ? gt("Could not open the thread")
+              : gt("Could not open the parent thread"),
+      });
       return;
     }
     // Deleted and unknown threads are absent from the titles.
     if (result.value[delegatedFrom.threadId] === undefined) {
-      toastManager.add({ type: "info", title: gt("The parent thread was deleted") });
+      toastManager.add({
+        type: "info",
+        title:
+          relation === "source"
+            ? gt("The conversation this task came from was deleted")
+            : relation !== undefined
+              ? gt("The thread was deleted")
+              : gt("The parent thread was deleted"),
+      });
       return;
     }
     void navigate({
@@ -468,7 +490,13 @@ function DelegatedFromRow(props: {
         >
           <ThreadRelationshipIcon
             anyInstanceBadge={props.anyInstanceBadge}
-            fallbackIcon={CornerLeftUpIcon}
+            fallbackIcon={
+              relation === "side"
+                ? MessagesSquareIcon
+                : relation === "linked"
+                  ? GitForkIcon
+                  : CornerLeftUpIcon
+            }
             status={null}
           />
           <span className="min-w-0 flex-1">
@@ -488,20 +516,69 @@ function DelegatedFromRow(props: {
           <LineageTooltipContent
             title={title}
             hint={
-              environment === null
-                ? label
-                  ? gt("Delegated from {label}. Connect to it to open the parent thread.", {
-                      label,
-                    })
-                  : gt(
-                      "Delegated from a linked environment. Connect to it to open the parent thread.",
-                    )
-                : gt("Open parent agent on {label}", { label: environment.label })
+              relation === "source"
+                ? environment === null
+                  ? gt("Made on another environment. Connect to it to open the conversation.")
+                  : gt("Open the conversation this task came from")
+                : relation !== undefined
+                  ? environment === null
+                    ? gt("On another environment. Connect to it to open the thread.")
+                    : relation === "side"
+                      ? gt("Open side chat")
+                      : gt("Open thread")
+                  : environment === null
+                    ? label
+                      ? gt("Delegated from {label}. Connect to it to open the parent thread.", {
+                          label,
+                        })
+                      : gt(
+                          "Delegated from a linked environment. Connect to it to open the parent thread.",
+                        )
+                    : gt("Open parent agent on {label}", { label: environment.label })
             }
           />
         </TooltipPopup>
       </Tooltip>
     </li>
+  );
+}
+
+/** The conversation a board task was made from, as a lineage row that opens at its own route. */
+export function SourceThreadRow(props: { readonly thread: ScopedThreadRef }) {
+  const gt = useGT();
+  return (
+    <ThreadLineageRowList hiddenCount={0} onShowMore={() => {}}>
+      <DelegatedFromRow
+        delegatedFrom={{ ...props.thread, title: gt("The conversation it came from") }}
+        fallbackLabel={undefined}
+        anyInstanceBadge={false}
+        relation="source"
+      />
+    </ThreadLineageRowList>
+  );
+}
+
+/** A board task's side chats and linked threads, from any environment, each opening at its own route. */
+export function TaskRelatedThreadRows(props: {
+  readonly threads: ReadonlyArray<ScopedThreadRef & { readonly role: "side" | "linked" }>;
+}) {
+  const gt = useGT();
+  return (
+    <ThreadLineageRowList hiddenCount={0} onShowMore={() => {}}>
+      {props.threads.map((thread) => (
+        <DelegatedFromRow
+          key={scopedThreadKey(thread)}
+          delegatedFrom={{
+            environmentId: thread.environmentId,
+            threadId: thread.threadId,
+            title: thread.role === "side" ? gt("Side chat") : gt("Linked thread"),
+          }}
+          fallbackLabel={undefined}
+          anyInstanceBadge={false}
+          relation={thread.role}
+        />
+      ))}
+    </ThreadLineageRowList>
   );
 }
 
@@ -612,7 +689,11 @@ export function ThreadRelationshipsPanel(props: {
     (row.edge.kind !== "subagent" || isParentThreadRelationship(row.edge, props.threadId));
   const currentProject = projects.find((project) => project.id === currentThread?.projectId);
   const latestMergeBackRun = projection === null ? null : resolveLatestMergeBackRun(projection);
-  const mergeTargetThreadId = resolveMergeBackTargetThreadId(projection);
+  const forkedFromThreadId = resolveMergeBackTargetThreadId(projection);
+  const mergeTargetThreadId =
+    forkedFromThreadId !== null && mergeBackAcceptedBy(graph.nodes.get(forkedFromThreadId)?.thread)
+      ? forkedFromThreadId
+      : null;
   const relationshipRows = orderWebThreadLineageRows({
     graph,
     rows: immediateThreadRelationships(graph, props.threadId),
@@ -1103,8 +1184,10 @@ export function ThreadRelationshipsPanel(props: {
               ? gt("Lineage · {runningCount} running", { runningCount })
               : gt("Lineage", { $context: "thread details section: parent and child agents" })
           }
-          // A lone "Previous agents" row names itself; the heading returns for status or actions.
+          // A lone "Previous agents" row names itself; the heading returns for status or actions,
+          // and for a host's own rows, which name nothing.
           showHeading={
+            props.extraGroup !== undefined ||
             runningCount > 0 ||
             canDetach ||
             related.length > 0 ||

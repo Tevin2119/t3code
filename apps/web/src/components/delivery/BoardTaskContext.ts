@@ -1,8 +1,9 @@
 import type { EnvironmentId, ScopedThreadRef } from "@t3tools/contracts";
-import { createContext, useContext } from "react";
+import { createContext, useContext, type ReactNode } from "react";
 
 import type { TaskView } from "../../lib/delivery";
-import type { SeatConversations } from "./TaskTeamActivity";
+import type { SeatThread, SeatThreadRow } from "../../lib/taskConversation";
+import { BOARD_TASK_THREAD_PANEL_VISIBILITY } from "../../rightPanelStore";
 
 /** The board task a view belongs to: its id and the board's own read of it. */
 export interface BoardTask {
@@ -16,16 +17,37 @@ export interface BoardTask {
   readonly refresh: () => void;
   /** Opens another board task in place of this one. */
   readonly openTask: (taskId: string) => void;
-  /** Opens a conversation in the centre, the way a seat's opens. */
-  readonly openThread: (thread: ScopedThreadRef) => void;
-  /** The seats' own conversations, which the team's rows open. */
-  readonly seats: SeatConversations;
+  /** Opens one of the task's own tabs on the panel its view keeps them on. */
+  readonly openTab: (tab: "task-evidence" | "task-deployments") => void;
+  /** The engine's decisions on the task, which the Task item leads with. */
+  readonly decisions: ReactNode;
+  /** The task's own thread, whose lineage the seats' conversations open from. */
+  readonly thread: ScopedThreadRef | null;
+  readonly seats: {
+    /** A seat's conversation, here or on a linked machine, when it has one. */
+    readonly thread: (seat: string) => SeatThread | null;
+    /** The seat conversations the thread's lineage adds, after the subagents it lists itself. */
+    readonly rows: ReadonlyArray<SeatThreadRow>;
+  };
+  /** Opens a side chat of the task's thread to talk about the task; null where none can start. */
+  readonly discuss: (() => void) | null;
 }
 
-/**
- * Provided where the board's task view mounts, so what it hosts reads the task from here and never
- * from the thread on screen, which is a seat's while one is open in the centre.
- */
+/** Provided where the board's task view mounts, so what it hosts reads the task from here. */
 export const BoardTaskContext = createContext<BoardTask | null>(null);
 
 export const useBoardTask = () => useContext(BoardTaskContext);
+
+/**
+ * What the thread's details card shows with no stored choice: collapsed for the task's own
+ * thread, whose facts are on the left, and T3's default for any other thread.
+ */
+export function useThreadPanelFallback(ref: ScopedThreadRef | null | undefined) {
+  const thread = useBoardTask()?.thread ?? null;
+  return thread &&
+    ref &&
+    thread.environmentId === ref.environmentId &&
+    thread.threadId === ref.threadId
+    ? BOARD_TASK_THREAD_PANEL_VISIBILITY
+    : undefined;
+}

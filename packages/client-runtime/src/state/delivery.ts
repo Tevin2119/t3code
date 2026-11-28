@@ -140,6 +140,18 @@ export function createDeliveryEnvironmentAtoms<R, E>(
       label: "environment-data:delivery:fetch-archived-board-threads",
       tag: WS_METHODS.deliveryArchivedBoardThreads,
     }),
+    /** Whether the server holds the board approval key, and from where. Never the key itself. */
+    boardApprovalKey: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:delivery:board-approval-key",
+      tag: WS_METHODS.deliveryBoardApprovalKey,
+      staleTimeMs: 30_000,
+    }),
+    /** Sets, replaces or clears the saved key. The key is sent once and never read back. */
+    setBoardApprovalKey: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:delivery:set-board-approval-key",
+      tag: WS_METHODS.deliverySetBoardApprovalKey,
+      concurrency: { mode: "serial", key: ({ environmentId }) => environmentId },
+    }),
     /** A thread's team, or the team choice that is still held. Cheap, and read often. */
     threadBinding,
     linkedBring: createEnvironmentRpcCommand(runtime, {
@@ -259,6 +271,26 @@ export function createDeliveryEnvironmentAtoms<R, E>(
     act: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:delivery:act",
       tag: WS_METHODS.deliveryAct,
+    }),
+    /** Port to app from a release line. A second click while the first runs joins it. */
+    filePort: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:delivery:file-port",
+      tag: WS_METHODS.deliveryFilePort,
+      concurrency: {
+        mode: "singleFlight",
+        key: ({ environmentId, input }) =>
+          JSON.stringify([environmentId, input.board, input.from, input.to, input.commits]),
+      },
+    }),
+    /** Files a draft from a thread. A second click while the first runs joins it. */
+    fileThreadTask: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:delivery:file-thread-task",
+      tag: WS_METHODS.deliveryFileThreadTask,
+      concurrency: {
+        mode: "singleFlight",
+        key: ({ environmentId, input }) =>
+          JSON.stringify([environmentId, input.threadId, input.board]),
+      },
     }),
     /** Gives up a team choice whose setup never completed. */
     releaseThread: createEnvironmentRpcCommand(runtime, {

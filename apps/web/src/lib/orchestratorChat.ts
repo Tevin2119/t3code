@@ -59,6 +59,8 @@ export function resolveOrchestratorRoster(input: {
   readonly orchestrator?: {
     readonly harness: string | null;
     readonly role: string | null;
+    /** The seat the orchestrator holds, when it is known by its id, as a board task's lead is. */
+    readonly seat?: string | undefined;
     /** What the orchestrator runs on, shown on the seat it holds. */
     readonly modelSelection?: ModelSelection | undefined;
   };
@@ -68,10 +70,12 @@ export function resolveOrchestratorRoster(input: {
   // The orchestrator already speaks for the seat it holds, so that seat sits out unless asked in.
   const inRole = (input.team?.seats ?? []).filter((seat) => seat.role === input.orchestrator?.role);
   // An orchestrator moved to another harness still holds its role's seat when only one seat has it.
-  const ownSeat = (
-    inRole.find((seat) => harnessOf(seat) === input.orchestrator?.harness) ??
-    (inRole.length === 1 ? inRole[0] : undefined)
-  )?.seat;
+  const ownSeat =
+    input.orchestrator?.seat ??
+    (
+      inRole.find((seat) => harnessOf(seat) === input.orchestrator?.harness) ??
+      (inRole.length === 1 ? inRole[0] : undefined)
+    )?.seat;
   const selectionProblem = (
     title: string,
     modelSelection: ModelSelection,

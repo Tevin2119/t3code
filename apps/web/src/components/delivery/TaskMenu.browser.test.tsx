@@ -38,6 +38,7 @@ function menu(props: Partial<Parameters<typeof TaskMenu>[0]> = {}) {
       taskActions={{ busy: false, run: vi.fn(), moveTo: vi.fn() }}
       onCreateTask={() => {}}
       onAllocate={() => {}}
+      onDiscuss={null}
       onChanged={() => {}}
       onProblem={() => {}}
       {...props}

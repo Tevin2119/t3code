@@ -42,7 +42,11 @@ import { environmentContextRecord } from "~/lib/composerContextRecords";
 import { startWorkspaceFocus } from "~/lib/workspaceFocus";
 import { usePreviewMiniPlayerStore } from "~/previewMiniPlayerStore";
 import { usePromptStashStore } from "~/promptStashStore";
-import { selectThreadRightPanelState, useRightPanelStore } from "~/rightPanelStore";
+import {
+  BOARD_TASK_THREAD_PANEL_VISIBILITY,
+  selectThreadRightPanelState,
+  useRightPanelStore,
+} from "~/rightPanelStore";
 import { getRouter } from "~/router";
 import { appAtomRegistry } from "~/rpc/atomRegistry";
 import { environmentShell } from "~/state/shell";
@@ -1124,8 +1128,169 @@ const boardTask = () => ({
   stale: false,
   refresh: () => {},
   openTask: () => {},
-  openThread: () => {},
-  seats: { thread: () => null, current: null, open: () => {} },
+  openTab: () => {},
+  decisions: null,
+  discuss: null,
+  thread: null,
+  seats: { thread: () => null, rows: [] },
+});
+
+/**
+ * A board task's thread on its own route, with a source thread and one seat conversation. It only
+ * mounts: a case asserts after `await using`, so a failed wait never leaves the app mounted.
+ */
+async function renderBoardTaskLineage() {
+  await page.viewport(1400, 900);
+  const lead = threadWithHistory("task-lineage-lead", 1);
+  const seat = threadWithHistory("task-lineage-seat", 1);
+  const filedFrom = threadWithHistory("task-lineage-source", 1);
+  const environment = installFakeEnvironment([lead, seat, filedFrom]);
+  try {
+    // A plain click opens a side thread on the main screen, at its own route.
+    __setClientSettingsForTests({
+      ...DEFAULT_CLIENT_SETTINGS,
+      onboardingCompletedAt: "2026-01-01T00:00:00.000Z",
+      sideThreadOpenTarget: "main",
+    });
+    const leadRef = scopeThreadRef(ENVIRONMENT_ID, lead.id);
+    const seatRef = scopeThreadRef(ENVIRONMENT_ID, seat.id);
+    const task = parseTask({
+      id: "t7",
+      number: 7,
+      title: "Fix the sync",
+      body: "Make the sync stop dropping rows.",
+      state: "in-work",
+      lane: "implementation",
+      source: { kind: "thread", ref: `${ENVIRONMENT_ID}/${filedFrom.id}` },
+      council: {
+        seats: [{ seat: "qa", harness: "codex", activity: "waiting", blockedBy: "builder" }],
+      },
+      card: { id: "t7", number: 7, title: "Fix the sync", lane: "implementation" },
+    });
+    const router = getRouter(
+      createMemoryHistory({ initialEntries: [`/${ENVIRONMENT_ID}/${lead.id}`] }),
+    );
+    await router.load();
+    const screen = await render(
+      <BoardTaskContext
+        value={{
+          ...boardTask(),
+          task,
+          thread: leadRef,
+          seats: {
+            thread: () => seatRef,
+            rows: [{ seat: "qa", activity: "waiting", target: seatRef }],
+          },
+        }}
+      >
+        <ThreadPanelHostContext value={leadRef}>
+          <AppRoot router={router} />
+        </ThreadPanelHostContext>
+      </BoardTaskContext>,
+      {
+        // AppRoot brings its own router.
+        router: false,
+      },
+    );
+    useRightPanelStore
+      .getState()
+      .setThreadPanelOpen(leadRef, "inline", true, BOARD_TASK_THREAD_PANEL_VISIBILITY);
+    return {
+      router,
+      lineage: page.getByRole("region", { name: "Lineage" }),
+      seat,
+      filedFrom,
+      [Symbol.asyncDispose]: async () => {
+        await screen[Symbol.asyncDispose]();
+        environment[Symbol.dispose]();
+      },
+    };
+  } catch (error) {
+    environment[Symbol.dispose]();
+    throw error;
+  }
+}
+
+it("a board task's step a T3 restart cut short shows its line in the thread with no run", async () => {
+  await page.viewport(1400, 900);
+  const lead = threadWithHistory("task-cut-lead", 1);
+  using _environment = installFakeEnvironment([lead]);
+  __setClientSettingsForTests({
+    ...DEFAULT_CLIENT_SETTINGS,
+    onboardingCompletedAt: "2026-01-01T00:00:00.000Z",
+  });
+  const task = parseTask({
+    id: "t7",
+    number: 7,
+    title: "Fix the sync",
+    state: "in-work",
+    lane: "implementation",
+    council: {
+      seats: [
+        {
+          seat: "builder",
+          activity: "stopped",
+          attempts: [
+            {
+              stage: "build",
+              state: "stopped",
+              reason: "interrupted: T3 restarted and cut this step short",
+              ended: "2026-11-27T10:00:00Z",
+            },
+          ],
+        },
+      ],
+    },
+    card: { id: "t7", number: 7, title: "Fix the sync", lane: "implementation" },
+  });
+  const router = getRouter(
+    createMemoryHistory({ initialEntries: [`/${ENVIRONMENT_ID}/${lead.id}`] }),
+  );
+  await router.load();
+  await using _screen = await render(
+    <BoardTaskContext value={{ ...boardTask(), task }}>
+      <AppRoot router={router} />
+    </BoardTaskContext>,
+    { router: false },
+  );
+  await expect.element(page.getByTestId("composer-editor")).toBeVisible();
+  // The thread's own line, not the Task item's copy of it in the details panel.
+  await expect
+    .poll(() =>
+      [...document.querySelectorAll("[data-steps-cut-by-t3]")]
+        .filter((line) => line.closest("[data-thread-details-panel]") === null)
+        .map((line) => line.textContent),
+    )
+    .toEqual([
+      "T3 restarted and cut builder's build step short. It needs a person to check it before the work goes on.",
+    ]);
+});
+
+it("a board task's seat conversation is a lineage row that opens at its own route", async () => {
+  await using view = await renderBoardTaskLineage();
+  const row = view.lineage.getByRole("button", { name: /qa/ });
+  await expect.element(row).toBeVisible();
+  await row.click();
+  await expect
+    .poll(() => view.router.state.location.pathname)
+    .toBe(`/${ENVIRONMENT_ID}/${view.seat.id}`);
+});
+
+it("the thread a board task was filed from is a lineage row that opens at its own route", async () => {
+  await using view = await renderBoardTaskLineage();
+  // The row asks the thread's environment whether it still exists before it opens it.
+  using _titles = answerRpc(ORCHESTRATION_V2_WS_METHODS.getThreadTitles, () =>
+    Effect.succeed({ [view.filedFrom.id]: view.filedFrom.title }),
+  );
+  // Named by the thread's title once the shell has it, else by what it is.
+  const row = view.lineage.getByRole("button", {
+    name: new RegExp(`${view.filedFrom.title}|The conversation it came from`),
+  });
+  await expect.element(row).toBeVisible();
+  await row.click();
+  await expect
+    .poll(() => view.router.state.location.pathname)
+    .toBe(`/${ENVIRONMENT_ID}/${view.filedFrom.id}`);
 });
 
 it("a thread a board task's view shows in its own thread's place keeps the task's panels", async () => {
@@ -1140,7 +1305,9 @@ it("a thread a board task's view shows in its own thread's place keeps the task'
   const leadRef = scopeThreadRef(ENVIRONMENT_ID, lead.id);
   // The task's tabs and its details are open on the task thread's panels; the seat's are empty.
   useRightPanelStore.getState().open(leadRef, "task-evidence");
-  useRightPanelStore.getState().setThreadPanelOpen(leadRef, "inline", true);
+  useRightPanelStore
+    .getState()
+    .setThreadPanelOpen(leadRef, "inline", true, BOARD_TASK_THREAD_PANEL_VISIBILITY);
   const router = getRouter(
     createMemoryHistory({ initialEntries: [`/${ENVIRONMENT_ID}/${seat.id}`] }),
   );
@@ -1164,9 +1331,11 @@ it("a thread a board task's view shows in its own thread's place keeps the task'
     .element(screen.getByRole("button", { name: "Task evidence", exact: true }))
     .toBeVisible();
   await expect.element(screen.getByText("Execution and checkpoints")).toBeVisible();
-  // So are the details, whose Task item reads the board's task.
-  const taskItem = page.getByRole("region", { name: "Task", exact: true });
-  await expect.element(taskItem.getByText("Make the sync stop dropping rows.")).toBeVisible();
+  // So are the details, opened on the task thread; the task's facts are in the board's column.
+  await expect.element(page.getByRole("region", { name: "Workspace" })).toBeVisible();
+  await expect
+    .element(page.getByRole("region", { name: "Task #7", exact: true }))
+    .not.toBeInTheDocument();
 });
 
 it("a board task's thread opened by its own route keeps the task's tabs saved for its task view, out of sight", async () => {

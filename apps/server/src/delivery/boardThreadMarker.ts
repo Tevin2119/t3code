@@ -66,6 +66,10 @@ export const createBoardTaskThread = (
     engineIntake: boardTaskThreadMarker(task),
   }) satisfies OrchestrationV2ServerCommand;
 
+/** Whether a thread was created as a board task's conversation, from its id alone. */
+export const isBoardTaskThreadId = (threadId: string) =>
+  threadId.startsWith(PREFIX) && boardTaskOfMarker(threadId) !== null;
+
 /** Matches every board task marker in SQL `LIKE`, and nothing an engine intake stamps. */
 export const BOARD_TASK_MARKER_LIKE = `${PREFIX}%`;
 

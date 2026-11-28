@@ -1,7 +1,13 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   CommandId,
+  DeliveryRememberedLineup,
+  DeliveryThreadBinding,
+  DeliveryThreadPending,
+  DeliveryThreadState,
   EnvironmentId,
+  ModelSelection,
+  TrimmedNonEmptyString,
   MessageId,
   ProjectId,
   ProviderInstanceId,
@@ -14,12 +20,17 @@ import { assert, it } from "@effect/vitest";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import { limitedLeadHandoffThreadId } from "@t3tools/shared/limitedSeat";
 import * as DateTime from "effect/DateTime";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
 
 import * as ServerConfig from "../config.ts";
+import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as EventStore from "../orchestration-v2/EventStore.ts";
 import { OrchestratorCommandRejectedError } from "../orchestration-v2/Orchestrator.ts";
@@ -32,6 +43,7 @@ import { deriveProviderInstanceConfigMap } from "../provider/ProviderInstanceReg
 import * as ServerSettings from "../serverSettings.ts";
 import * as BoardConversation from "./BoardConversation.ts";
 import { steerMessageId } from "./BoardConversation.ts";
+import * as BoardTaskSideChats from "./BoardTaskSideChats.ts";
 import * as BoardTaskThreads from "./BoardTaskThreads.ts";
 import {
   scratchEngine,
@@ -44,10 +56,21 @@ import {
   boardTaskOfMarker,
   boardTaskThreadCommandId,
   boardTaskThreadId,
+  createBoardTaskThread,
 } from "./boardThreadMarker.ts";
 import * as DeliveryService from "./DeliveryService.ts";
 import * as LimitedSeats from "./LimitedSeats.ts";
 import * as LimitedSeatSwap from "./LimitedSeatSwap.ts";
+
+/** The delivery service the case runs on, holding the board approval key a server would. */
+const withBoardApprovalKey = (key: string | undefined) =>
+  Effect.provideServiceEffect(
+    DeliveryService.DeliveryService,
+    Effect.gen(function* () {
+      const delivery = yield* DeliveryService.DeliveryService;
+      return { ...delivery, boardApprovalKey: Effect.succeed(key) };
+    }),
+  );
 
 // Every case here runs against the scratch engine of boardThreadEngine.testkit.ts, through the
 // delivery service's real request path. BoardTaskThreads.engine.test.ts runs the real engine.
@@ -90,6 +113,8 @@ function threadStore() {
   const active = new Map<string, string>();
   const latestRuns = new Map<string, RunId>();
   const rejects = new Set<string>();
+  /** Messages whose dispatch fails for now, by id prefix, as a busy or disabled thread does. */
+  const unavailable = new Set<string>();
   const commit = (threadId: string, type: string, payload: Record<string, unknown>) =>
     events.push({
       sequence: events.length + 1,
@@ -120,7 +145,11 @@ function threadStore() {
     const message = { id: `reply:${runId}`, role: "assistant", runId, createdBy: "agent" };
     commit(threadId, "message.updated", { ...message, text: text.slice(0, 5), streaming: true });
     commit(threadId, "message.updated", { ...message, text, streaming: false });
-    commit(threadId, "run.updated", { id: runId, status: "completed" });
+    commit(threadId, "run.updated", {
+      id: runId,
+      status: "completed",
+      userMessageId: runId.slice("run:".length),
+    });
     active.delete(threadId);
   };
   const dispatch = (command: OrchestrationV2ServerCommand) =>
@@ -133,6 +162,8 @@ function threadStore() {
         // A command already answered is answered again with what it did the first time.
         if (receipts.has(command.commandId)) return Effect.succeed({ storedEvents: [] });
         if (command.type === "message.dispatch") {
+          if ([...unavailable].some((prefix) => command.messageId.startsWith(prefix)))
+            return Effect.fail(new BoardTaskThreads.BoardTaskThreadsError({ reason: "thread" }));
           if (rejects.has(command.messageId))
             return Effect.fail(
               new OrchestratorCommandRejectedError({
@@ -193,6 +224,7 @@ function threadStore() {
     active,
     latestRuns,
     rejects,
+    unavailable,
     say,
     reply,
   };
@@ -207,7 +239,8 @@ const INSTANCES = [
 function service(
   store: ThreadStore,
   options: {
-    readonly key?: string | null;
+    /** `"settings"` reads the key the delivery service holds, as a server does. */
+    readonly key?: string | null | "settings";
     readonly instances?: ReadonlyArray<(typeof INSTANCES)[number]>;
     readonly projects?: ReadonlyArray<string>;
   } = {},
@@ -216,6 +249,12 @@ function service(
     const conversation = yield* BoardConversation.make;
     return yield* BoardTaskThreads.make.pipe(
       Effect.provideService(BoardConversation.BoardConversation, conversation),
+      // Side chats are recorded against the scratch engine in BoardTaskSideChats.test.ts.
+      Effect.provideService(BoardTaskSideChats.BoardTaskSideChats, {
+        record: () => Effect.void,
+        sync: () => Effect.void,
+        start: () => Effect.void,
+      }),
       Effect.provide(LimitedSeatSwap.layer.pipe(Layer.provide(LimitedSeats.layer))),
       Effect.provideService(ProviderAdapterRegistry.ProviderAdapterRegistryV2, {
         get: () => Effect.die("A resumed hand-off keeps the successor's model"),
@@ -233,15 +272,11 @@ function service(
           ),
         ),
     } as unknown as EventStore.EventStoreV2["Service"]),
-    Effect.provideService(
-      HostProcess.Environment,
-      options.key === null
-        ? {}
-        : {
-            [DeliveryService.BOARD_THREAD_KEY_VARIABLE]:
-              options.key ?? "scratch approval passphrase",
-          },
-    ),
+    options.key === "settings"
+      ? (effect) => effect
+      : withBoardApprovalKey(
+          options.key === null ? undefined : (options.key ?? "scratch approval passphrase"),
+        ),
     Effect.provideService(ServerEnvironment.ServerEnvironmentIdentity, {
       getEnvironmentId: Effect.succeed(ENVIRONMENT),
     }),
@@ -332,8 +367,24 @@ function service(
 }
 
 /** The delivery service as the server runs it, with the scratch engine behind its HTTP client. */
-const deliveryLayer = (engine: ScratchEngine, prefix: string) =>
+const deliveryLayer = (engine: ScratchEngine, prefix: string, legacyStore?: unknown) =>
   Layer.fresh(DeliveryService.layer(deriveProviderInstanceConfigMap)).pipe(
+    Layer.provideMerge(
+      legacyStore === undefined
+        ? Layer.empty
+        : Layer.effectDiscard(
+            Effect.gen(function* () {
+              const { stateDir } = yield* ServerConfig.ServerConfig;
+              const fileSystem = yield* FileSystem.FileSystem;
+              yield* fileSystem.makeDirectory(stateDir, { recursive: true });
+              yield* fileSystem.writeFileString(
+                `${stateDir}/delivery-threads.json`,
+                JSON.stringify(legacyStore),
+              );
+            }).pipe(Effect.orDie),
+          ),
+    ),
+    Layer.provideMerge(ServerSecretStore.layer.pipe(Layer.provide(SecureRandom.layerWebCrypto))),
     Layer.provideMerge(Layer.succeed(HostProcess.Environment, {})),
     Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix })),
     Layer.provideMerge(NodeServices.layer),
@@ -412,7 +463,6 @@ it.effect.each(["picked", "legacy"] as const)(
         : {}),
     });
     engine.addTask({ id: "draft-1", lane: "draft", state: "draft", submitted: false });
-    engine.addTask({ id: "queued-1", lane: "queue", state: "ready" });
     engine.addTask({ id: "done-1", lane: "completed", state: "completed" });
     // A split parent stands where its parts stand, and its parts are the work.
     engine.addTask({ id: "whole-1", lane: "child-work", state: "split" });
@@ -458,6 +508,93 @@ it.effect.each(["picked", "legacy"] as const)(
     }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-create-")));
   },
 );
+
+const QUEUED = boardTaskOf("work", "queued-1")!;
+const QUEUED_THREAD = boardTaskThreadId(QUEUED);
+const claims = (engine: ScratchEngine, id: string) =>
+  engine.requests.filter((request) => request.path === `/api/orchestration/tasks/${id}/claim`);
+
+const sends = (store: ThreadStore, threadId: string) =>
+  store.commands.filter(
+    (command) => command.type === "message.dispatch" && command.threadId === threadId,
+  );
+
+it.effect("gives a submitted task an idle thread, and claims it only in work", () => {
+  const engine = board();
+  const queued = engine.addTask({ id: "queued-1", lane: "queue", state: "ready" });
+  const store = threadStore();
+  return Effect.gen(function* () {
+    const threads = yield* service(store);
+    assert.deepEqual([...(yield* threads.reconcile())], []);
+    yield* threads.reconcile();
+    assert.deepEqual([...store.threads.keys()], [QUEUED_THREAD]);
+    assert.equal(engine.linkOf("queued-1")?.threadId, QUEUED_THREAD);
+    // Waiting for a slot takes no lease, so it never counts toward the board's task cap.
+    assert.isNull(engine.leaseOf("queued-1"));
+    assert.lengthOf(claims(engine, "queued-1"), 0);
+    // Every message starts a lead turn, so a waiting thread is sent none and runs nothing.
+    assert.lengthOf(sends(store, QUEUED_THREAD), 0);
+    assert.isFalse(store.active.has(QUEUED_THREAD));
+    assert.isFalse(store.events.some(({ event }) => event.threadId === QUEUED_THREAD));
+    queued.lane = "in-work";
+    queued.state = "triage";
+    yield* threads.reconcile();
+    yield* threads.reconcile();
+    // Admitted, the same thread claims it. The pass still sends nothing: the engine's brief, sent
+    // in the task's worktree (BoardTaskExecution), is the first message that starts a turn.
+    assert.equal(engine.leaseOf("queued-1")?.origin, `thread:${ENVIRONMENT}/${QUEUED_THREAD}`);
+    assert.lengthOf(creates(store), 1);
+    assert.lengthOf(linkWrites(engine), 1);
+    assert.lengthOf(sends(store, QUEUED_THREAD), 0);
+    assert.isFalse(store.active.has(QUEUED_THREAD));
+  }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-submit-")));
+});
+
+it.effect("gives no thread at submit to a draft, a finished task, or one submitted earlier", () => {
+  const engine = board();
+  engine.addTask({ id: "draft-1", lane: "draft", state: "draft", submitted: false });
+  const old = engine.addTask({ id: "queued-1", lane: "queue", state: "ready" });
+  engine.addTask({
+    id: "queued-2",
+    lane: "queue",
+    state: "intake",
+    served: { submitted: "2026-11-22T09:45:00.000Z" },
+  });
+  engine.addTask({
+    id: "closed-1",
+    lane: "queue",
+    state: "closed",
+    served: { submitted: "2026-11-22T09:45:00.000Z" },
+  });
+  const threadOf = (id: string) => boardTaskThreadId(boardTaskOf("work", id)!);
+  const store = threadStore();
+  return Effect.gen(function* () {
+    // This build first runs after queued-1 was submitted (09:00) and before queued-2 was.
+    yield* TestClock.setTime(Date.parse("2026-11-22T09:30:00.000Z"));
+    yield* (yield* service(store)).reconcile();
+    assert.deepEqual([...store.threads.keys()], [threadOf("queued-2")]);
+    // A restart keeps the line where this build first ran.
+    yield* TestClock.setTime(Date.parse("2026-11-22T10:30:00.000Z"));
+    engine.addTask({
+      id: "queued-3",
+      lane: "queue",
+      state: "ready",
+      served: { submitted: "2026-11-22T09:50:00.000Z" },
+    });
+    const restarted = yield* service(store);
+    yield* restarted.reconcile();
+    assert.isTrue(store.threads.has(threadOf("queued-3")));
+    // An open task submitted earlier is not backfilled: its thread comes once it is in work.
+    old.lane = "in-work";
+    old.state = "triage";
+    yield* restarted.reconcile();
+    yield* restarted.reconcile();
+    assert.isTrue(store.threads.has(QUEUED_THREAD));
+    assert.isNotNull(engine.leaseOf("queued-1"));
+    assert.isFalse(store.threads.has(threadOf("draft-1")));
+    assert.isFalse(store.threads.has(threadOf("closed-1")));
+  }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-no-backfill-")));
+});
 
 it.effect("links every task when a seat has no model yet or one card cannot be read", () => {
   const engine = board();
@@ -707,7 +844,19 @@ it.effect("starts the successor once after a restart between its create and firs
     assert.deepInclude(turns[0], {
       commandId: CommandId.make(messageId),
       messageId: MessageId.make(messageId),
+      createdBy: "agent",
+      dispatchMode: { type: "queue_after_active" },
     });
+    // The continuation is an engine notice, so the successor's lineup starts no team round on it.
+    assert.deepInclude(turns[0]?.type === "message.dispatch" ? turns[0].notification : undefined, {
+      source: { kind: "system" },
+      outcome: "updated",
+    });
+    const delivery = yield* DeliveryService.DeliveryService;
+    assert.deepEqual(
+      (yield* delivery.threadState(successor)).lineup,
+      (yield* delivery.threadState(THREAD)).lineup,
+    );
   }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-swap-restart-")));
 });
 
@@ -1230,6 +1379,38 @@ it.effect("writes no link without the approval key, and none on a wrong one", ()
 });
 
 it.effect(
+  "links a task once its approval key is saved in Settings, and none once it is cleared",
+  () => {
+    const engine = board();
+    engine.addTask({ id: "task-7" });
+    const store = threadStore();
+    return Effect.gen(function* () {
+      const threads = yield* service(store, { key: "settings" });
+      assert.deepEqual([...(yield* threads.reconcile())], [["task-7", "no-key"]]);
+      assert.isNull(engine.linkOf("task-7"));
+      const delivery = yield* DeliveryService.DeliveryService;
+      assert.deepEqual(yield* delivery.setBoardApprovalKey("scratch approval passphrase"), {
+        source: "settings",
+        stored: true,
+      });
+      assert.deepEqual([...(yield* threads.reconcile())], []);
+      assert.equal(engine.linkOf("task-7")?.threadId, THREAD);
+
+      // Cleared, the key leaves the store and the next task waits for one again.
+      assert.deepEqual(yield* delivery.setBoardApprovalKey(null), {
+        source: "none",
+        stored: false,
+      });
+      const secrets = yield* ServerSecretStore.ServerSecretStore;
+      assert.isTrue(Option.isNone(yield* secrets.get(DeliveryService.BOARD_APPROVAL_KEY_SECRET)));
+      engine.addTask({ id: "task-8" });
+      assert.deepEqual([...(yield* threads.reconcile())], [["task-8", "no-key"]]);
+      assert.isNull(engine.linkOf("task-8"));
+    }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-saved-key-")));
+  },
+);
+
+it.effect(
   "archives the thread of a task that was deleted, and leaves a finished task's open",
   () => {
     const engine = board();
@@ -1326,12 +1507,20 @@ it.effect("keeps the link and claim routes for the server: a client's act is ref
 
 const ingests = (engine: ScratchEngine) =>
   engine.requests.filter((request) => request.path.endsWith("/activity")).length;
+const undelivered = (store: ThreadStore) =>
+  store.commands.flatMap((command) =>
+    command.type === "message.dispatch" &&
+    command.messageId.startsWith("message:board-steer-undelivered:")
+      ? [command]
+      : [],
+  );
 const steerSends = (store: ThreadStore) =>
   store.commands.filter((command) => command.type === "message.dispatch");
 
 it.effect("mirrors each conversation event once, across a restart and a replaced thread", () => {
   const engine = board();
-  engine.addTask({ id: "task-7" });
+  // A run under way takes the person's words as a steer, so no undelivered notice is mirrored.
+  engine.addTask({ id: "task-7", run: { id: "run-1" } });
   const store = threadStore();
   return Effect.gen(function* () {
     const first = yield* service(store);
@@ -1339,9 +1528,12 @@ it.effect("mirrors each conversation event once, across a restart and a replaced
     store.say(THREAD, "m-1", "Build the  thing\nplease", "system");
     store.reply(THREAD, "x".repeat(300));
     store.say(THREAD, "m-2", "a person's words", "user");
+    store.say(THREAD, "message:board-brief:att-plan", "The engine's brief", "system");
+    store.reply(THREAD, "The engine's plan");
     yield* first.reconcile();
     // Each seq is the event store's own; a streamed reply counts once, when its run completes. A
-    // person's words are a steer with no excerpt, so they never reach the card.
+    // person's words are a steer with no excerpt, so they never reach the card. An engine step and
+    // its answer are left out whole: the engine has its own record of both.
     assert.deepEqual(
       engine.activityOf("task-7").map((row) => [row.seq, row.kind, row.excerpt, row.setBy]),
       [
@@ -1367,14 +1559,14 @@ it.effect("mirrors each conversation event once, across a restart and a replaced
     yield* after.reconcile();
     assert.deepEqual(
       engine.activityOf("task-7").map((row) => row.seq),
-      [1, 4, 5, 6],
+      [1, 4, 5, 10],
     );
     const delivery = yield* DeliveryService.DeliveryService;
     yield* delivery.boardThreadAct({
       method: "POST",
       path: "/api/tasks/task-7/activity",
       body: {
-        seq: 7,
+        seq: 11,
         at: "2026-11-23T00:00:00.000Z",
         kind: "message",
         setBy: "previous-environment",
@@ -1570,3 +1762,1063 @@ it.effect(
     }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-steer-failed-")));
   },
 );
+
+it.effect.each(["approved", "pr-open", "merged", "rejected", "closed"])(
+  "never delivers a steer to a task that closed as %s after the lanes read",
+  (closed) => {
+    const engine = board();
+    engine.addTask({ id: "task-7" });
+    const store = threadStore();
+    return Effect.gen(function* () {
+      const threads = yield* service(store);
+      yield* threads.reconcile();
+      const steer = engine.queueSteer("task-7", "Use the other API");
+      engine.beforeNextDetail(() => {
+        engine.task("task-7").state = closed;
+      });
+      yield* threads.reconcile();
+      assert.equal(steerSends(store).length, 0);
+      assert.deepInclude(engine.steer(steer), { state: "failed" });
+      assert.include(engine.steer(steer).failure ?? "", closed);
+      yield* threads.reconcile();
+      assert.equal(steerSends(store).length, 0);
+    }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-steer-closed-")));
+  },
+);
+
+it.effect("confirms a delivered steer delivered after its task closes", () => {
+  const engine = board();
+  engine.addTask({ id: "task-7" });
+  const store = threadStore();
+  return Effect.gen(function* () {
+    const threads = yield* service(store);
+    yield* threads.reconcile();
+    const steer = engine.queueSteer("task-7", "Use the other API");
+    engine.dropNext(/\/steers\/\d+\/delivered$/);
+    yield* threads.reconcile();
+    assert.equal(steerSends(store).length, 1);
+    assert.equal(engine.steer(steer).state, "pending");
+    engine.task("task-7").state = "merged";
+    yield* threads.reconcile();
+    assert.equal(engine.steer(steer).state, "delivered");
+    assert.equal(steerSends(store).length, 1);
+  }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-steer-closed-delivered-")));
+});
+
+it.effect("tells a lost failed confirmation again once the task is off the steered set", () => {
+  const engine = board();
+  engine.addTask({ id: "task-7" });
+  const store = threadStore();
+  return Effect.gen(function* () {
+    const threads = yield* service(store);
+    yield* threads.reconcile();
+    const steer = engine.queueSteer("task-7", "Use the other API");
+    engine.beforeNextDetail(() => {
+      engine.task("task-7").state = "approved";
+    });
+    engine.dropNext(/\/steers\/\d+\/failed$/);
+    yield* threads.reconcile();
+    assert.equal(engine.steer(steer).state, "pending");
+    yield* threads.reconcile();
+    assert.equal(engine.steer(steer).state, "failed");
+    assert.equal(steerSends(store).length, 0);
+  }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-steer-closed-retry-")));
+});
+
+it.effect.each([
+  { lane: "completed", reason: "The task is completed." },
+  { lane: "closed-not-done", reason: "The task was closed." },
+])("names the $lane lane when the lane finished the task", ({ lane, reason }) => {
+  const engine = board();
+  engine.addTask({ id: "task-7" });
+  const store = threadStore();
+  return Effect.gen(function* () {
+    const threads = yield* service(store);
+    yield* threads.reconcile();
+    const steer = engine.queueSteer("task-7", "Use the other API");
+    engine.beforeNextDetail(() => {
+      engine.task("task-7").lane = lane;
+    });
+    yield* threads.reconcile();
+    assert.deepInclude(engine.steer(steer), { state: "failed", failure: reason });
+  }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-steer-closed-lane-")));
+});
+
+const CLAUDE = { instanceId: ProviderInstanceId.make("claudeAgent"), model: "claude-fable-5-1" };
+/** A lineup as plain data, so it compares by value. */
+const plainLineup = (threadId: ThreadId) =>
+  Effect.gen(function* () {
+    const state = yield* (yield* DeliveryService.DeliveryService).threadState(threadId);
+    const lineup = state.boardLineup ?? state.lineup;
+    return lineup === undefined ? undefined : JSON.parse(JSON.stringify(lineup));
+  });
+const DEVELOPER = {
+  seat: "developer",
+  role: "lead-developer",
+  modelSelection: { instanceId: "claudeAgent", model: "claude-fable-5-1" },
+};
+/** A lead and two seats, each with its duty. */
+const TEAM_OF_THREE = [
+  {
+    team: "development",
+    seats: [
+      { ...TEAMS[0]!.seats[0]!, stages: ["build"] },
+      TEAMS[0]!.seats[1]!,
+      { seat: "reviewer", role: "reviewer", harness: "codex", model: "gpt-6-sol", stages: ["qa"] },
+    ],
+  },
+];
+
+/** A person's own lineup and team, as a build before board lineups could have saved them. */
+const PERSONAL = {
+  participants: [
+    { seat: "scout", role: "researcher", modelSelection: CLAUDE },
+    { seat: "critic", role: "reviewer", modelSelection: CLAUDE },
+  ],
+};
+const legacyStoreOn = (threadId: ThreadId) => ({
+  threads: {
+    [threadId]: {
+      threadId,
+      orchestration: PERSONAL,
+      session: "session-1",
+      team: "research",
+      role: "reviewer",
+      seat: "critic",
+      harness: "codex",
+      driver: "codex",
+      workspace: REPO,
+      configuration: "research@1#digest",
+      requestedModel: null,
+      memoryScope: "conversation",
+      tools: [],
+      project: PROJECT,
+      boundAt: "2026-11-20T00:00:00.000Z",
+    },
+  },
+  lineups: { [threadId]: PERSONAL },
+});
+
+it.effect(
+  "makes a task's conversation a team thread: every seat but the lead's, on the engine's picks",
+  () => {
+    const engine = board();
+    engine.setTeams(TEAM_OF_THREE);
+    engine.addTask({
+      id: "task-7",
+      seatModels: {
+        lead: { harness: "codex", model: "gpt-6-astra", source: "profile" },
+        reviewer: { harness: "claude", model: "claude-sonnet", source: "picked" },
+      },
+    });
+    const store = threadStore();
+    return Effect.gen(function* () {
+      const threads = yield* service(store);
+      assert.deepEqual([...(yield* threads.reconcile())], []);
+      const reviewer = {
+        seat: "reviewer",
+        role: "reviewer",
+        modelSelection: { instanceId: "claudeAgent", model: "claude-sonnet" },
+        duty: "qa",
+      };
+      // Read-only seats, and no swap or critique setting: the engine picks.
+      assert.deepEqual(yield* plainLineup(THREAD), {
+        team: "development",
+        participants: [{ ...DEVELOPER, duty: "build" }, reviewer],
+      });
+      // The lineup only: the lead is bound to no team, so it takes no engine tools.
+      const delivery = yield* DeliveryService.DeliveryService;
+      assert.isNull((yield* delivery.threadState(THREAD)).binding);
+      // Not a snapshot: the engine's next pick reaches the thread on the next pass.
+      engine.task("task-7").seatModels = {
+        lead: { harness: "codex", model: "gpt-6-astra", source: "profile" },
+        reviewer: { harness: "codex", model: "gpt-6-sol", source: "picked" },
+      };
+      yield* threads.reconcile();
+      assert.deepEqual(yield* plainLineup(THREAD), {
+        team: "development",
+        participants: [
+          { ...DEVELOPER, duty: "build" },
+          { ...reviewer, modelSelection: { instanceId: "codex", model: "gpt-6-sol" } },
+        ],
+      });
+      // A seat that can no longer run here leaves it, and a restarted server keeps what it shows.
+      const restarted = yield* service(store, { instances: [INSTANCES[1]!] });
+      yield* restarted.reconcile();
+      assert.deepEqual(yield* plainLineup(THREAD), {
+        team: "development",
+        participants: [{ ...DEVELOPER, duty: "build" }],
+      });
+    }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-lineup-")));
+  },
+);
+
+it.effect("shows the board's lineup on a linked conversation over a person's old one", () => {
+  const engine = board();
+  engine.addTask({ id: "task-7" });
+  engine.addTask({ id: "task-8" });
+  const store = threadStore();
+  return Effect.gen(function* () {
+    // A conversation linked by a server from before task threads had a lineup, on which a
+    // person's lineup and team were saved.
+    yield* store.dispatch(
+      createBoardTaskThread(TASK, {
+        commandId: boardTaskThreadCommandId(TASK),
+        threadId: THREAD,
+        projectId: PROJECT,
+        title: "Task task-7",
+        modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-6-astra" },
+      }),
+    );
+    engine.writeLink("task-7", {
+      environmentId: ENVIRONMENT,
+      threadId: THREAD,
+      setBy: ENVIRONMENT,
+    });
+    engine.writeLink("task-8", { environmentId: OTHER, threadId: THEIRS, setBy: OTHER });
+    // By its id alone the thread is the board's: nothing a person saved on it is shown.
+    assert.isUndefined(yield* plainLineup(THREAD));
+    const threads = yield* service(store);
+    assert.deepEqual([...(yield* threads.reconcile())], []);
+    const shown = yield* plainLineup(THREAD);
+    assert.deepEqual(shown, { team: "development", participants: [DEVELOPER] });
+    // Another environment's conversation is never given one here.
+    assert.isUndefined(yield* plainLineup(ThreadId.make(THEIRS)));
+    yield* threads.reconcile();
+    yield* (yield* service(store)).reconcile();
+    assert.deepEqual(yield* plainLineup(THREAD), shown);
+    assert.lengthOf(creates(store), 1);
+  }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-backfill-", legacyStoreOn(THREAD))));
+});
+
+it.effect(
+  "keeps board lineups out of the store an older build reads, so a rollback keeps working",
+  () => {
+    const engine = board();
+    engine.addTask({ id: "task-7" });
+    const store = threadStore();
+    return Effect.gen(function* () {
+      yield* (yield* service(store)).reconcile();
+      assert.deepEqual(yield* plainLineup(THREAD), {
+        team: "development",
+        participants: [DEVELOPER],
+      });
+      const { stateDir } = yield* ServerConfig.ServerConfig;
+      const fileSystem = yield* FileSystem.FileSystem;
+      const legacy = yield* fileSystem
+        .readFileString(`${stateDir}/delivery-threads.json`)
+        .pipe(Effect.orElseSucceed(() => "{}"));
+      assert.notInclude(legacy, "developer");
+      assert.include(
+        yield* fileSystem.readFileString(`${stateDir}/delivery-board-lineups.json`),
+        "developer",
+      );
+    }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-rollback-")));
+  },
+);
+
+it.effect(
+  "refuses a person's lineup or team on a board task's thread, with or without a shell",
+  () => {
+    const engine = board();
+    const store = threadStore();
+    return Effect.gen(function* () {
+      const delivery = yield* DeliveryService.DeliveryService;
+      // No thread exists for this id yet: its form alone says it is a board task's.
+      const lineup = yield* delivery
+        .setThreadLineup({ threadId: THREAD, orchestration: PERSONAL })
+        .pipe(Effect.flip);
+      assert.equal(lineup.reason, "refused");
+      const cleared = yield* delivery
+        .setThreadLineup({ threadId: THREAD, orchestration: null })
+        .pipe(Effect.flip);
+      assert.equal(cleared.reason, "refused");
+      const bound = yield* delivery
+        .bindThread({ threadId: THREAD, team: "research", driver: "codex", cwd: REPO })
+        .pipe(Effect.flip);
+      assert.equal(bound.reason, "refused");
+      // A successor's id has no such form: the board's lineup makes it the board's.
+      const successor = limitedLeadHandoffThreadId(RunId.make("failed-board-lead"));
+      yield* delivery.setBoardLineup(successor, null);
+      const onSuccessor = yield* delivery
+        .setThreadLineup({ threadId: successor, orchestration: PERSONAL })
+        .pipe(Effect.flip);
+      assert.equal(onSuccessor.reason, "refused");
+      assert.lengthOf(store.commands, 0);
+    }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-refuse-")));
+  },
+);
+
+it.effect("keeps claims and steers going when the teams cannot be read", () => {
+  const engine = board();
+  // A lead alone: its thread has no lineup, so every pass asks for the teams.
+  engine.setTeams([{ team: "development", seats: [TEAMS[0]!.seats[1]!] }]);
+  engine.addTask({ id: "task-7" });
+  const store = threadStore();
+  return Effect.gen(function* () {
+    const threads = yield* service(store);
+    yield* threads.reconcile();
+    assert.equal(engine.linkOf("task-7")?.threadId, THREAD);
+    const steer = engine.queueSteer("task-7", "Use the other API");
+    engine.advance(100_000);
+    engine.dropNext(/^\/api\/teams$/);
+    yield* threads.reconcile();
+    assert.equal(engine.steer(steer).state, "delivered");
+    engine.advance(100_000);
+    assert.isNotNull(engine.leaseOf("task-7"));
+  }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-teams-down-")));
+});
+
+it.effect("sends every engine notice into a task's conversation as a system notice", () => {
+  const engine = board();
+  const task = engine.addTask({ id: "task-7", run: { id: "run-1" } });
+  const store = threadStore();
+  return Effect.gen(function* () {
+    const threads = yield* service(store);
+    yield* threads.reconcile();
+    engine.queueSteer("task-7", "Use the other API");
+    task.hold = { stage: "qa", deadline: "2026-11-22T10:30:00.000Z", handoff: null };
+    yield* threads.reconcile();
+    const sends = steerSends(store);
+    assert.lengthOf(sends, 2);
+    // A notice is what `NativeTeamChat.prepareTurn` answers with no team round, and what the
+    // orchestrator takes only as a server-created, queued agent message.
+    for (const send of sends) {
+      if (send.type !== "message.dispatch") throw new Error("Expected a message");
+      assert.deepInclude(send, {
+        createdBy: "agent",
+        creationSource: "server",
+        dispatchMode: { type: "queue_after_active" },
+      });
+      assert.deepEqual(send.notification, {
+        source: { kind: "system" },
+        outcome: "updated",
+        summary: send.notification?.summary ?? "",
+        detail: send.text,
+      });
+    }
+    assert.deepEqual(
+      sends.map((send) => (send.type === "message.dispatch" ? send.notification?.summary : null)),
+      ["A steer from the board", "The engine is holding QA for your hand-off"],
+    );
+    // A steer is still a person's words to the card: it is mirrored as one, with no excerpt.
+    yield* threads.reconcile();
+    assert.isTrue(
+      engine.activityOf("task-7").some((row) => row.kind === "steer" && row.excerpt === null),
+    );
+  }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-notices-")));
+});
+
+it.effect("gives a lead and one seat a one-participant lineup, still a team thread", () => {
+  const engine = board();
+  engine.addTask({ id: "task-7" });
+  const store = threadStore();
+  return Effect.gen(function* () {
+    const threads = yield* service(store);
+    assert.deepEqual([...(yield* threads.reconcile())], []);
+    assert.equal(engine.linkOf("task-7")?.threadId, THREAD);
+    assert.deepEqual(yield* plainLineup(THREAD), {
+      team: "development",
+      participants: [DEVELOPER],
+    });
+    // A person still cannot set a one-participant lineup: only a board task's team may be one.
+    const delivery = yield* DeliveryService.DeliveryService;
+    const set = yield* delivery
+      .setThreadLineup({
+        threadId: ThreadId.make("a-person's-thread"),
+        orchestration: { participants: [{ ...DEVELOPER, modelSelection: CLAUDE }] },
+      })
+      .pipe(Effect.flip);
+    assert.equal(set.reason, "invalid");
+  }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-one-seat-")));
+});
+
+it.effect.each([
+  { name: "its lead alone", extra: [] },
+  // A seat whose harness no provider here runs does not count toward the team.
+  {
+    name: "its lead and a seat no provider here runs",
+    extra: [{ seat: "researcher", role: "researcher", harness: "hermes", model: "m" }],
+  },
+])("gives a task whose team is $name a thread with no lineup, nor a person's", ({ extra }) => {
+  const engine = board();
+  engine.setTeams([{ team: "development", seats: [TEAMS[0]!.seats[1]!, ...extra] }]);
+  engine.addTask({ id: "task-7" });
+  const store = threadStore();
+  return Effect.gen(function* () {
+    const threads = yield* service(store);
+    // Every task in work gets its conversation: nothing is held for want of a team.
+    assert.deepEqual([...(yield* threads.reconcile())], []);
+    assert.equal(engine.linkOf("task-7")?.threadId, THREAD);
+    assert.isUndefined(yield* plainLineup(THREAD));
+    yield* threads.reconcile();
+    assert.isUndefined(yield* plainLineup(THREAD));
+    // Once the team has a seat that runs here, the next pass gives the thread its lineup.
+    engine.setTeams(TEAMS);
+    yield* threads.reconcile();
+    assert.deepEqual(yield* plainLineup(THREAD), {
+      team: "development",
+      participants: [DEVELOPER],
+    });
+  }).pipe(
+    Effect.provide(deliveryLayer(engine, "board-threads-lead-alone-", legacyStoreOn(THREAD))),
+  );
+});
+
+it.effect(
+  "shows the other tasks' teams and keeps their steers going past one unreadable pick",
+  () => {
+    const engine = board();
+    engine.addTask({ id: "task-7" });
+    engine.addTask({ id: "task-8" });
+    const store = threadStore();
+    const other = boardTaskThreadId(boardTaskOf("work", "task-8")!);
+    return Effect.gen(function* () {
+      const threads = yield* service(store);
+      yield* threads.reconcile();
+      const steer = engine.queueSteer("task-8", "Please continue");
+      // A blank model this build cannot read on one task's seat leaves only that seat out.
+      engine.task("task-7").seatModels = {
+        developer: { harness: "claude", model: " ", source: "picked" },
+      };
+      engine.task("task-8").seatModels = {
+        lead: { harness: "codex", model: "gpt-6-astra", source: "profile" },
+        developer: { harness: "claude", model: "claude-sonnet", source: "picked" },
+      };
+      const pass = yield* threads.reconcile().pipe(Effect.result);
+      assert.equal(pass._tag, "Success");
+      assert.equal(engine.steer(steer).state, "delivered");
+      assert.deepEqual(yield* plainLineup(other), {
+        team: "development",
+        participants: [
+          { ...DEVELOPER, modelSelection: { instanceId: "claudeAgent", model: "claude-sonnet" } },
+        ],
+      });
+    }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-bad-pick-")));
+  },
+);
+
+it.effect("holds only the tasks awaiting a thread when the teams cannot be read", () => {
+  const engine = board();
+  engine.addTask({ id: "task-7" });
+  const store = threadStore();
+  return Effect.gen(function* () {
+    const threads = yield* service(store);
+    yield* threads.reconcile();
+    const steer = engine.queueSteer("task-7", "Use the other API");
+    engine.advance(100_000);
+    // A task that waits for its first thread needs the teams; the pass goes on without them.
+    engine.addTask({ id: "task-8" });
+    engine.dropNext(/^\/api\/teams$/);
+    assert.deepEqual([...(yield* threads.reconcile())], [["task-8", "no-teams"]]);
+    assert.equal(engine.steer(steer).state, "delivered");
+    engine.advance(100_000);
+    assert.isNotNull(engine.leaseOf("task-7"));
+    // The next pass reads them and makes the waiting task's thread.
+    assert.deepEqual([...(yield* threads.reconcile())], []);
+    assert.isNotNull(engine.linkOf("task-8"));
+  }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-teams-hold-")));
+});
+
+it.effect("makes a successor made before board lineups the board's from its marker", () => {
+  const engine = board();
+  engine.addTask({ id: "task-7" });
+  const store = threadStore();
+  const successor = limitedLeadHandoffThreadId(RunId.make("old-failed-run"));
+  return Effect.gen(function* () {
+    yield* store.dispatch(
+      createBoardTaskThread(TASK, {
+        commandId: CommandId.make("create-old-successor"),
+        threadId: successor,
+        projectId: PROJECT,
+        title: "Task task-7",
+        modelSelection: CLAUDE,
+      }),
+    );
+    engine.writeLink("task-7", {
+      environmentId: ENVIRONMENT,
+      threadId: successor,
+      setBy: ENVIRONMENT,
+    });
+    const delivery = yield* DeliveryService.DeliveryService;
+    // Read with its marker's word, before any pass: a person's team saved there is not shown.
+    const hinted = yield* delivery.threadState(successor, { boardOwned: true });
+    assert.isNull(hinted.binding);
+    assert.isUndefined(hinted.lineup);
+    // Even when the teams cannot be read, the pass makes it the board's.
+    engine.dropNext(/^\/api\/teams$/);
+    yield* (yield* service(store)).reconcile();
+    assert.isUndefined(yield* plainLineup(successor));
+    assert.isNull((yield* delivery.threadState(successor)).binding);
+  }).pipe(
+    Effect.provide(deliveryLayer(engine, "board-threads-old-successor-", legacyStoreOn(successor))),
+  );
+});
+
+// Live: an atomic save waits on real time before it gives up.
+it.live("saves board lineups again once a save that failed can go through", () => {
+  const engine = board();
+  engine.addTask({ id: "task-7" });
+  return Effect.gen(function* () {
+    const { stateDir } = yield* ServerConfig.ServerConfig;
+    const fileSystem = yield* FileSystem.FileSystem;
+    const file = `${stateDir}/delivery-board-lineups.json`;
+    // Something in the way of the file: the first save fails, and the lineup is shown anyway.
+    yield* fileSystem.makeDirectory(file, { recursive: true });
+    const threads = yield* service(threadStore());
+    yield* threads.reconcile();
+    assert.deepEqual(yield* plainLineup(THREAD), {
+      team: "development",
+      participants: [DEVELOPER],
+    });
+    yield* fileSystem.remove(file, { recursive: true });
+    yield* threads.reconcile();
+    assert.include(yield* fileSystem.readFileString(file), "developer");
+  }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-save-retry-")));
+});
+
+it.effect(
+  "starts a board task's sessions on the board's team, never a person's old binding",
+  () => {
+    const engine = board();
+    engine.addTask({ id: "task-7" });
+    const legacy = legacyStoreOn(THREAD);
+    // A person bound the thread to research on Claude before the upgrade.
+    Object.assign(legacy.threads[THREAD]!, { driver: "claudeAgent", harness: "claude" });
+    return Effect.gen(function* () {
+      yield* (yield* service(threadStore())).reconcile();
+      const delivery = yield* DeliveryService.DeliveryService;
+      const shown = yield* delivery.threadState(THREAD);
+      assert.isNull(shown.binding);
+      assert.equal(shown.boardLineup?.team, "development");
+      // The board's lead runs on Codex: its session starts as an ordinary one, as the panel says.
+      assert.isFalse(yield* delivery.prepareThread(THREAD, { driver: "codex", cwd: REPO }));
+    }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-legacy-binding-", legacy)));
+  },
+);
+
+it.effect(
+  "hides a person's held team choice on a board task's thread, and keeps it on disk",
+  () => {
+    const engine = board();
+    engine.addTask({ id: "task-7" });
+    const ordinary = ThreadId.make("ordinary");
+    // A person's bind to research that never completed before the upgrade.
+    const legacy = {
+      ...legacyStoreOn(ordinary),
+      pending: {
+        [THREAD]: {
+          threadId: THREAD,
+          team: "research",
+          role: "reviewer",
+          driver: "codex",
+          cwd: REPO,
+          since: "2026-11-20T00:00:00.000Z",
+          why: "the engine was offline",
+        },
+      },
+    };
+    return Effect.gen(function* () {
+      yield* (yield* service(threadStore())).reconcile();
+      const delivery = yield* DeliveryService.DeliveryService;
+      for (const state of [
+        yield* delivery.threadState(THREAD),
+        yield* delivery.threadState(THREAD, { boardOwned: true }),
+      ]) {
+        assert.isNull(state.pending);
+        assert.isNull(state.binding);
+        assert.equal(state.boardLineup?.team, "development");
+      }
+      assert.isFalse(yield* delivery.prepareThread(THREAD, { driver: "codex", cwd: REPO }));
+      // A person's own conversation keeps what it had.
+      assert.equal((yield* delivery.threadState(ordinary)).binding?.team, "research");
+      const { stateDir } = yield* ServerConfig.ServerConfig;
+      const fileSystem = yield* FileSystem.FileSystem;
+      assert.include(
+        yield* fileSystem.readFileString(`${stateDir}/delivery-threads.json`),
+        "the engine was offline",
+      );
+    }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-held-choice-", legacy)));
+  },
+);
+
+it.effect("starts an old successor as the board's even when the engine cannot be read", () => {
+  const engine = board();
+  engine.addTask({ id: "task-7" });
+  const store = threadStore();
+  const successor = limitedLeadHandoffThreadId(RunId.make("old-failed-run"));
+  return Effect.gen(function* () {
+    yield* store.dispatch(
+      createBoardTaskThread(TASK, {
+        commandId: CommandId.make("create-old-successor"),
+        threadId: successor,
+        projectId: PROJECT,
+        title: "Task task-7",
+        modelSelection: CLAUDE,
+      }),
+    );
+    engine.writeLink("task-7", {
+      environmentId: ENVIRONMENT,
+      threadId: successor,
+      setBy: ENVIRONMENT,
+    });
+    // The first pass cannot read the lanes: it still makes the thread the board's by its marker.
+    engine.dropNext(/^\/api\/lanes$/);
+    const pass = yield* (yield* service(store)).reconcile().pipe(Effect.result);
+    assert.equal(pass._tag, "Failure");
+    const delivery = yield* DeliveryService.DeliveryService;
+    assert.isNull((yield* delivery.threadState(successor)).binding);
+    // Its session starts as the read says: not on the person's old binding.
+    assert.isFalse(yield* delivery.prepareThread(successor, { driver: "claudeAgent", cwd: REPO }));
+  }).pipe(
+    Effect.provide(
+      deliveryLayer(engine, "board-threads-successor-offline-", legacyStoreOn(successor)),
+    ),
+  );
+});
+
+/**
+ * The thread state a client from before board lineups decodes (`cee1846c`), frozen here so this
+ * stays a test of what such a client reads.
+ */
+const MasterThreadState = Schema.Struct({
+  binding: Schema.NullOr(DeliveryThreadBinding),
+  pending: Schema.NullOr(DeliveryThreadPending),
+  lineup: Schema.optional(
+    Schema.Struct({
+      participants: Schema.Array(
+        Schema.Struct({
+          seat: TrimmedNonEmptyString,
+          role: TrimmedNonEmptyString,
+          modelSelection: ModelSelection,
+          access: Schema.optional(
+            Schema.Literals(["read-only", "approval-required", "full-access"]),
+          ),
+          picked: Schema.optional(Schema.Boolean),
+          duty: Schema.optional(Schema.Literals(["build", "qa"])),
+          substitute: Schema.optional(ModelSelection),
+        }),
+      ).check(Schema.isMinLength(2), Schema.isMaxLength(12)),
+      critique: Schema.optional(Schema.Literals(["first", "always", "never"])),
+      limitedSeat: Schema.optional(Schema.Literals(["swap", "ask", "skip"])),
+      access: Schema.optional(Schema.Literals(["approval-required", "full-access"])),
+      team: Schema.optional(TrimmedNonEmptyString),
+    }),
+  ),
+  rememberedLineup: Schema.optional(DeliveryRememberedLineup),
+});
+const encodeThreadState = Schema.encodeEffect(DeliveryThreadState);
+const decodeByOlderClient = Schema.decodeUnknownEffect(MasterThreadState);
+/** A thread's state as the RPC sends it, read back by a client from before board lineups. */
+const readByOlderClient = (state: DeliveryThreadState) =>
+  encodeThreadState(state).pipe(Effect.flatMap(decodeByOlderClient));
+
+it.effect.each([
+  { name: "a lead and one seat", teams: TEAMS, seats: 1 },
+  { name: "a lead and two seats", teams: TEAM_OF_THREE, seats: 2 },
+])("sends $name in a thread state a client from before board lineups reads", ({ teams, seats }) => {
+  const engine = board();
+  engine.setTeams(teams);
+  engine.addTask({ id: "task-7" });
+  return Effect.gen(function* () {
+    yield* (yield* service(threadStore())).reconcile();
+    const delivery = yield* DeliveryService.DeliveryService;
+    for (const state of [
+      yield* delivery.threadState(THREAD),
+      yield* delivery.threadState(THREAD, { boardOwned: true }),
+    ]) {
+      // An older client reads a team it can show, or, for one seat, an ordinary conversation.
+      const older = yield* readByOlderClient(state);
+      assert.equal(older.lineup?.participants.length, seats === 1 ? undefined : seats);
+      assert.isNull(older.binding);
+      // Clients that know board lineups read the team, one seat included.
+      assert.lengthOf(state.boardLineup?.participants ?? [], seats);
+    }
+  }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-older-client-")));
+});
+
+it.effect("gives each part of a split task its own thread, and none to the parent", () => {
+  const engine = board();
+  // A parent putting its parts together is in work by its lane, and still gets no thread.
+  const whole = engine.addTask({ id: "whole-3", lane: "in-work", state: "doing" });
+  engine.addTask({
+    id: "part-1",
+    served: { partOf: { id: "whole-3", number: 1002, title: "The whole", here: true } },
+  });
+  // A part whose parent is not here is worked like any other part.
+  engine.addTask({
+    id: "part-2",
+    served: { partOf: { id: "whole-elsewhere", number: null, title: null, here: false } },
+  });
+  const store = threadStore();
+  const threadOf = (id: string) => boardTaskThreadId(boardTaskOf("work", id)!);
+  return Effect.gen(function* () {
+    const threads = yield* service(store);
+    // Before its split the task is worked as itself, with a thread and a claim.
+    yield* threads.reconcile();
+    assert.isNotNull(engine.leaseOf("whole-3"));
+    whole.served = { split: true };
+    engine.advance(30_000);
+    assert.deepEqual([...(yield* threads.reconcile())], []);
+    assert.deepEqual(
+      [...store.threads.keys()].toSorted(),
+      [threadOf("part-1"), threadOf("part-2"), threadOf("whole-3")].toSorted(),
+    );
+    assert.equal(engine.linkOf("part-1")?.threadId, threadOf("part-1"));
+    assert.equal(engine.linkOf("part-2")?.threadId, threadOf("part-2"));
+    assert.isNotNull(engine.leaseOf("part-1"));
+    assert.isNotNull(engine.leaseOf("part-2"));
+    // Split, the parent releases its claim and keeps the thread it had, unarchived.
+    assert.isNull(engine.leaseOf("whole-3"));
+    assert.isNull(store.threads.get(threadOf("whole-3"))!.archivedAt);
+    // A parent split before it had a thread is never given one.
+    engine.addTask({ id: "whole-4", lane: "in-work", state: "doing", served: { split: true } });
+    yield* threads.reconcile();
+    assert.isFalse(store.threads.has(threadOf("whole-4")));
+    assert.isNull(engine.linkOf("whole-4"));
+    assert.isNull(engine.leaseOf("whole-4"));
+  }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-parts-")));
+});
+
+it.effect("tells the engine a person's words in a task thread as a thread steer, once", () => {
+  const engine = board();
+  const task = engine.addTask({ id: "task-7", run: { id: "run-1" } });
+  const store = threadStore();
+  const steered = () => engine.steeredOf("task-7").map(({ text, by, from }) => [text, by, from]);
+  return Effect.gen(function* () {
+    const threads = yield* service(store);
+    yield* threads.reconcile();
+    store.say(THREAD, "m-1", "Build it", "system");
+    store.reply(THREAD, "Planned");
+    store.say(THREAD, "m-2", "Use the other API", "user");
+    yield* threads.reconcile();
+    // Only a person's words are a steer; the engine's own brief is not.
+    assert.deepEqual(steered(), [["Use the other API", "person", "thread"]]);
+    // The engine queues no thread steer back, so nothing is delivered into the thread again.
+    assert.deepEqual(steerSends(store), []);
+    assert.equal(engine.requests.filter((r) => r.path.includes("/steers/")).length, 0);
+    yield* threads.reconcile();
+    yield* (yield* service(store)).reconcile();
+    assert.deepEqual(steered(), [["Use the other API", "person", "thread"]]);
+
+    // The engine away: the words are told on a later pass, before their mirror.
+    engine.dropNext(/\/steer$/);
+    store.reply(THREAD, "On it");
+    store.say(THREAD, "m-3", "Also add tests", "user");
+    const before = ingests(engine);
+    yield* threads.reconcile();
+    assert.equal(steered().length, 1);
+    // The mirror never waits on a steer: the reply and the words are both mirrored.
+    assert.equal(ingests(engine), before + 2);
+    yield* threads.reconcile();
+    assert.deepEqual(steered().at(-1), ["Also add tests", "person", "thread"]);
+
+    // A mirror lost after its steer went through sends only the mirror again.
+    engine.dropNext(/\/activity$/);
+    store.reply(THREAD, "Tests added");
+    store.say(THREAD, "m-4", "Thanks", "user");
+    yield* threads.reconcile();
+    yield* threads.reconcile();
+    yield* threads.reconcile();
+    assert.deepEqual(
+      steered().map(([text]) => text),
+      ["Use the other API", "Also add tests", "Thanks"],
+    );
+    assert.deepEqual(
+      engine.activityOf("task-7").map((row) => row.kind),
+      ["message", "summary", "steer", "summary", "steer", "summary", "steer"],
+    );
+
+    // Words the run took are told in no notice.
+    assert.equal(undelivered(store).length, 0);
+    // With no run under way the engine refuses the steer; the words stay mirrored and are not
+    // tried again.
+    task.run = null;
+    store.reply(THREAD, "Done");
+    store.say(THREAD, "m-5", "One more thing", "user");
+    yield* threads.reconcile();
+    yield* threads.reconcile();
+    assert.equal(steered().length, 3);
+    assert.equal(engine.requests.filter((r) => r.path.endsWith("/steer")).length, 4);
+    assert.equal(engine.activityOf("task-7").at(-1)?.kind, "steer");
+  }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-thread-steer-")));
+});
+
+it.effect("tells a person's words once across a restart after their mirror was lost", () => {
+  const engine = board();
+  engine.addTask({ id: "task-7", run: { id: "run-1" } });
+  const store = threadStore();
+  return Effect.gen(function* () {
+    yield* (yield* service(store)).reconcile();
+    store.say(THREAD, "m-1", "Use the other API", "user");
+    // The steer is taken, then its mirror is lost, and the server restarts before the next pass.
+    engine.dropNext(/\/activity$/);
+    yield* (yield* service(store)).reconcile();
+    assert.equal(engine.steeredOf("task-7").length, 1);
+    assert.equal(engine.activityOf("task-7").length, 0);
+    const restarted = yield* service(store);
+    yield* restarted.reconcile();
+    yield* restarted.reconcile();
+    assert.deepEqual(
+      engine.steeredOf("task-7").map(({ text }) => text),
+      ["Use the other API"],
+    );
+    // The steer carries a key stable per message, for an engine that dedupes on it.
+    const refs = engine.requests
+      .filter((request) => request.path.endsWith("/steer"))
+      .map((request) => (request.body as { ref?: string }).ref);
+    assert.deepEqual(refs, [`thread:${THREAD}:m-1`]);
+    assert.deepEqual(
+      engine.activityOf("task-7").map((row) => row.kind),
+      ["steer"],
+    );
+  }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-steer-restart-")));
+});
+
+it.effect("tells a thread steer again with its ref after an engine error, applied once", () => {
+  const engine = board();
+  engine.addTask({ id: "task-7", run: { id: "run-1" } });
+  const store = threadStore();
+  return Effect.gen(function* () {
+    const threads = yield* service(store);
+    yield* threads.reconcile();
+    store.say(THREAD, "m-1", "Use the other API", "user");
+    engine.answerNext(/\/steer$/, 500, { error: "the run could not be told" });
+    yield* threads.reconcile();
+    // The mirror does not wait for the steer.
+    assert.equal(engine.activityOf("task-7").length, 1);
+    yield* threads.reconcile();
+    yield* threads.reconcile();
+    const sent = engine.requests.filter((request) => request.path.endsWith("/steer"));
+    assert.deepEqual(
+      sent.map((request) => (request.body as { ref?: string }).ref),
+      [`thread:${THREAD}:m-1`, `thread:${THREAD}:m-1`],
+    );
+    assert.equal(engine.steeredOf("task-7").length, 1);
+    assert.deepEqual(
+      engine.activityOf("task-7").map((row) => row.kind),
+      ["steer"],
+    );
+  }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-steer-error-")));
+});
+
+it.effect("gives up on a thread steer the engine keeps failing, and says so once", () => {
+  const engine = board();
+  engine.addTask({ id: "task-7", run: { id: "run-1" } });
+  const store = threadStore();
+  return Effect.gen(function* () {
+    yield* TestClock.setTime(Date.parse("2026-11-22T10:00:00.000Z"));
+    const threads = yield* service(store);
+    yield* threads.reconcile();
+    store.say(THREAD, "m-1", "Use the other API", "user");
+    engine.answerNext(/\/steer$/, 500, { error: "the run could not be told" });
+    yield* threads.reconcile();
+    // Within the hand-off wait it is tried again; the mirror goes on.
+    assert.equal(undelivered(store).length, 0);
+    assert.equal(engine.activityOf("task-7").length, 1);
+    yield* TestClock.adjust("31 minutes");
+    engine.answerNext(/\/steer$/, 500, { error: "the run could not be told" });
+    yield* threads.reconcile();
+    const [notice] = undelivered(store);
+    assert.include(notice?.text, "This message didn't reach the team");
+    assert.include(notice?.text, "Use the other API");
+    // A system notice: the lead reads it, and no team round starts on it.
+    assert.equal(notice?.notification?.source.kind, "system");
+    assert.equal(engine.steeredOf("task-7").length, 0);
+    // The words, then the notice, are mirrored.
+    assert.deepEqual(
+      engine.activityOf("task-7").map((row) => row.kind),
+      ["steer", "steer"],
+    );
+    const restarted = yield* service(store);
+    yield* restarted.reconcile();
+    yield* restarted.reconcile();
+    assert.equal(undelivered(store).length, 1);
+    // Past the window it is given up without being sent again.
+    assert.equal(engine.requests.filter((r) => r.path.endsWith("/steer")).length, 1);
+    // The notice is mirrored like the engine's other notices, with no excerpt.
+    assert.deepEqual(
+      engine.activityOf("task-7").map((row) => [row.kind, row.excerpt]),
+      [
+        ["steer", null],
+        ["steer", null],
+      ],
+    );
+  }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-steer-give-up-")));
+});
+
+it.effect("says once in the thread when the engine refuses a person's words", () => {
+  const engine = board();
+  // Awaiting approval: no run under way, so the engine refuses a steer with 409.
+  engine.addTask({ id: "task-7" });
+  const store = threadStore();
+  return Effect.gen(function* () {
+    yield* (yield* service(store)).reconcile();
+    store.say(THREAD, "m-1", "Use the other API", "user");
+    yield* (yield* service(store)).reconcile();
+    const [notice] = undelivered(store);
+    assert.include(notice?.text, "no run is under way on this task");
+    assert.deepEqual(
+      engine.activityOf("task-7").map((row) => row.kind),
+      ["steer"],
+    );
+    const restarted = yield* service(store);
+    yield* restarted.reconcile();
+    yield* restarted.reconcile();
+    assert.equal(undelivered(store).length, 1);
+    assert.equal(engine.requests.filter((r) => r.path.endsWith("/steer")).length, 1);
+  }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-steer-refused-")));
+});
+
+it.effect("tells words still being retried as undelivered once their task leaves work", () => {
+  const engine = board();
+  const task = engine.addTask({ id: "task-7", run: { id: "run-1" } });
+  const store = threadStore();
+  return Effect.gen(function* () {
+    const threads = yield* service(store);
+    yield* threads.reconcile();
+    store.say(THREAD, "m-1", "Use the other API", "user");
+    engine.answerNext(/\/steer$/, 500, { error: "the run could not be told" });
+    yield* threads.reconcile();
+    assert.equal(undelivered(store).length, 0);
+    // Approved: out of work, so the words can no longer reach a run.
+    task.state = "approved";
+    yield* threads.reconcile();
+    yield* threads.reconcile();
+    assert.equal(undelivered(store).length, 1);
+    assert.include(undelivered(store)[0]?.text, "the task is no longer in work");
+    assert.equal(engine.requests.filter((r) => r.path.endsWith("/steer")).length, 2);
+    assert.equal(engine.activityOf("task-7")[0]?.kind, "steer");
+  }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-steer-left-work-")));
+});
+
+it.effect("gives up on a lost steer answer past the hand-off wait", () => {
+  const engine = board();
+  engine.addTask({ id: "task-7", run: { id: "run-1" } });
+  const store = threadStore();
+  return Effect.gen(function* () {
+    yield* TestClock.setTime(Date.parse("2026-11-22T10:00:00.000Z"));
+    const threads = yield* service(store);
+    yield* threads.reconcile();
+    store.say(THREAD, "m-1", "Use the other API", "user");
+    engine.dropNext(/\/steer$/);
+    yield* threads.reconcile();
+    assert.equal(undelivered(store).length, 0);
+    // Past the window it is given up without being sent again: stale words never reach a run.
+    yield* TestClock.adjust("31 minutes");
+    yield* threads.reconcile();
+    assert.equal(engine.requests.filter((r) => r.path.endsWith("/steer")).length, 0);
+    assert.equal(undelivered(store).length, 1);
+    assert.include(undelivered(store)[0]?.text, "could not take it for 30 minutes");
+    assert.equal(engine.activityOf("task-7")[0]?.kind, "steer");
+  }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-steer-lost-answer-")));
+});
+
+it.effect("posts a notice the thread could not take later, never steering again", () => {
+  const engine = board();
+  engine.addTask({ id: "task-7" });
+  const store = threadStore();
+  return Effect.gen(function* () {
+    yield* (yield* service(store)).reconcile();
+    store.say(THREAD, "m-1", "Use the other API", "user");
+    store.unavailable.add("message:board-steer-undelivered:");
+    yield* (yield* service(store)).reconcile();
+    // Refused 409 and settled; the notice is owed, and the mirror is not held for it.
+    assert.equal(undelivered(store).length, 1);
+    assert.isFalse(store.messages.get(THREAD)?.has(undelivered(store)[0]!.messageId) ?? false);
+    assert.equal(engine.activityOf("task-7")[0]?.kind, "steer");
+    // A restart keeps the notice owed, and the steer is never sent again.
+    const restarted = yield* service(store);
+    yield* restarted.reconcile();
+    store.unavailable.clear();
+    yield* restarted.reconcile();
+    yield* restarted.reconcile();
+    const posted = undelivered(store).filter((command) =>
+      store.messages.get(THREAD)?.has(command.messageId),
+    );
+    assert.equal(new Set(posted.map((command) => command.messageId)).size, 1);
+    assert.equal(engine.requests.filter((r) => r.path.endsWith("/steer")).length, 1);
+  }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-steer-notice-later-")));
+});
+
+it.effect("posts a notice owed on an approved task after a restart", () => {
+  const engine = board();
+  const task = engine.addTask({ id: "task-7", run: { id: "run-1" } });
+  const store = threadStore();
+  return Effect.gen(function* () {
+    const threads = yield* service(store);
+    yield* threads.reconcile();
+    store.say(THREAD, "m-1", "Use the other API", "user");
+    engine.answerNext(/\/steer$/, 500, { error: "the run could not be told" });
+    yield* threads.reconcile();
+    // Approved while the steer is retried, and the thread cannot take the notice yet.
+    task.state = "approved";
+    store.unavailable.add("message:board-steer-undelivered:");
+    yield* threads.reconcile();
+    // A restart forgets every scan and floor; the ledger still owes the notice.
+    store.unavailable.clear();
+    const restarted = yield* service(store);
+    yield* restarted.reconcile();
+    yield* restarted.reconcile();
+    const posted = undelivered(store).filter((command) =>
+      store.messages.get(THREAD)?.has(command.messageId),
+    );
+    assert.equal(new Set(posted.map((command) => command.messageId)).size, 1);
+    assert.include(posted[0]?.text, "the task is no longer in work");
+    assert.equal(engine.requests.filter((r) => r.path.endsWith("/steer")).length, 2);
+  }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-steer-approved-restart-")));
+});
+
+it.effect("gives up a steer still retried when its task moves, and says so once", () => {
+  const engine = board();
+  const task = engine.addTask({ id: "task-7", run: { id: "run-1" } });
+  const store = threadStore();
+  return Effect.gen(function* () {
+    const threads = yield* service(store);
+    yield* threads.reconcile();
+    store.say(THREAD, "m-1", "Use the other API", "user");
+    engine.answerNext(/\/steer$/, 500, { error: "the run could not be told" });
+    yield* threads.reconcile();
+    assert.equal(undelivered(store).length, 0);
+    task.state = "moving";
+    yield* threads.reconcile();
+    task.state = "moved";
+    yield* threads.reconcile();
+    yield* (yield* service(store)).reconcile();
+    assert.equal(undelivered(store).length, 1);
+    assert.include(undelivered(store)[0]?.text, "the task moved to another machine");
+    // Told once more before it is given up, in case the engine took it before a crash.
+    assert.equal(engine.requests.filter((r) => r.path.endsWith("/steer")).length, 2);
+  }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-steer-moved-")));
+});
+
+it.effect("never mirrors a person's words the steer ledger could not save", () => {
+  const engine = board();
+  engine.addTask({ id: "task-7", run: { id: "run-1" } });
+  const store = threadStore();
+  return Effect.gen(function* () {
+    const fileSystem = yield* FileSystem.FileSystem;
+    const { stateDir } = yield* ServerConfig.ServerConfig;
+    const ledger = `${stateDir}/delivery-thread-steers.json`;
+    yield* (yield* service(store)).reconcile();
+    store.say(THREAD, "m-1", "Use the other API", "user");
+    // A directory where the ledger goes: every write of it fails.
+    yield* fileSystem.remove(ledger, { force: true });
+    yield* fileSystem.makeDirectory(ledger, { recursive: true });
+    yield* (yield* service(store)).reconcile();
+    assert.equal(engine.activityOf("task-7").length, 0);
+    assert.equal(engine.steeredOf("task-7").length, 0);
+    // Writable again, a restarted server finds the words, tells them and mirrors them.
+    yield* fileSystem.remove(ledger, { recursive: true });
+    const restarted = yield* service(store);
+    yield* restarted.reconcile();
+    assert.deepEqual(
+      engine.steeredOf("task-7").map(({ text }) => text),
+      ["Use the other API"],
+    );
+    assert.deepEqual(
+      engine.activityOf("task-7").map((row) => row.kind),
+      ["steer"],
+    );
+  }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-steer-ledger-fails-")));
+});

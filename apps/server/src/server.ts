@@ -11,9 +11,12 @@ import * as PullRequestSyncReactor from "./orchestration-v2/PullRequestSyncReact
 import * as PullRequestWatchReactor from "./orchestration-v2/PullRequestWatchReactor.ts";
 import * as DelegatedTaskQuestionReactor from "./orchestration-v2/DelegatedTaskQuestionReactor.ts";
 import * as BoardConversation from "./delivery/BoardConversation.ts";
+import * as BoardTaskSideChats from "./delivery/BoardTaskSideChats.ts";
 import * as BoardTaskThreads from "./delivery/BoardTaskThreads.ts";
 import * as BoardThreadRows from "./delivery/boardThreadRows.ts";
 import * as NativeIntake from "./delivery/NativeIntake.ts";
+import * as BoardTaskExecution from "./delivery/BoardTaskExecution.ts";
+import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as MilestoneHub from "./milestones/MilestoneHub.ts";
 import * as OrchestrationMilestones from "./milestones/OrchestrationMilestones.ts";
 // Effect wraps this raw Node HTTP server after its startup and write-error guards attach.
@@ -350,7 +353,7 @@ const layerUsage = UsageService.layer.pipe(
 
 const layerDelivery = DeliveryService.layer(
   ProviderInstanceRegistryHydration.deriveProviderInstanceConfigMap,
-).pipe(Layer.provide(layerServerSettings));
+).pipe(Layer.provide(layerServerSettings), Layer.provide(ServerSecretStore.layer));
 
 const layerResourceDiagnostics = Layer.mergeAll(
   HostResources.layer,
@@ -777,9 +780,14 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
     Effect.gen(function* () {
       const service = yield* BoardTaskThreads.BoardTaskThreads;
       yield* service.start();
+      // Shares the board pass's claims, which keep each held step's task alive.
+      yield* (yield* BoardTaskExecution.BoardTaskExecution).start();
+      yield* (yield* BoardTaskSideChats.BoardTaskSideChats).start();
     }),
   ).pipe(
-    Layer.provide(BoardTaskThreads.layer),
+    Layer.provide(BoardTaskExecution.layer.pipe(Layer.provide(IdAllocator.layer))),
+    Layer.provideMerge(BoardTaskThreads.layer),
+    Layer.provideMerge(BoardTaskSideChats.layer),
     Layer.provide(BoardConversation.layer),
     Layer.provide(BoardThreadRows.layer),
     Layer.provide(EventStoreV2.layer),
@@ -853,7 +861,10 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
   Layer.provideMerge(Layer.mergeAll(Keybindings.layer, UsageLimitSources.layer)),
   Layer.provideMerge(ProviderRegistry.layer),
   Layer.provideMerge(
-    ProviderInstanceRegistryHydration.layer.pipe(Layer.provide(SqlitePersistence.layerConfig)),
+    ProviderInstanceRegistryHydration.layer.pipe(
+      Layer.provide(SqlitePersistence.layerConfig),
+      Layer.provide(layerNativeTelemetry),
+    ),
   ),
   // One gate for the server, below hydration so the Claude adapter sees it: layers memoize by
   // reference, so the runtime layer shares it.

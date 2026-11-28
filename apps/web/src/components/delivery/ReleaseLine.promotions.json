@@ -1,0 +1,579 @@
+{
+  "recordedWith": "Operation-PaperClip df20024e delivery/lib/promotions.mjs through createDeployments, run against scratch repositories with a bare remote: qa (branch qa) promotes into app (branch main). Instance ids are renamed to the release-line fixtures' t3code-qa and t3code-app. compareAfterPromoted is deployment-compare.mjs's read once main moved and app has not deployed it.",
+  "states": {
+    "planned": {
+      "id": "promo-68044225f9bc",
+      "from": "t3code-qa",
+      "to": "t3code-app",
+      "repository": "t3code",
+      "fromEnvironment": "qa",
+      "toEnvironment": "app",
+      "by": "Ana",
+      "state": "planned",
+      "sync": null,
+      "source": null,
+      "need": null,
+      "waiting": null,
+      "consent": {
+        "source": "cff45f28ef58f1b535c2b298514a0b6a4a628f09",
+        "by": "Ana",
+        "at": "2026-11-27T08:25:58.566Z"
+      },
+      "candidate": null,
+      "protected": null,
+      "conflict": null,
+      "interrupted": null,
+      "problem": null,
+      "events": [
+        {
+          "at": "2026-11-27T08:25:58.566Z",
+          "type": "planned",
+          "by": "Ana",
+          "seen": "cff45f28ef58f1b535c2b298514a0b6a4a628f09"
+        }
+      ],
+      "createdAt": "2026-11-27T08:25:58.566Z",
+      "updatedAt": "2026-11-27T08:25:58.566Z"
+    },
+    "syncing": {
+      "id": "promo-68044225f9bc",
+      "from": "t3code-qa",
+      "to": "t3code-app",
+      "repository": "t3code",
+      "fromEnvironment": "qa",
+      "toEnvironment": "app",
+      "by": "Ana",
+      "state": "syncing",
+      "sync": null,
+      "source": null,
+      "need": null,
+      "waiting": null,
+      "consent": {
+        "source": "cff45f28ef58f1b535c2b298514a0b6a4a628f09",
+        "by": "Ana",
+        "at": "2026-11-27T08:25:58.566Z"
+      },
+      "candidate": null,
+      "protected": null,
+      "conflict": null,
+      "interrupted": null,
+      "problem": null,
+      "events": [
+        {
+          "at": "2026-11-27T08:25:58.566Z",
+          "type": "planned",
+          "by": "Ana",
+          "seen": "cff45f28ef58f1b535c2b298514a0b6a4a628f09"
+        },
+        {
+          "at": "2026-11-27T08:25:58.625Z",
+          "type": "syncing",
+          "fromTip": "cff45f28ef58f1b535c2b298514a0b6a4a628f09",
+          "toTip": "3eca546fe22362150085c7b440281a05cf7ba627",
+          "hotfixes": 1
+        }
+      ],
+      "createdAt": "2026-11-27T08:25:58.566Z",
+      "updatedAt": "2026-11-27T08:25:58.625Z"
+    },
+    "awaiting-qa": {
+      "id": "promo-68044225f9bc",
+      "from": "t3code-qa",
+      "to": "t3code-app",
+      "repository": "t3code",
+      "fromEnvironment": "qa",
+      "toEnvironment": "app",
+      "by": "Ana",
+      "state": "awaiting-qa",
+      "sync": {
+        "commit": "43425a5aa3816428008abc65ef77a4a232ce9b2e",
+        "fromTip": "cff45f28ef58f1b535c2b298514a0b6a4a628f09",
+        "toTip": "3eca546fe22362150085c7b440281a05cf7ba627",
+        "at": "2026-11-27T08:25:58.828Z"
+      },
+      "source": null,
+      "need": "43425a5aa3816428008abc65ef77a4a232ce9b2e",
+      "waiting": "qa runs cff45f28ef58, which does not contain the sync 43425a5aa381 yet.",
+      "consent": {
+        "source": "cff45f28ef58f1b535c2b298514a0b6a4a628f09",
+        "by": "Ana",
+        "at": "2026-11-27T08:25:58.566Z"
+      },
+      "candidate": null,
+      "protected": null,
+      "conflict": null,
+      "interrupted": null,
+      "problem": null,
+      "events": [
+        {
+          "at": "2026-11-27T08:25:58.566Z",
+          "type": "planned",
+          "by": "Ana",
+          "seen": "cff45f28ef58f1b535c2b298514a0b6a4a628f09"
+        },
+        {
+          "at": "2026-11-27T08:25:58.625Z",
+          "type": "syncing",
+          "fromTip": "cff45f28ef58f1b535c2b298514a0b6a4a628f09",
+          "toTip": "3eca546fe22362150085c7b440281a05cf7ba627",
+          "hotfixes": 1
+        },
+        {
+          "at": "2026-11-27T08:25:58.828Z",
+          "type": "awaiting-qa",
+          "sync": "43425a5aa3816428008abc65ef77a4a232ce9b2e"
+        },
+        {
+          "at": "2026-11-27T08:25:59.052Z",
+          "type": "awaiting-qa",
+          "need": "43425a5aa3816428008abc65ef77a4a232ce9b2e"
+        }
+      ],
+      "createdAt": "2026-11-27T08:25:58.566Z",
+      "updatedAt": "2026-11-27T08:25:59.052Z"
+    },
+    "ready": {
+      "id": "promo-68044225f9bc",
+      "from": "t3code-qa",
+      "to": "t3code-app",
+      "repository": "t3code",
+      "fromEnvironment": "qa",
+      "toEnvironment": "app",
+      "by": "Ana",
+      "state": "ready",
+      "sync": {
+        "commit": "43425a5aa3816428008abc65ef77a4a232ce9b2e",
+        "fromTip": "cff45f28ef58f1b535c2b298514a0b6a4a628f09",
+        "toTip": "3eca546fe22362150085c7b440281a05cf7ba627",
+        "at": "2026-11-27T08:25:58.828Z"
+      },
+      "source": "43425a5aa3816428008abc65ef77a4a232ce9b2e",
+      "need": null,
+      "waiting": null,
+      "consent": {
+        "source": "cff45f28ef58f1b535c2b298514a0b6a4a628f09",
+        "by": "Ana",
+        "at": "2026-11-27T08:25:58.566Z"
+      },
+      "candidate": null,
+      "protected": null,
+      "conflict": null,
+      "interrupted": null,
+      "problem": null,
+      "events": [
+        {
+          "at": "2026-11-27T08:25:58.566Z",
+          "type": "planned",
+          "by": "Ana",
+          "seen": "cff45f28ef58f1b535c2b298514a0b6a4a628f09"
+        },
+        {
+          "at": "2026-11-27T08:25:58.625Z",
+          "type": "syncing",
+          "fromTip": "cff45f28ef58f1b535c2b298514a0b6a4a628f09",
+          "toTip": "3eca546fe22362150085c7b440281a05cf7ba627",
+          "hotfixes": 1
+        },
+        {
+          "at": "2026-11-27T08:25:58.828Z",
+          "type": "awaiting-qa",
+          "sync": "43425a5aa3816428008abc65ef77a4a232ce9b2e"
+        },
+        {
+          "at": "2026-11-27T08:25:59.052Z",
+          "type": "awaiting-qa",
+          "need": "43425a5aa3816428008abc65ef77a4a232ce9b2e"
+        },
+        {
+          "at": "2026-11-27T08:25:59.419Z",
+          "type": "ready",
+          "source": "43425a5aa3816428008abc65ef77a4a232ce9b2e",
+          "toTip": "3eca546fe22362150085c7b440281a05cf7ba627"
+        }
+      ],
+      "createdAt": "2026-11-27T08:25:58.566Z",
+      "updatedAt": "2026-11-27T08:25:59.419Z"
+    },
+    "advancing": {
+      "id": "promo-68044225f9bc",
+      "from": "t3code-qa",
+      "to": "t3code-app",
+      "repository": "t3code",
+      "fromEnvironment": "qa",
+      "toEnvironment": "app",
+      "by": "Ana",
+      "state": "advancing",
+      "sync": {
+        "commit": "43425a5aa3816428008abc65ef77a4a232ce9b2e",
+        "fromTip": "cff45f28ef58f1b535c2b298514a0b6a4a628f09",
+        "toTip": "3eca546fe22362150085c7b440281a05cf7ba627",
+        "at": "2026-11-27T08:25:58.828Z"
+      },
+      "source": "43425a5aa3816428008abc65ef77a4a232ce9b2e",
+      "need": null,
+      "waiting": null,
+      "consent": {
+        "source": "43425a5aa3816428008abc65ef77a4a232ce9b2e",
+        "by": "Ben",
+        "at": "2026-11-27T08:25:59.432Z"
+      },
+      "candidate": null,
+      "protected": null,
+      "conflict": null,
+      "interrupted": null,
+      "problem": null,
+      "events": [
+        {
+          "at": "2026-11-27T08:25:58.566Z",
+          "type": "planned",
+          "by": "Ana",
+          "seen": "cff45f28ef58f1b535c2b298514a0b6a4a628f09"
+        },
+        {
+          "at": "2026-11-27T08:25:58.625Z",
+          "type": "syncing",
+          "fromTip": "cff45f28ef58f1b535c2b298514a0b6a4a628f09",
+          "toTip": "3eca546fe22362150085c7b440281a05cf7ba627",
+          "hotfixes": 1
+        },
+        {
+          "at": "2026-11-27T08:25:58.828Z",
+          "type": "awaiting-qa",
+          "sync": "43425a5aa3816428008abc65ef77a4a232ce9b2e"
+        },
+        {
+          "at": "2026-11-27T08:25:59.052Z",
+          "type": "awaiting-qa",
+          "need": "43425a5aa3816428008abc65ef77a4a232ce9b2e"
+        },
+        {
+          "at": "2026-11-27T08:25:59.419Z",
+          "type": "ready",
+          "source": "43425a5aa3816428008abc65ef77a4a232ce9b2e",
+          "toTip": "3eca546fe22362150085c7b440281a05cf7ba627"
+        },
+        {
+          "at": "2026-11-27T08:25:59.432Z",
+          "type": "consent",
+          "by": "Ben",
+          "source": "43425a5aa3816428008abc65ef77a4a232ce9b2e"
+        },
+        {
+          "at": "2026-11-27T08:25:59.487Z",
+          "type": "advancing",
+          "source": "43425a5aa3816428008abc65ef77a4a232ce9b2e",
+          "branch": "main"
+        }
+      ],
+      "createdAt": "2026-11-27T08:25:58.566Z",
+      "updatedAt": "2026-11-27T08:25:59.487Z"
+    },
+    "promoted": {
+      "id": "promo-68044225f9bc",
+      "from": "t3code-qa",
+      "to": "t3code-app",
+      "repository": "t3code",
+      "fromEnvironment": "qa",
+      "toEnvironment": "app",
+      "by": "Ana",
+      "state": "promoted",
+      "sync": {
+        "commit": "43425a5aa3816428008abc65ef77a4a232ce9b2e",
+        "fromTip": "cff45f28ef58f1b535c2b298514a0b6a4a628f09",
+        "toTip": "3eca546fe22362150085c7b440281a05cf7ba627",
+        "at": "2026-11-27T08:25:58.828Z"
+      },
+      "source": "43425a5aa3816428008abc65ef77a4a232ce9b2e",
+      "need": null,
+      "waiting": null,
+      "consent": {
+        "source": "43425a5aa3816428008abc65ef77a4a232ce9b2e",
+        "by": "Ben",
+        "at": "2026-11-27T08:25:59.432Z"
+      },
+      "candidate": null,
+      "protected": null,
+      "conflict": null,
+      "interrupted": null,
+      "problem": null,
+      "events": [
+        {
+          "at": "2026-11-27T08:25:58.566Z",
+          "type": "planned",
+          "by": "Ana",
+          "seen": "cff45f28ef58f1b535c2b298514a0b6a4a628f09"
+        },
+        {
+          "at": "2026-11-27T08:25:58.625Z",
+          "type": "syncing",
+          "fromTip": "cff45f28ef58f1b535c2b298514a0b6a4a628f09",
+          "toTip": "3eca546fe22362150085c7b440281a05cf7ba627",
+          "hotfixes": 1
+        },
+        {
+          "at": "2026-11-27T08:25:58.828Z",
+          "type": "awaiting-qa",
+          "sync": "43425a5aa3816428008abc65ef77a4a232ce9b2e"
+        },
+        {
+          "at": "2026-11-27T08:25:59.052Z",
+          "type": "awaiting-qa",
+          "need": "43425a5aa3816428008abc65ef77a4a232ce9b2e"
+        },
+        {
+          "at": "2026-11-27T08:25:59.419Z",
+          "type": "ready",
+          "source": "43425a5aa3816428008abc65ef77a4a232ce9b2e",
+          "toTip": "3eca546fe22362150085c7b440281a05cf7ba627"
+        },
+        {
+          "at": "2026-11-27T08:25:59.432Z",
+          "type": "consent",
+          "by": "Ben",
+          "source": "43425a5aa3816428008abc65ef77a4a232ce9b2e"
+        },
+        {
+          "at": "2026-11-27T08:25:59.487Z",
+          "type": "advancing",
+          "source": "43425a5aa3816428008abc65ef77a4a232ce9b2e",
+          "branch": "main"
+        },
+        {
+          "at": "2026-11-27T08:25:59.553Z",
+          "type": "promoted",
+          "source": "43425a5aa3816428008abc65ef77a4a232ce9b2e",
+          "branch": "main",
+          "alreadyAtSource": true
+        }
+      ],
+      "createdAt": "2026-11-27T08:25:58.566Z",
+      "updatedAt": "2026-11-27T08:25:59.553Z",
+      "promotedAt": "2026-11-27T08:25:59.553Z"
+    },
+    "conflicted": {
+      "id": "promo-827cfbc56a88",
+      "from": "t3code-qa",
+      "to": "t3code-app",
+      "repository": "t3code",
+      "fromEnvironment": "qa",
+      "toEnvironment": "app",
+      "by": "Ana",
+      "state": "conflicted",
+      "sync": null,
+      "source": null,
+      "need": null,
+      "waiting": null,
+      "consent": {
+        "source": "6bd9f7ee7d9c6bbcfceb07be96bf3d81d6dbea9f",
+        "by": "Ana",
+        "at": "2026-11-27T08:26:00.832Z"
+      },
+      "candidate": null,
+      "protected": null,
+      "conflict": {
+        "files": ["app/index.html"],
+        "fromTip": "6bd9f7ee7d9c6bbcfceb07be96bf3d81d6dbea9f",
+        "toTip": "a50999606249f8669f49853161cbd22fe9a6dd2a"
+      },
+      "interrupted": null,
+      "problem": "Merging main (a50999606249) into qa (6bd9f7ee7d9c) conflicts in app/index.html. A resolved sync commit is needed.",
+      "events": [
+        {
+          "at": "2026-11-27T08:26:00.832Z",
+          "type": "planned",
+          "by": "Ana",
+          "seen": "6bd9f7ee7d9c6bbcfceb07be96bf3d81d6dbea9f"
+        },
+        {
+          "at": "2026-11-27T08:26:00.870Z",
+          "type": "syncing",
+          "fromTip": "6bd9f7ee7d9c6bbcfceb07be96bf3d81d6dbea9f",
+          "toTip": "a50999606249f8669f49853161cbd22fe9a6dd2a",
+          "hotfixes": 1
+        },
+        {
+          "at": "2026-11-27T08:26:01.017Z",
+          "type": "conflicted",
+          "files": ["app/index.html"]
+        }
+      ],
+      "createdAt": "2026-11-27T08:26:00.832Z",
+      "updatedAt": "2026-11-27T08:26:01.017Z"
+    },
+    "cancelled": {
+      "id": "promo-827cfbc56a88",
+      "from": "t3code-qa",
+      "to": "t3code-app",
+      "repository": "t3code",
+      "fromEnvironment": "qa",
+      "toEnvironment": "app",
+      "by": "Ana",
+      "state": "cancelled",
+      "sync": null,
+      "source": null,
+      "need": null,
+      "waiting": null,
+      "consent": {
+        "source": "6bd9f7ee7d9c6bbcfceb07be96bf3d81d6dbea9f",
+        "by": "Ana",
+        "at": "2026-11-27T08:26:00.832Z"
+      },
+      "candidate": null,
+      "protected": null,
+      "conflict": {
+        "files": ["app/index.html"],
+        "fromTip": "6bd9f7ee7d9c6bbcfceb07be96bf3d81d6dbea9f",
+        "toTip": "a50999606249f8669f49853161cbd22fe9a6dd2a"
+      },
+      "interrupted": null,
+      "problem": "Cancelled by Ana.",
+      "events": [
+        {
+          "at": "2026-11-27T08:26:00.832Z",
+          "type": "planned",
+          "by": "Ana",
+          "seen": "6bd9f7ee7d9c6bbcfceb07be96bf3d81d6dbea9f"
+        },
+        {
+          "at": "2026-11-27T08:26:00.870Z",
+          "type": "syncing",
+          "fromTip": "6bd9f7ee7d9c6bbcfceb07be96bf3d81d6dbea9f",
+          "toTip": "a50999606249f8669f49853161cbd22fe9a6dd2a",
+          "hotfixes": 1
+        },
+        {
+          "at": "2026-11-27T08:26:01.017Z",
+          "type": "conflicted",
+          "files": ["app/index.html"]
+        },
+        {
+          "at": "2026-11-27T08:26:01.030Z",
+          "type": "cancelled",
+          "by": "Ana"
+        }
+      ],
+      "createdAt": "2026-11-27T08:26:00.832Z",
+      "updatedAt": "2026-11-27T08:26:01.030Z"
+    },
+    "blocked": {
+      "id": "promo-f34e372ddb94",
+      "from": "t3code-qa",
+      "to": "t3code-app",
+      "repository": "t3code",
+      "fromEnvironment": "qa",
+      "toEnvironment": "app",
+      "by": "Ana",
+      "state": "blocked",
+      "sync": null,
+      "source": "48eda23f75d8a45c59090d57d3ab059eff44fb17",
+      "need": null,
+      "waiting": null,
+      "consent": {
+        "source": "48eda23f75d8a45c59090d57d3ab059eff44fb17",
+        "by": "Ana",
+        "at": "2026-11-27T08:26:01.908Z"
+      },
+      "candidate": null,
+      "protected": {
+        "branch": "main",
+        "at": "2026-11-27T08:26:02.271Z"
+      },
+      "conflict": null,
+      "interrupted": null,
+      "problem": "main: branch protected; a PR is needed. The push was refused as protected: remote: error: GH006: Protected branch update failed for refs/heads/main. error: failed to push some refs to '/work/remote.git'",
+      "events": [
+        {
+          "at": "2026-11-27T08:26:01.908Z",
+          "type": "planned",
+          "by": "Ana",
+          "seen": "48eda23f75d8a45c59090d57d3ab059eff44fb17"
+        },
+        {
+          "at": "2026-11-27T08:26:01.988Z",
+          "type": "ready",
+          "source": "48eda23f75d8a45c59090d57d3ab059eff44fb17",
+          "toTip": "378e99b09c34947cc53105db070b6346a3be65c5"
+        },
+        {
+          "at": "2026-11-27T08:26:01.999Z",
+          "type": "advancing",
+          "source": "48eda23f75d8a45c59090d57d3ab059eff44fb17",
+          "branch": "main"
+        },
+        {
+          "at": "2026-11-27T08:26:02.271Z",
+          "type": "blocked",
+          "problem": "main: branch protected; a PR is needed. The push was refused as protected: remote: error: GH006: Protected branch update failed for refs/heads/main. error: failed to push some refs to '/work/remote.git'"
+        }
+      ],
+      "createdAt": "2026-11-27T08:26:01.908Z",
+      "updatedAt": "2026-11-27T08:26:02.271Z"
+    }
+  },
+  "compareAfterPromoted": {
+    "version": 1,
+    "repository": "t3code",
+    "from": {
+      "id": "t3code-qa",
+      "environment": "qa",
+      "branch": "qa",
+      "servedFolder": null
+    },
+    "to": {
+      "id": "t3code-app",
+      "environment": "app",
+      "branch": "main",
+      "servedFolder": null
+    },
+    "points": {
+      "fromLive": "43425a5aa3816428008abc65ef77a4a232ce9b2e",
+      "toLive": "3eca546fe22362150085c7b440281a05cf7ba627",
+      "fromTip": "43425a5aa3816428008abc65ef77a4a232ce9b2e",
+      "toTip": "43425a5aa3816428008abc65ef77a4a232ce9b2e"
+    },
+    "remote": "origin",
+    "limit": 500,
+    "ahead": {
+      "prs": [],
+      "loose": [
+        {
+          "commit": "43425a5aa3816428008abc65ef77a4a232ce9b2e",
+          "subject": "Merge main into qa"
+        },
+        {
+          "commit": "cff45f28ef58f1b535c2b298514a0b6a4a628f09",
+          "subject": "feat: feature"
+        }
+      ],
+      "tasks": [],
+      "count": 2,
+      "truncated": false
+    },
+    "hotfixes": {
+      "prs": [],
+      "loose": [],
+      "tasks": [],
+      "count": 0,
+      "truncated": false
+    },
+    "waiting": {
+      "prs": [],
+      "loose": [
+        {
+          "commit": "43425a5aa3816428008abc65ef77a4a232ce9b2e",
+          "subject": "Merge main into qa"
+        },
+        {
+          "commit": "cff45f28ef58f1b535c2b298514a0b6a4a628f09",
+          "subject": "feat: feature"
+        }
+      ],
+      "tasks": [],
+      "count": 2,
+      "truncated": false
+    },
+    "folders": null,
+    "promote": "promote",
+    "problem": null
+  }
+}

@@ -98,6 +98,8 @@ import {
   DeliveryThreadBindingInput,
   DeliveryThreadState,
   DeliveryArchivedBoardThreads,
+  DeliveryBoardApprovalKeyStatus,
+  DeliverySetBoardApprovalKeyInput,
 } from "./delivery.ts";
 import {
   AcpRegistryAcceptUrlAuthInput,
@@ -244,11 +246,11 @@ import {
   IssueCreateResult,
   IssueDetail,
   IssueLinkedThreadsResult,
+  IssueDetailInput,
   IssueListInput,
   IssueListResult,
   IssueOperationError,
   IssueReactionInput,
-  IssueRef,
   IssueScopeRef,
   IssueSetStateInput,
   IssueTemplateList,
@@ -423,6 +425,8 @@ import {
   ServerRemoveKeybindingInput,
   ServerRemoveKeybindingResult,
   ServerProviderUpdatedPayload,
+  ProviderRuntimeModeLimitsInput,
+  ProviderRuntimeModeLimitsResult,
   ServerSelfUpdateError,
   ServerNpmRelease,
   ServerNpmReleaseError,
@@ -500,7 +504,12 @@ import {
 } from "./scheduledTask.ts";
 import { SecretRequestAnswerInput, SecretRequestError } from "./secretRequest.ts";
 import { OrchestratorMcpFailure } from "./orchestratorMcp.ts";
-import { BoardTaskAnswerInput } from "./boardThreadTasks.ts";
+import {
+  BoardTaskAnswerInput,
+  BoardTaskFiling,
+  BoardThreadFilingInput,
+} from "./boardThreadTasks.ts";
+import { DeploymentPortInput } from "./deployments.ts";
 import { AgentFeedbackAnswerInput, AgentFeedbackRequestError } from "./agentFeedback.ts";
 import {
   ProjectCloneActionInput,
@@ -633,6 +642,7 @@ export const WS_METHODS = {
   serverGetConfig: "server.getConfig",
   serverGetNpmRelease: "server.getNpmRelease",
   serverRefreshProviders: "server.refreshProviders",
+  serverGetProviderRuntimeModeLimits: "server.getProviderRuntimeModeLimits",
   serverUpdateProvider: "server.updateProvider",
   serverUpdateServer: "server.updateServer",
   serverUpdateServerWithProgress: "server.updateServerWithProgress",
@@ -711,10 +721,14 @@ export const WS_METHODS = {
   deliverySetBoardLinkedVisibility: "delivery.setBoardLinkedVisibility",
   deliverySetTaskLinkedHidden: "delivery.setTaskLinkedHidden",
   deliveryAnswerBoardTask: "delivery.answerBoardTask",
+  deliveryFilePort: "delivery.filePort",
+  deliveryFileThreadTask: "delivery.fileThreadTask",
   deliveryAct: "delivery.act",
   deliveryBindThread: "delivery.bindThread",
   deliveryThreadBinding: "delivery.threadBinding",
   deliveryArchivedBoardThreads: "delivery.archivedBoardThreads",
+  deliveryBoardApprovalKey: "delivery.boardApprovalKey",
+  deliverySetBoardApprovalKey: "delivery.setBoardApprovalKey",
   deliveryReleaseThread: "delivery.releaseThread",
   deliverySetThreadLineup: "delivery.setThreadLineup",
   deliveryLimitedSeats: "delivery.limitedSeats",
@@ -891,6 +905,15 @@ export const WsServerRefreshProvidersRpc = Rpc.make(WS_METHODS.serverRefreshProv
   success: ServerProviderUpdatedPayload,
   error: Schema.Union([EnvironmentAuthorizationError, ProviderSetupError]),
 });
+
+const WsServerGetProviderRuntimeModeLimitsRpc = Rpc.make(
+  WS_METHODS.serverGetProviderRuntimeModeLimits,
+  {
+    payload: ProviderRuntimeModeLimitsInput,
+    success: ProviderRuntimeModeLimitsResult,
+    error: EnvironmentAuthorizationError,
+  },
+);
 
 const WsServerUpdateProviderRpc = Rpc.make(WS_METHODS.serverUpdateProvider, {
   payload: ServerProviderUpdateInput,
@@ -1460,6 +1483,20 @@ const WsDeliveryAnswerBoardTaskRpc = Rpc.make(WS_METHODS.deliveryAnswerBoardTask
   error: Schema.Union([OrchestratorMcpFailure, EnvironmentAuthorizationError]),
 });
 
+/** Port to app: files a release-line draft; the server stamps its origin and composes it. */
+const WsDeliveryFilePortRpc = Rpc.make(WS_METHODS.deliveryFilePort, {
+  payload: DeploymentPortInput,
+  success: BoardTaskFiling,
+  error: Schema.Union([OrchestratorMcpFailure, EnvironmentAuthorizationError]),
+});
+
+/** A person files a draft from a thread; the server stamps the thread as its origin. */
+const WsDeliveryFileThreadTaskRpc = Rpc.make(WS_METHODS.deliveryFileThreadTask, {
+  payload: BoardThreadFilingInput,
+  success: BoardTaskFiling,
+  error: Schema.Union([OrchestratorMcpFailure, EnvironmentAuthorizationError]),
+});
+
 /** Relays a read to the delivery engine. The engine's answer is passed on as it came. */
 const WsDeliveryReadRpc = Rpc.make(WS_METHODS.deliveryRead, {
   payload: DeliveryReadInput,
@@ -1485,6 +1522,20 @@ const WsDeliveryBindThreadRpc = Rpc.make(WS_METHODS.deliveryBindThread, {
 const WsDeliveryArchivedBoardThreadsRpc = Rpc.make(WS_METHODS.deliveryArchivedBoardThreads, {
   payload: Schema.Struct({}),
   success: DeliveryArchivedBoardThreads,
+  error: Schema.Union([EnvironmentAuthorizationError, DeliveryError]),
+});
+
+/** Whether the board approval key is set, and by what. The key itself never leaves the server. */
+const WsDeliveryBoardApprovalKeyRpc = Rpc.make(WS_METHODS.deliveryBoardApprovalKey, {
+  payload: Schema.Struct({}),
+  success: DeliveryBoardApprovalKeyStatus,
+  error: Schema.Union([EnvironmentAuthorizationError, DeliveryError]),
+});
+
+/** Sets, replaces or clears the board approval key saved on this server. */
+const WsDeliverySetBoardApprovalKeyRpc = Rpc.make(WS_METHODS.deliverySetBoardApprovalKey, {
+  payload: DeliverySetBoardApprovalKeyInput,
+  success: DeliveryBoardApprovalKeyStatus,
   error: Schema.Union([EnvironmentAuthorizationError, DeliveryError]),
 });
 
@@ -1815,7 +1866,7 @@ const WsIssuesListRpc = Rpc.make(WS_METHODS.issuesList, {
 });
 
 const WsIssuesDetailRpc = Rpc.make(WS_METHODS.issuesDetail, {
-  payload: IssueRef,
+  payload: IssueDetailInput,
   success: IssueDetail,
   error: IssueRpcError,
 });
@@ -2914,6 +2965,7 @@ export const CoreWsRpcGroup = RpcGroup.make(
   WsServerImportAcpRegistrySessionRpc,
   WsServerDeleteAcpRegistrySessionRpc,
   WsServerListAcpRegistryProvidersRpc,
+  WsServerGetProviderRuntimeModeLimitsRpc,
   WsServerSetAcpRegistryProviderRpc,
   WsServerDisableAcpRegistryProviderRpc,
   WsServerLogoutAcpRegistryRpc,
@@ -3142,10 +3194,14 @@ export const ForkWsRpcGroup = RpcGroup.make(
   WsDeliverySetBoardLinkedVisibilityRpc,
   WsDeliverySetTaskLinkedHiddenRpc,
   WsDeliveryAnswerBoardTaskRpc,
+  WsDeliveryFilePortRpc,
+  WsDeliveryFileThreadTaskRpc,
   WsDeliveryActRpc,
   WsDeliveryBindThreadRpc,
   WsDeliveryThreadBindingRpc,
   WsDeliveryArchivedBoardThreadsRpc,
+  WsDeliveryBoardApprovalKeyRpc,
+  WsDeliverySetBoardApprovalKeyRpc,
   WsDeliveryReleaseThreadRpc,
   WsDeliverySetThreadLineupRpc,
   WsDeliveryLimitedSeatsRpc,

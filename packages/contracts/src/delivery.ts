@@ -10,22 +10,22 @@ import { ModelSelection } from "./modelSelection.ts";
 export const DeliveryLimitedSeatPolicy = Schema.Literals(["swap", "ask", "skip"]);
 export type DeliveryLimitedSeatPolicy = typeof DeliveryLimitedSeatPolicy.Type;
 
-export const DeliveryOrchestrationConfig = Schema.Struct({
-  participants: Schema.Array(
-    Schema.Struct({
-      seat: TrimmedNonEmptyString,
-      role: TrimmedNonEmptyString,
-      modelSelection: ModelSelection,
-      /** This participant's own access. Absent means the conversation's. */
-      access: Schema.optional(Schema.Literals(["read-only", "approval-required", "full-access"])),
-      /** A person chose this seat's model by hand, so it is never swapped without asking. */
-      picked: Schema.optional(Schema.Boolean),
-      /** What the seat does in its team. A QA seat never stands in on a builder seat's model. */
-      duty: Schema.optional(Schema.Literals(["build", "qa"])),
-      /** What a person agreed the seat runs on while its own model is limited. */
-      substitute: Schema.optional(ModelSelection),
-    }),
-  ).check(Schema.isMinLength(2), Schema.isMaxLength(12)),
+const DeliveryParticipants = Schema.Array(
+  Schema.Struct({
+    seat: TrimmedNonEmptyString,
+    role: TrimmedNonEmptyString,
+    modelSelection: ModelSelection,
+    /** This participant's own access. Absent means the conversation's. */
+    access: Schema.optional(Schema.Literals(["read-only", "approval-required", "full-access"])),
+    /** A person chose this seat's model by hand, so it is never swapped without asking. */
+    picked: Schema.optional(Schema.Boolean),
+    /** What the seat does in its team. A QA seat never stands in on a builder seat's model. */
+    duty: Schema.optional(Schema.Literals(["build", "qa"])),
+    /** What a person agreed the seat runs on while its own model is limited. */
+    substitute: Schema.optional(ModelSelection),
+  }),
+);
+const DeliveryLineupSettings = {
   /** When participants critique each other. Absent means the conversation's first message only. */
   critique: Schema.optional(Schema.Literals(["first", "always", "never"])),
   /** When a seat is limited. Absent means swap automatically. Read at the start of each turn. */
@@ -34,8 +34,24 @@ export const DeliveryOrchestrationConfig = Schema.Struct({
   access: Schema.optional(Schema.Literals(["approval-required", "full-access"])),
   /** The team participants take their roles from, when the conversation itself is bound to none. */
   team: Schema.optional(TrimmedNonEmptyString),
+};
+
+/** Who joins a conversation, as a person sets it up. */
+export const DeliveryOrchestrationConfig = Schema.Struct({
+  participants: DeliveryParticipants.check(Schema.isMinLength(2), Schema.isMaxLength(12)),
+  ...DeliveryLineupSettings,
 });
 export type DeliveryOrchestrationConfig = typeof DeliveryOrchestrationConfig.Type;
+
+/**
+ * Who joins a conversation, as its thread shows it. A board task's team is the engine's pick and
+ * may be its lead and one seat, so this takes one participant where a person's setup takes two.
+ */
+export const DeliveryThreadLineup = Schema.Struct({
+  participants: DeliveryParticipants.check(Schema.isMinLength(1), Schema.isMaxLength(12)),
+  ...DeliveryLineupSettings,
+});
+export type DeliveryThreadLineup = typeof DeliveryThreadLineup.Type;
 
 /** The access one seat joins with: its own, else the conversation's, else read-only. */
 export const deliveryParticipantAccess = (
@@ -110,7 +126,7 @@ export const DeliveryEngineVersions = Schema.Struct({
       commit: Schema.NullOr(DeliveryCommit),
       at: Schema.String,
       snapshot: Schema.optional(Schema.NullOr(Schema.String)),
-      problem: Schema.optional(Schema.String),
+      problem: Schema.optional(Schema.NullOr(Schema.String)),
     }),
   ),
 });
@@ -309,12 +325,35 @@ export type DeliveryThreadPending = typeof DeliveryThreadPending.Type;
 export const DeliveryThreadState = Schema.Struct({
   binding: Schema.NullOr(DeliveryThreadBinding),
   pending: Schema.NullOr(DeliveryThreadPending),
-  /** Who joins the next message. Absent for an ordinary conversation. */
+  /**
+   * Who joins the next message, as every client reads it: two to twelve participants. Absent for
+   * an ordinary conversation, and for a board task's team of one seat, which `boardLineup` alone
+   * carries so a client that predates it never meets a lineup it cannot read.
+   */
   lineup: Schema.optional(DeliveryOrchestrationConfig),
+  /** A board task's team as the board picks it, its lead and one seat included. */
+  boardLineup: Schema.optional(DeliveryThreadLineup),
   /** The team this conversation most recently switched away from, if any. */
   rememberedLineup: Schema.optional(DeliveryRememberedLineup),
 });
 export type DeliveryThreadState = typeof DeliveryThreadState.Type;
+
+/**
+ * Whether this server holds the engine's board approval key, never the key itself. `environment`
+ * is the server's `T3_DELIVERY_BOARD_THREAD_KEY`, which wins over one saved in Settings; `stored`
+ * says a saved key exists, also while the variable overrides it.
+ */
+export const DeliveryBoardApprovalKeyStatus = Schema.Struct({
+  source: Schema.Literals(["environment", "settings", "none"]),
+  stored: Schema.Boolean,
+});
+export type DeliveryBoardApprovalKeyStatus = typeof DeliveryBoardApprovalKeyStatus.Type;
+
+/** Saves the board approval key in this server's secret store; `null` clears it. */
+export const DeliverySetBoardApprovalKeyInput = Schema.Struct({
+  key: Schema.NullOr(TrimmedNonEmptyString.check(Schema.isMaxLength(1_024))),
+});
+export type DeliverySetBoardApprovalKeyInput = typeof DeliverySetBoardApprovalKeyInput.Type;
 
 /**
  * The archived conversations of board tasks. A task that ended (deleted, its project removed, or

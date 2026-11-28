@@ -1,19 +1,13 @@
 import "../../index.css";
 
 import type { ReactNode } from "react";
-import { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import { expect, it, vi } from "vite-plus/test";
 import { page } from "vite-plus/test/browser";
 
 import { render } from "../../../test/render";
-import { parseCard, type CouncilSeat, type TaskView } from "../../lib/delivery";
-import { TaskTeamActivity } from "./TaskTeamActivity";
+import type { CouncilSeat } from "../../lib/delivery";
+import { SeatThreadRow } from "./TaskTeamActivity";
 
-vi.mock("./SeatSettingsPanel", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./SeatSettingsPanel")>()),
-  useSeatCatalog: () => ({ entries: [], providers: [], options: {} }),
-  SeatSettingsPanel: () => null,
-}));
 vi.mock("../ThreadHoverCard", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../ThreadHoverCard")>()),
   ThreadHoverCardPopup: (_props: { children: ReactNode }) => null,
@@ -42,26 +36,33 @@ const seat = (extra: Partial<CouncilSeat>): CouncilSeat => ({
   stage: null,
   verdict: null,
   attempts: 1,
+  cutByT3: null,
   live: null,
   threadId: null,
   ...extra,
 });
 
-const task = {
-  id: "task-1",
-  team: "development",
-  defaults: 0,
-  lane: "implementation",
-  publications: [],
-  settings: [],
-  card: parseCard({ lane: "implementation" })!,
-  council: { seats: [seat({})] },
-} as unknown as TaskView;
+const catalog = { entries: [], providers: [], options: {} } as unknown as Parameters<
+  typeof SeatThreadRow
+>[0]["catalog"];
+
+const rows = (seats: ReadonlyArray<CouncilSeat>, onOpen = vi.fn()) => (
+  <ul>
+    {seats.map((item) => (
+      <SeatThreadRow
+        key={item.seat}
+        seat={item}
+        catalog={catalog}
+        onOpen={(intent) => onOpen(item.seat, intent)}
+      />
+    ))}
+  </ul>
+);
 
 it("keeps a long seat detail inside a 220px pane, with both name and detail ellipsized", async () => {
   const container = document.createElement("div");
   container.style.width = "220px";
-  await using screen = await render(<TaskTeamActivity environmentId={null} task={task} />, {
+  await using screen = await render(rows([seat({})]), {
     container,
   });
   const detail = screen.container.querySelector<HTMLElement>("[data-seat-detail]")!;
@@ -79,31 +80,11 @@ it("keeps a long seat detail inside a 220px pane, with both name and detail elli
   expect(name.scrollWidth).toBeGreaterThan(name.clientWidth);
 });
 
-it("opens a seat's own conversation from its row, and leaves a seat with none inert", async () => {
+it("opens a seat's own conversation from its row, as a subagent row opens its thread", async () => {
   const open = vi.fn();
-  const child = { environmentId: EnvironmentId.make("env"), threadId: ThreadId.make("child") };
-  const both = {
-    ...task,
-    council: { seats: [seat({ seat: "builder" }), seat({ seat: "qa", blockedBy: null })] },
-  } as unknown as TaskView;
-  await using screen = await render(
-    <TaskTeamActivity
-      environmentId={null}
-      task={both}
-      conversations={{
-        thread: (name) => (name === "builder" ? child : null),
-        current: child,
-        open,
-      }}
-    />,
+  await using _screen = await render(
+    rows([seat({ seat: "builder" }), seat({ seat: "qa", blockedBy: null })], open),
   );
   await page.getByRole("button", { name: /builder/ }).click();
-  expect(open).toHaveBeenCalledExactlyOnceWith(child);
-  await expect
-    .element(page.getByRole("button", { name: /builder/ }))
-    .toHaveAttribute("aria-current", "true");
-  await expect.element(page.getByRole("button", { name: /qa/ })).not.toBeInTheDocument();
-  expect(
-    screen.container.querySelector('[data-task-seat="qa"]')?.getAttribute("data-seat-conversation"),
-  ).toBe("no");
+  expect(open).toHaveBeenCalledExactlyOnceWith("builder", "primary");
 });

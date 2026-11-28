@@ -1,10 +1,17 @@
 import type { EnvironmentId } from "@t3tools/contracts";
-import { useRef, useState } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 
 import { minutesLeft, parseDeliveryEngineHealth } from "../../lib/deliveryEngineControl";
 import type { DeliveryCard } from "../../lib/delivery";
 import { boardLaneOf } from "../../lib/boardLanes";
-import { ACTION_LABEL, LANE_TITLE, moveIntent } from "../../lib/deliveryBoard";
+import {
+  ACTION_LABEL,
+  CLOSE_REASON_LIMIT,
+  closeKindOf,
+  isCloseReasonRefusal,
+  LANE_TITLE,
+  moveIntent,
+} from "../../lib/deliveryBoard";
 
 import {
   useBoardStore,
@@ -25,6 +32,8 @@ import {
 import { Input } from "../ui/input";
 import { Textarea } from "../ui/textarea";
 import { ApprovalKeyInput } from "./ApprovalKeyInput";
+import { toastManager } from "../ui/toast";
+import { reviewedAsPart, wholeName } from "./partOf.logic";
 
 const ACTION_HELP: Record<string, string> = {
   "accept-artifacts":
@@ -56,23 +65,26 @@ export function actionLabel(
   card: Pick<DeliveryCard, "partOf" | "publication"> | null,
 ): string {
   if (action === "publish" && card?.publication?.state === "failed") return "Try publishing again";
-  if (card?.partOf && action === "approve") return "Mark part as reviewed";
-  if (card?.partOf && action === "reject") return "Send part back";
+  if (reviewedAsPart(card) && action === "approve") return "Mark part as reviewed";
+  if (reviewedAsPart(card) && action === "reject") return "Send part back";
   return ACTION_LABEL[action] ?? action;
 }
 
 /** What an action does, said for this task. */
 export function actionHelp(action: string, card: Pick<DeliveryCard, "partOf"> | null): string {
-  if (card?.partOf && action === "approve")
-    return `Records that you reviewed this part as it stands. It does not approve the whole, #${card.partOf.number}, which is decided on its own.`;
-  if (card?.partOf && action === "reject")
-    return `Sends this part back to be built again. The whole, #${card.partOf.number}, is put together and tested again after it.`;
+  if (!reviewedAsPart(card) || !card?.partOf) return ACTION_HELP[action] ?? "";
+  const name = wholeName(card.partOf);
+  const whole = name === null ? "The whole" : `The whole, ${name},`;
+  if (action === "approve")
+    return `Records that you reviewed this part as it stands. It does not approve the whole${name === null ? "" : `, ${name}`}, which is decided on its own.`;
+  if (action === "reject")
+    return `Sends this part back to be built again. ${whole} is put together and tested again after it.`;
   return ACTION_HELP[action] ?? "";
 }
 
 type Target = Pick<
   DeliveryCard,
-  "id" | "title" | "number" | "run" | "partOf" | "parts" | "publication"
+  "id" | "title" | "number" | "run" | "partOf" | "parts" | "publication" | "state" | "flow"
 >;
 type Decision = {
   readonly card: Target;
@@ -91,8 +103,11 @@ export function useTaskActions(
   options: {
     readonly onDone: () => void;
     readonly onDiscarded?: ((id: string) => void) | undefined;
+    /** What the actions are for, such as the open task: a new one starts with nothing pending. */
+    readonly scope?: string | undefined;
   },
 ) {
+  const { scope } = options;
   const person = usePersonName();
   const act = useDeliveryAct(environmentId, "task action");
   const [decision, setDecision] = useState<Decision | null>(null);
@@ -106,6 +121,23 @@ export function useTaskActions(
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
   const [confirming, setConfirming] = useState<Confirming | null>(null);
+  const [closing, setClosing] = useState<Target | null>(null);
+  const [shownScope, setShownScope] = useState(scope);
+  if (shownScope !== scope) {
+    setShownScope(scope);
+    setDecision(null);
+    setConfirming(null);
+    setClosing(null);
+    setRequireKey(false);
+    setBusy(false);
+    setProblem(null);
+  }
+  // What is open now, for an answer that returns after a switch: it is not the new task's.
+  const currentScope = useRef(scope);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- an answer arriving after a task switch is checked against the task open now
+  useLayoutEffect(() => {
+    currentScope.current = scope;
+  }, [scope]);
   const { onDone, onDiscarded } = options;
   // One request at a time. A second press while one is out is dropped, not queued: the state it
   // was pressed against may be gone by the time the first returns. A lost answer is not sent again.
@@ -114,8 +146,9 @@ export function useTaskActions(
   const sendDecision = async (path: string, body: Record<string, unknown>) => {
     if (inFlight.current) {
       setProblem("Another step is being sent. Wait for it, then try again.");
-      return { ok: false, status: null };
+      return { ok: false, current: true, status: null, why: null };
     }
+    const sentFor = scope;
     inFlight.current = true;
     setBusy(true);
     setProblem(null);
@@ -125,11 +158,14 @@ export function useTaskActions(
     inFlight.current = false;
     setBusy(false);
     onDone();
+    // Another task opened meanwhile: its answer, a refusal included, is not shown on that one.
+    if (currentScope.current !== sentFor)
+      return { ok: result.ok, current: false, status: null, why: null };
     if (!result.ok) {
       setProblem(result.why);
-      return { ok: false, status: result.status };
+      return { ok: false, current: true, status: result.status, why: result.why };
     }
-    return { ok: true, status: null };
+    return { ok: true, current: true, status: null, why: null };
   };
 
   const send = async (path: string, body: Record<string, unknown>) =>
@@ -137,7 +173,26 @@ export function useTaskActions(
   const decide = async (path: string, body: Record<string, unknown>) => {
     const result = await sendDecision(path, body);
     if (!result.ok && result.status === 403 && !Object.hasOwn(body, "key")) setRequireKey(true);
-    return result.ok;
+    // A decision answered after a switch must not close the dialog now open on another task.
+    return result.ok && result.current;
+  };
+
+  const openClose = (card: Target) => {
+    setProblem(null);
+    setClosing(card);
+  };
+
+  const closeWithReason = async (card: Target, reason: string) => {
+    const result = await sendDecision(`/api/tasks/${card.id}/control`, {
+      action: "close",
+      reason,
+      by: person,
+    });
+    if (!result.current) return;
+    if (result.ok) return setClosing(null);
+    // The dialog stays open with the reason, so it can be changed and sent again.
+    setProblem(null);
+    toastManager.add({ type: "error", title: "The task was not closed", description: result.why });
   };
 
   const run = (card: Target, action: string) => {
@@ -154,11 +209,19 @@ export function useTaskActions(
       setDecision({ card, decision: action });
       return;
     }
-    if (action === "submit") void send(`/api/tasks/${card.id}/submit`, { by: person });
-    else if (action === "deliver" || action === "close") {
+    if (action === "close") {
+      // Work closed before it is done needs a reason, so it is asked for before anything is sent.
+      if (closeKindOf(card) === "unfinished") return openClose(card);
+      void sendDecision(`/api/tasks/${card.id}/control`, { action, by: person }).then((result) => {
+        if (result.why !== null && isCloseReasonRefusal(result.why)) openClose(card);
+      });
+    } else if (action === "submit") void send(`/api/tasks/${card.id}/submit`, { by: person });
+    else if (action === "deliver") {
       void send(`/api/tasks/${card.id}/control`, { action, by: person });
     } else if (action === "discard") {
-      void send(`/api/tasks/${card.id}/discard`, {}).then((done) => done && onDiscarded?.(card.id));
+      void sendDecision(`/api/tasks/${card.id}/discard`, {}).then(
+        (result) => result.ok && result.current && onDiscarded?.(card.id),
+      );
     } else if (action === "first" || action === "not-first") {
       void send(`/api/tasks/${card.id}/first`, { on: action === "first", by: person });
     } else if (action === "stop") {
@@ -183,6 +246,8 @@ export function useTaskActions(
     const intent = moveIntent(card, lane);
     if (intent.kind === "move") return void move(card, lane, before);
     if (intent.kind === "refused") return setProblem(intent.why);
+    // The reason dialog is itself the confirmation.
+    if (intent.action === "close" && closeKindOf(card) === "unfinished") return openClose(card);
     if (ASKED_FIRST.has(intent.action)) {
       setProblem(null);
       setConfirming({ card, action: intent.action, lane });
@@ -198,7 +263,14 @@ export function useTaskActions(
     run,
     move,
     moveTo,
-    dialog: confirming ? (
+    dialog: closing ? (
+      <CloseReasonDialog
+        card={closing}
+        busy={busy}
+        onCancel={() => setClosing(null)}
+        onClose={(reason) => void closeWithReason(closing, reason)}
+      />
+    ) : confirming ? (
       <Dialog open onOpenChange={(open) => !open && !busy && setConfirming(null)}>
         <DialogPopup className="max-w-md" data-delivery-move-confirm={confirming.action}>
           <DialogHeader>
@@ -279,6 +351,54 @@ export function useTaskActions(
   };
 }
 
+function CloseReasonDialog(props: {
+  readonly card: Target;
+  readonly busy: boolean;
+  readonly onCancel: () => void;
+  readonly onClose: (reason: string) => void;
+}) {
+  const [reason, setReason] = useState("");
+  const trimmed = reason.trim();
+  return (
+    <Dialog open onOpenChange={(open) => !open && !props.busy && props.onCancel()}>
+      <DialogPopup className="max-w-md" data-delivery-close-reason>
+        <DialogHeader>
+          <DialogTitle>
+            Close without it being done: #{props.card.number} {props.card.title}
+          </DialogTitle>
+        </DialogHeader>
+        <DialogPanel>
+          <div className="flex flex-col gap-6 text-sm">
+            <p className="text-muted-foreground">
+              Nothing more is done for it. What was said and found is kept, along with its branch.
+              Say why it is closed; the reason is kept with the task.
+            </p>
+            <Textarea
+              aria-label="Why it is closed"
+              placeholder="Why it is closed"
+              maxLength={CLOSE_REASON_LIMIT}
+              value={reason}
+              onChange={(event) => setReason(event.target.value)}
+            />
+          </div>
+        </DialogPanel>
+        <DialogFooter>
+          <Button variant="outline" disabled={props.busy} onClick={props.onCancel}>
+            Keep it open
+          </Button>
+          <Button
+            variant="destructive"
+            disabled={props.busy || !trimmed}
+            onClick={() => props.onClose(trimmed)}
+          >
+            Close task
+          </Button>
+        </DialogFooter>
+      </DialogPopup>
+    </Dialog>
+  );
+}
+
 function DecisionDialog(props: {
   readonly decision: Decision;
   readonly healthBody: unknown;
@@ -311,7 +431,11 @@ function DecisionDialog(props: {
   const accepting = decision === "accept-artifacts";
   const approving = decision === "approve" || accepting;
   const publishing = decision === "publish";
-  const whole = card.partOf;
+  const whole = reviewedAsPart(card) ? card.partOf : null;
+  const wholeNamed = whole ? wholeName(whole) : null;
+  const partOfWords = wholeNamed
+    ? `This is a part of ${wholeNamed}.`
+    : "This is a part of a larger task.";
   const parts = card.parts.length;
   const verb = accepting
     ? "Accept deliverables"
@@ -340,8 +464,8 @@ function DecisionDialog(props: {
                 data-delivery-decision-part
               >
                 {approving
-                  ? `This is a part of #${whole.number} ${whole.title}. Marking it as reviewed does not approve the whole. The whole is decided on its own, when every part is built and they were tested together.`
-                  : `This is a part of #${whole.number} ${whole.title}. Sent back, this part is built again, and the whole is put together and tested again after it.`}
+                  ? `${partOfWords} Marking it as reviewed does not approve the whole. The whole is decided on its own, when every part is built and they were tested together.`
+                  : `${partOfWords} Sent back, this part is built again, and the whole is put together and tested again after it.`}
               </p>
             ) : parts > 0 ? (
               <p

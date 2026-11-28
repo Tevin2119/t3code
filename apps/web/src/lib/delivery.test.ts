@@ -28,6 +28,7 @@ import {
   parseCards,
   parseSeatSettings,
   parseTask,
+  stepsCutByT3,
   parseTeamDefaults,
   parseTeamProfile,
   parseTeams,
@@ -752,6 +753,56 @@ describe("parseTask", () => {
     ]);
   });
 
+  it("keeps a step T3's restart cut short as needing a person until a run of it ends", () => {
+    const cut = {
+      stage: "build",
+      state: "stopped",
+      reason: "interrupted: T3 restarted and cut this step short",
+      ended: "2026-11-27T10:00:00Z",
+    };
+    const ended = (stage: string) => ({ stage, state: "done", ended: "2026-11-27T11:00:00Z" });
+    const task = parseTask({
+      id: "task-5",
+      card: card({}),
+      council: {
+        seats: [
+          // Cut, and nothing since.
+          { seat: "builder", activity: "stopped", attempts: [cut] },
+          // The engine's one re-run, still going, looks running but is still owed.
+          {
+            seat: "qa",
+            activity: "active",
+            attempts: [
+              { ...cut, stage: "qa" },
+              { stage: "qa", state: "running", ended: null },
+            ],
+          },
+          // A run of another stage since does not settle it.
+          { seat: "lead", attempts: [cut, ended("review")] },
+          // A re-run that ended does.
+          { seat: "reviewer", attempts: [cut, ended("build")] },
+          // An engine stop is not T3's restart.
+          { seat: "checks", attempts: [{ ...cut, reason: "stopped on request" }] },
+        ],
+      },
+    });
+    expect(task?.council?.seats.map((seat) => seat.cutByT3)).toEqual([
+      "build",
+      "qa",
+      "build",
+      null,
+      null,
+    ]);
+    expect(stepsCutByT3(task)).toEqual([
+      { seat: "builder", stage: "build" },
+      { seat: "qa", stage: "qa" },
+      { seat: "lead", stage: "build" },
+    ]);
+    // A finished task asks nothing of anyone.
+    expect(stepsCutByT3(task && { ...task, lane: "completed" })).toEqual([]);
+    expect(stepsCutByT3(task && { ...task, state: "closed" })).toEqual([]);
+  });
+
   it("keeps hand-off, receipt, and model facts from the engine", () => {
     const task = parseTask({
       id: "task-a0b1c2",
@@ -1178,6 +1229,20 @@ describe("decideTeamForSend", () => {
     expect(
       decideTeamForSend({ ...sendOf({ team: "development", role: null }, true), held }),
     ).toEqual({ action: "bind", team: "development", role: "lead-developer" });
+  });
+
+  it("never sets up a team for a board task's thread, whatever was held or chosen there", () => {
+    const held = { team: "rnd", role: "scout" };
+    for (const explicit of [false, true])
+      expect(
+        decideTeamForSend({
+          ...sendOf({ team: "development", role: null }, explicit),
+          isServerThread: true,
+          boardOwned: true,
+          held,
+          driver: "kimi",
+        }),
+      ).toEqual({ action: "none" });
   });
 
   it("binds a new thread to its team before the first turn", () => {

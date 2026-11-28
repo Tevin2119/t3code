@@ -2,10 +2,12 @@
 // Refuse to start if a binding cannot be read, saved, set up, or matched to its session.
 import {
   DELIVERY_HARNESS_BY_DRIVER,
+  type DeliveryBoardApprovalKeyStatus,
   DeliveryError,
   DeliveryOrchestrationConfig,
   DeliveryRememberedLineup,
   DeliveryThreadBinding,
+  DeliveryThreadLineup,
   DeliveryThreadPending,
   DeliveryDiscoveryInput,
   type DeliveryDiscoverySnapshot,
@@ -40,9 +42,9 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
-import * as Option from "effect/Option";
 import * as Latch from "effect/Latch";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import type * as SchemaAST from "effect/SchemaAST";
@@ -53,9 +55,11 @@ import { FetchHttpClient, HttpClient, HttpClientRequest, HttpIncomingMessage } f
 import { writeFileStringAtomically } from "@t3tools/shared/atomicWrite";
 import * as McpInvocationContext from "../mcp/McpInvocationContext.ts";
 import { ServerConfig } from "../config.ts";
+import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import type { deriveProviderInstanceConfigMap } from "../provider/ProviderInstanceRegistryHydration.ts";
 import type * as DeliveryEffective from "./DeliveryEffective.ts";
+import { boardTaskOfMarker } from "./boardThreadMarker.ts";
 import * as DeliveryThreadSession from "./DeliveryThreadSession.ts";
 import * as Discovery from "./deliveryDiscovery.ts";
 import { linkedReturnPeer } from "./linkedReturn.ts";
@@ -75,6 +79,15 @@ const BindingsFile = Schema.fromJsonString(
 );
 const decodeBindings = Schema.decodeUnknownEffect(BindingsFile);
 const encodeBindings = Schema.encodeEffect(BindingsFile);
+
+// Board tasks' lineups, in a file of their own: a build that predates them never reads it, and
+// the board can always give them again. Null is a board task's thread with no team to show.
+const BoardLineupsFile = Schema.fromJsonString(
+  Schema.Record(Schema.String, Schema.NullOr(DeliveryThreadLineup)),
+);
+const decodeBoardLineups = Schema.decodeUnknownEffect(BoardLineupsFile);
+const sameBoardLineup = Schema.toEquivalence(Schema.NullOr(DeliveryThreadLineup));
+const encodeBoardLineups = Schema.encodeEffect(BoardLineupsFile);
 
 const Identity = Schema.Struct({
   session: Schema.String,
@@ -146,10 +159,30 @@ const decodeDeliveryRequest = Schema.decodeUnknownEffect(
   }),
 );
 
-/** The engine writes for a board task's conversation; only the server makes them. */
-const BOARD_THREAD_LINK = /^\/api\/tasks\/[\w-]+\/board-thread$/;
-/** The engine's approval key for server-owned board writes. */
+/**
+ * The engine writes for a board task's conversations, its own and its related threads (slice
+ * L2t); only the server makes them.
+ */
+const BOARD_THREAD_LINK = /^\/api\/tasks\/[\w-]+\/(?:board-thread|threads\/[\w-]{1,80})$/;
+/** The engine's approval key for server-owned board writes. Wins over the one saved in Settings. */
 export const BOARD_THREAD_KEY_VARIABLE = "T3_DELIVERY_BOARD_THREAD_KEY";
+/** Where Settings saves the board approval key in the server's secret store. */
+export const BOARD_APPROVAL_KEY_SECRET = "delivery-board-approval-key";
+export const NO_BOARD_APPROVAL_KEY =
+  "This server has no board approval key configured. Set it in Settings → Threads → Board.";
+
+/** The key a keyed board write uses: the server's variable when it is set, else the saved one. */
+export function resolveBoardApprovalKey(
+  environment: NodeJS.ProcessEnv,
+  stored: string | undefined,
+): { readonly key: string | undefined; readonly status: DeliveryBoardApprovalKeyStatus } {
+  const fromEnvironment = environment[BOARD_THREAD_KEY_VARIABLE];
+  const saved = Boolean(stored);
+  if (fromEnvironment)
+    return { key: fromEnvironment, status: { source: "environment", stored: saved } };
+  if (stored) return { key: stored, status: { source: "settings", stored: true } };
+  return { key: undefined, status: { source: "none", stored: false } };
+}
 export const BoardThreadLink = Schema.Struct({
   environmentId: Schema.String,
   threadId: Schema.String,
@@ -166,6 +199,9 @@ const BOARD_THREAD_CONVERSATION =
 const BOARD_SEAT_POST =
   /^\/api\/(?:tasks\/[\w-]+\/(?:qa-receipts|lead-pick)|runs\/[\w-]+\/(?:seat-attestations|handoffs(?:\/qa\/(?:delivered|fallback))?))$/;
 const BOARD_TASK_POST = /^\/api\/boards\/[^/]+\/tasks$/;
+// A person's words typed in a task's conversation (`from: "thread"`). A client steers on the same
+// route through `act`, so it is the server's to use but not refused to the relay.
+const BOARD_THREAD_STEER = /^\/api\/tasks\/[\w-]+\/steer$/;
 const BOARD_THREAD_POST = new RegExp(
   `${BOARD_THREAD_CLAIM.source}|${BOARD_THREAD_CONVERSATION.source}|${BOARD_SEAT_POST.source}|${BOARD_TASK_POST.source}`,
 );
@@ -289,6 +325,16 @@ export class DeliveryService extends Context.Service<
     ) => Effect.Effect<DeliveryResponse, DeliveryError>;
     readonly boardThreadConfiguration: Effect.Effect<string, DeliveryError>;
     /**
+     * The engine's approval key for keyed board writes, read on each use so a key saved in
+     * Settings applies at once. Undefined when neither the variable nor Settings has one.
+     */
+    readonly boardApprovalKey: Effect.Effect<string | undefined>;
+    readonly boardApprovalKeyStatus: Effect.Effect<DeliveryBoardApprovalKeyStatus, DeliveryError>;
+    /** Saves the key in the server's secret store, or clears it with `null`. */
+    readonly setBoardApprovalKey: (
+      key: string | null,
+    ) => Effect.Effect<DeliveryBoardApprovalKeyStatus, DeliveryError>;
+    /**
      * Server-owned board writes. The generic `act` relay refuses them.
      */
     readonly boardThreadAct: (input: {
@@ -307,7 +353,14 @@ export class DeliveryService extends Context.Service<
       threadId: ThreadId,
       configuration: string,
     ) => Effect.Effect<DeliveryThreadBinding, DeliveryError>;
-    readonly threadState: (threadId: ThreadId) => Effect.Effect<DeliveryThreadState, DeliveryError>;
+    /**
+     * What a conversation is bound to and who joins it. `boardOwned` is the caller's word, from the
+     * thread's own board marker, that it is a board task's, before the board has given it a lineup.
+     */
+    readonly threadState: (
+      threadId: ThreadId,
+      options?: { readonly boardOwned?: boolean },
+    ) => Effect.Effect<DeliveryThreadState, DeliveryError>;
     readonly threadHasDeliveryBinding: (
       threadId: ThreadId,
     ) => Effect.Effect<boolean, DeliveryError>;
@@ -315,10 +368,28 @@ export class DeliveryService extends Context.Service<
     readonly releaseThread: (
       threadId: ThreadId,
     ) => Effect.Effect<DeliveryThreadState, DeliveryError>;
-    /** Replaces who joins a conversation from its next message on; null makes it an ordinary one. */
+    /**
+     * Replaces who joins a conversation from its next message on; null makes it an ordinary one.
+     * A board task's thread is refused: its team is the board's.
+     */
     readonly setThreadLineup: (
       input: DeliverySetThreadLineupInput,
     ) => Effect.Effect<DeliveryThreadState, DeliveryError>;
+    /**
+     * The team a board task's thread shows, as the board picks it; null is none. The only lineup
+     * such a thread has: what a person set on it is ignored. Never fails, as the board gives it
+     * again on the next pass.
+     */
+    readonly setBoardLineup: (
+      threadId: ThreadId,
+      lineup: DeliveryThreadLineup | null,
+    ) => Effect.Effect<void>;
+    /** Makes a thread with a board task's marker the board's, keeping any lineup it gave it. */
+    readonly ownBoardThread: (threadId: ThreadId) => Effect.Effect<void>;
+    /** The team the board gave a thread: undefined for one the board never gave one, even none. */
+    readonly boardLineupOf: (
+      threadId: ThreadId,
+    ) => Effect.Effect<DeliveryThreadLineup | null | undefined>;
     /**
      * Fetches a bound thread's team setup and makes it readable by adapters.
      * Succeeds with `false` for a thread with no team, which starts as it
@@ -369,6 +440,9 @@ export const layerTestWithThreadIndex = (overrides: Partial<TestThreadIndex>) =>
       nativeBuildAct: disabled,
       nativeIntakeAct: disabled,
       boardThreadConfiguration: Effect.succeed("test"),
+      boardApprovalKey: Effect.undefined,
+      boardApprovalKeyStatus: Effect.succeed({ source: "none", stored: false }),
+      setBoardApprovalKey: disabled,
       boardThreadAct: disabled,
       bindThread: disabled,
       refreshThread: disabled,
@@ -380,6 +454,9 @@ export const layerTestWithThreadIndex = (overrides: Partial<TestThreadIndex>) =>
         Effect.succeed({ binding: null, pending: null }),
       ),
       setThreadLineup: disabled,
+      setBoardLineup: Effect.fn("DeliveryService.setBoardLineup")(() => Effect.void),
+      ownBoardThread: Effect.fn("DeliveryService.ownBoardThread")(() => Effect.void),
+      boardLineupOf: Effect.fn("DeliveryService.boardLineupOf")(() => Effect.undefined),
       prepareThread: Effect.fn("DeliveryService.prepareThread")(() => Effect.succeed(false)),
       terminalEntryScript: Effect.succeed(null),
     }),
@@ -396,13 +473,39 @@ const make = Effect.fn("DeliveryService.make")(function* (
   const config = yield* ServerConfig;
   const settingsService = yield* ServerSettings.ServerSettingsService;
   const httpClient = yield* HttpClient.HttpClient;
+  const secretStore = yield* ServerSecretStore.ServerSecretStore;
+  const processEnvironment = yield* HostProcess.Environment;
+
+  // Only this service writes the saved key, so it is read from the store once.
+  let savedKey: Option.Option<string> | undefined;
+  const keyStorageError = (detail: string) => () =>
+    new DeliveryError({ reason: "storage", detail });
+  const readSavedKey = Effect.suspend(() =>
+    savedKey !== undefined
+      ? Effect.succeed(savedKey)
+      : secretStore.get(BOARD_APPROVAL_KEY_SECRET).pipe(
+          Effect.map(Option.map((bytes) => new TextDecoder().decode(bytes))),
+          Effect.tap((read) => Effect.sync(() => (savedKey = read))),
+          Effect.mapError(keyStorageError("The saved board approval key could not be read.")),
+        ),
+  );
+  const readBoardApprovalKey = readSavedKey.pipe(
+    Effect.map((saved) =>
+      resolveBoardApprovalKey(processEnvironment, Option.getOrUndefined(saved)),
+    ),
+  );
+  const boardKeyWrites = yield* Semaphore.make(1);
 
   const bindingsPath = path.join(config.stateDir, "delivery-threads.json");
   const bindings = new Map<string, DeliveryThreadBinding>();
   const pending = new Map<string, DeliveryThreadPending>();
   const lineups = new Map<string, DeliveryOrchestrationConfig | null>();
   const rememberedLineups = new Map<string, DeliveryRememberedLineup>();
+  const boardLineupsPath = path.join(config.stateDir, "delivery-board-lineups.json");
+  const boardLineups = new Map<string, DeliveryThreadLineup | null>();
   const writeLock = yield* Semaphore.make(1);
+  const boardLineupWrites = yield* Semaphore.make(1);
+  let boardLineupsUnsaved = false;
   const boardSeatWrites = yield* Semaphore.make(1);
   const boardLinkWrites = yield* Semaphore.make(1);
 
@@ -445,6 +548,24 @@ const make = Effect.fn("DeliveryService.make")(function* (
     }
   }
   if (storeProblem) yield* Effect.logError(storeProblem);
+  // A board lineup file that is not there or not understood is an empty one.
+  const loadedBoardLineups = yield* fileSystem
+    .readFileString(boardLineupsPath)
+    .pipe(Effect.flatMap(decodeBoardLineups), Effect.result);
+  if (loadedBoardLineups._tag === "Success") {
+    for (const [threadId, lineup] of Object.entries(loadedBoardLineups.success))
+      boardLineups.set(threadId, lineup);
+  }
+  /** A board task's thread: one the board gave a lineup, or one with a board task's own id. */
+  const boardOwned = (threadId: string) =>
+    boardLineups.has(threadId) || boardTaskOfMarker(threadId) !== null;
+  /**
+   * The team a conversation's own sessions start with. A board task's thread has none: a binding
+   * a person saved on it is left in the store, for a build that predates board lineups, and is
+   * neither shown nor enforced.
+   */
+  const teamBindingOf = (threadId: string) =>
+    boardOwned(threadId) ? undefined : bindings.get(threadId);
 
   const storeReadable = Effect.suspend(() =>
     storeProblem
@@ -1205,7 +1326,18 @@ const make = Effect.fn("DeliveryService.make")(function* (
     return (yield* repositoryRootOf(folder)) ?? folder;
   });
 
-  const stateOf = (threadId: ThreadId): DeliveryThreadState => {
+  const stateOf = (threadId: ThreadId, boardHint = false): DeliveryThreadState => {
+    if (boardHint || boardOwned(threadId)) {
+      // The board's team only: a person's binding, lineup or held team choice saved here is not
+      // the board's, and stays on disk for a build that predates board lineups.
+      const lineup = boardLineups.get(threadId);
+      return {
+        binding: null,
+        pending: null,
+        ...(lineup ? { boardLineup: lineup } : {}),
+        ...(lineup && lineup.participants.length >= 2 ? { lineup } : {}),
+      };
+    }
     const binding = bindings.get(threadId) ?? null;
     // What the thread was started with stands until a person changes it.
     const lineup = lineups.has(threadId) ? lineups.get(threadId) : binding?.orchestration;
@@ -1231,11 +1363,22 @@ const make = Effect.fn("DeliveryService.make")(function* (
         )
       : Effect.void;
 
+  const refuseBoardOwned = (threadId: ThreadId) =>
+    boardOwned(threadId)
+      ? Effect.fail(
+          new DeliveryError({
+            reason: "refused",
+            detail: "The board picks this task's team and models. Change them on the board.",
+          }),
+        )
+      : Effect.void;
+
   const setThreadLineup = Effect.fn("DeliveryService.setThreadLineup")(function* (
     input: DeliverySetThreadLineupInput,
   ) {
     yield* requireOwner;
     yield* storeReadable;
+    yield* refuseBoardOwned(input.threadId);
     if (input.orchestration !== null) yield* checkParticipants(input.orchestration.participants);
     const had = lineups.has(input.threadId);
     const previous = lineups.get(input.threadId);
@@ -1275,12 +1418,51 @@ const make = Effect.fn("DeliveryService.make")(function* (
     return stateOf(input.threadId);
   });
 
+  const setBoardLineup = Effect.fn("DeliveryService.setBoardLineup")(function* (
+    threadId: ThreadId,
+    lineup: DeliveryThreadLineup | null,
+  ) {
+    const current = boardLineups.get(threadId);
+    // What is shown changes at once; a save that failed is tried again on the next call.
+    if (current !== undefined && sameBoardLineup(current, lineup) && !boardLineupsUnsaved) return;
+    boardLineups.set(threadId, lineup);
+    yield* boardLineupWrites.withPermits(1)(
+      Effect.suspend(() => encodeBoardLineups(Object.fromEntries(boardLineups))).pipe(
+        Effect.flatMap((contents) =>
+          writeFileStringAtomically({ filePath: boardLineupsPath, contents }).pipe(
+            Effect.provideService(FileSystem.FileSystem, fileSystem),
+            Effect.provideService(Path.Path, path),
+          ),
+        ),
+        Effect.matchCauseEffect({
+          onSuccess: () => Effect.sync(() => (boardLineupsUnsaved = false)),
+          onFailure: (cause) => {
+            const first = !boardLineupsUnsaved;
+            boardLineupsUnsaved = true;
+            return first
+              ? Effect.logWarning("Board lineups were not saved; the next change tries again.", {
+                  cause,
+                })
+              : Effect.void;
+          },
+        }),
+      ),
+    );
+  });
+
+  const ownBoardThread = Effect.fn("DeliveryService.ownBoardThread")(function* (
+    threadId: ThreadId,
+  ) {
+    yield* setBoardLineup(threadId, boardLineups.get(threadId) ?? null);
+  });
+
   const bindThread = Effect.fn("DeliveryService.bindThread")(function* (
     input: DeliveryBindThreadInput,
     configuration?: string,
   ) {
     yield* requireOwner;
     yield* storeReadable;
+    yield* refuseBoardOwned(input.threadId);
     if (input.orchestration !== undefined) {
       yield* checkParticipants(input.orchestration.participants);
     }
@@ -1979,14 +2161,14 @@ const make = Effect.fn("DeliveryService.make")(function* (
       return false;
     }
     yield* storeReadable;
-    const intent = pending.get(threadId);
+    const intent = boardOwned(threadId) ? undefined : pending.get(threadId);
     if (intent && !bindings.has(threadId)) {
       return yield* new DeliveryError({
         reason: "pending",
         detail: `Team ${intent.team} was chosen for this thread and its setup did not complete${intent.why ? `: ${intent.why}` : "."} Send again to retry, or choose "No team" to start it as an ordinary thread.`,
       });
     }
-    const binding = bindings.get(threadId);
+    const binding = teamBindingOf(threadId);
     if (!binding) return false;
 
     if (actual.driver !== binding.driver) {
@@ -2066,7 +2248,7 @@ const make = Effect.fn("DeliveryService.make")(function* (
   // The record is kept by the engine. A report it does not take is logged and
   // does not stop the thread, which runs on what it was given either way.
   const reportEffective = (threadId: ThreadId, report: DeliveryEffective.EffectiveReport) => {
-    const binding = bindings.get(threadId);
+    const binding = teamBindingOf(threadId);
     if (!binding) return Effect.void;
     return request("POST", `/api/sessions/${binding.session}/effective`, {
       by: "T3 Code",
@@ -2099,7 +2281,7 @@ const make = Effect.fn("DeliveryService.make")(function* (
 
   DeliveryThreadSession.registerDeliveryPreparer(prepareThread);
   DeliveryThreadSession.registerDeliveryReporter(reportEffective);
-  DeliveryThreadSession.registerDeliveryTeamLookup((threadId) => bindings.get(threadId)?.team);
+  DeliveryThreadSession.registerDeliveryTeamLookup((threadId) => teamBindingOf(threadId)?.team);
   yield* Effect.addFinalizer(() =>
     Effect.sync(() => {
       DeliveryThreadSession.registerDeliveryPreparer(undefined);
@@ -2269,8 +2451,44 @@ const make = Effect.fn("DeliveryService.make")(function* (
           ),
     ),
     boardThreadConfiguration: requireOwner.pipe(Effect.andThen(readConfiguration())),
+    boardApprovalKey: readBoardApprovalKey.pipe(
+      Effect.map((resolved) => resolved.key),
+      Effect.catch((error) =>
+        // A variable still wins when the store cannot be read.
+        Effect.logWarning("The saved board approval key could not be read.", {
+          why: error.detail,
+        }).pipe(Effect.as(processEnvironment[BOARD_THREAD_KEY_VARIABLE] || undefined)),
+      ),
+      Effect.withSpan("DeliveryService.boardApprovalKey"),
+    ),
+    boardApprovalKeyStatus: requireOwner.pipe(
+      Effect.andThen(readBoardApprovalKey),
+      Effect.map((resolved) => resolved.status),
+      Effect.withSpan("DeliveryService.boardApprovalKeyStatus"),
+    ),
+    setBoardApprovalKey: Effect.fn("DeliveryService.setBoardApprovalKey")((key: string | null) =>
+      requireOwner.pipe(
+        Effect.andThen(
+          boardKeyWrites.withPermit(
+            (key === null
+              ? secretStore.remove(BOARD_APPROVAL_KEY_SECRET)
+              : secretStore.set(BOARD_APPROVAL_KEY_SECRET, new TextEncoder().encode(key))
+            ).pipe(
+              Effect.ensuring(Effect.sync(() => (savedKey = undefined))),
+              Effect.mapError(keyStorageError("The board approval key could not be saved.")),
+              Effect.andThen(readBoardApprovalKey),
+              Effect.map((resolved) => resolved.status),
+            ),
+          ),
+        ),
+      ),
+    ),
     boardThreadAct: Effect.fn("DeliveryService.boardThreadAct")(function* (input) {
-      if (!(input.method === "POST" ? BOARD_THREAD_POST : BOARD_THREAD_LINK).test(input.path))
+      const allowed =
+        input.method === "POST"
+          ? BOARD_THREAD_POST.test(input.path) || BOARD_THREAD_STEER.test(input.path)
+          : BOARD_THREAD_LINK.test(input.path);
+      if (!allowed)
         return yield* new DeliveryError({
           reason: "invalid",
           detail: "Invalid board thread mutation path.",
@@ -2303,17 +2521,23 @@ const make = Effect.fn("DeliveryService.make")(function* (
     ),
     bindThread,
     refreshThread,
-    threadState: Effect.fn("DeliveryService.threadState")((threadId) =>
-      requireOwner.pipe(
-        Effect.andThen(storeReadable),
-        Effect.map(() => stateOf(threadId)),
-      ),
+    threadState: Effect.fn("DeliveryService.threadState")(
+      (threadId: ThreadId, options?: { readonly boardOwned?: boolean }) =>
+        requireOwner.pipe(
+          Effect.andThen(storeReadable),
+          Effect.as(stateOf(threadId, options?.boardOwned === true)),
+        ),
     ),
     threadHasDeliveryBinding: Effect.fn("DeliveryService.threadHasDeliveryBinding")((threadId) =>
       storeReadable.pipe(Effect.map(() => bindings.has(threadId) || pending.has(threadId))),
     ),
     releaseThread,
     setThreadLineup,
+    setBoardLineup,
+    ownBoardThread,
+    boardLineupOf: Effect.fn("DeliveryService.boardLineupOf")((threadId: ThreadId) =>
+      Effect.sync(() => boardLineups.get(threadId)),
+    ),
     prepareThread,
     terminalEntryScript: requireOwner.pipe(Effect.andThen(delivery), Effect.map(entryScriptOf)),
   });

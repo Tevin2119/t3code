@@ -291,8 +291,11 @@ function Sidebar({
   resizable = false,
   className,
   children,
+  onMobileOpenChangeComplete,
   ...props
 }: React.ComponentProps<"div"> & {
+  /** The phone sheet finished opening or closing, so what it holds can be scrolled to. */
+  onMobileOpenChangeComplete?: (open: boolean) => void;
   side?: "left" | "right";
   variant?: "sidebar" | "floating" | "inset";
   collapsible?: "offcanvas" | "icon" | "none";
@@ -335,6 +338,7 @@ function Sidebar({
           onOpenChange={setOpenMobile}
           onOpenChangeComplete={(open) => {
             if (!open) setMobileSheetMounted(false);
+            onMobileOpenChangeComplete?.(open);
           }}
           open={openMobile}
         >

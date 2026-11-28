@@ -4,8 +4,11 @@ import {
   deliveryParticipantAccess,
   isCompactionCommandMessage,
   isServerOwnedThreadLineage,
+  type MessageId,
   type ModelSelection,
+  type NodeId,
   parseGoalCommand,
+  type OrchestrationV2NotificationSource,
   type OrchestrationV2Subagent,
   RunId,
   ThreadId,
@@ -34,6 +37,17 @@ import { runtimeModeProblem } from "@t3tools/provider-core/server/runtimeModeSup
 import { resolveAttachmentPath } from "../attachmentStore.ts";
 import { ServerConfig } from "../config.ts";
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
+import {
+  isBoardBriefMessageId,
+  isEngineStageMessageId,
+  isTerminalAttempt,
+  NativeAttempt,
+  nativeAttemptPath,
+  seatCommandId,
+} from "./boardTaskAttempts.ts";
+import { boardTaskOfMarker, isBoardTaskThreadId } from "./boardThreadMarker.ts";
+
+const decodeAttempt = Schema.decodeUnknownEffect(NativeAttempt);
 import * as DeliveryService from "./DeliveryService.ts";
 import * as LimitedSeats from "./LimitedSeats.ts";
 import { teamDiscussionContext } from "./teamDiscussionContext.ts";
@@ -128,6 +142,86 @@ export const make = Effect.gen(function* () {
   const projects = yield* ProjectStore.ProjectStoreV2;
   const { attachmentsDir } = yield* ServerConfig;
 
+  /** The engine's seats a board task's system turn starts, when the turn is an engine stage. */
+  const engineStageOf = Effect.fn("NativeTeamChat.engineStageOf")(function* (
+    threadId: ThreadId,
+    run: { readonly userMessageId: MessageId | null },
+  ) {
+    if (run.userMessageId === null || !isEngineStageMessageId(run.userMessageId)) return undefined;
+    const messages = yield* projections.getMessagesById(threadId, [run.userMessageId]);
+    const source = messages.get(run.userMessageId)?.notification?.source;
+    return source?.kind === "engine_stage" ? source : undefined;
+  });
+
+  /**
+   * An engine stage: each seat starts as a child of this turn, in the engine's worktree and with
+   * its access, and the lead's turn waits until every one is terminal. Then the lead gets their
+   * results, to keep track of the task; each answer is the engine's already.
+   */
+  const runEngineStage = Effect.fn("NativeTeamChat.engineStage")(function* (
+    input: { readonly threadId: ThreadId; readonly runId: RunId },
+    run: {
+      readonly status: string;
+      readonly rootNodeId: NodeId | null;
+    },
+    subagents: ReadonlyArray<OrchestrationV2Subagent>,
+    stage: Extract<OrchestrationV2NotificationSource, { kind: "engine_stage" }>,
+    delivery: DeliveryService.DeliveryService["Service"],
+  ) {
+    if (run.rootNodeId === null)
+      return yield* new NativeTeamChatError({ runId: input.runId, reason: "state" });
+    if (run.status !== "starting") return { ready: false, context: "" };
+    const started: Array<OrchestrationV2Subagent> = [];
+    let waiting = false;
+    for (const seat of stage.seats) {
+      const commandId = seatCommandId(input.threadId, seat.attemptId);
+      const task = subagents.find((candidate) => candidate.childThreadId === seat.childThreadId);
+      if (task !== undefined) {
+        started.push(task);
+        if (!terminal(task)) waiting = true;
+        continue;
+      }
+      // The prompt stays with the engine, so the turn carries no copy of it.
+      const attempt = yield* delivery
+        .read({ path: nativeAttemptPath(seat.attemptId) })
+        .pipe(Effect.flatMap((response) => decodeAttempt(response.body)));
+      // A step the engine ended or asked to stop starts no child.
+      if (isTerminalAttempt(attempt.state) || attempt.cancelRequested || !attempt.prompt?.trim())
+        continue;
+      yield* threads.dispatch({
+        type: "delegated_task.request",
+        commandId,
+        createdBy: "system",
+        creationSource: "server",
+        parentThreadId: input.threadId,
+        parentRunId: input.runId,
+        parentNodeId: run.rootNodeId,
+        // A seat of the turn's own round: the orchestrator resumes the turn held at its start
+        // once the seat ends, as for a team's seats, and holds steers meanwhile.
+        teamChat: { sourceRunId: input.runId, stage: "engine", seat: seat.seat },
+        title: `${seat.seat} · ${stage.stage}`,
+        task: attempt.prompt,
+        modelSelection: seat.modelSelection,
+        // A read-only seat runs in the mode that asks, and TeamChatReadOnlyReactor declines it.
+        runtimeMode: seat.access === "full" ? "full-access" : "approval-required",
+        interactionMode: "default",
+        workspaceStrategy: { type: "existing_worktree", worktreePath: seat.worktreePath },
+        completionWake: "settled_only",
+      });
+      // Its child waits in the engine's worktree until BoardTaskExecution prepares its run.
+      waiting = true;
+    }
+    if (waiting) return { ready: false, context: "" };
+    return {
+      ready: true,
+      context: `The engine ran the ${stage.stage} stage of this board task with ${
+        started.length === 0 ? "no seat: none of them started" : "these seats"
+      }. Each answer below is reported to the engine as that seat's result, which the engine judges. Keep track of where the task stands; do not redo their work.${
+        started.length === 0 ? "" : `\n\n${contributions(started)}`
+      }`,
+    };
+  });
+
   const prepareTurn: NativeTeamChat["Service"]["prepareTurn"] = Effect.fn(
     "NativeTeamChat.prepareTurn",
   )(
@@ -137,17 +231,31 @@ export const make = Effect.gen(function* () {
       const state = yield* delivery.threadState(input.threadId);
       let binding = state.binding;
       const lineup = state.lineup;
-      if (lineup === undefined) return { ready: true, context: "" };
-      const roster = lineup.participants;
-      // Participants take a team's roles when there is one; with none they join as themselves.
-      const team = binding?.team ?? lineup.team;
-      const group = team === undefined ? "this conversation" : `team ${team}`;
+      // An engine stage starts its seats whatever the team, so a board task's thread reads on.
+      if (lineup === undefined && !isBoardTaskThreadId(input.threadId))
+        return { ready: true, context: "" };
       const parent = yield* projections.getThreadRecords(input.threadId, [
         "runs",
         "subagents",
         "turnItems",
       ]);
       const run = parent.runs.find((candidate) => candidate.id === input.runId);
+      // The engine does a board task's work, so a message there, a person's included, goes to the
+      // lead alone: a team round would do that work a second time. Only the engine's brief starts
+      // the team round, and an engine stage starts the engine's own seats.
+      if (
+        boardTaskOfMarker(parent.thread.lineage.engineIntake) !== null &&
+        !isBoardBriefMessageId(run?.userMessageId)
+      ) {
+        const stage = run === undefined ? undefined : yield* engineStageOf(input.threadId, run);
+        if (run === undefined || stage === undefined) return { ready: true, context: "" };
+        return yield* runEngineStage(input, run, parent.subagents, stage, delivery);
+      }
+      if (lineup === undefined) return { ready: true, context: "" };
+      const roster = lineup.participants;
+      // Participants take a team's roles when there is one; with none they join as themselves.
+      const team = binding?.team ?? lineup.team;
+      const group = team === undefined ? "this conversation" : `team ${team}`;
       if (run === undefined || run.rootNodeId === null || run.activeAttemptId === null) {
         return yield* new NativeTeamChatError({ runId: input.runId, reason: "state" });
       }
@@ -284,8 +392,12 @@ export const make = Effect.gen(function* () {
           (seat) =>
             skipped.has(seat.seat) || round.some((task) => task.teamChat?.seat === seat.seat),
         );
+      // An engine stage's seats are the engine's steps, never an earlier round of this team.
       const followUp = parent.subagents.some(
-        (task) => task.teamChat !== undefined && task.teamChat.sourceRunId !== input.runId,
+        (task) =>
+          task.teamChat !== undefined &&
+          task.teamChat.stage !== "engine" &&
+          task.teamChat.sourceRunId !== input.runId,
       );
       // Read-only by default: a participant asks before it changes anything, and
       // TeamChatReadOnlyReactor declines what it asks.

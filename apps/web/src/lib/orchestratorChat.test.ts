@@ -587,3 +587,27 @@ it("marks a model chosen by hand, a seat's duty and an agreed substitute for the
   // An added participant is a person's own choice, and takes the duty of its role.
   expect(picked?.participants[2]).toMatchObject({ seat: "custom-1", picked: true, duty: "qa" });
 });
+
+it("holds the orchestrator to the seat named by its id over others in its role and harness", () => {
+  const input = setup();
+  const team = parseTeams([
+    {
+      team: "research",
+      available: true,
+      seats: [
+        { seat: "first", title: "First", role: "reviewer", harness: "codex", available: true },
+        ...input.team.seats,
+      ],
+      settings: input.team.settings,
+    },
+  ])[0]!;
+  const lead = { instanceId: ProviderInstanceId.make("codex"), model: "successor-model" };
+  const result = resolveOrchestratorRoster({
+    ...input,
+    team,
+    choices: undefined,
+    orchestrator: { harness: "codex", role: "reviewer", seat: "critic", modelSelection: lead },
+  });
+  expect(result.rows.filter((row) => row.orchestrator).map((row) => row.seat)).toEqual(["critic"]);
+  expect(result.rows.find((row) => row.seat === "critic")?.modelSelection).toEqual(lead);
+});
