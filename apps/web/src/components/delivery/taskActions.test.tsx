@@ -240,6 +240,9 @@ it("starts another task with no refusal, open decision or late answer from the o
     await answer.promise;
   });
   expect(actions.problem).toBeNull();
+  // Nor does it come back with the first task.
+  await act(() => renderer.update(<ScopedProbe scope="task-1" />));
+  expect(actions.problem).toBeNull();
   // A decision opened on one task is gone once another is open.
   await act(() => actions.run(target, "approve"));
   expect(renderer.toJSON()).not.toBeNull();
@@ -269,4 +272,37 @@ it("asks for the reason once the engine refuses a close without one", async () =
   });
   await act(async () => actions.run({ ...target, state: "", flow: "standard" }, "close"));
   expect(renderer.root.findAllByType("textarea")).toHaveLength(1);
+});
+
+it("clears a refusal on a task switch, so the task it was for does not show it again", async () => {
+  mock.action.mockReset().mockResolvedValue({ ok: false, why: "Refused", status: 409 });
+  await act(() => {
+    renderer = create(<ScopedProbe scope="task-1" />);
+  });
+  await act(async () => actions.run(target, "submit"));
+  expect(actions.problem).toBe("Refused");
+  await act(() => renderer.update(<ScopedProbe scope="task-2" />));
+  expect(actions.problem).toBeNull();
+  await act(() => renderer.update(<ScopedProbe scope="task-1" />));
+  expect(actions.problem).toBeNull();
+});
+
+it("opens no close reason for a task left before the engine asked for one", async () => {
+  const answer = Promise.withResolvers<{ ok: false; status: number; why: string }>();
+  mock.action.mockReset().mockReturnValueOnce(answer.promise);
+  await act(() => {
+    renderer = create(<ScopedProbe scope="task-1" />);
+  });
+  await act(() => actions.run({ ...target, state: "", flow: "standard" }, "close"));
+  await act(() => renderer.update(<ScopedProbe scope="task-2" />));
+  await act(async () => {
+    answer.resolve({
+      ok: false,
+      status: 400,
+      why: "a close needs a reason: say why the task is closed without being done.",
+    });
+    await answer.promise;
+  });
+  expect(renderer.root.findAllByType("textarea")).toHaveLength(0);
+  expect(actions.problem).toBeNull();
 });

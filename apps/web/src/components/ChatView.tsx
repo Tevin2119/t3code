@@ -1603,11 +1603,9 @@ export default function ChatView(props: ChatViewProps) {
   const selectedProvider = selectedProviderEntry?.driverKind ?? requestedDriverKind;
   // A board task's thread is a team thread from the start: its team and lead stand where an empty
   // thread asks for a first message.
-  const boardOwnedThread =
-    activeThread !== undefined && isServerOwnedThreadLineage(activeThread.lineage);
-  // Stable, so the timeline's memo holds; it draws the header from the latest render's values.
-  const renderTaskTeamHeader = useStableCallback(() =>
-    activeThread ? (
+  // The timeline is handed it only while it is empty, so a thread with messages keeps its memo.
+  const taskTeamHeader =
+    activeThread && isServerOwnedThreadLineage(activeThread.lineage) ? (
       <TaskTeamHeader
         environmentId={activeThread.environmentId}
         threadId={activeThread.id}
@@ -1623,8 +1621,7 @@ export default function ChatView(props: ChatViewProps) {
         }
         leadModelSelection={activeThread.modelSelection}
       />
-    ) : null,
-  );
+    ) : undefined;
   const activeProviderInstanceId = selectedProviderEntry?.instanceId ?? null;
   const activeProviderStatus = selectedProviderEntry?.snapshot ?? null;
   const activeUsageModel =
@@ -4230,7 +4227,7 @@ export default function ChatView(props: ChatViewProps) {
                   onViewportAttach={attachTimelineViewport}
                   onFooterGrow={onTimelineFooterGrowStable}
                   hideEmptyPlaceholder={isDraftHeroState || threadDetailLoading}
-                  {...(boardOwnedThread ? { renderEmptyState: renderTaskTeamHeader } : {})}
+                  {...(taskTeamHeader && timelineEmpty ? { emptyState: taskTeamHeader } : {})}
                   emptyPlaceholderInset={composerReservedHeight}
                   topFadeEnabled={!hasTimelineTopBanner}
                   {...(threadHistoryControls === undefined
