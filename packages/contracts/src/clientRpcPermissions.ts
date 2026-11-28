@@ -25,6 +25,8 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   [WS_METHODS.deliveryFileThreadTask]: AuthOrchestrationOperateScope,
   // The board approval key lets this server write to the board for everyone who uses it.
   [WS_METHODS.deliverySetBoardApprovalKey]: AuthEnvironmentMaintainScope,
+  // Uses the saved approval key, so it is the key holder's decision: the same scope that saves it.
+  [WS_METHODS.deliveryEngineLifecycle]: AuthEnvironmentMaintainScope,
   [WS_METHODS.providerAuthRemoveMethod]: AuthProvidersManageScope,
   // An MCP sign-in stores a credential for the agent, as an account sign-in does.
   [WS_METHODS.providerMcpSignInStart]: AuthProvidersManageScope,

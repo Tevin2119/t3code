@@ -159,6 +159,28 @@ confirmation. Inherit removes only that override and can reveal inherited On per
 Policy eligibility is not merge readiness: full-auto mode and the engine's independent merge
 checks still apply. Merge permission never enables automatic deployment.
 
+### What agents can do with boards
+
+When Delivery is on, an agent in any thread can do with boards and tasks what you can do
+from the board. It can list boards and tasks, create, edit and remove a board, and edit,
+submit, move, close or discard a task. Ask it in plain words, for example "close every task
+on the Old board that hasn't moved since October". The task's history records the agent's
+thread as the one who made the change. An agent on another machine can do the same through a
+linked environment paired with full access.
+
+- **Bulk changes preview first.** Closing or moving many tasks (up to 200 per call) starts as
+  a dry run that lists exactly what would change. The agent acts only after that, and only
+  on the same list. If any task changed in between, it has to preview again.
+- **Some things can't be undone.** A closed task stays closed: file a new one to restart the
+  work. A discarded draft is gone. Removing a board keeps its tasks, which end up on no
+  board, but loses the board's seats, mode and merge settings.
+- **Live work is protected.** An agent won't close, discard or re-board a task with a run in
+  progress, or touch a deployment-linked board, unless you tell it to.
+- **Engine stop and restart.** With the approval key saved in **Settings → Threads → Board**,
+  the Engine panel's Stop and Restart no longer ask for the passphrase, and an agent can
+  stop or restart the engine when you ask. Restarting pauses running seats until the engine
+  is back. The key stays on the server.
+
 ## Fork baseline: nightly integration for delivery work
 
 The `integrate/nightly-20261028-deployment-board` branch combines the fork's deployment

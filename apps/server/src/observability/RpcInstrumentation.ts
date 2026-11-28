@@ -22,6 +22,7 @@ const RPC_AGGREGATES = {
   [WS_METHODS.deliveryArchivedBoardThreads]: "delivery",
   [WS_METHODS.deliveryBoardApprovalKey]: "delivery",
   [WS_METHODS.deliverySetBoardApprovalKey]: "delivery",
+  [WS_METHODS.deliveryEngineLifecycle]: "delivery",
   [WS_METHODS.deliveryReleaseThread]: "delivery",
   [WS_METHODS.deliverySetThreadLineup]: "delivery",
   [WS_METHODS.deliveryLimitedSeats]: "delivery",

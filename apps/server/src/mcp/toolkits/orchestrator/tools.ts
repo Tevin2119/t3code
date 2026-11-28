@@ -1,6 +1,26 @@
 import {
   EnvironmentId,
+  BoardAgentBoard,
+  BoardAgentBoardCreateInput,
+  BoardAgentBoardEditInput,
+  BoardAgentBoardRemoveInput,
+  BoardAgentBoardRemoved,
+  BoardAgentBoardsResult,
+  BoardAgentBulkCloseInput,
+  BoardAgentBulkMoveInput,
+  BoardAgentBulkResult,
+  BoardAgentTask,
+  BoardAgentTaskCloseInput,
+  BoardAgentTaskDiscardInput,
+  BoardAgentTaskDiscarded,
+  BoardAgentTaskEditInput,
+  BoardAgentTaskMoveInput,
+  BoardAgentTaskRef,
+  BoardAgentTasksListInput,
+  BoardAgentTasksListResult,
   BoardTaskDraft,
+  DeliveryEngineLifecycleInput,
+  DeliveryEngineLifecycleReceipt,
   BoardTaskOutcome,
   DeliveryDiscoveryInput,
   DeliveryDiscoverySnapshot,
@@ -50,6 +70,8 @@ import {
   TrimmedNonEmptyString,
 } from "@t3tools/contracts";
 import { McpSchema, Tool, Toolkit } from "effect/ai";
+import * as Context from "effect/Context";
+import * as Fiber from "effect/Fiber";
 import * as Schema from "effect/Schema";
 import * as Struct from "effect/Struct";
 
@@ -63,6 +85,7 @@ import * as OrchestratorMcpService from "../../OrchestratorMcpService.ts";
 import * as ThreadMetadataMcpService from "../../ThreadMetadataMcpService.ts";
 import { DeliveryService } from "../../../delivery/DeliveryService.ts";
 import { BoardThreadTasks } from "../../../delivery/BoardThreadTasks.ts";
+import { BoardAgentTools } from "../../../delivery/BoardAgentTools.ts";
 import { SeatHandoffs } from "../../../delivery/SeatHandoffs.ts";
 
 const dependencies = [
@@ -449,10 +472,222 @@ const SeatHandoffTool = Tool.make("delivery_seat_handoff", {
   .annotate(Tool.Destructive, true)
   .annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenWhileDeliveryOff);
 
+/** Board tools act for any caller, linked ones included, so only Delivery being off hides them. */
+const hiddenWhileDeliveryDisabled = (): boolean => {
+  const fiber = Fiber.getCurrent();
+  const scope =
+    fiber && Context.getOrUndefined(fiber.context, McpInvocationContext.McpInvocationContext);
+  return scope?.delivery !== false;
+};
+const boardDependencies = [...dependencies, BoardAgentTools];
+const onBoard = <Fields extends Schema.Struct.Fields>(input: Schema.Struct<Fields>) =>
+  Schema.Struct({ environmentId: OrchestratorMcpEnvironmentTarget, ...input.fields });
+
+const BoardsListTool = Tool.make("delivery_boards_list", {
+  description:
+    "List custom boards (id, repository, deployment link) and the repositories a board can be bound to.",
+  parameters: Schema.Struct({ environmentId: OrchestratorMcpEnvironmentTarget }),
+  success: BoardAgentBoardsResult,
+  failure: OrchestratorMcpFailure,
+  failureMode: "return",
+  dependencies: boardDependencies,
+})
+  .annotate(Tool.Title, "List boards")
+  .annotate(Tool.Readonly, true)
+  .annotate(Tool.Destructive, false)
+  .annotate(Tool.Idempotent, true)
+  .annotate(McpSchema.EnabledWhen, hiddenWhileDeliveryDisabled);
+
+const BoardCreateTool = Tool.make("delivery_board_create", {
+  description:
+    "Create a custom board bound to a repository `id` from `delivery_boards_list`. Undo with `delivery_board_remove`.",
+  parameters: onBoard(BoardAgentBoardCreateInput),
+  success: BoardAgentBoard,
+  failure: OrchestratorMcpFailure,
+  failureMode: "return",
+  dependencies: boardDependencies,
+})
+  .annotate(Tool.Title, "Create a board")
+  .annotate(Tool.Destructive, false)
+  .annotate(McpSchema.EnabledWhen, hiddenWhileDeliveryDisabled);
+
+const BoardEditTool = Tool.make("delivery_board_edit", {
+  description:
+    "Rename a board, change its description or icon, or bind it to another repository or base. Its tasks keep their targets.",
+  parameters: onBoard(BoardAgentBoardEditInput),
+  success: BoardAgentBoard,
+  failure: OrchestratorMcpFailure,
+  failureMode: "return",
+  dependencies: boardDependencies,
+})
+  .annotate(Tool.Title, "Edit a board")
+  .annotate(Tool.Destructive, true)
+  .annotate(McpSchema.EnabledWhen, hiddenWhileDeliveryDisabled);
+
+const BoardRemoveTool = Tool.make("delivery_board_remove", {
+  description:
+    "Destructive, only when the person asks: remove a board. Its tasks are kept, on no board. No restore: its seats, mode and merge settings are lost; recreating it gives a new board, then move the returned `tasks` back. Deployment-linked boards need `force`.",
+  parameters: onBoard(BoardAgentBoardRemoveInput),
+  success: BoardAgentBoardRemoved,
+  failure: OrchestratorMcpFailure,
+  failureMode: "return",
+  dependencies: boardDependencies,
+})
+  .annotate(Tool.Title, "Remove a board")
+  .annotate(Tool.Destructive, true)
+  .annotate(McpSchema.EnabledWhen, hiddenWhileDeliveryDisabled);
+
+const TasksListTool = Tool.make("delivery_tasks_list", {
+  description:
+    "List board tasks newest first, filtered by board, lane, state, words, origin or `updatedBefore`. `more`: page with `updatedBefore` set to the last `updated`.",
+  parameters: onBoard(BoardAgentTasksListInput),
+  success: BoardAgentTasksListResult,
+  failure: OrchestratorMcpFailure,
+  failureMode: "return",
+  dependencies: boardDependencies,
+})
+  .annotate(Tool.Title, "List board tasks")
+  .annotate(Tool.Readonly, true)
+  .annotate(Tool.Destructive, false)
+  .annotate(Tool.Idempotent, true)
+  .annotate(McpSchema.EnabledWhen, hiddenWhileDeliveryDisabled);
+
+const TaskGetTool = Tool.make("delivery_task_get", {
+  description: "Read one board task: state, lane, board, run, and its text.",
+  parameters: onBoard(BoardAgentTaskRef),
+  success: BoardAgentTask,
+  failure: OrchestratorMcpFailure,
+  failureMode: "return",
+  dependencies: boardDependencies,
+})
+  .annotate(Tool.Title, "Read a board task")
+  .annotate(Tool.Readonly, true)
+  .annotate(Tool.Destructive, false)
+  .annotate(Tool.Idempotent, true)
+  .annotate(McpSchema.EnabledWhen, hiddenWhileDeliveryDisabled);
+
+const TaskEditTool = Tool.make("delivery_task_edit", {
+  description:
+    "Edit a task's title, priority or tags; its body only while it is a draft. A submitted task's ask changes through its thread.",
+  parameters: onBoard(BoardAgentTaskEditInput),
+  success: BoardAgentTask,
+  failure: OrchestratorMcpFailure,
+  failureMode: "return",
+  dependencies: boardDependencies,
+})
+  .annotate(Tool.Title, "Edit a board task")
+  .annotate(Tool.Destructive, true)
+  .annotate(McpSchema.EnabledWhen, hiddenWhileDeliveryDisabled);
+
+const TaskMoveTool = Tool.make("delivery_task_move", {
+  description:
+    "Move a task to a `lane` (queue submits or retriages; paused pauses; the engine refuses lanes it reaches itself) or a `board` (null for none). Moving out of paused resumes. Live or deployment-linked tasks need `force` to change board.",
+  parameters: onBoard(BoardAgentTaskMoveInput),
+  success: BoardAgentTask,
+  failure: OrchestratorMcpFailure,
+  failureMode: "return",
+  dependencies: boardDependencies,
+})
+  .annotate(Tool.Title, "Move a board task")
+  .annotate(Tool.Destructive, true)
+  .annotate(McpSchema.EnabledWhen, hiddenWhileDeliveryDisabled);
+
+const TaskSubmitTool = Tool.make("delivery_task_submit", {
+  description:
+    "Only when the person asks, submit a draft: its team starts work. A submitted task cannot be a draft again.",
+  parameters: onBoard(BoardAgentTaskRef),
+  success: BoardAgentTask,
+  failure: OrchestratorMcpFailure,
+  failureMode: "return",
+  dependencies: boardDependencies,
+})
+  .annotate(Tool.Title, "Submit a draft task")
+  .annotate(Tool.Destructive, true)
+  .annotate(McpSchema.EnabledWhen, hiddenWhileDeliveryDisabled);
+
+const TaskCloseTool = Tool.make("delivery_task_close", {
+  description:
+    "Destructive, only when the person asks: close a task without it being done, with a `reason`. Stops its runs. Cannot be reopened; file a new task to restart. Live or deployment-linked tasks need `force`.",
+  parameters: onBoard(BoardAgentTaskCloseInput),
+  success: BoardAgentTask,
+  failure: OrchestratorMcpFailure,
+  failureMode: "return",
+  dependencies: boardDependencies,
+})
+  .annotate(Tool.Title, "Close a board task")
+  .annotate(Tool.Destructive, true)
+  .annotate(McpSchema.EnabledWhen, hiddenWhileDeliveryDisabled);
+
+const TaskDiscardTool = Tool.make("delivery_task_discard", {
+  description:
+    "Destructive, only when the person asks: delete a draft and its files. Cannot be undone. Submitted tasks are closed instead.",
+  parameters: onBoard(BoardAgentTaskDiscardInput),
+  success: BoardAgentTaskDiscarded,
+  failure: OrchestratorMcpFailure,
+  failureMode: "return",
+  dependencies: boardDependencies,
+})
+  .annotate(Tool.Title, "Discard a draft task")
+  .annotate(Tool.Destructive, true)
+  .annotate(McpSchema.EnabledWhen, hiddenWhileDeliveryDisabled);
+
+const TasksCloseBulkTool = Tool.make("delivery_tasks_close_bulk", {
+  description:
+    "Destructive, only when the person asks: close up to 200 tasks, by `tasks` ids or `filter`, with one `reason`. First call is a dry run listing exactly what would close; show it, then call again with `confirm: true` and its `dryRunToken`. Refused if the list changed. Closed tasks cannot be reopened. Live or deployment-linked tasks are skipped without `force`.",
+  parameters: onBoard(BoardAgentBulkCloseInput),
+  success: BoardAgentBulkResult,
+  failure: OrchestratorMcpFailure,
+  failureMode: "return",
+  dependencies: boardDependencies,
+})
+  .annotate(Tool.Title, "Close board tasks in bulk")
+  .annotate(Tool.Destructive, true)
+  .annotate(McpSchema.EnabledWhen, hiddenWhileDeliveryDisabled);
+
+const TasksMoveBulkTool = Tool.make("delivery_tasks_move_bulk", {
+  description:
+    "Move up to 200 tasks, by `tasks` ids or `filter`, to a `lane` or `board`. First call is a dry run; act with `confirm: true` and its `dryRunToken`. Refused if the list changed.",
+  parameters: onBoard(BoardAgentBulkMoveInput),
+  success: BoardAgentBulkResult,
+  failure: OrchestratorMcpFailure,
+  failureMode: "return",
+  dependencies: boardDependencies,
+})
+  .annotate(Tool.Title, "Move board tasks in bulk")
+  .annotate(Tool.Destructive, true)
+  .annotate(McpSchema.EnabledWhen, hiddenWhileDeliveryDisabled);
+
+const EngineLifecycleTool = Tool.make("delivery_engine_lifecycle", {
+  description:
+    "Only when the person asks: stop or restart the delivery engine through its launcher, with the approval key saved in Settings. Pauses every running seat until it is back; stop leaves it down. Returns acceptance; check `delivery_read` health for completion.",
+  parameters: onBoard(DeliveryEngineLifecycleInput),
+  success: DeliveryEngineLifecycleReceipt,
+  failure: OrchestratorMcpFailure,
+  failureMode: "return",
+  dependencies: boardDependencies,
+})
+  .annotate(Tool.Title, "Stop or restart the delivery engine")
+  .annotate(Tool.Destructive, true)
+  .annotate(McpSchema.EnabledWhen, hiddenWhileDeliveryDisabled);
+
 export const OrchestratorToolkit = Toolkit.make(
+  EngineLifecycleTool,
   DeliveryReadTool,
   NativeBuildStepTool,
   FileBoardTaskTool,
+  BoardsListTool,
+  BoardCreateTool,
+  BoardEditTool,
+  BoardRemoveTool,
+  TasksListTool,
+  TaskGetTool,
+  TaskEditTool,
+  TaskMoveTool,
+  TaskSubmitTool,
+  TaskCloseTool,
+  TaskDiscardTool,
+  TasksCloseBulkTool,
+  TasksMoveBulkTool,
   QaReceiptTool,
   SeatHandoffTool,
   OrchestratorCapabilitiesTool,

@@ -164,6 +164,30 @@ export function useDeliveryAct(environmentId: EnvironmentId | null, label: strin
   };
 }
 
+/**
+ * Stop and restart with the approval key saved on the server, when one is saved and this
+ * connection may use it. Otherwise `usable` is false and the panel asks for the passphrase.
+ */
+export function useSavedKeyEngineLifecycle(environmentId: EnvironmentId) {
+  const allowed = useAtomValue(deliveryEnvironment.engineLifecycle.permissionAtom(environmentId));
+  const status = useEnvironmentQuery(
+    deliveryEnvironment.boardApprovalKey({ environmentId, input: {} }),
+  );
+  const run = useAtomCommand(deliveryEnvironment.engineLifecycle, {
+    label: "engine control",
+    reportFailure: false,
+  });
+  return {
+    usable: allowed && status.data != null && status.data.source !== "none",
+    run: async (action: "stop" | "restart") => {
+      const result = await run({ environmentId, input: { action } });
+      if (result._tag === "Failure")
+        throw new Error(deliveryFailureText(squashAtomCommandFailure(result)));
+      return result.value;
+    },
+  };
+}
+
 /** Port to app from a release line: whether this connection may, and the filing itself. */
 export function useFilePort(environmentId: EnvironmentId) {
   const allowed = useAtomValue(deliveryEnvironment.filePort.permissionAtom(environmentId));

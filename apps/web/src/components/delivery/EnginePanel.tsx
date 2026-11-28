@@ -21,7 +21,7 @@ import {
   requireDeliveryUpdateReceipt,
 } from "../../lib/deliveryEngineControl";
 import { useEnvironment } from "../../state/environments";
-import { useDeliveryAct, useDeliveryRead } from "../../state/delivery";
+import { useDeliveryAct, useDeliveryRead, useSavedKeyEngineLifecycle } from "../../state/delivery";
 import { primaryServerKeybindingsAtom, serverEnvironment } from "../../state/server";
 import { terminalEnvironment } from "../../state/terminal";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -195,6 +195,7 @@ function EngineControl(props: {
   );
   const health = useDeliveryRead(environmentId, "/api/health", { pollMs: 5000 });
   const act = useDeliveryAct(environmentId, "engine control");
+  const savedKey = useSavedKeyEngineLifecycle(environmentId);
   const configuration = useAtomValue(serverEnvironment.configValueAtom(environmentId));
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const terminalOpen = useAtomCommand(terminalEnvironment.open, { reportFailure: false });
@@ -269,6 +270,7 @@ function EngineControl(props: {
     const problem = await controlDeliveryEngine(action, {
       launcherOwned: summary.launcherOwned,
       lifecycle: async (action) => {
+        if (savedKey.usable) return savedKey.run(action);
         const result = await act("/api/engine/lifecycle", { key: approval, action });
         if (!result.ok) throw new Error(result.why);
         return result.body;
@@ -444,6 +446,9 @@ function EngineControl(props: {
                     ? "Use the approval passphrase you set for this PaperClip engine. It survives restarts."
                     : "Use the approval key printed in this engine's terminal."}{" "}
                   This is not a T3 pairing code.
+                  {savedKey.usable
+                    ? " Stop and restart use the approval key saved in Settings, so they need no passphrase here."
+                    : null}
                 </p>
                 <Input
                   type="password"
@@ -488,7 +493,11 @@ function EngineControl(props: {
                     size="sm"
                     variant="outline"
                     disabled={
-                      busy || awaitingUpdate || stopping || !approval || !summary.launcherOwned
+                      busy ||
+                      awaitingUpdate ||
+                      stopping ||
+                      (!approval && !savedKey.usable) ||
+                      !summary.launcherOwned
                     }
                     onClick={() => void control("stop")}
                   >
@@ -498,7 +507,11 @@ function EngineControl(props: {
                     size="sm"
                     variant="outline"
                     disabled={
-                      busy || awaitingUpdate || stopping || !approval || !summary.launcherOwned
+                      busy ||
+                      awaitingUpdate ||
+                      stopping ||
+                      (!approval && !savedKey.usable) ||
+                      !summary.launcherOwned
                     }
                     onClick={() => void control("restart")}
                   >
