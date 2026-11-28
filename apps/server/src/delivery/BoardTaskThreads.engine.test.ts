@@ -2,11 +2,11 @@
 // BoardTaskThreads against a real delivery engine, not the scratch one of
 // boardThreadEngine.testkit.ts. Skipped unless T3_BOARD_THREAD_ENGINE_ROOT names a checkout of
 // the engine (Operation-PaperClip) that serves the task-to-thread contract; last validated at
-// its commit a658892b:
+// its commit 80add7c6, which serves the thread heartbeat:
 //
-//   mkdir /tmp/engine-a658892b
-//   git -C <Operation-PaperClip> archive a658892b delivery teams | tar -x -C /tmp/engine-a658892b
-//   cd apps/server && T3_BOARD_THREAD_ENGINE_ROOT=/tmp/engine-a658892b \
+//   mkdir /tmp/engine-80add7c6
+//   git -C <Operation-PaperClip> archive 80add7c6 delivery teams | tar -x -C /tmp/engine-80add7c6
+//   cd apps/server && T3_BOARD_THREAD_ENGINE_ROOT=/tmp/engine-80add7c6 \
 //     vp test run src/delivery/BoardTaskThreads.engine.test.ts
 //
 // The test starts scripts/board-thread-engine.ts, which serves that engine from a temp home with
@@ -331,6 +331,8 @@ const linkLife = Effect.gen(function* () {
   const renewed = yield* leaseOf(started);
   assert.equal(renewed.claimed, lease.claimed);
   assert.isTrue(renewed.heartbeat >= lease.heartbeat);
+  // The second pass renews the thread heartbeat the first pass linked (engine slice S2).
+  assert.isTrue(yield* threads.heartbeatLive(started, threadOf(started)));
   assert.equal((yield* setEvents(started)).length, 1);
   assert.equal(store.commands.filter((command) => command.type === "thread.create").length, 1);
 

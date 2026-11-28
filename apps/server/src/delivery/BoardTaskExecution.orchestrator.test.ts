@@ -326,6 +326,7 @@ const execution = () =>
       } as unknown as ProjectionStore.ProjectionStoreV2["Service"]),
       Effect.provideService(BoardTaskThreads.BoardTaskThreads, {
         holdTask: () => Effect.succeed(true),
+        heartbeatLive: () => Effect.succeed(false),
       } as unknown as BoardTaskThreads.BoardTaskThreads["Service"]),
       Effect.provideService(BoardThreadRows.BoardThreadRows, {
         list: () => Effect.succeed([{ threadId: THREAD }]),
