@@ -172,7 +172,8 @@ export function useTaskActions(
   const decide = async (path: string, body: Record<string, unknown>) => {
     const result = await sendDecision(path, body);
     if (!result.ok && result.status === 403 && !Object.hasOwn(body, "key")) setRequireKey(true);
-    return result.ok;
+    // A decision answered after a switch must not close the dialog now open on another task.
+    return result.ok && result.current;
   };
 
   const openClose = (card: Target) => {

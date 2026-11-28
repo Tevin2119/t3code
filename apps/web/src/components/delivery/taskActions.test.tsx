@@ -306,3 +306,24 @@ it("opens no close reason for a task left before the engine asked for one", asyn
   expect(renderer.root.findAllByType("textarea")).toHaveLength(0);
   expect(actions.problem).toBeNull();
 });
+
+it("keeps the next task's decision open when the previous task's decision is answered late", async () => {
+  const answer = Promise.withResolvers<{ ok: true }>();
+  mock.action.mockReset().mockReturnValueOnce(answer.promise);
+  await act(() => {
+    renderer = create(<ScopedProbe scope="task-1" />);
+  });
+  await act(() => actions.run(target, "approve"));
+  // Sent, with the answer held.
+  await act(async () => {
+    void submit().props.onClick();
+  });
+  await act(() => renderer.update(<ScopedProbe scope="task-2" />));
+  await act(() => actions.run({ ...target, id: "task-2", number: 2 }, "approve"));
+  expect(renderer.toJSON()).not.toBeNull();
+  await act(async () => {
+    answer.resolve({ ok: true });
+    await answer.promise;
+  });
+  expect(renderer.toJSON()).not.toBeNull();
+});
