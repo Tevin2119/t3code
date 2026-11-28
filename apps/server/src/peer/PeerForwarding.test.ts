@@ -8,6 +8,7 @@ import {
   DeliveryError,
   EnvironmentId,
   type LinkedDeliveryAction,
+  LINKED_ACTION_APPLIED,
   LINKED_HANDOFF_BUNDLE_MAX_BYTES,
   LINKED_HANDOFF_MCP_MAX_BYTES,
   LinkedHandoffPeerResponses,
@@ -237,6 +238,70 @@ it.effect.each([
     ]),
   );
 });
+
+it.effect(
+  "reports a linked action the owner applied as done when its answer is in a newer shape",
+  () => {
+    const remote = EnvironmentId.make("remote");
+    const answers: Array<unknown> = [
+      { environmentId: remote, diagnostic: null, data: { task: { id: "task", kind: "future" } } },
+      { environmentId: remote, diagnostic: "not-found", data: null },
+    ];
+    return Effect.gen(function* () {
+      const forwarding = yield* PeerForwarding.PeerForwarding;
+      const target = { peerEnvironmentId: remote };
+      const comment = { operation: "comment", taskId: "task", text: "hello" } as const;
+      expect(yield* forwarding.linkedDelivery(target, comment)).toEqual({
+        environmentId: remote,
+        diagnostic: null,
+        data: null,
+        message: LINKED_ACTION_APPLIED,
+      });
+      // A refusal is still the owner's own, and nothing was applied.
+      expect(yield* forwarding.linkedDelivery(target, comment)).toEqual({
+        environmentId: remote,
+        diagnostic: "not-found",
+        data: null,
+      });
+    }).pipe(
+      Effect.provide([
+        PeerForwarding.layer.pipe(
+          Layer.provide(
+            Layer.mergeAll(
+              NodeCrypto.layer,
+              Layer.mock(PeerLinks.PeerLinks)({
+                enabled: Effect.succeed(true),
+                get: () =>
+                  Effect.gen(function* () {
+                    const now = yield* DateTime.now;
+                    return Option.some({
+                      environmentId: remote,
+                      label: "Remote",
+                      urls: ["http://test.invalid"],
+                      access: "full-access",
+                      linkedAt: DateTime.makeUnsafe(0),
+                      expiresAt: DateTime.add(now, { hours: 1 }),
+                      lastReachedAt: null,
+                      lastError: null,
+                    } satisfies PeerLink);
+                  }),
+              }),
+              Layer.mock(PeerMcpClient.PeerMcpClient)({
+                call: (request) => {
+                  expect(request.tool).toBe("delivery_linked_act");
+                  // The client decodes the owner's answer with the schema it was asked for.
+                  return Effect.succeed(answers.shift() as never);
+                },
+              }),
+              Layer.mock(ThreadManagement.ThreadManagementService)({}),
+            ),
+          ),
+        ),
+        DeliveryService.layerTest,
+      ]),
+    );
+  },
+);
 
 const laptop = descriptorOf("environment-laptop", "Laptop");
 const box = descriptorOf("environment-box", "Box");

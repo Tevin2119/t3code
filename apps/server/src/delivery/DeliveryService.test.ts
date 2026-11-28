@@ -497,7 +497,23 @@ const sharedTask = {
   files: [],
   runs: [],
   revisions: [{ revision: 1, created: "now", notes: null, body: "Work to do", acceptance: [] }],
-  threads: [],
+  // Each kind of row the engine's `threadsOf` (delivery/lib/linked.mjs) lists.
+  threads: [
+    { environmentId: linkedEnvironmentId, threadId: threadId("board"), kind: "board-thread" },
+    {
+      environmentId: linkedEnvironmentId,
+      threadId: threadId("side-chat"),
+      kind: "related",
+      role: "side",
+    },
+    {
+      environmentId: linkedEnvironmentId,
+      threadId: threadId("linked-thread"),
+      kind: "related",
+      role: "linked",
+    },
+    { environmentId: linkedEnvironmentId, threadId: threadId("filed-from"), kind: "source" },
+  ],
 } satisfies (typeof LinkedDeliveryResults.comment.Type)["task"];
 
 it.effect.each(["link", "linked thread"] as const)(
@@ -777,6 +793,25 @@ it.effect.each([
     }).pipe(Effect.provide(layer(fake, { prefix: "t3-delivery-link-refusal-" })));
   },
 );
+
+it.effect("treats an applied linked action as done when its answer is in a newer shape", () => {
+  const fake = engine();
+  const path = "/api/linked/tasks/task-shared/messages";
+  fake.replies = { [path]: { task: { ...sharedTask, threads: [{ kind: "future" }] } } };
+  return Effect.gen(function* () {
+    const delivery = yield* DeliveryService.DeliveryService;
+    const result = yield* delivery
+      .actLinked({ operation: "comment", taskId: sharedTask.id, text: "Hello" })
+      .pipe(
+        Effect.provideService(
+          McpInvocationContext.McpInvocationContext,
+          linkedScope("approval-required"),
+        ),
+      );
+    expect(result).toBeNull();
+    expect(fake.requests.filter(({ method }) => method === "POST")).toHaveLength(1);
+  }).pipe(Effect.provide(layer(fake, { prefix: "t3-delivery-link-newer-" })));
+});
 
 it.effect("reads the complete owner thread index and invalidates it after a write", () => {
   const fake = engine();

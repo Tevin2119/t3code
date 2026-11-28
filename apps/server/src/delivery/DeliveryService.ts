@@ -289,9 +289,10 @@ export class DeliveryService extends Context.Service<
     readonly readLinked: <K extends LinkedDeliveryRead["operation"]>(
       input: Extract<LinkedDeliveryRead, { operation: K }>,
     ) => Effect.Effect<LinkedData<K>, DeliveryError>;
+    /** Null when the engine applied the action but answered in a shape this version cannot read. */
     readonly actLinked: <K extends LinkedDeliveryAction["operation"]>(
       input: Extract<LinkedDeliveryAction, { operation: K }>,
-    ) => Effect.Effect<LinkedData<K>, DeliveryError>;
+    ) => Effect.Effect<LinkedData<K> | null, DeliveryError>;
     readonly peerHandoff: (
       input: LinkedHandoffPeerRequest,
       verifiedReturnPeer?: string,
@@ -1203,11 +1204,16 @@ const make = Effect.fn("DeliveryService.make")(function* (
       release: "take/release",
     }[operation];
     const body = "answer" in fields ? { replyTo: fields.replyTo, ...fields.answer } : fields;
-    return yield* linkedRequest("POST", `tasks/${encodeURIComponent(taskId)}/${endpoint}`, {
-      ...body,
-      access: "act",
-      by: client.label,
-    }).pipe(Effect.flatMap(decodeEngine(LinkedDeliveryResults[operation])));
+    const response = yield* linkedRequest(
+      "POST",
+      `tasks/${encodeURIComponent(taskId)}/${endpoint}`,
+      { ...body, access: "act", by: client.label },
+    );
+    // The engine applied it, so an answer this version cannot read is still a success: calling it
+    // unsupported would invite a retry that does it twice.
+    return yield* decodeEngine(LinkedDeliveryResults[operation])(response).pipe(
+      Effect.orElseSucceed(() => null),
+    );
   });
 
   const peerHandoff = Effect.fn("DeliveryService.peerHandoff")(function* (

@@ -12,6 +12,8 @@ import {
   LinkedDeliveryRead,
   LinkedDeliveryAction,
   type LinkedDeliveryBoardsResult,
+  LINKED_ACTION_APPLIED,
+  LinkedDeliveryActionResult,
   LinkedDeliveryResults,
   linkedDeliveryResult,
   OrchestratorMcpFailure,
@@ -107,6 +109,8 @@ const cachedOperations = new Set<LinkedOperation>([
  * the call to the link's access, narrowed to the agent's modes, which every
  * forwarded call carries.
  */
+const decodeLinkedAction = Schema.decodeUnknownOption(LinkedDeliveryActionResult);
+
 export class PeerForwarding extends Context.Service<
   PeerForwarding,
   {
@@ -340,16 +344,33 @@ const make = Effect.gen(function* () {
     const action = actionOperations.has(request.operation);
     if (action && link.access === "read-only") return noLinkedResult(environmentId, "read-only");
 
-    const call = Effect.suspend(() =>
+    const options = {
+      environmentId,
+      tool: action ? "delivery_linked_act" : "delivery_linked_read",
+      arguments: { request },
+      limits: { runtimeMode: "full-access", interactionMode: "default" },
+      maxResponseBytes: 10 * 1024 * 1024,
+    } as const;
+    const readCall = Effect.suspend(() =>
       peers.call({
-        environmentId,
-        tool: action ? "delivery_linked_act" : "delivery_linked_read",
-        arguments: { request },
-        limits: { runtimeMode: "full-access", interactionMode: "default" },
+        ...options,
         success: linkedDeliveryResult(LinkedDeliveryResults[request.operation]),
-        maxResponseBytes: 10 * 1024 * 1024,
       }),
+    );
+    // The owner applied an action it answered without a diagnostic, so data this version cannot
+    // read is reported as done rather than unsupported, which would invite a second attempt.
+    const actCall = Effect.suspend(() =>
+      peers.call({ ...options, success: linkedDeliveryResult(Schema.Unknown) }),
     ).pipe(
+      Effect.map((result) =>
+        Option.getOrElse(decodeLinkedAction(result), () => ({
+          ...result,
+          data: null,
+          ...(result.diagnostic === null ? { message: LINKED_ACTION_APPLIED } : {}),
+        })),
+      ),
+    );
+    const call = (action ? actCall : readCall).pipe(
       Effect.timeout("15 seconds"),
       Effect.map((result) =>
         result.environmentId === environmentId

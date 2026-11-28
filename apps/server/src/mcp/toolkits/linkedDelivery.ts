@@ -1,5 +1,6 @@
 import {
   type DeliveryError,
+  LINKED_ACTION_APPLIED,
   LinkedArrivalProofInput,
   LinkedDeliveryAction,
   LinkedDeliveryActionResult,
@@ -168,7 +169,14 @@ const handlers = {
     linkedResult((delivery) => delivery.readLinked(request)),
   ),
   delivery_linked_act: McpToolAccess.writes(
-    ({ request }) => linkedResult((delivery) => delivery.actLinked(request)),
+    ({ request }) =>
+      linkedResult((delivery) => delivery.actLinked(request)).pipe(
+        Effect.map((result) =>
+          result.data === null && result.diagnostic === null
+            ? { ...result, message: LINKED_ACTION_APPLIED }
+            : result,
+        ),
+      ),
     { linkedCallers: "allowed" },
   ),
   delivery_linked_handoff: McpToolAccess.writes(linkedHandoff, { linkedCallers: "allowed" }),

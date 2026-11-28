@@ -23,10 +23,15 @@ const TaskRef = Schema.Struct({
   state: NullableString,
 });
 const ThreadRef = Schema.Struct({ environmentId: EnvironmentId, threadId: ThreadId });
-const TaskThread = Schema.Struct({
-  ...ThreadRef.fields,
-  kind: Schema.Literals(["board-thread", "source"]),
-});
+const TaskThread = Schema.Union([
+  Schema.Struct({ ...ThreadRef.fields, kind: Schema.Literals(["board-thread", "source"]) }),
+  // A side chat of the task's thread, or a thread linked to the task (engine slice L2).
+  Schema.Struct({
+    ...ThreadRef.fields,
+    kind: Schema.Literal("related"),
+    role: Schema.Literals(["side", "linked"]),
+  }),
+]);
 
 const Card = Schema.Struct({
   ...TaskRef.fields,
@@ -309,6 +314,9 @@ export const LinkedDeliveryDiagnostic = Schema.Literals([
   "response-too-large",
 ]);
 export type LinkedDeliveryDiagnostic = typeof LinkedDeliveryDiagnostic.Type;
+
+/** An action the owner applied whose answer this version could not read. */
+export const LINKED_ACTION_APPLIED = "Done on that machine. Refresh to see the result.";
 
 export const linkedDeliveryResult = <S extends Schema.Top>(schema: S) =>
   Schema.Struct({
