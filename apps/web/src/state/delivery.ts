@@ -34,6 +34,7 @@ import type {
   OrchestratorParticipantChoice,
 } from "../lib/orchestratorChat";
 import { boardPreferencesOf, useBoardStore } from "./deliveryBoard";
+import { pollDeliveryRead } from "./deliveryPoll";
 import { useEnvironments, usePrimaryEnvironmentId } from "./environments";
 import { useEnvironmentQuery } from "./query";
 import { serverEnvironment } from "./server";
@@ -61,7 +62,8 @@ export function useDeliveryEnabled(environmentId: EnvironmentId | null): boolean
 /**
  * Reads an engine path through the server. With `pollMs` the reading is
  * refreshed while the component is mounted and the page is visible, since a
- * team works for minutes and the engine has no push channel yet.
+ * team works for minutes and the engine has no push channel yet. Every
+ * component polling the same reading shares one timer.
  */
 export function useDeliveryRead(
   environmentId: EnvironmentId | null,
@@ -78,10 +80,7 @@ export function useDeliveryRead(
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Poll the engine while mounted because delivery has no push channel.
   useEffect(() => {
     if (!atom || !pollMs) return;
-    const timer = window.setInterval(() => {
-      if (document.visibilityState === "visible") refresh();
-    }, pollMs);
-    return () => window.clearInterval(timer);
+    return pollDeliveryRead(atom, pollMs, refresh);
   }, [atom, pollMs, refresh]);
   return {
     body: query.data?.body ?? null,

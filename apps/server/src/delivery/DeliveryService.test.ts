@@ -89,6 +89,8 @@ interface Engine {
   health?: { profile: string | null; home: string };
   replies?: Readonly<Record<string, unknown>>;
   statuses?: Readonly<Record<string, number>>;
+  /** The store generation, as the engine names it on reads and at /api/generation. */
+  generation?: number;
   beforeRequest?: (url: URL) => Effect.Effect<void>;
 }
 
@@ -178,10 +180,15 @@ const layer = (
                       "content-length": String(
                         new TextEncoder().encode(JSON.stringify(value)).byteLength,
                       ),
+                      ...(fake.generation === undefined || request.method !== "GET"
+                        ? {}
+                        : { "x-store-generation": String(fake.generation) }),
                     },
                   }),
                 ),
               );
+            if (url.pathname === "/api/generation" && fake.generation !== undefined)
+              return json({ generation: fake.generation });
             if (fake.replies && Object.hasOwn(fake.replies, url.pathname + url.search))
               return json(
                 fake.replies[url.pathname + url.search],
@@ -2106,6 +2113,29 @@ describe("DeliveryService", () => {
       }).pipe(Effect.provide(layer(fake, { prefix: "board-delivery-relay-" })));
     },
   );
+  it.effect("polls a board read again only once the store generation moved or T3 wrote", () => {
+    const fake = engine();
+    const lanes = "/api/lanes?view=development&set=all";
+    fake.generation = 7;
+    fake.replies = { "/api/lanes": { lanes: [] }, "/api/tasks/task-1/seen": { accepted: true } };
+    const asked = (path: string) => fake.requests.filter((request) => request.path === path).length;
+    return Effect.gen(function* () {
+      const delivery = yield* DeliveryService.DeliveryService;
+      yield* delivery.pollRead({ path: lanes });
+      yield* TestClock.adjust("2 seconds");
+      expect((yield* delivery.pollRead({ path: lanes })).body).toEqual({ lanes: [] });
+      expect([asked("/api/lanes"), asked("/api/generation")]).toEqual([1, 1]);
+
+      fake.generation = 8;
+      yield* TestClock.adjust("2 seconds");
+      yield* delivery.pollRead({ path: lanes });
+      expect([asked("/api/lanes"), asked("/api/generation")]).toEqual([2, 2]);
+
+      yield* delivery.act({ path: "/api/tasks/task-1/seen", body: {} });
+      yield* delivery.pollRead({ path: lanes });
+      expect(asked("/api/lanes")).toBe(3);
+    }).pipe(Effect.provide(layer(fake, { prefix: "delivery-poll-read-" })));
+  });
   it.effect(
     "refuses native completion through the public relay before contacting the engine",
     () => {
