@@ -46,6 +46,7 @@ import type * as DeliveryEffective from "./DeliveryEffective.ts";
 import { boardTaskOfMarker } from "./boardThreadMarker.ts";
 import * as DeliveryThreadSession from "./DeliveryThreadSession.ts";
 import * as Discovery from "./deliveryDiscovery.ts";
+import { makeDeliveryPolledReads } from "./deliveryPolledReads.ts";
 
 const BindingsFile = Schema.fromJsonString(
   Schema.Struct({
@@ -93,6 +94,9 @@ const Identity = Schema.Struct({
   project: Schema.String,
 });
 const decodeOpened = Schema.decodeUnknownEffect(Schema.Struct({ identity: Identity }));
+const decodeGeneration = Schema.decodeUnknownEffect(
+  Schema.Struct({ generation: Schema.Number.check(Schema.isInt()) }),
+);
 const decodeBinding = Schema.decodeUnknownEffect(DeliveryThreadBinding);
 const decodePending = Schema.decodeUnknownEffect(DeliveryThreadPending);
 
@@ -217,6 +221,11 @@ export class DeliveryService extends Context.Service<
   DeliveryService,
   {
     readonly read: (input: DeliveryReadInput) => Effect.Effect<DeliveryResponse, DeliveryError>;
+    /**
+     * A client's read: identical reads in flight share one engine request, and a board or task
+     * read the store generation says is unchanged is served from the last one.
+     */
+    readonly pollRead: (input: DeliveryReadInput) => Effect.Effect<DeliveryResponse, DeliveryError>;
     readonly discover: (
       input: DeliveryDiscoveryInput,
       caller: Discovery.DiscoveryCaller,
@@ -312,6 +321,7 @@ export const layerTest = Layer.succeed(
   DeliveryService,
   DeliveryService.of({
     read: disabled,
+    pollRead: disabled,
     discover: Effect.fn("DeliveryService.discover")(function* (input, caller) {
       return {
         ...Discovery.emptyDiscovery(
@@ -516,10 +526,15 @@ const make = Effect.fn("DeliveryService.make")(function* (
   const discoveryLock = yield* Semaphore.make(1);
   let discoveryGeneration = 0;
   let discoveryConfiguration = "";
+  // Late-bound: the polled reads are made with `request`, which invalidates them on each write.
+  let invalidatePolledReads = () => {};
   const invalidateDiscovery = () => {
     discoveryGeneration++;
     discoveryCache.clear();
+    invalidatePolledReads();
   };
+  /** The store generation each engine answer was served at, from its `x-store-generation`. */
+  const storeGenerations = new WeakMap<DeliveryResponse, number>();
 
   const readHealth = Effect.fn("DeliveryService.readHealth")(
     function* (engineUrl: string, bounded: boolean) {
@@ -798,13 +813,37 @@ const make = Effect.fn("DeliveryService.make")(function* (
         });
       }
       const readAt = DateTime.formatIso(yield* DateTime.now);
-      return { readAt, body: parsed } satisfies DeliveryResponse;
+      const result = { readAt, body: parsed } satisfies DeliveryResponse;
+      const generation = Number(response.headers["x-store-generation"]);
+      if (method === "GET" && Number.isSafeInteger(generation)) {
+        storeGenerations.set(result, generation);
+      }
+      return result;
     },
     (effect, method) =>
       method === "GET" ? effect : effect.pipe(Effect.ensuring(Effect.sync(invalidateDiscovery))),
   );
 
-  /** The root of the repository a folder is in, or the folder itself when it is in none. */
+  const polledReads = makeDeliveryPolledReads({
+    scope: yield* Effect.scope,
+    read: (path) =>
+      request("GET", path).pipe(
+        Effect.map((response) => ({
+          response,
+          generation: storeGenerations.get(response) ?? null,
+        })),
+      ),
+    generation: request("GET", "/api/generation", undefined, true).pipe(
+      Effect.flatMap((response) => decodeGeneration(response.body)),
+      Effect.map(({ generation }) => generation),
+      Effect.mapError(
+        () =>
+          new DeliveryError({ reason: "invalid", detail: "The engine generation is unreadable." }),
+      ),
+    ),
+  });
+  invalidatePolledReads = polledReads.invalidate;
+
   /** The root of the repository a folder is in, or `null` for a folder in none. */
   const repositoryRootOf = Effect.fn("DeliveryService.repositoryRootOf")(function* (
     folder: string,
@@ -1777,6 +1816,7 @@ const make = Effect.fn("DeliveryService.make")(function* (
 
   return DeliveryService.of({
     read: Effect.fn("DeliveryService.read")((input) => request("GET", input.path)),
+    pollRead: Effect.fn("DeliveryService.pollRead")((input) => polledReads.read(input.path)),
     discover,
     act: Effect.fn("DeliveryService.act")((input) =>
       /^\/api\/native-(builds|intakes)\//.test(

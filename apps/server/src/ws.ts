@@ -2063,7 +2063,7 @@ export const layerWsRpc = (
         linkedBoardTasks(
           link,
           Option.isSome(boardDelivery)
-            ? boardDelivery.value.read({ path: "/api/lanes?view=development&set=all" })
+            ? boardDelivery.value.pollRead({ path: "/api/lanes?view=development&set=all" })
             : null,
         ).pipe(
           Effect.provideService(SqlClient.SqlClient, sql),
@@ -3871,7 +3871,7 @@ const layerForkWsRpc = (currentSession: EnvironmentAuth.AuthenticatedSession) =>
           serverEnvironment.getEnvironmentId.pipe(
             Effect.flatMap((environmentId) => boardThreadTasks.fileThread(environmentId, input)),
           ),
-        [WS_METHODS.deliveryRead]: (input) => delivery.read(input),
+        [WS_METHODS.deliveryRead]: (input) => delivery.pollRead(input),
         // A request that reaches the workspace needs the file scope the engine would use.
         [WS_METHODS.deliveryAct]: (input) =>
           (input.path.endsWith("/from-chat") ||
