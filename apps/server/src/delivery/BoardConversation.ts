@@ -58,8 +58,6 @@ interface Activity {
 const STEER_MESSAGE_PREFIX = "message:board-steer:";
 const HANDOFF_NOTICE_PREFIX = "message:board-handoff:";
 const UNDELIVERED_NOTICE_PREFIX = "message:board-steer-undelivered:";
-/** A task as filed, the first message of its conversation (`BoardTaskThreads`). */
-export const FILED_NOTICE_PREFIX = "message:board-task-filed:";
 /** How long a thread steer the engine cannot take is tried: the board's default hand-off wait. */
 const STEER_RETRY_MINUTES = 30;
 const STEER_RETRY_MS = STEER_RETRY_MINUTES * 60 * 1000;
@@ -137,7 +135,6 @@ function scanActivity(
         message.id.startsWith(STEER_MESSAGE_PREFIX) ||
         message.id.startsWith(HANDOFF_NOTICE_PREFIX) ||
         message.id.startsWith(UNDELIVERED_NOTICE_PREFIX) ||
-        message.id.startsWith(FILED_NOTICE_PREFIX) ||
         typed;
       found.push({
         seq: stored.sequence,

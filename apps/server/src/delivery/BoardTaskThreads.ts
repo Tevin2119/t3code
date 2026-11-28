@@ -3,7 +3,6 @@
 // say who leads. This never starts a task, and no client asks it to make a thread.
 import {
   CommandId,
-  MessageId,
   DeliverySeatModels,
   type DeliveryError,
   type DeliveryOrchestrationConfig,
@@ -35,7 +34,6 @@ import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.
 import * as ServerSettings from "../serverSettings.ts";
 import { forkParked } from "../serverActivation.ts";
 import * as BoardConversation from "./BoardConversation.ts";
-import { engineNotice, FILED_NOTICE_PREFIX } from "./BoardConversation.ts";
 import * as BoardTaskSideChats from "./BoardTaskSideChats.ts";
 import { boardTaskInWork, MOVED } from "./boardTaskWork.ts";
 import * as BoardThreadRows from "./boardThreadRows.ts";
@@ -135,19 +133,7 @@ const TaskStanding = Schema.Struct({
 type TaskStanding = typeof TaskStanding.Type;
 const decodeStanding = Schema.decodeUnknownOption(TaskStanding);
 const decodeSelection = Schema.decodeUnknownEffect(ModelSelection);
-/** The task as a person filed it, from its own detail. */
-const Filed = Schema.Struct({
-  body: readOrNull(Schema.String),
-  acceptance: readOrNull(Schema.Array(Schema.String)),
-});
-const decodeFiled = Schema.decodeUnknownOption(Filed);
-const SubmitSince = Schema.fromJsonString(
-  Schema.Struct({
-    since: Schema.Number,
-    // Tasks whose thread was made at submit and that are still owed their first message.
-    owed: Schema.optional(Schema.Array(Schema.String)),
-  }),
-);
+const SubmitSince = Schema.fromJsonString(Schema.Struct({ since: Schema.Number }));
 const decodeSince = Schema.decodeUnknownOption(SubmitSince);
 const encodeSince = Schema.encodeEffect(SubmitSince);
 
@@ -199,18 +185,6 @@ const waitsSinceSubmit = (card: Card, since: number) =>
 /** A task submitted or in work with no conversation: this pass links it to its thread. */
 const awaitsThread = (card: Card, since: number) =>
   card.boardThread === null && (boardTaskInWork(card) || waitsSinceSubmit(card, since));
-
-/** The conversation's first message, sent once the task is admitted: the task as filed. */
-const filedText = (title: string, filed: typeof Filed.Type) => {
-  const acceptance = (filed.acceptance ?? []).map((line) => `- ${line}`).join("\n");
-  return [
-    `# ${title}`,
-    filed.body?.trim() ?? "",
-    acceptance === "" ? "" : `Acceptance:\n${acceptance}`,
-  ]
-    .filter((part) => part !== "")
-    .join("\n\n");
-};
 
 /**
  * How a thread this server made stands with its task, as the engine's lanes show it: `linked` is
@@ -327,17 +301,15 @@ export const make = Effect.gen(function* () {
     Effect.orElseSucceed(() => Option.none()),
   );
   const since = Option.isSome(stamped) ? stamped.value.since : yield* Clock.currentTimeMillis;
-  const owedFiled = new Set(Option.isSome(stamped) ? (stamped.value.owed ?? []) : []);
-  const saveSince = () =>
-    encodeSince({ since, owed: [...owedFiled] }).pipe(
+  if (Option.isNone(stamped))
+    yield* encodeSince({ since }).pipe(
       Effect.flatMap((contents) => writeFileStringAtomically({ filePath: sincePath, contents })),
       Effect.provideService(FileSystem.FileSystem, fileSystem),
       Effect.provideService(Path.Path, path),
       Effect.catchCause((cause) =>
-        Effect.logWarning("Board threads made at submit could not be saved.", { cause }),
+        Effect.logWarning("When board threads start at submit could not be saved.", { cause }),
       ),
     );
-  if (Option.isNone(stamped)) yield* saveSince();
   // The token of each claim this server holds. It is kept in memory only: after a restart the
   // old lease lapses within its window and the task is claimed again, still by the same thread.
   const holders = new Map<string, string>();
@@ -549,41 +521,6 @@ export const make = Effect.gen(function* () {
     return yield* new BoardTaskThreadsError({ reason: "engine", cause: put.failure });
   });
 
-  /**
-   * The task as filed, told once its task is admitted and claimed here: a system notice, so no
-   * team round starts and no person says it. Never while the task waits, since every message
-   * starts a lead turn. A detail that cannot be read, or a thread that cannot take it, waits for
-   * a later pass.
-   */
-  const sendFiled = Effect.fn("BoardTaskThreads.sendFiled")(function* (
-    card: Card,
-    threadId: ThreadId,
-  ) {
-    const task = card.set ? boardTaskOf(card.set, card.id) : null;
-    if (task === null || card.title == null || !owedFiled.has(card.id)) return;
-    const read = yield* delivery.read({ path: `/api/tasks/${card.id}` }).pipe(Effect.result);
-    const filed = read._tag === "Success" ? decodeFiled(read.success.body) : Option.none();
-    if (Option.isNone(filed)) return;
-    const text = filedText(card.title, filed.value);
-    const sent = yield* threads
-      .dispatch({
-        type: "message.dispatch",
-        commandId: CommandId.make(`${boardTaskThreadMarker(task)}:filed`),
-        threadId,
-        messageId: MessageId.make(`${FILED_NOTICE_PREFIX}${task.board}:${task.id}`),
-        text,
-        notification: engineNotice("The task as filed", text),
-        attachments: [],
-        dispatchMode: { type: "queue_after_active" },
-        createdBy: "agent",
-        creationSource: "server",
-      })
-      .pipe(Effect.result);
-    if (sent._tag !== "Success") return;
-    owedFiled.delete(card.id);
-    yield* saveSince();
-  });
-
   /** A started task with no conversation: make its thread once, and tell the engine. */
   const bind = Effect.fn("BoardTaskThreads.bind")(function* (
     card: Card,
@@ -643,15 +580,14 @@ export const make = Effect.gen(function* () {
       environmentId: context.environmentId,
       key: context.key,
     });
-    if (boardThread?.environmentId === context.environmentId && boardThread.threadId === threadId) {
-      // A task waiting for a slot holds no claim and is told nothing yet: it is claimed, then told
-      // the task as filed, once it is in work.
-      if (inWork) yield* holdClaim(card.id, context.environmentId, threadId);
-      else if (!owedFiled.has(card.id)) {
-        owedFiled.add(card.id);
-        yield* saveSince();
-      }
-    }
+    // A task waiting for a slot holds no claim and is sent nothing: its thread stays idle until
+    // the engine's brief, sent in the task's worktree, once it is in work.
+    if (
+      inWork &&
+      boardThread?.environmentId === context.environmentId &&
+      boardThread.threadId === threadId
+    )
+      yield* holdClaim(card.id, context.environmentId, threadId);
     return hold;
   });
 
@@ -878,9 +814,6 @@ export const make = Effect.gen(function* () {
         }
         steering.add(taskId);
         yield* holdClaim(taskId, environmentId, link.threadId);
-        const card = cards.get(taskId);
-        if (holders.has(taskId) && card !== undefined)
-          yield* sendFiled(card, link.threadId as ThreadId);
       }
       yield* settleEnded({ cards, standings, openThreads, environmentId });
       yield* refreshTeams({ cards, openThreads, teams: teamsOf });

@@ -514,19 +514,14 @@ const QUEUED_THREAD = boardTaskThreadId(QUEUED);
 const claims = (engine: ScratchEngine, id: string) =>
   engine.requests.filter((request) => request.path === `/api/orchestration/tasks/${id}/claim`);
 
-const filedSends = (store: ThreadStore, threadId: string) =>
+const sends = (store: ThreadStore, threadId: string) =>
   store.commands.filter(
     (command) => command.type === "message.dispatch" && command.threadId === threadId,
   );
 
-it.effect("gives a submitted task an idle thread, and its first message once claimed", () => {
+it.effect("gives a submitted task an idle thread, and claims it only in work", () => {
   const engine = board();
-  const queued = engine.addTask({
-    id: "queued-1",
-    title: "Ship it",
-    lane: "queue",
-    state: "ready",
-  });
+  const queued = engine.addTask({ id: "queued-1", lane: "queue", state: "ready" });
   const store = threadStore();
   return Effect.gen(function* () {
     const threads = yield* service(store);
@@ -538,39 +533,20 @@ it.effect("gives a submitted task an idle thread, and its first message once cla
     assert.isNull(engine.leaseOf("queued-1"));
     assert.lengthOf(claims(engine, "queued-1"), 0);
     // Every message starts a lead turn, so a waiting thread is sent none and runs nothing.
-    assert.lengthOf(filedSends(store, QUEUED_THREAD), 0);
+    assert.lengthOf(sends(store, QUEUED_THREAD), 0);
     assert.isFalse(store.active.has(QUEUED_THREAD));
     assert.isFalse(store.events.some(({ event }) => event.threadId === QUEUED_THREAD));
     queued.lane = "in-work";
     queued.state = "triage";
     yield* threads.reconcile();
-    // Admitted, the same thread claims it, then is told the task as filed.
+    yield* threads.reconcile();
+    // Admitted, the same thread claims it. The pass still sends nothing: the engine's brief, sent
+    // in the task's worktree (BoardTaskExecution), is the first message that starts a turn.
     assert.equal(engine.leaseOf("queued-1")?.origin, `thread:${ENVIRONMENT}/${QUEUED_THREAD}`);
     assert.lengthOf(creates(store), 1);
     assert.lengthOf(linkWrites(engine), 1);
-    const [first, ...rest] = filedSends(store, QUEUED_THREAD);
-    assert.lengthOf(rest, 0);
-    if (first?.type !== "message.dispatch") throw new Error("Expected the task as filed");
-    assert.equal(first.text, "# Ship it\n\nComplete the task.");
-    // A system notice from the server, said by no person: `NativeTeamChat.prepareTurn` starts no
-    // team round for it.
-    assert.deepInclude(first, {
-      createdBy: "agent",
-      creationSource: "server",
-      dispatchMode: { type: "queue_after_active" },
-    });
-    assert.deepEqual(first.notification, {
-      source: { kind: "system" },
-      outcome: "updated",
-      summary: "The task as filed",
-      detail: first.text,
-    });
-    yield* threads.reconcile();
-    assert.lengthOf(filedSends(store, QUEUED_THREAD), 1);
-    // The card counts it as a notice, not a message of the conversation.
-    assert.isTrue(
-      engine.activityOf("queued-1").some((row) => row.kind === "steer" && row.excerpt === null),
-    );
+    assert.lengthOf(sends(store, QUEUED_THREAD), 0);
+    assert.isFalse(store.active.has(QUEUED_THREAD));
   }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-submit-")));
 });
 
@@ -608,15 +584,13 @@ it.effect("gives no thread at submit to a draft, a finished task, or one submitt
     const restarted = yield* service(store);
     yield* restarted.reconcile();
     assert.isTrue(store.threads.has(threadOf("queued-3")));
-    // An open task submitted earlier is not backfilled: its thread comes once it is in work,
-    // with no first message.
+    // An open task submitted earlier is not backfilled: its thread comes once it is in work.
     old.lane = "in-work";
     old.state = "triage";
     yield* restarted.reconcile();
     yield* restarted.reconcile();
     assert.isTrue(store.threads.has(QUEUED_THREAD));
     assert.isNotNull(engine.leaseOf("queued-1"));
-    assert.lengthOf(filedSends(store, QUEUED_THREAD), 0);
     assert.isFalse(store.threads.has(threadOf("draft-1")));
     assert.isFalse(store.threads.has(threadOf("closed-1")));
   }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-no-backfill-")));
