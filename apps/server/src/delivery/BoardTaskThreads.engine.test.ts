@@ -45,6 +45,7 @@ import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.
 import { deriveProviderInstanceConfigMap } from "../provider/ProviderInstanceRegistryHydration.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as BoardConversation from "./BoardConversation.ts";
+import * as BoardTaskSideChats from "./BoardTaskSideChats.ts";
 import * as BoardTaskThreads from "./BoardTaskThreads.ts";
 import * as BoardThreadRows from "./boardThreadRows.ts";
 import { boardTaskOf, boardTaskOfMarker, boardTaskThreadId } from "./boardThreadMarker.ts";
@@ -213,6 +214,11 @@ function service(store: ReturnType<typeof threadStore>, key: string | null = PHR
     Effect.provideService(BoardConversation.BoardConversation, {
       sync: () => Effect.void,
       settleSteers: () => Effect.void,
+    }),
+    Effect.provideService(BoardTaskSideChats.BoardTaskSideChats, {
+      record: () => Effect.void,
+      sync: () => Effect.void,
+      start: () => Effect.void,
     }),
     Effect.provideService(LimitedSeatSwap.LimitedSeatSwap, {
       resumeBoardLeadHandoff: () => Effect.die("This fixture has no lead hand-offs"),

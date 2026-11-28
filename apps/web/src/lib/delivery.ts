@@ -1839,6 +1839,18 @@ export interface TaskView {
     readonly environmentId: string;
     readonly threadId: string;
   } | null;
+  /**
+   * Other conversations that belong with the task (engine slice L2): its side chats and threads
+   * linked to it, from any environment, oldest first. Older engines serve none.
+   */
+  readonly relatedThreads: ReadonlyArray<TaskRelatedThread>;
+}
+
+export interface TaskRelatedThread {
+  readonly key: string;
+  readonly environmentId: string;
+  readonly threadId: string;
+  readonly role: "side" | "linked";
 }
 
 export function parseSeatLive(value: unknown): SeatLive | null {
@@ -2175,6 +2187,14 @@ export function parseTask(body: unknown): TaskView | null {
           }
         : null;
     })(),
+    relatedThreads: records(body.relatedThreads).flatMap((link): Array<TaskRelatedThread> => {
+      const key = text(link.key);
+      const environmentId = text(link.environmentId);
+      const threadId = text(link.threadId);
+      return key && environmentId && threadId && (link.role === "side" || link.role === "linked")
+        ? [{ key, environmentId, threadId, role: link.role }]
+        : [];
+    }),
   };
 }
 

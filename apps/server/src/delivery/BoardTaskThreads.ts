@@ -28,6 +28,7 @@ import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.
 import * as ServerSettings from "../serverSettings.ts";
 import { forkParked } from "../serverActivation.ts";
 import * as BoardConversation from "./BoardConversation.ts";
+import * as BoardTaskSideChats from "./BoardTaskSideChats.ts";
 import { boardTaskInWork, MOVED } from "./boardTaskWork.ts";
 import * as BoardThreadRows from "./boardThreadRows.ts";
 import {
@@ -52,6 +53,8 @@ const Card = Schema.Struct({
   set: Schema.optional(Schema.NullOr(Schema.String)),
   // Absent on an engine without the link: such an engine is never written to.
   boardThread: Schema.optional(Schema.NullOr(BoardThreadLink)),
+  // Absent on an engine before slice L2: its side chats are never recorded by the pass.
+  relatedThreads: readOrNull(Schema.Array(BoardTaskSideChats.RelatedThreadLink)),
   // A task split into parts: its parts get threads, never the parent (engine slice E1).
   split: readOrNull(Schema.Boolean),
   // Read only to make a thread: without them a task is held as `unreadable-card`.
@@ -254,6 +257,7 @@ export const make = Effect.gen(function* () {
   const instances = yield* ProviderInstanceRegistry.ProviderInstanceRegistry;
   const rows = yield* BoardThreadRows.BoardThreadRows;
   const conversation = yield* BoardConversation.BoardConversation;
+  const sideChats = yield* BoardTaskSideChats.BoardTaskSideChats;
   const swaps = yield* LimitedSeatSwap.LimitedSeatSwap;
   const lock = yield* Semaphore.make(1);
   // The token of each claim this server holds. It is kept in memory only: after a restart the
@@ -758,8 +762,10 @@ export const make = Effect.gen(function* () {
       yield* refreshTeams({ cards, openThreads, teams: teamsOf });
       // Moved tasks are worked on another machine: their conversation is not told from here.
       const mirrored = [...cards.values()].filter((card) => !MOVED.has(card.state));
-      if (key !== undefined)
+      if (key !== undefined) {
         yield* conversation.sync({ cards: mirrored, steering, environmentId, key });
+        yield* sideChats.sync({ cards, environmentId, key });
+      }
       // Again, so words the mirror saw this pass are told in it.
       yield* conversation.settleSteers({ standings, environmentId });
       for (const [task, hold] of holds) {
