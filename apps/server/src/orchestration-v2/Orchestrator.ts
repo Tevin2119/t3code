@@ -82,6 +82,7 @@ import {
   ThreadId,
   TurnItemId,
   TrimmedNonEmptyString,
+  isServerOwnedThreadLineage,
   managedRuntimeModeCeilingMessage,
 } from "@t3tools/contracts";
 import * as KeyedLock from "@t3tools/shared/KeyedLock";
@@ -6398,6 +6399,14 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         ),
       );
 
+    // The engine works a server-owned thread; a side chat about its task stays out of it.
+    if (isServerOwnedThreadLineage(targetProjection.thread.lineage)) {
+      return yield* new OrchestratorDispatchError({
+        commandId: command.commandId,
+        commandType: command.type,
+        cause: "A task thread takes no merge-back; side chats about a task stay separate.",
+      });
+    }
     if (
       sourceProjection.thread.lineage.relationshipToParent !== "fork" ||
       sourceProjection.thread.lineage.parentThreadId !== command.targetThreadId

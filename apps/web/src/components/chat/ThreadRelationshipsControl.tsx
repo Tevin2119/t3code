@@ -21,6 +21,7 @@ import {
   isParentThreadRelationship,
   threadRelationshipRowStatus,
   orderWebThreadLineageRows,
+  mergeBackAcceptedBy,
   resolveMergeBackTargetThreadId,
   type ThreadRelationshipEdge,
   type ThreadRelationshipWalkRow,
@@ -643,7 +644,11 @@ export function ThreadRelationshipsPanel(props: {
     (row.edge.kind !== "subagent" || isParentThreadRelationship(row.edge, props.threadId));
   const currentProject = projects.find((project) => project.id === currentThread?.projectId);
   const latestMergeBackRun = projection === null ? null : resolveLatestMergeBackRun(projection);
-  const mergeTargetThreadId = resolveMergeBackTargetThreadId(projection);
+  const forkedFromThreadId = resolveMergeBackTargetThreadId(projection);
+  const mergeTargetThreadId =
+    forkedFromThreadId !== null && mergeBackAcceptedBy(graph.nodes.get(forkedFromThreadId)?.thread)
+      ? forkedFromThreadId
+      : null;
   const relationshipRows = orderWebThreadLineageRows({
     graph,
     rows: immediateThreadRelationships(graph, props.threadId),

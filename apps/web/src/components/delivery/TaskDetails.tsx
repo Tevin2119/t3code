@@ -1,6 +1,6 @@
 import { boardTaskFinishedBy } from "@t3tools/shared/boardTaskFinished";
 import { msg, useGT, useMessages } from "gt-react";
-import { ClipboardListIcon, PencilIcon, RocketIcon } from "lucide-react";
+import { ClipboardListIcon, MessagesSquareIcon, PencilIcon, RocketIcon } from "lucide-react";
 import { useRef, useState } from "react";
 
 import { BOARD_LANE, boardLaneOf, boardLaneTitle } from "../../lib/boardLanes";
@@ -579,6 +579,14 @@ function TaskDetailsBody(props: { readonly board: BoardTask; readonly task: Task
             </Button>
           </span>
         </Row>
+        {board.discuss ? (
+          <Row label={gt("Side chat", { $context: "the board task's side chat to talk about it" })}>
+            <Button size="xs" variant="ghost" onClick={board.discuss} data-task-discuss>
+              <MessagesSquareIcon />
+              {gt("Discuss in a thread")}
+            </Button>
+          </Row>
+        ) : null}
       </TaskDisclosure>
 
       <TaskSeatHandoffs handoffs={task.handoffs} />

@@ -1,5 +1,6 @@
 import {
   isOrchestrationV2WorkActive,
+  isServerOwnedThreadLineage,
   type OrchestrationV2ThreadShell,
   type ThreadId,
 } from "@t3tools/contracts";
@@ -41,6 +42,16 @@ export function resolveMergeBackTargetThreadId(
   return projection.thread.forkedFrom?.type === "run"
     ? projection.thread.forkedFrom.threadId
     : projection.thread.lineage.parentThreadId;
+}
+
+/**
+ * Whether a fork may merge back into `target`. A server-owned thread, such as a board task's,
+ * takes none, and the server refuses one: a side chat about the task stays out of it.
+ */
+export function mergeBackAcceptedBy(
+  target: Pick<OrchestrationV2ThreadShell, "lineage"> | null | undefined,
+): boolean {
+  return target == null || !isServerOwnedThreadLineage(target.lineage);
 }
 
 function edgeKey(edge: ThreadRelationshipEdge): string {

@@ -29,6 +29,8 @@ export interface BoardTask {
     /** The seat conversations the thread's lineage adds, after the subagents it lists itself. */
     readonly rows: ReadonlyArray<SeatThreadRow>;
   };
+  /** Opens a side chat of the task's thread to talk about the task; null where none can start. */
+  readonly discuss: (() => void) | null;
 }
 
 /** Provided where the board's task view mounts, so what it hosts reads the task from here. */

@@ -330,6 +330,7 @@ it("leaves a board task's facts to the board's column, and keeps its lineage", a
         openTask: () => {},
         openTab: () => {},
         decisions: <p>Your decision</p>,
+        discuss: null,
         thread: null,
         seats: {
           thread: () => null,
@@ -379,6 +380,7 @@ it("keeps a board task's lineage, where its seats and source open, when the card
         openTask: () => {},
         openTab: () => {},
         decisions: null,
+        discuss: null,
         thread: null,
         seats: { thread: () => null, rows: [] },
       }}

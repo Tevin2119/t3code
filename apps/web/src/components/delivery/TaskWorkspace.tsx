@@ -167,6 +167,7 @@ function OpenTaskWorkspace(props: TaskWorkspaceProps & { readonly value: OpenBoa
                           setTaskBrief("");
                         }}
                         onAllocate={() => setAllocatingTask(task.id)}
+                        onDiscuss={props.value.discuss}
                         onChanged={read.refresh}
                         onProblem={setMenuProblem}
                       />

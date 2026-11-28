@@ -293,6 +293,7 @@ it("starts collapsed for a board task's own thread, and keeps the person's toggl
     openTask: () => {},
     openTab: () => {},
     decisions: null,
+    discuss: null,
     thread: threadA,
     seats: { thread: () => null, rows: [] },
   };
