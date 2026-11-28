@@ -1,5 +1,11 @@
 import {
+  type DeliveryError,
   LinkedArrivalProofInput,
+  LinkedDeliveryAction,
+  LinkedDeliveryActionResult,
+  type LinkedDeliveryDiagnostic,
+  LinkedDeliveryRead,
+  LinkedDeliveryReadResult,
   LinkedArrivalProofResult,
   LinkedHandoffPeerAct,
   LinkedHandoffPeerRead,
@@ -18,6 +24,34 @@ import * as ThreadManagementService from "../../orchestration-v2/ThreadManagemen
 import * as PeerLinks from "../../peer/PeerLinks.ts";
 import * as McpInvocationContext from "../McpInvocationContext.ts";
 import * as McpToolAccess from "../McpToolAccess.ts";
+
+const DeliveryLinkedReadTool = Tool.make("delivery_linked_read", {
+  description:
+    "Read shared boards and visible tasks on this machine through an authenticated peer link.",
+  parameters: Schema.Struct({ request: LinkedDeliveryRead }),
+  success: LinkedDeliveryReadResult,
+  failure: OrchestratorMcpFailure,
+  failureMode: "return",
+  dependencies: [McpInvocationContext.McpInvocationContext, DeliveryService.DeliveryService],
+})
+  .annotate(Tool.Readonly, true)
+  .annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenUnlessLinkedDeliveryPeer);
+
+const DeliveryLinkedActTool = Tool.make("delivery_linked_act", {
+  description:
+    "Comment, answer, pause, resume, steer or manage a lease on a visible task through an acting peer link.",
+  parameters: Schema.Struct({ request: LinkedDeliveryAction }),
+  success: LinkedDeliveryActionResult,
+  failure: OrchestratorMcpFailure,
+  failureMode: "return",
+  dependencies: [
+    McpInvocationContext.McpInvocationContext,
+    ThreadManagementService.ThreadManagementService,
+    DeliveryService.DeliveryService,
+  ],
+})
+  .annotate(Tool.Readonly, false)
+  .annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenUnlessLinkedDeliveryPeer);
 
 const DeliveryLinkedHandoffTool = Tool.make("delivery_linked_handoff", {
   description: "Relay a hand-off phase through an authenticated delivery peer link.",
@@ -64,6 +98,8 @@ const DeliveryLinkedOriginTool = Tool.make("delivery_linked_origin", {
   .annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenUnlessLinkedDeliveryPeer);
 
 export const LinkedDeliveryToolkit = Toolkit.make(
+  DeliveryLinkedReadTool,
+  DeliveryLinkedActTool,
   DeliveryLinkedHandoffTool,
   DeliveryLinkedHandoffReadTool,
   DeliveryLinkedOriginTool,
@@ -93,7 +129,48 @@ const linkedHandoff = Effect.fn("mcp.deliveryLinkedHandoff")(function* ({
   );
 });
 
+const linkedDiagnostic = (error: DeliveryError): LinkedDeliveryDiagnostic => {
+  if (error.status === 404) return "not-found";
+  if (error.status === 413) return "response-too-large";
+  if (error.status === 403) return "unauthorized";
+  if (error.reason === "disabled" || error.reason === "unreachable") return "offline";
+  if (error.reason === "invalid") return "unsupported";
+  return "refused";
+};
+
+const linkedResult = Effect.fn("mcp.linkedDeliveryResult")(function* <A>(
+  run: (service: DeliveryService.DeliveryService["Service"]) => Effect.Effect<A, DeliveryError>,
+) {
+  const scope = yield* McpInvocationContext.McpInvocationContext;
+  const { environmentId } = scope;
+  if (scope.client?.linked !== true || !scope.capabilities.has("orchestration")) {
+    return { environmentId, data: null, diagnostic: "unauthorized" as const };
+  }
+  const delivery = yield* DeliveryService.DeliveryService;
+  return yield* run(delivery).pipe(
+    Effect.map((data) => ({ environmentId, data, diagnostic: null })),
+    Effect.catchTags({
+      DeliveryError: (error) =>
+        Effect.succeed({
+          environmentId,
+          data: null,
+          diagnostic: linkedDiagnostic(error),
+          ...(error.linkedRefusalMessage === undefined
+            ? {}
+            : { message: error.linkedRefusalMessage }),
+        }),
+    }),
+  );
+});
+
 const handlers = {
+  delivery_linked_read: McpToolAccess.reads(({ request }) =>
+    linkedResult((delivery) => delivery.readLinked(request)),
+  ),
+  delivery_linked_act: McpToolAccess.writes(
+    ({ request }) => linkedResult((delivery) => delivery.actLinked(request)),
+    { linkedCallers: "allowed" },
+  ),
   delivery_linked_handoff: McpToolAccess.writes(linkedHandoff, { linkedCallers: "allowed" }),
   delivery_linked_handoff_read: McpToolAccess.reads(linkedHandoff),
   delivery_linked_origin: McpToolAccess.reads(

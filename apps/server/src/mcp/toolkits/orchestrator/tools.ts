@@ -1,11 +1,4 @@
 import {
-  LinkedDeliveryAction,
-  LinkedDeliveryActionResult,
-  LinkedDeliveryLocalRead,
-  LinkedDeliveryRead,
-  LinkedDeliveryReadResult,
-} from "@t3tools/contracts";
-import {
   EnvironmentId,
   BoardTaskDraft,
   BoardTaskOutcome,
@@ -404,46 +397,6 @@ const DeliveryReadTool = Tool.make("delivery_read", {
   .annotate(Tool.Destructive, false)
   .annotate(Tool.Idempotent, true);
 
-const DeliveryLinkedReadTool = Tool.make("delivery_linked_read", {
-  description:
-    "Read shared boards and visible tasks on this machine through an authenticated peer link.",
-  parameters: Schema.Struct({ request: LinkedDeliveryRead }),
-  success: LinkedDeliveryReadResult,
-  failure: OrchestratorMcpFailure,
-  failureMode: "return",
-  dependencies: [McpInvocationContext.McpInvocationContext, DeliveryService],
-})
-  .annotate(Tool.Readonly, true)
-  .annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenUnlessLinkedDeliveryPeer);
-
-const DeliveryLinkedActTool = Tool.make("delivery_linked_act", {
-  description:
-    "Comment, answer, pause, resume, steer or manage a lease on a visible task through an acting peer link.",
-  parameters: Schema.Struct({ request: LinkedDeliveryAction }),
-  success: LinkedDeliveryActionResult,
-  failure: OrchestratorMcpFailure,
-  failureMode: "return",
-  dependencies: [
-    McpInvocationContext.McpInvocationContext,
-    ThreadManagementService.ThreadManagementService,
-    DeliveryService,
-  ],
-})
-  .annotate(Tool.Readonly, false)
-  .annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenUnlessLinkedDeliveryPeer);
-
-const DeliveryReadLinkedTool = Tool.make("delivery_read_linked", {
-  description:
-    "Read shared boards and visible tasks on a linked machine. Use a peerEnvironmentId from t3_environment_links. Use fresh to refresh a cached snapshot.",
-  parameters: LinkedDeliveryLocalRead,
-  success: LinkedDeliveryReadResult,
-  failure: OrchestratorMcpFailure,
-  failureMode: "return",
-  dependencies: [McpInvocationContext.McpInvocationContext, PeerForwarding.PeerForwarding],
-})
-  .annotate(Tool.Readonly, true)
-  .annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenWhileLinksOff);
-
 const NativeBuildStepTool = Tool.make("delivery_native_build_step", {
   description:
     "Step an opted-in build from its exact engine worktree. Retries reuse one native child; the server reads its result. Step after completion or engine cancellation.",
@@ -498,9 +451,6 @@ const SeatHandoffTool = Tool.make("delivery_seat_handoff", {
 
 export const OrchestratorToolkit = Toolkit.make(
   DeliveryReadTool,
-  DeliveryLinkedReadTool,
-  DeliveryLinkedActTool,
-  DeliveryReadLinkedTool,
   NativeBuildStepTool,
   FileBoardTaskTool,
   QaReceiptTool,

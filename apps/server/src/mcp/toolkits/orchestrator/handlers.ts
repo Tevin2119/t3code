@@ -1,8 +1,4 @@
-import {
-  OrchestratorMcpFailure,
-  type DeliveryError,
-  type LinkedDeliveryDiagnostic,
-} from "@t3tools/contracts";
+import { OrchestratorMcpFailure } from "@t3tools/contracts";
 import { OrchestratorToolkit } from "./tools.ts";
 import * as Effect from "effect/Effect";
 
@@ -15,60 +11,11 @@ import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
 import * as OrchestratorMcpService from "../../OrchestratorMcpService.ts";
 import * as ThreadMetadataMcpService from "../../ThreadMetadataMcpService.ts";
-import * as DeliveryService from "../../../delivery/DeliveryService.ts";
 import * as BoardThreadTasks from "../../../delivery/BoardThreadTasks.ts";
 import * as NativeBuildExecution from "../../../delivery/NativeBuildExecution.ts";
 import * as SeatHandoffs from "../../../delivery/SeatHandoffs.ts";
 
-const linkedDiagnostic = (error: DeliveryError): LinkedDeliveryDiagnostic => {
-  if (error.status === 404) return "not-found";
-  if (error.status === 413) return "response-too-large";
-  if (error.status === 403) return "unauthorized";
-  if (error.reason === "disabled" || error.reason === "unreachable") return "offline";
-  if (error.reason === "invalid") return "unsupported";
-  return "refused";
-};
-
-const linkedResult = Effect.fn("mcp.linkedDeliveryResult")(function* <A>(
-  run: (service: DeliveryService.DeliveryService["Service"]) => Effect.Effect<A, DeliveryError>,
-) {
-  const scope = yield* McpInvocationContext.McpInvocationContext;
-  const { environmentId } = scope;
-  if (scope.client?.linked !== true || !scope.capabilities.has("orchestration")) {
-    return { environmentId, data: null, diagnostic: "unauthorized" as const };
-  }
-  const delivery = yield* DeliveryService.DeliveryService;
-  return yield* run(delivery).pipe(
-    Effect.map((data) => ({ environmentId, data, diagnostic: null })),
-    Effect.catchTags({
-      DeliveryError: (error) =>
-        Effect.succeed({
-          environmentId,
-          data: null,
-          diagnostic: linkedDiagnostic(error),
-          ...(error.linkedRefusalMessage === undefined
-            ? {}
-            : { message: error.linkedRefusalMessage }),
-        }),
-    }),
-  );
-});
-
 const handlers = {
-  delivery_linked_read: McpToolAccess.reads(({ request }) =>
-    linkedResult((delivery) => delivery.readLinked(request)),
-  ),
-  delivery_linked_act: McpToolAccess.writes(
-    ({ request }) => linkedResult((delivery) => delivery.actLinked(request)),
-    { linkedCallers: "allowed" },
-  ),
-  delivery_read_linked: McpToolAccess.reads(({ request, ...target }) =>
-    Effect.gen(function* () {
-      const scope = yield* McpInvocationContext.McpInvocationContext;
-      const forwarding = yield* PeerForwarding.PeerForwarding;
-      return yield* forwarding.readLinkedAsAgent(scope, target, request);
-    }),
-  ),
   delivery_read: McpToolAccess.reads(({ environmentId, ...input }) =>
     Effect.gen(function* () {
       const scope = yield* McpInvocationContext.McpInvocationContext;

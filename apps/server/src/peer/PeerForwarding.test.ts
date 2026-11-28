@@ -683,14 +683,13 @@ it.effect("uses the owner engine's visibility for linked thread snapshots, lists
       const a = yield* makeLaptop;
       yield* linkTo(a.links, b, "auto");
       yield* Ref.set(linkSession, (yield* b.linkedSessions)[0]!.sessionId);
-      const linkedBoards = yield* a.call("thread:laptop-full", "delivery_read_linked", {
-        peerEnvironmentId: box.environmentId,
-        request: { operation: "boards" },
+      const linkedBoards = yield* a.call("thread:laptop-full", "delivery_read", {
+        folder: ".",
+        environmentId: box.environmentId,
       });
       expect(linkedBoards.structuredContent).toMatchObject({
         environmentId: box.environmentId,
-        diagnostic: null,
-        data: { boards: [{ id: "work" }] },
+        boards: [{ id: "work", branch: null }],
       });
       for (const state of ["private", "shared", "offline"] as const) {
         yield* Ref.set(visibility, state);

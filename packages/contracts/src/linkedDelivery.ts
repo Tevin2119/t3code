@@ -339,10 +339,6 @@ export const LinkedDeliveryReadTarget = {
   ...LinkedDeliveryPeerTarget,
   ...LinkedDeliveryFresh.fields,
 };
-export const LinkedDeliveryLocalRead = Schema.Struct({
-  ...LinkedDeliveryReadTarget,
-  request: LinkedDeliveryRead,
-});
 export const LinkedDeliveryBoardsResult = Schema.Struct({
   links: Schema.Array(
     Schema.Struct({

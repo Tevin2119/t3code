@@ -1725,6 +1725,26 @@ describe("DeliveryService", () => {
     ).toEqual({ key: undefined, status: { source: "none", stored: false } });
   });
 
+  it.effect("keeps the saved approval key to this machine while its own server still uses it", () =>
+    Effect.gen(function* () {
+      const delivery = yield* DeliveryService.DeliveryService;
+      yield* delivery.setBoardApprovalKey("owner key");
+      const asPeer = <A>(effect: Effect.Effect<A, { readonly status?: number | undefined }>) =>
+        effect.pipe(
+          Effect.provideService(
+            McpInvocationContext.McpInvocationContext,
+            linkedScope("full-access"),
+          ),
+          Effect.flip,
+        );
+      expect((yield* asPeer(delivery.boardApprovalKeyStatus)).status).toBe(403);
+      expect((yield* asPeer(delivery.setBoardApprovalKey("peer key"))).status).toBe(403);
+      // Keyed engine calls this server makes for itself still read the key.
+      expect(yield* delivery.boardApprovalKey).toBe("owner key");
+      expect(yield* delivery.boardApprovalKeyStatus).toEqual({ source: "settings", stored: true });
+    }).pipe(Effect.provide(layer(engine(), { prefix: "board-approval-key-owner-" }))),
+  );
+
   it.effect("saves, replaces and clears the board approval key, and a variable still wins", () =>
     Effect.gen(function* () {
       const delivery = yield* DeliveryService.DeliveryService;
