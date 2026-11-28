@@ -21,6 +21,7 @@ import * as HttpClientRequest from "effect/http/HttpClientRequest";
 import * as HttpClientResponse from "effect/http/HttpClientResponse";
 import * as ChildProcess from "effect/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
+import { resolveSpawnCommand } from "@t3tools/shared/shell";
 
 const DRIVER = ProviderDriverKind.make("hermes");
 // PyPI's `hermes-agent` lags the releases and npm's is an unofficial bridge.
@@ -35,12 +36,18 @@ const readCommandOutput = Effect.fn("HermesMaintenance.readCommandOutput")(funct
 ) {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const run = Effect.gen(function* () {
+    const probeEnv = { ...env, GIT_TERMINAL_PROMPT: "0" };
+    // Windows `hermes.cmd` wrappers need the shell, as the status probe and updater give them.
+    const resolved = yield* resolveSpawnCommand(command, args, { env: probeEnv, extendEnv: true });
     const child = yield* spawner.spawn(
-      ChildProcess.make(command, args, {
-        env: { ...env, GIT_TERMINAL_PROMPT: "0" },
+      ChildProcess.make(resolved.command, resolved.args, {
+        env: probeEnv,
         extendEnv: true,
+        shell: resolved.shell,
         stdin: "ignore",
         stderr: "ignore",
+        // The timeout interrupts with SIGTERM and waits; a launcher that ignores it would hang.
+        forceKillAfter: "1 second",
       }),
     );
     yield* Effect.addFinalizer(() => child.kill().pipe(Effect.ignore));
