@@ -113,6 +113,7 @@ const Refusal = Schema.Struct({
 const Linked = Schema.Struct({ boardThread: BoardThreadLink });
 const Detail = Schema.Struct({ boardThread: Schema.NullOr(BoardThreadLink) });
 const Claimed = Schema.Struct({ holder: Schema.String });
+const Acked = Schema.Struct({ heartbeatMs: Schema.Number });
 
 const decodeLanes = Schema.decodeUnknownEffect(Lanes);
 const decodeCard = Schema.decodeUnknownResult(Card);
@@ -122,6 +123,7 @@ const decodeRefusal = Schema.decodeUnknownOption(Refusal);
 const decodeLinked = Schema.decodeUnknownEffect(Linked);
 const decodeDetail = Schema.decodeUnknownOption(Detail);
 const decodeClaimed = Schema.decodeUnknownOption(Claimed);
+const decodeAcked = Schema.decodeUnknownOption(Acked);
 /** What a task's own detail says of where it stands: all a card is judged by when it can't be read. */
 const TaskStanding = Schema.Struct({
   state: Schema.String,
@@ -160,6 +162,9 @@ const dutyOf = (stages: unknown) =>
       : stages.includes("build")
         ? ("build" as const)
         : undefined;
+
+/** The most heartbeats of one pass in flight: the engine checks two approval keys at once. */
+const ACK_CONCURRENCY = 2;
 
 /** The most participants a lineup takes (`DeliveryOrchestrationConfig`). */
 const MAX_PARTICIPANTS = 12;
@@ -264,6 +269,11 @@ export class BoardTaskThreads extends Context.Service<
      * engine never takes the step for abandoned while T3 works it.
      */
     readonly holdTask: (taskId: string, threadId: ThreadId) => Effect.Effect<boolean>;
+    /**
+     * Whether the engine renewed this thread's heartbeat on its task within its window, by this
+     * server's clock from when the ack was sent. Not a lease: it holds no slot.
+     */
+    readonly heartbeatLive: (taskId: string, threadId: ThreadId) => Effect.Effect<boolean>;
     readonly start: () => Effect.Effect<void, never, Scope.Scope>;
   }
 >()("t3/delivery/BoardTaskThreads") {}
@@ -316,6 +326,11 @@ export const make = Effect.gen(function* () {
   const told = new Map<string, BoardThreadHold>();
   const toldTeamless = new Set<string>();
   const toldUnread = new Map<string, string>();
+  // Each linked thread's last renewed heartbeat, and the threads the engine refused one for
+  // (`conflict`, `moved`, `not-found`), by task. A refusal holds until the task's link or state
+  // changes; the relink, moved and deleted handling of the pass settles the thread meanwhile.
+  const beats = new Map<string, { readonly threadId: string; readonly at: number; ms: number }>();
+  const unbeaten = new Map<string, string>();
 
   const engine = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
     effect.pipe(Effect.mapError((cause) => new BoardTaskThreadsError({ reason: "engine", cause })));
@@ -723,6 +738,66 @@ export const make = Effect.gen(function* () {
     }
   });
 
+  /**
+   * The thread heartbeat (slice S2): every task whose board thread is linked from here, unfinished
+   * and not moved, renews it on every pass, a few at a time. It takes no lease and no slot. No
+   * answer leaves a task's last heartbeat to lapse, and fails nothing.
+   */
+  const ackThreads = Effect.fn("BoardTaskThreads.ackThreads")(function* (input: {
+    readonly cards: ReadonlyMap<string, Card>;
+    readonly environmentId: EnvironmentId;
+    readonly key: string;
+  }) {
+    const { cards, environmentId, key } = input;
+    const linked = new Map<string, { readonly threadId: string; readonly mark: string }>();
+    for (const [taskId, card] of cards) {
+      const link = card.boardThread;
+      if (
+        link?.environmentId !== environmentId ||
+        MOVED.has(card.state) ||
+        boardTaskFinishedBy(card) !== null
+      )
+        continue;
+      linked.set(taskId, { threadId: link.threadId, mark: `${link.threadId}\u0000${card.state}` });
+    }
+    for (const taskId of beats.keys()) if (!linked.has(taskId)) beats.delete(taskId);
+    for (const [taskId, mark] of unbeaten)
+      if (linked.get(taskId)?.mark !== mark) unbeaten.delete(taskId);
+    const due = [...linked].filter(([taskId]) => !unbeaten.has(taskId));
+    let refused = 0;
+    yield* Effect.forEach(
+      due,
+      Effect.fnUntraced(function* ([taskId, { threadId, mark }]) {
+        const sentAt = yield* Clock.currentTimeMillis;
+        const acked = yield* delivery
+          .boardThreadAct({
+            method: "POST",
+            path: `/api/tasks/${taskId}/board-thread/ack`,
+            body: { environmentId, threadId, setBy: environmentId, key },
+          })
+          .pipe(Effect.result);
+        if (acked._tag === "Success") {
+          const window = decodeAcked(acked.success.body);
+          if (Option.isSome(window))
+            beats.set(taskId, { threadId, at: sentAt, ms: window.value.heartbeatMs });
+          return;
+        }
+        const refusal = refusalOf(acked.failure);
+        if (
+          refusal.code === "conflict" ||
+          refusal.code === "moved" ||
+          refusal.code === "not-found"
+        ) {
+          beats.delete(taskId);
+          unbeaten.set(taskId, mark);
+        } else if (refusal.status === 403) refused += 1;
+      }),
+      { concurrency: ACK_CONCURRENCY, discard: true },
+    );
+    if (refused > 0)
+      yield* Effect.logWarning("The engine refused board thread heartbeats.", { tasks: refused });
+  });
+
   const reconcile = Effect.fn("BoardTaskThreads.reconcile")(
     function* () {
       const holds = new Map<string, BoardThreadHold>();
@@ -816,6 +891,7 @@ export const make = Effect.gen(function* () {
         yield* holdClaim(taskId, environmentId, link.threadId);
       }
       yield* settleEnded({ cards, standings, openThreads, environmentId });
+      if (key !== undefined) yield* ackThreads({ cards, environmentId, key });
       yield* refreshTeams({ cards, openThreads, teams: teamsOf });
       // Moved tasks are worked on another machine: their conversation is not told from here.
       const mirrored = [...cards.values()].filter((card) => !MOVED.has(card.state));
@@ -855,7 +931,14 @@ export const make = Effect.gen(function* () {
     yield* holdClaim(taskId, yield* identity.getEnvironmentId, threadId);
     return holders.has(taskId);
   });
-  return BoardTaskThreads.of({ reconcile, holdTask, start });
+  const heartbeatLive = (taskId: string, threadId: ThreadId) =>
+    Clock.currentTimeMillis.pipe(
+      Effect.map((now) => {
+        const beat = beats.get(taskId);
+        return beat?.threadId === threadId && now - beat.at < beat.ms;
+      }),
+    );
+  return BoardTaskThreads.of({ reconcile, holdTask, heartbeatLive, start });
 });
 
 export const layer = Layer.effect(BoardTaskThreads, make);

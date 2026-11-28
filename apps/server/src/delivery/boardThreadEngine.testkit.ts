@@ -143,6 +143,8 @@ export function scratchEngine(
   const related = new Map<string, Map<string, ScratchRelated>>();
   const servesRelated = options.servesRelated !== false;
   const leases = new Map<string, Lease>();
+  /** Each task's thread heartbeat (slice S2): the board thread it renewed, by the engine clock. */
+  const beats = new Map<string, { environmentId: string; threadId: string; at: number }>();
   const events: Array<{ kind: string; task: string; data: unknown }> = [];
   const requests: Array<{ method: string; path: string; body: unknown }> = [];
   const sets = new Map<string, { path: string | null }>();
@@ -353,6 +355,41 @@ export function scratchEngine(
     links.set(id, boardThread);
     events.push({ kind: "task.board-thread-set", task: id, data: { previous, boardThread } });
     return { status: 200, body: { task: id, number: task.number, boardThread } };
+  };
+
+  /** The thread heartbeat route (slice S2): only the task's current board thread renews it. */
+  const ackLink = (id: string, body: Record<string, unknown>): Answer => {
+    const task = tasks.get(id);
+    if (!task) return refused(404, `no task ${id.slice(0, 40)}`, { code: "not-found", task: null });
+    const { environmentId, threadId, setBy } = body;
+    if (
+      typeof environmentId !== "string" ||
+      !ENVIRONMENT_PART.test(environmentId) ||
+      typeof threadId !== "string" ||
+      !THREAD_PART.test(threadId) ||
+      typeof setBy !== "string" ||
+      !ENVIRONMENT_PART.test(setBy)
+    )
+      return refused(400, "a heartbeat reads as { environmentId, threadId, setBy }", {
+        code: "invalid-field",
+      });
+    const boardThread = links.get(id) ?? null;
+    if (!sameTarget(boardThread, { environmentId, threadId }))
+      return refused(409, "this conversation is not the task's board thread", {
+        code: "conflict",
+        current: boardThread,
+      });
+    beats.set(id, { environmentId, threadId, at: clock });
+    return {
+      status: 200,
+      body: {
+        task: id,
+        number: task.number,
+        boardThread,
+        heartbeat: DateTime.formatIso(DateTime.makeUnsafe(clock)),
+        heartbeatMs: LEASE_MS,
+      },
+    };
   };
 
   const putRelated = (id: string, relatedKey: string, body: Record<string, unknown>): Answer => {
@@ -659,6 +696,12 @@ export function scratchEngine(
       before?.();
       return putLink(link[1]!, body);
     }
+    const ack = /^\/api\/tasks\/([\w-]+)\/board-thread\/ack$/.exec(pathname);
+    if (ack && method === "POST") {
+      if (body.key !== key)
+        return refused(403, "the approval key is wrong or missing", { code: "refused" });
+      return ackLink(ack[1]!, body);
+    }
     const relatedRoute = servesRelated
       ? /^\/api\/tasks\/([\w-]+)\/threads\/([\w-]{1,80})$/.exec(pathname)
       : null;
@@ -794,6 +837,13 @@ export function scratchEngine(
     writeLink: (id: string, link: { environmentId: string; threadId: string; setBy: string }) =>
       putLink(id, link),
     leaseOf: (id: string) => live().get(id) ?? null,
+    /** The task's thread heartbeat while it is live and its thread is still the link. */
+    heartbeatOf: (id: string) => {
+      const beat = beats.get(id);
+      return beat && clock - beat.at <= LEASE_MS && sameTarget(beat, links.get(id) ?? null)
+        ? beat
+        : null;
+    },
     advance: (ms: number) => {
       clock += ms;
     },

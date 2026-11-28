@@ -175,6 +175,8 @@ export const BoardThreadLink = Schema.Struct({
 export const readOrNull = <S extends Schema.Top>(schema: S) =>
   Schema.optional(Schema.NullOr(schema).pipe(Schema.catchDecoding(() => Effect.succeedSome(null))));
 const BOARD_THREAD_CLAIM = /^\/api\/orchestration\/tasks\/[\w-]+\/(claim|ack|release)$/;
+// The board thread's heartbeat (slice S2), renewed by the board pass; not a lease.
+const BOARD_THREAD_HEARTBEAT = /^\/api\/tasks\/[\w-]+\/board-thread\/ack$/;
 // The conversation's mirror and the steer handshake (spec 6a, slice 5).
 const BOARD_THREAD_CONVERSATION =
   /^\/api\/tasks\/[\w-]+\/(activity|steers\/\d+\/(delivered|failed))$/;
@@ -185,7 +187,7 @@ const BOARD_TASK_POST = /^\/api\/boards\/[^/]+\/tasks$/;
 // route through `act`, so it is the server's to use but not refused to the relay.
 const BOARD_THREAD_STEER = /^\/api\/tasks\/[\w-]+\/steer$/;
 const BOARD_THREAD_POST = new RegExp(
-  `${BOARD_THREAD_CLAIM.source}|${BOARD_THREAD_CONVERSATION.source}|${BOARD_SEAT_POST.source}|${BOARD_TASK_POST.source}`,
+  `${BOARD_THREAD_CLAIM.source}|${BOARD_THREAD_HEARTBEAT.source}|${BOARD_THREAD_CONVERSATION.source}|${BOARD_SEAT_POST.source}|${BOARD_TASK_POST.source}`,
 );
 const BOARD_THREAD_WRITE = new RegExp(`${BOARD_THREAD_LINK.source}|${BOARD_THREAD_POST.source}`);
 

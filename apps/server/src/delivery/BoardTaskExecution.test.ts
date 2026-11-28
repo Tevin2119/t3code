@@ -340,7 +340,10 @@ function boardClaims(engine: ScratchEngine) {
       holders.set(taskId, (answer.body as { holder: string }).holder);
       return true;
     });
-  return { calls, holdTask };
+  // Tasks whose board thread's heartbeat the board pass renewed, as BoardTaskThreads keeps them.
+  const beating = new Set<string>();
+  const heartbeatLive = (taskId: string) => Effect.sync(() => beating.has(taskId));
+  return { calls, holdTask, beating, heartbeatLive };
 }
 
 /** One server process: a fresh service over the same store, engine and claims. */
@@ -348,6 +351,7 @@ function service(store: ThreadStore, claims: ReturnType<typeof boardClaims>) {
   return BoardTaskExecution.make.pipe(
     Effect.provideService(BoardTaskThreads.BoardTaskThreads, {
       holdTask: claims.holdTask,
+      heartbeatLive: claims.heartbeatLive,
     } as unknown as BoardTaskThreads.BoardTaskThreads["Service"]),
     withBoardApprovalKey("scratch approval passphrase"),
     Effect.provideService(ServerEnvironment.ServerEnvironmentIdentity, {
@@ -947,6 +951,59 @@ it.effect("advances no step without a live claim on its task, after a restart to
     assert.equal(engine.attempts.get("att-build")!.state, "claimed");
     assert.deepEqual(order(engine, "att-build"), ["native.claimed", "native.attached"]);
   }).pipe(Effect.provide(deliveryLayer(engine, "board-execution-unheld-")));
+});
+
+it.effect("runs a read-only step under a live heartbeat with no lease, and no writer", () => {
+  // A task waiting for a slot: the engine takes no claim from it (the cap is reached).
+  const engine = scratchEngine({ cap: 0 });
+  engine.setBoard("work", "/work/repo");
+  engine.addTask({ id: "task-7", title: "Ship the export", lane: "queue", state: "queued" });
+  engine.writeLink("task-7", { environmentId: ENVIRONMENT, threadId: THREAD, setBy: ENVIRONMENT });
+  engine.queueAttempt({
+    id: "att-triage",
+    task: "task-7",
+    stage: "triage",
+    kind: "comment",
+    seat: "triage",
+    access: "read-only",
+  });
+  const store = threadStore();
+  const claims = boardClaims(engine);
+  return Effect.gen(function* () {
+    const execution = yield* service(store, claims);
+    // No heartbeat and no lease: nothing advances.
+    yield* execution.reconcile();
+    assert.deepEqual(order(engine, "att-triage"), []);
+    claims.calls.length = 0;
+    claims.beating.add("task-7");
+    yield* execution.reconcile();
+    // Under the heartbeat alone: claimed and sent, with no lease asked for or taken.
+    assert.deepEqual(order(engine, "att-triage"), ["native.claimed", "native.attached"]);
+    assert.deepEqual(claims.calls, []);
+    assert.isNull(engine.leaseOf("task-7"));
+    // A writer step of the same task still waits for a lease.
+    engine.queueAttempt({
+      id: "att-build",
+      task: "task-7",
+      stage: "build",
+      kind: "build",
+      seat: "dev",
+    });
+    yield* execution.reconcile();
+    assert.deepEqual(claims.calls, ["task-7"]);
+    assert.deepEqual(order(engine, "att-build"), []);
+    // So does a read-only step of a stage that is not read-only in the engine.
+    engine.queueAttempt({
+      id: "att-plan",
+      task: "task-7",
+      stage: "plan",
+      kind: "plan",
+      seat: "lead",
+      access: "read-only",
+    });
+    yield* execution.reconcile();
+    assert.deepEqual(order(engine, "att-plan"), []);
+  }).pipe(Effect.provide(deliveryLayer(engine, "board-execution-heartbeat-")));
 });
 
 it.effect("keeps a stage turn's id when only some of its seats were attached", () => {
