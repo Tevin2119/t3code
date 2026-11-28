@@ -1,6 +1,6 @@
 import {
   BOARD_AGENT_BULK_MAX,
-  DeliveryEngineLifecycleReceipt,
+  type DeliveryEngineLifecycleReceipt,
   DeliveryError,
   OrchestratorMcpFailure,
   isReservedBoardTaskBoard,
@@ -15,8 +15,8 @@ import {
   type BoardAgentTasksToolInput,
   type BoardAgentTasksToolResult,
   type DeliveryEngineControlInput,
+  type DeliveryEngineControlResult,
   type DeliveryEngineLifecycleInput,
-  type DeliveryResponse,
 } from "@t3tools/contracts";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
@@ -76,7 +76,32 @@ const decodeRepositories = Schema.decodeUnknownEffect(
   ),
 );
 const decodeCreated = Schema.decodeUnknownEffect(Schema.Struct({ id: Schema.String }));
-const decodeLifecycle = Schema.decodeUnknownEffect(DeliveryEngineLifecycleReceipt);
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const COMMIT = /^[0-9a-f]{40}$/i;
+const CHANNELS = ["dev", "qa", "main"] as const;
+const field = (body: unknown, name: string) =>
+  typeof body === "object" && body !== null ? (body as Record<string, unknown>)[name] : undefined;
+const shaped = (value: unknown, pattern: RegExp) =>
+  typeof value === "string" && pattern.test(value) ? value : null;
+
+/**
+ * An engine control's answer, reduced to what it may say: accepted or done, and the receipt's
+ * id, commit and channel only in their fixed formats. The rest is dropped unread.
+ */
+function engineControlSummary(
+  action: DeliveryEngineControlInput["action"],
+  body: unknown,
+): DeliveryEngineControlResult {
+  const channel = field(body, "channel");
+  return {
+    ok: true,
+    action,
+    state: field(body, "accepted") === true ? "accepted" : "done",
+    id: shaped(field(body, "id"), UUID),
+    commit: shaped(field(body, "commit"), COMMIT),
+    channel: CHANNELS.find((known) => known === channel) ?? null,
+  };
+}
 
 /** The engine's own cap on one task search. It has no cursor. */
 const SEARCH_MAX = 500;
@@ -242,7 +267,7 @@ export class BoardAgentTools extends Context.Service<
      */
     readonly engineControl: (
       input: DeliveryEngineControlInput,
-    ) => Effect.Effect<DeliveryResponse, DeliveryError>;
+    ) => Effect.Effect<DeliveryEngineControlResult, DeliveryError>;
     readonly engineLifecycle: (
       input: DeliveryEngineLifecycleInput,
     ) => Effect.Effect<typeof DeliveryEngineLifecycleReceipt.Type, DeliveryError>;
@@ -500,7 +525,11 @@ const make = Effect.gen(function* () {
             return yield* invalid(
               `Board ${id} is protected. Pass force only when the person asked.`,
             );
-          const { tasks } = yield* search({ board: id }, SEARCH_MAX);
+          const { tasks, truncated } = yield* search({ board: id }, SEARCH_MAX);
+          if (truncated)
+            return yield* invalid(
+              `Board ${id} has more tasks than one read shows (${SEARCH_MAX}), so a dry run could not list them all. Close or move some of its tasks first, then remove it.`,
+            );
           const kept = tasks.map((task) => task.id);
           const standing = keyOf([found.protected, [...kept].sort()]);
           const binding = keyOf(["board-remove", id, input.force === true]);
@@ -561,13 +590,11 @@ const make = Effect.gen(function* () {
           return yield* detail(id);
         case "close": {
           const reason = yield* needs(input.reason, "reason");
-          const done = yield* oneAfterDryRun(
-            input,
-            keyOf(["task-close", id, reason, force === true]),
-            (summary) => closeSkip(summary, force),
-            (found) => closeOne(by, found.card.id, reason),
-          );
-          return "dryRunToken" in done ? done : yield* detail(id);
+          const found = yield* taskOf(id);
+          const why = closeSkip(found.summary, force);
+          if (why !== null) return yield* invalid(why);
+          yield* closeOne(by, found.card.id, reason);
+          return yield* detail(id);
         }
         case "discard": {
           const done = yield* oneAfterDryRun(
@@ -608,7 +635,7 @@ const make = Effect.gen(function* () {
         input.action,
         reason,
         lane ?? null,
-        board === undefined ? "keep" : board,
+        board === undefined ? null : { board },
         force === true,
         normalFilter(input.filter),
         ids === null ? null : [...ids].sort(),
@@ -711,8 +738,9 @@ const make = Effect.gen(function* () {
       });
     const body =
       action === "stop" || action === "restart" ? { key, action } : { key, commit, channel };
-    // The relay already gives a keyed refusal in fixed words and drops the engine's answer.
-    return yield* delivery.act({ path: ENGINE_PATH[action], body });
+    // The relay gives a keyed refusal in fixed words; an answer is reduced here.
+    const response = yield* delivery.act({ path: ENGINE_PATH[action], body });
+    return engineControlSummary(action, response.body);
   });
 
   return BoardAgentTools.of({
@@ -721,16 +749,13 @@ const make = Effect.gen(function* () {
     tasks,
     engineControl,
     engineLifecycle: Effect.fn("BoardAgentTools.engineLifecycle")(function* ({ action }) {
-      const response = yield* engineControl({ action });
-      return yield* decodeLifecycle(response.body).pipe(
-        Effect.mapError(
-          () =>
-            new DeliveryError({
-              reason: "invalid",
-              detail: "The engine did not return a lifecycle receipt. Check its health.",
-            }),
-        ),
-      );
+      const summary = yield* engineControl({ action });
+      if (summary.state !== "accepted" || summary.id === null)
+        return yield* new DeliveryError({
+          reason: "invalid",
+          detail: "The engine did not return a lifecycle receipt. Check its health.",
+        });
+      return { accepted: true as const, id: summary.id, action };
     }),
   });
 });

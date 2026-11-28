@@ -93,7 +93,13 @@ export function agentEngine() {
       if (body.key !== KEY) return refuse(403, `the approval key ${String(body.key)} is wrong`);
       return {
         status: 200,
-        body: { accepted: true, id: "update-1", commit: body.commit, channel: "qa" },
+        body: {
+          accepted: true,
+          id: `update ${String(body.key)}`,
+          commit: body.commit,
+          channel: "qa",
+          note: body.key,
+        },
       };
     }
     if (method === "POST" && path === "/api/engine/lifecycle") {
@@ -101,7 +107,12 @@ export function agentEngine() {
       if (body.key !== KEY) return refuse(403, `the approval key ${String(body.key)} is wrong`);
       return {
         status: 200,
-        body: { accepted: true, id: "5f0c2b8e-0d7e-4f61-9d1e-2a4b6c8d0e1f", action: body.action },
+        body: {
+          accepted: true,
+          id: "5f0c2b8e-0d7e-4f61-9d1e-2a4b6c8d0e1f",
+          action: body.action,
+          echoed: body.key,
+        },
       };
     }
     if (method === "GET" && path === "/api/boards")

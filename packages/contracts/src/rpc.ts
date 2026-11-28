@@ -486,7 +486,7 @@ import {
   BoardTaskFiling,
   BoardThreadFilingInput,
 } from "./boardThreadTasks.ts";
-import { DeliveryEngineControlInput } from "./boardAgentTools.ts";
+import { DeliveryEngineControlInput, DeliveryEngineControlResult } from "./boardAgentTools.ts";
 import { DeploymentPortInput } from "./deployments.ts";
 import { AgentFeedbackAnswerInput, AgentFeedbackRequestError } from "./agentFeedback.ts";
 import {
@@ -1302,7 +1302,7 @@ const WsDeliverySetBoardApprovalKeyRpc = Rpc.make(WS_METHODS.deliverySetBoardApp
 /** A keyed engine control with the server's saved approval key, which never leaves it. */
 const WsDeliveryEngineControlRpc = Rpc.make(WS_METHODS.deliveryEngineControl, {
   payload: DeliveryEngineControlInput,
-  success: DeliveryResponse,
+  success: DeliveryEngineControlResult,
   error: Schema.Union([EnvironmentAuthorizationError, DeliveryError]),
 });
 

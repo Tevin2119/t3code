@@ -123,7 +123,7 @@ export type BoardAgentTaskToolInput = typeof BoardAgentTaskToolInput.Type;
 
 export const BoardAgentTaskToolResult = Schema.Struct({
   ...BoardAgentTask.fields,
-  /** Set on a close's or discard's dry run; nothing was changed yet. */
+  /** Set on a discard's dry run; nothing was changed yet. */
   dryRunToken: Schema.optional(Schema.String),
   /** On a dry run: what to do with it. */
   next: Schema.optional(Schema.String),
@@ -187,3 +187,18 @@ export const DeliveryEngineControlInput = Schema.Struct({
   channel: Schema.optional(DeliveryReleaseChannel),
 });
 export type DeliveryEngineControlInput = typeof DeliveryEngineControlInput.Type;
+
+/**
+ * What an engine control answers, and nothing else of the engine's answer: whether it was
+ * accepted, and the receipt's id, commit and channel only in their fixed formats, so nothing the
+ * engine echoes (such as the key it was sent) reaches a client or an agent.
+ */
+export const DeliveryEngineControlResult = Schema.Struct({
+  ok: Schema.Literal(true),
+  action: DeliveryEngineControlInput.fields.action,
+  state: Schema.Literals(["accepted", "done"]),
+  id: Schema.NullOr(Schema.String),
+  commit: Schema.NullOr(Schema.String),
+  channel: Schema.NullOr(DeliveryReleaseChannel),
+});
+export type DeliveryEngineControlResult = typeof DeliveryEngineControlResult.Type;

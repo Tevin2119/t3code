@@ -168,8 +168,8 @@ on the Old board that hasn't moved since October". The task's history records th
 thread as the one who made the change. An agent on another machine can do the same through a
 linked environment paired with full access.
 
-- **Anything that can't be undone previews first.** Removing a board, closing or discarding a
-  task, and closing or moving many tasks (up to 200 per call) start as a dry run that shows
+- **Anything that can't be undone previews first.** Removing a board, discarding a draft,
+  and closing or moving many tasks (up to 200 per call) start as a dry run that shows
   exactly what would change. The agent acts only after you agree, and only on that same list.
   Just before each change it reads the task again, and leaves alone any task that changed.
 - **Some things can't be undone.** A closed task stays closed: file a new one to restart the

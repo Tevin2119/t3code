@@ -190,7 +190,17 @@ export function useSavedKeyEngineControl(environmentId: EnvironmentId) {
             why: deliveryFailureText(squashAtomCommandFailure(result)),
             problems: [],
           }
-        : { ok: true, body: result.value.body };
+        : {
+            ok: true,
+            // The panel reads receipts in the engine's own shape; the server sent only these.
+            body: {
+              accepted: result.value.state === "accepted",
+              action: result.value.action,
+              id: result.value.id,
+              commit: result.value.commit,
+              channel: result.value.channel,
+            },
+          };
     },
   };
 }

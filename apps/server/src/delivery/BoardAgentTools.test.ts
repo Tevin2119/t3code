@@ -187,7 +187,7 @@ it.effect("lists by every predicate here, and paging ends at the engine's window
   );
 });
 
-it.effect("one task: edit, submit, move; close and discard only after a dry run", () => {
+it.effect("one task: edit, submit, move and close in one call; discard after a dry run", () => {
   const engine = agentEngine();
   engine.addBoard("work");
   engine.addRepository("api");
@@ -220,29 +220,9 @@ it.effect("one task: edit, submit, move; close and discard only after a dry run"
 
       const liveClose = yield* failureOf(task({ action: "close", task: live.id, reason: "Stale" }));
       assert.match(liveClose.message, /live run/);
-      const preview = yield* task({ action: "close", task: live.id, reason: "Stale", force: true });
-      assert.isString(preview.dryRunToken);
-      assert.equal(engine.tasks.get(live.id)?.state, "ready");
-      const otherReason = yield* failureOf(
-        task({
-          action: "close",
-          task: live.id,
-          reason: "Other",
-          force: true,
-          confirm: true,
-          dryRunToken: preview.dryRunToken!,
-        }),
-      );
-      assert.match(otherReason.message, /differs from its dry run/);
-      const again = yield* task({ action: "close", task: live.id, reason: "Stale", force: true });
-      const closed = yield* task({
-        action: "close",
-        task: live.id,
-        reason: "Stale",
-        force: true,
-        confirm: true,
-        dryRunToken: again.dryRunToken!,
-      });
+      // Close is one call: there is no dry run for it.
+      const closed = yield* task({ action: "close", task: live.id, reason: "Stale", force: true });
+      assert.isUndefined(closed.dryRunToken);
       assert.deepInclude(closed, { state: "closed", live: false });
 
       const fresh = engine.addTask({ state: "draft", lane: "draft" });
@@ -344,6 +324,55 @@ it.effect("a bulk close binds its call, its list and each task, and re-checks ea
   );
 });
 
+it.effect(
+  "a bulk move that kept the board cannot be confirmed as a move to a board named keep",
+  () => {
+    const engine = agentEngine();
+    engine.addBoard("work");
+    engine.addBoard("keep");
+    const picked = engine.addTask({ state: "draft", lane: "draft" });
+    return run(
+      engine,
+      Effect.gen(function* () {
+        const tools = yield* BoardAgentTools;
+        const preview = yield* tools.tasks(scope, {
+          action: "move",
+          tasks: [picked.id],
+          lane: "queue",
+        });
+        const refused = yield* failureOf(
+          tools.tasks(scope, {
+            action: "move",
+            tasks: [picked.id],
+            lane: "queue",
+            board: "keep",
+            confirm: true,
+            dryRunToken: preview.dryRunToken!,
+          }),
+        );
+        assert.match(refused.message, /differs from its dry run/);
+        assert.isEmpty(engine.writes);
+        assert.equal(engine.tasks.get(picked.id)?.set, "work");
+      }),
+    );
+  },
+);
+
+it.effect("a board with more tasks than one read shows is not previewed for removal", () => {
+  const engine = agentEngine();
+  engine.addBoard("big");
+  for (let index = 0; index < 500; index++) engine.addTask({ set: "big" });
+  return run(
+    engine,
+    Effect.gen(function* () {
+      const tools = yield* BoardAgentTools;
+      const refused = yield* failureOf(tools.board(scope, { action: "remove", board: "big" }));
+      assert.match(refused.message, /Close or move some of its tasks first/);
+      assert.isEmpty(engine.writes);
+    }),
+  );
+});
+
 it.effect("a bulk move sends the lane each card was seen in", () => {
   const engine = agentEngine();
   engine.addBoard("work");
@@ -393,11 +422,24 @@ it.effect(
 
         yield* delivery.setBoardApprovalKey(engine.key);
         const receipt = yield* tools.engineLifecycle({ action: "restart" });
-        assert.deepInclude(receipt, { accepted: true, action: "restart" });
+        assert.deepEqual(receipt, {
+          accepted: true,
+          id: "5f0c2b8e-0d7e-4f61-9d1e-2a4b6c8d0e1f",
+          action: "restart",
+        });
         assert.notInclude(JSON.stringify(receipt), engine.key);
         assert.deepEqual(engine.writes.at(-1)?.body, { key: engine.key, action: "restart" });
         const update = yield* tools.engineControl({ action: "update", commit: "c".repeat(40) });
-        assert.deepInclude(update.body as object, { id: "update-1" });
+        // The engine's answer echoes the key in its id and an extra field: only fixed formats pass.
+        assert.deepEqual(update, {
+          ok: true,
+          action: "update",
+          state: "accepted",
+          id: null,
+          commit: "c".repeat(40),
+          channel: "qa",
+        });
+        assert.notInclude(JSON.stringify(update), engine.key);
 
         yield* delivery.setBoardApprovalKey("an old passphrase");
         const wrong = yield* Effect.flip(tools.engineControl({ action: "update" }));
