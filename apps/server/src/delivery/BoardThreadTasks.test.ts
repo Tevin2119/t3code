@@ -112,7 +112,8 @@ const harness = Effect.fn("BoardThreadTasks.testHarness")(function* (
           read: ({ path }) =>
             Effect.sync(() => {
               reads.push(path);
-              return { readAt: "2026-11-27T12:00:00Z", body: compare };
+              const body = typeof compare === "function" ? compare(path) : compare;
+              return { readAt: "2026-11-27T12:00:00Z", body };
             }),
           boardThreadAct: (input) =>
             Effect.suspend((): ReturnType<Act> => {
@@ -482,44 +483,114 @@ it.effect(
     }),
 );
 
+/**
+ * The engine's thread intake as thread-tasks.mjs keeps it: one receipt per request ID, replayed
+ * only with the fields it was filed with, refused 409 with others, and 410 once discarded.
+ */
+function fakeIntake() {
+  const receipts = new Map<string, { fields: string; task: string }>();
+  const tasks = new Map<string, { id: string; number: number; title: string; body: string }>();
+  let next = 20;
+  const act: Act = (input) =>
+    Effect.suspend(() => {
+      const { requestId, title, body } = input.body as Record<string, string>;
+      const fields = JSON.stringify([title, body]);
+      const kept = receipts.get(requestId!);
+      const shown = (id: string, created: boolean) => {
+        const { number } = tasks.get(id)!;
+        return Effect.succeed({
+          readAt: "2026-11-28T00:00:00Z",
+          body: {
+            created,
+            task: { id, number, board: "work", team: "development", state: "draft", origin },
+          },
+        });
+      };
+      if (kept === undefined) {
+        const number = next++;
+        const id = `task-${number}`;
+        tasks.set(id, { id, number, title: title!, body: body! });
+        receipts.set(requestId!, { fields, task: id });
+        return shown(id, true);
+      }
+      if (!tasks.has(kept.task)) return Effect.fail(refusal(410, "discarded", "gone"));
+      if (kept.fields !== fields) return Effect.fail(refusal(409, "other fields", "conflict"));
+      return shown(kept.task, false);
+    });
+  const read = (path: string) => {
+    if (path.startsWith("/api/tasks?origin="))
+      return [...tasks.values()].map(({ id, number }) => ({ id, number, set: "work", origin }));
+    const task = tasks.get(decodeURIComponent(path.slice("/api/tasks/".length)));
+    return task === undefined ? null : { ...task, lane: "draft" };
+  };
+  return { act, read, tasks };
+}
+
+it.effect("answers an edited refiling with the task its own receipt filed, never another", () =>
+  Effect.gen(function* () {
+    const engine = fakeIntake();
+    const { calls, layer } = yield* harness(engine.act, undefined, false, engine.read);
+    yield* Effect.gen(function* () {
+      const service = yield* BoardTasks.BoardThreadTasks;
+      // Another task from this thread, filed by the agent's tool, is listed before this one.
+      engine.tasks.set("task-9", { id: "task-9", number: 9, title: "Tool's", body: "Other" });
+      const first = yield* service.fileThread(environmentId, filing);
+      assert.isTrue(first.created);
+      const edited = yield* service.fileThread(environmentId, { ...filing, title: "Edited" });
+      assert.deepStrictEqual(edited, { created: false, task: first.task });
+      assert.strictEqual(engine.tasks.size, 2);
+      // The edit was refused; the tool's task was asked under this request ID and refused too.
+      const tried = calls.slice(1).map((call) => bodyOf(call).title);
+      assert.includeMembers(tried, ["Edited", "From a thread"]);
+    }).pipe(Effect.provide(layer));
+  }),
+);
+
 it.effect(
-  "answers a refiling with the thread's live task, and files anew once it is discarded",
+  "files anew under the next request ID once the draft was discarded, then replays it",
   () =>
     Effect.gen(function* () {
-      const { board: _board, ...card } = task;
-      const live = [{ ...card, set: "work", lane: "draft", title: "From a thread" }];
-      let refusals = [refusal(409, "different fields", "conflict"), refusal(410, "gone", "gone")];
-      const { calls, reads, layer } = yield* harness(
-        (input) => {
-          const next = refusals.shift();
-          return next ? Effect.fail(next) : threadFiled(input);
-        },
-        undefined,
-        false,
-        live,
-      );
+      const engine = fakeIntake();
+      const { calls, layer } = yield* harness(engine.act, undefined, false, engine.read);
       yield* Effect.gen(function* () {
         const service = yield* BoardTasks.BoardThreadTasks;
-        const originRead = `/api/tasks?origin=${encodeURIComponent(origin)}&set=all&limit=500`;
-        // Edited text conflicts with the kept receipt: the task already filed from here answers.
-        assert.deepStrictEqual(yield* service.fileThread(environmentId, filing), {
-          created: false,
-          task,
-        });
-        assert.include(reads, originRead);
-        // Discarded, with nothing else live from this thread: a new request ID files it again.
-        live.length = 0;
-        assert.deepStrictEqual(yield* service.fileThread(environmentId, filing), {
-          created: true,
-          task,
-        });
+        const first = yield* service.fileThread(environmentId, filing);
+        engine.tasks.delete(first.task.id);
+        const again = yield* service.fileThread(environmentId, filing);
+        assert.isTrue(again.created);
+        assert.notStrictEqual(again.task.id, first.task.id);
+        const replay = yield* service.fileThread(environmentId, filing);
+        assert.deepStrictEqual(replay, { created: false, task: again.task });
         const ids = calls.map((call) => String(bodyOf(call).requestId));
-        assert.strictEqual(ids.length, 3);
-        assert.strictEqual(ids[1], ids[0]);
-        assert.match(ids[2]!, /^thread-[a-f0-9]{53}-[0-9a-f-]{36}$/);
-        refusals = [];
+        assert.match(ids[0]!, /^thread-[a-f0-9]{64}$/);
+        assert.deepStrictEqual(ids.slice(1), [
+          ids[0],
+          `${ids[0]!.slice(0, 60)}-1`,
+          ids[0],
+          `${ids[0]!.slice(0, 60)}-1`,
+        ]);
       }).pipe(Effect.provide(layer));
     }),
+);
+
+it.effect("refuses an edited refiling whose draft was itself edited since, filing nothing", () =>
+  Effect.gen(function* () {
+    const engine = fakeIntake();
+    const { layer } = yield* harness(engine.act, undefined, false, engine.read);
+    yield* Effect.gen(function* () {
+      const service = yield* BoardTasks.BoardThreadTasks;
+      const first = yield* service.fileThread(environmentId, filing);
+      engine.tasks.set(first.task.id, {
+        ...engine.tasks.get(first.task.id)!,
+        body: "Changed on the board",
+      });
+      const error = yield* Effect.flip(
+        service.fileThread(environmentId, { ...filing, title: "Edited" }),
+      );
+      assert.strictEqual(error.code, "invalid_request");
+      assert.strictEqual(engine.tasks.size, 1);
+    }).pipe(Effect.provide(layer));
+  }),
 );
 
 it.effect("refuses a reserved board, a board task's own thread, or an unknown thread", () =>

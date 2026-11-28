@@ -1,7 +1,10 @@
-import type { ScopedThreadRef } from "@t3tools/contracts";
+import { CLIENT_GUARDED_RPC_SCOPES, WS_METHODS, type ScopedThreadRef } from "@t3tools/contracts";
 import { Atom } from "effect/reactivity";
 
 import { appAtomRegistry } from "~/rpc/atomRegistry";
+import { serverEnvironment } from "~/state/server";
+import { readEnvironmentScope } from "~/state/session";
+import { fileThreadTaskOffered } from "./fileThreadTask.logic";
 
 /**
  * Which thread has the "File a task" dialog open. The details panel, the thread menus and the
@@ -14,4 +17,20 @@ export const fileThreadTaskDialogAtom = Atom.make<ScopedThreadRef | null>(null).
 
 export function openFileThreadTaskDialog(threadRef: ScopedThreadRef): void {
   appAtomRegistry.set(fileThreadTaskDialogAtom, threadRef);
+}
+
+/** Whether a thread menu offers filing this thread, read as the menu opens. */
+export function readFileThreadTaskOffered(threadRef: ScopedThreadRef): boolean {
+  const { environmentId, threadId } = threadRef;
+  return fileThreadTaskOffered({
+    deliveryEnabled:
+      appAtomRegistry.get(serverEnvironment.settingsValueAtom(environmentId))?.delivery?.enabled ===
+      true,
+    threadId,
+    // The scope the filing RPC is guarded by, as its permission atom reads it.
+    permitted: readEnvironmentScope(
+      environmentId,
+      CLIENT_GUARDED_RPC_SCOPES[WS_METHODS.deliveryFileThreadTask],
+    ),
+  });
 }

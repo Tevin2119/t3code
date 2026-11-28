@@ -129,6 +129,8 @@ export interface ThreadActionMenuState {
   readonly canShareWithGuest?: boolean;
   /** A No project thread with its own folder, on a server that can promote it. */
   readonly canTurnIntoProject?: boolean;
+  /** Delivery is on, this is not a board task's own thread, and this connection may file. */
+  readonly canFileTask?: boolean;
 }
 
 /** Local navigation, read markers, and copying remain available to read-only clients. */
@@ -178,7 +180,15 @@ export function buildThreadActionMenuItems(
     // it, which opens the task form written from the conversation, for review before saving.
     { id: "create-task", label: "Create task from conversation", icon: "square-kanban" },
     // A quick draft on a board, linked to this thread; the full form above is for team and seats.
-    { id: "file-task", label: "File a task from this thread", icon: "square-kanban" },
+    ...(state.canFileTask
+      ? [
+          {
+            id: "file-task" as const,
+            label: "File a task from this thread",
+            icon: "square-kanban",
+          },
+        ]
+      : []),
     ...(state.supports.pinning
       ? [
           state.isPinned

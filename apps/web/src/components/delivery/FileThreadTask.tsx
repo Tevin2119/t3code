@@ -1,6 +1,6 @@
 import { useAtomValue } from "@effect/atom-react";
 import { isReservedBoardTaskBoard, type ScopedThreadRef } from "@t3tools/contracts";
-import { useNavigate } from "@tanstack/react-router";
+import { Link, useNavigate } from "@tanstack/react-router";
 import { SquareKanbanIcon, SquarePlusIcon } from "lucide-react";
 import { useState } from "react";
 
@@ -94,6 +94,8 @@ function FileThreadTaskDialog({
     setDraft({ title: made.title, body: made.text.slice(0, BODY_LIMIT) });
   }
   const [busy, setBusy] = useState(false);
+  // A filing that replayed the task this thread already has there: nothing new was saved.
+  const [replayed, setReplayed] = useState<{ id: string; number: number } | null>(null);
   const title = draft?.title ?? "";
   const body = draft?.body ?? "";
   const blocked =
@@ -110,9 +112,13 @@ function FileThreadTaskDialog({
     }
     const { task, created } = result.filing;
     tasksRead.refresh();
+    if (!created) {
+      setReplayed({ id: task.id, number: task.number });
+      return;
+    }
     toastManager.add({
       type: "success",
-      title: created ? `Filed as task #${task.number}` : `Already filed as task #${task.number}`,
+      title: `Filed as task #${task.number}`,
       description: `A draft on ${task.board ?? board}. Submit it from the board when it is ready.`,
     });
     onClose();
@@ -170,7 +176,10 @@ function FileThreadTaskDialog({
               value={title}
               maxLength={TITLE_LIMIT}
               readOnly={busy || !draft}
-              onChange={(event) => setDraft({ title: event.target.value, body })}
+              onChange={(event) => {
+                setReplayed(null);
+                setDraft({ title: event.target.value, body });
+              }}
             />
           </label>
           <label className="flex min-w-0 flex-col gap-1">
@@ -182,9 +191,31 @@ function FileThreadTaskDialog({
               rows={10}
               readOnly={busy || !draft}
               placeholder={draft ? undefined : "Reading the conversation…"}
-              onChange={(event) => setDraft({ title, body: event.target.value })}
+              onChange={(event) => {
+                setReplayed(null);
+                setDraft({ title, body: event.target.value });
+              }}
             />
           </label>
+          {replayed ? (
+            <p
+              role="alert"
+              className="text-xs text-warning-foreground"
+              data-file-thread-task-replayed
+            >
+              This thread was already filed on this board as{" "}
+              <Link
+                to="/board"
+                search={{ environment: environmentId, task: replayed.id }}
+                className="text-primary underline-offset-2 hover:underline"
+                onClick={onClose}
+              >
+                task #{replayed.number}
+              </Link>
+              . Nothing new was filed, so the edits here were not saved. Change that task on the
+              board instead.
+            </p>
+          ) : null}
           {enabled && !filing.allowed ? (
             <p role="status" className="text-xs text-muted-foreground">
               This connection does not have permission to file board tasks.
@@ -216,6 +247,7 @@ function FileThreadTaskDialog({
 export function ThreadFiledTasks({ threadRef }: { threadRef: ScopedThreadRef }) {
   const navigate = useNavigate();
   const tasks = useThreadTasks(threadRef.environmentId, threadRef.threadId);
+  const { allowed } = useFileThreadTask(threadRef.environmentId);
   return (
     <ThreadDetailsSection
       headingId="thread-details-board-heading"
@@ -249,18 +281,20 @@ export function ThreadFiledTasks({ threadRef }: { threadRef: ScopedThreadRef }) 
             </li>
           ))}
         </ul>
-        <ThreadDetailsControl
-          size="sm"
-          variant="ghost"
-          part="row"
-          onClick={() => openFileThreadTaskDialog(threadRef)}
-          data-file-thread-task
-        >
-          <SquarePlusIcon aria-hidden className={THREAD_DETAILS_PANEL_ICON_CLASS} />
-          <span className={cn(THREAD_DETAILS_PANEL_LABEL_CLASS, "min-w-0 flex-1 truncate")}>
-            File a task from this thread
-          </span>
-        </ThreadDetailsControl>
+        {allowed ? (
+          <ThreadDetailsControl
+            size="sm"
+            variant="ghost"
+            part="row"
+            onClick={() => openFileThreadTaskDialog(threadRef)}
+            data-file-thread-task
+          >
+            <SquarePlusIcon aria-hidden className={THREAD_DETAILS_PANEL_ICON_CLASS} />
+            <span className={cn(THREAD_DETAILS_PANEL_LABEL_CLASS, "min-w-0 flex-1 truncate")}>
+              File a task from this thread
+            </span>
+          </ThreadDetailsControl>
+        ) : null}
       </div>
     </ThreadDetailsSection>
   );
