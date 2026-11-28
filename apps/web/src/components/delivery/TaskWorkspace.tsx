@@ -22,7 +22,8 @@ import { TaskEditor } from "./TaskEditor";
 import { TaskMenu } from "./TaskMenu";
 import { TaskPanelTab } from "./TaskPanelTab";
 import { TaskWorkspacePanels } from "./TaskWorkspacePanels";
-import { useBoardTaskValue } from "./useBoardTaskValue";
+import { OpenBoardTaskProvider, useOpenBoardTask, type OpenBoardTask } from "./useBoardTaskValue";
+import { showTaskLog } from "./taskLogReveal";
 
 /**
  * A board task opened as its native thread: the thread view T3 shows any thread in, with the
@@ -30,22 +31,41 @@ import { useBoardTaskValue } from "./useBoardTaskValue";
  * draft has the same page, with the task editor as its centre. The task's facts are in the
  * board's left column, which reads the same task. The board's own read is the only source.
  */
-export function TaskWorkspace(props: {
+type TaskWorkspaceProps = {
   readonly environmentId: EnvironmentId | null;
   readonly taskId: string;
   readonly from: "Board" | "Orchestrator";
   readonly onClose: () => void;
   readonly onOpenTask: (taskId: string | null) => void;
-}) {
+};
+
+export function TaskWorkspace(props: TaskWorkspaceProps) {
+  const shared = useOpenBoardTask();
+  // On the Board the column already holds this task; anywhere else the view builds its own.
+  if (shared?.board?.taskId === props.taskId && shared.board.environmentId === props.environmentId)
+    return <OpenTaskWorkspace {...props} value={shared} />;
+  return (
+    <OpenBoardTaskProvider
+      environmentId={props.environmentId}
+      taskId={props.taskId}
+      onOpenTask={props.onOpenTask}
+      onDiscarded={props.onClose}
+    >
+      <SharedTaskWorkspace {...props} />
+    </OpenBoardTaskProvider>
+  );
+}
+
+function SharedTaskWorkspace(props: TaskWorkspaceProps) {
+  const value = useOpenBoardTask();
+  return value ? <OpenTaskWorkspace {...props} value={value} /> : null;
+}
+
+function OpenTaskWorkspace(props: TaskWorkspaceProps & { readonly value: OpenBoardTask }) {
   const gt = useGT();
   const person = usePersonName();
   const sidebar = useSidebar();
-  // This view keeps the task fresh; the board's column reads the same reading.
-  const { board, task, read, actions, conversation, owner, others } = useBoardTaskValue(
-    props.environmentId,
-    props.taskId,
-    { polls: true, onOpenTask: props.onOpenTask, onDiscarded: props.onClose },
-  );
+  const { board, task, read, actions, conversation, owner, others } = props.value;
   const act = useDeliveryAct(props.environmentId, "task seen");
   const steerAct = useDeliveryAct(props.environmentId, "steer");
   const [taskBrief, setTaskBrief] = useState<string | null>(null);
@@ -154,14 +174,12 @@ export function TaskWorkspace(props: {
                     notices,
                     panelControls: panel.controls,
                     showLog: () => {
-                      // The log is among the task's facts in the board's column, a sheet on a phone.
+                      // The log is among the task's facts in the board's column, a sheet on a phone,
+                      // which is scrolled once it has opened.
+                      const sheetOpening = sidebar.isMobile && !sidebar.openMobile;
                       if (sidebar.isMobile) sidebar.setOpenMobile(true);
                       else sidebar.setOpen(true);
-                      requestAnimationFrame(() =>
-                        document
-                          .querySelector('[data-board-panel] [data-task-section="log"]')
-                          ?.scrollIntoView({ block: "start", behavior: "smooth" }),
-                      );
+                      showTaskLog({ sheetOpening });
                     },
                     steer: finished ? steer : undefined,
                     backToBoard: props.onClose,
@@ -175,7 +193,6 @@ export function TaskWorkspace(props: {
             <TaskEmpty notices={notices} reading={read.isPending} failed={!!read.error} />
           )}
         </div>
-        {actions.dialog}
         {task ? (
           <SharedTaskAllocation
             environmentId={props.environmentId}

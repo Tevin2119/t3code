@@ -550,7 +550,7 @@ describe("MessagesTimeline messages", () => {
       <MessagesTimeline
         {...baseProps()}
         timelineEntries={[]}
-        emptyState={<section aria-label="Team development">Lead, then seats</section>}
+        renderEmptyState={() => <section aria-label="Team development">Lead, then seats</section>}
       />,
     );
     await expect.element(screen.getByRole("region", { name: "Team development" })).toBeVisible();

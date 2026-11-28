@@ -210,3 +210,39 @@ it.each([{}, openWindow])("polls faster only with an open sign-off dialog: %j", 
   await act(() => renderer.root.findByType("dialog").props.onOpenChange(false));
   expect(mock.read.mock.lastCall?.[2]?.pollMs).toBeUndefined();
 });
+
+function ScopedProbe(props: { readonly scope: string }) {
+  const value = useTaskActions(EnvironmentId.make("env-a"), {
+    onDone: () => {},
+    scope: props.scope,
+  });
+  useLayoutEffect(() => {
+    actions = value;
+  }, [value]);
+  return value.dialog;
+}
+
+it("starts another task with no refusal, open decision or late answer from the one before", async () => {
+  const answer = Promise.withResolvers<{ ok: false; why: string; status: null; problems: [] }>();
+  mock.action.mockReset().mockReturnValueOnce(answer.promise);
+  await act(() => {
+    renderer = create(<ScopedProbe scope="task-1" />);
+  });
+  await act(() => {
+    actions.run(target, "submit");
+  });
+  expect(actions.busy).toBe(true);
+  await act(() => renderer.update(<ScopedProbe scope="task-2" />));
+  expect(actions.busy).toBe(false);
+  // The first task's refusal arrives after the switch: it is not the second task's.
+  await act(async () => {
+    answer.resolve({ ok: false, why: "Refused for task 1", status: null, problems: [] });
+    await answer.promise;
+  });
+  expect(actions.problem).toBeNull();
+  // A decision opened on one task is gone once another is open.
+  await act(() => actions.run(target, "approve"));
+  expect(renderer.toJSON()).not.toBeNull();
+  await act(() => renderer.update(<ScopedProbe scope="task-3" />));
+  expect(renderer.toJSON()).toBeNull();
+});

@@ -94,8 +94,11 @@ export function useTaskActions(
   options: {
     readonly onDone: () => void;
     readonly onDiscarded?: ((id: string) => void) | undefined;
+    /** What the actions are for, such as the open task: a new one starts with nothing pending. */
+    readonly scope?: string | undefined;
   },
 ) {
+  const { scope } = options;
   const person = usePersonName();
   const act = useDeliveryAct(environmentId, "task action");
   const [decision, setDecision] = useState<Decision | null>(null);
@@ -107,8 +110,22 @@ export function useTaskActions(
   const { refresh: refreshHealth } = health;
   const [requireKey, setRequireKey] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [problem, setProblem] = useState<string | null>(null);
+  // A refusal belongs to what it was sent for; one that returns after a switch is not shown.
+  const [refusal, setRefusal] = useState<{
+    readonly scope: string | undefined;
+    readonly why: string;
+  } | null>(null);
+  const problem = refusal && refusal.scope === scope ? refusal.why : null;
+  const setProblem = (why: string | null) => setRefusal(why === null ? null : { scope, why });
   const [confirming, setConfirming] = useState<Confirming | null>(null);
+  const [shownScope, setShownScope] = useState(scope);
+  if (shownScope !== scope) {
+    setShownScope(scope);
+    setDecision(null);
+    setConfirming(null);
+    setRequireKey(false);
+    setBusy(false);
+  }
   const { onDone, onDiscarded } = options;
   // One request at a time. A second press while one is out is dropped, not queued: the state it
   // was pressed against may be gone by the time the first returns. A lost answer is not sent again.

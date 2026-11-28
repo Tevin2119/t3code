@@ -67,7 +67,7 @@ import { ThreadDetailsSection } from "../chat/ThreadDetailsSection";
 import { BoardTaskContext } from "./BoardTaskContext";
 import { TaskDetailsItem } from "./TaskDetails";
 import { TaskLineage } from "./TaskLineage";
-import { useBoardTaskValue } from "./useBoardTaskValue";
+import { OpenBoardTaskProvider, useOpenBoardTask, type OpenBoardTask } from "./useBoardTaskValue";
 import { useOpenSeatThread } from "./useTaskConversation";
 
 /** Each group's name, title and what it says when it is empty, in the order they show. */
@@ -231,20 +231,51 @@ function SwitcherSection(props: {
 }
 
 /**
- * The open task's facts, at the top of the column: the Task item and its lineage, read with the
- * task view's own reading. What is decided here reports here.
+ * On the Board, the task the route opens, built once for the column and the task view, so both
+ * read it on one clock and its actions send one request at a time.
  */
-function BoardTaskFacts(props: { readonly value: ReturnType<typeof useBoardTaskValue> }) {
+export function BoardOpenTaskRoute(props: { readonly children: ReactNode }) {
+  const search = useSearch({ strict: false }) as DeliveryBoardSearch;
+  const pathname = useLocation({ select: (location) => location.pathname });
+  const onBoard = pathname === "/board";
+  const environmentId = useDeliveryEnvironmentId(
+    onBoard && search.new ? (search.from ?? null) : null,
+    onBoard ? (search.environment ?? null) : null,
+  );
+  const enabled = useDeliveryEnabled(environmentId);
+  const navigate = useNavigate();
+  const open = (task: string | null) =>
+    void navigate({
+      to: "/board",
+      search: {
+        ...(environmentId ? { environment: environmentId } : {}),
+        ...(task ? { task } : {}),
+      },
+    });
+  return (
+    <OpenBoardTaskProvider
+      environmentId={enabled ? environmentId : null}
+      taskId={onBoard ? (search.task ?? null) : null}
+      onOpenTask={open}
+      onDiscarded={() => open(null)}
+    >
+      {props.children}
+    </OpenBoardTaskProvider>
+  );
+}
+
+/**
+ * The open task's facts, at the top of the column: the Task item and its lineage, from the
+ * reading the task view shares. A refusal shows under the task view's header.
+ */
+function BoardTaskFacts(props: { readonly value: OpenBoardTask | null }) {
   const gt = useGT();
-  const { board, task, read, actions } = props.value;
+  const board = props.value?.board ?? null;
+  const task = props.value?.task ?? null;
+  const read = props.value?.read ?? null;
   return (
     <BoardTaskContext value={board}>
       <SidebarGroup className="px-0" data-board-panel-task-facts={board?.taskId}>
-        {actions.problem ? (
-          <p className="px-3 pb-1 text-xs text-warning" data-delivery-problem>
-            {actions.problem}
-          </p>
-        ) : null}
         {task ? (
           <>
             <TaskDetailsItem />
@@ -261,15 +292,14 @@ function BoardTaskFacts(props: { readonly value: ReturnType<typeof useBoardTaskV
           </>
         ) : (
           <p className="px-3 text-xs text-sidebar-muted-foreground" role="status">
-            {read.error
+            {read?.error
               ? gt("The engine did not answer.")
-              : read.isPending
+              : !read || read.isPending
                 ? gt("Reading the task...")
                 : gt("There is no such task.")}
           </p>
         )}
       </SidebarGroup>
-      {actions.dialog}
     </BoardTaskContext>
   );
 }
@@ -365,14 +395,12 @@ function EnvironmentBoardSidebar({
     [taskCards, boardCards, q],
   );
   const kept = panelCards(cards, filters, switching);
-  // The open task as the task view reads it, for its facts and its family. The view polls it.
-  const openTaskValue = useBoardTaskValue(enabled ? environmentId : null, openTaskId, {
-    polls: false,
-    onOpenTask: (taskId) => (taskId ? goToTask(taskId) : backToBoard()),
-    onDiscarded: () => backToBoard(),
-  });
-  const { task: openTask, conversation } = openTaskValue;
-  const openSeatThread = useOpenSeatThread(conversation.ref);
+  // The open task as the task view reads it, for its facts and its family.
+  const openShared = useOpenBoardTask();
+  const openTaskValue = openShared?.board?.taskId === openTaskId ? openShared : null;
+  const openTask = openTaskValue?.task ?? null;
+  const conversation = openTaskValue?.conversation ?? null;
+  const openSeatThread = useOpenSeatThread(conversation?.ref ?? null);
   const family: SwitcherFamily | null = openTask
     ? {
         open: openTask.card,
@@ -382,7 +410,7 @@ function EnvironmentBoardSidebar({
           ...relatedTaskGroups(openTask.followUps).current,
         ],
         seats: (openTask.council?.seats ?? []).flatMap((item) => {
-          const thread = conversation.seats.thread(item.seat);
+          const thread = conversation?.seats.thread(item.seat) ?? null;
           return thread ? [{ seat: item.seat, activity: item.activity, thread }] : [];
         }),
       }
@@ -436,11 +464,29 @@ function EnvironmentBoardSidebar({
     />
   );
 
+  const backRow = (
+    <SidebarGroup>
+      <div className="flex">
+        <Button size="sm" variant="ghost" onClick={backToBoard} data-board-panel-back>
+          <ArrowLeftIcon />
+          {gt("Back to board")}
+        </Button>
+      </div>
+    </SidebarGroup>
+  );
+
+  // A shared board lists its tasks in the workspace, but an open task's facts stay here.
   if (shared)
     return (
       <SidebarContent className="overflow-x-hidden" data-board-panel>
+        {switching ? (
+          <>
+            {backRow}
+            <BoardTaskFacts value={openTaskValue} />
+          </>
+        ) : null}
         <SidebarGroup>
-          <p className="px-1 text-xs text-sidebar-muted-foreground">
+          <p className="px-1 text-xs text-sidebar-muted-foreground" data-board-panel-shared>
             A shared board is selected for this environment. Its tasks and allocation controls
             appear in the board workspace. Choose another board from the Board selector.
           </p>
@@ -674,14 +720,7 @@ function EnvironmentBoardSidebar({
   if (switching)
     return (
       <SidebarContent className="overflow-x-hidden" data-board-panel>
-        <SidebarGroup>
-          <div className="flex">
-            <Button size="sm" variant="ghost" onClick={backToBoard} data-board-panel-back>
-              <ArrowLeftIcon />
-              {gt("Back to board")}
-            </Button>
-          </div>
-        </SidebarGroup>
+        {backRow}
         <BoardTaskFacts value={openTaskValue} />
         <SidebarGroup>
           <Group

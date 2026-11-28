@@ -339,8 +339,8 @@ interface MessagesTimelineProps {
   onFooterGrow?: () => void;
   findOpen?: boolean;
   hideEmptyPlaceholder?: boolean;
-  /** Shown in place of the "send a message" placeholder, such as a board task's team. */
-  emptyState?: ReactNode;
+  /** Drawn in place of the "send a message" placeholder, such as a board task's team. */
+  renderEmptyState?: () => ReactNode;
   /** Composer space to center the empty state against; held steady through collapse. */
   emptyPlaceholderInset: number;
   topFadeEnabled?: boolean;
@@ -440,7 +440,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
   onViewportAttach,
   onFooterGrow,
   hideEmptyPlaceholder = false,
-  emptyState,
+  renderEmptyState,
   emptyPlaceholderInset,
   topFadeEnabled = false,
   historyControls,
@@ -1470,7 +1470,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
           className="flex h-full items-center justify-center ps-(--chat-lane-inset-start) pe-(--chat-lane-inset-end)"
           style={{ paddingBottom: emptyPlaceholderInset }}
         >
-          {emptyState ?? (
+          {renderEmptyState?.() ?? (
             <p className="text-sm text-muted-foreground">
               <T>Send a message to start the conversation.</T>
             </p>

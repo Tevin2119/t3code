@@ -42,7 +42,8 @@ import {
 import { BackgroundThreadAnnouncer } from "./BackgroundThreadAnnouncer";
 import { HistorySwipeNavigation } from "./HistorySwipeNavigation";
 import ThreadSidebar from "./Sidebar";
-import { BoardSidebarPanel } from "./delivery/BoardSidebarPanel";
+import { BoardOpenTaskRoute, BoardSidebarPanel } from "./delivery/BoardSidebarPanel";
+import { revealPendingTaskLog } from "./delivery/taskLogReveal";
 import { SidebarChromeHeader, SidebarChromeFooter } from "./sidebar/SidebarChrome";
 import { SidebarBrandWidthProbe } from "./sidebar/SidebarChrome";
 import { isAppModalPage } from "./sidebar/mainAppLocation";
@@ -475,42 +476,48 @@ export function AppSidebarLayout({
         storageKey="chat_thread_sidebar_open"
         style={sidebarProviderStyle}
       >
-        {showSidebar ? (
-          <>
-            <SidebarBrandWidthProbe isElectron={isElectron} onWidthChange={setBrandWidth} />
-            <Sidebar
-              side="left"
-              collapsible="offcanvas"
-              data-app-sidebar=""
-              {...sidebarArea}
-              role="navigation"
-              aria-label={gt("Threads")}
-              resizable={{
-                collapseOnResize: true,
-                maxWidth: sidebarMaximumWidth,
-                minWidth: sidebarMinimumWidth,
-                shouldAcceptWidth: ({ currentWidth, nextWidth, wrapper }) =>
-                  nextWidth <= currentWidth ||
-                  wrapper.clientWidth - nextWidth >= THREAD_MAIN_CONTENT_MIN_WIDTH,
-                storageKey: THREAD_SIDEBAR_WIDTH_STORAGE_KEY,
-                onResize: setSidebarWidth,
-              }}
-              style={windowControlsInsetStyle}
-            >
-              {isOnBoard ? (
-                <>
-                  <SidebarChromeHeader isElectron={isElectron} boardControls />
-                  <BoardSidebarPanel />
-                  <SidebarChromeFooter />
-                </>
-              ) : (
-                <ThreadSidebar routeReveal={sidebarRouteReveal} />
-              )}
-              <SidebarRail onDoubleClick={resetSidebarWidth} />
-            </Sidebar>
-          </>
-        ) : null}
-        {children}
+        {/* The Board's open task, which its column and its task view share. */}
+        <BoardOpenTaskRoute>
+          {showSidebar ? (
+            <>
+              <SidebarBrandWidthProbe isElectron={isElectron} onWidthChange={setBrandWidth} />
+              <Sidebar
+                side="left"
+                collapsible="offcanvas"
+                data-app-sidebar=""
+                {...sidebarArea}
+                role="navigation"
+                aria-label={gt("Threads")}
+                resizable={{
+                  collapseOnResize: true,
+                  maxWidth: sidebarMaximumWidth,
+                  minWidth: sidebarMinimumWidth,
+                  shouldAcceptWidth: ({ currentWidth, nextWidth, wrapper }) =>
+                    nextWidth <= currentWidth ||
+                    wrapper.clientWidth - nextWidth >= THREAD_MAIN_CONTENT_MIN_WIDTH,
+                  storageKey: THREAD_SIDEBAR_WIDTH_STORAGE_KEY,
+                  onResize: setSidebarWidth,
+                }}
+                style={windowControlsInsetStyle}
+                onMobileOpenChangeComplete={(open) => {
+                  if (open && isOnBoard) revealPendingTaskLog();
+                }}
+              >
+                {isOnBoard ? (
+                  <>
+                    <SidebarChromeHeader isElectron={isElectron} boardControls />
+                    <BoardSidebarPanel />
+                    <SidebarChromeFooter />
+                  </>
+                ) : (
+                  <ThreadSidebar routeReveal={sidebarRouteReveal} />
+                )}
+                <SidebarRail onDoubleClick={resetSidebarWidth} />
+              </Sidebar>
+            </>
+          ) : null}
+          {children}
+        </BoardOpenTaskRoute>
         <BackgroundThreadAnnouncer />
         <SidebarControl showSidebar={showSidebar} />
         {isElectron ? <HistorySwipeNavigation /> : null}
