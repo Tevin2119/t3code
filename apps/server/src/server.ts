@@ -11,6 +11,7 @@ import * as PullRequestSyncReactor from "./orchestration-v2/PullRequestSyncReact
 import * as PullRequestWatchReactor from "./orchestration-v2/PullRequestWatchReactor.ts";
 import * as DelegatedTaskQuestionReactor from "./orchestration-v2/DelegatedTaskQuestionReactor.ts";
 import * as BoardConversation from "./delivery/BoardConversation.ts";
+import * as BoardTaskSideChats from "./delivery/BoardTaskSideChats.ts";
 import * as BoardTaskThreads from "./delivery/BoardTaskThreads.ts";
 import * as BoardThreadRows from "./delivery/boardThreadRows.ts";
 import * as NativeIntake from "./delivery/NativeIntake.ts";
@@ -781,10 +782,12 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
       yield* service.start();
       // Shares the board pass's claims, which keep each held step's task alive.
       yield* (yield* BoardTaskExecution.BoardTaskExecution).start();
+      yield* (yield* BoardTaskSideChats.BoardTaskSideChats).start();
     }),
   ).pipe(
     Layer.provide(BoardTaskExecution.layer.pipe(Layer.provide(IdAllocator.layer))),
     Layer.provideMerge(BoardTaskThreads.layer),
+    Layer.provideMerge(BoardTaskSideChats.layer),
     Layer.provide(BoardConversation.layer),
     Layer.provide(BoardThreadRows.layer),
     Layer.provide(EventStoreV2.layer),

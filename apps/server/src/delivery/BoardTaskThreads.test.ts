@@ -43,6 +43,7 @@ import { deriveProviderInstanceConfigMap } from "../provider/ProviderInstanceReg
 import * as ServerSettings from "../serverSettings.ts";
 import * as BoardConversation from "./BoardConversation.ts";
 import { steerMessageId } from "./BoardConversation.ts";
+import * as BoardTaskSideChats from "./BoardTaskSideChats.ts";
 import * as BoardTaskThreads from "./BoardTaskThreads.ts";
 import {
   scratchEngine,
@@ -248,6 +249,12 @@ function service(
     const conversation = yield* BoardConversation.make;
     return yield* BoardTaskThreads.make.pipe(
       Effect.provideService(BoardConversation.BoardConversation, conversation),
+      // Side chats are recorded against the scratch engine in BoardTaskSideChats.test.ts.
+      Effect.provideService(BoardTaskSideChats.BoardTaskSideChats, {
+        record: () => Effect.void,
+        sync: () => Effect.void,
+        start: () => Effect.void,
+      }),
       Effect.provide(LimitedSeatSwap.layer.pipe(Layer.provide(LimitedSeats.layer))),
       Effect.provideService(ProviderAdapterRegistry.ProviderAdapterRegistryV2, {
         get: () => Effect.die("A resumed hand-off keeps the successor's model"),

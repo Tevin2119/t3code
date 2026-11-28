@@ -16,6 +16,11 @@ export interface ScratchLink {
   readonly setAt: string;
 }
 
+export interface ScratchRelated extends ScratchLink {
+  readonly key: string;
+  readonly role: "side" | "linked";
+}
+
 export interface ScratchTask {
   readonly id: string;
   readonly number: number;
@@ -127,11 +132,16 @@ export function scratchEngine(
      * the legacy engine, which keys by `(task, seq)` and serves neither.
      */
     readonly sourceScoped?: boolean;
+    /** `false` models an engine before slice L2: no related threads and no routes for them. */
+    readonly servesRelated?: boolean;
   } = {},
 ) {
   const key = options.key ?? "scratch approval passphrase";
   const tasks = new Map<string, ScratchTask>();
   const links = new Map<string, ScratchLink>();
+  /** Each task's related threads by key, in the order they were first set (lib/related-threads.mjs). */
+  const related = new Map<string, Map<string, ScratchRelated>>();
+  const servesRelated = options.servesRelated !== false;
   const leases = new Map<string, Lease>();
   const events: Array<{ kind: string; task: string; data: unknown }> = [];
   const requests: Array<{ method: string; path: string; body: unknown }> = [];
@@ -185,6 +195,7 @@ export function scratchEngine(
     hold: task.hold ?? null,
     ...(task.seatModels === undefined ? {} : { seatModels: task.seatModels }),
     ...(options.servesLink === false ? {} : { boardThread: links.get(task.id) ?? null }),
+    ...(servesRelated ? { relatedThreads: [...(related.get(task.id)?.values() ?? [])] } : {}),
     ...(conversing ? { conversation: mirrorOf(task.id), steers: steerCounts(task.id) } : {}),
     ...task.served,
   });
@@ -342,6 +353,70 @@ export function scratchEngine(
     links.set(id, boardThread);
     events.push({ kind: "task.board-thread-set", task: id, data: { previous, boardThread } });
     return { status: 200, body: { task: id, number: task.number, boardThread } };
+  };
+
+  const putRelated = (id: string, relatedKey: string, body: Record<string, unknown>): Answer => {
+    const task = tasks.get(id);
+    if (!task) return refused(404, `no task ${id.slice(0, 40)}`, { code: "not-found", task: null });
+    const { environmentId, threadId, role, setBy } = body;
+    if (
+      typeof environmentId !== "string" ||
+      !ENVIRONMENT_PART.test(environmentId) ||
+      typeof threadId !== "string" ||
+      !THREAD_PART.test(threadId) ||
+      (role !== "side" && role !== "linked") ||
+      typeof setBy !== "string" ||
+      !ENVIRONMENT_PART.test(setBy)
+    )
+      return refused(400, "a related thread reads as { environmentId, threadId, role, setBy }", {
+        code: "invalid-field",
+      });
+    const target = { environmentId, threadId };
+    if (sameTarget(links.get(id) ?? null, target))
+      return refused(400, "this is the task's own board thread", { code: "board-thread" });
+    const rows = related.get(id) ?? new Map<string, ScratchRelated>();
+    const elsewhere = [...rows.values()].find(
+      (link) => link.key !== relatedKey && sameTarget(link, target),
+    );
+    if (elsewhere) return refused(409, "already related", { code: "conflict", current: elsewhere });
+    const previous = rows.get(relatedKey) ?? null;
+    if (
+      previous &&
+      sameTarget(previous, target) &&
+      previous.role === role &&
+      previous.setBy === setBy
+    )
+      return {
+        status: 200,
+        body: { task: id, number: task.number, relatedThread: previous, unchanged: true },
+      };
+    const relatedThread = {
+      key: relatedKey,
+      environmentId,
+      threadId,
+      role,
+      setBy,
+      setAt: DateTime.formatIso(DateTime.makeUnsafe(clock)),
+    } as const;
+    rows.set(relatedKey, relatedThread);
+    related.set(id, rows);
+    events.push({ kind: "task.related-thread-set", task: id, data: { previous, relatedThread } });
+    return { status: 200, body: { task: id, number: task.number, relatedThread } };
+  };
+
+  const clearRelated = (id: string, relatedKey: string, body: Record<string, unknown>): Answer => {
+    if (!tasks.has(id))
+      return refused(404, `no task ${id.slice(0, 40)}`, { code: "not-found", task: null });
+    const previous = related.get(id)?.get(relatedKey) ?? null;
+    if (previous) {
+      related.get(id)!.delete(relatedKey);
+      events.push({
+        kind: "task.related-thread-cleared",
+        task: id,
+        data: { previous, by: body.setBy },
+      });
+    }
+    return { status: 204, body: null };
   };
 
   const clearLink = (id: string): Answer => {
@@ -584,6 +659,16 @@ export function scratchEngine(
       before?.();
       return putLink(link[1]!, body);
     }
+    const relatedRoute = servesRelated
+      ? /^\/api\/tasks\/([\w-]+)\/threads\/([\w-]{1,80})$/.exec(pathname)
+      : null;
+    if (relatedRoute && (method === "PUT" || method === "DELETE")) {
+      if (body.key !== key)
+        return refused(403, "the approval key is wrong or missing", { code: "refused" });
+      return method === "DELETE"
+        ? clearRelated(relatedRoute[1]!, relatedRoute[2]!, body)
+        : putRelated(relatedRoute[1]!, relatedRoute[2]!, body);
+    }
     const keyed = conversing
       ? /^\/api\/tasks\/([\w-]+)\/(activity|steers\/(\d+)\/(delivered|failed))$/.exec(pathname)
       : null;
@@ -704,6 +789,7 @@ export function scratchEngine(
       teams = value;
     },
     linkOf: (id: string) => links.get(id) ?? null,
+    relatedOf: (id: string) => [...(related.get(id)?.values() ?? [])],
     /** Another writer's link, written as the engine would write it. */
     writeLink: (id: string, link: { environmentId: string; threadId: string; setBy: string }) =>
       putLink(id, link),

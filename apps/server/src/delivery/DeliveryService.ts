@@ -141,8 +141,11 @@ const decodeDeliveryRequest = Schema.decodeUnknownEffect(
   }),
 );
 
-/** The engine writes for a board task's conversation; only the server makes them. */
-const BOARD_THREAD_LINK = /^\/api\/tasks\/[\w-]+\/board-thread$/;
+/**
+ * The engine writes for a board task's conversations, its own and its related threads (slice
+ * L2t); only the server makes them.
+ */
+const BOARD_THREAD_LINK = /^\/api\/tasks\/[\w-]+\/(?:board-thread|threads\/[\w-]{1,80})$/;
 /** The engine's approval key for server-owned board writes. Wins over the one saved in Settings. */
 export const BOARD_THREAD_KEY_VARIABLE = "T3_DELIVERY_BOARD_THREAD_KEY";
 /** Where Settings saves the board approval key in the server's secret store. */

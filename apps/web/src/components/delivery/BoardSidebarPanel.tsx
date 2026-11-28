@@ -67,6 +67,7 @@ import { ThreadDetailsSection } from "../chat/ThreadDetailsSection";
 import { BoardTaskContext } from "./BoardTaskContext";
 import { TaskDetailsItem } from "./TaskDetails";
 import { TaskLineage } from "./TaskLineage";
+import { TaskRelatedThreads } from "./TaskRelatedThreads";
 import { OpenBoardTaskProvider, useOpenBoardTask, type OpenBoardTask } from "./useBoardTaskValue";
 import { useOpenSeatThread } from "./useTaskConversation";
 
@@ -289,6 +290,7 @@ function BoardTaskFacts(props: { readonly value: OpenBoardTask | null }) {
                 <TaskLineage />
               </ThreadDetailsSection>
             ) : null}
+            <TaskRelatedThreads />
           </>
         ) : (
           <p className="px-3 text-xs text-sidebar-muted-foreground" role="status">

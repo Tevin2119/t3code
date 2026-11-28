@@ -30,6 +30,7 @@ const taskBody = {
   },
 };
 const reads: string[] = [];
+let relatedThreads: ReadonlyArray<Record<string, string>> = [];
 
 vi.mock(import("../../state/delivery"), async (importOriginal) => ({
   ...(await importOriginal()),
@@ -45,7 +46,7 @@ vi.mock(import("../../state/delivery"), async (importOriginal) => ({
     if (path) reads.push(`${path} ${options?.pollMs ?? "once"}`);
     const body =
       path === "/api/tasks/t1"
-        ? taskBody
+        ? { ...taskBody, relatedThreads }
         : path?.startsWith("/api/tasks?")
           ? [
               taskBody.card,
@@ -89,6 +90,7 @@ beforeEach(async () => {
   await page.viewport(1400, 900);
   localStorage.clear();
   reads.length = 0;
+  relatedThreads = [];
 });
 
 const column = (width = 300) => (
@@ -158,4 +160,45 @@ it.each([256, 208])("fits the decisions in a %ipx column, nothing cut off", asyn
   }
   const region = decisions.element();
   expect(region.scrollWidth).toBeLessThanOrEqual(region.clientWidth);
+});
+
+it("lists the task's related threads in the column with the lineage's own rows", async () => {
+  relatedThreads = [
+    {
+      key: "side-1",
+      environmentId,
+      threadId: "side-chat-1",
+      role: "side",
+      setBy: environmentId,
+      setAt: "2026-11-28T06:00:00.000Z",
+    },
+    {
+      key: "linked-1",
+      environmentId: "env-elsewhere",
+      threadId: "thread-elsewhere",
+      role: "linked",
+      setBy: "env-elsewhere",
+      setAt: "2026-11-28T06:01:00.000Z",
+    },
+    // A role this build does not know is left out, not shown as one it does.
+    { key: "odd", environmentId, threadId: "odd", role: "watcher", setBy: environmentId },
+  ];
+  await using screen = await render(column(), { router: route });
+  const section = screen.getByRole("region", { name: "Related threads" });
+  await expect.element(section).toBeVisible();
+  const list = section.getByRole("list", { name: "Related threads" });
+  await expect.element(list).toBeVisible();
+  const rows = [...list.element().querySelectorAll(":scope > li")].map((row) =>
+    row.textContent?.trim(),
+  );
+  expect(rows).toEqual(["Side chat", "Linked thread"]);
+  // Below the task's own facts, in the left column.
+  const facts = document.querySelector("[data-board-panel-task-facts]")!;
+  expect(facts.contains(section.element())).toBe(true);
+});
+
+it("shows no related threads section for a task without any", async () => {
+  await using screen = await render(column(), { router: route });
+  await expect.element(screen.getByRole("region", { name: "Task #12" })).toBeVisible();
+  expect(document.querySelector("[data-task-related-threads]")).toBeNull();
 });

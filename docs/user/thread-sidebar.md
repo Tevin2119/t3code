@@ -118,8 +118,10 @@ task's menu or on the **Task** item. It opens a side chat of the task's thread,
 with the conversation so far, on the thread's right panel and among its **Side
 chats** in the thread details card. What you write there stays in the side chat:
 it does not reach the task, its team or the engine, and a task's thread offers no
-**Merge back**. Closing or archiving the side
-chat leaves the task as it is.
+**Merge back**. The board only learns that the side chat exists, so the task lists
+it under **Related threads** on the board's task column, from any environment.
+Archiving or deleting the side chat takes it off that list and leaves the task as
+it is; restoring it puts it back.
 
 The task's lineage lists the seats' own conversations, **Made from**, the
 conversation that created the task, and the task's parent, parts and follow-ups.
