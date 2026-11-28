@@ -12,7 +12,18 @@ export interface DeliveryBoardSearch {
   readonly task?: string;
   readonly new?: boolean;
   readonly from?: string;
+  /** A machine this environment links to, whose shared boards the Board shows. */
+  readonly linked?: string;
+  /** The board of the linked machine that is shown. */
+  readonly linkedBoard?: string;
 }
+
+/** A board id as the engine gives one: word characters, at most 256 of them. */
+const isBoardId = (value: unknown): value is string =>
+  typeof value === "string" && /^[\w-]{1,256}$/.test(value);
+
+const isMachineId = (value: unknown): value is string =>
+  typeof value === "string" && value.trim().length > 0 && value.length <= 200;
 
 export function parseBoardSearch(raw: Record<string, unknown>): DeliveryBoardSearch {
   const environment =
@@ -21,14 +32,16 @@ export function parseBoardSearch(raw: Record<string, unknown>): DeliveryBoardSea
     raw.environment.length <= 200
       ? { environment: raw.environment }
       : {};
-  if (isTaskId(raw.task)) return { ...environment, task: raw.task };
+  const linked = isMachineId(raw.linked) ? { linked: raw.linked } : {};
+  const linkedBoard = isBoardId(raw.linkedBoard) ? { linkedBoard: raw.linkedBoard } : {};
+  if (isTaskId(raw.task)) return { ...environment, ...linked, ...linkedBoard, task: raw.task };
   if (raw.new === true)
     return {
       ...environment,
       new: true,
       ...(isConversationRef(raw.from) ? { from: raw.from } : {}),
     };
-  return environment;
+  return { ...environment, ...linked, ...linkedBoard };
 }
 
 export const PRIORITY_LABEL: Record<TaskPriority, string> = {

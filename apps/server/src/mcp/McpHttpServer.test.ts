@@ -1739,6 +1739,9 @@ it.effect("hides tools for links and Delivery while off, and refuses another env
   Effect.scoped(
     Effect.gen(function* () {
       const token = "linksToken";
+      let shellReads = 0;
+      const origin = ThreadId.make("thread-origin");
+      const intermediate = ThreadId.make("thread-intermediate");
       const scope: McpInvocationContext.McpThreadInvocationScope = {
         environmentId,
         requestNamespace: token,
@@ -1760,8 +1763,9 @@ it.effect("hides tools for links and Delivery while off, and refuses another env
         }).annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenWhileLinksOff),
         Tool.make("where", {
           description: "Says where it ran.",
+          dependencies: [McpInvocationContext.McpInvocationContext],
           parameters: Schema.Struct({ environmentId: OrchestratorMcpEnvironmentTarget }),
-          success: Schema.Struct({ ranIn: Schema.String }),
+          success: Schema.Struct({ ranIn: Schema.String, linked: Schema.Boolean }),
           failure: OrchestratorMcpFailure,
           failureMode: "return",
         }),
@@ -1779,13 +1783,45 @@ it.effect("hides tools for links and Delivery while off, and refuses another env
           LinksToolkit,
           McpToolAccess.toLayer(LinksToolkit, {
             links: McpToolAccess.reads(() => Effect.succeed({ links: 0 })),
-            where: McpToolAccess.reads(() => Effect.succeed({ ranIn: "here" })),
+            where: McpToolAccess.reads(() =>
+              McpInvocationContext.McpInvocationContext.pipe(
+                Effect.map((current) => ({
+                  ranIn: "here",
+                  linked: McpInvocationContext.isLinkedDeliveryCaller(current),
+                })),
+              ),
+            ),
             delivery: McpToolAccess.reads(() => Effect.succeed({ stepped: true })),
           }),
         ),
       ).pipe(
         Layer.provide(Layer.succeedContext(settingsContext)),
         Layer.provide(McpToolAccessTestkit.liveThreadsLayer),
+        Layer.provide(
+          Layer.mock(ProjectionStore.ProjectionStoreV2)({
+            getThreadShell: (threadId) =>
+              Effect.sync(() => {
+                shellReads++;
+                const shell = McpToolAccessTestkit.liveThreadShell(threadId);
+                if (threadId === origin) {
+                  return {
+                    ...shell,
+                    linkOrigin: {
+                      sessionId: "origin-session",
+                      label: "Peer",
+                      access: "full-access",
+                    },
+                  };
+                }
+                if (threadId === intermediate) return { ...shell, creationSource: "mcp" };
+                return {
+                  ...shell,
+                  lineage: { ...shell.lineage, launchedFromThreadId: intermediate },
+                };
+              }),
+            getLegacyLaunchAncestor: (id) => Effect.succeed(id === intermediate ? origin : null),
+          }),
+        ),
         Layer.provide(
           Layer.mock(McpSessionRegistry.McpSessionRegistry)({
             resolve: (presented) => Effect.succeed(presented === token ? scope : undefined),
@@ -1851,7 +1887,10 @@ it.effect("hides tools for links and Delivery while off, and refuses another env
         isError: true,
         content: [{ text: expect.stringContaining("Linked environments is off on this machine") }],
       });
-      expect((yield* ranIn(environmentId)).structuredContent).toEqual({ ranIn: "here" });
+      expect((yield* ranIn(environmentId)).structuredContent).toEqual({
+        ranIn: "here",
+        linked: true,
+      });
 
       yield* settings.updateSettings({ linkedEnvironmentsEnabled: true });
       expect(yield* listed()).toEqual(["links", "where"]);
@@ -1863,6 +1902,7 @@ it.effect("hides tools for links and Delivery while off, and refuses another env
 
       yield* settings.updateSettings({ delivery: { enabled: true } });
       expect(yield* listed()).toEqual(["links", "where", "delivery"]);
+      expect(shellReads).toBe(3);
     }),
   ).pipe(Effect.provide(NodeHttpServer.layerTest)),
 );
@@ -2044,6 +2084,9 @@ it.effect(
               Layer.mock(ProjectionStore.ProjectionStoreV2)({
                 getThreadShell: (threadId) =>
                   Effect.succeed({
+                    id: threadId,
+                    deletedAt: null,
+                    lineage: { rootThreadId: threadId, parentThreadId: null },
                     projectId: ProjectId.make(threadId.replace("thread-", "project-")),
                   } as never),
               }),

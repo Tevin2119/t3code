@@ -208,7 +208,11 @@ function Message(props: {
   );
 }
 
-function Happening(props: {
+/**
+ * One line of a task's history that is not a message. Rendered by the task view's engine log
+ * and by a linked machine's task, whose timeline is a snapshot of the same lines.
+ */
+export function Happening(props: {
   readonly entry: TimelineEntry;
   readonly onShow?: ((section: "acceptance" | "plan") => void) | undefined;
 }) {

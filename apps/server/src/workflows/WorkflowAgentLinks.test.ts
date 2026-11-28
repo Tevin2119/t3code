@@ -56,6 +56,26 @@ const input = {
   environment: "env-b",
   thread: undefined,
 };
+it.effect("keeps linked workflow launches on their originating machine", () => {
+  const there = peer({});
+  return Effect.gen(function* () {
+    const links = yield* WorkflowAgentLinks.make;
+    const refusal = yield* links
+      .start(
+        {
+          ...input,
+          launchOrigin: { linkOrigin: { sessionId: "incoming-link", label: "Caller" } },
+        },
+        "env-b",
+        "request-1",
+        EnvironmentId.make("env-a"),
+      )
+      .pipe(Effect.flip);
+    assert.include(refusal.reason, "A linked workflow");
+    assert.deepStrictEqual(there.calls, []);
+  }).pipe(Effect.provide(there.layer));
+});
+
 const run = (status: string) => ({ recentRuns: [{ runId: "turn-1", status }], items: [] });
 const waited = { threadId: "thread-1", runId: "turn-1", status: "idle" };
 

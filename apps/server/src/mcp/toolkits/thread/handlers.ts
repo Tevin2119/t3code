@@ -11,6 +11,7 @@ import * as Effect from "effect/Effect";
 import { modelSelectionCommandType } from "@t3tools/shared/model";
 import { topOfPinnedRunOrderKey } from "@t3tools/shared/pinOrderKey";
 
+import { callerLinkOrigin } from "../../linkOrigin.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
 import {
@@ -20,6 +21,15 @@ import {
   readThread,
   unavailable,
 } from "../../threadAccess.ts";
+import * as DeliveryService from "../../../delivery/DeliveryService.ts";
+import * as Option from "effect/Option";
+import {
+  assertPeerScheduledTask,
+  assertPeerThreadTargets,
+  filterPeerThreadRows,
+  linkedScheduleNotFound,
+} from "../../../delivery/linkedThreadAccess.ts";
+import * as ThreadFork from "../../../orchestration-v2/ThreadForkService.ts";
 import { providerOptionDescriptors, refuseAgentModePick } from "../../delegatedTaskModes.ts";
 import * as ProviderRegistry from "../../../provider/ProviderRegistry.ts";
 import type * as ThreadManagement from "../../../orchestration-v2/ThreadManagementService.ts";
@@ -116,11 +126,22 @@ export const layer = McpToolAccess.toLayer(ThreadToolkit, {
     Effect.gen(function* () {
       const scheduler = yield* ScheduledTasks.ScheduledTaskService;
       const { tasks } = yield* scheduler.list().pipe(Effect.mapError(unavailable));
-      if (!tasks.some((task) => task.id === input.taskId))
-        return yield* new OrchestratorMcpFailure({
-          code: "invalid_request",
-          message: "The scheduled task was not found.",
-        });
+      const scheduled = tasks.find((task) => task.id === input.taskId);
+      const scope = yield* McpInvocationContext.McpInvocationContext;
+      if (scheduled === undefined)
+        return yield* McpInvocationContext.isLinkedDeliveryCaller(scope)
+          ? linkedScheduleNotFound()
+          : new OrchestratorMcpFailure({
+              code: "invalid_request",
+              message: "The scheduled task was not found.",
+            });
+      if (McpInvocationContext.isLinkedDeliveryCaller(scope)) {
+        const { threads } = yield* readCaller();
+        const delivery = Option.getOrUndefined(
+          yield* Effect.serviceOption(DeliveryService.DeliveryService),
+        );
+        yield* assertPeerScheduledTask(scope, scheduled, scheduler, threads, delivery);
+      }
       const { task, threadId } = yield* scheduler
         .runNow({ id: input.taskId })
         .pipe(
@@ -129,7 +150,6 @@ export const layer = McpToolAccess.toLayer(ThreadToolkit, {
               new OrchestratorMcpFailure({ code: "orchestration_error", message: error.message }),
           ),
         );
-      const scope = yield* McpInvocationContext.McpInvocationContext;
       return {
         taskId: task.id,
         threadId,
@@ -147,15 +167,21 @@ export const layer = McpToolAccess.toLayer(ThreadToolkit, {
   ),
   t3_thread_search: McpToolAccess.reads((input) =>
     Effect.gen(function* () {
-      const { caller } = yield* readCaller();
+      const { caller, threads } = yield* readCaller();
       const scope = yield* McpInvocationContext.McpInvocationContext;
       const threadSearch = yield* ThreadSearch.ThreadSearch;
       const { matches } = yield* threadSearch
         .searchThreads({ ...input, projectId: input.projectId ?? caller?.projectId })
         .pipe(Effect.mapError(unavailable));
+      const visible = yield* filterPeerThreadRows(
+        scope,
+        matches,
+        (match) => match.threadId,
+        threads,
+      );
       return {
         currentThreadId: scope.thread?.threadId ?? null,
-        matches: matches.map((match) => ({
+        matches: visible.map((match) => ({
           ...match,
           link: McpInvocationContext.threadLinkFor(scope, match.threadId, match.title),
         })),
@@ -166,16 +192,31 @@ export const layer = McpToolAccess.toLayer(ThreadToolkit, {
     (input) => input.action === "status",
     McpToolAccess.reads((input) =>
       Effect.gen(function* () {
-        const { projection } = yield* readThread(input.threadId, ["contextTransfers"]);
+        const { projection, scope, threads } = yield* readThread(input.threadId, [
+          "contextTransfers",
+        ]);
+        const delivery = Option.getOrUndefined(
+          yield* Effect.serviceOption(DeliveryService.DeliveryService),
+        );
+        const transfers = McpInvocationContext.isLinkedDeliveryCaller(scope)
+          ? yield* Effect.filter(
+              projection.contextTransfers,
+              ({ sourceThreadId, targetThreadId }) =>
+                assertPeerThreadTargets(
+                  scope,
+                  [sourceThreadId, targetThreadId].filter((id) => id !== projection.thread.id),
+                  threads,
+                  delivery,
+                ).pipe(Effect.isSuccess),
+            )
+          : projection.contextTransfers;
         return {
-          transfers: projection.contextTransfers.map(
-            ({ id, sourceThreadId, targetThreadId, status }) => ({
-              id,
-              sourceThreadId,
-              targetThreadId,
-              status,
-            }),
-          ),
+          transfers: transfers.map(({ id, sourceThreadId, targetThreadId, status }) => ({
+            id,
+            sourceThreadId,
+            targetThreadId,
+            status,
+          })),
         };
       }),
     ),
@@ -184,7 +225,7 @@ export const layer = McpToolAccess.toLayer(ThreadToolkit, {
       (input) =>
         Effect.gen(function* () {
           const sourcePoint = input.sourcePoint ?? { type: "latest_stable" as const };
-          const { threads, projection } = yield* readThread(input.threadId);
+          const { threads, projection, scope } = yield* readThread(input.threadId);
           const commandId = yield* newCommandId();
           if (input.action === "merge_back") {
             const targetThreadId = yield* required(input.targetThreadId, "targetThreadId");
@@ -203,6 +244,8 @@ export const layer = McpToolAccess.toLayer(ThreadToolkit, {
             return { sequence: result.sequence, targetThreadId };
           }
           const targetThreadId = ThreadId.make(`${commandId}:fork`);
+          const linkOrigin = callerLinkOrigin({ scope, caller: undefined });
+          const launchedFromThreadId = scope.thread?.threadId;
           const result = yield* threads
             .dispatch({
               type: "thread.fork",
@@ -214,7 +257,13 @@ export const layer = McpToolAccess.toLayer(ThreadToolkit, {
               createdBy: "agent",
               creationSource: "mcp",
             })
-            .pipe(Effect.mapError(dispatchFailure));
+            .pipe(
+              Effect.provideService(ThreadFork.ForkOrigin, {
+                ...(linkOrigin === undefined ? {} : { linkOrigin }),
+                ...(launchedFromThreadId === undefined ? {} : { launchedFromThreadId }),
+              }),
+              Effect.mapError(dispatchFailure),
+            );
           return { sequence: result.sequence, targetThreadId };
         }),
     ),

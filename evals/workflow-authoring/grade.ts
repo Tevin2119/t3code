@@ -16,6 +16,7 @@ import WorkflowRunTagsMigration from "../../apps/server/src/persistence/Migratio
 import WorkflowMailSenderMigration from "../../apps/server/src/persistence/Migrations/117_WorkflowMailSender.ts";
 import WorkflowPoolsMigration from "../../apps/server/src/persistence/Migrations/118_WorkflowPools.ts";
 import WorkflowRunSubjectMigration from "../../apps/server/src/persistence/Migrations/119_WorkflowRunSubject.ts";
+import WorkflowLaunchOriginMigration from "../../apps/server/src/persistence/Migrations/122_WorkflowLaunchOrigin.ts";
 import type { WorkflowDefinition } from "../../apps/server/src/workflows/workflow.ts";
 import {
   type AgentResult,
@@ -84,6 +85,7 @@ const world = Effect.fn("gradeWorkflow.world")(function* (
       Effect.andThen(WorkflowMailSenderMigration),
       Effect.andThen(WorkflowPoolsMigration),
       Effect.andThen(WorkflowRunSubjectMigration),
+      Effect.andThen(WorkflowLaunchOriginMigration),
     ),
     database,
   );

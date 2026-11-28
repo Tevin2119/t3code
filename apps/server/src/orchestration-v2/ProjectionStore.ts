@@ -92,7 +92,9 @@ import {
   deriveBlockedOnThreadWait,
   derivePendingBackgroundWork,
 } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
+import * as Cache from "effect/Cache";
 import * as Context from "effect/Context";
+import * as Duration from "effect/Duration";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -663,8 +665,12 @@ export interface ProjectionStoreV2Shape {
     Effect.Effect<OrchestrationV2ThreadShellSnapshot, ProjectionStoreV2Error>,
     ProjectionStoreV2Error
   >;
+  readonly getLegacyLaunchAncestor: (
+    threadId: ThreadId,
+  ) => Effect.Effect<ThreadId | null, ProjectionStoreV2Error>;
   readonly getThreadShell: (
     threadId: ThreadId,
+    options?: { readonly includeDeleted?: boolean },
   ) => Effect.Effect<OrchestrationV2ThreadShell | null, ProjectionStoreV2Error>;
   /** The thread whose current guest share has this id. Scans thread rows; only redeem uses it. */
   readonly findGuestShareThreadId: (
@@ -9906,7 +9912,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       };
     }, Effect.mapError(shellSnapshotReadError));
 
-    const getThreadShell: ProjectionStoreV2Shape["getThreadShell"] = (threadId) =>
+    const getThreadShell: ProjectionStoreV2Shape["getThreadShell"] = (threadId, options) =>
       sql
         .withTransaction(
           Effect.gen(function* () {
@@ -9918,7 +9924,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                 continue;
               }
               const rows = yield* selectShellThreadRows(nextId, {
-                includeDeleted: nextId !== threadId,
+                includeDeleted: options?.includeDeleted === true || nextId !== threadId,
               });
               const row = rows[0];
               if (row === undefined) {
@@ -9997,6 +10003,28 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       (...args: Args): Effect.Effect<A, E, R> =>
         method(...args).pipe(NodeSqliteClient.readOnly);
 
+    const legacyLaunchAncestors = yield* Cache.makeWith(
+      Effect.fn("ProjectionStore.getLegacyLaunchAncestor")(function* (threadId: ThreadId) {
+        const [message] = yield* sql<{ readonly sender: string | null }>`
+          SELECT json_extract(payload_json, '$.senderThreadId') AS sender
+          FROM orchestration_v2_projection_messages
+          WHERE thread_id = ${threadId}
+          ORDER BY created_at, message_id
+          LIMIT 1
+        `.pipe(
+          NodeSqliteClient.readOnly,
+          Effect.mapError((cause) => new ProjectionStoreReadError({ threadId, cause })),
+        );
+        if (message === undefined) return undefined;
+        return message.sender === null ? null : ThreadId.make(message.sender);
+      }),
+      {
+        capacity: 10_000,
+        timeToLive: (exit) =>
+          exit._tag === "Success" && exit.value !== undefined ? Duration.infinity : Duration.zero,
+      },
+    );
+
     return {
       apply,
       getAgentAwarenessSnapshot: readOnReader(getAgentAwarenessSnapshot),
@@ -10008,6 +10036,8 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       listActiveThreads: readOnReader(listActiveThreads),
       readShellSnapshot: readOnReader(readShellSnapshot),
       listOlderSettledThreads: readOnReader(listOlderSettledThreads),
+      getLegacyLaunchAncestor: (id: ThreadId) =>
+        Cache.get(legacyLaunchAncestors, id).pipe(Effect.map((ancestor) => ancestor ?? null)),
       getThreadShell: readOnReader(getThreadShell),
       findGuestShareThreadId: readOnReader(findGuestShareThreadId),
       getThread: readOnReader(getThread),

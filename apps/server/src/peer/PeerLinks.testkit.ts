@@ -23,7 +23,7 @@ import * as EnvironmentAuth from "../auth/EnvironmentAuth.ts";
 import * as AuthHttp from "../auth/http.ts";
 import * as McpOAuth from "../auth/McpOAuth.ts";
 import * as McpOAuthHttp from "../auth/mcpOAuthHttp.ts";
-import type * as SqlClient from "effect/sql/SqlClient";
+import * as SqlClient from "effect/sql/SqlClient";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as CloudLink from "../cloud/CloudLink.ts";
 import * as ServerConfig from "../config.ts";
@@ -66,7 +66,7 @@ export const layerEnvironmentAuth = (prefix: string) =>
   EnvironmentAuth.layer.pipe(
     Layer.provide(ManagedPolicy.layerTest()),
     Layer.provideMerge(ServerSettings.layerTest({ linkedEnvironmentsEnabled: true })),
-    Layer.provide(Sqlite.layerMemory),
+    Layer.provideMerge(Sqlite.layerMemory),
     Layer.provideMerge(ServerSecretStore.layer),
     Layer.provideMerge(ServerEnvironment.layerIdentity),
     Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix })),
@@ -172,6 +172,7 @@ export const servePeer = <E, R, E2 = never, R2 = never>(
       url,
       auth,
       /** Its settings, as for turning its Linked environments beta off. */
+      sql: Context.get(authContext, SqlClient.SqlClient),
       settings: Context.get(authContext, ServerSettings.ServerSettingsService),
       descriptor,
       bearers,

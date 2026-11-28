@@ -31,6 +31,7 @@ import {
 } from "../ui/dialog";
 import { Input } from "../ui/input";
 import { Textarea } from "../ui/textarea";
+import { ApprovalKeyInput } from "./ApprovalKeyInput";
 import { toastManager } from "../ui/toast";
 import { reviewedAsPart, wholeName } from "./partOf.logic";
 
@@ -516,15 +517,7 @@ function DecisionDialog(props: {
                 left.
               </p>
             ) : (
-              <Input
-                aria-label="Approval passphrase or terminal key"
-                placeholder="Approval passphrase or terminal key"
-                name="delivery-approval"
-                type="password"
-                autoComplete="current-password"
-                value={approvalKey}
-                onChange={(event) => setApprovalKey(event.target.value)}
-              />
+              <ApprovalKeyInput value={approvalKey} onChange={setApprovalKey} />
             )}
             {approving || publishing ? null : (
               <Textarea

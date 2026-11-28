@@ -8,7 +8,7 @@ import * as Layer from "effect/Layer";
 
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as ServerConfig from "../config.ts";
-import type { McpInvocationScope } from "../mcp/McpInvocationContext.ts";
+import { McpInvocationContext, type McpInvocationScope } from "../mcp/McpInvocationContext.ts";
 import { deriveProviderInstanceConfigMap } from "../provider/ProviderInstanceRegistryHydration.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { BoardAgentTools, actorOf, layer } from "./BoardAgentTools.ts";
@@ -465,6 +465,41 @@ it.effect("saved-key engine controls share the server's two key checks", () => {
       );
       assert.lengthOf(receipts, 4);
       assert.equal(engine.keyChecks.most, 2);
+    }),
+  );
+});
+
+// A linked machine reaches this engine only through its fenced /api/linked routes.
+it.effect("a linked caller reaches none of the board tools or the saved-key controls", () => {
+  const engine = agentEngine();
+  engine.addBoard("work");
+  const task = engine.addTask({ title: "Private work" });
+  const linked: McpInvocationScope = {
+    ...scope,
+    thread: undefined,
+    client: { sessionId: "s", label: "Peer", access: "full-access", linked: true },
+  };
+  return run(
+    engine,
+    Effect.gen(function* () {
+      const tools = yield* BoardAgentTools;
+      const delivery = yield* DeliveryService.DeliveryService;
+      yield* delivery.setBoardApprovalKey(engine.key);
+      const asPeer = <A, E>(effect: Effect.Effect<A, E>) =>
+        effect.pipe(Effect.provideService(McpInvocationContext, linked), Effect.flip);
+      yield* asPeer(tools.board(linked, { action: "list" }));
+      yield* asPeer(tools.tasks(linked, { action: "list" }));
+      yield* asPeer(
+        tools.task(linked, { action: "close", task: task.id, reason: "Not needed", force: true }),
+      );
+      yield* asPeer(tools.engineLifecycle({ action: "restart" }));
+      assert.equal(engine.keyChecks.most, 0);
+      // The owner still reads the same board.
+      const listed = yield* tools.tasks(scope, { action: "list" });
+      assert.deepEqual(
+        listed.tasks?.map((item) => [item.id, item.state]),
+        [[task.id, task.state]],
+      );
     }),
   );
 });

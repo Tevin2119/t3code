@@ -256,7 +256,8 @@ export function BoardOpenTaskRoute(props: { readonly children: ReactNode }) {
   return (
     <OpenBoardTaskProvider
       environmentId={enabled ? environmentId : null}
-      taskId={onBoard ? (search.task ?? null) : null}
+      // A linked machine's task is read over the link by its own page, never from this engine.
+      taskId={onBoard && !search.linked ? (search.task ?? null) : null}
       onOpenTask={open}
       onDiscarded={() => open(null)}
     >
@@ -338,7 +339,7 @@ function EnvironmentBoardSidebar({
   const location = useLocation({
     select: (at) => ({
       pathname: at.pathname,
-      search: at.search as { task?: string; thread?: string },
+      search: at.search as { task?: string; thread?: string; linked?: string },
     }),
   });
   const selected = location.search.task ?? location.search.thread ?? null;
@@ -439,6 +440,17 @@ function EnvironmentBoardSidebar({
     setDeliveryEnvironment(environment);
     void navigate({ to: "/board", search: { environment } });
   };
+  // A linked machine is read through this environment, so it stays the chosen one.
+  const chooseLinkedMachine = (peerEnvironmentId: string) => {
+    if (environmentId) setDeliveryEnvironment(environmentId);
+    void navigate({
+      to: "/board",
+      search: {
+        ...(environmentId ? { environment: environmentId } : {}),
+        linked: peerEnvironmentId,
+      },
+    });
+  };
   // Until the tasks are read, an empty list says nothing about the board.
   const unread =
     read.readAt === null && cards.length === 0
@@ -492,6 +504,27 @@ function EnvironmentBoardSidebar({
             A shared board is selected for this environment. Its tasks and allocation controls
             appear in the board workspace. Choose another board from the Board selector.
           </p>
+        </SidebarGroup>
+      </SidebarContent>
+    );
+
+  // A linked machine's tasks are not this environment's: none are listed here, and each is
+  // opened from the board workspace, where the machine's boards are shown.
+  if (location.search.linked)
+    return (
+      <SidebarContent className="overflow-x-hidden" data-board-panel data-board-panel-linked>
+        <SidebarGroup>
+          <div className="flex flex-col gap-2">
+            <EnvironmentPicker
+              value={environmentId}
+              onChoose={chooseEnvironment}
+              onChooseLinked={chooseLinkedMachine}
+            />
+            <p className="px-1 text-xs text-sidebar-muted-foreground">
+              A linked machine&apos;s shared boards are open in the board workspace. Their tasks
+              open there too; none of the machine&apos;s threads or tasks are listed here.
+            </p>
+          </div>
         </SidebarGroup>
       </SidebarContent>
     );

@@ -8,17 +8,20 @@ import {
   DELIVERY_DEFAULT_TEAM,
   DELIVERY_HARNESS_BY_DRIVER,
   DeliveryLimitedSeatPolicy,
+  LinkedArrival,
   type DeliveryThreadBinding,
   type BoardDeploymentLink,
   type MergePermissionView,
   type TaskDeployment,
 } from "@t3tools/contracts";
+import * as Option from "effect/Option";
 import { boardTaskFinishedBy } from "@t3tools/shared/boardTaskFinished";
 import * as Schema from "effect/Schema";
 import { parseSuggestedBoard, type SuggestedBoard } from "./deliveryMove";
 import { parseBoardDeployment, parseMergePermission, parseTaskDeployment } from "./boardDelivery";
 
 type Json = Record<string, unknown>;
+const decodeLinkedArrival = Schema.decodeUnknownOption(LinkedArrival);
 const isLimitedSeatPolicy = Schema.is(DeliveryLimitedSeatPolicy);
 const isRecord = (value: unknown): value is Json =>
   typeof value === "object" && value !== null && !Array.isArray(value);
@@ -1015,6 +1018,7 @@ export interface DeliveryCard {
   /** The flow it was given in: a chat, a plan, a review or a delivery. */
   readonly flow: string;
   readonly lane: string;
+  readonly inWorkStage?: string | null;
   readonly state: string;
   readonly revision: number;
   readonly origin: string;
@@ -1238,6 +1242,8 @@ export interface DeliveryBoard {
     readonly target: DeliveryTarget | null;
     readonly deployment?: BoardDeploymentLink | null;
     readonly mergePermission?: MergePermissionView | null;
+    /** Whether machines linked to this one can see the board. An engine that does not say: private. */
+    readonly linkedVisibility: "shared" | "private";
   }>;
   /** Cards that wait for a person. */
   readonly waiting: number;
@@ -1281,6 +1287,7 @@ export const parseCard = (value: Json): DeliveryCard => {
     team: text(value.team),
     flow: text(value.flow, "standard"),
     lane: text(value.lane),
+    inWorkStage: textOrNull(value.inWorkStage),
     state: text(value.state),
     revision: count(value.revision),
     origin: text(value.origin),
@@ -1421,6 +1428,7 @@ export function parseBoard(body: unknown): DeliveryBoard | null {
       target: parseTarget(item.target),
       deployment: parseBoardDeployment(item.deployment),
       mergePermission: parseMergePermission(item.mergePermission),
+      linkedVisibility: item.linkedVisibility === "shared" ? "shared" : "private",
     })),
     lanes: records(body.lanes).map((lane) => ({
       lane: text(lane.lane),
@@ -1600,7 +1608,7 @@ export function fullAutoAttribution(entry: Pick<TimelineEntry, "by" | "fullAuto"
   return entry.by === "full auto" ? { by: null, since: null } : null;
 }
 
-const parseTimeline = (value: unknown): ReadonlyArray<TimelineEntry> =>
+export const parseTimeline = (value: unknown): ReadonlyArray<TimelineEntry> =>
   records(value).map((entry) => {
     const change = entry.change;
     const auto = entry.fullAuto;
@@ -1839,6 +1847,9 @@ export interface TaskView {
     readonly environmentId: string;
     readonly threadId: string;
   } | null;
+  /** Whether machines linked to this one are kept from seeing the task. An engine that does not say shows it. */
+  readonly linkedHidden: boolean;
+  readonly linkedArrival: typeof LinkedArrival.Type | null;
   /**
    * Other conversations that belong with the task (engine slice L2): its side chats and threads
    * linked to it, from any environment, oldest first. Older engines serve none.
@@ -2187,6 +2198,8 @@ export function parseTask(body: unknown): TaskView | null {
           }
         : null;
     })(),
+    linkedHidden: flag(body.linkedHidden),
+    linkedArrival: Option.getOrNull(decodeLinkedArrival(body.linkedArrival)),
     relatedThreads: records(body.relatedThreads).flatMap((link): Array<TaskRelatedThread> => {
       const key = text(link.key);
       const environmentId = text(link.environmentId);

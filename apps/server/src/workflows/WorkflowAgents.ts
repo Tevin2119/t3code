@@ -1,3 +1,4 @@
+import type { WorkflowLaunchOrigin } from "./WorkflowStore.ts";
 import type {
   ModelSelection,
   OrchestrationV2ThreadLaunchWorkspaceStrategy,
@@ -80,6 +81,7 @@ export class WorkflowAgents extends Context.Service<
       readonly key: string;
       /** The run and step this turn is for, which a new thread is marked with. */
       readonly origin: { readonly runId: string; readonly workflow: string; readonly step: string };
+      readonly launchOrigin?: WorkflowLaunchOrigin;
       readonly title: string;
       readonly prompt: string;
       readonly outputSchema: Readonly<Record<string, Schema.Json>> | undefined;

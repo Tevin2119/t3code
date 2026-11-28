@@ -1,6 +1,7 @@
 import * as Context from "effect/Context";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 import * as Effect from "effect/Effect";
+import * as DateTime from "effect/DateTime";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -41,6 +42,7 @@ export const AuthSessionRecord = Schema.Struct({
   expiresAt: Schema.DateTimeUtcFromString,
   lastConnectedAt: Schema.NullOr(Schema.DateTimeUtcFromString),
   revokedAt: Schema.NullOr(Schema.DateTimeUtcFromString),
+  peerArrivalKey: Schema.optionalKey(Schema.String),
 });
 export type AuthSessionRecord = typeof AuthSessionRecord.Type;
 
@@ -53,6 +55,7 @@ export const CreateAuthSessionInput = Schema.Struct({
   issuedAt: Schema.DateTimeUtcFromString,
   expiresAt: Schema.DateTimeUtcFromString,
   proofKeyThumbprint: Schema.optionalKey(Schema.String),
+  peerArrivalKey: Schema.optionalKey(Schema.String),
 });
 export type CreateAuthSessionInput = typeof CreateAuthSessionInput.Type;
 
@@ -120,6 +123,18 @@ export class AuthSessionRepository extends Context.Service<
     readonly createIfAbsent: (
       input: CreateAuthSessionInput,
     ) => Effect.Effect<void, AuthSessionRepositoryError>;
+    readonly getPeerArrivalKey: (
+      sessionId: AuthSessionId,
+      now: DateTime.Utc,
+    ) => Effect.Effect<Option.Option<string>, AuthSessionRepositoryError>;
+    readonly isActive: (
+      sessionId: AuthSessionId,
+      now: DateTime.Utc,
+    ) => Effect.Effect<boolean, AuthSessionRepositoryError>;
+    readonly rememberPeerArrivalKey: (
+      sessionId: AuthSessionId,
+      key: string,
+    ) => Effect.Effect<void, AuthSessionRepositoryError>;
     readonly getById: (
       input: GetAuthSessionByIdInput,
     ) => Effect.Effect<Option.Option<AuthSessionRecord>, AuthSessionRepositoryError>;
@@ -163,6 +178,7 @@ const AuthSessionDbRow = Schema.Struct({
   expiresAt: Schema.DateTimeUtcFromString,
   lastConnectedAt: Schema.NullOr(Schema.DateTimeUtcFromString),
   revokedAt: Schema.NullOr(Schema.DateTimeUtcFromString),
+  peerArrivalKey: Schema.optionalKey(Schema.NullOr(Schema.String)),
 });
 
 const AuthSessionRawDbRow = Schema.Struct({
@@ -180,6 +196,7 @@ const AuthSessionRawDbRow = Schema.Struct({
   expiresAt: Schema.Unknown,
   lastConnectedAt: Schema.Unknown,
   revokedAt: Schema.Unknown,
+  peerArrivalKey: Schema.optionalKey(Schema.Unknown),
 });
 
 const decodeAuthSessionDbRow = Schema.decodeUnknownEffect(AuthSessionDbRow);
@@ -202,6 +219,7 @@ function toAuthSessionRecord(row: typeof AuthSessionDbRow.Type): AuthSessionReco
     expiresAt: row.expiresAt,
     lastConnectedAt: row.lastConnectedAt,
     revokedAt: row.revokedAt,
+    ...(row.peerArrivalKey == null ? {} : { peerArrivalKey: row.peerArrivalKey }),
   };
 }
 
@@ -243,7 +261,8 @@ export const make = Effect.gen(function* () {
           issued_at,
           expires_at,
           revoked_at,
-          proof_key_thumbprint
+          proof_key_thumbprint,
+          peer_arrival_key
         )
         VALUES (
           ${input.sessionId},
@@ -259,7 +278,8 @@ export const make = Effect.gen(function* () {
           ${input.issuedAt},
           ${input.expiresAt},
           NULL,
-          ${input.proofKeyThumbprint ?? null}
+          ${input.proofKeyThumbprint ?? null},
+          ${input.peerArrivalKey ?? null}
         )
         ${ignoreExisting ? sql`ON CONFLICT(session_id) DO NOTHING` : sql``}
       `,
@@ -286,7 +306,8 @@ export const make = Effect.gen(function* () {
           issued_at AS "issuedAt",
           expires_at AS "expiresAt",
           last_connected_at AS "lastConnectedAt",
-          revoked_at AS "revokedAt"
+          revoked_at AS "revokedAt",
+          peer_arrival_key AS "peerArrivalKey"
         FROM auth_sessions
         WHERE session_id = ${sessionId}
       `,
@@ -586,10 +607,63 @@ export const make = Effect.gen(function* () {
       Effect.map((rows) => rows.map((row) => row.sessionId)),
     );
 
+  const activeSession = (sessionId: AuthSessionId, now: DateTime.Utc) => sql`
+    FROM auth_sessions
+    WHERE session_id = ${sessionId} AND revoked_at IS NULL
+      AND expires_at > ${DateTime.formatIso(now)}
+  `;
+
   return {
     create,
     createReplacingActive,
     createIfAbsent,
+    getPeerArrivalKey: Effect.fn("AuthSessionRepository.getPeerArrivalKey")(
+      function* (sessionId, now) {
+        const [session] = yield* sql<{ peer_arrival_key: string }>`
+          SELECT peer_arrival_key ${activeSession(sessionId, now)} AND peer_arrival_key IS NOT NULL
+        `.pipe(
+          NodeSqliteClient.readOnly,
+          Effect.mapError(
+            (cause) =>
+              new PersistenceSqlError({
+                operation: "AuthSessionRepository.getPeerArrivalKey",
+                correlation: { sessionId },
+                cause,
+              }),
+          ),
+        );
+        return Option.fromNullishOr(session?.peer_arrival_key);
+      },
+    ),
+    isActive: Effect.fn("AuthSessionRepository.isActive")(function* (sessionId, now) {
+      const rows = yield* sql`SELECT 1 ${activeSession(sessionId, now)}`.pipe(
+        NodeSqliteClient.readOnly,
+        Effect.mapError(
+          (cause) =>
+            new PersistenceSqlError({
+              operation: "AuthSessionRepository.isActive",
+              correlation: { sessionId },
+              cause,
+            }),
+        ),
+      );
+      return rows.length > 0;
+    }),
+    rememberPeerArrivalKey: Effect.fn("AuthSessionRepository.rememberPeerArrivalKey")(
+      function* (sessionId, key) {
+        yield* sql`UPDATE auth_sessions SET peer_arrival_key = ${key}
+          WHERE session_id = ${sessionId} AND peer_arrival_key IS NULL AND revoked_at IS NULL`.pipe(
+          Effect.mapError(
+            (cause) =>
+              new PersistenceSqlError({
+                operation: "AuthSessionRepository.rememberPeerArrivalKey",
+                correlation: { sessionId },
+                cause,
+              }),
+          ),
+        );
+      },
+    ),
     getById,
     listActive,
     revoke,

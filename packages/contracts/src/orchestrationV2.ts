@@ -191,6 +191,7 @@ export const OrchestrationV2AppThreadLineage = Schema.Struct({
   parentThreadId: Schema.NullOr(ThreadId),
   relationshipToParent: Schema.NullOr(Schema.Literals(["fork", "subagent"])),
   rootThreadId: ThreadId,
+  launchedFromThreadId: Schema.optional(Schema.NullOr(ThreadId)),
   sideChat: Schema.optional(Schema.Boolean),
   engineIntake: Schema.optional(TrimmedNonEmptyString),
   /** An agent step of a workflow run, which the thread's `workflowRun` names. */
@@ -3421,6 +3422,7 @@ export const OrchestrationV2Command = Schema.Union([
     worktreePath: Schema.NullOr(TrimmedNonEmptyString),
     /** Only the server sets this; a client's thread.create never carries one. */
     linkOrigin: Schema.optional(OrchestrationV2LinkOrigin),
+    launchedFromThreadId: Schema.optional(ThreadId),
     /** Server-owned work remains addressable without entering conversation lists. */
     engineIntake: Schema.optional(TrimmedNonEmptyString),
     /** Only the server sets this, with `linkOrigin`, for a linked environment's delegated task. */

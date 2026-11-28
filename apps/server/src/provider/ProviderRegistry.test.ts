@@ -435,6 +435,7 @@ function makeMutableServerSettingsService(
     return {
       start: Effect.void,
       ready: Effect.void,
+      deliveryConfigurationRevision: Effect.succeed(0),
       getSettings: Ref.get(settingsRef),
       updateSettings: (patch) =>
         Effect.gen(function* () {

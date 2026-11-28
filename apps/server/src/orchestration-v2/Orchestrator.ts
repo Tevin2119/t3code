@@ -578,8 +578,12 @@ export interface OrchestratorV2Shape {
     Effect.Effect<OrchestrationV2ThreadShellSnapshot, OrchestratorV2Error>,
     OrchestratorV2Error
   >;
+  readonly getLegacyLaunchAncestor: (
+    threadId: ThreadId,
+  ) => Effect.Effect<ThreadId | null, OrchestratorV2Error>;
   readonly getThreadShell: (
     threadId: ThreadId,
+    options?: { readonly includeDeleted?: boolean },
   ) => Effect.Effect<OrchestrationV2ThreadShell | null, OrchestratorV2Error>;
   readonly findGuestShareThreadId: (
     shareId: GuestShareId,
@@ -4252,6 +4256,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         parentThreadId: null,
         relationshipToParent: null,
         rootThreadId: command.threadId,
+        ...(command.creationSource === "mcp" || command.launchedFromThreadId !== undefined
+          ? { launchedFromThreadId: command.launchedFromThreadId ?? null }
+          : {}),
         ...(command.engineIntake === undefined ? {} : { engineIntake: command.engineIntake }),
         ...(command.workflowRun === undefined ? {} : { workflowStep: true }),
       },
@@ -17957,9 +17964,16 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           Effect.map(Effect.mapError(shellProjectionError)),
         );
     }),
-    getThreadShell: Effect.fn("OrchestratorV2.getThreadShell")(function (threadId) {
+    getLegacyLaunchAncestor: Effect.fn("OrchestratorV2.getLegacyLaunchAncestor")(
+      function (threadId) {
+        return projectionStore
+          .getLegacyLaunchAncestor(threadId)
+          .pipe(Effect.mapError((cause) => new OrchestratorProjectionError({ threadId, cause })));
+      },
+    ),
+    getThreadShell: Effect.fn("OrchestratorV2.getThreadShell")(function (threadId, options) {
       return projectionStore
-        .getThreadShell(threadId)
+        .getThreadShell(threadId, options)
         .pipe(Effect.mapError((cause) => new OrchestratorProjectionError({ threadId, cause })));
     }),
     findGuestShareThreadId: Effect.fn("OrchestratorV2.findGuestShareThreadId")(function (shareId) {

@@ -202,3 +202,13 @@ it("shows no related threads section for a task without any", async () => {
   await expect.element(screen.getByRole("region", { name: "Task #12" })).toBeVisible();
   expect(document.querySelector("[data-task-related-threads]")).toBeNull();
 });
+
+it("never reads a linked machine's open task from this environment's engine", async () => {
+  await using screen = await render(column(), {
+    router: `/board?task=t1&environment=${environmentId}&linked=env-peer`,
+  });
+  await expect
+    .element(screen.getByText(/shared boards are open in the board workspace/))
+    .toBeVisible();
+  expect(reads.filter((read) => read.startsWith("/api/tasks/t1 "))).toEqual([]);
+});

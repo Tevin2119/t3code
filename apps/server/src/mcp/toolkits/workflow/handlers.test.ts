@@ -1,11 +1,18 @@
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { expect, it } from "@effect/vitest";
-import { EnvironmentId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
+import {
+  EnvironmentId,
+  ProviderInstanceId,
+  ThreadId,
+  type WorkflowRun,
+  type WorkflowStep,
+} from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Stream from "effect/Stream";
 import { McpSchema, McpServer } from "effect/ai";
 
+import * as DeliveryService from "../../../delivery/DeliveryService.ts";
 import * as Workflows from "../../../workflows/Workflows.ts";
 import * as McpHttpServer from "../../McpHttpServer.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
@@ -20,11 +27,13 @@ const supervised = { sessionId: "session-2", label: "Bot", access: "approval-req
 const handlersWith = (
   workflows: Partial<Workflows.Workflows["Service"]>,
   scope: Partial<McpInvocationContext.McpInvocationScope> = {},
+  delivery = DeliveryService.layerTest,
 ) =>
   McpToolAccess.HandlersLayer.layer(WorkflowHandlers.layer).pipe(
     Layer.provideMerge(
       Layer.mergeAll(
         NodeCrypto.layer,
+        delivery,
         McpToolAccessTestkit.liveThreadsLayer,
         Layer.succeed(McpInvocationContext.McpInvocationContext, {
           environmentId: EnvironmentId.make("environment:workflow"),
@@ -163,6 +172,170 @@ it.effect("a caller below the broadest mode reads runs but does not start or cha
     }
     expect(reached).toEqual([]);
     expect(results.slice(changes.length)).toEqual([{ runs: [] }, { questions: [] }]);
+  }),
+);
+
+it.effect("a workflow started by a full-access linked thread retains the caller and its link", () =>
+  Effect.gen(function* () {
+    const threadId = ThreadId.make("thread:linked-workflow");
+    const linkOrigin = { ...fullAccess, label: "Peer" };
+    let origin: Parameters<Workflows.Workflows["Service"]["start"]>[2]["launchOrigin"];
+    const result = yield* call({ action: "start", workflow: "echo", idempotencyKey: "trial" }).pipe(
+      Effect.provide(
+        handlersWith(
+          {
+            start: (_workflow, _input, options) =>
+              Effect.sync(() => {
+                origin = options.launchOrigin;
+                return { runId: "run-1" };
+              }),
+            get: () => Effect.succeed(emptyRun),
+            launchOrigin: () => Effect.succeed({ linkOrigin }),
+          },
+          {
+            client: undefined,
+            thread: {
+              threadId,
+              providerInstanceId: ProviderInstanceId.make("codex"),
+              providerSessionId: "peer-provider",
+              linkOrigin,
+            },
+          },
+        ),
+      ),
+    );
+    expect(result).toEqual(emptyRun);
+    expect(origin).toEqual({ launchedFromThreadId: threadId, linkOrigin });
+  }),
+);
+
+it.effect("a full-access link sees and changes only its own workflow runs", () =>
+  Effect.gen(function* () {
+    const peer = { ...fullAccess, linked: true } as const;
+    const run = (runId: string): WorkflowRun => ({
+      runId,
+      workflow: "review",
+      version: 1,
+      title: runId,
+      status: "waiting",
+      detail: null,
+      result: null,
+      pauses: 0,
+      retired: false,
+      resumesAt: null,
+      parentRunId: null,
+      parentStep: null,
+      startedAt: "2026-11-20T00:00:00.000Z",
+      updatedAt: "2026-11-20T00:00:00.000Z",
+      endedAt: null,
+    });
+    const runs = ["same-link", "other-link", "owner-thread", "no-origin"].map(run);
+    const privateThread = ThreadId.make("private-workflow-thread");
+    const ordinaryThread = ThreadId.make("ordinary-workflow-thread");
+    const step = (threadId: ThreadId): WorkflowStep => ({
+      name: "agent",
+      kind: "agent",
+      status: "completed",
+      attempts: 1,
+      threadId,
+      environmentId: null,
+      result: "agent result",
+      said: "agent reply",
+      detail: null,
+      startedAt: "2026-11-20T00:00:00.000Z",
+      endedAt: null,
+    });
+    const mutations: string[] = [];
+    const workflows = {
+      launchOrigin: (runId: string) =>
+        Effect.succeed(
+          runId === "same-link"
+            ? { linkOrigin: fullAccess }
+            : runId === "other-link"
+              ? { linkOrigin: { ...fullAccess, sessionId: "other-session" } }
+              : runId === "owner-thread"
+                ? { launchedFromThreadId: ordinaryThread }
+                : undefined,
+        ),
+      list: () => Effect.succeed(runs),
+      get: (runId: string) =>
+        Effect.succeed({
+          run: run(runId),
+          steps: [step(privateThread), step(ordinaryThread)],
+          references: [],
+        }),
+      questions: Effect.succeed(
+        runs.map(({ runId, startedAt }) => ({
+          runId,
+          name: "review",
+          request: null,
+          askedAt: startedAt,
+          thread: { threadId: privateThread, environmentId: null },
+        })),
+      ),
+      hooks: Effect.succeed([]),
+      stored: () => Effect.succeed([{ key: "global", value: "owner data" }]),
+      storeSet: (key: string) => Effect.sync(() => void mutations.push(key)),
+      storeDelete: (key: string) => Effect.sync(() => void mutations.push(key)),
+      resume: (runId: string) => Effect.sync(() => void mutations.push(runId)),
+      cancel: (runId: string) => Effect.sync(() => void mutations.push(runId)),
+      withdraw: (runId: string) => Effect.sync(() => (mutations.push(runId), "withdrawn" as const)),
+      signal: () => Effect.sync(() => (mutations.push("signal"), "delivered" as const)),
+    };
+    yield* Effect.gen(function* () {
+      expect(yield* call({ action: "list" })).toEqual({ runs: [runs[0]] });
+      expect(yield* call({ action: "questions" })).toMatchObject({
+        questions: [{ runId: "same-link", thread: null }],
+      });
+      expect(yield* call({ action: "store" })).toEqual({ entries: [] });
+      for (const input of [
+        { action: "hooks" },
+        { action: "store_set", key: "global", value: true },
+        { action: "store_delete", key: "global" },
+        { action: "signal", workflow: "review", channel: "review", value: true },
+      ]) {
+        expect(yield* call(input)).toMatchObject({ code: "capability_denied" });
+      }
+      const refused = yield* call({ action: "read", runId: "missing" });
+      expect(refused).toMatchObject({
+        code: "invalid_request",
+        message: "The workflow run was not found.",
+      });
+      for (const { runId } of runs.slice(1)) {
+        for (const action of ["read", "resume", "cancel", "signal", "withdraw"]) {
+          const input = action === "signal" || action === "withdraw" ? { wait: "review" } : {};
+          expect(
+            yield* call({
+              ...input,
+              action,
+              runId,
+              ...(action === "signal" ? { value: true } : {}),
+            }),
+          ).toEqual(refused);
+        }
+      }
+      expect(mutations).toEqual([]);
+      expect(yield* call({ action: "read", runId: "same-link" })).toMatchObject({
+        run: { runId: "same-link" },
+        steps: [{ threadId: null, result: null, said: null }, step(ordinaryThread)],
+      });
+      expect(
+        yield* call({ action: "signal", runId: "same-link", wait: "review", value: true }),
+      ).toEqual({
+        delivery: "delivered",
+      });
+      expect(mutations).toEqual(["signal"]);
+    }).pipe(
+      Effect.provide(
+        handlersWith(
+          workflows,
+          { client: peer },
+          DeliveryService.layerTestWithThreadIndex({
+            ownerTiedThreads: () => Effect.succeed({ ties: new Map([[privateThread, false]]) }),
+          }),
+        ),
+      ),
+    );
   }),
 );
 

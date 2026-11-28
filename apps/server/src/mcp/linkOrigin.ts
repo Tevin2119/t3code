@@ -16,9 +16,11 @@ import { assertFullAccess, type Caller } from "./threadAccess.ts";
  */
 
 /** The link a caller acts for: its own session, or the link that started its thread. */
-export const callerLinkOrigin = (
-  caller: Pick<Caller, "scope" | "caller">,
-): OrchestrationV2LinkOrigin | undefined =>
+export const callerLinkOrigin = (caller: {
+  readonly scope: Caller["scope"];
+  readonly caller: Pick<OrchestrationV2ThreadShell, "linkOrigin"> | undefined;
+}): OrchestrationV2LinkOrigin | undefined =>
+  caller.scope.thread?.linkOrigin ??
   caller.caller?.linkOrigin ??
   (caller.scope.client?.linked === true
     ? {

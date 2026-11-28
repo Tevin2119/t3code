@@ -2,7 +2,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, it } from "@effect/vitest";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
-import { ProjectId } from "@t3tools/contracts";
+import { ProjectId, ThreadId } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
@@ -46,6 +46,7 @@ import WorkflowRunTagsMigration from "../persistence/Migrations/115_WorkflowRunT
 import WorkflowMailSenderMigration from "../persistence/Migrations/117_WorkflowMailSender.ts";
 import WorkflowPoolsMigration from "../persistence/Migrations/118_WorkflowPools.ts";
 import WorkflowRunSubjectMigration from "../persistence/Migrations/119_WorkflowRunSubject.ts";
+import WorkflowLaunchOriginMigration from "../persistence/Migrations/122_WorkflowLaunchOrigin.ts";
 import * as WorkflowEngine from "./WorkflowEngine.ts";
 import {
   Issue,
@@ -1018,6 +1019,7 @@ const harness = Effect.fnUntraced(function* (store?: typeof WorkflowStore.layer)
       Effect.andThen(WorkflowMailSenderMigration),
       Effect.andThen(WorkflowPoolsMigration),
       Effect.andThen(WorkflowRunSubjectMigration),
+      Effect.andThen(WorkflowLaunchOriginMigration),
     ),
     database,
   );
@@ -2055,10 +2057,24 @@ it.effect("two agents run side by side, and one past its time limit is stopped",
     yield* boot(
       Effect.gen(function* () {
         const workflows = yield* Workflows.Workflows;
-        const run = yield* workflows.start("pair", {}, { idempotencyKey: "p" });
+        const launchOrigin = {
+          launchedFromThreadId: ThreadId.make("thread:workflow-origin"),
+          linkOrigin: { sessionId: "workflow-peer", label: "Workflow peer", access: "full-access" },
+        } as const;
+        const run = yield* workflows.start("pair", {}, { idempotencyKey: "p", launchOrigin });
+        const otherLink = {
+          ...launchOrigin,
+          linkOrigin: { ...launchOrigin.linkOrigin, sessionId: "other-peer" },
+        };
+        const replay = yield* workflows
+          .start("pair", {}, { idempotencyKey: "p", launchOrigin: otherLink })
+          .pipe(Effect.flip);
+        assert.equal(replay.message, "The workflow run was not found.");
+        const sameLink = yield* workflows.start("pair", {}, { idempotencyKey: "p", launchOrigin });
+        assert.equal(sameLink.runId, run.runId);
         // Both have started before either has ended.
-        yield* agents.started(run.runId, "left/0");
-        yield* agents.started(run.runId, "right/0");
+        assert.deepEqual((yield* agents.started(run.runId, "left/0")).launchOrigin, launchOrigin);
+        assert.deepEqual((yield* agents.started(run.runId, "right/0")).launchOrigin, launchOrigin);
         yield* agents.end(run.runId, "left/0", { reply: "done" });
         // The right one never answers. Its minute passes, and a stop that cannot get through
         // pauses the run without giving the turn up, so the next try stops it.

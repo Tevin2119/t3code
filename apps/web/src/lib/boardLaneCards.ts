@@ -54,13 +54,10 @@ const STAGE_OF_LANE: Readonly<Record<string, WorkStage>> = {
   rework: "build",
 };
 
-/**
- * The section of the In work lane a card stands in. The stage comes from `run.stage`. A card
- * being triaged has no delivery run yet, and one sent back for rework is being built again
- * whatever stage its last run ended at, so those two are told by the lane the engine put them
- * in. A rework round is a count on the card (see `reworkOf`), never a section.
- */
-export function workStageOf(card: Pick<DeliveryCard, "lane" | "run">): CardStage {
+/** The engine's section, with a run or lane fallback for older cards. */
+export function workStageOf(card: Pick<DeliveryCard, "lane" | "run" | "inWorkStage">): CardStage {
+  const reported = WORK_STAGES.find((stage) => stage === card.inWorkStage);
+  if (reported) return reported;
   if (card.lane === "triage") return "triage";
   if (card.lane === "rework") return "build";
   // Neither the run nor the lane places it: no stage is made up for it.
@@ -71,7 +68,7 @@ export function workStageOf(card: Pick<DeliveryCard, "lane" | "run">): CardStage
  * The cards of the In work lane in sections, in stage order; a stage with no card has no section.
  * Cards of no known stage come last in a section of their own, so none drops off the board.
  */
-export function workSections<T extends Pick<DeliveryCard, "lane" | "run">>(
+export function workSections<T extends Pick<DeliveryCard, "lane" | "run" | "inWorkStage">>(
   cards: ReadonlyArray<T>,
 ): ReadonlyArray<{ readonly stage: CardStage; readonly cards: ReadonlyArray<T> }> {
   return ([...WORK_STAGES, UNKNOWN_STAGE] satisfies ReadonlyArray<CardStage>)

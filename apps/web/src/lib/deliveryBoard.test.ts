@@ -76,6 +76,37 @@ describe("environment-scoped board links", () => {
       task: "task-0a1b2c3d4e",
     });
   });
+  it("carries the linked machine, its board, and a task on it, together", () => {
+    expect(parseBoardSearch({ environment: "mac", linked: "vps", linkedBoard: "pilot" })).toEqual({
+      environment: "mac",
+      linked: "vps",
+      linkedBoard: "pilot",
+    });
+    expect(
+      parseBoardSearch({
+        environment: "mac",
+        linked: "vps",
+        linkedBoard: "pilot",
+        task: "task-0a1b2c3d4e",
+      }),
+    ).toEqual({
+      environment: "mac",
+      linked: "vps",
+      linkedBoard: "pilot",
+      task: "task-0a1b2c3d4e",
+    });
+    expect(parseBoardSearch({ environment: "mac", linked: "vps" })).toEqual({
+      environment: "mac",
+      linked: "vps",
+    });
+  });
+  it("discards an invalid linked machine or board, and gives new no place beside a task", () => {
+    expect(parseBoardSearch({ linked: " ", linkedBoard: "no spaces" })).toEqual({});
+    expect(parseBoardSearch({ linked: "vps".repeat(100) })).toEqual({});
+    expect(
+      parseBoardSearch({ environment: "mac", linked: "vps", new: true, task: "task-0a1b2c3d4e" }),
+    ).toEqual({ environment: "mac", linked: "vps", task: "task-0a1b2c3d4e" });
+  });
 });
 
 describe("matchesCard", () => {

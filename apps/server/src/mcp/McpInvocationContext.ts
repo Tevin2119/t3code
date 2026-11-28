@@ -1,6 +1,7 @@
 import {
   type AgentFeedbackMode,
   type AuthMcpClientAccess,
+  type OrchestrationV2LinkOrigin,
   type EnvironmentId,
   McpCapabilityUnavailableError,
   OrchestratorMcpFailure,
@@ -32,6 +33,8 @@ export interface McpThreadCaller {
   readonly threadId: ThreadId;
   readonly providerSessionId: string;
   readonly providerInstanceId: ProviderInstanceId;
+  readonly linkOrigin?: OrchestrationV2LinkOrigin;
+  readonly deliveryOriginUnknown?: boolean;
   /** A delegated child task; its parent owns the work it hands back. */
   readonly subagent?: boolean;
 }
@@ -172,6 +175,11 @@ export interface McpInvocationScope {
   readonly forge?: boolean;
 }
 
+export const isLinkedDeliveryCaller = (scope: McpInvocationScope | undefined): boolean =>
+  scope?.client?.linked === true ||
+  scope?.thread?.linkOrigin !== undefined ||
+  scope?.thread?.deliveryOriginUnknown === true;
+
 /**
  * T3 Code renders `t3-thread://` links as thread chips. Other MCP clients cannot open them, so
  * they get the hosted link Copy thread copies, which opens the thread in either app or a browser.
@@ -236,6 +244,12 @@ export const hiddenWhileLinksOff = (): boolean => {
   const fiber = Fiber.getCurrent();
   const scope = fiber && Context.getOrUndefined(fiber.context, McpInvocationContext);
   return scope?.linkedEnvironments !== false;
+};
+
+export const hiddenUnlessLinkedDeliveryPeer = (): boolean => {
+  const fiber = Fiber.getCurrent();
+  const scope = fiber && Context.getOrUndefined(fiber.context, McpInvocationContext);
+  return scope?.client?.linked === true;
 };
 
 /** `McpSchema.EnabledWhen` for agent feedback tools, for every client including `t3 feedback`. */

@@ -1,3 +1,6 @@
+import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
+import * as DeliveryService from "../delivery/DeliveryService.ts";
+import { isFencedThread } from "../delivery/linkedThreadAccess.ts";
 import {
   OrchestrationV2GetTurnItemResult,
   OrchestrationV2ThreadHistoryPage,
@@ -5,6 +8,7 @@ import {
   PEER_LINK_THREAD_HISTORY_ROUTE,
   PEER_LINK_THREAD_ITEM_ROUTE,
   PEER_LINK_THREAD_STREAM_ROUTE,
+  type EnvironmentId,
   ThreadId,
   TurnItemId,
 } from "@t3tools/contracts";
@@ -35,6 +39,31 @@ const encodeStreamItem = Schema.encodeEffect(
 const encodeHistoryPage = Schema.encodeEffect(Schema.toCodecJson(OrchestrationV2ThreadHistoryPage));
 const encodeItem = Schema.encodeEffect(Schema.toCodecJson(OrchestrationV2GetTurnItemResult));
 
+const omitLinkOrigin = <T extends { readonly linkOrigin?: unknown }>({
+  linkOrigin: _,
+  ...rest
+}: T) => rest;
+
+const redactEventOrigin = <T extends { readonly payload: object }>(event: T): T => {
+  if (!("linkOrigin" in event.payload)) return event;
+  const payload = { ...event.payload };
+  Reflect.deleteProperty(payload, "linkOrigin");
+  return { ...event, payload };
+};
+
+const redactStreamItem = (
+  item: OrchestrationV2ThreadStreamItem,
+): OrchestrationV2ThreadStreamItem => {
+  if (item.kind === "snapshot") {
+    return {
+      ...item,
+      projection: { ...item.projection, thread: omitLinkOrigin(item.projection.thread) },
+    };
+  }
+  if (item.kind === "event") return { ...item, event: redactEventOrigin(item.event) };
+  return item;
+};
+
 const refusal = (status: number, error: string) =>
   HttpServerResponse.jsonUnsafe({ error }, { status, headers: NO_STORE });
 
@@ -42,7 +71,10 @@ const refusal = (status: number, error: string) =>
  * Admits a peer link's session, as `/mcp` does: no browser origin, the link's own bearer, and the
  * Linked environments beta on here. Every access level may read, as each reads through `/mcp`.
  */
-const admitLink = Effect.gen(function* () {
+const admitLink = Effect.fn("linkThreadHttp.admitLink")(function* (
+  delivery: DeliveryService.DeliveryService["Service"],
+  environmentId: EnvironmentId,
+) {
   const request = yield* HttpServerRequest.HttpServerRequest;
   if (request.headers.origin !== undefined) return refusal(403, "origin_not_allowed");
   const auth = yield* EnvironmentAuth.EnvironmentAuth;
@@ -66,8 +98,19 @@ const admitLink = Effect.gen(function* () {
   if (shell.value === null || shell.value.deletedAt !== null) {
     return refusal(404, "thread_not_found");
   }
+  const resolvedId = shell.value.id;
+  const deliveryTied = Effect.gen(function* () {
+    const ownerTied = yield* delivery.ownerTiedThreads(environmentId).pipe(Effect.option);
+    if (ownerTied._tag === "None") return true;
+    const current = yield* threads.getThreadShell(resolvedId).pipe(Effect.option);
+    if (current._tag === "None" || current.value === null || current.value.deletedAt !== null)
+      return true;
+    return yield* isFencedThread(current.value, threads, delivery, ownerTied.value, false);
+  });
+  if (yield* deliveryTied) return refusal(404, "thread_not_found");
   return {
     threadId: shell.value.id,
+    deliveryTied,
     params,
     linkExpiresAt: client.value.linkExpiresAt,
     /** Completes once the link's session or the beta no longer admits it. */
@@ -93,70 +136,95 @@ const withLinkExpiry = (
       );
 
 // The owner's thread subscription with a bounded snapshot: the same items, in the same order.
-const streamRoute = HttpRouter.add(
-  "GET",
-  PEER_LINK_THREAD_STREAM_ROUTE,
-  Effect.gen(function* () {
-    const admitted = yield* admitLink;
-    if (HttpServerResponse.isHttpServerResponse(admitted)) return admitted;
-    const items = yield* subscribeOrchestrationV2Thread({
-      threadId: admitted.threadId,
-      acceptBoundedSnapshot: true,
-    }).pipe(Effect.option);
-    if (items._tag === "None") return refusal(500, "thread_read_failed");
-    return withLinkExpiry(
-      eventStreamResponse(
-        items.value.pipe(
-          // A failed read closes the response; the linking environment reports it and reconnects.
-          Stream.catchCause(() => Stream.empty),
-          Stream.interruptWhen(admitted.revoked),
+const streamRoute = (
+  delivery: DeliveryService.DeliveryService["Service"],
+  environmentId: EnvironmentId,
+) =>
+  HttpRouter.add(
+    "GET",
+    PEER_LINK_THREAD_STREAM_ROUTE,
+    Effect.gen(function* () {
+      const admitted = yield* admitLink(delivery, environmentId);
+      if (HttpServerResponse.isHttpServerResponse(admitted)) return admitted;
+      const items = yield* subscribeOrchestrationV2Thread({
+        threadId: admitted.threadId,
+        acceptBoundedSnapshot: true,
+      }).pipe(Effect.option);
+      if (items._tag === "None") return refusal(500, "thread_read_failed");
+      return withLinkExpiry(
+        eventStreamResponse(
+          items.value.pipe(
+            Stream.takeWhileEffect(() => admitted.deliveryTied.pipe(Effect.map((tied) => !tied))),
+            // A failed read closes the response; the linking environment reports it and reconnects.
+            Stream.catchCause(() => Stream.empty),
+            Stream.interruptWhen(admitted.revoked),
+            Stream.map(redactStreamItem),
+          ),
+          encodeStreamItem,
         ),
-        encodeStreamItem,
-      ),
-      admitted.linkExpiresAt,
-    );
-  }),
-);
+        admitted.linkExpiresAt,
+      );
+    }),
+  );
 
-const historyRoute = HttpRouter.add(
-  "GET",
-  PEER_LINK_THREAD_HISTORY_ROUTE,
-  Effect.gen(function* () {
-    const admitted = yield* admitLink;
-    if (HttpServerResponse.isHttpServerResponse(admitted)) return admitted;
-    const cursor = admitted.params.get("cursor");
-    if (!cursor) return refusal(400, "invalid_request");
-    const threads = yield* ThreadManagement.ThreadManagementService;
-    const body = yield* threads
-      .getThreadHistoryPage(admitted.threadId, cursor)
-      .pipe(Effect.flatMap(encodeHistoryPage), Effect.option);
-    if (body._tag === "None") return refusal(500, "thread_read_failed");
-    return withLinkExpiry(
-      HttpServerResponse.jsonUnsafe(body.value, { headers: NO_STORE }),
-      admitted.linkExpiresAt,
-    );
-  }),
-);
+const historyRoute = (
+  delivery: DeliveryService.DeliveryService["Service"],
+  environmentId: EnvironmentId,
+) =>
+  HttpRouter.add(
+    "GET",
+    PEER_LINK_THREAD_HISTORY_ROUTE,
+    Effect.gen(function* () {
+      const admitted = yield* admitLink(delivery, environmentId);
+      if (HttpServerResponse.isHttpServerResponse(admitted)) return admitted;
+      const cursor = admitted.params.get("cursor");
+      if (!cursor) return refusal(400, "invalid_request");
+      const threads = yield* ThreadManagement.ThreadManagementService;
+      const body = yield* threads
+        .getThreadHistoryPage(admitted.threadId, cursor)
+        .pipe(Effect.flatMap(encodeHistoryPage), Effect.option);
+      if (body._tag === "None") return refusal(500, "thread_read_failed");
+      return withLinkExpiry(
+        HttpServerResponse.jsonUnsafe(body.value, { headers: NO_STORE }),
+        admitted.linkExpiresAt,
+      );
+    }),
+  );
 
-const itemRoute = HttpRouter.add(
-  "GET",
-  PEER_LINK_THREAD_ITEM_ROUTE,
-  Effect.gen(function* () {
-    const admitted = yield* admitLink;
-    if (HttpServerResponse.isHttpServerResponse(admitted)) return admitted;
-    const itemId = admitted.params.get("item");
-    if (!itemId) return refusal(400, "invalid_request");
-    const threads = yield* ThreadManagement.ThreadManagementService;
-    const body = yield* threads
-      .getTurnItem({ threadId: admitted.threadId, itemId: TurnItemId.make(itemId) })
-      .pipe(Effect.flatMap(encodeItem), Effect.option);
-    if (body._tag === "None") return refusal(500, "thread_read_failed");
-    return withLinkExpiry(
-      HttpServerResponse.jsonUnsafe(body.value, { headers: NO_STORE }),
-      admitted.linkExpiresAt,
-    );
-  }),
-);
+const itemRoute = (
+  delivery: DeliveryService.DeliveryService["Service"],
+  environmentId: EnvironmentId,
+) =>
+  HttpRouter.add(
+    "GET",
+    PEER_LINK_THREAD_ITEM_ROUTE,
+    Effect.gen(function* () {
+      const admitted = yield* admitLink(delivery, environmentId);
+      if (HttpServerResponse.isHttpServerResponse(admitted)) return admitted;
+      const itemId = admitted.params.get("item");
+      if (!itemId) return refusal(400, "invalid_request");
+      const threads = yield* ThreadManagement.ThreadManagementService;
+      const body = yield* threads
+        .getTurnItem({ threadId: admitted.threadId, itemId: TurnItemId.make(itemId) })
+        .pipe(Effect.flatMap(encodeItem), Effect.option);
+      if (body._tag === "None") return refusal(500, "thread_read_failed");
+      return withLinkExpiry(
+        HttpServerResponse.jsonUnsafe(body.value, { headers: NO_STORE }),
+        admitted.linkExpiresAt,
+      );
+    }),
+  );
 
 /** What an environment serves of its threads to the environments linked to it. */
-export const layer = Layer.mergeAll(streamRoute, historyRoute, itemRoute);
+export const layer = Layer.unwrap(
+  Effect.gen(function* () {
+    const delivery = yield* DeliveryService.DeliveryService;
+    const environment = yield* ServerEnvironment.ServerEnvironment;
+    const environmentId = yield* environment.getEnvironmentId;
+    return Layer.mergeAll(
+      streamRoute(delivery, environmentId),
+      historyRoute(delivery, environmentId),
+      itemRoute(delivery, environmentId),
+    );
+  }),
+);

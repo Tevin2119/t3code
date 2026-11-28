@@ -6,7 +6,7 @@ import "~/index.css";
 import { render } from "../../../test/render";
 import { regroupLanes } from "../../lib/boardLanes";
 import { parseCard, type DeliveryLane } from "../../lib/delivery";
-import { Lane } from "./BoardPage";
+import { Lane } from "./BoardLaneView";
 
 vi.mock("../../state/delivery", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../state/delivery")>()),

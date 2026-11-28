@@ -1,5 +1,6 @@
 // Agent steps as threads: a step's turn is an ordinary thread turn that was asked for a result.
 import {
+  AuthSessionId,
   CommandId,
   MessageId,
   type ModelSelection,
@@ -20,9 +21,11 @@ import * as Hex from "effect/encoding/Hex";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 
+import { resolveLinkOrigin } from "../orchestration-v2/threadLaunchLineage.ts";
 import * as ThreadIssueService from "../orchestration-v2/ThreadIssueService.ts";
 import * as ThreadLaunch from "../orchestration-v2/ThreadLaunchService.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
+import * as AuthSessions from "../persistence/AuthSessions.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as ServerSettings from "../serverSettings.ts";
@@ -56,6 +59,7 @@ const make = Effect.gen(function* () {
   const linked = yield* WorkflowAgentLinks.make;
   const forge = yield* WorkflowForge;
   const threadIssues = yield* ThreadIssueService.ThreadIssueService;
+  const sessions = yield* AuthSessions.AuthSessionRepository;
   // A tracker that is down must not cost the step its agent.
   const showIssue = (issue: IssueAddress | undefined, threadId: string) =>
     issue === undefined
@@ -142,6 +146,17 @@ const make = Effect.gen(function* () {
 
   const agents = WorkflowAgents.of({
     start: Effect.fn("WorkflowAgentThreads.start")(function* (input) {
+      const linkOrigin = input.launchOrigin?.linkOrigin;
+      if (
+        linkOrigin !== undefined &&
+        !(yield* sessions
+          .isActive(AuthSessionId.make(linkOrigin.sessionId), yield* DateTime.now)
+          .pipe(Effect.mapError(failed("Could not verify the workflow's link session"))))
+      ) {
+        return yield* new WorkflowAgentError({
+          reason: "The workflow's link session was revoked or expired.",
+        });
+      }
       const id = yield* idOf(input.key);
       const environment = elsewhere(input.environment);
       if (environment !== undefined) return yield* linked.start(input, environment, id, here);
@@ -160,6 +175,16 @@ const make = Effect.gen(function* () {
           return yield* new WorkflowAgentError({
             reason: `Thread ${input.thread} no longer exists, so it cannot be continued.`,
           });
+        }
+        if (linkOrigin !== undefined) {
+          const targetOrigin = yield* resolveLinkOrigin(shell, threads).pipe(
+            Effect.mapError(failed("Could not verify the thread's link origin")),
+          );
+          if (targetOrigin.linkOrigin?.sessionId !== linkOrigin.sessionId) {
+            return yield* new WorkflowAgentError({
+              reason: "A linked workflow can continue only a thread started by the same link.",
+            });
+          }
         }
         const sent = yield* threads
           .sendToThread({
@@ -220,6 +245,7 @@ const make = Effect.gen(function* () {
           createdBy: "system",
           creationSource: "server",
           workflowRun: { environmentId: here, ...input.origin },
+          ...input.launchOrigin,
         })
         .pipe(Effect.mapError(failed("Could not start the thread")));
       const run = launched.projection.runs.find(
@@ -345,4 +371,4 @@ const make = Effect.gen(function* () {
   });
 });
 
-export const layer = Layer.effect(WorkflowAgents, make);
+export const layer = Layer.effect(WorkflowAgents, make).pipe(Layer.provide(AuthSessions.layer));

@@ -24,6 +24,7 @@ import WorkflowMailSenderMigration from "../persistence/Migrations/117_WorkflowM
 import WorkflowPoolsMigration from "../persistence/Migrations/118_WorkflowPools.ts";
 import WorkflowRunSubjectMigration from "../persistence/Migrations/119_WorkflowRunSubject.ts";
 import { type AgentResult, WorkflowAgents } from "./WorkflowAgents.ts";
+import WorkflowLaunchOriginMigration from "../persistence/Migrations/122_WorkflowLaunchOrigin.ts";
 import * as WorkflowEngine from "./WorkflowEngine.ts";
 import * as WorkflowRuntime from "./WorkflowRuntime.ts";
 import { engineTag, type WorkflowDefinition } from "./workflow.ts";
@@ -63,6 +64,7 @@ const setup = Effect.fn("setup")(function* (
       Effect.andThen(WorkflowMailSenderMigration),
       Effect.andThen(WorkflowPoolsMigration),
       Effect.andThen(WorkflowRunSubjectMigration),
+      Effect.andThen(WorkflowLaunchOriginMigration),
     ),
     database,
   );
@@ -95,8 +97,10 @@ it.effect(
       yield* Effect.gen(function* () {
         const workflows = yield* Workflows.Workflows;
         const definitions = yield* WorkflowRuntime.WorkflowDefinitions;
-        const held = yield* workflows.start("hold", {}, { idempotencyKey: "h" });
+        const launchOrigin = { linkOrigin: { sessionId: "link", label: "Linked server" } };
+        const held = yield* workflows.start("hold", {}, { idempotencyKey: "h", launchOrigin });
         yield* workflows.waitFor(held.runId, (run) => run.status === "waiting");
+        assert.deepEqual(yield* workflows.launchOrigin(held.runId), launchOrigin);
 
         // A file that does not parse is not written, and says where it breaks.
         const broken = yield* definitions.save("greet.ts", "T3.workflow(\n  'x',\n];\n");

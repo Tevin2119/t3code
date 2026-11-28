@@ -1,3 +1,5 @@
+import { filterPeerThreadRows } from "../../../delivery/linkedThreadAccess.ts";
+import * as DeliveryService from "../../../delivery/DeliveryService.ts";
 import {
   CommandId,
   MessageId,
@@ -494,6 +496,7 @@ export const layer = McpToolAccess.toLayer(ProjectToolkit, {
           createdBy: "agent",
           creationSource: "mcp",
           ...(linkOrigin === undefined ? {} : { linkOrigin }),
+          ...(caller === undefined ? {} : { launchedFromThreadId: caller.id }),
           // Kept only alongside linkOrigin: thread.create drops it otherwise.
           ...(input.delegatedFrom === undefined ? {} : { delegatedFrom: input.delegatedFrom }),
           // A link's word for it, like `delegatedFrom`: nothing else may name a run.
@@ -636,11 +639,25 @@ export const layer = McpToolAccess.toLayer(ProjectToolkit, {
         });
       const projects = yield* Project.ProjectService;
       const clones = yield* ProjectCloneTracker.ProjectCloneTracker;
-      return yield* mutateProjectWithClone(projects, clones, {
-        ...input,
-        type: "project.delete",
-        commandId: yield* newCommandId(),
-      }).pipe(Effect.mapError(projectFailure));
+      const scope = yield* McpInvocationContext.McpInvocationContext;
+      const delivery = Option.getOrUndefined(
+        yield* Effect.serviceOption(DeliveryService.DeliveryService),
+      );
+      return yield* mutateProjectWithClone(
+        projects,
+        clones,
+        {
+          ...input,
+          type: "project.delete",
+          commandId: yield* newCommandId(),
+        },
+        McpInvocationContext.isLinkedDeliveryCaller(scope) && input.force === true
+          ? (threads, projections) =>
+              filterPeerThreadRows(scope, threads, (thread) => thread, projections, delivery).pipe(
+                Effect.map((visible) => visible.length === threads.length),
+              )
+          : undefined,
+      ).pipe(Effect.mapError(projectFailure));
     }),
   ),
   t3_project_clone: McpToolAccess.writesEnvironment(

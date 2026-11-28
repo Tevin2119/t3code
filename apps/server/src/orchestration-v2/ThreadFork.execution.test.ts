@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, it } from "@effect/vitest";
 import {
   CheckpointId,
@@ -5,6 +6,7 @@ import {
   CheckpointScopeId,
   CommandId,
   EventId,
+  EnvironmentId,
   MessageId,
   NodeId,
   ProjectId,
@@ -22,10 +24,19 @@ import {
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as Statement from "effect/sql/Statement";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 
+import * as DeliveryService from "../delivery/DeliveryService.ts";
+import { isFencedThread } from "../delivery/linkedThreadAccess.ts";
+import * as McpInvocationContext from "../mcp/McpInvocationContext.ts";
+import * as McpToolAccess from "../mcp/McpToolAccess.ts";
+import * as ThreadHandlers from "../mcp/toolkits/thread/handlers.ts";
+import { ThreadToolkit } from "../mcp/toolkits/thread/tools.ts";
+import { resolveLinkOrigin } from "./threadLaunchLineage.ts";
+import * as ThreadManagement from "./ThreadManagementService.ts";
 import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
 import { ClaudeProviderCapabilitiesV2 } from "./Adapters/ClaudeAdapterV2.ts";
 import * as EffectWorker from "./EffectWorker.ts";
@@ -63,14 +74,13 @@ const forkCases = (
   return { driver, status, instanceId, modelSelection, layer };
 });
 
-it.effect("a persisted fork leaves PR watching with its parent until explicitly opted in", () =>
+it.effect("a linked fork keeps its provenance and leaves PR watching with its parent", () =>
   Effect.gen(function* () {
     const orchestrator = yield* Orchestrator.OrchestratorV2;
     const eventSink = yield* EventSink.EventSinkV2;
     const now = yield* DateTime.now;
     const { instanceId, modelSelection } = forkCases[0]!;
     const sourceThreadId = ThreadId.make("fork-watch-source");
-    const targetThreadId = ThreadId.make("fork-watch-target");
     const sourceRunId = RunId.make("fork-watch-source-run");
     const key = { host: "github.com", repository: "example/repo", number: 1 };
     const link = { url: "https://github.com/example/repo/pull/1", source: "agent" as const };
@@ -130,17 +140,61 @@ it.effect("a persisted fork leaves PR watching with its parent until explicitly 
     assert.isDefined(parentWatch);
     assert.lengthOf(parentBefore?.pendingBackgroundTasks ?? [], 1);
 
-    yield* orchestrator.dispatch({
-      type: "thread.fork",
-      commandId: CommandId.make("fork-watch-fork"),
-      sourceThreadId,
-      targetThreadId,
-      sourcePoint: { type: "run", runId: sourceRunId },
-      createdBy: "user",
-      creationSource: "mcp",
-    });
+    const linkOrigin = {
+      sessionId: "peer-session",
+      label: "Peer",
+      access: "full-access",
+    } as const;
+    const forked = yield* Effect.gen(function* () {
+      const toolkit = yield* ThreadToolkit;
+      return yield* toolkit
+        .handle("t3_thread_transfer", {
+          action: "fork",
+          threadId: sourceThreadId,
+          sourcePoint: { type: "run", runId: sourceRunId },
+        })
+        .pipe(Stream.unwrap, Stream.runCollect);
+    }).pipe(
+      Effect.provide(
+        McpToolAccess.HandlersLayer.layer(ThreadHandlers.layer).pipe(
+          Layer.provideMerge(
+            Layer.mergeAll(
+              DeliveryService.layerTest,
+              NodeCrypto.layer,
+              Layer.succeed(McpInvocationContext.McpInvocationContext, {
+                environmentId: EnvironmentId.make("fork-watch-environment"),
+                requestNamespace: "peer",
+                thread: undefined,
+                client: { ...linkOrigin, linked: true },
+                capabilities: new Set(["orchestration" as const]),
+                issuedAt: 0,
+              }),
+              Layer.mock(ThreadManagement.ThreadManagementService)({
+                dispatch: orchestrator.dispatch,
+                getThreadShell: orchestrator.getThreadShell,
+                getLegacyLaunchAncestor: orchestrator.getLegacyLaunchAncestor,
+                getProjectThreadRecords: ({ threadId }, fields, filter) =>
+                  orchestrator.getThreadRecords(threadId, fields, filter).pipe(Effect.orDie),
+              }),
+            ),
+          ),
+        ),
+      ),
+    );
+    const result = forked.at(-1)?.result;
+    assert.isDefined(result);
+    const targetThreadId = "targetThreadId" in result ? result.targetThreadId : undefined;
+    assert.isDefined(targetThreadId, JSON.stringify(result));
     const fork = yield* orchestrator.getThreadShell(targetThreadId);
     assert.isNotNull(fork);
+    assert.deepEqual(fork.linkOrigin, linkOrigin);
+    assert.equal(fork.lineage.parentThreadId, sourceThreadId);
+    assert.equal(fork.lineage.rootThreadId, sourceThreadId);
+    assert.deepEqual(fork.forkedFrom, {
+      type: "run",
+      threadId: sourceThreadId,
+      runId: sourceRunId,
+    });
     assert.deepEqual(fork.pullRequests, [
       {
         ...key,
@@ -206,6 +260,76 @@ it.effect("a persisted fork leaves PR watching with its parent until explicitly 
     assert.deepEqual(stoppedFork?.pendingBackgroundTasks, []);
     assert.deepEqual(yield* orchestrator.getThreadShell(sourceThreadId), parentBefore);
   }).pipe(Effect.provide(forkCases[0]!.layer)),
+);
+
+it.effect.each(["owner", "link", "tied"] as const)(
+  "resolves a %s launch ancestor after deletion",
+  (kind) =>
+    Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const delivery = yield* DeliveryService.DeliveryService;
+      const projectId = ProjectId.make("deleted-launcher-project");
+      const ancestor = ThreadId.make(`deleted-launcher:${kind}`);
+      const child = ThreadId.make(`deleted-launch-child:${kind}`);
+      const linkOrigin = { sessionId: "peer", label: "Peer", access: "full-access" } as const;
+      const shared = {
+        type: "thread.create",
+        projectId,
+        title: "Launch ancestry",
+        modelSelection: forkCases[0]!.modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+        createdBy: "agent",
+        creationSource: "mcp",
+      } as const;
+      yield* orchestrator.dispatch({
+        ...shared,
+        commandId: CommandId.make(`${ancestor}:create`),
+        threadId: ancestor,
+        ...(kind === "link" ? { linkOrigin } : {}),
+      });
+      yield* orchestrator.dispatch({
+        ...shared,
+        commandId: CommandId.make(`${child}:create`),
+        threadId: child,
+        launchedFromThreadId: ancestor,
+      });
+
+      const shell = yield* orchestrator.getThreadShell(child);
+      assert.isNotNull(shell);
+      const expected = kind === "link" ? { linkOrigin } : {};
+      assert.deepEqual(yield* resolveLinkOrigin(shell, orchestrator), expected);
+      if (kind === "tied") {
+        assert.isTrue(
+          yield* isFencedThread(
+            shell,
+            orchestrator,
+            delivery,
+            {
+              ties: new Map([[ancestor, false]]),
+            },
+            true,
+          ),
+        );
+      }
+
+      yield* orchestrator.dispatch({
+        type: "thread.delete",
+        commandId: CommandId.make(`${ancestor}:delete`),
+        threadId: ancestor,
+      });
+      assert.isNull(yield* orchestrator.getThreadShell(ancestor));
+      const surviving = yield* orchestrator.getThreadShell(child);
+      assert.isNotNull(surviving);
+      assert.deepEqual(yield* resolveLinkOrigin(surviving, orchestrator), expected);
+      if (kind === "tied") {
+        assert.isTrue(
+          yield* isFencedThread(surviving, orchestrator, delivery, { ties: new Map() }, true),
+        );
+      }
+    }).pipe(Effect.provide(Layer.merge(forkCases[0]!.layer, DeliveryService.layerTest))),
 );
 
 it.effect.each(forkCases)(

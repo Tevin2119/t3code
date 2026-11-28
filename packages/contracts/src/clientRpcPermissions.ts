@@ -20,6 +20,18 @@ import { WS_METHODS } from "./rpc.ts";
 /** Incremental client enforcement; the server still authorizes every request. */
 export const CLIENT_GUARDED_RPC_SCOPES = {
   [WS_METHODS.deliveryAct]: AuthOrchestrationOperateScope,
+  [WS_METHODS.deliveryLinkedComment]: AuthOrchestrationOperateScope,
+  [WS_METHODS.deliveryLinkedAnswer]: AuthOrchestrationOperateScope,
+  [WS_METHODS.deliveryLinkedControl]: AuthOrchestrationOperateScope,
+  [WS_METHODS.deliveryLinkedSteer]: AuthOrchestrationOperateScope,
+  [WS_METHODS.deliveryLinkedTake]: AuthOrchestrationOperateScope,
+  [WS_METHODS.deliveryLinkedRenew]: AuthOrchestrationOperateScope,
+  [WS_METHODS.deliveryLinkedBring]: AuthOrchestrationOperateScope,
+  [WS_METHODS.deliveryLinkedSend]: AuthOrchestrationOperateScope,
+  [WS_METHODS.deliveryLinkedHandoffRetry]: AuthOrchestrationOperateScope,
+  [WS_METHODS.deliveryLinkedRelease]: AuthOrchestrationOperateScope,
+  [WS_METHODS.deliverySetBoardLinkedVisibility]: AuthOrchestrationOperateScope,
+  [WS_METHODS.deliverySetTaskLinkedHidden]: AuthOrchestrationOperateScope,
   // Files a board draft with the server's own approval key, as an answered thread filing does.
   [WS_METHODS.deliveryFilePort]: AuthOrchestrationOperateScope,
   [WS_METHODS.deliveryFileThreadTask]: AuthOrchestrationOperateScope,

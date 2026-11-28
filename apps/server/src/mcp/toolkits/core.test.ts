@@ -10,6 +10,7 @@ import {
   DEFAULT_SERVER_SETTINGS,
   ChatImageAttachment,
   CommandId,
+  ContextTransferId,
   EnvironmentId,
   NodeId,
   OrchestratorMcpThreadReadResult,
@@ -86,6 +87,7 @@ const declaredFailure = (result: McpSchema.CallToolResult) => {
 };
 import { htmlRenderFromToolItem } from "@t3tools/shared/toolOutput";
 
+const decodeScheduledTask = Schema.decodeSync(ScheduledTask);
 const decodeMcpAttachmentInput = Schema.decodeUnknownEffect(McpAttachmentInput);
 const decodeThreadReadResult = Schema.decodeUnknownEffect(OrchestratorMcpThreadReadResult);
 const decodeThreadSearchResult = Schema.decodeUnknownEffect(
@@ -1289,7 +1291,7 @@ it.effect.each([
     scenario: "explains why a webhook task cannot run manually",
     tasks: [
       {
-        ...Schema.decodeSync(ScheduledTask)(scheduledTask("task-webhook", "full-access")),
+        ...decodeScheduledTask(scheduledTask("task-webhook", "full-access")),
         schedule: { type: "webhook" as const, signature: null },
       },
     ],
@@ -1344,6 +1346,304 @@ it.effect.each([
     ),
   ),
 );
+
+it.effect.each(["bound", "created", "owner-origin", "legacy"] as const)(
+  "a link-started thread cannot run a scheduled task with %s provenance",
+  (relationship) => {
+    const privateThreadId = ThreadId.make("scheduled-private-thread");
+    const linkOrigin = { sessionId: "peer-session", label: "Peer", access: "full-access" } as const;
+    const task = {
+      ...decodeScheduledTask(scheduledTask("task-private", "full-access")),
+      ...(relationship === "bound"
+        ? { threadId: privateThreadId, launchedFromThreadId: threadId }
+        : relationship === "legacy"
+          ? {}
+          : { launchedFromThreadId: privateThreadId }),
+    };
+    return Effect.gen(function* () {
+      const server = yield* McpServer.McpServer;
+      const result = yield* server
+        .callTool({
+          name: "run_scheduled_task_now",
+          arguments: { taskId: task.id },
+        })
+        .pipe(
+          Effect.provideService(McpInvocationContext.McpInvocationContext, {
+            ...scope,
+            thread: { ...scope.thread!, linkOrigin },
+          }),
+          Effect.provideService(McpSchema.McpServerClient, client),
+        );
+      expect(declaredFailure(result)).toMatchObject({ code: "task_not_found" });
+    }).pipe(
+      Effect.provide(
+        McpHttpServer.layerThreadToolkit.pipe(
+          Layer.provide(Layer.mock(ProviderRegistry.ProviderRegistry)({})),
+          Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
+          Layer.provide(NodeCrypto.layer),
+          Layer.provide(Layer.mock(ThreadSearch.ThreadSearch)({})),
+          Layer.provide(Layer.mock(PeerForwarding.PeerForwarding)({})),
+          Layer.provide(Layer.mock(PeerLinkRequests.PeerLinkRequests)({})),
+          Layer.provide(Layer.mock(PeerLinks.PeerLinks)({})),
+          Layer.provide(
+            DeliveryService.layerTestWithThreadIndex({
+              ownerTiedThreads: () =>
+                Effect.succeed({
+                  ties: new Map(
+                    relationship === "bound" || relationship === "created"
+                      ? [[privateThreadId, false]]
+                      : [],
+                  ),
+                }),
+            }),
+          ),
+          Layer.provide(
+            Layer.mock(ThreadManagement.ThreadManagementService)({
+              getThreadShell: (id) =>
+                Effect.succeed({
+                  ...McpToolAccessTestkit.liveThreadShell(id),
+                  ...(id === threadId || relationship === "created" ? { linkOrigin } : {}),
+                }),
+            }),
+          ),
+          Layer.provide(
+            Layer.mock(ScheduledTaskService.ScheduledTaskService)({
+              list: () => Effect.succeed({ tasks: [task] }),
+              getLinkOrigin: () =>
+                Effect.succeed(
+                  relationship === "bound" || relationship === "created" ? linkOrigin : undefined,
+                ),
+              runNow: () => Effect.succeed({ task, threadId: privateThreadId }),
+            }),
+          ),
+        ),
+      ),
+    );
+  },
+);
+
+it.effect("a full-access link can manage its schedules after the creator is deleted", () =>
+  Effect.gen(function* () {
+    const owner = ThreadId.make("owner-schedule-thread");
+    const peer = ThreadId.make("peer-schedule-thread");
+    const other = ThreadId.make("other-schedule-thread");
+    const launched = ThreadId.make("schedule-run-thread");
+    const linkedClient = clientScope("full-access");
+    const credentials = { ...linkedClient.client!, linked: true } as const;
+    const task = (id: string, ancestor?: ThreadId) => ({
+      ...decodeScheduledTask(scheduledTask(id, "full-access")),
+      ...(ancestor === undefined ? {} : { launchedFromThreadId: ancestor }),
+    });
+    const ownTask = { ...task("same-link", peer), threadId: launched };
+    const tasks = [
+      ownTask,
+      task("other-link", other),
+      task("owner-thread", owner),
+      task("no-origin"),
+    ];
+    const writes: string[] = [];
+    const services = Layer.mergeAll(
+      Layer.mock(ThreadManagement.ThreadManagementService)({
+        getThreadShell: (id, options) =>
+          Effect.succeed(
+            id === peer && !options?.includeDeleted
+              ? null
+              : {
+                  ...McpToolAccessTestkit.liveThreadShell(id),
+                  ...(id === peer
+                    ? { deletedAt: DateTime.makeUnsafe("2026-11-26T00:00:00Z") }
+                    : {}),
+                  ...(id === launched
+                    ? {
+                        lineage: {
+                          ...McpToolAccessTestkit.liveThreadShell(id).lineage,
+                          launchedFromThreadId: peer,
+                        },
+                        runtimeMode: "full-access" as const,
+                      }
+                    : {}),
+                  ...(id === owner
+                    ? {}
+                    : {
+                        linkOrigin: {
+                          sessionId:
+                            id === peer || id === launched
+                              ? credentials.sessionId
+                              : "other-session",
+                          label: credentials.label,
+                          access: credentials.access,
+                        },
+                      }),
+                },
+          ),
+      }),
+      Layer.mock(ScheduledTaskService.ScheduledTaskService)({
+        list: () => Effect.succeed({ tasks }),
+        getLinkOrigin: ({ id }) =>
+          Effect.succeed(
+            id === ownTask.id
+              ? {
+                  sessionId: credentials.sessionId,
+                  label: credentials.label,
+                  access: credentials.access,
+                }
+              : id === "other-link"
+                ? { sessionId: "other-session", label: "Other link", access: credentials.access }
+                : undefined,
+          ),
+        upsert: (input, origin) =>
+          Effect.sync(() => {
+            expect(origin).toBeUndefined();
+            writes.push(`update:${input.id}`);
+            return { task: ownTask };
+          }),
+        delete: ({ id }) =>
+          Effect.sync(() => {
+            writes.push(`delete:${id}`);
+            return { id };
+          }),
+        runNow: ({ id }) =>
+          Effect.sync(() => {
+            writes.push(`run:${id}`);
+            return { task: ownTask, threadId: launched };
+          }),
+      }),
+      DeliveryService.layerTest,
+      NodeCrypto.layer,
+      ServerSettings.layerTest(),
+      Layer.mock(ProviderRegistry.ProviderRegistry)({}),
+      Layer.mock(ProviderAdapterRegistry.ProviderAdapterRegistryV2)({}),
+      Layer.mock(PeerForwarding.PeerForwarding)({}),
+      Layer.mock(PeerLinkRequests.PeerLinkRequests)({}),
+      Layer.mock(PeerLinks.PeerLinks)({}),
+      Layer.mock(ProjectService.ProjectService)({}),
+      Layer.mock(SecretRequests.SecretRequests)({}),
+      Layer.mock(RemoteDelegation.RemoteDelegation)({}),
+      Layer.mock(ThreadSearch.ThreadSearch)({}),
+    );
+    yield* Effect.gen(function* () {
+      const server = yield* McpServer.McpServer;
+      const call = (
+        name: string,
+        args: Record<string, unknown>,
+        sessionId = credentials.sessionId,
+      ) =>
+        server.callTool({ name, arguments: args }).pipe(
+          Effect.provideService(McpInvocationContext.McpInvocationContext, {
+            ...linkedClient,
+            client: { ...credentials, sessionId },
+          }),
+          Effect.provideService(McpSchema.McpServerClient, client),
+        );
+      const listed = yield* call("list_scheduled_tasks", {});
+      expect(listed.structuredContent).toMatchObject({ tasks: [{ scheduledTaskId: ownTask.id }] });
+      const otherList = yield* call("list_scheduled_tasks", {}, "other-session");
+      expect(otherList.structuredContent).toMatchObject({
+        tasks: [{ scheduledTaskId: "other-link" }],
+      });
+      for (const [tool, key] of [
+        ["schedule_task", "scheduledTaskId"],
+        ["delete_scheduled_task", "scheduledTaskId"],
+        ["run_scheduled_task_now", "taskId"],
+      ] as const) {
+        const absent = declaredFailure(yield* call(tool, { [key]: "missing" }));
+        expect(absent).toMatchObject({
+          code: "task_not_found",
+          message: "The scheduled task was not found.",
+        });
+        for (const { id } of tasks.slice(1)) {
+          expect(declaredFailure(yield* call(tool, { [key]: id }))).toEqual(absent);
+        }
+        expect(declaredFailure(yield* call(tool, { [key]: ownTask.id }, "other-session"))).toEqual(
+          absent,
+        );
+        expect((yield* call(tool, { [key]: ownTask.id })).isError).toBe(false);
+      }
+      expect(writes).toEqual(["update:same-link", "delete:same-link", "run:same-link"]);
+    }).pipe(
+      Effect.provide(
+        Layer.merge(layerOrchestratorToolkit, McpHttpServer.layerThreadToolkit).pipe(
+          Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
+          Layer.provide(services),
+        ),
+      ),
+    );
+  }),
+);
+
+it.effect("a link-started thread only sees transfers whose endpoints it can read", () => {
+  const linkOrigin = { sessionId: "peer-session", label: "Peer", access: "full-access" } as const;
+  const own = { ...McpToolAccessTestkit.liveThreadShell(threadId), linkOrigin };
+  const privateThreadId = ThreadId.make("transfer-private-thread");
+  const ordinaryThreadId = ThreadId.make("transfer-ordinary-thread");
+  return Effect.gen(function* () {
+    const server = yield* McpServer.McpServer;
+    const result = yield* server
+      .callTool({
+        name: "t3_thread_transfer",
+        arguments: { action: "status", threadId },
+      })
+      .pipe(
+        Effect.provideService(McpInvocationContext.McpInvocationContext, {
+          ...scope,
+          thread: { ...scope.thread!, linkOrigin },
+        }),
+        Effect.provideService(McpSchema.McpServerClient, client),
+      );
+    expect(result.structuredContent).toEqual({
+      transfers: [
+        {
+          id: ContextTransferId.make("transfer-visible"),
+          sourceThreadId: ordinaryThreadId,
+          targetThreadId: threadId,
+          status: "consumed",
+        },
+      ],
+    });
+  }).pipe(
+    Effect.provide(
+      McpHttpServer.layerThreadToolkit.pipe(
+        Layer.provide(Layer.mock(ProviderRegistry.ProviderRegistry)({})),
+        Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
+        Layer.provide(NodeCrypto.layer),
+        Layer.provide(Layer.mock(ThreadSearch.ThreadSearch)({})),
+        Layer.provide(Layer.mock(PeerForwarding.PeerForwarding)({})),
+        Layer.provide(Layer.mock(PeerLinkRequests.PeerLinkRequests)({})),
+        Layer.provide(Layer.mock(PeerLinks.PeerLinks)({})),
+        Layer.provide(Layer.mock(ScheduledTaskService.ScheduledTaskService)({})),
+        Layer.provide(
+          DeliveryService.layerTestWithThreadIndex({
+            ownerTiedThreads: () => Effect.succeed({ ties: new Map([[privateThreadId, false]]) }),
+          }),
+        ),
+        Layer.provide(
+          Layer.mock(ThreadManagement.ThreadManagementService)({
+            getThreadShell: (id) =>
+              Effect.succeed(id === threadId ? own : McpToolAccessTestkit.liveThreadShell(id)),
+            getProjectThreadRecords: () =>
+              Effect.succeed({
+                ...McpToolAccessTestkit.idleThreadProjection(own),
+                contextTransfers: [
+                  {
+                    id: ContextTransferId.make("transfer-private"),
+                    sourceThreadId: privateThreadId,
+                    targetThreadId: threadId,
+                    status: "consumed",
+                  },
+                  {
+                    id: ContextTransferId.make("transfer-visible"),
+                    sourceThreadId: ordinaryThreadId,
+                    targetThreadId: threadId,
+                    status: "consumed",
+                  },
+                ],
+              } as never),
+          }),
+        ),
+      ),
+    ),
+  );
+});
 
 it.effect("run_scheduled_task_now reports why a started run failed to dispatch", () =>
   Effect.gen(function* () {

@@ -471,6 +471,7 @@ export class DeliveryError extends Schema.TaggedError<DeliveryError>()("Delivery
   detail: TrimmedNonEmptyString,
   /** The engine's HTTP status, when it answered. */
   status: Schema.optional(Schema.Number),
+  linkedRefusalMessage: Schema.optionalKey(TrimmedNonEmptyString),
   /** The engine's answer when it refused, e.g. the roles to choose from. */
   body: Schema.optional(Schema.Unknown),
 }) {

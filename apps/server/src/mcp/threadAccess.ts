@@ -83,6 +83,12 @@ export const threadNotFound = Effect.fn("OrchestratorMcpService.threadNotFound")
   threadId: ThreadId,
   message: string,
 ) {
+  if (McpInvocationContext.isLinkedDeliveryCaller(scope)) {
+    return yield* new OrchestratorMcpFailure({
+      code: "thread_not_found",
+      message: "The thread was not found.",
+    });
+  }
   let suggested: ThreadId | null = null;
   for (const candidate of candidateThreadIds(threadId, scope.environmentId)) {
     const shell = yield* threads.getThreadShell(candidate).pipe(Effect.orElseSucceed(() => null));
@@ -105,7 +111,6 @@ export const threadNotFound = Effect.fn("OrchestratorMcpService.threadNotFound")
   // A peer link's caller would be pointed at this machine's links, and a fenced one may not use them.
   const linksHint =
     scope.linkedEnvironments === false ||
-    scope.client?.linked === true ||
     fencingLinkOrigin({ scope, caller: caller ?? undefined }) !== undefined
       ? ""
       : " Thread ids belong to one environment: for a thread on a linked one, find it with `t3_environment_links` and pass its `environmentId` to a tool that takes one.";

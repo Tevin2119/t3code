@@ -2,6 +2,7 @@ import {
   AuthMcpClientAccess,
   AuthMcpRegistrationError,
   AuthMcpTokenError,
+  AuthSessionId,
   EnvironmentHttpApi,
   EnvironmentId,
   type ExecutionEnvironmentCapabilities,
@@ -16,6 +17,7 @@ import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Digest from "effect/crypto/Digest";
+import * as Mac from "effect/crypto/Mac";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
@@ -37,9 +39,12 @@ import * as HttpApi from "effect/http-api/HttpApi";
 import * as HttpApiClient from "effect/http-api/HttpApiClient";
 import { isLocalLoopbackHost, isTailnetHost } from "@t3tools/shared/hostClassification";
 
+import * as PayloadSigner from "../auth/PayloadSigner.ts";
+import { derivePeerArrivalKey } from "../auth/peerArrivalKey.ts";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import * as AuthSessions from "../persistence/AuthSessions.ts";
 
 const PeerHttpApi = HttpApi.make(EnvironmentHttpApi.identifier)
   .add(EnvironmentHttpApi.groups.metadata)
@@ -110,6 +115,7 @@ export class PeerLinks extends Context.Service<
       input: PeerLinkCreateInput,
     ) => Effect.Effect<{ readonly link: PeerLink; readonly alreadyLinked: boolean }, PeerLinkError>;
     readonly list: Effect.Effect<ReadonlyArray<PeerLinkSummary>, PeerLinkError>;
+    readonly listStored: Effect.Effect<ReadonlyArray<PeerLink>, PeerLinkError>;
     /** The unexpired links' names, from what is stored, without asking any peer. */
     readonly names: Effect.Effect<ReadonlyArray<PeerLinkName>, PeerLinkError>;
     /** The stored link, without asking the peer whether it answers. */
@@ -120,6 +126,24 @@ export class PeerLinks extends Context.Service<
     readonly unlink: (
       environmentId: EnvironmentId,
     ) => Effect.Effect<{ readonly removed: boolean; readonly endedThere: boolean }, PeerLinkError>;
+    readonly actingSessionId: (
+      environmentId: EnvironmentId,
+    ) => Effect.Effect<string | null, PeerLinkError>;
+    readonly challengeArrival: (
+      sessionId: string,
+      challenge: string,
+      answeringEnvironmentId: EnvironmentId,
+      callerSessionId: string,
+    ) => Effect.Effect<
+      { claim: string; verify: (proof: string) => Effect.Effect<boolean> } | null,
+      PeerLinkError
+    >;
+    readonly arrivalProof: (
+      environmentId: EnvironmentId,
+      challenge: string,
+      claim: string,
+      callerSessionId: string,
+    ) => Effect.Effect<string | null, PeerLinkError>;
     /** An address that answers as the linked peer, with its token, ready to call. */
     readonly resolve: (
       environmentId: EnvironmentId,
@@ -136,6 +160,32 @@ export class PeerLinks extends Context.Service<
     ) => Effect.Effect<void>;
   }
 >()("t3/peer/PeerLinks") {}
+
+const decodeLinkClaims = Schema.decodeUnknownEffect(
+  Schema.fromJsonString(
+    Schema.Struct({
+      kind: Schema.Literal("session"),
+      plk: Schema.Literal(1),
+      sid: Schema.String,
+    }),
+  ),
+);
+
+const arrivalMessage = (
+  challenge: string,
+  sessionId: string,
+  side: "claim" | "proof",
+  answeringEnvironmentId: EnvironmentId,
+  callerSessionId: string,
+) =>
+  JSON.stringify([
+    "t3:peer-arrival:v1",
+    side,
+    challenge,
+    sessionId,
+    answeringEnvironmentId,
+    callerSessionId,
+  ]);
 
 interface PeerLinkRow {
   readonly environment_id: string;
@@ -244,9 +294,11 @@ const linkLimitsHold = (peer: { readonly capabilities: ExecutionEnvironmentCapab
 
 const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
+  const authSessions = yield* AuthSessions.AuthSessionRepository;
   const secrets = yield* ServerSecretStore.ServerSecretStore;
   const random = yield* SecureRandom.SecureRandom;
   const digest = yield* Digest.Digest;
+  const mac = yield* Mac.Mac;
   const httpClient = yield* HttpClient.HttpClient;
   const environment = yield* ServerEnvironment.ServerEnvironment;
   const serverSettings = yield* ServerSettings.ServerSettingsService;
@@ -639,8 +691,9 @@ const make = Effect.gen(function* () {
     return { ...(yield* withLabel(link, answered.value.label)), status: "reachable" };
   });
 
+  const listStored = readRows.pipe(Effect.flatMap((rows) => Effect.forEach(rows, toLink)));
   const list: PeerLinks["Service"]["list"] = Effect.gen(function* () {
-    const links = yield* Effect.forEach(yield* readRows, toLink);
+    const links = yield* listStored;
     const now = yield* DateTime.now;
     return yield* Effect.forEach(links, (link) => statusOf(link, now), {
       concurrency: "unbounded",
@@ -754,21 +807,35 @@ const make = Effect.gen(function* () {
       // The token goes only to an address that still answers as this peer,
       // so one that now answers as another machine never receives it. The
       // addresses race, so a silent one never delays one that answers.
+      let answeredAs: EnvironmentId | undefined;
       const answered =
         link.urls.length === 0
           ? Option.none()
           : yield* Effect.raceAll(
               link.urls.map((url) =>
-                answersAs(url, environmentId).pipe(
-                  Effect.flatMap(Effect.fromOption),
-                  Effect.map((peer) => ({ url, peer })),
+                probe(url).pipe(
+                  Effect.flatMap((peer) => {
+                    if (peer.environmentId === environmentId) return Effect.succeed({ url, peer });
+                    answeredAs = peer.environmentId;
+                    return Effect.fail(
+                      new PeerLinkError({
+                        reason: "environment_mismatch",
+                        message: "The address answers as a different environment.",
+                        answeredAs,
+                      }),
+                    );
+                  }),
                 ),
               ),
             ).pipe(Effect.option);
       if (Option.isNone(answered)) {
         return yield* new PeerLinkError({
-          reason: "unreachable",
-          message: `${link.label} did not answer at ${link.urls.join(", ")}.`,
+          reason: answeredAs === undefined ? "unreachable" : "environment_mismatch",
+          message:
+            answeredAs === undefined
+              ? `${link.label} did not answer at ${link.urls.join(", ")}.`
+              : `An address for ${link.label} answered as a different environment.`,
+          ...(answeredAs === undefined ? {} : { answeredAs }),
         });
       }
       const { url, peer } = answered.value;
@@ -788,6 +855,99 @@ const make = Effect.gen(function* () {
       };
     },
   );
+
+  const actingCredential = Effect.fn("PeerLinks.actingCredential")(function* (
+    environmentId: EnvironmentId,
+  ) {
+    if (!(yield* enabled)) return null;
+    const row = yield* readRow(environmentId);
+    if (Option.isNone(row)) return null;
+    const link = yield* toLink(row.value);
+    if (
+      link.access === "read-only" ||
+      DateTime.isLessThanOrEqualTo(link.expiresAt, yield* DateTime.now)
+    )
+      return null;
+    const stored = yield* secrets.get(row.value.secret_name).pipe(Effect.catch(failStorage));
+    if (Option.isNone(stored)) return null;
+    const token = new TextDecoder().decode(stored.value);
+    const [payload, signature] = token.split(".");
+    if (!payload || !signature) return null;
+    return yield* Effect.fromResult(Base64Url.decodeString(payload)).pipe(
+      Effect.flatMap(decodeLinkClaims),
+      Effect.map(({ sid }) => ({ sid, token })),
+      Effect.orElseSucceed(() => null),
+    );
+  });
+
+  const actingSessionId = Effect.fn("PeerLinks.actingSessionId")(function* (
+    environmentId: EnvironmentId,
+  ) {
+    return (yield* actingCredential(environmentId))?.sid ?? null;
+  });
+
+  const arrivalSigner = Effect.fn("PeerLinks.arrivalSigner")(function* (key: string) {
+    const signer = yield* PayloadSigner.fromSecret(new TextEncoder().encode(key)).pipe(
+      Effect.provideService(Mac.Mac, mac),
+    );
+    return {
+      sign: (message: string) =>
+        signer
+          .sign(message)
+          .pipe(Effect.map((tag) => Buffer.from(tag, "base64url").toString("hex"))),
+      verify: (message: string, tag: string) =>
+        /^[a-f0-9]{64}$/.test(tag)
+          ? signer.verify(message, Buffer.from(tag, "hex").toString("base64url"))
+          : Effect.succeed(false),
+    };
+  });
+
+  const challengeArrival = Effect.fn("PeerLinks.challengeArrival")(function* (
+    sessionId: string,
+    challenge: string,
+    answeringEnvironmentId: EnvironmentId,
+    callerSessionId: string,
+  ) {
+    const key = yield* authSessions
+      .getPeerArrivalKey(AuthSessionId.make(sessionId), yield* DateTime.now)
+      .pipe(Effect.catch(failStorage));
+    if (Option.isNone(key)) return null;
+    const signer = yield* arrivalSigner(key.value);
+    const claim = yield* signer.sign(
+      arrivalMessage(challenge, sessionId, "claim", answeringEnvironmentId, callerSessionId),
+    );
+    return {
+      claim,
+      verify: (proof: string) =>
+        signer.verify(
+          arrivalMessage(challenge, sessionId, "proof", answeringEnvironmentId, callerSessionId),
+          proof,
+        ),
+    };
+  });
+
+  const arrivalProof = Effect.fn("PeerLinks.arrivalProof")(function* (
+    environmentId: EnvironmentId,
+    challenge: string,
+    claim: string,
+    callerSessionId: string,
+  ) {
+    const credential = yield* actingCredential(environmentId);
+    if (credential === null) return null;
+    const answeringId = yield* environment.getEnvironmentId;
+    const key = yield* derivePeerArrivalKey(credential.token).pipe(
+      Effect.provideService(Mac.Mac, mac),
+    );
+    const signer = yield* arrivalSigner(key);
+    return (yield* signer.verify(
+      arrivalMessage(challenge, credential.sid, "claim", answeringId, callerSessionId),
+      claim,
+    ))
+      ? yield* signer.sign(
+          arrivalMessage(challenge, credential.sid, "proof", answeringId, callerSessionId),
+        )
+      : null;
+  });
 
   const recordOutcome: PeerLinks["Service"]["recordOutcome"] = (environmentId, outcome) =>
     DateTime.now.pipe(
@@ -818,13 +978,17 @@ const make = Effect.gen(function* () {
     link,
     linkUnlessLinked,
     list,
+    listStored,
     names,
     get,
     unlink,
     resolve,
+    actingSessionId,
+    challengeArrival,
+    arrivalProof,
     recordOutcome,
     recordExpiry,
   });
 });
 
-export const layer = Layer.effect(PeerLinks, make);
+export const layer = Layer.effect(PeerLinks, make).pipe(Layer.provide(AuthSessions.layer));

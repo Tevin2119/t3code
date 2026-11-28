@@ -19,6 +19,7 @@ import WorkflowRunTagsMigration from "../persistence/Migrations/115_WorkflowRunT
 import WorkflowMailSenderMigration from "../persistence/Migrations/117_WorkflowMailSender.ts";
 import WorkflowPoolsMigration from "../persistence/Migrations/118_WorkflowPools.ts";
 import WorkflowRunSubjectMigration from "../persistence/Migrations/119_WorkflowRunSubject.ts";
+import WorkflowLaunchOriginMigration from "../persistence/Migrations/122_WorkflowLaunchOrigin.ts";
 import * as MilestoneHub from "../milestones/MilestoneHub.ts";
 import * as WorkflowStore from "./WorkflowStore.ts";
 
@@ -43,6 +44,7 @@ const withStore = <A, E>(
         Effect.andThen(WorkflowMailSenderMigration),
         Effect.andThen(WorkflowPoolsMigration),
         Effect.andThen(WorkflowRunSubjectMigration),
+        Effect.andThen(WorkflowLaunchOriginMigration),
       ),
     );
     return yield* Effect.provide(

@@ -40,6 +40,7 @@ import * as HtmlRender from "../htmlRender/HtmlRender.ts";
 import * as MilestoneEvents from "../milestones/MilestoneEvents.ts";
 import * as ThreadCommandExecutor from "../orchestration-v2/ThreadCommandExecutor.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
+import { resolveLinkOrigin } from "../orchestration-v2/threadLaunchLineage.ts";
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import * as PullRequestService from "../pullRequest/PullRequestService.ts";
 import * as PullRequestWatchService from "../pullRequest/PullRequestWatchService.ts";
@@ -83,6 +84,7 @@ import * as ThreadHandlers from "./toolkits/thread/handlers.ts";
 import * as ThreadMetadataMcpService from "./ThreadMetadataMcpService.ts";
 import * as McpSessionRegistry from "./McpSessionRegistry.ts";
 import * as PreviewAutomationBroker from "./PreviewAutomationBroker.ts";
+import * as LinkedDeliveryTools from "./toolkits/linkedDelivery.ts";
 import * as OrchestratorHandlers from "./toolkits/orchestrator/handlers.ts";
 import * as SeatHandoffs from "../delivery/SeatHandoffs.ts";
 import { OrchestratorToolkit } from "./toolkits/orchestrator/tools.ts";
@@ -334,22 +336,31 @@ const makeMcpAuthMiddleware = Effect.gen(function* () {
       ),
     );
   };
-  // Every request reads it, and a remote added mid-thread shows the tools within a minute.
-  const forgeOfThread = yield* Cache.make({
-    capacity: 1_000,
-    timeToLive: Duration.minutes(1),
-    lookup: (threadId: ThreadId): Effect.Effect<boolean | undefined> =>
-      Option.isNone(pullRequests) || Option.isNone(projections)
-        ? Effect.undefined
-        : projections.value.getThreadShell(threadId).pipe(
-            Effect.flatMap((thread) =>
-              thread === null
-                ? Effect.undefined
-                : pullRequests.value.servesProject(thread.projectId),
-            ),
-            Effect.orElseSucceed(() => undefined),
-          ),
-  });
+  const threadMetadata = yield* Cache.makeWith(
+    Effect.fn("McpHttpServer.threadMetadata")(function* (threadId: ThreadId) {
+      if (Option.isNone(projections)) return null;
+      const shell = yield* projections.value
+        .getThreadShell(threadId)
+        .pipe(Effect.orElseSucceed(() => null));
+      if (shell === null || shell.deletedAt !== null) return null;
+      const forge = Option.isNone(pullRequests)
+        ? undefined
+        : yield* pullRequests.value
+            .servesProject(shell.projectId)
+            .pipe(Effect.orElseSucceed(() => undefined));
+      const origin = yield* resolveLinkOrigin(shell, projections.value).pipe(
+        Effect.orElseSucceed(() => ({ unknown: true as const })),
+      );
+      return { ...origin, forge };
+    }),
+    {
+      capacity: 1_000,
+      timeToLive: (exit) =>
+        exit._tag === "Success" && exit.value !== null && !exit.value.unknown
+          ? Duration.minutes(1)
+          : Duration.zero,
+    },
+  );
   const authenticateRequest = Effect.fn("McpHttpServer.authenticateRequest")(function* (
     request: HttpServerRequest.HttpServerRequest,
   ) {
@@ -383,12 +394,22 @@ const makeMcpAuthMiddleware = Effect.gen(function* () {
     const { linkedEnvironments, agentFeedback, workflows, delivery } = yield* settingsFlags;
     if (limited.client?.linked === true && !linkedEnvironments) return linkedEnvironmentsOff;
     const origin = Option.getOrUndefined(Option.map(requestUrl(request), (url) => url.origin));
-    const forge =
-      limited.thread === undefined
-        ? undefined
-        : yield* Cache.get(forgeOfThread, limited.thread.threadId);
+    let thread = limited.thread;
+    const metadata =
+      thread === undefined ? null : yield* Cache.get(threadMetadata, thread.threadId);
+    if (thread !== undefined) {
+      if (
+        metadata?.unknown === true ||
+        (metadata === null && (delivery || Option.isSome(projections)))
+      )
+        thread = { ...thread, deliveryOriginUnknown: true };
+      else if (metadata?.linkOrigin !== undefined)
+        thread = { ...thread, linkOrigin: metadata.linkOrigin };
+    }
+    const forge = metadata?.forge;
     return {
       ...limited,
+      thread,
       linkedEnvironments,
       agentFeedback,
       workflows,
@@ -1458,6 +1479,11 @@ export const layerOrchestratorToolkit = toolkitRegistration(
   Layer.provide(ThreadMetadataMcpService.layer),
 );
 
+export const layerLinkedDeliveryToolkit = toolkitRegistration(
+  LinkedDeliveryTools.LinkedDeliveryToolkit,
+  LinkedDeliveryTools.layer,
+);
+
 export const layerThreadToolkit = toolkitRegistration(ThreadToolkit, ThreadHandlers.layer);
 const layerWorkflowToolkit = toolkitRegistration(WorkflowToolkit, WorkflowHandlers.layer);
 
@@ -1551,7 +1577,7 @@ export const layerMcpTransport = <RA, RE, RR>(registrations: Layer.Layer<RA, RE,
     registrations,
   }).pipe(Layer.provide(layerMcpAuthMiddleware));
 
-/** Every tool the T3 MCP server advertises. AgentContextBudget.test.ts measures this set. */
+/** The MCP tools available to agents. AgentContextBudget.test.ts measures this set. */
 export const layerTools = Layer.mergeAll(
   layerPreviewToolkit,
   layerOrchestratorToolkit,
@@ -1681,5 +1707,5 @@ export const layerMilestoneEvents = Layer.effectDiscard(
 );
 
 export const layer = layerMcpTransport(
-  Layer.mergeAll(layerTools, layerToolSearch, layerMilestoneEvents),
+  Layer.mergeAll(layerTools, layerLinkedDeliveryToolkit, layerToolSearch, layerMilestoneEvents),
 );

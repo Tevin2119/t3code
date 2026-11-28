@@ -160,6 +160,112 @@ export function createDeliveryEnvironmentAtoms<R, E>(
     }),
     /** A thread's team, or the team choice that is still held. Cheap, and read often. */
     threadBinding,
+    linkedBring: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:delivery:linked-bring",
+      tag: WS_METHODS.deliveryLinkedBring,
+    }),
+    linkedSend: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:delivery:linked-send",
+      tag: WS_METHODS.deliveryLinkedSend,
+    }),
+    linkedHandoffs: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:delivery:linked-handoffs",
+      tag: WS_METHODS.deliveryLinkedHandoffs,
+    }),
+    linkedHandoffRetry: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:delivery:linked-handoff-retry",
+      tag: WS_METHODS.deliveryLinkedHandoffRetry,
+    }),
+    linkedSendDestination: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:delivery:linked-send-destination",
+      tag: WS_METHODS.deliveryLinkedSendDestination,
+    }),
+    linkedBoards: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:delivery:linked-boards",
+      tag: WS_METHODS.deliveryLinkedBoards,
+      staleTimeMs: 5_000,
+    }),
+    linkedBoard: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:delivery:linked-board",
+      tag: WS_METHODS.deliveryLinkedBoard,
+      staleTimeMs: 5_000,
+    }),
+    linkedSearch: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:delivery:linked-search",
+      tag: WS_METHODS.deliveryLinkedSearch,
+      staleTimeMs: 5_000,
+    }),
+    linkedTask: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:delivery:linked-task",
+      tag: WS_METHODS.deliveryLinkedTask,
+      staleTimeMs: 5_000,
+    }),
+    linkedMessages: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:delivery:linked-messages",
+      tag: WS_METHODS.deliveryLinkedMessages,
+      staleTimeMs: 5_000,
+    }),
+    linkedTimeline: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:delivery:linked-timeline",
+      tag: WS_METHODS.deliveryLinkedTimeline,
+      staleTimeMs: 5_000,
+    }),
+    linkedEvents: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:delivery:linked-events",
+      tag: WS_METHODS.deliveryLinkedEvents,
+      staleTimeMs: 5_000,
+    }),
+    linkedFile: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:delivery:linked-file",
+      tag: WS_METHODS.deliveryLinkedFile,
+      staleTimeMs: 5_000,
+    }),
+    linkedAttached: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:delivery:linked-attached",
+      tag: WS_METHODS.deliveryLinkedAttached,
+      staleTimeMs: 5_000,
+    }),
+    linkedAttachedFile: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:delivery:linked-attached-file",
+      tag: WS_METHODS.deliveryLinkedAttachedFile,
+      staleTimeMs: 5_000,
+    }),
+    linkedComment: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:delivery:linked-comment",
+      tag: WS_METHODS.deliveryLinkedComment,
+    }),
+    linkedAnswer: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:delivery:linked-answer",
+      tag: WS_METHODS.deliveryLinkedAnswer,
+    }),
+    linkedControl: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:delivery:linked-control",
+      tag: WS_METHODS.deliveryLinkedControl,
+    }),
+    linkedSteer: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:delivery:linked-steer",
+      tag: WS_METHODS.deliveryLinkedSteer,
+    }),
+    linkedTake: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:delivery:linked-take",
+      tag: WS_METHODS.deliveryLinkedTake,
+    }),
+    linkedRenew: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:delivery:linked-renew",
+      tag: WS_METHODS.deliveryLinkedRenew,
+    }),
+    linkedRelease: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:delivery:linked-release",
+      tag: WS_METHODS.deliveryLinkedRelease,
+    }),
+    setBoardLinkedVisibility: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:delivery:set-board-linked-visibility",
+      tag: WS_METHODS.deliverySetBoardLinkedVisibility,
+    }),
+    setTaskLinkedHidden: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:delivery:set-task-linked-hidden",
+      tag: WS_METHODS.deliverySetTaskLinkedHidden,
+    }),
     /** Query families include the environment and thread; previous query values never carry over. */
     modelBinding: (target: Parameters<typeof threadBinding>[0]) =>
       modelBinding(threadBinding(target))(target.input.threadId),

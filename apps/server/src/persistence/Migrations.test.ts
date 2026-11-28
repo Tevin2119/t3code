@@ -79,6 +79,25 @@ describe("runMigrations", () => {
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
 
+  it.effect("upgrades the current master migration history with linked-board migrations", () =>
+    Effect.gen(function* () {
+      yield* runMigrations({ toMigrationInclusive: 119 });
+
+      const throughLinkedBoards = { toMigrationInclusive: 123 };
+      assert.deepStrictEqual(yield* runMigrations(throughLinkedBoards), [
+        [120, "ScheduledTaskAncestry"],
+        [121, "PeerArrivalKey"],
+        [122, "WorkflowLaunchOrigin"],
+        [123, "ScheduledTaskProvenance"],
+      ]);
+      assert.deepStrictEqual(
+        yield* history,
+        migrationManifest.filter(([id]) => id <= throughLinkedBoards.toMigrationInclusive),
+      );
+      assert.deepStrictEqual(yield* runMigrations(throughLinkedBoards), []);
+    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+  );
+
   it.effect("upgrades a database at exactly 54, then rechecks it without a write lock", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;

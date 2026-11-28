@@ -10,6 +10,7 @@ import {
   RuntimeMode,
   type ServerAuthSessionMethod,
 } from "@t3tools/contracts";
+import * as Mac from "effect/crypto/Mac";
 import * as Context from "effect/Context";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
@@ -29,6 +30,7 @@ import type {
   ServerAuthInternalError,
   ServerAuthInvalidCredentialError,
 } from "./EnvironmentAuth.ts";
+import { derivePeerArrivalKey } from "./peerArrivalKey.ts";
 import * as PayloadSigner from "./PayloadSigner.ts";
 import * as ServerSecretStore from "./ServerSecretStore.ts";
 import {
@@ -560,6 +562,9 @@ const make = Effect.gen(function* () {
   const serverConfig = yield* ServerConfig.ServerConfig;
   const serverEnvironment = yield* ServerEnvironment.ServerEnvironmentIdentity;
   const secretStore = yield* ServerSecretStore.ServerSecretStore;
+  const mac = yield* Mac.Mac;
+  const arrivalKey = (token: string) =>
+    derivePeerArrivalKey(token).pipe(Effect.provideService(Mac.Mac, mac));
   const authSessions = yield* AuthSessions.AuthSessionRepository;
   const signer = yield* PayloadSigner.fromSecret(
     yield* secretStore.getOrCreateRandom(SIGNING_SECRET_NAME, 32),
@@ -771,6 +776,7 @@ const make = Effect.gen(function* () {
         issuedAt,
         expiresAt: sessionExpiresAt,
         ...(claims.jkt ? { proofKeyThumbprint: claims.jkt } : {}),
+        ...(claims.plk === 1 ? { peerArrivalKey: yield* arrivalKey(token) } : {}),
       } satisfies AuthSessions.CreateAuthSessionInput;
       const replacedSessionIds = yield* (
         input?.replaceSessionId !== undefined || input?.replaceActiveForSubjectAndMethod
@@ -920,6 +926,15 @@ const make = Effect.gen(function* () {
         });
       }
 
+      if (claims.plk === 1 && row.value.peerArrivalKey === undefined) {
+        yield* authSessions
+          .rememberPeerArrivalKey(claims.sid, yield* arrivalKey(token))
+          .pipe(
+            Effect.mapError(
+              (cause) => new SessionCredentialVerificationError({ sessionId: claims.sid, cause }),
+            ),
+          );
+      }
       return {
         sessionId: claims.sid,
         token,

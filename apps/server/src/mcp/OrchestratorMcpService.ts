@@ -1,3 +1,11 @@
+import * as DeliveryService from "../delivery/DeliveryService.ts";
+import {
+  assertPeerScheduledTask,
+  assertPeerThreadTargets,
+  filterPeerThreadRows,
+  filterPeerScheduledTasks,
+  linkedScheduleNotFound,
+} from "../delivery/linkedThreadAccess.ts";
 import {
   CommandId,
   type RunId,
@@ -122,8 +130,10 @@ import * as ProjectService from "../project/ProjectService.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as ScheduledTaskService from "../scheduledTasks/ScheduledTaskService.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import { callerLinkOrigin } from "./linkOrigin.ts";
 import {
   clientModeCeiling,
+  isLinkedDeliveryCaller,
   type McpInvocationScope,
   type McpThreadInvocationScope,
   requireThreadScope,
@@ -1600,6 +1610,10 @@ const make = Effect.gen(function* () {
     },
   );
 
+  const delivery = Option.getOrUndefined(
+    yield* Effect.serviceOption(DeliveryService.DeliveryService),
+  );
+
   const loadReadableThread = Effect.fn("OrchestratorMcpService.loadReadableThread")(function* (
     scope: McpInvocationScope,
     threadId: ThreadId,
@@ -2463,6 +2477,7 @@ const make = Effect.gen(function* () {
    * the caller's limits.
    */
   const loadScheduledTask = Effect.fn("OrchestratorMcpService.loadScheduledTask")(function* (
+    scope: McpInvocationScope,
     scheduledTaskId: ScheduledTask["id"],
     limits: {
       readonly runtimeMode: RuntimeMode;
@@ -2478,8 +2493,11 @@ const make = Effect.gen(function* () {
       );
     const task = tasks.find((candidate) => candidate.id === scheduledTaskId);
     if (task === undefined) {
-      return yield* failure("task_not_found", `Scheduled task ${scheduledTaskId} was not found.`);
+      return yield* isLinkedDeliveryCaller(scope)
+        ? linkedScheduleNotFound()
+        : failure("task_not_found", `Scheduled task ${scheduledTaskId} was not found.`);
     }
+    yield* assertPeerScheduledTask(scope, task, scheduledTasks, threadManagement, delivery);
     yield* requireScheduledTaskWithinLimits(task, limits);
     return task;
   });
@@ -2487,6 +2505,12 @@ const make = Effect.gen(function* () {
   return OrchestratorMcpService.of({
     scheduleTask: Effect.fn("OrchestratorMcpService.scheduleTask")(function* (scope, input) {
       const { parent, limits } = yield* loadCaller(scope, ["runs"]);
+      if (isLinkedDeliveryCaller(scope) && parent === undefined) {
+        return yield* failure(
+          "capability_denied",
+          "Linked callers must schedule work from a thread.",
+        );
+      }
       const projectId = yield* resolveProjectTarget(parent, input.projectId);
       yield* assertLiveCallerForOtherProject(scope, parent, projectId);
       const project = yield* requireProject(projectId);
@@ -2550,10 +2574,19 @@ const make = Effect.gen(function* () {
             ),
           );
         const replayed = tasks.find((candidate) => candidate.id === replayedId);
-        if (replayed !== undefined) yield* requireScheduledTaskWithinLimits(replayed, limits);
+        if (replayed !== undefined) {
+          yield* assertPeerScheduledTask(
+            scope,
+            replayed,
+            scheduledTasks,
+            threadManagement,
+            delivery,
+          );
+          yield* requireScheduledTaskWithinLimits(replayed, limits);
+        }
       }
       const { task } = yield* scheduledTasks
-        .upsert(upsertInput)
+        .upsert(upsertInput, parent?.thread.id)
         .pipe(
           Effect.mapError((error) =>
             failure("orchestration_error", `Could not schedule task: ${error.message}`),
@@ -2572,21 +2605,28 @@ const make = Effect.gen(function* () {
               failure("orchestration_error", `Could not list scheduled tasks: ${error.message}`),
             ),
           );
-        return {
-          tasks: tasks
-            .filter(
-              (task) =>
-                (projectId === undefined || task.projectId === projectId) &&
-                (input.scheduledTaskId === undefined || task.id === input.scheduledTaskId),
-            )
-            .map((task) => scheduledTaskSummary(task, false)),
-        };
+        const matching = tasks.filter(
+          (task) =>
+            (projectId === undefined || task.projectId === projectId) &&
+            (input.scheduledTaskId === undefined || task.id === input.scheduledTaskId),
+        );
+        if (!isLinkedDeliveryCaller(scope)) {
+          return { tasks: matching.map((task) => scheduledTaskSummary(task, false)) };
+        }
+        const owned = yield* filterPeerScheduledTasks(
+          scope,
+          matching,
+          scheduledTasks,
+          threadManagement,
+          delivery,
+        );
+        return { tasks: owned.map((task) => scheduledTaskSummary(task, false)) };
       },
     ),
     updateScheduledTask: Effect.fn("OrchestratorMcpService.updateScheduledTask")(
       function* (scope, input) {
         const { parent, limits } = yield* loadCaller(scope, ["runs"]);
-        const existing = yield* loadScheduledTask(input.scheduledTaskId, limits);
+        const existing = yield* loadScheduledTask(scope, input.scheduledTaskId, limits);
         yield* assertLiveCallerForOtherProject(scope, parent, existing.projectId);
         if (
           input.bindToCurrentThread === true &&
@@ -2663,7 +2703,7 @@ const make = Effect.gen(function* () {
     deleteScheduledTask: Effect.fn("OrchestratorMcpService.deleteScheduledTask")(
       function* (scope, input) {
         const { parent, limits } = yield* loadCaller(scope, ["runs"]);
-        const existing = yield* loadScheduledTask(input.scheduledTaskId, limits);
+        const existing = yield* loadScheduledTask(scope, input.scheduledTaskId, limits);
         yield* assertLiveCallerForOtherProject(scope, parent, existing.projectId);
         yield* scheduledTasks
           .delete({ id: existing.id })
@@ -3441,6 +3481,7 @@ const make = Effect.gen(function* () {
                       text: request.prompt,
                       attachments: [],
                     };
+              const linkOrigin = callerLinkOrigin({ scope, caller: parent.thread });
               const created = yield* threadManagement
                 .dispatch({
                   type: "thread.create",
@@ -3456,9 +3497,8 @@ const make = Effect.gen(function* () {
                   interactionMode,
                   branch: parent.thread.branch,
                   worktreePath: parent.thread.worktreePath,
-                  ...(parent.thread.linkOrigin === undefined
-                    ? {}
-                    : { linkOrigin: parent.thread.linkOrigin }),
+                  launchedFromThreadId: parent.thread.id,
+                  ...(linkOrigin === undefined ? {} : { linkOrigin }),
                   ...(initialMessage === undefined ? {} : { initialMessage }),
                 })
                 .pipe(
@@ -3611,7 +3651,14 @@ const make = Effect.gen(function* () {
               ),
             )
           : null;
-      const candidates = projectThreads
+      const visible = yield* filterPeerThreadRows(
+        scope,
+        projectThreads,
+        ({ id }) => id,
+        threadManagement,
+        delivery,
+      );
+      const candidates = visible
         .filter((thread) => mayBeLiveIds === null || mayBeLiveIds.has(thread.id))
         .filter(
           (thread) =>
@@ -3688,6 +3735,16 @@ const make = Effect.gen(function* () {
           ...(input.itemId === undefined ? {} : { itemId: input.itemId }),
         })
         .pipe(Effect.mapError(threadManagementFailure));
+      yield* assertPeerThreadTargets(
+        scope,
+        new Set(
+          timeline.items.flatMap(({ sourceThreadId }) =>
+            sourceThreadId === target.thread.id ? [] : [sourceThreadId],
+          ),
+        ),
+        threadManagement,
+        delivery,
+      );
       const messageIdsByThread = new Map<ThreadId, Array<MessageId>>();
       for (const row of timeline.items) {
         if (row.item.type !== "user_message" && row.item.type !== "assistant_message") continue;

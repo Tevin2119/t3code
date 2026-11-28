@@ -2,6 +2,7 @@
 import * as NodeFS from "node:fs";
 // @effect-diagnostics-next-line nodeBuiltinImport:off - A peer with a certificate this machine does not trust.
 import * as NodeHttps from "node:https";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { NodeHttpServer } from "@effect/platform-node";
 import { type ExecutionEnvironmentDescriptor, OrchestratorMcpFailure } from "@t3tools/contracts";
 import { expect, it } from "@effect/vitest";
@@ -189,10 +190,92 @@ it.effect("links with a pairing code, and the peer holds its agents to the limit
         urls: [b.url],
         access: "auto",
       });
-      // B lists the link under A's name, where it can be revoked.
-      expect((yield* linkedSessions(b)).map((session) => session.client.label)).toEqual([
-        "T3 Code · Laptop",
-      ]);
+      const sessions = yield* linkedSessions(b);
+      expect(sessions.map((session) => session.client.label)).toEqual(["T3 Code · Laptop"]);
+      const session = sessions[0]!;
+      const issuer = Context.get(
+        yield* Layer.build(
+          layerLinkingEnvironment(box, undefined, Layer.succeed(SqlClient.SqlClient, b.sql)),
+        ),
+        PeerLinks.PeerLinks,
+      );
+      const challenge = "random-challenge";
+      const callerSessionId = "reciprocal-link";
+      const pending = yield* issuer.challengeArrival(
+        session.sessionId,
+        challenge,
+        laptop.environmentId,
+        callerSessionId,
+      );
+      expect(pending).not.toBeNull();
+      if (pending === null) return yield* Effect.die("Expected a challenge for the link session");
+      const proof = yield* a.links.arrivalProof(
+        box.environmentId,
+        challenge,
+        pending.claim,
+        callerSessionId,
+      );
+      expect(proof).not.toBeNull();
+      if (proof === null)
+        return yield* Effect.die("Expected proof from the link credential holder");
+      expect(yield* pending.verify(proof)).toBe(true);
+      expect(yield* pending.verify(pending.claim)).toBe(false);
+      expect(yield* pending.verify(session.sessionId)).toBe(false);
+      expect(
+        yield* a.links.arrivalProof(
+          box.environmentId,
+          "other-challenge",
+          pending.claim,
+          callerSessionId,
+        ),
+      ).toBeNull();
+      expect(
+        yield* a.links.arrivalProof(box.environmentId, challenge, pending.claim, "another-link"),
+      ).toBeNull();
+
+      yield* b.sql`UPDATE auth_sessions SET peer_arrival_key = NULL WHERE session_id = ${session.sessionId}`;
+      expect(
+        yield* issuer.challengeArrival(
+          session.sessionId,
+          challenge,
+          laptop.environmentId,
+          callerSessionId,
+        ),
+      ).toBeNull();
+      yield* probe(a);
+      expect(
+        yield* issuer.challengeArrival(
+          session.sessionId,
+          challenge,
+          laptop.environmentId,
+          callerSessionId,
+        ),
+      ).toMatchObject({ claim: pending.claim });
+
+      const third = yield* makeA(descriptorOf("environment-third", "Third"));
+      const thirdPairing = yield* b.auth.issuePairingCredential({
+        access: "auto",
+        purpose: "peer-link",
+      });
+      yield* third.links.link({ url: b.url, pairingCode: thirdPairing.credential, access: "auto" });
+      const thirdChallenge = yield* issuer.challengeArrival(
+        session.sessionId,
+        challenge,
+        descriptorOf("environment-third", "Third").environmentId,
+        callerSessionId,
+      );
+      expect(thirdChallenge).not.toBeNull();
+      if (thirdChallenge === null)
+        return yield* Effect.die("Expected a challenge bound to the third environment");
+      expect(
+        yield* third.links.arrivalProof(
+          box.environmentId,
+          challenge,
+          thirdChallenge.claim,
+          callerSessionId,
+        ),
+      ).toBeNull();
+      yield* third.links.unlink(box.environmentId);
       expect(
         (yield* a.links.list).map(({ environmentId, status }) => [environmentId, status]),
       ).toEqual([[box.environmentId, "reachable"]]);
@@ -221,7 +304,7 @@ it.effect("links with a pairing code, and the peer holds its agents to the limit
         endedThere: false,
       });
     }),
-  ).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  ).pipe(Effect.provide([NodeHttpServer.layerTest, NodeCrypto.layer])),
 );
 
 it.effect(
@@ -399,7 +482,10 @@ it.effect("never sends a link's token to an address that stops answering as that
       yield* Ref.set(b.descriptor, descriptorOf("environment-impostor", "Impostor"));
       yield* Ref.set(b.bearers, []);
       const failed = yield* probe(a).pipe(Effect.flip);
-      expect(failed.message).toContain("Box did not answer");
+      expect(failed).toMatchObject({
+        code: "environment_mismatch",
+        message: expect.stringContaining("different environment"),
+      });
       expect(yield* Ref.get(b.bearers)).toEqual([]);
       expect((yield* a.links.list).map((link) => link.status)).toEqual(["unreachable"]);
     }),

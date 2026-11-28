@@ -1,4 +1,5 @@
 import { EnvironmentId } from "@t3tools/contracts";
+import { GTProvider } from "gt-react";
 import { act, useLayoutEffect } from "react";
 import { create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
@@ -51,7 +52,11 @@ function Probe() {
   useLayoutEffect(() => {
     actions = value;
   }, [value]);
-  return value.dialog;
+  return (
+    <GTProvider locale="en" translations={{}}>
+      {value.dialog}
+    </GTProvider>
+  );
 }
 const openWindow = {
   approvalWindow: { open: true, windows: [{ by: "Sam", expiresAt: "2026-10-19T10:10:00Z" }] },

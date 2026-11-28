@@ -1,3 +1,4 @@
+import * as DeliveryService from "../delivery/DeliveryService.ts";
 import { McpSchema, McpServer } from "effect/ai";
 import * as McpHttpServer from "./McpHttpServer.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
@@ -4220,6 +4221,7 @@ describe("OrchestratorMcpService provider resolution", () => {
       saved: ScheduledTask = tasks[0]!,
       /** Stores each keyed create under the id its key derives, as the real service does. */
       created?: Ref.Ref<ReadonlyArray<ScheduledTask>>,
+      caller?: OrchestrationV2ThreadShell,
     ) =>
       OrchestratorMcpService.layer.pipe(
         Layer.provide(Layer.mock(ThreadLaunchService.ThreadLaunchService)({})),
@@ -4237,6 +4239,11 @@ describe("OrchestratorMcpService provider resolution", () => {
             Layer.mock(ThreadManagementService.ThreadManagementService)({
               getThreadShell: (threadId) =>
                 Effect.succeed(threadId === boundThreadId ? boundThread : null),
+              ...(caller === undefined
+                ? {}
+                : {
+                    getThreadRecords: () => Effect.succeed(idleThreadProjection(caller)),
+                  }),
             }),
             ServerSettings.layerTest(),
             Layer.mock(ProviderRegistry.ProviderRegistry)({ getProviders: Effect.succeed([]) }),
@@ -4254,6 +4261,7 @@ describe("OrchestratorMcpService provider resolution", () => {
             Layer.mock(SecretRequests.SecretRequests)({}),
             Layer.mock(RemoteDelegation.RemoteDelegation)({}),
             Layer.mock(ScheduledTaskService.ScheduledTaskService)({
+              getLinkOrigin: () => Effect.succeed(caller?.linkOrigin),
               list: () =>
                 created === undefined
                   ? Effect.succeed({ tasks })
@@ -4400,6 +4408,61 @@ describe("OrchestratorMcpService provider resolution", () => {
           assert.equal(error.code, "runtime_mode_escalation_denied");
           assert.equal(yield* Ref.get(upserted), 1);
         }),
+    );
+
+    it.effect("refuses to replay a keyed create after it is rebound to a private thread", () =>
+      Effect.gen(function* () {
+        const upserted = yield* Ref.make(0);
+        const created = yield* Ref.make<ReadonlyArray<ScheduledTask>>([]);
+        const caller = ThreadId.make("thread:linked-scheduler");
+        const bound = task({ threadId: boundThreadId });
+        const scope = {
+          ...supervisedClient,
+          client: undefined,
+          thread: {
+            threadId: caller,
+            providerSessionId: "linked-scheduler",
+            providerInstanceId: ProviderInstanceId.make("codex"),
+            linkOrigin: { sessionId: "link", label: "Peer", access: "full-access" },
+          },
+        } satisfies McpInvocationScope;
+        const shell = {
+          ...liveThreadShell(caller, { runtimeMode: "approval-required" }),
+          linkOrigin: scope.thread.linkOrigin,
+          projectId,
+        };
+        const mcp = yield* OrchestratorMcpService.OrchestratorMcpService.pipe(
+          Effect.provide(
+            service(
+              [bound],
+              liveThreadShell(boundThreadId, { runtimeMode: "approval-required" }),
+              upserted,
+              bound,
+              created,
+              shell,
+            ).pipe(
+              Layer.provide(
+                DeliveryService.layerTestWithThreadIndex({
+                  ownerTiedThreads: () =>
+                    Effect.succeed({ ties: new Map([[boundThreadId, false]]) }),
+                }),
+              ),
+            ),
+          ),
+        );
+        const create = (prompt: string) =>
+          mcp.scheduleTask(scope, {
+            projectId,
+            prompt,
+            schedule: { type: "webhook" },
+            freshSession: true,
+            clientRequestId: "nightly",
+          });
+        yield* create("Check the build");
+        const error = yield* create("Something else").pipe(Effect.flip);
+        assert.equal(error.code, "task_not_found");
+        assert.equal(yield* Ref.get(upserted), 1);
+      }),
     );
 
     it.effect("reports a saved task even when its bound thread cannot be read", () =>

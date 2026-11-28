@@ -167,7 +167,9 @@ const make = Effect.gen(function* () {
     if (from === to) return yield* invalidRequest("Port between two different instances.");
     const key = yield* delivery.boardApprovalKey;
     if (!key) return yield* invalidRequest(Delivery.NO_BOARD_APPROVAL_KEY);
-    const configuration = yield* delivery.boardThreadConfiguration;
+    const configuration = yield* delivery.boardThreadConfiguration.pipe(
+      Effect.mapError(engineFailure),
+    );
     // The engine's reading, not the client's, says what is ported and what each commit is.
     const reading = yield* delivery
       .read({
@@ -247,7 +249,9 @@ const make = Effect.gen(function* () {
       return yield* invalidRequest("No such thread in this environment.");
     const key = yield* delivery.boardApprovalKey;
     if (!key) return yield* invalidRequest(Delivery.NO_BOARD_APPROVAL_KEY);
-    const configuration = yield* delivery.boardThreadConfiguration;
+    const configuration = yield* delivery.boardThreadConfiguration.pipe(
+      Effect.mapError(engineFailure),
+    );
     const origin = threadOrigin(environmentId, threadId);
     const send = (requestId: string, fields: { readonly title: string; readonly body: string }) =>
       post(board, { requestId, ...fields, origin, key }, configuration);
@@ -311,7 +315,9 @@ const make = Effect.gen(function* () {
         message: "Filing a board task requires an active run owned by this MCP provider session.",
       });
     const nodeId = run.rootNodeId;
-    const configuration = yield* delivery.boardThreadConfiguration;
+    const configuration = yield* delivery.boardThreadConfiguration.pipe(
+      Effect.mapError(engineFailure),
+    );
     const probe = yield* delivery
       .boardThreadAct({
         method: "POST",

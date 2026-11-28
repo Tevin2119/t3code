@@ -6,7 +6,15 @@ import { NodeHttpServer } from "@effect/platform-node";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
+  DeliveryError,
   EnvironmentId,
+  type LinkedDeliveryAction,
+  LINKED_ACTION_APPLIED,
+  LINKED_HANDOFF_BUNDLE_MAX_BYTES,
+  LINKED_HANDOFF_MCP_MAX_BYTES,
+  LinkedHandoffPeerResponses,
+  linkedHandoffPeerResult,
+  type PeerLink,
   type OrchestrationV2Run,
   type OrchestrationV2ThreadShell,
   type SourceControlCloneRepositoryInput,
@@ -18,6 +26,7 @@ import {
 } from "@t3tools/contracts";
 import { expect, it } from "@effect/vitest";
 import * as Context from "effect/Context";
+import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -47,20 +56,23 @@ import * as McpInvocationContext from "../mcp/McpInvocationContext.ts";
 import { liveThreadShell } from "../mcp/McpToolAccess.testkit.ts";
 import * as PeerForwarding from "./PeerForwarding.ts";
 import * as PeerMcpClient from "./PeerMcpClient.ts";
-import { emptyDiscovery } from "../delivery/deliveryDiscovery.ts";
 import * as PeerLinks from "./PeerLinks.ts";
 import * as PeerLinkRequests from "./PeerLinkRequests.ts";
 import { descriptorOf, layerLinkingEnvironment, linkTo, servePeer } from "./PeerLinks.testkit.ts";
 
 it.effect.each([
-  "local",
+  "owner",
+  "peer",
+  "linked-work",
   "unpaired",
   "links-off",
   "linked",
+  "offline",
+  "unauthorized",
+  "environment-mismatch",
   "old",
-  "old-without-cards",
-  "denied",
-] as const)("delivery reads keep scoped auth and sanitize %s routing", (mode) => {
+  "read-only",
+] as const)("linked delivery separates caller scope and reports %s", (mode) => {
   const local = EnvironmentId.make("local");
   const remote = EnvironmentId.make("remote");
   const callerId = ThreadId.make("ordinary");
@@ -69,56 +81,82 @@ it.effect.each([
     capabilities: new Set(["orchestration"]),
     issuedAt: 1,
     requestNamespace: "fixture",
-    client: undefined,
+    client:
+      mode === "peer"
+        ? { sessionId: "fixture", label: "Other", access: "full-access", linked: true }
+        : undefined,
     linkedEnvironments: mode !== "links-off",
-    thread: {
-      threadId: callerId,
-      providerSessionId: "fixture",
-      providerInstanceId: ProviderInstanceId.make("pi"),
-    },
-  };
-  const input = { folder: "/workspace/repo", board: "work", cards: true };
-  const remoteSnapshot = emptyDiscovery(
-    input,
-    { environmentId: remote },
-    "remote-config",
-    "2026-11-16T00:00:00Z",
-    "remote-profile",
-  );
-  const card = {
-    id: "card",
-    number: 1,
-    title: "Draft",
-    lane: "inbox",
-    state: "draft",
-    boardThread: null,
-    fromThisThread: true,
+    thread:
+      mode === "peer"
+        ? undefined
+        : {
+            threadId: callerId,
+            providerSessionId: "fixture",
+            providerInstanceId: ProviderInstanceId.make("pi"),
+          },
   };
   const calls: string[] = [];
+  const boards = [
+    {
+      id: "work",
+      title: "Shared",
+      icon: null,
+      description: "",
+      counts: { tasks: 0, waitingOnYou: 0, questions: 0 },
+    },
+  ];
   return Effect.gen(function* () {
     const forwarding = yield* PeerForwarding.PeerForwarding;
-    const result = yield* forwarding.readDelivery(
-      scope,
-      input,
-      mode === "local" ? undefined : remote,
+    const input = { folder: "/workspace/repo", board: "work" };
+    if (mode === "owner" || mode === "peer") {
+      const result = yield* forwarding.readDelivery(scope, input);
+      expect(result.diagnostics).toEqual([mode === "owner" ? "disabled" : "unauthorized"]);
+      expect(calls).toEqual([]);
+      return;
+    }
+    const target = { peerEnvironmentId: remote };
+    const result = yield* forwarding.readLinkedAsAgent(scope, target, { operation: "boards" });
+    expect(result.diagnostic).toBe(
+      mode === "links-off" || mode === "unpaired"
+        ? "not-linked"
+        : mode === "linked-work"
+          ? "unauthorized"
+          : mode === "old"
+            ? "unsupported"
+            : mode === "linked" || mode === "read-only"
+              ? null
+              : mode,
     );
-    expect(result.environmentId).toBe(mode === "local" ? local : remote);
-    expect(result.diagnostics).toEqual(
-      mode === "local"
-        ? ["disabled"]
-        : mode === "unpaired" || mode === "links-off"
-          ? ["remote-unpaired"]
-          : mode === "old" || mode === "old-without-cards"
-            ? ["unsupported-server"]
-            : mode === "denied"
-              ? ["unauthorized"]
-              : [],
-    );
-    expect(calls).toEqual(
-      ["local", "unpaired", "links-off"].includes(mode) ? [] : ["delivery_read"],
-    );
-    expect(result.cards).toEqual(mode === "linked" ? [card] : []);
     expect(JSON.stringify(result)).not.toContain("private-fixture");
+    if (mode === "read-only") {
+      const actions = [
+        { operation: "comment", taskId: "task", text: "hello" },
+        { operation: "answer", taskId: "task", replyTo: 1, answer: { option: "first" } },
+        { operation: "control", taskId: "task", action: "pause" },
+        { operation: "steer", taskId: "task", text: "continue" },
+        { operation: "take", taskId: "task", origin: "conversation" },
+        { operation: "renew", taskId: "task", holder: "lease" },
+        { operation: "release", taskId: "task", holder: "lease" },
+      ] satisfies ReadonlyArray<LinkedDeliveryAction>;
+      for (const action of actions) {
+        expect((yield* forwarding.linkedDelivery(target, action)).diagnostic).toBe("read-only");
+      }
+      expect(calls).toEqual(["delivery_linked_read"]);
+    }
+    if (mode === "linked") {
+      const legacy = yield* forwarding.readDelivery(scope, input, remote);
+      expect(legacy.boards).toEqual([{ id: "work", branch: null }]);
+      expect(calls).toEqual(["delivery_linked_read"]);
+      expect((yield* forwarding.listLinkedBoards({})).links).toMatchObject([
+        { environmentId: remote, label: "Remote", data: { boards } },
+      ]);
+      expect(calls).toEqual(["delivery_linked_read"]);
+      yield* forwarding.linkedDelivery({ ...target, fresh: true }, { operation: "boards" });
+      expect(calls).toHaveLength(2);
+      yield* TestClock.adjust("5 seconds");
+      yield* forwarding.linkedDelivery(target, { operation: "boards" });
+      expect(calls).toHaveLength(3);
+    }
   }).pipe(
     Effect.provide([
       PeerForwarding.layer.pipe(
@@ -128,38 +166,71 @@ it.effect.each([
             Layer.mock(PeerLinks.PeerLinks)({
               enabled: Effect.succeed(true),
               get: () =>
-                mode === "local"
-                  ? Effect.die("Local scoped reads must never request a peer link")
-                  : Effect.succeed(
-                      mode === "unpaired"
-                        ? Option.none()
-                        : Option.some({ environmentId: remote } as never),
-                    ),
+                Effect.gen(function* () {
+                  if (mode === "unpaired") return Option.none();
+                  const now = yield* DateTime.now;
+                  return Option.some({
+                    environmentId: remote,
+                    label: "Remote",
+                    urls: ["http://test.invalid"],
+                    access: mode === "read-only" ? "read-only" : "full-access",
+                    linkedAt: DateTime.makeUnsafe(0),
+                    expiresAt: DateTime.add(now, { hours: 1 }),
+                    lastReachedAt: null,
+                    lastError: null,
+                  } satisfies PeerLink);
+                }),
+              listStored: Effect.succeed([
+                {
+                  environmentId: remote,
+                  label: "Remote",
+                  access: "full-access",
+                  urls: ["http://test.invalid"],
+                  linkedAt: DateTime.makeUnsafe(0),
+                  expiresAt: DateTime.makeUnsafe("2099-01-01T00:00:00Z"),
+                  lastReachedAt: null,
+                  lastError: null,
+                },
+              ]),
             }),
             Layer.mock(PeerMcpClient.PeerMcpClient)({
               call: (request) => {
                 calls.push(request.tool);
-                expect(request.arguments).toEqual(input);
-                expect(request.sender).toMatchObject({
-                  environmentId: local,
-                  threadId: callerId,
-                });
-                return mode === "old" || mode === "denied"
-                  ? Effect.fail(
-                      new OrchestratorMcpFailure({
-                        code: mode === "old" ? "invalid_request" : "capability_denied",
-                        message: "Bearer private-fixture",
-                      }),
-                    )
-                  : Effect.succeed({
-                      ...remoteSnapshot,
-                      cards: mode === "old-without-cards" ? null : [card],
-                    } as never);
+                expect(request.arguments).toEqual({ request: { operation: "boards" } });
+                if (mode === "old" || mode === "unauthorized" || mode === "offline") {
+                  return Effect.fail(
+                    new OrchestratorMcpFailure({
+                      code:
+                        mode === "old"
+                          ? "invalid_request"
+                          : mode === "unauthorized"
+                            ? "capability_denied"
+                            : "orchestration_error",
+                      message: "Bearer private-fixture",
+                    }),
+                  );
+                }
+                return Effect.succeed({
+                  environmentId: mode === "environment-mismatch" ? local : remote,
+                  diagnostic: null,
+                  data: { boards },
+                } as never);
               },
             }),
             Layer.mock(ThreadManagement.ThreadManagementService)({
               getThreadShell: () =>
-                Effect.succeed(liveThreadShell(callerId, { runtimeMode: "full-access" })),
+                Effect.succeed({
+                  ...liveThreadShell(callerId),
+                  ...(mode === "linked-work"
+                    ? {
+                        linkOrigin: {
+                          sessionId: "other",
+                          label: "Other",
+                          access: "full-access" as const,
+                        },
+                      }
+                    : {}),
+                }),
             }),
           ),
         ),
@@ -168,6 +239,70 @@ it.effect.each([
     ]),
   );
 });
+
+it.effect(
+  "reports a linked action the owner applied as done when its answer is in a newer shape",
+  () => {
+    const remote = EnvironmentId.make("remote");
+    const answers: Array<unknown> = [
+      { environmentId: remote, diagnostic: null, data: { task: { id: "task", kind: "future" } } },
+      { environmentId: remote, diagnostic: "not-found", data: null },
+    ];
+    return Effect.gen(function* () {
+      const forwarding = yield* PeerForwarding.PeerForwarding;
+      const target = { peerEnvironmentId: remote };
+      const comment = { operation: "comment", taskId: "task", text: "hello" } as const;
+      expect(yield* forwarding.linkedDelivery(target, comment)).toEqual({
+        environmentId: remote,
+        diagnostic: null,
+        data: null,
+        message: LINKED_ACTION_APPLIED,
+      });
+      // A refusal is still the owner's own, and nothing was applied.
+      expect(yield* forwarding.linkedDelivery(target, comment)).toEqual({
+        environmentId: remote,
+        diagnostic: "not-found",
+        data: null,
+      });
+    }).pipe(
+      Effect.provide([
+        PeerForwarding.layer.pipe(
+          Layer.provide(
+            Layer.mergeAll(
+              NodeCrypto.layer,
+              Layer.mock(PeerLinks.PeerLinks)({
+                enabled: Effect.succeed(true),
+                get: () =>
+                  Effect.gen(function* () {
+                    const now = yield* DateTime.now;
+                    return Option.some({
+                      environmentId: remote,
+                      label: "Remote",
+                      urls: ["http://test.invalid"],
+                      access: "full-access",
+                      linkedAt: DateTime.makeUnsafe(0),
+                      expiresAt: DateTime.add(now, { hours: 1 }),
+                      lastReachedAt: null,
+                      lastError: null,
+                    } satisfies PeerLink);
+                  }),
+              }),
+              Layer.mock(PeerMcpClient.PeerMcpClient)({
+                call: (request) => {
+                  expect(request.tool).toBe("delivery_linked_act");
+                  // The client decodes the owner's answer with the schema it was asked for.
+                  return Effect.succeed(answers.shift() as never);
+                },
+              }),
+              Layer.mock(ThreadManagement.ThreadManagementService)({}),
+            ),
+          ),
+        ),
+        DeliveryService.layerTest,
+      ]),
+    );
+  },
+);
 
 const laptop = descriptorOf("environment-laptop", "Laptop");
 const box = descriptorOf("environment-box", "Box");
@@ -204,10 +339,16 @@ const usersThread = ThreadId.make("thread:box-users-own");
  * started, whose run finishes on the third wait, and the box user's own.
  * Every send and wait is recorded.
  */
-const boxThreads = (seen: Ref.Ref<Seen>, linkSession: Ref.Ref<string>) => {
+const boxThreads = (seen: Ref.Ref<Seen>, linkSession: Ref.Ref<string>, taskThread: boolean) => {
   const base = { ...liveThreadShell(boxThread, { runtimeMode: "auto" }), projectId: boxProject };
   const linked = Ref.get(linkSession).pipe(
-    Effect.map((sessionId) => ({ ...base, linkOrigin: { sessionId, label: "T3 Code · Laptop" } })),
+    Effect.map((sessionId) => ({
+      ...base,
+      linkOrigin: { sessionId, label: "T3 Code · Laptop" },
+      lineage: taskThread
+        ? { ...base.lineage, engineIntake: "board-task:work:task-demo" }
+        : base.lineage,
+    })),
   );
   const users = { ...liveThreadShell(usersThread, { runtimeMode: "auto" }), projectId: boxProject };
   const run = (status: OrchestrationV2Run["status"]) =>
@@ -357,22 +498,48 @@ const boxProjects = (seen: Ref.Ref<Seen>) =>
  * OAuth. `linkSession` is filled in once A links, so B's fixture thread reads
  * as one that link started.
  */
-const serveBox = (seen: Ref.Ref<Seen>, linkSession: Ref.Ref<string>) =>
+const serveBox = (
+  seen: Ref.Ref<Seen>,
+  linkSession: Ref.Ref<string>,
+  taskDelivery?: Layer.Layer<DeliveryService.DeliveryService>,
+) =>
   servePeer(
     box,
     Layer.mergeAll(
       McpHttpServer.layerOrchestratorToolkit.pipe(
         Layer.provide(Layer.mock(BoardThreadTasks.BoardThreadTasks)({})),
         Layer.provide(Layer.mock(BoardAgentTools.BoardAgentTools)({})),
-        Layer.provide(DeliveryService.layerTest),
       ),
+      McpHttpServer.layerLinkedDeliveryToolkit,
       McpHttpServer.layerProjectRegistration,
       McpHttpServer.layerThreadToolkit,
     ).pipe(
       Layer.provide(DocumentText.layer.pipe(Layer.provideMerge(NodeServices.layer))),
+      Layer.provide(
+        PeerForwarding.layer.pipe(Layer.provide(Layer.mock(PeerMcpClient.PeerMcpClient)({}))),
+      ),
       Layer.provide(NodeCrypto.layer),
-      Layer.provide(boxThreads(seen, linkSession)),
-      Layer.provide(Layer.mock(ThreadSearch.ThreadSearch)({})),
+      Layer.provide(
+        Layer.merge(
+          boxThreads(seen, linkSession, taskDelivery !== undefined),
+          taskDelivery ?? DeliveryService.layerTest,
+        ),
+      ),
+      Layer.provide(
+        Layer.mock(ThreadSearch.ThreadSearch)({
+          searchThreads: () =>
+            Effect.succeed({
+              matches: [
+                {
+                  threadId: boxThread,
+                  projectId: boxProject,
+                  title: "Task transcript",
+                  source: "title",
+                },
+              ],
+            }),
+        }),
+      ),
       Layer.provide(boxLaunches(seen)),
       Layer.provide(
         Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({ namedProjectsRoot: "/projects" }),
@@ -393,7 +560,6 @@ const serveBox = (seen: Ref.Ref<Seen>, linkSession: Ref.Ref<string>) =>
       Layer.provide(Layer.mock(ProjectCloneTracker.ProjectCloneTracker)({})),
       Layer.provide(Layer.mock(SecretRequests.SecretRequests)({})),
       Layer.provide(ServerSettings.layerTest()),
-      Layer.provide(Layer.mock(PeerForwarding.PeerForwarding)({})),
       Layer.provide(Layer.mock(RemoteDelegation.RemoteDelegation)({})),
       Layer.provide(Layer.mock(PeerLinkRequests.PeerLinkRequests)({})),
       Layer.provide(Layer.mock(PeerLinks.PeerLinks)({})),
@@ -419,7 +585,9 @@ const mcpClient = McpSchema.McpServerClient.of({
  */
 const makeLaptop = Effect.gen(function* () {
   const linking = yield* layerLinkingEnvironment(laptop).pipe(Layer.build);
+  const forwarding = PeerForwarding.layer.pipe(Layer.provide(Layer.succeedContext(linking)));
   const layerHere = Layer.mergeAll(
+    McpHttpServer.layerLinkedDeliveryToolkit.pipe(Layer.provide(DeliveryService.layerTest)),
     McpHttpServer.layerOrchestratorToolkit.pipe(
       Layer.provide(Layer.mock(BoardThreadTasks.BoardThreadTasks)({})),
       Layer.provide(Layer.mock(BoardAgentTools.BoardAgentTools)({})),
@@ -443,7 +611,7 @@ const makeLaptop = Effect.gen(function* () {
       ),
     ),
     Layer.provide(NodeServices.layer),
-    Layer.provide(PeerForwarding.layer),
+    Layer.provideMerge(forwarding),
     Layer.provide(Layer.succeedContext(linking)),
     Layer.provide(NodeCrypto.layer),
     Layer.provideMerge(
@@ -529,13 +697,201 @@ const makeLaptop = Effect.gen(function* () {
       }),
       Effect.provideService(McpSchema.McpServerClient, mcpClient),
     );
-  return { links: Context.get(linking, PeerLinks.PeerLinks), call, callAsClient };
+  return {
+    links: Context.get(linking, PeerLinks.PeerLinks),
+    peer: Context.get(linking, PeerMcpClient.PeerMcpClient),
+    call,
+    callAsClient,
+    forwarding: Context.get(here, PeerForwarding.PeerForwarding),
+  };
 });
 
 const failureOf = (result: McpSchema.CallToolResult) => {
   const text = result.content[0];
   return result.isError === true && text?.type === "text" ? JSON.parse(text.text) : undefined;
 };
+
+it.effect("uses the owner engine's visibility for linked thread snapshots, lists and search", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const seen = yield* Ref.make<Seen>(nothingSeen);
+      const linkSession = yield* Ref.make("");
+      const visibility = yield* Ref.make<"private" | "shared" | "offline">("private");
+      const unavailable = new DeliveryError({
+        reason: "unreachable",
+        detail: "Fixture engine offline.",
+      });
+      const taskDelivery = Layer.effect(
+        DeliveryService.DeliveryService,
+        Effect.map(DeliveryService.DeliveryService, (service) => ({
+          ...service,
+          readLinked: () =>
+            Effect.succeed({
+              boards: [
+                {
+                  id: "work",
+                  title: "Shared board",
+                  icon: null,
+                  description: "",
+                  counts: { tasks: 1, questions: 0, waitingOnYou: 0 },
+                },
+              ],
+            } as never),
+          ownerTiedThreads: () =>
+            Ref.get(visibility).pipe(
+              Effect.flatMap((value) =>
+                value === "offline"
+                  ? Effect.fail(unavailable)
+                  : Effect.succeed({ ties: new Map([[boxThread, value === "shared"]]) }),
+              ),
+            ),
+        })),
+      ).pipe(Layer.provide(DeliveryService.layerTest));
+      const b = yield* serveBox(seen, linkSession, taskDelivery);
+      const a = yield* makeLaptop;
+      yield* linkTo(a.links, b, "auto");
+      yield* Ref.set(linkSession, (yield* b.linkedSessions)[0]!.sessionId);
+      const linkedBoards = yield* a.call("thread:laptop-full", "delivery_read", {
+        folder: ".",
+        environmentId: box.environmentId,
+      });
+      expect(linkedBoards.structuredContent).toMatchObject({
+        environmentId: box.environmentId,
+        boards: [{ id: "work", branch: null }],
+      });
+      for (const state of ["private", "shared", "offline"] as const) {
+        yield* Ref.set(visibility, state);
+        const target = { threadId: boxThread, environmentId: box.environmentId };
+        const toolOutcomes = yield* Effect.forEach(
+          [
+            ["t3_thread_read", target],
+            ["t3_thread_wait", target],
+            ["t3_thread_send", { ...target, message: "Carry on." }],
+            ["t3_thread_interrupt", { ...target, stop: true }],
+          ] as const,
+          ([tool, args]) => a.call("thread:laptop-full", tool, args),
+        );
+        const expected = state === "shared" ? undefined : "thread_not_found";
+        expect(toolOutcomes.map((result) => failureOf(result)?.code)).toEqual(
+          Array(4).fill(expected),
+        );
+        const list = yield* a.call("thread:laptop-full", "t3_thread_list", {
+          environmentId: box.environmentId,
+          projectId: boxProject,
+        });
+        expect(list.structuredContent).toMatchObject({
+          threads: state === "shared" ? [{ threadId: boxThread }] : [],
+          total: state === "shared" ? 1 : 0,
+        });
+        const search = yield* a.call("thread:laptop-full", "t3_thread_search", {
+          environmentId: box.environmentId,
+          projectId: boxProject,
+          query: "Task transcript",
+        });
+        expect(search.structuredContent).toMatchObject({
+          matches: state === "shared" ? [{ threadId: boxThread }] : [],
+        });
+      }
+      expect((yield* Ref.get(seen)).sends).toHaveLength(1);
+    }),
+  ).pipe(Effect.provide(NodeHttpServer.layerTest)),
+);
+
+it.effect("carries a neutral engine refusal through the peer MCP result", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const message = "This task has not been submitted. Change the draft, or submit it.";
+      const delivery = Layer.mock(DeliveryService.DeliveryService)({
+        actLinked: () =>
+          Effect.fail(
+            new DeliveryError({
+              reason: "refused",
+              status: 409,
+              detail: message,
+              linkedRefusalMessage: message,
+            }),
+          ),
+      });
+      const seen = yield* Ref.make<Seen>(nothingSeen);
+      const linkSession = yield* Ref.make("");
+      const b = yield* serveBox(seen, linkSession, delivery);
+      const a = yield* makeLaptop;
+      yield* linkTo(a.links, b, "auto");
+
+      const refusal = yield* a.forwarding.linkedDelivery(
+        { peerEnvironmentId: box.environmentId },
+        { operation: "comment", taskId: "task", text: "Hello" },
+      );
+      expect(refusal).toEqual({
+        environmentId: box.environmentId,
+        data: null,
+        diagnostic: "refused",
+        message,
+      });
+    }),
+  ).pipe(Effect.provide(NodeHttpServer.layerTest)),
+);
+
+it.effect("only a linked MCP client can read a hand-off bundle near the size limit", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const seen = yield* Ref.make<Seen>(nothingSeen);
+      const linkSession = yield* Ref.make("");
+      const bundle = {
+        version: 1,
+        root: "task",
+        tasks: [{ title: "Move me", id: "task" }],
+        handoff: "move",
+        linked: { board: "shared" },
+        extra: "\\".repeat(LINKED_HANDOFF_BUNDLE_MAX_BYTES / 2 - 1024),
+      };
+      const encoded = JSON.stringify(bundle);
+      const bytes = Buffer.byteLength(encoded);
+      expect(bytes).toBeGreaterThan(16_000_000);
+      const taskDelivery = Layer.effect(
+        DeliveryService.DeliveryService,
+        Effect.map(DeliveryService.DeliveryService, (service) => ({
+          ...service,
+          peerHandoff: () =>
+            Effect.succeed({
+              handoff: "move",
+              state: "moving",
+              digest: "0".repeat(64),
+              bytes,
+              to: { peer: "linked", board: "shared" },
+              tasks: 1,
+              bundle,
+            } as const),
+        })),
+      ).pipe(Layer.provide(DeliveryService.layerTest));
+      const b = yield* serveBox(seen, linkSession, taskDelivery);
+      const a = yield* makeLaptop;
+      yield* linkTo(a.links, b, "auto");
+      yield* Ref.set(linkSession, (yield* b.linkedSessions)[0]!.sessionId);
+      const request = {
+        operation: "prepare",
+        taskId: "task",
+        handoff: "move",
+        boardId: "shared",
+      };
+      const result = yield* a.peer.call({
+        environmentId: box.environmentId,
+        tool: "delivery_linked_handoff",
+        arguments: { request },
+        limits: { runtimeMode: "auto", interactionMode: "default" },
+        success: linkedHandoffPeerResult(LinkedHandoffPeerResponses.prepare),
+        maxResponseBytes: LINKED_HANDOFF_MCP_MAX_BYTES,
+      });
+      expect(result.error).toBeNull();
+      expect(JSON.stringify(result.data?.bundle)).toBe(encoded);
+
+      const local = yield* a
+        .call("thread:laptop-full", "delivery_linked_handoff", { request })
+        .pipe(Effect.result);
+      expect(local).not.toMatchObject({ _tag: "Success", success: { isError: false } });
+    }),
+  ).pipe(Effect.provide(NodeHttpServer.layerTest)),
+);
 
 it.effect("an agent here works on a linked environment's threads within its own modes", () =>
   Effect.scoped(

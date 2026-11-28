@@ -88,6 +88,26 @@ Link two T3 Code machines (beta) so agents on one can launch, message, delegate 
 
 Open a delegated task or thread link on a linked machine to follow it live (read-only) in the right panel without pairing your client directly. Click **Connect to interact** to pair and take action (one-click if the link has Full access and you can manage access). Files, images, and HTML renders stay on the remote machine until you connect directly.
 
+### Share boards with linked machines
+
+In the Board, choose a linked machine to see the boards it shares. On a board
+you own, set its visibility to **Shared with linked machines** to make it
+available there. A **Private** board is visible only on its own machine. On a
+Shared board, **Hidden from linked machines** hides an individual task and its
+parts. Read-only links can view shared tasks.
+
+Use **Bring to this machine** on a linked task and choose one of your boards.
+Use **Send to linked machine** to choose another machine's Shared board, or
+**Send back** to return a task to its original board when it is reachable and
+Shared. Each move uses the approval key of the machine you start it from. The
+task arrives paused and takes the destination board's visibility. Sending a
+Hidden task to a Shared board makes it visible to machines linked to the
+destination.
+
+The move carries up to 16 MiB without seat logs. A larger task stays on its
+source machine. If a move is interrupted, open **Task moves** on the Board to
+finish it or restore the task on its source machine.
+
 ## Manage or revoke access
 
 Manage pairing links and active client sessions in **Settings → Sharing & access** or via `t3 auth --help`.

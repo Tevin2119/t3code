@@ -84,6 +84,7 @@ export class Workflows extends Context.Service<
       input: unknown,
       options: {
         readonly idempotencyKey: string;
+        readonly launchOrigin?: WorkflowStore.WorkflowLaunchOrigin;
         /** The run that waits for this one. A run started with a key has one parent or none. */
         readonly parent?: WorkflowStore.RunParent;
         /** The version to run, when the caller holds a definition. Without it, the newest. */
@@ -139,6 +140,9 @@ export class Workflows extends Context.Service<
       },
       WorkflowRunNotFoundError | WorkflowInputError
     >;
+    readonly launchOrigin: (
+      runId: string,
+    ) => Effect.Effect<WorkflowStore.WorkflowLaunchOrigin | undefined>;
     readonly list: (filter?: {
       readonly status?: WorkflowStore.WorkflowRunStatus;
       /** Only runs their workflow tagged with this. */
@@ -213,6 +217,7 @@ const refuse = Effect.fn("Workflows.disabled")(function* () {
 
 /** The service with nothing registered and no engine behind it. */
 export const disabled = Workflows.of({
+  launchOrigin: Effect.fn("Workflows.launchOrigin")(() => Effect.undefined),
   start: refuse,
   signal: refuse,
   answer: refuse,

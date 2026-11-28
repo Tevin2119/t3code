@@ -96,6 +96,7 @@ export function withCreationProvenance(
       // Only the server stamps a link's origin or folds in a first message, so a client cannot.
       const {
         linkOrigin: _linkOrigin,
+        launchedFromThreadId: _launchedFromThreadId,
         delegatedFrom: _delegatedFrom,
         engineIntake: _engineIntake,
         initialMessage: _initialMessage,
@@ -482,6 +483,7 @@ export interface ThreadManagementServiceShape {
     Effect.Effect<OrchestrationV2ThreadShellSnapshot, Orchestrator.OrchestratorV2Error>,
     Orchestrator.OrchestratorV2Error
   >;
+  readonly getLegacyLaunchAncestor: Orchestrator.OrchestratorV2["Service"]["getLegacyLaunchAncestor"];
   readonly getThreadShell: Orchestrator.OrchestratorV2["Service"]["getThreadShell"];
   readonly listAppOwnedChildThreadIds: Orchestrator.OrchestratorV2["Service"]["listAppOwnedChildThreadIds"];
   readonly getThreadLinkMetadata: Orchestrator.OrchestratorV2["Service"]["getThreadLinkMetadata"];
@@ -2002,6 +2004,7 @@ const make = Effect.gen(function* () {
     listActiveShellIndex: orchestrator.listActiveShellIndex,
     listOlderSettledThreads: orchestrator.listOlderSettledThreads,
     readShellSnapshot: orchestrator.readShellSnapshot,
+    getLegacyLaunchAncestor: orchestrator.getLegacyLaunchAncestor,
     getThreadShell: orchestrator.getThreadShell,
     listAppOwnedChildThreadIds: Effect.fn("ThreadManagementService.listAppOwnedChildThreadIds")(
       function (threadId) {

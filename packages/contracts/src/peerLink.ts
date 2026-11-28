@@ -80,6 +80,7 @@ export class PeerLinkError extends Schema.TaggedError<PeerLinkError>()("PeerLink
     "pairing_rejected",
     "expired",
     "unknown_link",
+    "environment_mismatch",
     "storage",
     "disabled",
   ]),

@@ -1,5 +1,6 @@
 import { expect, it } from "@effect/vitest";
 import {
+  DeliveryError,
   EnvironmentId,
   OrchestratorMcpEnvironmentTarget,
   OrchestratorMcpFailure,
@@ -9,6 +10,7 @@ import {
   ThreadId,
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
@@ -17,6 +19,7 @@ import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
 import { McpSchema, McpServer, Tool, Toolkit } from "effect/ai";
 
+import * as DeliveryService from "../delivery/DeliveryService.ts";
 import { OrchestratorProjectionError } from "../orchestration-v2/Orchestrator.ts";
 import * as PeerForwarding from "../peer/PeerForwarding.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
@@ -216,6 +219,7 @@ export const refusedAtCompileTime = () => {
 const probeServer = (threads: Layer.Layer<ThreadManagement.ThreadManagementService>) =>
   McpHttpServer.toolkitRegistration(ProbeToolkit, layerProbeHandlers).pipe(
     Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
+    Layer.provide(DeliveryService.layerTest),
     Layer.provideMerge(threads),
   );
 
@@ -456,6 +460,7 @@ const linkedProbeServer = McpHttpServer.toolkitRegistration(
   }),
 ).pipe(
   Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
+  Layer.provide(DeliveryService.layerTest),
   Layer.provideMerge(
     Layer.mock(ThreadManagement.ThreadManagementService)({
       getThreadShell: (threadId) => Effect.succeed(shells.get(threadId) ?? null),
@@ -567,3 +572,127 @@ it.effect("refuses to build a thread-bound tool that outside clients would be of
     );
   }),
 );
+
+it.effect.each([
+  "private",
+  "shared",
+  "offline",
+  "offline-known",
+  "offline-descendant",
+  "binding-unavailable",
+  "legacy-launch",
+  "legacy-descendant",
+  "offline-new",
+  "legacy-source",
+  "owner",
+  "source",
+  "pending",
+  "descendant",
+  "shared-descendant",
+] as const)("checks thread targets before invoking the handler for %s", (visibility) => {
+  const id = ThreadId.make("thread:delegated-task:command%3Aexample");
+  const parent = ThreadId.make("launching-thread");
+  const base = liveThreadShell(id);
+  const target =
+    visibility === "descendant" ||
+    visibility === "shared-descendant" ||
+    visibility === "offline-descendant"
+      ? {
+          ...base,
+          lineage: { ...base.lineage, launchedFromThreadId: parent },
+        }
+      : visibility === "legacy-launch" ||
+          visibility === "legacy-source" ||
+          visibility === "legacy-descendant"
+        ? { ...base, creationSource: "mcp" as const }
+        : base;
+  const tools = Toolkit.make(
+    Tool.make("test_thread_target", {
+      parameters: Schema.Struct({
+        threadId: ThreadId,
+        targetThreadId: Schema.optional(ThreadId),
+      }),
+      success: Schema.Struct({ ran: Schema.String }),
+      failure: OrchestratorMcpFailure,
+      failureMode: "return",
+      dependencies: [McpInvocationContext.McpInvocationContext],
+    }),
+  );
+  const owner = visibility === "owner";
+  const visible = visibility === "shared" || visibility === "legacy-launch";
+  let engineCalls = 0;
+  const delivery = DeliveryService.layerTestWithThreadIndex({
+    ownerTiedThreads: Effect.fn("fixture.ownerTiedThreads")(function* () {
+      engineCalls++;
+      if (visibility === "offline")
+        return yield* new DeliveryError({
+          reason: "unreachable",
+          detail: "Fixture engine offline.",
+        });
+      const index = new Map<ThreadId, boolean>();
+      if (
+        visibility === "private" ||
+        visibility === "source" ||
+        visibility === "legacy-source" ||
+        visibility === "offline-known"
+      )
+        index.set(id, false);
+      if (visibility === "shared" || visibility === "shared-descendant") index.set(id, true);
+      if (
+        visibility === "descendant" ||
+        visibility === "shared-descendant" ||
+        visibility === "offline-descendant" ||
+        visibility === "legacy-descendant"
+      )
+        index.set(parent, false);
+      return visibility === "offline-new"
+        ? { ties: index, uncertainAfter: DateTime.toEpochMillis(base.createdAt) - 1 }
+        : { ties: index };
+    }),
+    threadHasDeliveryBinding: (threadId) =>
+      visibility === "binding-unavailable" && threadId === id
+        ? Effect.fail(
+            new DeliveryError({ reason: "invalid", detail: "Fixture binding lookup failed." }),
+          )
+        : Effect.succeed(visibility === "pending" && threadId === id),
+  });
+  const server = McpHttpServer.toolkitRegistration(
+    tools,
+    McpToolAccess.toLayer(tools, {
+      test_thread_target: McpToolAccess.reads(() => Effect.succeed({ ran: "ran" })),
+    }),
+  ).pipe(
+    Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
+    Layer.provide(delivery),
+    Layer.provide(
+      Layer.mock(ThreadManagement.ThreadManagementService)({
+        getThreadShell: (threadId) =>
+          Effect.succeed(
+            threadId === id
+              ? target
+              : {
+                  ...liveThreadShell(threadId),
+                  createdAt: DateTime.makeUnsafe("2025-01-01T00:00:00.000Z"),
+                },
+          ),
+        getLegacyLaunchAncestor: () =>
+          Effect.succeed(visibility === "legacy-descendant" ? parent : null),
+      }),
+    ),
+  );
+  const scope = owner ? fullAccessClient : fullAccessLinkedClient;
+  return Effect.gen(function* () {
+    const expected = owner || visible ? "ran" : "thread_not_found";
+    expect(yield* call("test_thread_target", scope, { threadId: id })).toBe(expected);
+    expect(
+      yield* call("test_thread_target", scope, {
+        threadId: fullAccessThreadId,
+        targetThreadId: id,
+      }),
+    ).toBe(expected);
+    expect(engineCalls).toBe(owner ? 0 : 2);
+    expect(yield* call("test_thread_target", scope, { threadId: fullAccessThreadId })).toBe(
+      visibility === "offline" ? "thread_not_found" : "ran",
+    );
+  }).pipe(Effect.provide(server));
+});

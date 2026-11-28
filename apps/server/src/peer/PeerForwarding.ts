@@ -1,7 +1,21 @@
 import {
   type EnvironmentId,
+  DeliveryError,
+  LinkedArrivalProofResult,
+  LINKED_HANDOFF_MCP_MAX_BYTES,
+  linkedHandoffPeerResult,
+  LinkedHandoffPeerResponses,
+  type LinkedHandoffPeerRequest,
   DeliveryDiscoveryInput,
-  DeliveryDiscoverySnapshot,
+  type DeliveryDiscoverySnapshot,
+  type LinkedDeliveryDiagnostic,
+  LinkedDeliveryRead,
+  LinkedDeliveryAction,
+  type LinkedDeliveryBoardsResult,
+  LINKED_ACTION_APPLIED,
+  LinkedDeliveryActionResult,
+  LinkedDeliveryResults,
+  linkedDeliveryResult,
   OrchestratorMcpFailure,
   type OrchestratorMcpEnvironmentLinksResult,
   OrchestratorMcpThreadInterruptInput,
@@ -10,32 +24,35 @@ import {
   OrchestratorMcpThreadReadResult,
   OrchestratorMcpThreadWaitInput,
   OrchestratorMcpThreadWaitResult,
+  type PeerLink,
   type PeerLinkError,
   RuntimeMode,
 } from "@t3tools/contracts";
+import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Digest from "effect/crypto/Digest";
+import * as SecureRandom from "effect/crypto/SecureRandom";
+import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Hex from "effect/encoding/Hex";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Semaphore from "effect/Semaphore";
 import * as Schema from "effect/Schema";
 import type * as Tool from "effect/ai/Tool";
 
 import { runtimeModeRank } from "../mcp/delegatedTaskModes.ts";
-import { assertNotLinked } from "../mcp/linkOrigin.ts";
+import { assertNotLinked, callerLinkOrigin } from "../mcp/linkOrigin.ts";
 import * as McpInvocationContext from "../mcp/McpInvocationContext.ts";
 import { readCaller, unavailable } from "../mcp/threadAccess.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import * as PeerLinks from "./PeerLinks.ts";
 import * as PeerMcpClient from "./PeerMcpClient.ts";
 import * as DeliveryService from "../delivery/DeliveryService.ts";
-import {
-  emptyDiscovery,
-  invalidDiscoveryCards,
-  threadOrigin,
-} from "../delivery/deliveryDiscovery.ts";
+import { makeLinkedHandoffs, type LinkedHandoffs } from "../delivery/linkedHandoffs.ts";
+import { linkedReturnPeer } from "../delivery/linkedReturn.ts";
+import { emptyDiscovery, invalidDiscoveryCards } from "../delivery/deliveryDiscovery.ts";
 
 // Match local waits: return before MCP client timeouts and T3 Connect's ~100 s idle drop.
 const DEFAULT_WAIT_TIMEOUT_MS = 30_000;
@@ -43,12 +60,57 @@ const MAX_WAIT_TIMEOUT_MS = 45_000;
 
 type Scope = McpInvocationContext.McpInvocationScope;
 
+type LinkedResult<A> = {
+  readonly environmentId: EnvironmentId;
+  readonly data: A | null;
+  readonly diagnostic: LinkedDeliveryDiagnostic | null;
+  readonly message?: string;
+};
+
+type LinkedRequest = LinkedDeliveryRead | LinkedDeliveryAction;
+type LinkedOperation = LinkedRequest["operation"];
+type LinkedResultData<K extends LinkedOperation> = (typeof LinkedDeliveryResults)[K]["Type"];
+type LinkedTarget = {
+  readonly peerEnvironmentId: EnvironmentId;
+  readonly fresh?: boolean | undefined;
+};
+const noLinkedResult = (environmentId: EnvironmentId, diagnostic: LinkedDeliveryDiagnostic) => ({
+  environmentId,
+  data: null,
+  diagnostic,
+});
+
+const linkedCacheKey = (link: PeerLink, request: LinkedRequest) =>
+  JSON.stringify([link.environmentId, link.access, DateTime.formatIso(link.linkedAt), request]);
+
+const isLinkedRequest = Schema.is(Schema.Union([LinkedDeliveryRead, LinkedDeliveryAction]));
+
+const actionOperations = new Set<LinkedOperation>([
+  "comment",
+  "answer",
+  "control",
+  "steer",
+  "take",
+  "renew",
+  "release",
+]);
+const cachedOperations = new Set<LinkedOperation>([
+  "boards",
+  "board",
+  "search",
+  "task",
+  "messages",
+  "timeline",
+]);
+
 /**
  * Runs T3 MCP tools in a linked environment for an agent here. The tool's own
  * declaration checks the agent here first; the linked environment then holds
  * the call to the link's access, narrowed to the agent's modes, which every
  * forwarded call carries.
  */
+const decodeLinkedAction = Schema.decodeUnknownOption(LinkedDeliveryActionResult);
+
 export class PeerForwarding extends Context.Service<
   PeerForwarding,
   {
@@ -62,6 +124,32 @@ export class PeerForwarding extends Context.Service<
       environmentId: EnvironmentId,
       params: Tool.Parameters<T>,
     ) => Effect.Effect<Tool.Success<T>, OrchestratorMcpFailure>;
+    readonly listLinkedBoards: (input: {
+      readonly fresh?: boolean | undefined;
+    }) => Effect.Effect<typeof LinkedDeliveryBoardsResult.Type>;
+    readonly linkedDelivery: <K extends LinkedOperation>(
+      target: LinkedTarget,
+      request: LinkedRequest & { readonly operation: K },
+    ) => Effect.Effect<LinkedResult<LinkedResultData<K>>>;
+    readonly bringLinkedTask: LinkedHandoffs["bring"];
+    readonly sendLinkedTask: LinkedHandoffs["send"];
+    readonly listLinkedHandoffs: LinkedHandoffs["list"];
+    readonly retryLinkedHandoff: LinkedHandoffs["retry"];
+    readonly receiveLinkedHandoff: (
+      request: LinkedHandoffPeerRequest,
+    ) => Effect.Effect<
+      (typeof LinkedHandoffPeerResponses)[LinkedHandoffPeerRequest["operation"]]["Type"],
+      DeliveryError,
+      | DeliveryService.DeliveryService
+      | McpInvocationContext.McpInvocationContext
+      | ServerEnvironment.ServerEnvironment
+    >;
+    readonly linkedSendDestination: LinkedHandoffs["sendDestination"];
+    readonly readLinkedAsAgent: (
+      scope: Scope,
+      target: LinkedTarget,
+      request: LinkedDeliveryRead,
+    ) => Effect.Effect<LinkedResult<LinkedResultData<LinkedDeliveryRead["operation"]>>>;
     /** Discovery keeps routing failures as bounded diagnostics, not peer-supplied error text. */
     readonly readDelivery: (
       scope: Scope,
@@ -130,6 +218,8 @@ const make = Effect.gen(function* () {
   const peers = yield* PeerMcpClient.PeerMcpClient;
   const links = yield* PeerLinks.PeerLinks;
   const crypto = yield* Digest.Digest;
+  const random = yield* SecureRandom.SecureRandom;
+  const newId = random.uuidV4().pipe(Effect.orDie);
   const threads = yield* ThreadManagement.ThreadManagementService;
 
   /**
@@ -222,27 +312,406 @@ const make = Effect.gen(function* () {
     });
   });
 
+  const linkedCache = new Map<
+    string,
+    {
+      readonly environmentId: EnvironmentId;
+      readonly until: number;
+      readonly read: Effect.Effect<LinkedResult<LinkedResultData<LinkedOperation>>>;
+    }
+  >();
+  const cacheLock = yield* Semaphore.make(1);
+  const evictLinked = (environmentId: EnvironmentId) => {
+    for (const [key, entry] of linkedCache) {
+      if (entry.environmentId === environmentId) linkedCache.delete(key);
+    }
+  };
+
+  const linkedDelivery = Effect.fn("PeerForwarding.linkedDelivery")(function* (
+    target: LinkedTarget,
+    request: LinkedRequest,
+  ) {
+    const { peerEnvironmentId: environmentId } = target;
+    if (!isLinkedRequest(request)) return noLinkedResult(environmentId, "refused");
+    if (!(yield* links.enabled)) return noLinkedResult(environmentId, "not-linked");
+    const stored = yield* links.get(environmentId).pipe(Effect.result);
+    if (stored._tag === "Failure") return noLinkedResult(environmentId, "offline");
+    if (Option.isNone(stored.success)) return noLinkedResult(environmentId, "not-linked");
+    const link = stored.success.value;
+    if (DateTime.isLessThanOrEqualTo(link.expiresAt, yield* DateTime.now)) {
+      return noLinkedResult(environmentId, "unauthorized");
+    }
+    const action = actionOperations.has(request.operation);
+    if (action && link.access === "read-only") return noLinkedResult(environmentId, "read-only");
+
+    const options = {
+      environmentId,
+      tool: action ? "delivery_linked_act" : "delivery_linked_read",
+      arguments: { request },
+      limits: { runtimeMode: "full-access", interactionMode: "default" },
+      maxResponseBytes: 10 * 1024 * 1024,
+    } as const;
+    const readCall = Effect.suspend(() =>
+      peers.call({
+        ...options,
+        success: linkedDeliveryResult(LinkedDeliveryResults[request.operation]),
+      }),
+    );
+    // The owner applied an action it answered without a diagnostic, so data this version cannot
+    // read is reported as done rather than unsupported, which would invite a second attempt.
+    const actCall = Effect.suspend(() =>
+      peers.call({ ...options, success: linkedDeliveryResult(Schema.Unknown) }),
+    ).pipe(
+      Effect.map((result) =>
+        Option.getOrElse(decodeLinkedAction(result), () => ({
+          ...result,
+          data: null,
+          ...(result.diagnostic === null ? { message: LINKED_ACTION_APPLIED } : {}),
+        })),
+      ),
+    );
+    const call = (action ? actCall : readCall).pipe(
+      Effect.timeout("15 seconds"),
+      Effect.map((result) =>
+        result.environmentId === environmentId
+          ? result
+          : noLinkedResult(environmentId, "environment-mismatch"),
+      ),
+      Effect.catch((error) =>
+        Effect.succeed(
+          noLinkedResult(
+            environmentId,
+            error._tag !== "OrchestratorMcpFailure"
+              ? "offline"
+              : error.code === "capability_denied"
+                ? "unauthorized"
+                : error.code === "environment_mismatch"
+                  ? "environment-mismatch"
+                  : error.code === "response_too_large"
+                    ? "response-too-large"
+                    : error.code === "invalid_request"
+                      ? "unsupported"
+                      : "offline",
+          ),
+        ),
+      ),
+    );
+    if (action) {
+      evictLinked(environmentId);
+      return yield* call.pipe(Effect.ensuring(Effect.sync(() => evictLinked(environmentId))));
+    }
+    if (!cachedOperations.has(request.operation)) return yield* call;
+    const key = linkedCacheKey(link, request);
+    const read = yield* cacheLock.withPermits(1)(
+      Effect.gen(function* () {
+        const now = yield* Clock.currentTimeMillis;
+        const existing = linkedCache.get(key);
+        if (!target.fresh && existing !== undefined && existing.until > now) return existing.read;
+        const shared = yield* Effect.cached(
+          call.pipe(
+            Effect.tap((result) =>
+              Effect.sync(() => {
+                if (result.diagnostic !== null && linkedCache.get(key)?.read === shared)
+                  linkedCache.delete(key);
+              }),
+            ),
+            Effect.onInterrupt(() =>
+              Effect.sync(() => {
+                if (linkedCache.get(key)?.read === shared) linkedCache.delete(key);
+              }),
+            ),
+          ),
+        );
+        const oldest = linkedCache.keys().next();
+        if (linkedCache.size >= 12 && !oldest.done) linkedCache.delete(oldest.value);
+        linkedCache.set(key, { environmentId, until: now + 5_000, read: shared });
+        return shared;
+      }),
+    );
+    return yield* read;
+  });
+
+  const handoffLink = Effect.fn("PeerForwarding.handoffLink")(function* (
+    environmentId: EnvironmentId,
+    acting: boolean,
+  ) {
+    const scope = yield* Effect.serviceOption(McpInvocationContext.McpInvocationContext);
+    if (McpInvocationContext.isLinkedDeliveryCaller(Option.getOrUndefined(scope))) {
+      return yield* new DeliveryError({
+        reason: "refused",
+        detail: "A peer cannot forward a hand-off.",
+      });
+    }
+    if (!(yield* links.enabled)) {
+      return yield* new DeliveryError({
+        reason: "disabled",
+        detail: "Linked environments are turned off.",
+      });
+    }
+    const found = yield* links.get(environmentId).pipe(
+      Effect.mapError(
+        () =>
+          new DeliveryError({
+            reason: "unreachable",
+            detail: "The peer link could not be read.",
+          }),
+      ),
+    );
+    if (
+      Option.isNone(found) ||
+      DateTime.isLessThanOrEqualTo(found.value.expiresAt, yield* DateTime.now)
+    ) {
+      return yield* new DeliveryError({
+        reason: "refused",
+        detail: "The peer link is missing or expired.",
+      });
+    }
+    if (acting && found.value.access === "read-only") {
+      return yield* new DeliveryError({ reason: "refused", detail: "The peer link is read-only." });
+    }
+    return found.value;
+  });
+
+  const handoffPhase = Effect.fn("PeerForwarding.handoffPhase")(function* <
+    Request extends LinkedHandoffPeerRequest,
+  >(
+    environmentId: EnvironmentId,
+    request: Request,
+  ): Effect.fn.Return<
+    (typeof LinkedHandoffPeerResponses)[Request["operation"]]["Type"],
+    DeliveryError
+  > {
+    const acting = request.operation !== "get" && request.operation !== "list";
+    const carriesBundle = request.operation === "prepare" || request.operation === "import";
+    yield* handoffLink(environmentId, acting);
+    const success = LinkedHandoffPeerResponses[request.operation] as Schema.Decoder<
+      (typeof LinkedHandoffPeerResponses)[Request["operation"]]["Type"]
+    >;
+    if (acting) evictLinked(environmentId);
+    const result = yield* peers
+      .call({
+        environmentId,
+        tool: acting ? "delivery_linked_handoff" : "delivery_linked_handoff_read",
+        arguments: { request },
+        limits: { runtimeMode: "full-access", interactionMode: "default" },
+        success: linkedHandoffPeerResult(success),
+        maxResponseBytes:
+          request.operation === "prepare" ? LINKED_HANDOFF_MCP_MAX_BYTES : 10 * 1024 * 1024,
+      })
+      .pipe(
+        Effect.timeout(carriesBundle ? "60 seconds" : "15 seconds"),
+        Effect.mapError(
+          () =>
+            new DeliveryError({
+              reason: "unreachable",
+              detail: "The linked machine did not confirm the hand-off phase.",
+            }),
+        ),
+        Effect.ensuring(
+          Effect.sync(() => {
+            if (acting) evictLinked(environmentId);
+          }),
+        ),
+      );
+    if (result.environmentId !== environmentId) {
+      return yield* new DeliveryError({
+        reason: "invalid",
+        detail: "The hand-off answered from another environment.",
+      });
+    }
+    if (result.error !== null) {
+      return yield* new DeliveryError({
+        reason: result.error.refused ? "refused" : "unreachable",
+        detail: result.error.message.slice(0, 500),
+        ...(result.error.status === undefined ? {} : { status: result.error.status }),
+      });
+    }
+    return result.data;
+  });
+
+  const provePeer = Effect.fn("PeerForwarding.provePeer")(function* (
+    sessionId: string,
+    expectedPeer?: EnvironmentId,
+  ) {
+    if (!(yield* links.enabled)) return null;
+    const environment = yield* ServerEnvironment.ServerEnvironment;
+    const environmentId = yield* environment.getEnvironmentId;
+    const challenge = yield* newId;
+    const stored = yield* links.listStored.pipe(Effect.orElseSucceed(() => []));
+    const now = yield* DateTime.now;
+    const eligible = stored.filter(
+      (link) =>
+        (expectedPeer === undefined || link.environmentId === expectedPeer) &&
+        link.access !== "read-only" &&
+        DateTime.isGreaterThan(link.expiresAt, now),
+    );
+    const matching = yield* Effect.forEach(
+      eligible,
+      (link) =>
+        Effect.gen(function* () {
+          const callerSessionId = yield* links.actingSessionId(link.environmentId);
+          if (callerSessionId === null) return null;
+          const proof = yield* links.challengeArrival(
+            sessionId,
+            challenge,
+            link.environmentId,
+            callerSessionId,
+          );
+          if (proof === null) return null;
+          const answer = yield* peers
+            .call({
+              environmentId: link.environmentId,
+              tool: "delivery_linked_origin",
+              arguments: { environmentId, challenge, claim: proof.claim },
+              limits: { runtimeMode: "full-access", interactionMode: "default" },
+              success: LinkedArrivalProofResult,
+              maxResponseBytes: 4096,
+            })
+            .pipe(Effect.timeout("15 seconds"));
+          return answer.environmentId === link.environmentId &&
+            answer.proof !== null &&
+            (yield* proof.verify(answer.proof))
+            ? link.environmentId
+            : null;
+        }).pipe(Effect.orElseSucceed(() => null)),
+      { concurrency: 4 },
+    );
+    const matches = matching.filter((peer) => peer !== null);
+    return matches.length === 1 ? (matches[0] ?? null) : null;
+  });
+
+  const receiveLinkedHandoff = Effect.fn("PeerForwarding.receiveLinkedHandoff")(function* (
+    request: LinkedHandoffPeerRequest,
+  ) {
+    const { client, capabilities } = yield* McpInvocationContext.McpInvocationContext;
+    const delivery = yield* DeliveryService.DeliveryService;
+    const peer =
+      request.operation === "import"
+        ? linkedReturnPeer(request.bundle.handoff)
+        : request.operation === "settle"
+          ? linkedReturnPeer(request.handoff)
+          : null;
+    const verified =
+      peer !== null &&
+      client?.linked === true &&
+      client.access !== "read-only" &&
+      capabilities.has("orchestration")
+        ? yield* provePeer(client.sessionId, peer)
+        : null;
+    return yield* delivery.peerHandoff(request, verified ?? undefined);
+  });
+
+  const resolveArrivalPeer = Effect.fn("PeerForwarding.resolveArrivalPeer")(function* (
+    peer: string,
+    expectedPeer?: EnvironmentId,
+  ) {
+    const scope = yield* Effect.serviceOption(McpInvocationContext.McpInvocationContext);
+    if (
+      McpInvocationContext.isLinkedDeliveryCaller(Option.getOrUndefined(scope)) ||
+      !(yield* links.enabled)
+    )
+      return null;
+    return yield* provePeer(peer, expectedPeer);
+  });
+
+  const returnId = Effect.fn("PeerForwarding.returnId")(function* (handoff: string) {
+    const environment = yield* ServerEnvironment.ServerEnvironment;
+    const id = yield* environment.getEnvironmentId;
+    const suffix = yield* crypto.digestHex(Digest.sha256, new TextEncoder().encode(handoff));
+    return `back-${id}-${suffix.slice(0, 32)}`;
+  });
+
+  const handoffs = makeLinkedHandoffs(
+    handoffPhase,
+    (environmentId) => handoffLink(environmentId, true),
+    links.listStored.pipe(
+      Effect.map((stored) => stored.map((link) => link.environmentId)),
+      Effect.mapError(
+        () =>
+          new DeliveryError({ reason: "unreachable", detail: "The peer links could not be read." }),
+      ),
+    ),
+    newId,
+    returnId,
+    resolveArrivalPeer,
+  );
+
+  const listLinkedBoards = Effect.fn("PeerForwarding.listLinkedBoards")(function* (input: {
+    readonly fresh?: boolean | undefined;
+  }) {
+    if (!(yield* links.enabled)) return { links: [], diagnostic: "not-linked" as const };
+    const listed = yield* links.listStored.pipe(Effect.result);
+    if (listed._tag === "Failure") return { links: [], diagnostic: "offline" as const };
+    const statuses = yield* Effect.forEach(
+      listed.success,
+      (link) =>
+        linkedDelivery(
+          { ...input, peerEnvironmentId: link.environmentId },
+          { operation: "boards" },
+        ).pipe(
+          Effect.map((result) => ({
+            ...result,
+            data: result.data !== null && "boards" in result.data ? result.data : null,
+            label: link.label,
+            access: link.access,
+          })),
+        ),
+      { concurrency: 4 },
+    );
+    return { links: statuses, diagnostic: null };
+  });
+
+  const readLinkedAsAgent = Effect.fn("PeerForwarding.readLinkedAsAgent")(function* (
+    scope: Scope,
+    target: LinkedTarget,
+    request: LinkedDeliveryRead,
+  ) {
+    const { peerEnvironmentId } = target;
+    if (
+      !scope.capabilities.has("orchestration") ||
+      McpInvocationContext.isLinkedDeliveryCaller(scope)
+    ) {
+      return noLinkedResult(peerEnvironmentId, "unauthorized");
+    }
+    if (scope.linkedEnvironments === false) return noLinkedResult(peerEnvironmentId, "not-linked");
+    const caller = yield* forwardingCaller(scope).pipe(Effect.option);
+    if (Option.isNone(caller) || callerLinkOrigin(caller.value) !== undefined) {
+      return noLinkedResult(peerEnvironmentId, "unauthorized");
+    }
+    return yield* linkedDelivery(target, request);
+  });
+
   const readDelivery = Effect.fn("PeerForwarding.readDelivery")(function* (
     scope: Scope,
     input: DeliveryDiscoveryInput,
     environmentId?: EnvironmentId,
   ): Effect.fn.Return<DeliveryDiscoverySnapshot, never, DeliveryService.DeliveryService> {
     const target = remoteTarget(scope, environmentId);
-    const sender = scope.client?.senderThread;
-    const caller = {
-      environmentId: target ?? scope.environmentId,
-      authorized: scope.capabilities.has("orchestration"),
-      ...(scope.thread === undefined
-        ? {}
-        : { threadId: scope.thread.threadId, providerInstanceId: scope.thread.providerInstanceId }),
-      toolsSupported: true,
-      ...(sender === undefined
-        ? {}
-        : { cardOrigin: threadOrigin(sender.environmentId, sender.threadId) }),
-    };
+    if (McpInvocationContext.isLinkedDeliveryCaller(scope)) {
+      return {
+        ...emptyDiscovery(
+          input,
+          { environmentId: target ?? scope.environmentId },
+          "unavailable",
+          DateTime.formatIso(yield* DateTime.now),
+          null,
+        ),
+        diagnostics: ["unauthorized"],
+      };
+    }
     if (target === undefined) {
       const delivery = yield* DeliveryService.DeliveryService;
-      return yield* delivery.discover(input, caller);
+      return yield* delivery.discover(input, {
+        environmentId: scope.environmentId,
+        authorized: scope.capabilities.has("orchestration"),
+        ...(scope.thread === undefined
+          ? {}
+          : {
+              threadId: scope.thread.threadId,
+              providerInstanceId: scope.thread.providerInstanceId,
+            }),
+        toolsSupported: true,
+      });
     }
     const empty = emptyDiscovery(
       input,
@@ -251,40 +720,39 @@ const make = Effect.gen(function* () {
       DateTime.formatIso(yield* DateTime.now),
       null,
     );
-    if (!caller.authorized) return { ...empty, diagnostics: ["unauthorized"] };
     if (invalidDiscoveryCards(input)) return { ...empty, diagnostics: ["invalid-request"] };
-    if (scope.linkedEnvironments === false) return { ...empty, diagnostics: ["remote-unpaired"] };
-    const result = yield* Effect.gen(function* () {
-      yield* forwardingCaller(scope);
-      if (!(yield* links.enabled)) return { ...empty, diagnostics: ["remote-unpaired" as const] };
-      const link = yield* links.get(target).pipe(Effect.mapError(linkStorageFailure));
-      if (Option.isNone(link)) return { ...empty, diagnostics: ["remote-unpaired" as const] };
-      const snapshot = yield* forward<DeliveryDiscoverySnapshot>(
-        scope,
-        "delivery_read",
-        DeliveryDiscoveryInput,
-        DeliveryDiscoverySnapshot,
-        target,
-        input,
+    if (input.preflight || input.cards || input.task || input.route || input.team) {
+      return { ...empty, diagnostics: ["unsupported-server"] };
+    }
+    const read = yield* readLinkedAsAgent(
+      scope,
+      { peerEnvironmentId: target, fresh: input.fresh },
+      {
+        operation: "boards",
+      },
+    );
+    if (read.data !== null && "boards" in read.data) {
+      const boards = read.data.boards.filter(
+        ({ id }) => input.board === undefined || input.board === id,
       );
-      if (snapshot.environmentId !== target)
-        return { ...empty, diagnostics: ["environment-mismatch" as const] };
-      if (input.cards && snapshot.cards === null)
-        return { ...empty, diagnostics: ["unsupported-server" as const] };
-      return snapshot;
-    }).pipe(Effect.timeout("15 seconds"), Effect.result);
-    if (result._tag === "Success") return result.success;
-    const error = result.failure;
-    return {
-      ...empty,
-      diagnostics: [
-        error._tag === "OrchestratorMcpFailure" && error.code === "capability_denied"
-          ? "unauthorized"
-          : error._tag === "OrchestratorMcpFailure" && error.code === "invalid_request"
-            ? "unsupported-server"
-            : "unreachable",
-      ],
-    };
+      return {
+        ...empty,
+        boards: boards.slice(0, 12).map(({ id }) => ({ id, branch: null })),
+        truncated: boards.length > 12,
+      };
+    }
+    switch (read.diagnostic) {
+      case "unauthorized":
+      case "environment-mismatch":
+      case "response-too-large":
+        return { ...empty, diagnostics: [read.diagnostic] };
+      case "not-linked":
+        return { ...empty, diagnostics: ["remote-unpaired"] };
+      case "unsupported":
+        return { ...empty, diagnostics: ["unsupported-server"] };
+      default:
+        return { ...empty, diagnostics: ["unreachable"] };
+    }
   });
 
   const readThread: PeerForwarding["Service"]["readThread"] = (scope, environmentId, input) =>
@@ -393,6 +861,15 @@ const make = Effect.gen(function* () {
   return PeerForwarding.of({
     call,
     readDelivery,
+    listLinkedBoards,
+    bringLinkedTask: handoffs.bring,
+    sendLinkedTask: handoffs.send,
+    listLinkedHandoffs: handoffs.list,
+    retryLinkedHandoff: handoffs.retry,
+    linkedSendDestination: handoffs.sendDestination,
+    receiveLinkedHandoff,
+    linkedDelivery: linkedDelivery as PeerForwarding["Service"]["linkedDelivery"],
+    readLinkedAsAgent: readLinkedAsAgent as PeerForwarding["Service"]["readLinkedAsAgent"],
     readThread,
     interruptThread,
     waitForThread,

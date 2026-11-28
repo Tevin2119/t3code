@@ -1,3 +1,26 @@
+import * as Struct from "effect/Struct";
+import {
+  DeliveryBoardLinkedVisibility,
+  DeliverySetBoardLinkedVisibility,
+  DeliverySetTaskLinkedHidden,
+  DeliveryTaskLinkedHidden,
+  LinkedDeliveryActions,
+  LinkedBringInput,
+  LinkedHandoffOutcome,
+  LinkedSendInput,
+  LinkedHandoffsInput,
+  LinkedHandoffsResult,
+  LinkedHandoffRetryInput,
+  LinkedSendDestinationInput,
+  LinkedSendDestinationResult,
+  LinkedDeliveryBoardsResult,
+  LinkedDeliveryFresh,
+  LinkedDeliveryReads,
+  LinkedDeliveryPeerTarget,
+  LinkedDeliveryReadTarget,
+  LinkedDeliveryResults,
+  linkedDeliveryResult,
+} from "./linkedDelivery.ts";
 import {
   OrchestrationV2SearchThreadError,
   OrchestrationV2SearchThreadInput,
@@ -674,6 +697,30 @@ export const WS_METHODS = {
   serverRefreshUsageRates: "server.refreshUsageRates",
 
   deliveryRead: "delivery.read",
+  deliveryLinkedBoards: "delivery.linkedBoards",
+  deliveryLinkedBoard: "delivery.linkedBoard",
+  deliveryLinkedSearch: "delivery.linkedSearch",
+  deliveryLinkedTask: "delivery.linkedTask",
+  deliveryLinkedMessages: "delivery.linkedMessages",
+  deliveryLinkedTimeline: "delivery.linkedTimeline",
+  deliveryLinkedEvents: "delivery.linkedEvents",
+  deliveryLinkedFile: "delivery.linkedFile",
+  deliveryLinkedAttached: "delivery.linkedAttached",
+  deliveryLinkedAttachedFile: "delivery.linkedAttachedFile",
+  deliveryLinkedComment: "delivery.linkedComment",
+  deliveryLinkedAnswer: "delivery.linkedAnswer",
+  deliveryLinkedControl: "delivery.linkedControl",
+  deliveryLinkedSteer: "delivery.linkedSteer",
+  deliveryLinkedTake: "delivery.linkedTake",
+  deliveryLinkedRenew: "delivery.linkedRenew",
+  deliveryLinkedRelease: "delivery.linkedRelease",
+  deliveryLinkedBring: "delivery.linkedBring",
+  deliveryLinkedSend: "delivery.linkedSend",
+  deliveryLinkedHandoffs: "delivery.linkedHandoffs",
+  deliveryLinkedHandoffRetry: "delivery.linkedHandoffRetry",
+  deliveryLinkedSendDestination: "delivery.linkedSendDestination",
+  deliverySetBoardLinkedVisibility: "delivery.setBoardLinkedVisibility",
+  deliverySetTaskLinkedHidden: "delivery.setTaskLinkedHidden",
   deliveryAnswerBoardTask: "delivery.answerBoardTask",
   deliveryFilePort: "delivery.filePort",
   deliveryFileThreadTask: "delivery.fileThreadTask",
@@ -1236,6 +1283,201 @@ const WsServerRetryResourceTelemetryRpc = Rpc.make(WS_METHODS.serverRetryResourc
   payload: Schema.Struct({}),
   success: ResourceTelemetryRetryResult,
   error: EnvironmentAuthorizationError,
+});
+
+const WsDeliveryLinkedBringRpc = Rpc.make(WS_METHODS.deliveryLinkedBring, {
+  payload: LinkedBringInput,
+  success: LinkedHandoffOutcome,
+  error: EnvironmentAuthorizationError,
+});
+
+const WsDeliveryLinkedSendRpc = Rpc.make(WS_METHODS.deliveryLinkedSend, {
+  payload: LinkedSendInput,
+  success: LinkedHandoffOutcome,
+  error: EnvironmentAuthorizationError,
+});
+
+const WsDeliveryLinkedHandoffsRpc = Rpc.make(WS_METHODS.deliveryLinkedHandoffs, {
+  payload: LinkedHandoffsInput,
+  success: LinkedHandoffsResult,
+  error: Schema.Union([DeliveryError, EnvironmentAuthorizationError]),
+});
+
+const WsDeliveryLinkedHandoffRetryRpc = Rpc.make(WS_METHODS.deliveryLinkedHandoffRetry, {
+  payload: LinkedHandoffRetryInput,
+  success: LinkedHandoffOutcome,
+  error: EnvironmentAuthorizationError,
+});
+
+const WsDeliveryLinkedSendDestinationRpc = Rpc.make(WS_METHODS.deliveryLinkedSendDestination, {
+  payload: LinkedSendDestinationInput,
+  success: LinkedSendDestinationResult,
+  error: Schema.Union([DeliveryError, EnvironmentAuthorizationError]),
+});
+
+const WsDeliveryLinkedBoardsRpc = Rpc.make(WS_METHODS.deliveryLinkedBoards, {
+  payload: LinkedDeliveryFresh,
+  success: LinkedDeliveryBoardsResult,
+  error: EnvironmentAuthorizationError,
+});
+
+const WsDeliveryLinkedBoardRpc = Rpc.make(WS_METHODS.deliveryLinkedBoard, {
+  payload: Schema.Struct({
+    ...Struct.omit(LinkedDeliveryReads.board.fields, ["operation"]),
+    ...LinkedDeliveryReadTarget,
+  }),
+  success: linkedDeliveryResult(LinkedDeliveryResults.board),
+  error: EnvironmentAuthorizationError,
+});
+
+const WsDeliveryLinkedSearchRpc = Rpc.make(WS_METHODS.deliveryLinkedSearch, {
+  payload: Schema.Struct({
+    ...Struct.omit(LinkedDeliveryReads.search.fields, ["operation"]),
+    ...LinkedDeliveryReadTarget,
+  }),
+  success: linkedDeliveryResult(LinkedDeliveryResults.search),
+  error: EnvironmentAuthorizationError,
+});
+
+const WsDeliveryLinkedTaskRpc = Rpc.make(WS_METHODS.deliveryLinkedTask, {
+  payload: Schema.Struct({
+    ...Struct.omit(LinkedDeliveryReads.task.fields, ["operation"]),
+    ...LinkedDeliveryReadTarget,
+  }),
+  success: linkedDeliveryResult(LinkedDeliveryResults.task),
+  error: EnvironmentAuthorizationError,
+});
+
+const WsDeliveryLinkedMessagesRpc = Rpc.make(WS_METHODS.deliveryLinkedMessages, {
+  payload: Schema.Struct({
+    ...Struct.omit(LinkedDeliveryReads.messages.fields, ["operation"]),
+    ...LinkedDeliveryReadTarget,
+  }),
+  success: linkedDeliveryResult(LinkedDeliveryResults.messages),
+  error: EnvironmentAuthorizationError,
+});
+
+const WsDeliveryLinkedTimelineRpc = Rpc.make(WS_METHODS.deliveryLinkedTimeline, {
+  payload: Schema.Struct({
+    ...Struct.omit(LinkedDeliveryReads.timeline.fields, ["operation"]),
+    ...LinkedDeliveryReadTarget,
+  }),
+  success: linkedDeliveryResult(LinkedDeliveryResults.timeline),
+  error: EnvironmentAuthorizationError,
+});
+
+const WsDeliveryLinkedEventsRpc = Rpc.make(WS_METHODS.deliveryLinkedEvents, {
+  payload: Schema.Struct({
+    ...Struct.omit(LinkedDeliveryReads.events.fields, ["operation"]),
+    ...LinkedDeliveryReadTarget,
+  }),
+  success: linkedDeliveryResult(LinkedDeliveryResults.events),
+  error: EnvironmentAuthorizationError,
+});
+
+const WsDeliveryLinkedFileRpc = Rpc.make(WS_METHODS.deliveryLinkedFile, {
+  payload: Schema.Struct({
+    ...Struct.omit(LinkedDeliveryReads.file.fields, ["operation"]),
+    ...LinkedDeliveryReadTarget,
+  }),
+  success: linkedDeliveryResult(LinkedDeliveryResults.file),
+  error: EnvironmentAuthorizationError,
+});
+
+const WsDeliveryLinkedAttachedRpc = Rpc.make(WS_METHODS.deliveryLinkedAttached, {
+  payload: Schema.Struct({
+    ...Struct.omit(LinkedDeliveryReads.attached.fields, ["operation"]),
+    ...LinkedDeliveryReadTarget,
+  }),
+  success: linkedDeliveryResult(LinkedDeliveryResults.attached),
+  error: EnvironmentAuthorizationError,
+});
+
+const WsDeliveryLinkedAttachedFileRpc = Rpc.make(WS_METHODS.deliveryLinkedAttachedFile, {
+  payload: Schema.Struct({
+    ...Struct.omit(LinkedDeliveryReads.attachedFile.fields, ["operation"]),
+    ...LinkedDeliveryReadTarget,
+  }),
+  success: linkedDeliveryResult(LinkedDeliveryResults.attachedFile),
+  error: EnvironmentAuthorizationError,
+});
+
+const WsDeliveryLinkedCommentRpc = Rpc.make(WS_METHODS.deliveryLinkedComment, {
+  payload: Schema.Struct({
+    ...Struct.omit(LinkedDeliveryActions.comment.fields, ["operation"]),
+    ...LinkedDeliveryPeerTarget,
+  }),
+  success: linkedDeliveryResult(LinkedDeliveryResults.comment),
+  error: EnvironmentAuthorizationError,
+});
+
+const WsDeliveryLinkedAnswerRpc = Rpc.make(WS_METHODS.deliveryLinkedAnswer, {
+  payload: Schema.Struct({
+    ...Struct.omit(LinkedDeliveryActions.answer.fields, ["operation"]),
+    ...LinkedDeliveryPeerTarget,
+  }),
+  success: linkedDeliveryResult(LinkedDeliveryResults.answer),
+  error: EnvironmentAuthorizationError,
+});
+
+const WsDeliveryLinkedControlRpc = Rpc.make(WS_METHODS.deliveryLinkedControl, {
+  payload: Schema.Struct({
+    ...Struct.omit(LinkedDeliveryActions.control.fields, ["operation"]),
+    ...LinkedDeliveryPeerTarget,
+  }),
+  success: linkedDeliveryResult(LinkedDeliveryResults.control),
+  error: EnvironmentAuthorizationError,
+});
+
+const WsDeliveryLinkedSteerRpc = Rpc.make(WS_METHODS.deliveryLinkedSteer, {
+  payload: Schema.Struct({
+    ...Struct.omit(LinkedDeliveryActions.steer.fields, ["operation"]),
+    ...LinkedDeliveryPeerTarget,
+  }),
+  success: linkedDeliveryResult(LinkedDeliveryResults.steer),
+  error: EnvironmentAuthorizationError,
+});
+
+const WsDeliveryLinkedTakeRpc = Rpc.make(WS_METHODS.deliveryLinkedTake, {
+  payload: Schema.Struct({
+    ...Struct.omit(LinkedDeliveryActions.take.fields, ["operation"]),
+    ...LinkedDeliveryPeerTarget,
+  }),
+  success: linkedDeliveryResult(LinkedDeliveryResults.take),
+  error: EnvironmentAuthorizationError,
+});
+
+const WsDeliveryLinkedRenewRpc = Rpc.make(WS_METHODS.deliveryLinkedRenew, {
+  payload: Schema.Struct({
+    ...Struct.omit(LinkedDeliveryActions.renew.fields, ["operation"]),
+    ...LinkedDeliveryPeerTarget,
+  }),
+  success: linkedDeliveryResult(LinkedDeliveryResults.renew),
+  error: EnvironmentAuthorizationError,
+});
+
+const WsDeliveryLinkedReleaseRpc = Rpc.make(WS_METHODS.deliveryLinkedRelease, {
+  payload: Schema.Struct({
+    ...Struct.omit(LinkedDeliveryActions.release.fields, ["operation"]),
+    ...LinkedDeliveryPeerTarget,
+  }),
+  success: linkedDeliveryResult(LinkedDeliveryResults.release),
+  error: EnvironmentAuthorizationError,
+});
+
+const WsDeliverySetBoardLinkedVisibilityRpc = Rpc.make(
+  WS_METHODS.deliverySetBoardLinkedVisibility,
+  {
+    payload: DeliverySetBoardLinkedVisibility,
+    success: DeliveryBoardLinkedVisibility,
+    error: Schema.Union([EnvironmentAuthorizationError, DeliveryError]),
+  },
+);
+
+const WsDeliverySetTaskLinkedHiddenRpc = Rpc.make(WS_METHODS.deliverySetTaskLinkedHidden, {
+  payload: DeliverySetTaskLinkedHidden,
+  success: DeliveryTaskLinkedHidden,
+  error: Schema.Union([EnvironmentAuthorizationError, DeliveryError]),
 });
 
 const WsDeliveryAnswerBoardTaskRpc = Rpc.make(WS_METHODS.deliveryAnswerBoardTask, {
@@ -2936,6 +3178,30 @@ export const CoreWsRpcGroup = RpcGroup.make(
  */
 export const ForkWsRpcGroup = RpcGroup.make(
   WsDeliveryReadRpc,
+  WsDeliveryLinkedBoardsRpc,
+  WsDeliveryLinkedBoardRpc,
+  WsDeliveryLinkedSearchRpc,
+  WsDeliveryLinkedTaskRpc,
+  WsDeliveryLinkedMessagesRpc,
+  WsDeliveryLinkedTimelineRpc,
+  WsDeliveryLinkedEventsRpc,
+  WsDeliveryLinkedFileRpc,
+  WsDeliveryLinkedAttachedRpc,
+  WsDeliveryLinkedAttachedFileRpc,
+  WsDeliveryLinkedCommentRpc,
+  WsDeliveryLinkedAnswerRpc,
+  WsDeliveryLinkedControlRpc,
+  WsDeliveryLinkedSteerRpc,
+  WsDeliveryLinkedTakeRpc,
+  WsDeliveryLinkedRenewRpc,
+  WsDeliveryLinkedReleaseRpc,
+  WsDeliveryLinkedBringRpc,
+  WsDeliveryLinkedSendRpc,
+  WsDeliveryLinkedHandoffsRpc,
+  WsDeliveryLinkedHandoffRetryRpc,
+  WsDeliveryLinkedSendDestinationRpc,
+  WsDeliverySetBoardLinkedVisibilityRpc,
+  WsDeliverySetTaskLinkedHiddenRpc,
   WsDeliveryAnswerBoardTaskRpc,
   WsDeliveryFilePortRpc,
   WsDeliveryFileThreadTaskRpc,
