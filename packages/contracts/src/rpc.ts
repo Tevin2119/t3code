@@ -486,6 +486,7 @@ import {
   BoardTaskFiling,
   BoardThreadFilingInput,
 } from "./boardThreadTasks.ts";
+import { DeliveryEngineControlInput, DeliveryEngineControlResult } from "./boardAgentTools.ts";
 import { DeploymentPortInput } from "./deployments.ts";
 import { AgentFeedbackAnswerInput, AgentFeedbackRequestError } from "./agentFeedback.ts";
 import {
@@ -682,6 +683,7 @@ export const WS_METHODS = {
   deliveryArchivedBoardThreads: "delivery.archivedBoardThreads",
   deliveryBoardApprovalKey: "delivery.boardApprovalKey",
   deliverySetBoardApprovalKey: "delivery.setBoardApprovalKey",
+  deliveryEngineControl: "delivery.engineControl",
   deliveryReleaseThread: "delivery.releaseThread",
   deliverySetThreadLineup: "delivery.setThreadLineup",
   deliveryLimitedSeats: "delivery.limitedSeats",
@@ -1294,6 +1296,13 @@ const WsDeliveryBoardApprovalKeyRpc = Rpc.make(WS_METHODS.deliveryBoardApprovalK
 const WsDeliverySetBoardApprovalKeyRpc = Rpc.make(WS_METHODS.deliverySetBoardApprovalKey, {
   payload: DeliverySetBoardApprovalKeyInput,
   success: DeliveryBoardApprovalKeyStatus,
+  error: Schema.Union([EnvironmentAuthorizationError, DeliveryError]),
+});
+
+/** A keyed engine control with the server's saved approval key, which never leaves it. */
+const WsDeliveryEngineControlRpc = Rpc.make(WS_METHODS.deliveryEngineControl, {
+  payload: DeliveryEngineControlInput,
+  success: DeliveryEngineControlResult,
   error: Schema.Union([EnvironmentAuthorizationError, DeliveryError]),
 });
 
@@ -2936,6 +2945,7 @@ export const ForkWsRpcGroup = RpcGroup.make(
   WsDeliveryArchivedBoardThreadsRpc,
   WsDeliveryBoardApprovalKeyRpc,
   WsDeliverySetBoardApprovalKeyRpc,
+  WsDeliveryEngineControlRpc,
   WsDeliveryReleaseThreadRpc,
   WsDeliverySetThreadLineupRpc,
   WsDeliveryLimitedSeatsRpc,

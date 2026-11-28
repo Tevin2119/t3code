@@ -141,6 +141,7 @@ export const RPC_REQUIRED_SCOPES = {
   [WS_METHODS.deliveryArchivedBoardThreads]: AuthOrchestrationReadScope,
   [WS_METHODS.deliveryBoardApprovalKey]: AuthOrchestrationReadScope,
   [WS_METHODS.deliverySetBoardApprovalKey]: AuthEnvironmentMaintainScope,
+  [WS_METHODS.deliveryEngineControl]: AuthEnvironmentMaintainScope,
   [WS_METHODS.deliveryReleaseThread]: AuthOrchestrationOperateScope,
   [WS_METHODS.deliverySetThreadLineup]: AuthOrchestrationOperateScope,
   [WS_METHODS.deliveryLimitedSeats]: AuthOrchestrationReadScope,

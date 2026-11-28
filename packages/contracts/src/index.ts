@@ -70,6 +70,7 @@ export * from "./usage.ts";
 export * from "./delivery.ts";
 export * from "./deliveryDiscovery.ts";
 export * from "./boardThreadTasks.ts";
+export * from "./boardAgentTools.ts";
 export * from "./deployments.ts";
 export * from "./boardDelivery.ts";
 export * from "./scheduledTask.ts";

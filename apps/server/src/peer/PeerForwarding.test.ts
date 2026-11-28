@@ -1,3 +1,4 @@
+import * as BoardAgentTools from "../delivery/BoardAgentTools.ts";
 import * as BoardThreadTasks from "../delivery/BoardThreadTasks.ts";
 import * as DeliveryService from "../delivery/DeliveryService.ts";
 import * as DocumentText from "../provider/DocumentText.ts";
@@ -362,6 +363,7 @@ const serveBox = (seen: Ref.Ref<Seen>, linkSession: Ref.Ref<string>) =>
     Layer.mergeAll(
       McpHttpServer.layerOrchestratorToolkit.pipe(
         Layer.provide(Layer.mock(BoardThreadTasks.BoardThreadTasks)({})),
+        Layer.provide(Layer.mock(BoardAgentTools.BoardAgentTools)({})),
         Layer.provide(DeliveryService.layerTest),
       ),
       McpHttpServer.layerProjectRegistration,
@@ -420,6 +422,7 @@ const makeLaptop = Effect.gen(function* () {
   const layerHere = Layer.mergeAll(
     McpHttpServer.layerOrchestratorToolkit.pipe(
       Layer.provide(Layer.mock(BoardThreadTasks.BoardThreadTasks)({})),
+      Layer.provide(Layer.mock(BoardAgentTools.BoardAgentTools)({})),
       Layer.provide(DeliveryService.layerTest),
     ),
     McpHttpServer.layerProjectRegistration,

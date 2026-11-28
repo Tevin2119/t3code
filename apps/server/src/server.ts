@@ -238,6 +238,7 @@ import { MuseUsageHome } from "@t3tools/provider-muse/server";
 import * as CursorAccountReader from "@t3tools/provider-cursor/server/CursorAccountReader";
 import * as CursorUsageAccounts from "@t3tools/provider-cursor/server/CursorUsageAccounts";
 import * as UsageService from "./usage/UsageService.ts";
+import * as BoardAgentTools from "./delivery/BoardAgentTools.ts";
 import * as BoardThreadTasks from "./delivery/BoardThreadTasks.ts";
 import * as DeliveryService from "./delivery/DeliveryService.ts";
 import * as TeamChatReadOnlyReactor from "./delivery/TeamChatReadOnlyReactor.ts";
@@ -1003,7 +1004,7 @@ const layerMakeRoutes = Layer.mergeAll(
   Layer.provide(RemoteDelegation.layer.pipe(Layer.provide(ProjectionStoreV2.layer))),
   // Links agents ask for: shown in a thread from /mcp, answered over WebSocket.
   Layer.provide(PeerLinkRequests.layer),
-  Layer.provide(BoardThreadTasks.layer),
+  Layer.provide(Layer.mergeAll(BoardThreadTasks.layer, BoardAgentTools.layer)),
   // Share the service so HTTP/WS clients single-flight reads and invalidate each other's cached patches.
   Layer.provide(layerPullRequestService),
   Layer.provide(layerThreadIssueService),

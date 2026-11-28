@@ -1,3 +1,4 @@
+import * as BoardAgentTools from "../../delivery/BoardAgentTools.ts";
 import * as BoardThreadTasks from "../../delivery/BoardThreadTasks.ts";
 import * as AssetSigner from "../../assets/AssetSigner.ts";
 import * as DocumentText from "../../provider/DocumentText.ts";
@@ -73,6 +74,7 @@ import * as PeerLinks from "../../peer/PeerLinks.ts";
 
 const layerOrchestratorToolkit = McpHttpServer.layerOrchestratorToolkit.pipe(
   Layer.provide(Layer.mock(BoardThreadTasks.BoardThreadTasks)({})),
+  Layer.provide(Layer.mock(BoardAgentTools.BoardAgentTools)({})),
   Layer.provide(DeliveryService.layerTest),
   Layer.provide(Layer.mock(ThreadLaunchService.ThreadLaunchService)({})),
   Layer.provide(Layer.mock(GitVcsDriver.GitVcsDriver)({})),
@@ -1839,6 +1841,133 @@ it.effect(
           Layer.provide(Layer.mock(PeerForwarding.PeerForwarding)({})),
           Layer.provide(Layer.mock(PeerLinkRequests.PeerLinkRequests)({})),
           Layer.provide(Layer.mock(PeerLinks.PeerLinks)({})),
+          Layer.provide(Layer.mock(RemoteDelegation.RemoteDelegation)({})),
+        ),
+      ),
+    );
+  },
+);
+
+it.effect(
+  "board and engine tools: a read-only client reads, is refused every change, and Delivery off hides them",
+  () => {
+    const reached: Array<string> = [];
+    const task = {
+      id: "task-1",
+      number: 1,
+      title: "Task",
+      state: "ready",
+      lane: "queue",
+      board: "work",
+      team: null,
+      origin: null,
+      updated: null,
+      held: false,
+      run: null,
+      live: false,
+      protected: false,
+    };
+    const record = <A>(name: string, value: A) => Effect.sync(() => (reached.push(name), value));
+    const boards = Layer.mock(BoardAgentTools.BoardAgentTools)({
+      board: (_scope, input) => record(`board:${input.action}`, { boards: [] }),
+      task: (scope, input) =>
+        record(`task:${input.action}:${BoardAgentTools.actorOf(scope)}`, { ...task, body: null }),
+      tasks: (_scope, input) =>
+        record(`tasks:${input.action}`, { tasks: [task], more: false, truncated: false }),
+      engineLifecycle: (input) =>
+        record(`engine:${input.action}`, {
+          accepted: true as const,
+          id: "e-1",
+          action: input.action,
+        }),
+    });
+    return Effect.gen(function* () {
+      const server = yield* McpServer.McpServer;
+      const call = (
+        name: string,
+        args: Record<string, unknown>,
+        invocation = clientScope("read-only"),
+      ) =>
+        server
+          .callTool({ name, arguments: args })
+          .pipe(
+            Effect.provideService(McpInvocationContext.McpInvocationContext, invocation),
+            Effect.provideService(McpSchema.McpServerClient, client),
+          );
+      // Reads are the list and get actions of the same tools.
+      expect((yield* call("delivery_board", { action: "list" })).isError).toBe(false);
+      expect((yield* call("delivery_task", { action: "get", task: "task-1" })).isError).toBe(false);
+      expect((yield* call("delivery_tasks", { action: "list" })).isError).toBe(false);
+      const writes: ReadonlyArray<readonly [string, Record<string, unknown>]> = [
+        ["delivery_board", { action: "create", title: "Work", repository: "app" }],
+        ["delivery_board", { action: "edit", board: "work", title: "New" }],
+        ["delivery_board", { action: "remove", board: "work" }],
+        ...["edit", "move", "submit", "close", "discard"].map(
+          (action) => ["delivery_task", { action, task: "task-1" }] as const,
+        ),
+        ["delivery_tasks", { action: "close", tasks: ["task-1"], reason: "Stale" }],
+        ["delivery_tasks", { action: "move", tasks: ["task-1"], lane: "paused" }],
+        ["delivery_engine_lifecycle", { action: "restart" }],
+      ];
+      for (const [name, args] of writes)
+        expect(declaredFailure(yield* call(name, args)), `${name} ${args.action}`).toMatchObject({
+          code: "capability_denied",
+        });
+      expect(reached).toEqual(["board:list", "task:get:T3 client Claude Code", "tasks:list"]);
+
+      const closed = yield* call(
+        "delivery_task",
+        { action: "close", task: "task-1", reason: "Stale" },
+        clientScope("full-access"),
+      );
+      expect(closed.isError).toBe(false);
+      expect(reached.at(-1)).toBe("task:close:T3 client Claude Code");
+
+      // Stopping the engine uses the saved key: maintain scope, which no client or link holds,
+      // even one paired with full access.
+      for (const invocation of [
+        clientScope("full-access"),
+        {
+          ...clientScope("full-access"),
+          client: {
+            sessionId: "peer",
+            label: "Laptop",
+            access: "full-access" as const,
+            linked: true,
+          },
+        },
+      ]) {
+        const lifecycle = yield* call("delivery_engine_lifecycle", { action: "stop" }, invocation);
+        expect(declaredFailure(lifecycle)).toMatchObject({ code: "capability_denied" });
+      }
+      expect(reached.at(-1)).toBe("task:close:T3 client Claude Code");
+
+      const off = yield* call(
+        "delivery_board",
+        { action: "list" },
+        { ...clientScope("full-access"), delivery: false },
+      ).pipe(Effect.flip);
+      expect(off.message).toContain("Tool 'delivery_board' not found");
+    }).pipe(
+      Effect.provide(
+        McpHttpServer.layerOrchestratorToolkit.pipe(
+          Layer.provide(Layer.mock(BoardThreadTasks.BoardThreadTasks)({})),
+          Layer.provide(boards),
+          Layer.provide(DeliveryService.layerTest),
+          Layer.provide(Layer.mock(ThreadLaunchService.ThreadLaunchService)({})),
+          Layer.provide(Layer.mock(GitVcsDriver.GitVcsDriver)({})),
+          Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
+          Layer.provide(NodeCrypto.layer),
+          Layer.provide(Layer.mock(ThreadManagement.ThreadManagementService)({})),
+          Layer.provide(ServerSettings.layerTest()),
+          Layer.provide(Layer.mock(ProviderRegistry.ProviderRegistry)({})),
+          Layer.provide(Layer.mock(ProviderAdapterRegistry.ProviderAdapterRegistryV2)({})),
+          Layer.provide(Layer.mock(ScheduledTaskService.ScheduledTaskService)({})),
+          Layer.provide(Layer.mock(PeerForwarding.PeerForwarding)({})),
+          Layer.provide(Layer.mock(PeerLinkRequests.PeerLinkRequests)({})),
+          Layer.provide(Layer.mock(PeerLinks.PeerLinks)({})),
+          Layer.provide(Layer.mock(ProjectService.ProjectService)({})),
+          Layer.provide(Layer.mock(SecretRequests.SecretRequests)({})),
           Layer.provide(Layer.mock(RemoteDelegation.RemoteDelegation)({})),
         ),
       ),

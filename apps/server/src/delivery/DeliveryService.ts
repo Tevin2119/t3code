@@ -153,6 +153,42 @@ export const BOARD_APPROVAL_KEY_SECRET = "delivery-board-approval-key";
 export const NO_BOARD_APPROVAL_KEY =
   "This server has no board approval key configured. Set it in Settings → Threads → Board.";
 
+/**
+ * A refusal of a request that carried an approval key, in fixed words by status: what the engine
+ * said may echo what it was sent, so none of it goes on to a client or an agent.
+ */
+export function keyedRefusal(status: number | undefined): string {
+  switch (status) {
+    case 403:
+      return "The engine refused the approval key. Check it, or update the one saved in Settings → Threads → Board.";
+    case 409:
+      return "The engine cannot do that now. Check the Engine panel for its state, then try again.";
+    case 400:
+      return "The engine refused this request as it was sent.";
+    default:
+      return status === undefined
+        ? "The engine refused this request."
+        : `The engine refused this request (HTTP ${status}).`;
+  }
+}
+
+const withoutEngineWords =
+  (body: unknown) =>
+  <A, R>(effect: Effect.Effect<A, DeliveryError, R>): Effect.Effect<A, DeliveryError, R> =>
+    typeof body === "object" && body !== null && "key" in body
+      ? effect.pipe(
+          Effect.mapError((error) =>
+            error.reason === "refused"
+              ? new DeliveryError({
+                  reason: "refused",
+                  detail: keyedRefusal(error.status),
+                  ...(error.status === undefined ? {} : { status: error.status }),
+                })
+              : error,
+          ),
+        )
+      : effect;
+
 /** The key a keyed board write uses: the server's variable when it is set, else the saved one. */
 export function resolveBoardApprovalKey(
   environment: NodeJS.ProcessEnv,
@@ -1779,7 +1815,7 @@ const make = Effect.fn("DeliveryService.make")(function* (
     read: Effect.fn("DeliveryService.read")((input) => request("GET", input.path)),
     discover,
     act: Effect.fn("DeliveryService.act")((input) =>
-      /^\/api\/native-(builds|intakes)\//.test(
+      (/^\/api\/native-(builds|intakes)\//.test(
         new URL(input.path, "http://delivery.invalid").pathname,
       )
         ? Effect.fail(
@@ -1816,7 +1852,8 @@ const make = Effect.fn("DeliveryService.make")(function* (
                     ),
                   )
                 : request("POST", input.path, input.body),
-            ),
+            )
+      ).pipe(withoutEngineWords(input.body)),
     ),
     nativeBuildAct: Effect.fn("DeliveryService.nativeBuildAct")((input) =>
       /^\/api\/native-builds\/att-[A-Za-z0-9-]+\/(claim|attach|complete)$/.test(input.path)
