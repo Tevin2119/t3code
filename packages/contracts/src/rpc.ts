@@ -481,7 +481,11 @@ import {
 } from "./scheduledTask.ts";
 import { SecretRequestAnswerInput, SecretRequestError } from "./secretRequest.ts";
 import { OrchestratorMcpFailure } from "./orchestratorMcp.ts";
-import { BoardTaskAnswerInput, BoardTaskFiling } from "./boardThreadTasks.ts";
+import {
+  BoardTaskAnswerInput,
+  BoardTaskFiling,
+  BoardThreadFilingInput,
+} from "./boardThreadTasks.ts";
 import { DeploymentPortInput } from "./deployments.ts";
 import { AgentFeedbackAnswerInput, AgentFeedbackRequestError } from "./agentFeedback.ts";
 import {
@@ -671,6 +675,7 @@ export const WS_METHODS = {
   deliveryRead: "delivery.read",
   deliveryAnswerBoardTask: "delivery.answerBoardTask",
   deliveryFilePort: "delivery.filePort",
+  deliveryFileThreadTask: "delivery.fileThreadTask",
   deliveryAct: "delivery.act",
   deliveryBindThread: "delivery.bindThread",
   deliveryThreadBinding: "delivery.threadBinding",
@@ -1239,6 +1244,13 @@ const WsDeliveryAnswerBoardTaskRpc = Rpc.make(WS_METHODS.deliveryAnswerBoardTask
 /** Port to app: files a release-line draft; the server stamps its origin and composes it. */
 const WsDeliveryFilePortRpc = Rpc.make(WS_METHODS.deliveryFilePort, {
   payload: DeploymentPortInput,
+  success: BoardTaskFiling,
+  error: Schema.Union([OrchestratorMcpFailure, EnvironmentAuthorizationError]),
+});
+
+/** A person files a draft from a thread; the server stamps the thread as its origin. */
+const WsDeliveryFileThreadTaskRpc = Rpc.make(WS_METHODS.deliveryFileThreadTask, {
+  payload: BoardThreadFilingInput,
   success: BoardTaskFiling,
   error: Schema.Union([OrchestratorMcpFailure, EnvironmentAuthorizationError]),
 });
@@ -2917,6 +2929,7 @@ export const ForkWsRpcGroup = RpcGroup.make(
   WsDeliveryReadRpc,
   WsDeliveryAnswerBoardTaskRpc,
   WsDeliveryFilePortRpc,
+  WsDeliveryFileThreadTaskRpc,
   WsDeliveryActRpc,
   WsDeliveryBindThreadRpc,
   WsDeliveryThreadBindingRpc,

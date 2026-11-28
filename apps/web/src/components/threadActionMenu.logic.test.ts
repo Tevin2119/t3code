@@ -152,6 +152,9 @@ describe("buildThreadActionMenuItems", () => {
     expect(allIds(baseState)).not.toContain("new-thread-on-branch");
     // Making a task of a conversation is offered on every thread.
     expect(allIds(baseState)).toContain("create-task");
+    // Filing on a board is offered only where the caller says it is.
+    expect(allIds(baseState)).not.toContain("file-task");
+    expect(allIds({ ...baseState, canFileTask: true })).toContain("file-task");
     expect(allIds(baseState)).not.toContain("copy-branch");
   });
 

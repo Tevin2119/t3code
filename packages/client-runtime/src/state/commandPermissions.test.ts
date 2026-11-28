@@ -588,6 +588,7 @@ it.effect.each([
   WS_METHODS.agentFeedbackAnswerRequest,
   WS_METHODS.deliveryAnswerBoardTask,
   WS_METHODS.deliveryFilePort,
+  WS_METHODS.deliveryFileThreadTask,
 ])("requires thread operation for %s", (method) =>
   Effect.gen(function* () {
     const registry = yield* setup;

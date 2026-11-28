@@ -18,6 +18,15 @@ export const BoardTaskDraft = Schema.Struct({
 });
 export type BoardTaskDraft = typeof BoardTaskDraft.Type;
 
+/** A person files a draft from a thread of this environment; the server stamps its origin. */
+export const BoardThreadFilingInput = Schema.Struct({
+  threadId: ThreadId,
+  board: BoardTaskDraft.fields.board,
+  title: BoardTaskDraft.fields.title,
+  body: BoardTaskDraft.fields.body,
+});
+export type BoardThreadFilingInput = typeof BoardThreadFilingInput.Type;
+
 const FiledTask = Schema.Struct({
   id: Schema.String,
   number: Schema.Number,

@@ -3867,6 +3867,10 @@ const layerForkWsRpc = (currentSession: EnvironmentAuth.AuthenticatedSession) =>
           serverEnvironment.getEnvironmentId.pipe(
             Effect.flatMap((environmentId) => boardThreadTasks.filePort(environmentId, input)),
           ),
+        [WS_METHODS.deliveryFileThreadTask]: (input) =>
+          serverEnvironment.getEnvironmentId.pipe(
+            Effect.flatMap((environmentId) => boardThreadTasks.fileThread(environmentId, input)),
+          ),
         [WS_METHODS.deliveryRead]: (input) => delivery.read(input),
         // A request that reaches the workspace needs the file scope the engine would use.
         [WS_METHODS.deliveryAct]: (input) =>
