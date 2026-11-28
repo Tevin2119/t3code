@@ -550,6 +550,203 @@ it.effect("gives a submitted task an idle thread, and claims it only in work", (
   }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-submit-")));
 });
 
+const acks = (engine: ScratchEngine, id?: string) =>
+  engine.requests.filter(
+    (request) =>
+      request.path.endsWith("/board-thread/ack") &&
+      (id === undefined || request.path === `/api/tasks/${id}/board-thread/ack`),
+  );
+
+it.effect(
+  "renews the heartbeat of every thread linked from here on each pass, with no lease",
+  () => {
+    const engine = board();
+    engine.addTask({ id: "queued-1", lane: "queue", state: "ready" });
+    engine.addTask({ id: "task-7" });
+    // Linked from another environment, or finished: never renewed from here.
+    engine.addTask({ id: "theirs-1" });
+    engine.writeLink("theirs-1", { environmentId: OTHER, threadId: THEIRS, setBy: OTHER });
+    engine.addTask({ id: "done-1", lane: "completed", state: "completed" });
+    engine.writeLink("done-1", {
+      environmentId: ENVIRONMENT,
+      threadId: "t-done",
+      setBy: ENVIRONMENT,
+    });
+    const store = threadStore();
+    return Effect.gen(function* () {
+      const threads = yield* service(store);
+      yield* threads.reconcile();
+      // A thread linked in a pass beats in that pass.
+      assert.lengthOf(acks(engine, "queued-1"), 1);
+      assert.isTrue(yield* threads.heartbeatLive("queued-1", QUEUED_THREAD));
+      yield* threads.reconcile();
+      assert.deepEqual(acks(engine, "queued-1").at(-1)?.body, {
+        environmentId: ENVIRONMENT,
+        threadId: QUEUED_THREAD,
+        setBy: ENVIRONMENT,
+        key: "scratch approval passphrase",
+      });
+      assert.deepInclude(acks(engine, "task-7").at(-1)?.body, { threadId: THREAD });
+      assert.lengthOf(acks(engine, "theirs-1"), 0);
+      assert.lengthOf(acks(engine, "done-1"), 0);
+      assert.isNotNull(engine.heartbeatOf("queued-1"));
+      assert.isTrue(yield* threads.heartbeatLive("queued-1", QUEUED_THREAD));
+      assert.isFalse(yield* threads.heartbeatLive("queued-1", THREAD));
+      // The heartbeat is not a lease: the waiting task holds none.
+      assert.isNull(engine.leaseOf("queued-1"));
+      const before = acks(engine).length;
+      engine.advance(100_000);
+      yield* threads.reconcile();
+      assert.equal(acks(engine).length, before + 2);
+      engine.advance(100_000);
+      assert.isNotNull(engine.heartbeatOf("queued-1"));
+    }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-heartbeat-")));
+  },
+);
+
+it.effect(
+  "beats again first thing after a restart, and never renews a waiting task's lease",
+  () => {
+    const engine = board();
+    engine.addTask({ id: "queued-1", lane: "queue", state: "ready" });
+    const store = threadStore();
+    return Effect.gen(function* () {
+      yield* (yield* service(store)).reconcile();
+      // A new server process: its heartbeats are in memory only.
+      const restarted = yield* service(store);
+      assert.isFalse(yield* restarted.heartbeatLive("queued-1", QUEUED_THREAD));
+      // A lease taken for the waiting task, as a step's pass of an earlier build took it.
+      assert.isTrue(yield* restarted.holdTask("queued-1", QUEUED_THREAD));
+      engine.requests.length = 0;
+      yield* restarted.reconcile();
+      // The heartbeat goes out right after the lanes are read, before anything else is decided.
+      assert.deepEqual(
+        engine.requests.slice(0, 2).map((request) => request.path),
+        ["/api/lanes", "/api/tasks/queued-1/board-thread/ack"],
+      );
+      assert.isTrue(yield* restarted.heartbeatLive("queued-1", QUEUED_THREAD));
+      // The pass lets the lease go and never renews it while the task waits.
+      assert.isNull(engine.leaseOf("queued-1"));
+      for (let pass = 0; pass < 3; pass += 1) {
+        engine.advance(60_000);
+        yield* restarted.reconcile();
+      }
+      assert.isNull(engine.leaseOf("queued-1"));
+      assert.isFalse(
+        engine.requests.some((request) => request.path === "/api/orchestration/tasks/queued-1/ack"),
+      );
+    }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-heartbeat-restart-")));
+  },
+);
+
+it.effect("shares the engine's two key checks: a link write waits behind two heartbeats", () => {
+  const engine = board();
+  for (const id of ["task-7", "task-8"]) {
+    engine.addTask({ id });
+    engine.writeLink(id, { environmentId: ENVIRONMENT, threadId: `t-${id}`, setBy: ENVIRONMENT });
+  }
+  engine.addTask({ id: "task-9" });
+  const key = engine.key;
+  return Effect.gen(function* () {
+    const delivery = yield* DeliveryService.DeliveryService;
+    const ack = (id: string) =>
+      delivery.boardThreadAct({
+        method: "POST",
+        path: `/api/tasks/${id}/board-thread/ack`,
+        body: { environmentId: ENVIRONMENT, threadId: `t-${id}`, setBy: ENVIRONMENT, key },
+      });
+    const put = delivery.boardThreadAct({
+      method: "PUT",
+      path: "/api/tasks/task-9/board-thread",
+      body: { environmentId: ENVIRONMENT, threadId: "t-task-9", setBy: ENVIRONMENT, key },
+    });
+    const answers = yield* Effect.all([ack("task-7"), ack("task-8"), put], {
+      concurrency: "unbounded",
+    });
+    // A refused write would fail the three; each was answered.
+    assert.lengthOf(answers, 3);
+    assert.equal(engine.keyChecks.most, 2);
+    assert.equal(engine.keyChecks.refused, 0);
+    assert.equal(engine.linkOf("task-9")?.threadId, "t-task-9");
+  }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-key-checks-")));
+});
+
+it.effect("makes a person's relayed keyed write wait behind two heartbeats, never refused", () => {
+  const engine = board();
+  for (const id of ["task-7", "task-8"]) {
+    engine.addTask({ id });
+    engine.writeLink(id, { environmentId: ENVIRONMENT, threadId: `t-${id}`, setBy: ENVIRONMENT });
+  }
+  const key = engine.key;
+  return Effect.gen(function* () {
+    const delivery = yield* DeliveryService.DeliveryService;
+    const ack = (id: string) =>
+      delivery.boardThreadAct({
+        method: "POST",
+        path: `/api/tasks/${id}/board-thread/ack`,
+        body: { environmentId: ENVIRONMENT, threadId: `t-${id}`, setBy: ENVIRONMENT, key },
+      });
+    const approved = yield* Effect.all(
+      [
+        ack("task-7"),
+        ack("task-8"),
+        delivery.act({ path: "/api/tasks/task-7/approve", body: { by: "Tevin", key } }),
+      ],
+      { concurrency: "unbounded" },
+    );
+    assert.deepEqual(approved[2].body, { task: "task-7", approved: true });
+    assert.equal(engine.keyChecks.most, 2);
+    assert.equal(engine.keyChecks.refused, 0);
+  }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-relayed-key-")));
+});
+
+it.effect.each([
+  [409, "conflict"],
+  [409, "moved"],
+  [404, "not-found"],
+] as const)("stops renewing a heartbeat the engine answers %s %s", ([status, code]) => {
+  const engine = board();
+  engine.addTask({ id: "task-7" });
+  const store = threadStore();
+  return Effect.gen(function* () {
+    const threads = yield* service(store);
+    yield* threads.reconcile();
+    // The thread linked in the first pass beat in it; the second pass's heartbeat is refused.
+    assert.lengthOf(acks(engine, "task-7"), 1);
+    engine.answerNext(/^\/api\/tasks\/task-7\/board-thread\/ack$/, status, { code });
+    yield* threads.reconcile();
+    assert.lengthOf(acks(engine, "task-7"), 2);
+    assert.isFalse(yield* threads.heartbeatLive("task-7", THREAD));
+    yield* threads.reconcile();
+    yield* threads.reconcile();
+    assert.lengthOf(acks(engine, "task-7"), 2);
+    // The claim and the link are the pass's own business, untouched by the heartbeat.
+    assert.isNotNull(engine.leaseOf("task-7"));
+  }).pipe(Effect.provide(deliveryLayer(engine, `board-threads-heartbeat-${code}-`)));
+});
+
+it.effect("renews every other heartbeat when one is lost or refused, and fails no pass", () => {
+  const engine = board();
+  for (const id of ["task-7", "task-8", "task-9"]) engine.addTask({ id });
+  const store = threadStore();
+  return Effect.gen(function* () {
+    const threads = yield* service(store);
+    yield* threads.reconcile();
+    // The first pass's heartbeats lapse before the next.
+    engine.advance(130_000);
+    engine.dropNext(/^\/api\/tasks\/task-7\/board-thread\/ack$/);
+    engine.answerNext(/^\/api\/tasks\/task-8\/board-thread\/ack$/, 403, { code: "refused" });
+    yield* threads.reconcile();
+    assert.isNull(engine.heartbeatOf("task-7"));
+    assert.isNull(engine.heartbeatOf("task-8"));
+    assert.isNotNull(engine.heartbeatOf("task-9"));
+    // Neither is stopped: the next pass renews both.
+    yield* threads.reconcile();
+    assert.isNotNull(engine.heartbeatOf("task-7"));
+    assert.isNotNull(engine.heartbeatOf("task-8"));
+  }).pipe(Effect.provide(deliveryLayer(engine, "board-threads-heartbeat-lost-")));
+});
+
 it.effect("gives no thread at submit to a draft, a finished task, or one submitted earlier", () => {
   const engine = board();
   engine.addTask({ id: "draft-1", lane: "draft", state: "draft", submitted: false });

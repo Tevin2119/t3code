@@ -270,6 +270,8 @@ export function agentEngine() {
 
   return {
     key: KEY,
+    /** Keyed requests the engine is checking now, and the most it ever checked at once. */
+    keyChecks: { inFlight: 0, most: 0 },
     handle,
     writes,
     tasks,
@@ -318,16 +320,29 @@ export const agentEngineHttp = (engine: AgentEngine) =>
   Layer.succeed(
     HttpClient.HttpClient,
     HttpClient.make((request) =>
-      Effect.sync(() => {
+      Effect.suspend(() => {
         const url = new URL(request.url);
         const body =
           request.body._tag === "Uint8Array"
             ? (decodeJson(new TextDecoder().decode(request.body.body)) as Record<string, unknown>)
             : {};
-        const answer = engine.handle(request.method, url.pathname, body, url.searchParams);
-        return HttpClientResponse.fromWeb(
-          request,
-          Response.json(answer.body, { status: answer.status }),
+        const answer = () => {
+          const { status, body: answered } = engine.handle(
+            request.method,
+            url.pathname,
+            body,
+            url.searchParams,
+          );
+          return HttpClientResponse.fromWeb(request, Response.json(answered, { status }));
+        };
+        if (!("key" in body)) return Effect.sync(answer);
+        // A key check takes a turn of the scheduler, so checks sent at once are seen together.
+        const checks = engine.keyChecks;
+        checks.inFlight += 1;
+        checks.most = Math.max(checks.most, checks.inFlight);
+        return Effect.yieldNow.pipe(
+          Effect.map(answer),
+          Effect.ensuring(Effect.sync(() => (checks.inFlight -= 1))),
         );
       }),
     ),

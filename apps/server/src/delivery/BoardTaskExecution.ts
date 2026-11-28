@@ -74,6 +74,11 @@ const decodeAttempt = Schema.decodeUnknownEffect(NativeAttempt);
 const decodeTaskDetail = Schema.decodeUnknownEffect(TaskDetail);
 
 const TASK_ID = /^[\w-]{1,256}$/;
+// The engine's read-only native stages (READ_ONLY_NATIVE_STAGES, slice S2), which wait for a live
+// thread heartbeat as for a lease. Only a step of one that cannot write runs under a heartbeat.
+const HEARTBEAT_STAGES = new Set(["triage", "comms", "chat"]);
+const runsOnHeartbeat = (record: Pick<NativeAttempt, "stage" | "access">) =>
+  record.access === "read-only" && HEARTBEAT_STAGES.has(record.stage);
 /** The engine's bound on a result's text; a longer answer is cut, never refused. */
 const TEXT_LIMIT = 900_000;
 
@@ -367,9 +372,13 @@ export const make = Effect.gen(function* () {
     const refresh = Effect.suspend(() =>
       local(projections.getThreadRecords(threadId, ["runs", "subagents", "providerTurns"])),
     ).pipe(Effect.tap((records) => Effect.sync(() => (shell = records))));
-    // The claim on the task is its heartbeat: renewed on every pass while a step is held, so
-    // the engine never sends a step T3 works to needs-decision after the board's hand-off wait.
-    const held = yield* boardThreads.holdTask(taskId, threadId);
+    // The claim on the task keeps a step T3 works from the engine's fallback. A read-only step is
+    // kept by the thread's heartbeat alone: a task holding only such steps never takes a lease
+    // for them, also before its first heartbeat lands, when they wait.
+    const beating = yield* boardThreads.heartbeatLive(taskId, threadId);
+    const held = records.every(runsOnHeartbeat)
+      ? false
+      : yield* boardThreads.holdTask(taskId, threadId);
     const lineup =
       (yield* delivery.threadState(threadId).pipe(Effect.option)).pipe(
         Option.flatMap((state) => Option.fromNullishOr(state.lineup)),
@@ -379,9 +388,9 @@ export const make = Effect.gen(function* () {
     const idle = () => !shell.runs.some((run) => ACTIVE_RUN.has(run.status));
 
     const claim = Effect.fn("BoardTaskExecution.claim")(function* (record: NativeAttempt) {
-      // Without a live claim on the task no step advances here, one this server owns included:
-      // the engine takes a step whose claim lapsed for abandoned.
-      if (!held) return null;
+      // Without a live claim, or for a read-only step a live heartbeat, no step advances here,
+      // one this server owns included: the engine takes a step whose claim lapsed for abandoned.
+      if (!held && !(beating && runsOnHeartbeat(record))) return null;
       if (record.owner !== null) return record;
       // A step the engine stopped before it was claimed stays the engine's.
       if (record.cancelRequested) return null;

@@ -143,6 +143,8 @@ export function scratchEngine(
   const related = new Map<string, Map<string, ScratchRelated>>();
   const servesRelated = options.servesRelated !== false;
   const leases = new Map<string, Lease>();
+  /** Each task's thread heartbeat (slice S2): the board thread it renewed, by the engine clock. */
+  const beats = new Map<string, { environmentId: string; threadId: string; at: number }>();
   const events: Array<{ kind: string; task: string; data: unknown }> = [];
   const requests: Array<{ method: string; path: string; body: unknown }> = [];
   const sets = new Map<string, { path: string | null }>();
@@ -169,6 +171,8 @@ export function scratchEngine(
   let sourceScoped = options.sourceScoped === true;
   /** Link writes the engine is answering now, and the most it ever answered at once. */
   const linkWrites = { inFlight: 0, most: 0 };
+  /** Approval keys the engine is checking now; past two at once it refuses with 403, as approval.mjs does. */
+  const keyChecks = { inFlight: 0, most: 0, refused: 0 };
   /** Runs once, just before the next link write is admitted: another writer getting in first. */
   let beforeNextPut: (() => void) | null = null;
   /** Runs once, just before the next task detail is answered: the task changing mid-pass. */
@@ -353,6 +357,41 @@ export function scratchEngine(
     links.set(id, boardThread);
     events.push({ kind: "task.board-thread-set", task: id, data: { previous, boardThread } });
     return { status: 200, body: { task: id, number: task.number, boardThread } };
+  };
+
+  /** The thread heartbeat route (slice S2): only the task's current board thread renews it. */
+  const ackLink = (id: string, body: Record<string, unknown>): Answer => {
+    const task = tasks.get(id);
+    if (!task) return refused(404, `no task ${id.slice(0, 40)}`, { code: "not-found", task: null });
+    const { environmentId, threadId, setBy } = body;
+    if (
+      typeof environmentId !== "string" ||
+      !ENVIRONMENT_PART.test(environmentId) ||
+      typeof threadId !== "string" ||
+      !THREAD_PART.test(threadId) ||
+      typeof setBy !== "string" ||
+      !ENVIRONMENT_PART.test(setBy)
+    )
+      return refused(400, "a heartbeat reads as { environmentId, threadId, setBy }", {
+        code: "invalid-field",
+      });
+    const boardThread = links.get(id) ?? null;
+    if (!sameTarget(boardThread, { environmentId, threadId }))
+      return refused(409, "this conversation is not the task's board thread", {
+        code: "conflict",
+        current: boardThread,
+      });
+    beats.set(id, { environmentId, threadId, at: clock });
+    return {
+      status: 200,
+      body: {
+        task: id,
+        number: task.number,
+        boardThread,
+        heartbeat: DateTime.formatIso(DateTime.makeUnsafe(clock)),
+        heartbeatMs: LEASE_MS,
+      },
+    };
   };
 
   const putRelated = (id: string, relatedKey: string, body: Record<string, unknown>): Answer => {
@@ -659,6 +698,12 @@ export function scratchEngine(
       before?.();
       return putLink(link[1]!, body);
     }
+    const ack = /^\/api\/tasks\/([\w-]+)\/board-thread\/ack$/.exec(pathname);
+    if (ack && method === "POST") {
+      if (body.key !== key)
+        return refused(403, "the approval key is wrong or missing", { code: "refused" });
+      return ackLink(ack[1]!, body);
+    }
     const relatedRoute = servesRelated
       ? /^\/api\/tasks\/([\w-]+)\/threads\/([\w-]{1,80})$/.exec(pathname)
       : null;
@@ -678,6 +723,13 @@ export function scratchEngine(
       return keyed[2] === "activity"
         ? ingest(keyed[1]!, body)
         : settle(keyed[1]!, Number(keyed[3]), keyed[4]!, body);
+    }
+    // A person's keyed decision, as a client relays it through `act` (an approval dialog).
+    const decision = /^\/api\/tasks\/([\w-]+)\/approve$/.exec(pathname);
+    if (decision && method === "POST") {
+      if (body.key !== key)
+        return refused(403, "the approval key is wrong or missing", { code: "refused" });
+      return { status: 200, body: { task: decision[1], approved: true } };
     }
     const steerRoute = /^\/api\/tasks\/([\w-]+)\/steer$/.exec(pathname);
     if (steerRoute && method === "POST") {
@@ -794,6 +846,13 @@ export function scratchEngine(
     writeLink: (id: string, link: { environmentId: string; threadId: string; setBy: string }) =>
       putLink(id, link),
     leaseOf: (id: string) => live().get(id) ?? null,
+    /** The task's thread heartbeat while it is live and its thread is still the link. */
+    heartbeatOf: (id: string) => {
+      const beat = beats.get(id);
+      return beat && clock - beat.at <= LEASE_MS && sameTarget(beat, links.get(id) ?? null)
+        ? beat
+        : null;
+    },
     advance: (ms: number) => {
       clock += ms;
     },
@@ -808,6 +867,7 @@ export function scratchEngine(
     },
     isDown: () => down,
     linkWrites,
+    keyChecks,
     /** A person's steer, queued the way the engine's steer route queues it. */
     queueSteer: (task: string, text: string) => {
       const steer = {
@@ -877,15 +937,32 @@ export const scratchEngineHttp = (engine: ScratchEngine) =>
               : Response.json(answered, { status }),
           );
         };
-        if (request.method !== "PUT") return Effect.sync(answer);
-        // A link write takes a turn of the scheduler, so two sent at once would be seen together.
-        engine.linkWrites.inFlight += 1;
+        const keyed = typeof body === "object" && body !== null && "key" in body;
+        if (request.method !== "PUT" && !keyed) return Effect.sync(answer);
+        const put = request.method === "PUT";
+        // A keyed write or a link write takes a turn of the scheduler, so two sent at once would be
+        // seen together.
+        if (put) engine.linkWrites.inFlight += 1;
         engine.linkWrites.most = Math.max(engine.linkWrites.most, engine.linkWrites.inFlight);
+        if (keyed) engine.keyChecks.inFlight += 1;
+        engine.keyChecks.most = Math.max(engine.keyChecks.most, engine.keyChecks.inFlight);
+        const overCap = keyed && engine.keyChecks.inFlight > 2;
         return Effect.yieldNow.pipe(
-          Effect.map(answer),
+          Effect.map(() => {
+            if (!overCap) return answer();
+            engine.keyChecks.refused += 1;
+            return HttpClientResponse.fromWeb(
+              request,
+              Response.json(
+                { error: "the approval key is wrong or missing", code: "refused" },
+                { status: 403 },
+              ),
+            );
+          }),
           Effect.ensuring(
             Effect.sync(() => {
-              engine.linkWrites.inFlight -= 1;
+              if (put) engine.linkWrites.inFlight -= 1;
+              if (keyed) engine.keyChecks.inFlight -= 1;
             }),
           ),
         );

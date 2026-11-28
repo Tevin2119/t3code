@@ -450,3 +450,21 @@ it.effect(
     );
   },
 );
+
+it.effect("saved-key engine controls share the server's two key checks", () => {
+  const engine = agentEngine();
+  return run(
+    engine,
+    Effect.gen(function* () {
+      const tools = yield* BoardAgentTools;
+      const delivery = yield* DeliveryService.DeliveryService;
+      yield* delivery.setBoardApprovalKey(engine.key);
+      const receipts = yield* Effect.all(
+        Array.from({ length: 4 }, () => tools.engineLifecycle({ action: "restart" })),
+        { concurrency: "unbounded" },
+      );
+      assert.lengthOf(receipts, 4);
+      assert.equal(engine.keyChecks.most, 2);
+    }),
+  );
+});
