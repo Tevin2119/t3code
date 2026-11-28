@@ -1,13 +1,11 @@
 import type { ScopedThreadRef } from "@t3tools/contracts";
 import type { ReactNode } from "react";
 import { useAtomValue } from "@effect/atom-react";
-import { useState } from "react";
 import { isElectron } from "../../env";
 import { useMediaQuery } from "../../hooks/useMediaQuery";
 import { cn } from "../../lib/utils";
 import { RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY } from "../../rightPanelLayout";
 import {
-  selectThreadPanelOpen,
   selectThreadRightPanelState,
   taskPanelRef,
   useRightPanelStore,
@@ -15,11 +13,9 @@ import {
 } from "../../rightPanelStore";
 import { primaryServerKeybindingsAtom } from "../../state/server";
 import { PanelLayoutControls, RightPanelMaximizeControl } from "../chat/PanelLayoutControls";
-import { ThreadDetailsCard } from "../chat/ThreadDetailsCard";
 import { RightPanelSheet } from "../RightPanelSheet";
 import { RightPanelTabs } from "../RightPanelTabs";
 import { Button } from "../ui/button";
-import { PopoverCreateHandle } from "../ui/popover";
 
 const NO_SURFACES = new Set<string>();
 const NO_PREVIEW_SESSIONS = {};
@@ -55,22 +51,18 @@ function openTaskTabs(ref: ScopedThreadRef) {
 
 /**
  * Task-owned panels share native sizing and sheet behavior without inventing a thread owner. A
- * task with a thread keeps its tabs on that thread's right panel and its details in the thread's
- * own card, behind the native toggles. One without (a draft, a queued, unlinked or moved task)
- * gets a panel owned by `taskPanelRef` and the native details card over its page, both behind the
- * same native toggles under its header. Nothing opens unasked.
+ * task with a thread keeps its tabs on that thread's right panel, behind the thread view's own
+ * toggles. One without (a draft, a queued, unlinked or moved task) gets a panel owned by
+ * `taskPanelRef` behind the native right panel toggle under its header. The task's facts are in the
+ * board's left column either way. Nothing opens unasked.
  */
 export function TaskWorkspacePanels(props: {
   owner: string;
   /** The task's own thread, whose right panel holds the task's tabs. */
   thread: ScopedThreadRef | null;
-  /** The details card's content where no thread view holds the Task item. */
-  details: ReactNode;
   renderConversation: (panel: {
-    /** The native panel toggles for a page; none with a thread, whose view has its own. */
+    /** The native panel toggle for a page; none with a thread, whose view has its own. */
     readonly controls: ReactNode;
-    /** Takes the page header the details card hangs from, as a thread view's hangs from its own. */
-    readonly anchor: (element: HTMLDivElement | null) => void;
   }) => ReactNode;
   evidence: ReactNode;
   /** The deployments tab: delivering the task and its deployments. */
@@ -84,12 +76,6 @@ export function TaskWorkspacePanels(props: {
   );
   const ownPanel = props.thread === null;
   const evidenceOpen = ownPanel && panel.isOpen;
-  const [detailsHandle] = useState(PopoverCreateHandle);
-  // Held as state: the card positions against the header once the page has drawn it.
-  const [detailsAnchor, setDetailsAnchor] = useState<HTMLDivElement | null>(null);
-  const detailsOpen = useRightPanelStore((state) =>
-    selectThreadPanelOpen(state.threadPanelVisibilityByThreadKey, panelRef, "popover"),
-  );
   const maximized = evidenceOpen && panel.maximized === true;
   const closeEvidence = () => {
     useRightPanelStore.getState().close(panelRef);
@@ -104,9 +90,9 @@ export function TaskWorkspacePanels(props: {
       terminalOpen={false}
       terminalShortcutLabel={null}
       onToggleTerminal={NOTHING}
-      threadPanelOpen={detailsOpen}
+      showThreadPanelControl={false}
+      threadPanelOpen={false}
       threadPanelPresentation="popover"
-      threadPanelPopoverHandle={detailsHandle}
       threadPanelShortcutLabel={null}
       onToggleThreadPanel={NOTHING}
       rightPanelAvailable
@@ -182,7 +168,7 @@ export function TaskWorkspacePanels(props: {
   return (
     <div className="flex min-h-0 min-w-0 flex-1" data-task-workspace-panels>
       <div className={maximized && !sheet ? "hidden" : "flex min-h-0 min-w-0 flex-1"}>
-        {props.renderConversation({ controls, anchor: setDetailsAnchor })}
+        {props.renderConversation({ controls })}
       </div>
       {sheet ? (
         <RightPanelSheet animationDurationMs={0} open={evidenceOpen} onClose={closeEvidence}>
@@ -191,16 +177,6 @@ export function TaskWorkspacePanels(props: {
       ) : (
         evidence
       )}
-      {ownPanel ? (
-        <ThreadDetailsCard
-          threadRef={panelRef}
-          anchor={{ current: detailsAnchor }}
-          handle={detailsHandle}
-          contentKey="task"
-        >
-          {() => <div className="flex flex-col gap-2 py-2">{props.details}</div>}
-        </ThreadDetailsCard>
-      ) : null}
     </div>
   );
 }

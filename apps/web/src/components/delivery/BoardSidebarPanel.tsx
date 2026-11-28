@@ -14,7 +14,6 @@ import { useMemo, useState, type ReactNode } from "react";
 import {
   parseBoard,
   parseCards,
-  parseTask,
   TASK_PRIORITIES,
   type DeliveryCard,
   type TaskPriority,
@@ -63,8 +62,13 @@ import { Age, CardSigns, laneTone, PriorityPill } from "./taskParts";
 import { BoardIcon } from "./BoardIcon";
 import { EnvironmentPicker } from "./EnvironmentPicker";
 import { EngineDownNotice } from "./EnginePanel";
-import { relatedTaskGroups } from "./relatedTaskGroups";
-import { useOpenSeatThread, useTaskConversation } from "./useTaskConversation";
+import { relatedTaskGroups, taskHasLineage } from "./relatedTaskGroups";
+import { ThreadDetailsSection } from "../chat/ThreadDetailsSection";
+import { BoardTaskContext } from "./BoardTaskContext";
+import { TaskDetailsItem } from "./TaskDetails";
+import { TaskLineage } from "./TaskLineage";
+import { OpenBoardTaskProvider, useOpenBoardTask, type OpenBoardTask } from "./useBoardTaskValue";
+import { useOpenSeatThread } from "./useTaskConversation";
 
 /** Each group's name, title and what it says when it is empty, in the order they show. */
 const GROUP_TITLES: Readonly<Record<PanelGroup, string>> = {
@@ -227,6 +231,80 @@ function SwitcherSection(props: {
 }
 
 /**
+ * On the Board, the task the route opens, built once for the column and the task view, so both
+ * read it on one clock and its actions send one request at a time.
+ */
+export function BoardOpenTaskRoute(props: { readonly children: ReactNode }) {
+  const search = useSearch({ strict: false }) as DeliveryBoardSearch;
+  const pathname = useLocation({ select: (location) => location.pathname });
+  const onBoard = pathname === "/board";
+  const environmentId = useDeliveryEnvironmentId(
+    onBoard && search.new ? (search.from ?? null) : null,
+    onBoard ? (search.environment ?? null) : null,
+  );
+  const enabled = useDeliveryEnabled(environmentId);
+  const navigate = useNavigate();
+  const open = (task: string | null) =>
+    void navigate({
+      to: "/board",
+      search: {
+        ...(environmentId ? { environment: environmentId } : {}),
+        ...(task ? { task } : {}),
+      },
+    });
+  return (
+    <OpenBoardTaskProvider
+      environmentId={enabled ? environmentId : null}
+      taskId={onBoard ? (search.task ?? null) : null}
+      onOpenTask={open}
+      onDiscarded={() => open(null)}
+    >
+      {props.children}
+    </OpenBoardTaskProvider>
+  );
+}
+
+/**
+ * The open task's facts, at the top of the column: the Task item and its lineage, from the
+ * reading the task view shares. A refusal shows under the task view's header.
+ */
+function BoardTaskFacts(props: { readonly value: OpenBoardTask | null }) {
+  const gt = useGT();
+  const board = props.value?.board ?? null;
+  const task = props.value?.task ?? null;
+  const read = props.value?.read ?? null;
+  return (
+    <BoardTaskContext value={board}>
+      <SidebarGroup className="px-0" data-board-panel-task-facts={board?.taskId}>
+        {task ? (
+          <>
+            <TaskDetailsItem />
+            {taskHasLineage(board) ? (
+              <ThreadDetailsSection
+                headingId={`task-lineage-${task.id}`}
+                title={gt("Lineage", {
+                  $context: "thread details section: parent and child agents",
+                })}
+              >
+                <TaskLineage />
+              </ThreadDetailsSection>
+            ) : null}
+          </>
+        ) : (
+          <p className="px-3 text-xs text-sidebar-muted-foreground" role="status">
+            {read?.error
+              ? gt("The engine did not answer.")
+              : !read || read.isPending
+                ? gt("Reading the task...")
+                : gt("There is no such task.")}
+          </p>
+        )}
+      </SidebarGroup>
+    </BoardTaskContext>
+  );
+}
+
+/**
  * The sidebar while the Board is open: tasks in place of
  * threads. A task is started, found and opened from here, and what waits for
  * a person is at the top.
@@ -317,15 +395,12 @@ function EnvironmentBoardSidebar({
     [taskCards, boardCards, q],
   );
   const kept = panelCards(cards, filters, switching);
-  // The open task as the board reads it, for its family. The task view polls this same read.
-  const taskRead = useDeliveryRead(
-    enabled && openTaskId ? environmentId : null,
-    openTaskId ? `/api/tasks/${openTaskId}` : null,
-  );
-  const readTask = parseTask(taskRead.body);
-  const openTask = readTask?.id === openTaskId ? readTask : null;
-  const conversation = useTaskConversation(openTask);
-  const openSeatThread = useOpenSeatThread(conversation.ref);
+  // The open task as the task view reads it, for its facts and its family.
+  const openShared = useOpenBoardTask();
+  const openTaskValue = openShared?.board?.taskId === openTaskId ? openShared : null;
+  const openTask = openTaskValue?.task ?? null;
+  const conversation = openTaskValue?.conversation ?? null;
+  const openSeatThread = useOpenSeatThread(conversation?.ref ?? null);
   const family: SwitcherFamily | null = openTask
     ? {
         open: openTask.card,
@@ -335,7 +410,7 @@ function EnvironmentBoardSidebar({
           ...relatedTaskGroups(openTask.followUps).current,
         ],
         seats: (openTask.council?.seats ?? []).flatMap((item) => {
-          const thread = conversation.seats.thread(item.seat);
+          const thread = conversation?.seats.thread(item.seat) ?? null;
           return thread ? [{ seat: item.seat, activity: item.activity, thread }] : [];
         }),
       }
@@ -389,11 +464,29 @@ function EnvironmentBoardSidebar({
     />
   );
 
+  const backRow = (
+    <SidebarGroup>
+      <div className="flex">
+        <Button size="sm" variant="ghost" onClick={backToBoard} data-board-panel-back>
+          <ArrowLeftIcon />
+          {gt("Back to board")}
+        </Button>
+      </div>
+    </SidebarGroup>
+  );
+
+  // A shared board lists its tasks in the workspace, but an open task's facts stay here.
   if (shared)
     return (
       <SidebarContent className="overflow-x-hidden" data-board-panel>
+        {switching ? (
+          <>
+            {backRow}
+            <BoardTaskFacts value={openTaskValue} />
+          </>
+        ) : null}
         <SidebarGroup>
-          <p className="px-1 text-xs text-sidebar-muted-foreground">
+          <p className="px-1 text-xs text-sidebar-muted-foreground" data-board-panel-shared>
             A shared board is selected for this environment. Its tasks and allocation controls
             appear in the board workspace. Choose another board from the Board selector.
           </p>
@@ -401,120 +494,255 @@ function EnvironmentBoardSidebar({
       </SidebarContent>
     );
 
+  // Where tasks are found and started: on the board's column, or in the open task's Tasks group.
+  const controls = (
+    <>
+      <EnvironmentPicker value={environmentId} onChoose={chooseEnvironment} />
+      <div className="flex items-center gap-1">
+        <Button
+          size="sm"
+          className="flex-1 justify-start"
+          disabled={!enabled}
+          onClick={() => {
+            close();
+            void navigate({
+              to: "/board",
+              search: { new: true, ...(environmentId ? { environment: environmentId } : {}) },
+            });
+          }}
+          data-board-panel-new
+        >
+          <PlusIcon />
+          New task
+        </Button>
+        <Button
+          size="icon-sm"
+          variant="ghost"
+          aria-label="Profiles"
+          onClick={() => {
+            close();
+            if (environmentId) setDeliveryEnvironment(environmentId);
+            void navigate({ to: "/profiles" });
+          }}
+          data-board-panel-profiles
+        >
+          <UsersIcon />
+        </Button>
+        {switching ? null : (
+          <Button size="icon-sm" variant="ghost" aria-label="Show the board" onClick={backToBoard}>
+            <BoardIcon />
+          </Button>
+        )}
+        <Button
+          size="icon-sm"
+          variant={q ? "secondary" : "ghost"}
+          aria-label={mobileSearchOpen ? "Close task search" : "Search tasks"}
+          aria-expanded={mobileSearchOpen}
+          className="md:hidden"
+          onClick={() => setMobileSearchOpen((open) => !open)}
+        >
+          {mobileSearchOpen ? <XIcon /> : <SearchIcon />}
+        </Button>
+      </div>
+
+      <InputGroup className="hidden h-8 md:inline-flex">
+        <InputGroupAddon>
+          <SearchIcon className="size-3.5 text-sidebar-muted-foreground" />
+        </InputGroupAddon>
+        <InputGroupInput
+          size="compact"
+          type="search"
+          aria-label="Search tasks"
+          placeholder="#1001, a title, a tag"
+          value={switching ? switcherQuery : filters.q}
+          onChange={(event) =>
+            switching ? setSwitcherQuery(event.target.value) : setFilters({ q: event.target.value })
+          }
+          data-board-panel-search
+        />
+      </InputGroup>
+      {mobileSearchOpen ? (
+        <InputGroup className="h-8 md:hidden">
+          <InputGroupAddon>
+            <SearchIcon className="size-3.5 text-sidebar-muted-foreground" />
+          </InputGroupAddon>
+          <InputGroupInput
+            size="compact"
+            type="search"
+            aria-label="Search tasks"
+            placeholder="#1001, a title, a tag"
+            value={switching ? switcherQuery : filters.q}
+            onChange={(event) =>
+              switching
+                ? setSwitcherQuery(event.target.value)
+                : setFilters({ q: event.target.value })
+            }
+            data-board-panel-search
+            autoFocus
+          />
+        </InputGroup>
+      ) : null}
+
+      {boardSet !== "unsorted" ? (
+        <p className="px-1 text-3xs text-sidebar-muted-foreground" data-board-panel-set={boardSet}>
+          Showing: {board?.sets.find((item) => item.id === boardSet)?.title ?? boardSet}. Change it
+          at the top of the Board.
+        </p>
+      ) : null}
+    </>
+  );
+  const list = (
+    <div className="flex flex-col gap-1">
+      {!environmentId ? (
+        <p className="px-2 text-xs text-sidebar-muted-foreground">
+          {isReady ? "This environment is unavailable." : "Loading environments..."}
+        </p>
+      ) : !enabled ? (
+        <p className="px-2 text-xs text-sidebar-muted-foreground">
+          Delivery is turned off for this environment.
+        </p>
+      ) : read.error && cards.length === 0 ? (
+        <EngineDownNotice
+          className="px-2 text-xs"
+          environmentId={environmentId}
+          message={`Delivery engine not reachable. ${read.error}`}
+        />
+      ) : switching ? (
+        searching ? (
+          <SwitcherSection
+            environmentId={environmentId}
+            name="found"
+            title="Found"
+            rows={found}
+            empty={unread ?? "No task matches."}
+            list={switcherList}
+          />
+        ) : (
+          PANEL_GROUPS.map((group) => (
+            <SwitcherSection
+              key={group}
+              environmentId={environmentId}
+              name={group}
+              title={GROUP_TITLES[group]}
+              rows={switcherRows?.[group] ?? []}
+              {...(group === "waiting" ? { empty: unread ?? "Nothing waits for you." } : {})}
+              {...(group === "done" &&
+              !switcherRows?.done.some((row) => row.kind === "task" && row.current)
+                ? { defaultFolded: true }
+                : {})}
+              list={switcherList}
+            />
+          ))
+        )
+      ) : searching ? (
+        <Section
+          environmentId={environmentId}
+          name="found"
+          title="Found"
+          cards={kept}
+          empty={unread ?? "No task matches."}
+          now={now}
+          selected={selected}
+          onOpen={open}
+        />
+      ) : (
+        <>
+          <Section
+            environmentId={environmentId}
+            name="waiting"
+            title="Waiting on you"
+            cards={groups.waiting}
+            empty={unread ?? "Nothing waits for you."}
+            now={now}
+            selected={selected}
+            onOpen={open}
+          />
+          <Section
+            environmentId={environmentId}
+            name="working"
+            title="Being worked on"
+            cards={groups.working}
+            now={now}
+            selected={selected}
+            onOpen={open}
+          />
+          <Section
+            environmentId={environmentId}
+            name="chats"
+            title="Team chats"
+            cards={groups.chats}
+            now={now}
+            selected={selected}
+            onOpen={open}
+          />
+          <Section
+            environmentId={environmentId}
+            name="drafts"
+            title="Drafts"
+            cards={groups.drafts}
+            now={now}
+            selected={selected}
+            onOpen={open}
+          />
+          <Section
+            environmentId={environmentId}
+            name="open"
+            title="With the team"
+            cards={groups.open}
+            now={now}
+            selected={selected}
+            onOpen={open}
+          />
+          <Section
+            environmentId={environmentId}
+            name="done"
+            title="Done"
+            cards={groups.done}
+            now={now}
+            selected={selected}
+            onOpen={open}
+            defaultFolded
+          />
+        </>
+      )}
+    </div>
+  );
+  const build = (
+    <p
+      className="mt-auto mx-(--sidebar-content-inset) px-2 pb-2 font-mono text-3xs text-sidebar-muted-foreground"
+      data-app-build={APP_BUILD}
+    >
+      build {APP_BUILD}
+    </p>
+  );
+
+  // With a task open the column is the task's: its facts, then the tasks one fold away.
+  if (switching)
+    return (
+      <SidebarContent className="overflow-x-hidden" data-board-panel>
+        {backRow}
+        <BoardTaskFacts value={openTaskValue} />
+        <SidebarGroup>
+          <Group
+            environmentId={environmentId}
+            name="tasks"
+            title={gt("Tasks")}
+            count={kept.length}
+            defaultFolded
+          >
+            <div className="flex flex-col gap-2 pt-1 pb-2">{controls}</div>
+            {list}
+          </Group>
+        </SidebarGroup>
+        {build}
+      </SidebarContent>
+    );
+
   return (
     <SidebarContent className="overflow-x-hidden" data-board-panel>
       <SidebarGroup>
         <div className="flex flex-col gap-2">
-          {switching ? (
-            <div className="flex">
-              <Button size="sm" variant="ghost" onClick={backToBoard} data-board-panel-back>
-                <ArrowLeftIcon />
-                {gt("Back to board")}
-              </Button>
-            </div>
-          ) : null}
-          <EnvironmentPicker value={environmentId} onChoose={chooseEnvironment} />
-          <div className="flex items-center gap-1">
-            <Button
-              size="sm"
-              className="flex-1 justify-start"
-              disabled={!enabled}
-              onClick={() => {
-                close();
-                void navigate({
-                  to: "/board",
-                  search: { new: true, ...(environmentId ? { environment: environmentId } : {}) },
-                });
-              }}
-              data-board-panel-new
-            >
-              <PlusIcon />
-              New task
-            </Button>
-            <Button
-              size="icon-sm"
-              variant="ghost"
-              aria-label="Profiles"
-              onClick={() => {
-                close();
-                if (environmentId) setDeliveryEnvironment(environmentId);
-                void navigate({ to: "/profiles" });
-              }}
-              data-board-panel-profiles
-            >
-              <UsersIcon />
-            </Button>
-            {switching ? null : (
-              <Button
-                size="icon-sm"
-                variant="ghost"
-                aria-label="Show the board"
-                onClick={backToBoard}
-              >
-                <BoardIcon />
-              </Button>
-            )}
-            <Button
-              size="icon-sm"
-              variant={q ? "secondary" : "ghost"}
-              aria-label={mobileSearchOpen ? "Close task search" : "Search tasks"}
-              aria-expanded={mobileSearchOpen}
-              className="md:hidden"
-              onClick={() => setMobileSearchOpen((open) => !open)}
-            >
-              {mobileSearchOpen ? <XIcon /> : <SearchIcon />}
-            </Button>
-          </div>
-
-          <InputGroup className="hidden h-8 md:inline-flex">
-            <InputGroupAddon>
-              <SearchIcon className="size-3.5 text-sidebar-muted-foreground" />
-            </InputGroupAddon>
-            <InputGroupInput
-              size="compact"
-              type="search"
-              aria-label="Search tasks"
-              placeholder="#1001, a title, a tag"
-              value={switching ? switcherQuery : filters.q}
-              onChange={(event) =>
-                switching
-                  ? setSwitcherQuery(event.target.value)
-                  : setFilters({ q: event.target.value })
-              }
-              data-board-panel-search
-            />
-          </InputGroup>
-          {mobileSearchOpen ? (
-            <InputGroup className="h-8 md:hidden">
-              <InputGroupAddon>
-                <SearchIcon className="size-3.5 text-sidebar-muted-foreground" />
-              </InputGroupAddon>
-              <InputGroupInput
-                size="compact"
-                type="search"
-                aria-label="Search tasks"
-                placeholder="#1001, a title, a tag"
-                value={switching ? switcherQuery : filters.q}
-                onChange={(event) =>
-                  switching
-                    ? setSwitcherQuery(event.target.value)
-                    : setFilters({ q: event.target.value })
-                }
-                data-board-panel-search
-                autoFocus
-              />
-            </InputGroup>
-          ) : null}
-
-          {boardSet !== "unsorted" ? (
-            <p
-              className="px-1 text-3xs text-sidebar-muted-foreground"
-              data-board-panel-set={boardSet}
-            >
-              Showing: {board?.sets.find((item) => item.id === boardSet)?.title ?? boardSet}. Change
-              it at the top of the Board.
-            </p>
-          ) : null}
+          {controls}
           {/* While a task is open the board keeps its filters; the column neither shows nor applies them. */}
           {switching ? null : (
             <>
@@ -611,128 +839,8 @@ function EnvironmentBoardSidebar({
         </div>
       </SidebarGroup>
 
-      <SidebarGroup>
-        <div className="flex flex-col gap-1">
-          {!environmentId ? (
-            <p className="px-2 text-xs text-sidebar-muted-foreground">
-              {isReady ? "This environment is unavailable." : "Loading environments..."}
-            </p>
-          ) : !enabled ? (
-            <p className="px-2 text-xs text-sidebar-muted-foreground">
-              Delivery is turned off for this environment.
-            </p>
-          ) : read.error && cards.length === 0 ? (
-            <EngineDownNotice
-              className="px-2 text-xs"
-              environmentId={environmentId}
-              message={`Delivery engine not reachable. ${read.error}`}
-            />
-          ) : switching ? (
-            searching ? (
-              <SwitcherSection
-                environmentId={environmentId}
-                name="found"
-                title="Found"
-                rows={found}
-                empty={unread ?? "No task matches."}
-                list={switcherList}
-              />
-            ) : (
-              PANEL_GROUPS.map((group) => (
-                <SwitcherSection
-                  key={group}
-                  environmentId={environmentId}
-                  name={group}
-                  title={GROUP_TITLES[group]}
-                  rows={switcherRows?.[group] ?? []}
-                  {...(group === "waiting" ? { empty: unread ?? "Nothing waits for you." } : {})}
-                  {...(group === "done" &&
-                  !switcherRows?.done.some((row) => row.kind === "task" && row.current)
-                    ? { defaultFolded: true }
-                    : {})}
-                  list={switcherList}
-                />
-              ))
-            )
-          ) : searching ? (
-            <Section
-              environmentId={environmentId}
-              name="found"
-              title="Found"
-              cards={kept}
-              empty={unread ?? "No task matches."}
-              now={now}
-              selected={selected}
-              onOpen={open}
-            />
-          ) : (
-            <>
-              <Section
-                environmentId={environmentId}
-                name="waiting"
-                title="Waiting on you"
-                cards={groups.waiting}
-                empty={unread ?? "Nothing waits for you."}
-                now={now}
-                selected={selected}
-                onOpen={open}
-              />
-              <Section
-                environmentId={environmentId}
-                name="working"
-                title="Being worked on"
-                cards={groups.working}
-                now={now}
-                selected={selected}
-                onOpen={open}
-              />
-              <Section
-                environmentId={environmentId}
-                name="chats"
-                title="Team chats"
-                cards={groups.chats}
-                now={now}
-                selected={selected}
-                onOpen={open}
-              />
-              <Section
-                environmentId={environmentId}
-                name="drafts"
-                title="Drafts"
-                cards={groups.drafts}
-                now={now}
-                selected={selected}
-                onOpen={open}
-              />
-              <Section
-                environmentId={environmentId}
-                name="open"
-                title="With the team"
-                cards={groups.open}
-                now={now}
-                selected={selected}
-                onOpen={open}
-              />
-              <Section
-                environmentId={environmentId}
-                name="done"
-                title="Done"
-                cards={groups.done}
-                now={now}
-                selected={selected}
-                onOpen={open}
-                defaultFolded
-              />
-            </>
-          )}
-        </div>
-      </SidebarGroup>
-      <p
-        className="mt-auto mx-(--sidebar-content-inset) px-2 pb-2 font-mono text-3xs text-sidebar-muted-foreground"
-        data-app-build={APP_BUILD}
-      >
-        build {APP_BUILD}
-      </p>
+      <SidebarGroup>{list}</SidebarGroup>
+      {build}
     </SidebarContent>
   );
 }

@@ -1,5 +1,5 @@
 import type { EnvironmentId } from "@t3tools/contracts";
-import { useRef, useState } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 
 import { minutesLeft, parseDeliveryEngineHealth } from "../../lib/deliveryEngineControl";
 import type { DeliveryCard } from "../../lib/delivery";
@@ -102,8 +102,11 @@ export function useTaskActions(
   options: {
     readonly onDone: () => void;
     readonly onDiscarded?: ((id: string) => void) | undefined;
+    /** What the actions are for, such as the open task: a new one starts with nothing pending. */
+    readonly scope?: string | undefined;
   },
 ) {
+  const { scope } = options;
   const person = usePersonName();
   const act = useDeliveryAct(environmentId, "task action");
   const [decision, setDecision] = useState<Decision | null>(null);
@@ -118,6 +121,22 @@ export function useTaskActions(
   const [problem, setProblem] = useState<string | null>(null);
   const [confirming, setConfirming] = useState<Confirming | null>(null);
   const [closing, setClosing] = useState<Target | null>(null);
+  const [shownScope, setShownScope] = useState(scope);
+  if (shownScope !== scope) {
+    setShownScope(scope);
+    setDecision(null);
+    setConfirming(null);
+    setClosing(null);
+    setRequireKey(false);
+    setBusy(false);
+    setProblem(null);
+  }
+  // What is open now, for an answer that returns after a switch: it is not the new task's.
+  const currentScope = useRef(scope);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- an answer arriving after a task switch is checked against the task open now
+  useLayoutEffect(() => {
+    currentScope.current = scope;
+  }, [scope]);
   const { onDone, onDiscarded } = options;
   // One request at a time. A second press while one is out is dropped, not queued: the state it
   // was pressed against may be gone by the time the first returns. A lost answer is not sent again.
@@ -126,8 +145,9 @@ export function useTaskActions(
   const sendDecision = async (path: string, body: Record<string, unknown>) => {
     if (inFlight.current) {
       setProblem("Another step is being sent. Wait for it, then try again.");
-      return { ok: false, status: null, why: null };
+      return { ok: false, current: true, status: null, why: null };
     }
+    const sentFor = scope;
     inFlight.current = true;
     setBusy(true);
     setProblem(null);
@@ -137,11 +157,14 @@ export function useTaskActions(
     inFlight.current = false;
     setBusy(false);
     onDone();
+    // Another task opened meanwhile: its answer, a refusal included, is not shown on that one.
+    if (currentScope.current !== sentFor)
+      return { ok: result.ok, current: false, status: null, why: null };
     if (!result.ok) {
       setProblem(result.why);
-      return { ok: false, status: result.status, why: result.why };
+      return { ok: false, current: true, status: result.status, why: result.why };
     }
-    return { ok: true, status: null, why: null };
+    return { ok: true, current: true, status: null, why: null };
   };
 
   const send = async (path: string, body: Record<string, unknown>) =>
@@ -149,7 +172,8 @@ export function useTaskActions(
   const decide = async (path: string, body: Record<string, unknown>) => {
     const result = await sendDecision(path, body);
     if (!result.ok && result.status === 403 && !Object.hasOwn(body, "key")) setRequireKey(true);
-    return result.ok;
+    // A decision answered after a switch must not close the dialog now open on another task.
+    return result.ok && result.current;
   };
 
   const openClose = (card: Target) => {
@@ -163,6 +187,7 @@ export function useTaskActions(
       reason,
       by: person,
     });
+    if (!result.current) return;
     if (result.ok) return setClosing(null);
     // The dialog stays open with the reason, so it can be changed and sent again.
     setProblem(null);
@@ -193,7 +218,9 @@ export function useTaskActions(
     else if (action === "deliver") {
       void send(`/api/tasks/${card.id}/control`, { action, by: person });
     } else if (action === "discard") {
-      void send(`/api/tasks/${card.id}/discard`, {}).then((done) => done && onDiscarded?.(card.id));
+      void sendDecision(`/api/tasks/${card.id}/discard`, {}).then(
+        (result) => result.ok && result.current && onDiscarded?.(card.id),
+      );
     } else if (action === "first" || action === "not-first") {
       void send(`/api/tasks/${card.id}/first`, { on: action === "first", by: person });
     } else if (action === "stop") {

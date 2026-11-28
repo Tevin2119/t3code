@@ -1,5 +1,5 @@
 import { boardTaskFinishedBy } from "@t3tools/shared/boardTaskFinished";
-import { useGT, useMessages } from "gt-react";
+import { msg, useGT, useMessages } from "gt-react";
 import { ClipboardListIcon, PencilIcon, RocketIcon } from "lucide-react";
 import { useRef, useState } from "react";
 
@@ -33,7 +33,6 @@ import {
   withSeatChoice,
 } from "../../state/delivery";
 import { ThreadDetailsSection } from "../chat/ThreadDetailsSection";
-import { THREAD_DETAILS_ITEMS } from "../chat/threadDetailsItems";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
@@ -59,7 +58,9 @@ import { TaskAcceptanceReceipts, TaskSeatHandoffs } from "./TaskSeatResults";
 import { TaskPipelineStrip } from "./TaskTeamActivity";
 import { ThreadTaskQuestions } from "./ThreadTaskQuestions";
 
-const TASK_ITEM = THREAD_DETAILS_ITEMS.find((item) => item.id === "task")!;
+const TASK_TITLE = msg("Task", {
+  $context: "thread details item: the board task a thread belongs to",
+});
 
 const STEER_STATE: Record<
   string,
@@ -298,7 +299,7 @@ function Briefing(props: { readonly brief: TaskBriefing }) {
 }
 
 /** The stage the engine reports: the lane, the In work stage, and whether the task is held. */
-export function useStageWords(task: TaskView): string {
+function useStageWords(task: TaskView): string {
   const gt = useGT();
   const m = useMessages();
   const lane = boardLaneOf(task.lane ?? "");
@@ -351,9 +352,9 @@ function TeamRows(props: { readonly task: TaskView }) {
 }
 
 /**
- * The Task item of the thread details: the task's words, where it stands, who owns it and how its
- * seats are set, all from the board's own read. It renders only where a board task's view hosts the
- * thread, so any other thread gets nothing from it, whatever the settings say.
+ * The Task item: the task's words, where it stands, who owns it and how its seats are set, all
+ * from the board's own read. It heads the board's left column while the task is open, and renders
+ * nothing outside a board task.
  */
 export function TaskDetailsItem() {
   const board = useBoardTask();
@@ -362,7 +363,7 @@ export function TaskDetailsItem() {
   return (
     <ThreadDetailsSection
       headingId={`thread-details-task-${board.task.id}`}
-      title={`${m(TASK_ITEM.label)} #${board.task.number}`}
+      title={`${m(TASK_TITLE)} #${board.task.number}`}
       data-thread-details-task
     >
       <TaskDetailsBody key={board.task.id} board={board} task={board.task} />

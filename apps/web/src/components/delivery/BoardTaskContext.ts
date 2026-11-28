@@ -3,6 +3,7 @@ import { createContext, useContext, type ReactNode } from "react";
 
 import type { TaskView } from "../../lib/delivery";
 import type { SeatThread, SeatThreadRow } from "../../lib/taskConversation";
+import { BOARD_TASK_THREAD_PANEL_VISIBILITY } from "../../rightPanelStore";
 
 /** The board task a view belongs to: its id and the board's own read of it. */
 export interface BoardTask {
@@ -34,3 +35,17 @@ export interface BoardTask {
 export const BoardTaskContext = createContext<BoardTask | null>(null);
 
 export const useBoardTask = () => useContext(BoardTaskContext);
+
+/**
+ * What the thread's details card shows with no stored choice: collapsed for the task's own
+ * thread, whose facts are on the left, and T3's default for any other thread.
+ */
+export function useThreadPanelFallback(ref: ScopedThreadRef | null | undefined) {
+  const thread = useBoardTask()?.thread ?? null;
+  return thread &&
+    ref &&
+    thread.environmentId === ref.environmentId &&
+    thread.threadId === ref.threadId
+    ? BOARD_TASK_THREAD_PANEL_VISIBILITY
+    : undefined;
+}

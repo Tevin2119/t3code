@@ -15,18 +15,13 @@ beforeEach(async () => {
   await page.viewport(1400, 900);
 });
 
-// The centre puts the native toggles in its header, which the details card hangs from.
-const centre =
-  (label: string) =>
-  (panel: {
-    readonly controls: ReactNode;
-    readonly anchor: (element: HTMLDivElement | null) => void;
-  }) => (
-    <div>
-      <div ref={panel.anchor}>{panel.controls}</div>
-      <textarea aria-label={label} />
-    </div>
-  );
+// The centre puts the native toggles in its header.
+const centre = (label: string) => (panel: { readonly controls: ReactNode }) => (
+  <div>
+    <div>{panel.controls}</div>
+    <textarea aria-label={label} />
+  </div>
+);
 
 function TaskExample({ owner }: { owner: string }) {
   return (
@@ -34,7 +29,6 @@ function TaskExample({ owner }: { owner: string }) {
       <TaskWorkspacePanels
         owner={owner}
         thread={null}
-        details={<p>TaskExample configuration</p>}
         renderConversation={centre("TaskExample reply")}
         evidence={<p>Candidate evidence for {owner}</p>}
         deployments={<p>Deployment rows for {owner}</p>}
@@ -103,7 +97,6 @@ function ThreadTask(props: { readonly name: string }) {
     <TaskWorkspacePanels
       owner={`owner-${props.name}`}
       thread={taskThread(props.name)}
-      details={<p>Configuration</p>}
       evidence={<p>Evidence rows</p>}
       deployments={<p>Deployment rows</p>}
       renderConversation={centre("Thread reply")}
@@ -125,23 +118,15 @@ it("gives a task with a thread no panel, toggles or details of its own, and open
   expect(threadPanel("tabs-thread").surfaces).toEqual([]);
 });
 
-it("opens a page's details in the native details card from the native toggle, and closes them", async () => {
+it("gives a page no details card or toggle of its own: its facts are in the board's column", async () => {
   await using screen = await render(<TaskExample owner="details-card" />);
-  await screen.getByRole("textbox", { name: "TaskExample reply" }).fill("Keep details draft");
-  expect(document.body.textContent).not.toContain("TaskExample configuration");
-  const toggle = screen.getByRole("button", { name: "Toggle thread details panel", exact: true });
-  await toggle.click();
-  await expect.element(page.getByText("TaskExample configuration")).toBeVisible();
-  expect(document.querySelector("[data-thread-details-card]")?.textContent).toContain(
-    "TaskExample configuration",
-  );
-  // No sheet of its own: the native card is the only one.
-  expect(document.querySelector("[data-task-details-sheet]")).toBeNull();
-  await toggle.click();
-  await expect.element(page.getByText("TaskExample configuration")).not.toBeInTheDocument();
   await expect
-    .element(screen.getByRole("textbox", { name: "TaskExample reply" }))
-    .toHaveValue("Keep details draft");
+    .element(screen.getByRole("button", { name: "Toggle right panel", exact: true }))
+    .toBeVisible();
+  await expect
+    .element(screen.getByRole("button", { name: /Toggle thread details/ }))
+    .not.toBeInTheDocument();
+  expect(document.querySelector("[data-thread-details-card]")).toBeNull();
 });
 
 it("opens narrow-screen evidence as a sheet and restores the reply after closing", async () => {
@@ -187,7 +172,6 @@ it("opens no panel on a page unasked, and brings both tabs back after every one 
       key={key}
       owner="first-visit-task"
       thread={null}
-      details={<p>Details</p>}
       renderConversation={centre("Centre")}
       evidence={<p>Engine facts</p>}
       deployments={<p>Deployments</p>}

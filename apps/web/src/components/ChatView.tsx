@@ -1,7 +1,10 @@
 import { useThreadInspection } from "./chat/ThreadInspectionContext";
 import { useThreadPanelHost } from "./chat/ThreadPanelHostContext";
+import { useThreadPanelFallback } from "./delivery/BoardTaskContext";
 import { useBoardTask } from "./delivery/BoardTaskContext";
 import { StepsCutByT3 } from "./delivery/StepsCutByT3";
+import { TaskTeamHeader } from "./delivery/TaskTeamHeader";
+import { getAppModelOptionsForInstance } from "../modelSelection";
 import {
   deriveEngineStageLabel,
   deriveTeamChatPhase,
@@ -132,6 +135,7 @@ import {
   ProviderInteractionMode,
   resolveIdleCompaction,
   RuntimeMode,
+  isServerOwnedThreadLineage,
 } from "@t3tools/contracts";
 import {
   canResumeThread,
@@ -1597,6 +1601,27 @@ export default function ChatView(props: ChatViewProps) {
     deliveryBinding,
   });
   const selectedProvider = selectedProviderEntry?.driverKind ?? requestedDriverKind;
+  // A board task's thread is a team thread from the start: its team and lead stand where an empty
+  // thread asks for a first message.
+  // The timeline is handed it only while it is empty, so a thread with messages keeps its memo.
+  const taskTeamHeader =
+    activeThread && isServerOwnedThreadLineage(activeThread.lineage) ? (
+      <TaskTeamHeader
+        environmentId={activeThread.environmentId}
+        threadId={activeThread.id}
+        driver={selectedProvider}
+        entries={providerInstanceEntries}
+        models={
+          new Map(
+            providerInstanceEntries.map((entry) => [
+              entry.instanceId,
+              getAppModelOptionsForInstance(settings, entry),
+            ]),
+          )
+        }
+        leadModelSelection={activeThread.modelSelection}
+      />
+    ) : undefined;
   const activeProviderInstanceId = selectedProviderEntry?.instanceId ?? null;
   const activeProviderStatus = selectedProviderEntry?.snapshot ?? null;
   const activeUsageModel =
@@ -2288,8 +2313,14 @@ export default function ChatView(props: ChatViewProps) {
       params: buildThreadRouteParams(activeThreadRef),
     });
   };
+  const threadPanelFallback = useThreadPanelFallback(panelThreadRef);
   const threadPanelInlineOpen = useRightPanelStore((state) =>
-    selectThreadPanelOpen(state.threadPanelVisibilityByThreadKey, panelThreadRef, "inline"),
+    selectThreadPanelOpen(
+      state.threadPanelVisibilityByThreadKey,
+      panelThreadRef,
+      "inline",
+      threadPanelFallback,
+    ),
   );
   // Selects only the mode, so canvas resizes rerender the chat view only when the
   // card switches presentation.
@@ -2309,6 +2340,7 @@ export default function ChatView(props: ChatViewProps) {
       state.threadPanelVisibilityByThreadKey,
       panelThreadRef,
       threadPanelPresentation,
+      threadPanelFallback,
     ),
   );
   const supportsThreadPullRequests = serverConfig !== null;
@@ -4195,6 +4227,7 @@ export default function ChatView(props: ChatViewProps) {
                   onViewportAttach={attachTimelineViewport}
                   onFooterGrow={onTimelineFooterGrowStable}
                   hideEmptyPlaceholder={isDraftHeroState || threadDetailLoading}
+                  {...(taskTeamHeader && timelineEmpty ? { emptyState: taskTeamHeader } : {})}
                   emptyPlaceholderInset={composerReservedHeight}
                   topFadeEnabled={!hasTimelineTopBanner}
                   {...(threadHistoryControls === undefined

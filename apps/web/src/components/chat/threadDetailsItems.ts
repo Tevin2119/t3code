@@ -1,14 +1,9 @@
 import type { ClientSettings } from "@t3tools/contracts";
 import { msg } from "gt-react";
 
-// Ids are stored in client settings, so never rename one.
+// Ids are stored in client settings, so never rename one. "task" is retired: a board task's facts
+// are in the board's left column, so a stored choice for it is ignored.
 export const THREAD_DETAILS_ITEMS = [
-  // Shown only where a board task's view hosts the thread; any other thread has nothing for it.
-  {
-    id: "task",
-    label: msg("Task", { $context: "thread details item: the board task a thread belongs to" }),
-    defaultVisible: true,
-  },
   { id: "environment", label: msg("Environment and worktree"), defaultVisible: true },
   { id: "openIn", label: msg("Open in editor"), defaultVisible: true },
   { id: "scripts", label: msg("Project scripts"), defaultVisible: true },

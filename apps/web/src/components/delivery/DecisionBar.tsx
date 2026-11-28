@@ -32,12 +32,10 @@ export function DecisionBar(props: {
             </span>
           ) : null}
         </p>
-        <div className="flex items-center gap-2 [@media(min-width:640px)_and_(min-height:600px)]:flex-wrap">
+        {/* Each decision takes a row of its own where the column is too narrow for two. */}
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
           {props.actions.map((action) => (
-            <div
-              key={action}
-              className="flex min-w-0 flex-1 flex-col gap-0.5 [@media(min-width:640px)_and_(min-height:600px)]:max-w-80 [@media(min-width:640px)_and_(min-height:600px)]:flex-none"
-            >
+            <div key={action} className="flex min-w-0 max-w-80 flex-1 basis-32 flex-col gap-0.5">
               <Button
                 size="sm"
                 variant={action === "reject" ? "outline" : "default"}
@@ -48,7 +46,7 @@ export function DecisionBar(props: {
               >
                 <span className="truncate">{actionLabel(action, props.task.card)}</span>
               </Button>
-              <span className="hidden text-3xs text-muted-foreground [@media(min-width:640px)_and_(min-height:600px)]:block">
+              <span className="hidden text-3xs break-words text-muted-foreground [@media(min-width:640px)_and_(min-height:600px)]:block">
                 {actionHelp(action, props.task.card)}
               </span>
             </div>
