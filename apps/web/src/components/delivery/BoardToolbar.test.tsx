@@ -61,6 +61,8 @@ vi.mock("../../state/delivery", async () => {
     },
     useDeliveryAct: () => mock.action,
     useDeliveryEnabled: () => true,
+    // No key saved: the panel asks for the passphrase, as these cases expect.
+    useSavedKeyEngineLifecycle: () => ({ usable: false, run: vi.fn() }),
   };
 });
 vi.mock("../../state/server", () => ({

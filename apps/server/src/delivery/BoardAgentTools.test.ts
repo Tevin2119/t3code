@@ -355,3 +355,47 @@ it.effect(
     );
   },
 );
+
+it.effect("the folded tools run one action each and ask for what that action needs", () => {
+  const engine = agentEngine();
+  engine.addBoard("work");
+  const draft = engine.addTask({ state: "draft", lane: "draft" });
+  const ready = engine.addTask();
+  return run(
+    engine,
+    Effect.gen(function* () {
+      const tools = yield* BoardAgentTools;
+      const created = yield* tools.board(scope, {
+        action: "create",
+        title: "Later",
+        repository: "app",
+      });
+      assert.deepEqual(
+        created.boards.map((board) => board.id),
+        ["later"],
+      );
+      const noTitle = yield* failureOf(tools.board(scope, { action: "create", repository: "app" }));
+      assert.deepEqual(noTitle, { code: "invalid_request", message: "This action needs `title`." });
+      const noReason = yield* failureOf(tools.task(scope, { action: "close", task: ready.id }));
+      assert.equal(noReason.message, "This action needs `reason`.");
+      const discarded = yield* tools.task(scope, { action: "discard", task: draft.id });
+      assert.deepInclude(discarded, { id: draft.id, state: "discarded" });
+      const listed = yield* tools.tasks(scope, { action: "list", filter: { board: "work" } });
+      assert.deepEqual(
+        listed.tasks?.map((task) => task.id),
+        [ready.id],
+      );
+      const preview = yield* tools.tasks(scope, {
+        action: "close",
+        tasks: [ready.id],
+        reason: "Stale",
+      });
+      assert.deepEqual(
+        preview.items?.map((item) => item.outcome),
+        ["would-act"],
+      );
+      assert.isString(preview.dryRunToken);
+      assert.isTrue(engine.writes.every((write) => write.body.by === BY));
+    }),
+  );
+});

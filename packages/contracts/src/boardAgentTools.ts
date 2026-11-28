@@ -6,7 +6,6 @@ import { BoardTaskBoardId } from "./boardThreadTasks.ts";
 
 const Id = Schema.String.check(Schema.isPattern(/^[\w-]{1,100}$/));
 const NonBlank = Schema.String.check(Schema.isNonEmpty(), Schema.isPattern(/\S/));
-const Text = (max: number) => Schema.String.check(Schema.isMaxLength(max));
 const Force = Schema.optional(
   Schema.Boolean.annotate({
     description:
@@ -14,20 +13,8 @@ const Force = Schema.optional(
   }),
 );
 
-/** Lanes a person can drop a card on; the engine refuses the rest with its reason. */
-export const BoardAgentLane = Schema.Literals([
-  "draft",
-  "chat",
-  "queue",
-  "in-work",
-  "child-work",
-  "needs-decision",
-  "paused",
-  "approved",
-  "pull-request",
-  "closed-not-done",
-  "completed",
-]);
+/** A board lane id, e.g. `queue`, `paused`, `completed`; the engine refuses others with the list. */
+export const BoardAgentLane = Schema.String;
 export type BoardAgentLane = typeof BoardAgentLane.Type;
 
 export const BoardAgentBoard = Schema.Struct({
@@ -55,21 +42,23 @@ export const BoardAgentBoardsResult = Schema.Struct({
 export type BoardAgentBoardsResult = typeof BoardAgentBoardsResult.Type;
 
 export const BoardAgentBoardCreateInput = Schema.Struct({
-  title: NonBlank.check(Schema.isMaxLength(120)),
-  repository: Id.annotate({ description: "A repository `id` from `delivery_boards_list`." }),
-  base: Schema.optional(Text(200).annotate({ description: "Base branch. Omit for its default." })),
-  description: Schema.optional(Text(2_000)),
-  icon: Schema.optional(Text(60)),
+  title: NonBlank,
+  repository: Id.annotate({ description: "A repository `id` from `delivery_board` `list`." }),
+  base: Schema.optional(
+    Schema.String.annotate({ description: "Base branch. Omit for its default." }),
+  ),
+  description: Schema.optional(Schema.String),
+  icon: Schema.optional(Schema.String),
 });
 export type BoardAgentBoardCreateInput = typeof BoardAgentBoardCreateInput.Type;
 
 export const BoardAgentBoardEditInput = Schema.Struct({
   board: BoardTaskBoardId,
-  title: Schema.optional(NonBlank.check(Schema.isMaxLength(120))),
-  description: Schema.optional(Text(2_000)),
+  title: Schema.optional(NonBlank),
+  description: Schema.optional(Schema.String),
   repository: Schema.optional(Id),
-  base: Schema.optional(Text(200)),
-  icon: Schema.optional(Text(60)),
+  base: Schema.optional(Schema.String),
+  icon: Schema.optional(Schema.String),
 });
 export type BoardAgentBoardEditInput = typeof BoardAgentBoardEditInput.Type;
 
@@ -107,17 +96,14 @@ export const BoardAgentTaskSummary = Schema.Struct({
 });
 export type BoardAgentTaskSummary = typeof BoardAgentTaskSummary.Type;
 
+/** `query` is words or `#12`; `updatedBefore` an ISO time, to page past the newest. */
 export const BoardAgentTaskFilter = Schema.Struct({
-  board: Schema.optional(
-    BoardTaskBoardId.annotate({ description: "A board id. Omit for every board." }),
-  ),
+  board: Schema.optional(BoardTaskBoardId),
   lane: Schema.optional(BoardAgentLane),
-  state: Schema.optional(Text(40).annotate({ description: "Task state, e.g. `draft`, `closed`." })),
-  query: Schema.optional(Text(200).annotate({ description: "Words, or `#12` for a number." })),
-  origin: Schema.optional(Text(300)),
-  updatedBefore: Schema.optional(
-    Schema.String.annotate({ description: "ISO time. Only tasks last updated before it." }),
-  ),
+  state: Schema.optional(Schema.String),
+  query: Schema.optional(Schema.String),
+  origin: Schema.optional(Schema.String),
+  updatedBefore: Schema.optional(Schema.String),
 });
 export type BoardAgentTaskFilter = typeof BoardAgentTaskFilter.Type;
 
@@ -152,12 +138,10 @@ export type BoardAgentTask = typeof BoardAgentTask.Type;
 
 export const BoardAgentTaskEditInput = Schema.Struct({
   task: Id,
-  title: Schema.optional(NonBlank.check(Schema.isMaxLength(120))),
-  body: Schema.optional(
-    NonBlank.check(Schema.isMaxLength(20_000)).annotate({ description: "Drafts only." }),
-  ),
+  title: Schema.optional(NonBlank),
+  body: Schema.optional(NonBlank.annotate({ description: "Drafts only." })),
   priority: Schema.optional(Schema.Literals(["low", "medium", "high", "urgent"])),
-  tags: Schema.optional(Schema.Array(Text(40)).check(Schema.isMaxLength(20))),
+  tags: Schema.optional(Schema.Array(Schema.String)),
 });
 export type BoardAgentTaskEditInput = typeof BoardAgentTaskEditInput.Type;
 
@@ -168,7 +152,7 @@ export const BoardAgentTaskMoveInput = Schema.Struct({
     Schema.NullOr(BoardTaskBoardId).annotate({ description: "A board id, or null for none." }),
   ),
   base: Schema.optional(
-    Text(200).annotate({
+    Schema.String.annotate({
       description: "Base branch on the new board, when its repository differs.",
     }),
   ),
@@ -178,7 +162,7 @@ export type BoardAgentTaskMoveInput = typeof BoardAgentTaskMoveInput.Type;
 
 export const BoardAgentTaskCloseInput = Schema.Struct({
   task: Id,
-  reason: NonBlank.check(Schema.isMaxLength(500)),
+  reason: NonBlank,
   force: Force,
 });
 export type BoardAgentTaskCloseInput = typeof BoardAgentTaskCloseInput.Type;
@@ -202,7 +186,7 @@ const BulkSelection = {
     Schema.Boolean.annotate({ description: "true acts; omit for the dry run." }),
   ),
   dryRunToken: Schema.optional(
-    Schema.String.check(Schema.isMaxLength(200)).annotate({
+    Schema.String.annotate({
       description: "From the dry run; required with `confirm`.",
     }),
   ),
@@ -210,7 +194,7 @@ const BulkSelection = {
 
 export const BoardAgentBulkCloseInput = Schema.Struct({
   ...BulkSelection,
-  reason: NonBlank.check(Schema.isMaxLength(500)),
+  reason: NonBlank,
 });
 export type BoardAgentBulkCloseInput = typeof BoardAgentBulkCloseInput.Type;
 
@@ -244,3 +228,66 @@ export const DeliveryEngineLifecycleInput = Schema.Struct({
   action: Schema.Literals(["stop", "restart"]),
 });
 export type DeliveryEngineLifecycleInput = typeof DeliveryEngineLifecycleInput.Type;
+
+/** `delivery_board`: one tool, its action picks what the other fields mean. */
+export const BoardAgentBoardToolInput = Schema.Struct({
+  action: Schema.Literals(["list", "create", "edit", "remove"]),
+  board: Schema.optional(BoardTaskBoardId),
+  title: BoardAgentBoardEditInput.fields.title,
+  repository: Schema.optional(Id),
+  base: Schema.optional(Schema.String),
+  description: Schema.optional(Schema.String),
+  icon: Schema.optional(Schema.String),
+  force: Schema.optional(Schema.Boolean),
+});
+export type BoardAgentBoardToolInput = typeof BoardAgentBoardToolInput.Type;
+
+export const BoardAgentBoardToolResult = Schema.Struct({
+  boards: Schema.Array(BoardAgentBoard),
+  repositories: Schema.optional(Schema.Array(BoardAgentRepository)),
+  /** After remove: the board's tasks, kept on no board. */
+  tasks: Schema.optional(Schema.Array(Schema.String)),
+});
+export type BoardAgentBoardToolResult = typeof BoardAgentBoardToolResult.Type;
+
+/** `delivery_task`: one task, one action. */
+export const BoardAgentTaskToolInput = Schema.Struct({
+  action: Schema.Literals(["get", "edit", "move", "submit", "close", "discard"]),
+  task: Id,
+  title: BoardAgentTaskEditInput.fields.title,
+  body: Schema.optional(NonBlank),
+  priority: BoardAgentTaskEditInput.fields.priority,
+  tags: BoardAgentTaskEditInput.fields.tags,
+  lane: Schema.optional(BoardAgentLane),
+  board: Schema.optional(Schema.NullOr(BoardTaskBoardId)),
+  base: Schema.optional(Schema.String),
+  reason: Schema.optional(NonBlank),
+  force: Schema.optional(Schema.Boolean),
+});
+export type BoardAgentTaskToolInput = typeof BoardAgentTaskToolInput.Type;
+
+/** `delivery_tasks`: list, or close or move many after a dry run. */
+export const BoardAgentTasksToolInput = Schema.Struct({
+  action: Schema.Literals(["list", "close", "move"]),
+  filter: Schema.optional(BoardAgentTaskFilter),
+  tasks: Schema.optional(
+    Schema.Array(Id).check(Schema.isMinLength(1), Schema.isMaxLength(BOARD_AGENT_BULK_MAX)),
+  ),
+  limit: Schema.optional(Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 500 }))),
+  reason: Schema.optional(NonBlank),
+  lane: Schema.optional(BoardAgentLane),
+  board: Schema.optional(Schema.NullOr(BoardTaskBoardId)),
+  force: Schema.optional(Schema.Boolean),
+  confirm: Schema.optional(Schema.Boolean),
+  dryRunToken: Schema.optional(Schema.String),
+});
+export type BoardAgentTasksToolInput = typeof BoardAgentTasksToolInput.Type;
+
+export const BoardAgentTasksToolResult = Schema.Struct({
+  tasks: Schema.optional(Schema.Array(BoardAgentTaskSummary)),
+  more: Schema.Boolean,
+  /** A dry run's token; pass it back with `confirm`. Null once acted. */
+  dryRunToken: Schema.optional(Schema.NullOr(Schema.String)),
+  items: Schema.optional(Schema.Array(BoardAgentBulkItem)),
+});
+export type BoardAgentTasksToolResult = typeof BoardAgentTasksToolResult.Type;

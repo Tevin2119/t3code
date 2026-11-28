@@ -22,6 +22,11 @@ import {
   type BoardAgentTaskSummary,
   type BoardAgentTasksListInput,
   type BoardAgentTasksListResult,
+  type BoardAgentBoardToolInput,
+  type BoardAgentBoardToolResult,
+  type BoardAgentTaskToolInput,
+  type BoardAgentTasksToolInput,
+  type BoardAgentTasksToolResult,
   type DeliveryEngineLifecycleInput,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
@@ -228,8 +233,100 @@ export class BoardAgentTools extends Context.Service<
     readonly engineLifecycle: (
       input: DeliveryEngineLifecycleInput,
     ) => Effect.Effect<typeof DeliveryEngineLifecycleReceipt.Type, DeliveryError>;
+    /** The `delivery_board`, `delivery_task` and `delivery_tasks` tools: one action each call. */
+    readonly board: (
+      scope: McpInvocationScope,
+      input: BoardAgentBoardToolInput,
+    ) => Effect.Effect<BoardAgentBoardToolResult, OrchestratorMcpFailure>;
+    readonly task: (
+      scope: McpInvocationScope,
+      input: BoardAgentTaskToolInput,
+    ) => Effect.Effect<BoardAgentTask, OrchestratorMcpFailure>;
+    readonly tasks: (
+      scope: McpInvocationScope,
+      input: BoardAgentTasksToolInput,
+    ) => Effect.Effect<BoardAgentTasksToolResult, OrchestratorMcpFailure>;
   }
 >()("t3/delivery/BoardAgentTools") {}
+
+type Actions = Omit<BoardAgentTools["Service"], "board" | "task" | "tasks">;
+
+const needs = <A>(value: A | undefined, what: string) =>
+  value === undefined
+    ? Effect.fail(invalid(`This action needs \`${what}\`.`))
+    : Effect.succeed(value);
+
+/** Each folded tool's action, as the one method it stands for. */
+const folded = (
+  actions: Actions,
+): Pick<BoardAgentTools["Service"], "board" | "task" | "tasks"> => ({
+  board: Effect.fn("BoardAgentTools.board")(function* (scope, input) {
+    const { action, board, title, repository, force, ...fields } = input;
+    switch (action) {
+      case "list":
+        return yield* actions.listBoards;
+      case "create": {
+        const created = yield* actions.createBoard(scope, {
+          ...fields,
+          title: yield* needs(title, "title"),
+          repository: yield* needs(repository, "repository"),
+        });
+        return { boards: [created] };
+      }
+      case "edit": {
+        const edited = yield* actions.editBoard(scope, {
+          ...fields,
+          board: yield* needs(board, "board"),
+          title,
+          repository,
+        });
+        return { boards: [edited] };
+      }
+      case "remove": {
+        const removed = yield* actions.removeBoard(scope, {
+          board: yield* needs(board, "board"),
+          force,
+        });
+        return { boards: [removed.board], tasks: removed.tasks };
+      }
+    }
+  }),
+  task: Effect.fn("BoardAgentTools.task")(function* (scope, input) {
+    const { action, task, title, body, priority, tags, lane, board, base, reason, force } = input;
+    switch (action) {
+      case "get":
+        return yield* actions.getTask({ task });
+      case "edit":
+        return yield* actions.editTask(scope, { task, title, body, priority, tags });
+      case "move":
+        return yield* actions.moveTask(scope, { task, lane, board, base, force });
+      case "submit":
+        return yield* actions.submitTask(scope, { task });
+      case "close":
+        return yield* actions.closeTask(scope, {
+          task,
+          reason: yield* needs(reason, "reason"),
+          force,
+        });
+      case "discard": {
+        const before = yield* actions.getTask({ task });
+        yield* actions.discardTask(scope, { task, force });
+        return { ...before, state: "discarded", lane: null, live: false };
+      }
+    }
+  }),
+  tasks: Effect.fn("BoardAgentTools.tasks")(function* (scope, input) {
+    const { action, filter, tasks, limit, reason, lane, board, force, confirm, dryRunToken } =
+      input;
+    if (action === "list") return yield* actions.listTasks({ ...filter, limit });
+    const selection = { tasks, filter, force, confirm, dryRunToken };
+    const result =
+      action === "close"
+        ? yield* actions.closeTasks(scope, { ...selection, reason: yield* needs(reason, "reason") })
+        : yield* actions.moveTasks(scope, { ...selection, lane, board });
+    return { more: result.more, dryRunToken: result.dryRunToken, items: result.items };
+  }),
+});
 
 const make = Effect.gen(function* () {
   const delivery = yield* Delivery.DeliveryService;
@@ -268,7 +365,7 @@ const make = Effect.gen(function* () {
   const boardNamed = Effect.fn("BoardAgentTools.boardNamed")(function* (id: string) {
     const found = (yield* boards).find((board) => board.id === id);
     if (found === undefined)
-      return yield* invalid(`No board ${id}. List them with delivery_boards_list.`);
+      return yield* invalid(`No board ${id}. List them with the delivery_board list action.`);
     return found;
   });
 
@@ -441,7 +538,7 @@ const make = Effect.gen(function* () {
     return { dryRun: false, dryRunToken: null, more, items };
   });
 
-  return BoardAgentTools.of({
+  const actions: Actions = {
     engineLifecycle: Effect.fn("BoardAgentTools.engineLifecycle")(function* ({ action }) {
       const key = yield* delivery.boardApprovalKey;
       if (!key)
@@ -592,7 +689,8 @@ const make = Effect.gen(function* () {
         (task) => taskOf(task.id).pipe(Effect.flatMap((current) => move(by, current, input))),
       );
     }),
-  });
+  };
+  return BoardAgentTools.of({ ...actions, ...folded(actions) });
 });
 
 export const layer = Layer.effect(BoardAgentTools, make);
@@ -623,5 +721,8 @@ export const layerTest = Layer.succeed(
     closeTasks: turnedOff,
     moveTasks: turnedOff,
     engineLifecycle: engineOff,
+    board: turnedOff,
+    task: turnedOff,
+    tasks: turnedOff,
   }),
 );

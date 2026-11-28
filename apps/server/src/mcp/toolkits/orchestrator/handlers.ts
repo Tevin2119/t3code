@@ -21,11 +21,16 @@ import * as SeatHandoffs from "../../../delivery/SeatHandoffs.ts";
 const boardRead = <P, A>(
   run: (
     service: BoardAgentTools.BoardAgentTools["Service"],
+    scope: McpInvocationContext.McpInvocationScope,
     params: P,
   ) => Effect.Effect<A, OrchestratorMcpFailure>,
 ) =>
   McpToolAccess.reads((params: P) =>
-    BoardAgentTools.BoardAgentTools.pipe(Effect.flatMap((service) => run(service, params))),
+    Effect.gen(function* () {
+      const scope = yield* McpInvocationContext.McpInvocationContext;
+      const service = yield* BoardAgentTools.BoardAgentTools;
+      return yield* run(service, scope, params);
+    }),
   );
 /** A board change, recorded as the calling thread's; a full-access link may make it here. */
 const boardWrite = <P, A>(
@@ -63,21 +68,21 @@ const handlers = {
       ),
     ),
   ),
-  delivery_boards_list: boardRead((service) => service.listBoards),
-  delivery_board_create: boardWrite((service, scope, input) => service.createBoard(scope, input)),
-  delivery_board_edit: boardWrite((service, scope, input) => service.editBoard(scope, input)),
-  delivery_board_remove: boardWrite((service, scope, input) => service.removeBoard(scope, input)),
-  delivery_tasks_list: boardRead((service, input) => service.listTasks(input)),
-  delivery_task_get: boardRead((service, input) => service.getTask(input)),
-  delivery_task_edit: boardWrite((service, scope, input) => service.editTask(scope, input)),
-  delivery_task_move: boardWrite((service, scope, input) => service.moveTask(scope, input)),
-  delivery_task_submit: boardWrite((service, scope, input) => service.submitTask(scope, input)),
-  delivery_task_close: boardWrite((service, scope, input) => service.closeTask(scope, input)),
-  delivery_task_discard: boardWrite((service, scope, input) => service.discardTask(scope, input)),
-  delivery_tasks_close_bulk: boardWrite((service, scope, input) =>
-    service.closeTasks(scope, input),
+  delivery_board: McpToolAccess.either(
+    (input) => input.action === "list",
+    boardRead((service, scope, input) => service.board(scope, input)),
+    boardWrite((service, scope, input) => service.board(scope, input)),
   ),
-  delivery_tasks_move_bulk: boardWrite((service, scope, input) => service.moveTasks(scope, input)),
+  delivery_task: McpToolAccess.either(
+    (input) => input.action === "get",
+    boardRead((service, scope, input) => service.task(scope, input)),
+    boardWrite((service, scope, input) => service.task(scope, input)),
+  ),
+  delivery_tasks: McpToolAccess.either(
+    (input) => input.action === "list",
+    boardRead((service, scope, input) => service.tasks(scope, input)),
+    boardWrite((service, scope, input) => service.tasks(scope, input)),
+  ),
   delivery_read: McpToolAccess.reads(({ environmentId, ...input }) =>
     Effect.gen(function* () {
       const scope = yield* McpInvocationContext.McpInvocationContext;
